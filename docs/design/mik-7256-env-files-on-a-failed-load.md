@@ -1407,7 +1407,7 @@ is threaded.
 
 Both halves are in place. `SecretResolver` now holds an `Arc<LiveEnv>`, and
 `{env.VAR}` resolves through `EnvOverlay::resolve`: the overlay's own
-assignments, then what it inherited, then the process environment. A resolver
+assignments, then the process environment. A resolver
 built without one carries `LiveEnv::default()`, whose overlay assigns nothing,
 so every consumer that has not been threaded behaves exactly as before. The
 three affected sites take the value startup published, through
@@ -1424,12 +1424,22 @@ placeholder replaced by nothing — and that is a separate decision from the one
 this change makes. The signature path, where an empty value is exploitable
 rather than merely wrong, refuses it locally.
 
-A related divergence is recorded but not treated as a regression: a reload
-inherits the previous overlay (`EnvOverlay::inheriting`, and
-`Config::load_with_overlay` passes `live_env.get()`), so removing a key from an env file does not revoke
-its value until a restart. The process-mutating loader this change replaced did
-not revoke either, so the behaviour is unchanged; it differs from a restart, and
-whether reload should match a restart is an open design question.
+An earlier draft recorded a divergence here and did not treat it as a
+regression: the reload inherited the previous overlay, so removing a key from an
+env file did not revoke its value until a restart. That paragraph contradicted
+MIK.ENVFILE.13, which requires a deleted assignment to resolve to its baseline
+or to nothing. The contradiction was settled in favour of the criterion, and
+the mechanism behind the divergence was removed rather than patched: an overlay
+now carries nothing forward from the one it replaces. A reload re-reads the
+same recorded paths, so every env-file value is derived again and the only
+thing inheritance could add is a key whose line was deleted. `EnvOverlay::inheriting`
+is gone and `Config::load_with_overlay` no longer takes a previous overlay.
+
+This is a design event under the process rules: it changes what an observable
+reload does, in service of an acceptance criterion the code did not meet. The
+old behaviour matched the process-mutating loader this change replaced, so the
+change is visible to an operator who relied on a removal not taking effect
+until a restart — which is the behaviour the criterion calls wrong.
 
 ### Sweeping the same defect class
 

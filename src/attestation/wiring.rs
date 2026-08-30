@@ -139,8 +139,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let env_file = dir.path().join(".env");
         std::fs::write(&env_file, "GATEWAY_ATTESTATION_MODE=off\n").unwrap();
-        let overlay =
-            crate::config::EnvOverlay::from_paths(&[env_file], &crate::config::EnvOverlay::none());
+        let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
 
         assert!(
             attestation_wiring_from_overlay(&overlay).is_none(),

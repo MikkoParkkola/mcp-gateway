@@ -81,7 +81,7 @@ fn test_load_env_files_sets_env_vars() {
     writeln!(f, "MCP_GW_TEST_KEY_B=42").unwrap();
     drop(f);
 
-    let overlay = EnvOverlay::from_paths(&[env_path], &EnvOverlay::none());
+    let overlay = EnvOverlay::from_paths(&[env_path]);
 
     assert_eq!(
         overlay.resolve("MCP_GW_TEST_KEY_A").as_deref(),
@@ -96,10 +96,7 @@ fn test_load_env_files_sets_env_vars() {
 
 #[test]
 fn test_load_env_files_skips_missing() {
-    let overlay = EnvOverlay::from_paths(
-        &[std::path::PathBuf::from("/nonexistent/path/.env")],
-        &EnvOverlay::none(),
-    );
+    let overlay = EnvOverlay::from_paths(&[std::path::PathBuf::from("/nonexistent/path/.env")]);
 
     assert!(
         overlay.owned_keys().is_empty(),
@@ -122,7 +119,7 @@ fn test_load_env_files_later_file_overrides_earlier_file() {
     writeln!(second, "{key}=from_second").unwrap();
     drop(second);
 
-    let overlay = EnvOverlay::from_paths(&[first_path, second_path], &EnvOverlay::none());
+    let overlay = EnvOverlay::from_paths(&[first_path, second_path]);
 
     assert_eq!(overlay.resolve(key).as_deref(), Some("from_second"));
 }
@@ -132,7 +129,7 @@ fn test_load_env_files_empty() {
     let config = Config::default();
     assert!(config.env_files.is_empty());
 
-    let overlay = EnvOverlay::from_paths(&[], &EnvOverlay::none());
+    let overlay = EnvOverlay::from_paths(&[]);
     assert!(overlay.owned_keys().is_empty());
 }
 
@@ -1300,9 +1297,7 @@ fn envfile_19d_child_resolves_against_dirs_home_dir() {
     );
 
     // AND: a reload opens the same path, taking it from what startup recorded
-    let reloaded =
-        Config::load_with_overlay(Some(&cfg_path), &startup.env_paths, &EnvOverlay::none())
-            .unwrap();
+    let reloaded = Config::load_with_overlay(Some(&cfg_path), &startup.env_paths).unwrap();
     assert_eq!(
         reloaded.env_paths.as_paths(),
         &[expected],
@@ -1310,4 +1305,48 @@ fn envfile_19d_child_resolves_against_dirs_home_dir() {
     );
 
     println!("ENVFILE.19d child ok");
+}
+
+/// ENVFILE.13 on the path a running gateway actually takes: the reload layers
+/// the new overlay over the one in force, so a line deleted from an env file
+/// only stops resolving if that layering does not carry it forward.
+#[test]
+fn a_key_deleted_from_an_env_file_stops_resolving_after_a_reload() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join("gateway.env");
+    let cfg_path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &cfg_path,
+        format!("env_files:\n  - \"{}\"\n", env_path.display()),
+    )
+    .unwrap();
+    std::fs::write(&env_path, "MCP_GW_TEST_DELETED_KEY=first\n").unwrap();
+
+    // GIVEN: a startup that resolved the key from the file
+    let startup = Config::load_evaluated(Some(&cfg_path)).unwrap();
+    assert_eq!(
+        startup
+            .overlay
+            .resolve("MCP_GW_TEST_DELETED_KEY")
+            .as_deref(),
+        Some("first"),
+        "startup must resolve the key the env file assigns"
+    );
+
+    // WHEN: the line is deleted and the config is reloaded against the overlay
+    // in force, exactly as `config_reload` does it
+    std::fs::write(&env_path, "MCP_GW_TEST_OTHER_KEY=second\n").unwrap();
+    let reloaded = Config::load_with_overlay(Some(&cfg_path), &startup.env_paths).unwrap();
+
+    // THEN: the deleted line's value is gone, and the surviving line is not
+    assert_eq!(
+        reloaded.overlay.resolve("MCP_GW_TEST_DELETED_KEY"),
+        None,
+        "a deleted assignment must not survive the reload that removed it"
+    );
+    assert_eq!(
+        reloaded.overlay.resolve("MCP_GW_TEST_OTHER_KEY").as_deref(),
+        Some("second"),
+        "the reload must still apply the file's remaining assignments"
+    );
 }

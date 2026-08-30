@@ -334,15 +334,15 @@ impl Config {
     ///
     /// Takes `env_paths` rather than the config's raw `env_files` spellings on
     /// purpose: `~` resolved once, at startup, and a reload that resolved again
-    /// could silently open a different file. `previous` is the overlay in force
-    /// — `EnvOverlay::none()` at startup, `live_env.get()` on reload.
+    /// could silently open a different file. The overlay is built from those
+    /// files alone — nothing carries over from the overlay it replaces, so a
+    /// deleted assignment stops resolving when the reload lands.
     pub(crate) fn load_with_overlay(
         path: Option<&Path>,
         env_paths: &ResolvedEnvFiles,
-        previous: &EnvOverlay,
     ) -> Result<Evaluated> {
         let resolved = Self::prepare(path)?;
-        let overlay = EnvOverlay::from_paths_checked(env_paths.as_paths(), previous)?;
+        let overlay = EnvOverlay::from_paths_checked(env_paths.as_paths())?;
         Self::finish(resolved.as_deref(), overlay, env_paths.clone())
     }
 
@@ -361,7 +361,7 @@ impl Config {
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
 
-        let mut overlay = EnvOverlay::inheriting(&EnvOverlay::none());
+        let mut overlay = EnvOverlay::none();
         let mut paths = Vec::with_capacity(spec.env_files.len());
         let tilde = spec.env_files.iter().any(|e| e.starts_with('~'));
         for entry in &spec.env_files {

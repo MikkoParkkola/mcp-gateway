@@ -1259,7 +1259,7 @@ fn load_config_patch(
     // startup, and resolving the spelling again could open a different file.
     // A malformed line is an error here rather than a warning, so a reload
     // against a half-read env file is refused instead of published.
-    let evaluated = Config::load_with_overlay(Some(config_path), env.env_paths(), &env.get())
+    let evaluated = Config::load_with_overlay(Some(config_path), env.env_paths())
         .map_err(|e| format!("Failed to parse config: {e}"))?;
     let patch = compute_diff(&old_config, &evaluated.config);
 

@@ -238,8 +238,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let env_file = dir.path().join(".env");
         std::fs::write(&env_file, "SECRETS_OVERLAY_ONLY=from-the-overlay\n").unwrap();
-        let overlay =
-            crate::config::EnvOverlay::from_paths(&[env_file], &crate::config::EnvOverlay::none());
+        let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
         let env = std::sync::Arc::new(crate::config::LiveEnv::new(
             std::sync::Arc::new(overlay),
             crate::config::ResolvedEnvFiles::default(),

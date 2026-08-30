@@ -267,10 +267,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let env_file = dir.path().join(".env");
         std::fs::write(&env_file, "MCP_GATEWAY_FIREWALL_SKIP_KEYS=release_notes\n").unwrap();
-        let overlay = Arc::new(crate::config::EnvOverlay::from_paths(
-            &[env_file],
-            &crate::config::EnvOverlay::none(),
-        ));
+        let overlay = Arc::new(crate::config::EnvOverlay::from_paths(&[env_file]));
         let env = Arc::new(crate::config::LiveEnv::new(
             Arc::clone(&overlay),
             crate::config::ResolvedEnvFiles::default(),

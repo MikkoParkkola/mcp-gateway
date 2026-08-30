@@ -2719,8 +2719,7 @@ mod tests {
         .unwrap();
         // `none()` as the inherited base: whatever the developer's own
         // environment holds cannot decide this test either way.
-        let overlay =
-            crate::config::EnvOverlay::from_paths(&[env_file], &crate::config::EnvOverlay::none());
+        let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
 
         let (key, key_id) = provenance_key(&overlay);
 

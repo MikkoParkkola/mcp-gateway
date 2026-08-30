@@ -490,10 +490,7 @@ fn credential_resolves_against_an_env_file_overlay() {
     let dir = tempfile::tempdir().unwrap();
     let env_file = dir.path().join(".env");
     std::fs::write(&env_file, "INJECTOR_OVERLAY_ONLY=from-the-overlay\n").unwrap();
-    let overlay = mcp_gateway::config::EnvOverlay::from_paths(
-        &[env_file],
-        &mcp_gateway::config::EnvOverlay::none(),
-    );
+    let overlay = mcp_gateway::config::EnvOverlay::from_paths(&[env_file]);
     let env = std::sync::Arc::new(mcp_gateway::config::LiveEnv::new(
         std::sync::Arc::new(overlay),
         mcp_gateway::config::ResolvedEnvFiles::default(),

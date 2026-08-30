@@ -491,8 +491,7 @@ async fn webhook_handler_accepts_a_secret_an_env_file_assigns() {
     let dir = tempfile::tempdir().unwrap();
     let env_file = dir.path().join(".env");
     std::fs::write(&env_file, "MIK_7256_OVERLAY_SECRET=well-known-test-value\n").unwrap();
-    let overlay =
-        crate::config::EnvOverlay::from_paths(&[env_file], &crate::config::EnvOverlay::none());
+    let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
     let env = Arc::new(crate::config::LiveEnv::new(
         Arc::new(overlay),
         crate::config::ResolvedEnvFiles::default(),

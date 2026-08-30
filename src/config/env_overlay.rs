@@ -82,11 +82,6 @@ pub struct EnvOverlay {
     /// Keys this overlay's files assign. Distinct from `vars`' key set only in
     /// intent, but the intent is what the restart notice is decided from.
     owned: BTreeSet<String>,
-    /// Values inherited from the overlay in force when this one was built.
-    inherited: HashMap<String, String>,
-    /// The process-environment value of each owned key at construction, so a
-    /// consumer can tell an override from a pass-through.
-    baseline: HashMap<String, String>,
 }
 
 impl EnvOverlay {
@@ -96,13 +91,21 @@ impl EnvOverlay {
         Self::default()
     }
 
-    /// The single resolver. Env-file assignment first, then whatever the
-    /// previous overlay carried, then the process environment.
+    /// The single resolver. Env-file assignment first, then the process
+    /// environment.
+    ///
+    /// An overlay carries nothing forward from the one it replaces. A reload
+    /// re-reads the same recorded files, so every env-file value is derived
+    /// again; the only thing carrying the old overlay forward could add is a
+    /// key whose line was deleted, which is exactly what a reload must revoke.
+    ///
+    /// The fall-through is the baseline, not an approximation of one: nothing
+    /// in this crate writes the process environment, so a key's pre-overlay
+    /// value is still there to be read after any number of reloads.
     #[must_use]
     pub fn resolve(&self, name: &str) -> Option<String> {
         self.vars
             .get(name)
-            .or_else(|| self.inherited.get(name))
             .cloned()
             .or_else(|| std::env::var(name).ok())
     }
@@ -123,30 +126,23 @@ impl EnvOverlay {
         &self.owned
     }
 
-    /// The process-environment value `name` had when this overlay was built.
-    #[must_use]
-    pub fn baseline(&self, name: &str) -> Option<&str> {
-        self.baseline.get(name).map(String::as_str)
-    }
-
     /// Everything the overlay contributes, for consumers that need a map rather
     /// than point lookups.
     #[must_use]
     pub fn effective_vars(&self) -> BTreeMap<String, String> {
-        self.inherited
+        self.vars
             .iter()
-            .chain(self.vars.iter())
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
     }
 
-    /// Overlay for already-resolved paths, layered over `previous`.
+    /// Overlay for already-resolved paths.
     ///
     /// Unreadable or malformed files are warned about and skipped, matching the
     /// tolerance the process-mutating loader had.
     #[must_use]
-    pub fn from_paths(paths: &[PathBuf], previous: &EnvOverlay) -> Self {
-        let mut overlay = Self::inheriting(previous);
+    pub fn from_paths(paths: &[PathBuf]) -> Self {
+        let mut overlay = Self::default();
         for path in paths {
             overlay.apply_file_tolerant(path);
         }
@@ -158,22 +154,12 @@ impl EnvOverlay {
     /// The diagnostic is rebuilt rather than forwarded: `dotenvy`'s own
     /// `Display` echoes the offending line, which would put a secret into a log
     /// line written because a secret was mistyped.
-    pub fn from_paths_checked(paths: &[PathBuf], previous: &EnvOverlay) -> Result<Self> {
-        let mut overlay = Self::inheriting(previous);
+    pub fn from_paths_checked(paths: &[PathBuf]) -> Result<Self> {
+        let mut overlay = Self::default();
         for path in paths {
             overlay.apply_file(path)?;
         }
         Ok(overlay)
-    }
-
-    /// An empty overlay layered over `previous`, to be filled entry by entry.
-    pub(crate) fn inheriting(previous: &EnvOverlay) -> Self {
-        Self {
-            vars: HashMap::new(),
-            owned: BTreeSet::new(),
-            inherited: previous.effective_vars().into_iter().collect(),
-            baseline: HashMap::new(),
-        }
     }
 
     /// Applies one env file, warning rather than failing on malformed content.
@@ -200,9 +186,6 @@ impl EnvOverlay {
     }
 
     fn insert(&mut self, key: String, value: String) {
-        if let Ok(existing) = std::env::var(&key) {
-            self.baseline.entry(key.clone()).or_insert(existing);
-        }
         self.owned.insert(key.clone());
         self.vars.insert(key, value);
     }
