@@ -276,72 +276,50 @@ continuation state reaches them on `MetaMcpCallerContext` rather than being read
 from `AppState`. One seam instead of two, and the keyring is in scope for the
 retry side in the same place.
 
-### DE-2 — MRTR.9 has no source of truth for "what the client declared"
+### DE-2 — MRTR.9's source of truth is per request, not per session
 
 MRTR.9 requires the gateway not to send an `inputRequest` of a type the client
-has not declared support for. **Nothing records client capabilities.**
-`handle_initialize` (`src/gateway/meta_mcp/mod.rs:1011`) takes `&self`, reads
-`params` for the protocol version alone, and stores nothing per session. There
-is no per-session capability store to consult, and no `elicitation` capability
-is read from an initialize payload anywhere in `src/`.
+has not declared support for.
 
-This is not a gap in the wiring; it is a missing subsystem the requirement
-assumes exists. Increment 2 is scoped to two edits around one function, and a
-per-session client-capability store is neither of them.
+The search that found "nothing records client capabilities" looked at the
+**session** path and was right about it: `handle_initialize`
+(`src/gateway/meta_mcp/mod.rs:1011`) takes `&self`, reads `params` for the
+protocol version and a profile hint, and persists no capabilities; the
+`capabilities` it emits at `:1003` are the server's own. There is no per-session
+client-capability store, and building one is not increment 2's size.
 
-Disposal per §P0: **write it into the design** — it changes what the thing
-should be, not what it currently does. MRTR.9 does not close in increment 2, and
-test-plan rows 312 and 313 do not run here. The task brief's "Closes MRTR.9" is
-the claim this event withdraws.
+**A per-session store is not what MRTR.9 needs.** On the modern path a client
+declares its capabilities on *every request*, in `_meta`, and the gateway
+already parses them: `RequestFields::declared_capabilities`
+(`src/protocol/meta.rs:69`), populated at `:186`, with the predicate every
+consumer would call at `:271` — `declares_capability(name)`. The parse runs in
+production: `classify_request` is called at
+`src/gateway/router/handlers.rs:578`, and the `Modern(ref fields)` branch
+destructures the fields at `:595`, inside the function that dispatches.
 
-What a later increment needs, stated so it is not rediscovered:
+The field has **zero readers** outside its own module. That is the same defect
+as the rest of this increment — a path built, tested, and never wired — not a
+missing subsystem. The distinction decides the size: consulting a predicate that
+already exists on a struct already in hand is a rider on DE-1's seam, and
+`MetaMcpCallerContext` (`src/gateway/meta_mcp/mod.rs:111`) is a borrowed
+per-request struct that already carries `api_key_name` and `agent_id` across
+exactly this boundary.
 
-- `handle_initialize` must persist the client's declared capabilities against the
-  session, which means `&self` gains interior mutability or the store moves to
-  the session registry.
-- The check then belongs immediately before the mint, on the `input_required`
-  path in `invoke.rs`: an interim result naming an undeclared request type is
-  refused **before** anything is minted, so a refusal cannot leave a live
-  continuation behind.
-- Until that exists, the gateway forwards whatever request types a backend names.
-  That is the current behaviour, unchanged by this increment, and it is now
-  recorded rather than assumed.
+**MRTR.9 returns to increment 2's scope**, and test-plan rows 312 and 313 run
+here. The withdrawal is itself withdrawn.
 
-### The seam, mapped
+Where the check goes, unchanged from the earlier reasoning because that part was
+right: immediately before the mint on the `input_required` path, so an interim
+result naming an undeclared request type is refused **before** anything is
+minted and a refusal cannot leave a live continuation behind.
 
-Line numbers against 9f16fae8, so a later reader can tell drift from error.
+Two things a per-request declaration settles that a session store would not:
+a client may narrow what it accepts between calls, and a null or absent
+`clientCapabilities` is not a declaration — `meta.rs:70-77` already states the
+specification's rule that explicitly-absent is still absent. An implementation
+must refuse on absence rather than default to permitted.
 
-| what | where |
-|---|---|
-| refusal to delete (`is_retry` arm only) | `router/handlers.rs:872-889` |
-| the `is_malformed` arm that STAYS | `router/handlers.rs:862-871` |
-| `dispatch_to_backend` definition, 11 params | `meta_mcp/invoke.rs:1788` |
-| its only call site | `meta_mcp/invoke.rs:929` |
-| outbound params built here — siblings go here | `meta_mcp/invoke.rs:1910` |
-| idempotency + cache writes, all AFTER the call site | `invoke.rs:789, 851, 1040, 1276` |
-
-The outbound shape is one line today:
-
-```rust
-let base_params = json!({ "name": tool, "arguments": arguments });
-```
-
-`inputResponses` and `requestState` are inserted into that object beside
-`arguments`, never into it. That placement is the whole of MRTR.1's boundary
-case: a tool whose own argument is named `requestState` is untouched, because
-nothing ever writes inside `arguments`.
-
-Two distinct shapes, easily conflated, and conflating them is the security
-defect MRTR.2 names:
-
-- `RetryFields` (`protocol/mrtr.rs:34`) is the **inbound** shape — what the
-  client sent, including the gateway's own sealed token. Attacker-controlled.
-- the **outbound** shape is the backend's own opaque state, recovered by opening
-  that token. A second small struct, because reusing `RetryFields` here is what
-  forwards a client-supplied string to a backend as if the gateway had issued it.
-
-The mint belongs at the call site (`invoke.rs:929`), not inside
-`dispatch_to_backend` and not in `handlers.rs`: it must run after the result
-arrives and before the idempotency and cache writes below it, so an
-`input_required` result can suppress both. That ordering is design decision 3,
-and it is the reason for DE-1.
+Stated as inference, not verified here: DE-1's finding that the mint site in
+`invoke.rs` receives `MetaMcpCallerContext` is taken from that event's own
+source reading. If the mint site turns out not to hold that context, this
+returns to a design question before any code is written.
