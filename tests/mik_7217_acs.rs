@@ -332,6 +332,7 @@ mod http {
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let agent_registry = Arc::new(AgentRegistry::new());
         Arc::new(AppState {
+            env: None,
             meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
             backends,
             meta_mcp_enabled: true,

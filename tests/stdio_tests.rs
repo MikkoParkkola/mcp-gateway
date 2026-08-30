@@ -90,6 +90,7 @@ async fn test_stdio_initialize_produces_valid_response() {
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
 
     let _state = Arc::new(AppState {
+        env: None,
         backends: Arc::clone(&backends),
         meta_mcp: Arc::clone(&meta_mcp),
         meta_mcp_enabled: true,

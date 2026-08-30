@@ -115,6 +115,11 @@ pub struct AppState {
     /// SIEM export status, present when the export background task is running
     /// (MIK-6703). Drives the `EvidenceExport` entitlement + export-status route.
     pub export_status: Option<Arc<crate::control_plane::ExportStatus>>,
+    /// The environment the gateway resolves against, so a route reading an
+    /// operator-supplied variable sees what a reload published rather than what
+    /// the process was started with. `None` in tests that construct the state
+    /// directly, which then read the process environment as before.
+    pub env: Option<Arc<crate::config::LiveEnv>>,
     /// Tamper-evident transparency log (issue #133, D3), shared with `MetaMcp`.
     /// Lets the direct backend route (`backend_handlers::backend_handler`),
     /// which bypasses `MetaMcp`, write identity-propagation audit events

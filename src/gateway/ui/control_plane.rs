@@ -715,7 +715,10 @@ async fn local_shadow_radar(state: &AppState) -> ControlPlaneShadowRadar {
         .into_iter()
         .map(|backend| backend.name.clone())
         .collect();
-    let discovery = AutoDiscovery::new();
+    let discovery = match &state.env {
+        Some(env) => AutoDiscovery::new().with_env(Arc::clone(env)),
+        None => AutoDiscovery::new(),
+    };
 
     let Ok(discovered) = discovery.discover_all().await else {
         return ControlPlaneShadowRadar::scan_unavailable();
