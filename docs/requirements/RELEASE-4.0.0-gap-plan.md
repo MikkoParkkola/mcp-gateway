@@ -198,7 +198,7 @@ projection and identity, `forward_elicitation_with_response` taking a `session_i
 Two of ten rows checked across both passes were stale, both in the direction of the work being
 further along than the audit recorded.
 
-**18 — The destructive-confirmation gate governs every annotated tool (XS).** Closes
+**18 — The destructive-confirmation gate governs every annotated tool (S, one design question open).** Closes
 MIK-7246.CONF.3. `destructive_tools_from_annotations()` (`gateway/destructive_confirmation.rs:117`)
 derives destructive tools from the `destructiveHint` annotation, is unit-tested, and has no
 production caller — verified 2026-08-31, the only references in `src/` are its own doc comment and
@@ -210,8 +210,20 @@ The design decision this needs is already written down and does not have to be m
 doc comment at `destructive_confirmation.rs:143-147` says the two checks compose rather than
 replace — the annotation is the source of truth for tools the gateway did not write, the match arm
 is the floor for the one it did, so an annotation dropped by accident cannot quietly ungovern it.
-So the change is an `||` at the call site plus the `tools/list` value to derive from, not a
-redesign. This is the plan's cleanest example of DoD D7: the mechanism exists, the tests pass, and
+So the shape of the fix is an `||` at the call
+site rather than a redesign.
+
+What that leaves open is availability, not semantics, and it is why this is not the XS it first
+looked like. Checked on 2026-08-31: the gate at `handlers.rs:1024` has only `tool_name: &str` in
+scope. `destructive_tools_from_annotations()` takes a whole `tools/list` payload, and `tools/list` is
+served from a different match arm (`handlers.rs:834`, via `state.meta_mcp`). There is no derived set
+at the gate to ask. So the increment carries a design question before it carries code: **where does
+the annotation-derived set live, who populates it at list time, and what invalidates it when a
+backend re-lists?** That is new state, the same class of question as the stdio-capability one
+deferred out of increment 2a — and it is a cache over a security decision, so a stale entry
+ungoverns a tool rather than merely slowing something down.
+
+This is still the plan's cleanest example of DoD D7: the mechanism exists, the tests pass, and
 production does not call it.
 
 **19 — The unconfirmable-refusal test drives the router (XS).** Closes MIK-7246.CONF.4 properly.
