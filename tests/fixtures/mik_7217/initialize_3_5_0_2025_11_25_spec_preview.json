@@ -1,0 +1,25 @@
+{
+  "capabilities": {
+    "logging": {},
+    "prompts": {
+      "listChanged": true
+    },
+    "resources": {
+      "listChanged": true,
+      "subscribe": true
+    },
+    "tools": {
+      "filtering": true,
+      "listChanged": true,
+      "resolve": true
+    }
+  },
+  "instructions": "This server manages 0 tools across 0 backends.\nUse gateway_search_tools FIRST to find relevant tools by keyword before invoking.\nTool schemas are not listed directly so the prompt stays compact.\n\nDiscovery pattern:\n1. gateway_search_tools(query=\"your keyword\") -- find tools matching your need\n2. gateway_invoke(server=\"X\", tool=\"Y\", arguments={...}) -- call the tool\n\nDirect listing (when you know the backend):\n- gateway_list_tools(server=\"brave\") -- list tools from a specific backend\n- gateway_list_servers -- list all backends with status\n",
+  "protocolVersion": "2025-11-25",
+  "serverInfo": {
+    "description": "Universal MCP Gateway with Meta-MCP for dynamic tool discovery",
+    "name": "mcp-gateway",
+    "title": "MCP Gateway",
+    "version": "4.0.0"
+  }
+}

@@ -1,6 +1,6 @@
 # DoD check — MCP 2026-07-28 support (branch `feat/mcp-2026-protocol`)
 
-**Date**: 2026-08-29 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: `c4f4781a`
+**Date**: 2026-08-30 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: `3448f659`
 **Requirements**: `RELEASE-4.0.0-requirements.md` · **Plan**: `RELEASE-4.0.0-test-plan.md`
 
 Gates were **run**, not asserted. Where a verdict is N/A it carries its reason, because an N/A
@@ -43,7 +43,7 @@ pages.
 
 | Gate | Command | Result |
 |---|---|---|
-| Linter | `cargo clippy --all-targets -- -D warnings` | 0 warnings |
+| Linter | `cargo clippy --all-targets --all-features -- -D warnings` | 0 warnings |
 | Formatter | `cargo fmt --check` | clean |
 | Secret scan | private-key / API-key patterns over the branch diff | 0 |
 
@@ -55,9 +55,23 @@ the change that created them.
 
 ## §4 Testing — PASS at head
 
-- **4,463 tests passing across 45 binaries, 0 failing** — measured at the head commit with `--no-fail-fast`, so no binary was skipped because an earlier one failed.
+- **4,610 tests passing across 46 binaries, 0 failing** — measured at the head commit under `--all-features` with `--no-fail-fast`, so neither a disabled feature nor an earlier failing binary can hide a row. The figure recorded in the previous revision, 4,463 across 45 binaries, was the default feature set.
 - **41 doc-tests pass.**
 - **23 tests are `#[ignore]`d.** Twelve are doc-test examples and ten are pre-existing integration tests needing Docker or a live API. **One is this branch's**: `ac_discover_1_advertises_the_target_revision`, which asserts the gateway advertises 2026-07-28 — deliberately false while the switch is off. The previous revision of this document said "one test is ignored" and meant one of *mine*; as written it was a false claim about the suite, and this corrects it.
+
+**The suite had only ever been run under default features, and `--all-features` was red.**
+The handshake golden is keyed by feature set on purpose — under `spec-preview` the `initialize`
+result advertises two extra tool capabilities, so one golden is one feature set — but only the
+`default` goldens had been captured. Under `--all-features` the row failed on a missing fixture,
+which is the row working: a golden that silently stopped comparing would have been the failure worth
+having. The two `spec_preview` goldens are now captured. Capturing them from this tree rather than
+from the 3.5.0 tag is legitimate here and was verified rather than assumed: `meta_mcp_helpers.rs`,
+`meta_mcp/spec_preview.rs` and `handle_initialize` are byte-identical to `cdd52622`, so this tree
+*is* 3.5.0 for the handshake. The only handshake-adjacent change on the branch is `SUPPORTED_VERSIONS`
+dropping the never-specified `2024-10-07`, and the result does not carry that list. The new files
+record `"version": "4.0.0"` where their siblings record `"3.5.0"`; the row nulls that field and
+asserts it separately against the crate version, and hand-editing a captured golden is the one thing
+the capture rule forbids.
 
 ### Falsification — every control was made to fail, and two could not be
 
@@ -530,12 +544,13 @@ authenticated operator can trigger regardless of the switch; the port race exist
 
 Finding 6 has since been repaired rather than accepted, on the operator's instruction that anything
 fixable gets fixed and that the rules left standing should be ones any user can state. The rule that
-replaced it is one sentence: *a `~` in an env-file path, plus a `HOME` that differs from startup,
-means a restart is required.* With it closed, nothing outstanding is reachable while the switch is
-off, and the port race is test-only. Two real options remain:
+replaced it fires on either run's `HOME` assignment beside a `~` entry, or on a changed value: it is
+never silent when a restart would read different files, and for a config that assigns `HOME` beside
+a `~` entry it never clears either. With it closed, nothing outstanding is reachable while the
+switch is off, and the port race is test-only. Two real options remain:
 
 1. **Ship 4.0.0 as the legacy-safe groundwork**, modern path documented as preview with the findings listed. The default-off switch is what makes this honest.
-2. **Hold the tag** until the six numbered open findings above are closed and re-reviewed.
+2. **Hold the tag** until the five numbered open findings above are closed and re-reviewed.
 
 Removing the modern path is *not* a third option worth its cost: the switch already achieves the
 isolation removal would buy.

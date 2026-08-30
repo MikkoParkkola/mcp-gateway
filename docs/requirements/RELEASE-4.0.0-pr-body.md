@@ -20,10 +20,12 @@ deployer to discover.
 ## Tickets
 
 Closed by this branch when it merges: MIK-7272, MIK-7217, MIK-7215, MIK-7214,
-MIK-7213, MIK-7212, MIK-7116, MIK-7256.
+MIK-7213, MIK-7212, MIK-7116, MIK-7256, MIK-7320.
 Already closed against `v3.5.0`: MIK-7258, MIK-7257, MIK-7243, MIK-7244, MIK-7245.
 Filed as fast-follows: MIK-7311, MIK-7312.
-Blocked on an observation nobody can make from source: MIK-7265.
+Closed by deploying this release, not by merging it: MIK-7265. The guard exists in
+source and the installed build predates it; a probe of the running instance on
+2026-08-30 returned version `3.4.0` and answered a foreign `Origin` with HTTP 200.
 
 ## Evidence
 
