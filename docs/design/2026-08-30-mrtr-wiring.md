@@ -381,13 +381,16 @@ belong on that struct.
 
 `MetaMcpCallerContext` gains `may_request_input`, named for the question it
 answers rather than for where the answer comes from. On HTTP it is read at
-`handlers.rs:591`, inside the `Modern(ref fields)` block where the declaration
-is still in scope, and carried the ~500 lines to the construction site. It is a
-fresh read of `declares_capability("elicitation")`, not the boolean at `:690`:
-that one answers "did the client declare the capability THIS method needs",
-which is a different question that happens to share a helper.
+`handlers.rs:597`, alongside `is_modern`, so every shape-derived fact is read
+once and carried the ~500 lines to the construction site rather than
+re-classified there. The read is `RequestShape::may_request_input`, a named
+method rather than an inline `matches!`, so the capability string it compares
+against is covered by a test — a typo in it would otherwise compile and still
+look like a no-op. It is not the per-method check at `:695`: that one answers "did the
+client declare the capability THIS method needs", which is a different question
+that happens to share a helper.
 
-On stdio (`server/mod.rs:1730`) there is no per-request declaration to read, so
+On stdio (`server/mod.rs:1733`) there is no per-request declaration to read, so
 the value is `false`. That is a decision, not a default: `meta.rs:70-77` already
 states the specification's rule that explicitly-absent is still absent, and the
 same reading applies to a transport that cannot declare at all. A stdio client
@@ -398,9 +401,31 @@ constant to flip.
 Nothing reads the field yet. It is wired at both construction sites so the next
 increment adds the refusal, not the plumbing.
 
+**One boolean is deliberately not enough, and both review vendors said so.** It
+cannot tell elicitation from sampling from roots, and it cannot tell a form
+request from a URL-mode one. That is accepted here and closed in the increment
+that first reads the field: MRTR.9 refuses per `inputRequest` method, which
+needs the declared capability names on the context, not a bit. The bit is
+correct for what it currently gates — nothing — and wrong for what will gate on
+it, so it is replaced rather than extended when the reader lands. Recorded so
+the next increment inherits the requirement instead of rediscovering it.
+
+The same review raised the stdio half, claiming the gateway fails to persist
+capabilities a legacy client declares at `initialize`. The weaker half of that
+is true and the stronger half is worse: the gateway never reads them at all.
+`handle_initialize` (`meta_mcp/mod.rs:1018-1037`) extracts the protocol version
+and a profile hint and nothing else, and `client_capabilities` appears nowhere
+in `src/`. So `false` at `server/mod.rs:1733` is the only answer available, not
+merely the only one stored — reading and holding a legacy client's declaration
+is new state, which is why it is not a constant to flip here. It belongs with
+the legacy-client bridge increment, where a legacy client's capabilities first
+matter.
+
 ### The seam, mapped
 
-Line numbers against 9f16fae8, so a later reader can tell drift from error.
+Line numbers against the current tree on `feat/MIK-7320-golden-fixture-fix`, so
+a later reader can tell drift from error. The `invoke.rs` rows were re-read
+after DE-3 changed those signatures; they are not the values 9f16fae8 carried.
 
 | what | where |
 |---|---|

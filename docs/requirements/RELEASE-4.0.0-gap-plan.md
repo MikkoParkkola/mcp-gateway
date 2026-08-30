@@ -47,8 +47,10 @@ lifecycle; construct per process at startup; generate key material per process a
 Tests: construction through the production path, and a second `AppState` refusing the first's token
 (the current test builds two `Keyring`s by hand and proves only AES key separation).
 
-**2a — The mint site can see who is calling (S).** No behaviour, so no new tests: the existing
-suite is the safety net and a green run before and after is the evidence. `invoke_tool_traced`
+**2a — The mint site can see who is calling (S).** No behaviour change, so the existing suite
+green before and after is the evidence. Review added four tests anyway, on the capability string the
+new `RequestShape::may_request_input` compares against: a typo there compiles and reads as a
+correct no-op, so the string needs a test even when the caller of the method does nothing yet. `invoke_tool_traced`
 takes `caller: &MetaMcpCallerContext<'_>` in place of its six flattened caller fields, and the
 client's declared capabilities reach the scope where that context is built. Two source facts make
 this mechanical rather than a design question: `invoke_tool` already takes the context whole, and

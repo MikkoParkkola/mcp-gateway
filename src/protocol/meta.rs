@@ -261,6 +261,22 @@ pub fn required_capability(method: &str) -> Option<&'static str> {
     }
 }
 
+impl RequestShape {
+    /// Whether the caller may be asked for input mid-call.
+    ///
+    /// Only a modern request that declared `elicitation` may be. Legacy and
+    /// malformed shapes carry no declaration to read, and a capability the
+    /// client did not mention was not declared.
+    ///
+    /// Named rather than inlined at the call site so the capability string is
+    /// covered by a test: a typo in it would otherwise compile and still look
+    /// like a no-op.
+    #[must_use]
+    pub fn may_request_input(&self) -> bool {
+        matches!(self, RequestShape::Modern(f) if f.declares_capability("elicitation"))
+    }
+}
+
 impl RequestFields {
     /// Whether the client declared a capability by name.
     ///
@@ -270,5 +286,62 @@ impl RequestFields {
     #[must_use]
     pub fn declares_capability(&self, name: &str) -> bool {
         self.declared_capabilities.iter().any(|n| n == name)
+    }
+}
+
+#[cfg(test)]
+mod may_request_input_tests {
+    use super::{RequestShape, classify_request};
+    use serde_json::json;
+
+    fn modern_params(caps: &serde_json::Value) -> serde_json::Value {
+        json!({"_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": caps
+        }})
+    }
+
+    #[test]
+    fn a_modern_request_declaring_elicitation_may_be_asked_for_input() {
+        let shape = classify_request(
+            Some(&modern_params(&json!({"elicitation": {}}))),
+            Some("2026-07-28"),
+        );
+        assert!(
+            matches!(shape, RequestShape::Modern(_)),
+            "fixture must be modern"
+        );
+        assert!(shape.may_request_input());
+    }
+
+    #[test]
+    fn a_modern_request_declaring_nothing_may_not_be_asked_for_input() {
+        let shape = classify_request(Some(&modern_params(&json!({}))), Some("2026-07-28"));
+        assert!(
+            matches!(shape, RequestShape::Modern(_)),
+            "fixture must be modern"
+        );
+        assert!(!shape.may_request_input());
+    }
+
+    #[test]
+    fn declaring_a_different_capability_does_not_grant_input() {
+        // Guards the capability string itself: sampling and roots are the two
+        // neighbours a typo or a widened match would let through.
+        for cap in ["sampling", "roots"] {
+            let shape =
+                classify_request(Some(&modern_params(&json!({cap: {}}))), Some("2026-07-28"));
+            assert!(!shape.may_request_input(), "{cap} must not grant input");
+        }
+    }
+
+    #[test]
+    fn a_legacy_request_may_not_be_asked_for_input() {
+        let shape = classify_request(Some(&json!({})), Some("2025-11-25"));
+        assert!(
+            matches!(shape, RequestShape::Legacy),
+            "fixture must be legacy"
+        );
+        assert!(!shape.may_request_input());
     }
 }
