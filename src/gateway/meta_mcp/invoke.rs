@@ -1825,13 +1825,14 @@ impl MetaMcp {
         // shared default bucket (single-tenant behavior unchanged).
         identity_key: Option<&str>,
     ) -> Result<Value> {
-        let injection = self.secret_injector.inject(server, tool, arguments)?;
-        let arguments = injection.arguments;
-
         if let Some(cap) = self.get_capabilities()
             && server == cap.name
             && cap.has_capability(tool)
         {
+            // Capability path: inject then validate inside call_tool (pre-existing
+            // order). YAML schemas typically declare or ignore injected keys.
+            let injection = self.secret_injector.inject(server, tool, arguments)?;
+            let arguments = injection.arguments;
             let cap_def = cap
                 .get(tool)
                 .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
@@ -1938,6 +1939,10 @@ impl MetaMcp {
                 }));
             }
         };
+        // Inject after validation so gateway-owned credentials are not rejected
+        // as unknown keys (MIK-6865 gpt-review).
+        let injection = self.secret_injector.inject(server, tool, arguments)?;
+        let arguments = injection.arguments;
 
         // Eagerly check the cached tool list for a "did you mean?" hint.
         // Only fires when the cache is populated and the tool is not found there.

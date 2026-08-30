@@ -735,6 +735,45 @@ fn nested_additional_properties_true_allows_extra_keys() {
         "nested additionalProperties:true is the explicit opt-in; violations={:?}",
         result.violations
     );
+    assert_eq!(
+        result.coerced["edit"]["extra"],
+        json!("ok"),
+        "opted-in extra keys must survive coercion"
+    );
+}
+
+#[test]
+fn parent_additional_properties_true_does_not_open_nested_objects() {
+    let schema = json!({
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+            "edit": {
+                "type": "object",
+                "properties": {
+                    "oldText": { "type": "string" },
+                    "newText": { "type": "string" }
+                }
+            }
+        }
+    });
+    let result = validate_arguments(
+        &json!({
+            "edit": { "oldText": "a", "newText": "b", "type": "invented" },
+            "top_extra": true
+        }),
+        &schema,
+    );
+    assert!(
+        !result.is_valid(),
+        "nested declared objects stay fail-closed when the parent opts in; violations={:?}",
+        result.violations
+    );
+    assert!(
+        result.violations.iter().any(|v| v.param.contains("type")),
+        "invented nested key must be named, got {:?}",
+        result.violations
+    );
 }
 
 // ── Schema-shape classification (MCPGW.SCHEMA.2) ────────────────────────

@@ -675,6 +675,7 @@ pub(crate) fn build_code_mode_execute_tool() -> Tool {
                 "arguments": {
                     "type": "object",
                     "description": "Tool arguments matching its input schema",
+                    "additionalProperties": true,
                     "default": {}
                 },
                 "chain": {
@@ -684,7 +685,10 @@ pub(crate) fn build_code_mode_execute_tool() -> Tool {
                         "type": "object",
                         "properties": {
                             "tool": {"type": "string"},
-                            "arguments": {"type": "object"}
+                            "arguments": {
+                                "type": "object",
+                                "additionalProperties": true
+                            }
                         },
                         "required": ["tool"]
                     }

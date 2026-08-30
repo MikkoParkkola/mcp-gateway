@@ -133,6 +133,8 @@ impl SchemaValidationResult {
 pub fn validate_arguments(arguments: &Value, input_schema: &Value) -> SchemaValidationResult {
     // Inputs are strict: an unrecognised parameter is almost always a caller
     // typo or a hallucinated field, so it is reported as a violation.
+    // Nested objects use this same root default; they do not inherit a
+    // parent's `additionalProperties: true` (MIK-6865).
     validate_object(arguments, input_schema, true, "", 0)
 }
 
@@ -143,11 +145,13 @@ pub fn validate_arguments(arguments: &Value, input_schema: &Value) -> SchemaVali
 /// upstream APIs legitimately return extra fields the declared schema does not
 /// enumerate (e.g. Brave's `mixed`/`type`, Exa's `costDollars`/`searchTime`).
 /// Nested object schemas may override with `additionalProperties: true`.
+/// `root_reject` is the call-level default (inputs: true). A parent's opt-in
+/// does not leak to descendants.
 #[must_use]
 fn validate_object(
     arguments: &Value,
     input_schema: &Value,
-    reject_extra_keys: bool,
+    root_reject: bool,
     path: &str,
     depth: u8,
 ) -> SchemaValidationResult {
@@ -169,7 +173,7 @@ fn validate_object(
         };
     }
 
-    let reject_extra_keys = extra_keys_rejected(input_schema, reject_extra_keys);
+    let reject_extra_keys = extra_keys_rejected(input_schema, root_reject);
 
     let properties = input_schema.get("properties").and_then(Value::as_object);
 
@@ -222,12 +226,22 @@ fn validate_object(
             &param,
             raw_value,
             prop_schema,
-            reject_extra_keys,
+            root_reject,
             depth.saturating_add(1),
         );
 
         violations.extend(type_violations);
         coerced_map.insert(name.clone(), coerced_value);
+    }
+
+    // additionalProperties:true means extras are valid, so keep them. Declared
+    // keys already occupy the map with their coerced values.
+    if !reject_extra_keys {
+        for (key, value) in &arg_map {
+            coerced_map
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
     }
 
     // If there are type violations keep the original args (they'll be rejected).
@@ -349,7 +363,7 @@ fn validate_property(
     name: &str,
     value: &Value,
     prop_schema: &Value,
-    reject_extra_keys: bool,
+    root_reject: bool,
     depth: u8,
 ) -> (Value, Vec<ValidationViolation>) {
     let declared_type = prop_schema.get("type").and_then(Value::as_str);
@@ -423,7 +437,7 @@ fn validate_property(
 
     let is_object = declared_type == Some("object") || prop_schema.get("properties").is_some();
     if is_object {
-        let nested = validate_object(&coerced, prop_schema, reject_extra_keys, name, depth);
+        let nested = validate_object(&coerced, prop_schema, root_reject, name, depth);
         return (nested.coerced, nested.violations);
     }
 
@@ -431,7 +445,7 @@ fn validate_property(
         && let Some(items_schema) = prop_schema.get("items")
         && let Some(array) = coerced.as_array()
     {
-        return validate_array_items(name, array, items_schema, reject_extra_keys, depth);
+        return validate_array_items(name, array, items_schema, root_reject, depth);
     }
 
     (coerced, violations)
@@ -441,7 +455,7 @@ fn validate_array_items(
     path: &str,
     array: &[Value],
     items_schema: &Value,
-    reject_extra_keys: bool,
+    root_reject: bool,
     depth: u8,
 ) -> (Value, Vec<ValidationViolation>) {
     let mut violations = Vec::new();
@@ -450,13 +464,12 @@ fn validate_array_items(
     for (i, element) in array.iter().enumerate() {
         let item_path = format!("{path}[{i}]");
         if object_items {
-            let nested =
-                validate_object(element, items_schema, reject_extra_keys, &item_path, depth);
+            let nested = validate_object(element, items_schema, root_reject, &item_path, depth);
             violations.extend(nested.violations);
             coerced_items.push(nested.coerced);
         } else {
             let (coerced, item_violations) =
-                validate_property(&item_path, element, items_schema, reject_extra_keys, depth);
+                validate_property(&item_path, element, items_schema, root_reject, depth);
             violations.extend(item_violations);
             coerced_items.push(coerced);
         }
