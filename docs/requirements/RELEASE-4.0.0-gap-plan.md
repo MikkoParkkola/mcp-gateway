@@ -198,6 +198,45 @@ projection and identity, `forward_elicitation_with_response` taking a `session_i
 Two of ten rows checked across both passes were stale, both in the direction of the work being
 further along than the audit recorded.
 
+**18 — The destructive-confirmation gate governs every annotated tool (XS).** Closes
+MIK-7246.CONF.3. `destructive_tools_from_annotations()` (`gateway/destructive_confirmation.rs:117`)
+derives destructive tools from the `destructiveHint` annotation, is unit-tested, and has no
+production caller — verified 2026-08-31, the only references in `src/` are its own doc comment and
+its own tests. The live gate at `router/handlers.rs:1024` calls `is_destructive_meta_tool()`, which
+is `matches!(tool_name, "gateway_kill_server")`. A backend tool shipping tomorrow with
+`destructiveHint: true` inherits no gate.
+
+The design decision this needs is already written down and does not have to be made again: the
+doc comment at `destructive_confirmation.rs:143-147` says the two checks compose rather than
+replace — the annotation is the source of truth for tools the gateway did not write, the match arm
+is the floor for the one it did, so an annotation dropped by accident cannot quietly ungovern it.
+So the change is an `||` at the call site plus the `tools/list` value to derive from, not a
+redesign. This is the plan's cleanest example of DoD D7: the mechanism exists, the tests pass, and
+production does not call it.
+
+**19 — The unconfirmable-refusal test drives the router (XS).** Closes MIK-7246.CONF.4 properly.
+The current test asserts `ConfirmationPolicy::for_modern().on_unconfirmable() == REFUSE` at the
+struct level. That satisfies the criterion's literal text and cannot catch a call site that never
+consults the policy — the same shape as increment 18's defect, one layer down. MIK-7214's suite
+already has the pattern worth copying: real axum-router integration tests under its `mod http`.
+
+**20 — The header contract's two open halves (S).** Closes MIK-7214.HDR.2 and HDR.4. Inbound
+validation is done and green (`protocol/headers.rs:148-213`, wired at `handlers.rs:600-687`,
+mismatch to -32020, 32 tests). Two halves are absent, both verified by search on 2026-08-31:
+outbound `Mcp-Method`/`Mcp-Name` emission has zero hits in `src/backend` or `src/transport`, and
+`x-mcp-header` has zero hits anywhere in `src/`. HDR.4 may be closeable by a recorded declination
+rather than code — the criterion asks for support or an explicit decision, and which one it gets is
+an owner call, not an implementation detail.
+
+MIK-7214's own ticket comment dated 2026-08-30 says "no code implementing any part of the header
+contract" and cites a search returning nothing. The code is there, wired and tested. That comment is
+stale in the same direction as the two audit rows above, and it is the third such case: a written
+record of absence has now been wrong three times in this plan's evidence base, always by claiming
+less had shipped than had. The rows claiming something is *missing* are the ones to re-read first.
+
+Increment 18 runs the other way and is worth naming as the opposite failure: there, the record says
+a mechanism exists and the tests agree, and only the call site tells the truth.
+
 ### Still open, and it will not resolve itself
 
 The recovered audit is a floor, not a total. One row (SCHEMA.1, concerning `gateway_execute`'s
