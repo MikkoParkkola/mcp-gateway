@@ -422,3 +422,20 @@ because the two earlier revisions that did both drifted from it within a round. 
 its shape are worth saying once: no construction remains on the transport itself, the
 `subscriptions/listen` stream having landed, and nothing on the list waits on a source that
 cannot be reached, the tasks schema having been read.
+
+## Rounds 9–11 — the confirmation pass on this document
+
+The last three rounds reviewed this document rather than the code, both vendors on identical
+material, scope declared in the prompt each time.
+
+| Round | Material | Findings | Verdict |
+|---|---|---|---|
+| 9 | the tasks gap inventory rewritten against the schema | 1 MEDIUM, both vendors, the same one | SHIP-WITH-FIXES |
+| 10 | the repair to round 9 | 2 MEDIUM (gpt), 2 improvements (grok), the same passage | SHIP-WITH-FIXES / SHIP |
+| 11 | the closing paraphrase deleted | none | **SHIP** / **SHIP** |
+
+Rounds 9 and 10 both found their defect in the previous round's repair, in the same paragraph:
+a prose summary of the numbered open-findings list, which fell out of date each time the list
+was corrected. Round 11 deleted the summary instead of correcting it a third time, and both
+vendors returned SHIP. The pattern is the one the repair protocol names — three rounds spent
+patching a mechanism that the first round could have removed.
