@@ -65,10 +65,6 @@ trips, for a client that speaks the 2026 revision.
 
 OUT, explicitly:
 
-- the legacy-client bridge (`Bridge::to_legacy_client`) — asking a pre-2026 client a question
-  mid-call needs a server-initiated request over the client's own transport, which is a second
-  design. `to_legacy_client` stays unwired and stays out of the release claim.
-- multi-replica continuation state (MIK-7312). Addressed here only by *deciding* it, below.
 - more than one interim round trip per call. `Payload` carries **no** round counter, so the cap is
   not a configuration value in this release — it is one, enforced by construction: a result that
   comes back `input_required` on a *retry* dispatch is refused rather than minted again. A
@@ -107,6 +103,36 @@ same canonical form is how a digest silently stops matching.
 
 Neither value is ever logged, and both are already `<redacted>` in `Payload`'s `Debug`
 (continuation.rs:91-93).
+
+## Scope moved, and why — 2026-08-30
+
+**This design's FOR has widened. The two exclusions above are now in the release.** Recorded here
+rather than edited away, because a scope that moves silently is how a limit becomes a surprise.
+
+What forced it: the confirmation pass read the test plan's three NOT COVERED cells against the
+requirements and found all three are written as **MUST** — MRTR.5 says single-use enforcement
+"MUST hold across every replica that can receive the retry", MRTR.6 says a retry MUST reach the
+replica holding a legacy backend's open exchange or fail explicitly, and MRTR.7 says the gateway
+MUST bridge a modern backend's question to a legacy client. A stated limit is only honest against a
+requirement written as SHOULD. Against three MUSTs it is an unmet requirement wearing a limit's
+clothes, and the choice was the requester's: ship single-process and amend the criteria, or build
+both. **Decision (operator, 2026-08-30): build both before 4.0.0.**
+
+Neither piece starts from nothing, which is why the answer was not obviously the expensive one:
+
+- `InFlight` (continuation.rs, `hold` and its routing) is already **replica-aware** — it records
+  which replica holds each exchange and refuses at capacity. What it lacks is shared storage: the
+  table lives in one process's memory. The same gap as `ConsumedLedger`, and the same fix, which is
+  why MIK-7312's durable ledger covers MRTR.5 and MRTR.6 together rather than separately.
+- `Bridge::to_legacy_client` (mrtr.rs:186) already turns an interim result into the outbound
+  requests a pre-2026 client would understand. It has no caller anywhere in the tree. What is
+  missing is the wiring: issuing those requests over the client's own transport mid-call, and
+  collecting the answers.
+
+Both are **design events in their own right**, not extensions of this one: a shared ledger picks a
+storage dependency the gateway does not currently have, and the bridge holds a call open across a
+server-initiated request. Each gets its own design, its own review, and its own test plan, ahead of
+the wiring this document specifies — which is unchanged, and remains the first of the three.
 
 ## The shape
 
@@ -152,10 +178,10 @@ it hands a backend a value the client controls.
 
 ## Decisions this design makes
 
-1. **The response side ships; the legacy bridge does not.** A 2026 client gets a working
+1. **SUPERSEDED by the scope move above — the legacy bridge now ships too.** As written:  A 2026 client gets a working
    multi-round-trip call. A pre-2026 client gets what it gets today, and the release notes say so.
    Shipping half is what makes the other half's absence honest rather than hidden.
-2. **Single-use stays process-local for 4.0.0, and is documented as such.** The deployment is one
+2. **SUPERSEDED by the scope move above — single-use becomes cross-replica.** As written:  The deployment is one
    process. A shared ledger is a real piece of work (a store, its failure mode when unreachable,
    and a decision about whether an unreachable store fails open or closed) and doing it badly under
    release pressure is worse than declaring the limit. MIK-7312 keeps it.

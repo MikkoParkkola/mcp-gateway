@@ -301,9 +301,9 @@ exchange) and twice (the cap).
 | MRTR.5 | A token past its `expires_at` is refused, with the clock advanced rather than the payload hand-edited | I | security | Yes — the expiry check exists (continuation.rs:401), the *derivation* of `expires_at` from the mint does not |
 | MRTR.5 | Two retries of one token dispatched concurrently: exactly one reaches the backend | I | security | Yes — the AC says enforcement MUST be atomic, and a check-then-insert ledger passes every sequential row in this table while failing this one |
 | MRTR.5 | A continuation minted with an injected `now` expires at exactly `now + 300` | U | boundary | Yes, but only through the production construction path. `Keyring::mint` takes a whole `Payload` (continuation.rs:316) and seals whatever `expires_at` it is handed, so a test that fills a `Payload` in itself asserts its own arithmetic and goes green against a response side that derives nothing. The case mints the way the handler does. The row the design's clamp implied — "a mint requesting more than 300 seconds gets 300" — could not be written, because there is no request parameter to over-ask with, which is why the lifetime became a constant instead |
-| MRTR.5 | *Cross-replica* enforcement | — | **NOT COVERED** | Out of scope by design decision 2: single-use is process-local for 4.0.0 and MIK-7312 owns the durable ledger. Stated, not silent |
-| MRTR.6 | Legacy backend holding an open exchange | — | **NOT COVERED** | Out of scope by the design's FOR: the 4.0.0 claim covers modern backends that return `input_required`. A backend that instead holds an RPC open across the question is not something this release drives, so the gateway starts no second exchange with one. Process count is not the reason and would not be one |
-| MRTR.7 | Legacy-client bridge | — | **NOT COVERED** | Out of scope by design decision 1. The release notes say a pre-2026 client gets what it gets today |
+| MRTR.5 | *Cross-replica* enforcement | — | **NOT YET** | **NOT YET** — no longer out of scope. The requirement says MUST and the operator's 2026-08-30 decision is to build it, so this cell is filled by MIK-7312's shared ledger and its own test plan, ahead of this increment landing |
+| MRTR.6 | Legacy backend holding an open exchange | — | **NOT YET** | **NOT YET**, and covered by the same work as MRTR.5: `InFlight` already records which replica holds an exchange (continuation.rs) and already refuses at capacity; what it lacks is storage the other replicas can see. Routing a retry to the holder, or failing explicitly, is testable the moment that table is shared |
+| MRTR.7 | Legacy-client bridge | — | **NOT YET** | **NOT YET** — no longer out of scope, by the same decision. `Bridge::to_legacy_client` (mrtr.rs:186) already builds the outbound requests and has no caller; the missing piece is issuing them over the client's transport mid-call, which is its own design |
 | MRTR.8 | Minting a continuation that is never retried adds **nothing** to any gateway-side collection | I | resource | Yes — and the row it replaces could not fail. `ConsumedLedger` records *spent* tokens, so an abandoned one was never in it: there was nothing for a deadline to reclaim, and consuming the token to get an entry stops it being abandoned. The honest property is that abandonment costs nothing because minting stores nothing, and a design that later parked per-mint state would fail this |
 | MRTR.8 | A consumed token's ledger entry does not outlive its expiry | U | resource | Yes — this is the growth the ledger *can* have, since an entry is only added on redemption |
 | MRTR.8 | The ledger at capacity refuses rather than forgetting a live entry | U | security | Yes — the opposite implementation is the natural one and it reopens replay |
@@ -335,13 +335,20 @@ Four notes, so that absences read as decisions rather than oversights.
   path is streamable HTTP. The second dispatcher also calls `extract_tools_call_params` and will
   not carry `RetryFields`, and saying so makes it a stated limit rather than a silent gap.
 
-### The three NOT COVERED rows are the plan's most important cells
+### The three NOT YET rows are the plan's most important cells
 
-Each names a requirement this release does not meet and says which decision put it there. That is
-the difference between a limit and a gap: a limit is written down before the tests are, and appears
-in the release notes; a gap is discovered by whoever deploys it. MRTR.5's cross-replica half,
-MRTR.6 and MRTR.7 are limits. If the operator holds the release for any of them, the design reopens
-rather than the plan.
+Each names a requirement this increment does not meet and says what fills it. They were written as
+limits — stated before the tests, destined for the release notes — and the confirmation pass showed
+that reading would not hold: all three requirements say **MUST**, and a limit against a MUST is an
+unmet requirement in better clothes. So the operator was asked, and on 2026-08-30 held the release
+for all three.
+
+They are therefore no longer this increment's business, and neither are they gaps. Each is filled by
+work that lands **before** this suite is called complete: MRTR.5 and MRTR.6 by the shared ledger
+(MIK-7312), MRTR.7 by wiring the legacy bridge. Both get their own design, review and test plan. The
+distinction that matters is unchanged — a limit is written down before the tests are, a gap is
+discovered by whoever deploys it. These three were written down, and that is what let them be
+questioned before anyone deployed anything.
 
 ### What would make this increment's suite dishonest
 
