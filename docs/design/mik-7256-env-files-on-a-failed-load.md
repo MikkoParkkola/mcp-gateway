@@ -1442,9 +1442,21 @@ an unrecorded one reaches no reviewer.
 6. **The module doctest was updated for the new `ConfigWatcher::start` arity**
    (`src/config_reload/mod.rs`), which takes the live environment overlay.
 
+7. **`AttestationEnforcement::from_env` was deleted, not converted to the overlay**
+   (`src/attestation/launcher.rs`). This change routes every environment read
+   through the overlay, and the obvious repair was a third conversion beside
+   `wiring.rs:123` and `input_scanner.rs:159`. It had no caller anywhere in the
+   crate — the two tests that exercise the enforcement decision call
+   `from_flag` directly (`tests/mik_5223_acs.rs`), and the launcher itself never
+   reads the process environment. Converting dead code to the overlay would have
+   left an unreachable reader that a later maintainer could wire up without
+   noticing it bypasses the design. `ATTESTATION_FLAG_ENV` and `from_flag`
+   survive; the flag is still honoured wherever it is passed in.
+
 Items 4 and 5 are outside what this change is for. They are repaired here rather
 than filed because each repair is smaller than the ticket describing it, and
-both blocked the suite.
+both blocked the suite. Item 7 is inside it: it is an environment reader, which
+is exactly what the change is for.
 
 ## Regression found in review, since closed (2026-08-29)
 

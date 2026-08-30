@@ -79,12 +79,6 @@ impl AttestationEnforcement {
             _ => Self::Enforced,
         }
     }
-
-    /// Read [`ATTESTATION_FLAG_ENV`] from the process environment.
-    #[must_use]
-    pub fn from_env() -> Self {
-        Self::from_flag(std::env::var(ATTESTATION_FLAG_ENV).ok().as_deref())
-    }
 }
 
 /// Why a sandbox boot was refused (MIK-NEW.RUNTIME-A.1).
