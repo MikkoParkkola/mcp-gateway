@@ -1,6 +1,6 @@
 # DoD check — MCP 2026-07-28 support (branch `feat/mcp-2026-protocol`)
 
-**Date**: 2026-08-30 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: the tree of `e6e2ddd9`, at which §3 and §4 were run; only this document changes above it
+**Date**: 2026-08-30 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: `edfd020a`, at which §3 and §4 were re-run after that commit changed production code; every commit above it changes documentation only
 **Requirements**: `RELEASE-4.0.0-requirements.md` · **Plan**: `RELEASE-4.0.0-test-plan.md`
 
 Gates were **run**, not asserted. Where a verdict is N/A it carries its reason, because an N/A
@@ -9,9 +9,10 @@ the head, that is said in the same line rather than rounded up.
 
 ## Verdict, first
 
-**The 2025 path is done and shippable. The 2026 core path has no unbuilt piece left; what remains is
-gated on production topology, a tasks extension this release deliberately does not advertise, and
-one parsed protocol field with no consumer.**
+**The 2025 path is done and shippable. The 2026 core path is not finished: retry forwarding is
+accepted and then refused (MIK-7325), so a well-formed multi-round-trip tool request cannot
+complete. What else remains is gated on production topology, a tasks extension this release
+deliberately does not advertise, and one parsed protocol field with no consumer.**
 
 Eight independent review rounds produced **42 findings, a later scope audit added a forty-third, and
 the confirmation pass on this document found two more that had never been written down. Thirty-eight
@@ -54,9 +55,9 @@ another session's build cache was not this session's to decide. Only this branch
 artifacts were removed locally, which is housekeeping the rules already assign to the change that
 created them.
 
-## §4 Testing — PASS on execution, NOT MEASURED on coverage and mutation
+## §4 Testing — BLOCKED: execution passes, coverage and mutation are unmeasured
 
-- **4,610 tests passing across 46 binaries, 0 failing** — measured at the head commit under `--all-features` with `--no-fail-fast`, so neither a disabled feature nor an earlier failing binary can hide a row. The figure recorded in the previous revision, 4,463 across 45 binaries, was the default feature set.
+- **4,611 tests passing across 46 binaries, 0 failing** — measured at the head commit under `--all-features` with `--no-fail-fast`, so neither a disabled feature nor an earlier failing binary can hide a row. The figure recorded in the previous revision, 4,463 across 45 binaries, was the default feature set.
 - **41 doc-tests pass.**
 - **23 tests are `#[ignore]`d.** Twelve are doc-test examples and ten are pre-existing integration tests needing Docker or a live API. **One is this branch's**: `ac_discover_1_advertises_the_target_revision`, which asserts the gateway advertises 2026-07-28 — deliberately false while the switch is off. The previous revision of this document said "one test is ignored" and meant one of *mine*; as written it was a false claim about the suite, and this corrects it.
 
@@ -82,7 +83,7 @@ Recording that is the point of this subsection — a §4 marked PASS while two o
 were never measured is the failure mode the gate exists to prevent, and the earlier revision
 of this document did exactly that.
 
-What stands in their place, and what it does not substitute for: 4,610 passing tests and
+What stands in their place, and what it does not substitute for: 4,611 passing tests and
 thirty-one falsification probes, of which two controls could not be made to fail and are named
 as such. A falsification probe is stronger evidence than a mutation score for the control it
 targets — it proves that specific control observes what it claims — and weaker for the release
@@ -97,6 +98,8 @@ of new code. The probes do not tell us how much of the branch is untested.
 | what if it resolves badly | coverage below the tier threshold or mutation below 75% names specific untested code; that becomes tickets against the modules it names, and the modern path stays default-off until they close |
 
 This is a deferred unknown under §P1, not an N/A: the criteria apply and were not measured.
+A §P1 deferral schedules an unknown; it does not waive a blocking DoD criterion, so §4 stands
+BLOCKED and the release cannot claim a passing DoD until MIK-7324 records both figures.
 Holding the tag for them is a live option and one line from the operator takes it.
 
 ### Falsification — every control was made to fail, and two could not be
@@ -149,10 +152,26 @@ path is the thing most likely to break, so it is the thing most tested.
 - `#![deny(unsafe_code)]` holds; no dependency added.
 - Nine security findings from review were closed in this round; two remain open and are listed below.
 
-## §12 Review — one vendor, eight rounds, findings recorded
+## §12 Review — the whole record, in one place
 
-The operator set single-vendor review (codex/gpt) for this session, so the dual-vendor gate is
-**deliberately not met** and this is a known, authorised deviation rather than a passed gate.
+This section is the single account of who reviewed what, at which head, and what came back.
+Every other document points here rather than restating it.
+
+| rounds | head | vendors | outcome |
+|---|---|---|---|
+| 1-8 | per-module chunks | codex/GPT only | authorised single-vendor deviation, findings below |
+| 9-17 | per-module chunks | GPT + Grok | findings below |
+| release material | `e6e2ddd9` | GPT + Kimi | both SHIP-WITH-FIXES; Grok errored, no verdict |
+| repair commit | `edfd020a` | GPT + Kimi | both SHIP-WITH-FIXES; Grok unavailable, monthly quota |
+
+The two 2026-08-30 rounds reviewed the release *material* — the PR body, this document and the
+repair diff — not the feature work, which rounds 1-17 covered per module. Grok is recorded as
+unavailable in both, which is not agreement. The findings from the `edfd020a` round are repaired
+in the commit that carries this paragraph, so the head being merged is one commit past the last
+reviewed head; that is stated rather than rounded up.
+
+The operator set single-vendor review (codex/gpt) for rounds 1 to 8, so the dual-vendor gate was
+**deliberately not met** there and it is a known, authorised deviation rather than a passed gate.
 
 Reviews are chunked per module. An earlier attempt sent the whole 2,893-line diff and died at zero
 bytes five times; the cause was payload size, diagnosed by a minimal smoke test returning in seconds.

@@ -48,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credential a capability sent upstream. Both now read the same value, and the
   process environment is still the last place looked.
 
-  `ATTESTATION_SIGNING_KEY` and `ATTESTATION_KEY_ID` read the same overlay,
+  `GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_KEY_ID` read the same overlay,
   under fixed variable names rather than through a `{env.VAR}` reference in
   configuration. An env file can supply them, and the process environment is
   still the last place looked.

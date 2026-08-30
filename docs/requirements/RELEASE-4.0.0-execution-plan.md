@@ -7,9 +7,12 @@ so the work survives a session boundary.
 
 ## State at the time of writing
 
-Branch `feat/mcp-2026-protocol`, 175 commits ahead of `main`, no open PR. The DoD check
-records §3, §4, §5 PASS and §8 PASS on tooling. Implementation for the protocol core and
-the ride-along items is in the branch. What is left is listed below and nothing else.
+Superseded checkpoint, kept for its rationale rather than its status. It was written when the
+branch stood 175 commits ahead of `main` with no open PR and the DoD check recorded §3, §4,
+§5 and §8 as passing. The current status lives in `RELEASE-4.0.0-dod-check.md` and nowhere
+else: §4 is now BLOCKED on unmeasured coverage and mutation (MIK-7324), and retry forwarding
+is refused rather than implemented (MIK-7325). Read the sections below for why each decision
+was made, not for what remains.
 
 ## Blocking gaps to a passing DoD check
 
