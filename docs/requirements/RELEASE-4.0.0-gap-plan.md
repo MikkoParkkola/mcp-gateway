@@ -47,11 +47,27 @@ lifecycle; construct per process at startup; generate key material per process a
 Tests: construction through the production path, and a second `AppState` refusing the first's token
 (the current test builds two `Keyring`s by hand and proves only AES key separation).
 
-**2 — Retry reaches the backend (M).** Closes MRTR.1, .2, .3, .9. Delete the -32602 refusal at
-`handlers.rs:873-889`; thread the keyring into `dispatch_to_backend`; open the envelope, forward
-retry fields to the backend as siblings rather than merged, mint on `input_required`, pass
-`complete` and legacy results through byte-identical. Tests: the integration rows the plan already
-names, plus a pass-through row and a fresh-JSON-RPC-id row that a fixture transport can fail.
+**2a — The mint site can see who is calling (S).** No behaviour, so no new tests: the existing
+suite is the safety net and a green run before and after is the evidence. `invoke_tool_traced`
+takes `caller: &MetaMcpCallerContext<'_>` in place of its six flattened caller fields, and the
+client's declared capabilities reach the scope where that context is built. Two source facts make
+this mechanical rather than a design question: `invoke_tool` already takes the context whole, and
+the comment at `invoke.rs:419-421` gives the reason in the codebase's own words — the authorizer
+travels with the identity it authorizes. `invoke_tool_traced` is private with exactly one call
+site. The alternative, two more loose parameters taking it from eleven to thirteen, is rejected by
+that same comment.
+
+**2b — Retry reaches the backend (M).** Closes MRTR.1, .2, .3, .9. Delete the `is_retry` arm at
+`handlers.rs:872-889` and leave the malformed-envelope arm above it alone; open the envelope, forward
+retry fields to the backend as siblings of `arguments` rather than merged into them, mint at the
+call site after the result, pass `complete` and legacy results through unchanged. Inbound
+`RetryFields` is attacker-controlled client shape and the outbound state is the backend's own
+opaque value recovered from the token — conflating the two is the MRTR.2 defect, so they stay
+separate types. One defect drives the increment: an `input_required` result is today neither a
+success nor an error, so it falls through the `mark_completed` at `invoke.rs:1276` and is cached as
+a final answer. Tests: the integration rows the plan already names, plus a pass-through row and a
+fresh-JSON-RPC-id row that a fixture transport can fail. Pass-through asserts value equality and
+that no `requestState` key was added, not byte identity — the crate does not preserve key order.
 
 **3 — Single-use and expiry hold across replicas (S).** Closes MRTR.5. Origin refusal precedes any
 key lookup; typed and distinct from expired and already-spent. Tests: expiry on redeem with an
