@@ -860,3 +860,67 @@ fn a_client_id_stored_without_an_issuer_is_not_reused() {
 
     assert_eq!(client.client_id.read().clone(), None);
 }
+
+// =============================================================================
+// Re-initializing onto a different authorization server (gpt-review, v4.0.0)
+// =============================================================================
+
+fn injected_token() -> TokenInfo {
+    TokenInfo::from_response(
+        "token-from-the-previous-issuer".to_string(),
+        Some("Bearer".to_string()),
+        Some("refresh-from-the-previous-issuer".to_string()),
+        Some(3600),
+        None,
+    )
+}
+
+#[test]
+fn a_different_issuer_drops_the_previous_issuers_token_and_registered_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_at_issuer(dir.path(), "https://as-two.invalid-test");
+    *client.current_token.write() = Some(injected_token());
+    *client.client_id.write() = Some("cid-registered-with-as-one".to_string());
+    *client.client_id_source.write() = Some(ClientIdSource::Registered);
+
+    client.drop_credentials_from_other_issuer(Some("https://as-one.invalid-test"));
+
+    assert!(
+        client.current_token.read().is_none(),
+        "a token issued by the previous authorization server must not survive the change"
+    );
+    assert!(
+        client.client_id.read().is_none(),
+        "a client id registered with the previous server must not survive the change"
+    );
+}
+
+#[test]
+fn the_same_issuer_keeps_the_credentials_it_already_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_at_issuer(dir.path(), "https://as-one.invalid-test");
+    *client.current_token.write() = Some(injected_token());
+
+    client.drop_credentials_from_other_issuer(Some("https://as-one.invalid-test"));
+
+    assert!(
+        client.current_token.read().is_some(),
+        "an unchanged issuer must not cost the caller its token"
+    );
+}
+
+#[test]
+fn a_configured_client_id_belongs_to_the_operator_and_survives() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_at_issuer(dir.path(), "https://as-two.invalid-test");
+    *client.client_id.write() = Some("cid-the-operator-configured".to_string());
+    *client.client_id_source.write() = Some(ClientIdSource::Configured);
+
+    client.drop_credentials_from_other_issuer(Some("https://as-one.invalid-test"));
+
+    assert_eq!(
+        client.client_id.read().as_deref(),
+        Some("cid-the-operator-configured"),
+        "a configured client id is not the previous issuer's to take away"
+    );
+}

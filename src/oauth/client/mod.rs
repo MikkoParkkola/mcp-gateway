@@ -332,8 +332,11 @@ impl OAuthClient {
 
         // Discover authorization server metadata
         let auth_base = self.oauth_base_url.as_ref().unwrap();
+        let previous_issuer = self.auth_metadata.as_ref().map(|m| m.issuer.clone());
         self.auth_metadata =
             Some(AuthorizationServerMetadata::discover(&self.http_client, auth_base).await?);
+
+        self.drop_credentials_from_other_issuer(previous_issuer.as_deref());
 
         // Load any cached token
         if let Some(token) = self
@@ -381,6 +384,32 @@ impl OAuthClient {
     /// Dynamic Client Registration, never operator config (Defect 2,
     /// MIK-6750 r7) — safe to mark `Registered` so a later `invalid_client`
     /// rejection may purge it.
+    /// Drop in-memory credentials when re-initializing lands on a different
+    /// authorization server.
+    ///
+    /// Keying storage by issuer stops the *disk* from crossing that line.
+    /// In-memory state crosses it too unless it is dropped here, and a
+    /// retained client id additionally makes
+    /// [`restore_persisted_client_id`](Self::restore_persisted_client_id) a
+    /// no-op for the new issuer. A configured client id belongs to the
+    /// operator rather than to an issuer, so it stays.
+    fn drop_credentials_from_other_issuer(&self, previous_issuer: Option<&str>) {
+        let Some(previous) = previous_issuer else {
+            return;
+        };
+        let Some(current) = self.auth_metadata.as_ref().map(|m| m.issuer.as_str()) else {
+            return;
+        };
+        if previous == current {
+            return;
+        }
+        *self.current_token.write() = None;
+        if *self.client_id_source.read() == Some(ClientIdSource::Registered) {
+            *self.client_id.write() = None;
+            *self.client_id_source.write() = None;
+        }
+    }
+
     fn restore_persisted_client_id(&self) {
         if self.client_id.read().is_some() {
             return;
