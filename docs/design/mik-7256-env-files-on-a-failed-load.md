@@ -638,9 +638,14 @@ called once by an accepted reload.
 
 **Startup publishes the overlay its own load returned, never a second read of
 the same paths.** The gateway's own startup calls `Config::load_evaluated`,
-which applies the env files to the process exactly as today AND returns the map
-it applied, as the same `Evaluated { config, overlay, env_paths }` the reload path
-produces. **`env_paths` is the third field, and it is what stops the one
+which reads the env files into an overlay and returns it, as the same
+`Evaluated { config, overlay, env_paths }` the reload path produces. SHIPPED
+MECHANISM, corrected here: an earlier draft of this paragraph said startup
+"applies the env files to the process exactly as today", which was true of the
+`set_var` commit the review killed and is now the opposite of what ships. No
+path in the crate writes the process environment — `rg 'set_var' src/` returns
+nothing — so there is no process state for a failed load to leave behind, which
+is the whole point of the change this document describes. **`env_paths` is the third field, and it is what stops the one
 resolution becoming two.** It is a `ResolvedEnvFiles` — an opaque wrapper over
 the absolute paths startup recorded as it opened them, constructible ONLY by
 the resolver and carrying no `~` spelling to expand a second time. The watcher
@@ -977,12 +982,15 @@ that path is a secret written back out in plaintext by the very next line.
 `Config::load` itself is unchanged, and is the thin wrapper over
 `load_evaluated` stated above; nothing here gives it a second definition.
 
-The two bodies share a private `load_inner(path, EnvSource)` with
-`enum EnvSource<'a> { ApplyToProcess, Overlay { paths: &'a [PathBuf],
-previous: &'a EnvOverlay } }` — an enum, not a boolean, so the call site says
-which it means without opening the signature, and the overlay variant cannot
-be constructed without naming both the list it reads and the overlay it
-replaces.
+The two bodies share a private resolver. PRESCRIPTION, superseded: this named
+it `load_inner(path, EnvSource)` over `enum EnvSource<'a> { ApplyToProcess,
+Overlay { .. } }`, whose two variants encoded a choice — mutate the process or
+build an overlay — that no longer exists once nothing calls `set_var`. What
+ships is `Config::evaluate(path, home, Tolerance, Expansion)` handing off to
+`Config::finish` (`src/config/mod.rs`), with the same
+enum-rather-than-boolean reasoning applied to the axes that survived:
+`Tolerance` (warn or refuse on a malformed file) and `Expansion` (resolve
+`env:`/`${VAR}` or leave the file literal for a read-modify-write).
 
 `load_with_overlay` is `pub(crate)` because `config_persistence` is a different
 module and must reach it, and nothing outside the crate should. Its documented
@@ -1015,7 +1023,34 @@ published or logged.
 
 It revalidates at all because validation is overlay-aware: leaving it on the
 process environment alone would reject an admin edit naming a key that a
-listed env file supplies and a reload has since rotated.
+listed env file supplies. It reaches the rotated value by re-opening the listed
+files, not by consulting the running overlay — the `LiveEnv` cell is not on
+this path, and an earlier version of this paragraph described it as though it
+were.
+
+**Deferred, found in the final review: a write cannot see env files that only
+`MCP_GATEWAY_ENV_FILES` names.** `config.env_overlay()` builds its overlay from
+`self.env_files`, and the literal load now takes that field from YAML alone, so
+an operator who supplies the list through the `MCP_GATEWAY_*` prefix rather
+than the config file gets an empty validation overlay and a refused write. The
+two invariants genuinely collide here: a rewrite must not persist a value the
+environment supplied, and a validation must see the environment the config
+declares. Serving both means separating the validation environment from the
+serialised struct — a signature change across roughly twenty `write_config`
+call sites, or a non-serialised overlay handle on `Config`. That is a design
+decision, not a repair, and it is deferred rather than guessed at.
+
+| field | value |
+|---|---|
+| owner | MIK-7256 follow-up, unfiled until the operator rules on scope |
+| what would resolve it | ask the operator whether `MCP_GATEWAY_ENV_FILES` is a supported way to declare env files, or a side effect of the generic prefix provider nothing documents |
+| when | before the next change touching `write_config` or the literal load |
+| if it resolves badly | if the path is supported, `write_config` takes the overlay explicitly and the call sites move; if it is incidental, the prefix provider refuses `ENV_FILES` outright and says why |
+
+No in-process test can pin either outcome today: the crate forbids `unsafe`, so
+a test cannot seed `MCP_GATEWAY_ENV_FILES` in its own process. The same
+constraint that makes ENVFILE.6 untestable applies here, which is itself part
+of what the operator is being asked to weigh.
 
 **Who calls it: every config read that happens inside a running gateway.** A
 rule, not a list, because a list goes stale the moment a reader is added. Two
@@ -1603,6 +1638,17 @@ differential test grew its negative half: references the parser leaves alone
 must not refuse a reload. The library stays the oracle for its own lexical
 rules — every fixture is checked against `dotenvy`'s parse of the same bytes,
 in both directions.
+
+### A third finding that died at source (2026-08-30)
+
+The final review reported that the scanner "opens single quotes inside double
+quotes", missing the substitution in `K="don't $A"`. Put to `dotenvy` as a
+fixture, the library refuses to parse that line at all — the apostrophe opens a
+quote for the parser exactly as it does for the scanner, and the value is never
+expanded because it is never read. The differential test rejected the case on
+its own dotenvy assertion, which is the assertion that exists so a fixture
+cannot prove something the parser does not do. No repair; the scanner and the
+library agree.
 
 ### Residual: the runtime command runner is tests-only
 
