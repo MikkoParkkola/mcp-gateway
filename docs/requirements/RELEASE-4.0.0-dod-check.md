@@ -1,6 +1,6 @@
 # DoD check — MCP 2026-07-28 support (branch `feat/mcp-2026-protocol`)
 
-**Date**: 2026-08-30 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: `3448f659`
+**Date**: 2026-08-30 · **Base**: `main` at 3.5.0 (`cdd52622`) · **Head**: the tree of `e6e2ddd9`, at which §3 and §4 were run; only this document changes above it
 **Requirements**: `RELEASE-4.0.0-requirements.md` · **Plan**: `RELEASE-4.0.0-test-plan.md`
 
 Gates were **run**, not asserted. Where a verdict is N/A it carries its reason, because an N/A
