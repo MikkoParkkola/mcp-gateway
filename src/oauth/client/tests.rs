@@ -929,15 +929,28 @@ fn a_configured_client_id_belongs_to_the_operator_and_survives() {
 // Issuer provenance through `initialize`
 // =========================================================================
 
-/// Serve both well-known documents from one address: protected-resource
-/// metadata that advertises `advertised_as` (or none at all), and
-/// authorization-server metadata claiming `issuer_claimed`.
+/// What the protected-resource document says, which is what decides where
+/// `initialize` gets its issuer string from. Three states because there are
+/// three assignment sites, and an `Option` collapses two of them.
+#[derive(Clone)]
+enum ResourceDocument {
+    /// No document at all: the endpoint answers 404.
+    Absent,
+    /// A valid document that names no authorization server.
+    WithoutAuthorizationServer,
+    /// A valid document advertising this authorization server identifier.
+    Advertising(String),
+}
+
+/// Serve both well-known documents from one address: the protected-resource
+/// document described by `resource_document`, and authorization-server
+/// metadata claiming `issuer_claimed`.
 ///
 /// Serving address and claimed identity are separate parameters so a test can
 /// make them differ by exactly one character.
 async fn serve_oauth_documents(
     base: &str,
-    advertised_as: Option<String>,
+    resource_document: ResourceDocument,
     issuer_claimed: &str,
 ) -> String {
     use axum::{Router, response::IntoResponse, routing::get};
@@ -951,9 +964,15 @@ async fn serve_oauth_documents(
         "token_endpoint": format!("{issuer_claimed}token"),
     });
     let resource = base.to_string();
-    let prm_body = advertised_as.map(|auth_server| {
-        serde_json::json!({ "resource": resource, "authorization_servers": [auth_server] })
-    });
+    let prm_body = match resource_document {
+        ResourceDocument::Absent => None,
+        ResourceDocument::WithoutAuthorizationServer => {
+            Some(serde_json::json!({ "resource": resource }))
+        }
+        ResourceDocument::Advertising(auth_server) => Some(
+            serde_json::json!({ "resource": resource, "authorization_servers": [auth_server] }),
+        ),
+    };
 
     let app = Router::new()
         .route(
@@ -1009,7 +1028,12 @@ async fn free_addr() -> String {
 #[tokio::test]
 async fn an_issuer_advertised_by_protected_resource_metadata_is_compared_exactly() {
     let base = free_addr().await;
-    let served = serve_oauth_documents(&base, Some(base.clone()), &format!("{base}/")).await;
+    let served = serve_oauth_documents(
+        &base,
+        ResourceDocument::Advertising(base.clone()),
+        &format!("{base}/"),
+    )
+    .await;
     let dir = tempfile::tempdir().unwrap();
     let mut client = client_for(&format!("{served}/mcp"), dir.path());
 
@@ -1029,7 +1053,7 @@ async fn an_issuer_advertised_by_protected_resource_metadata_is_compared_exactly
 #[tokio::test]
 async fn an_issuer_reached_by_the_origin_fallback_tolerates_a_trailing_slash() {
     let base = free_addr().await;
-    let served = serve_oauth_documents(&base, None, &format!("{base}/")).await;
+    let served = serve_oauth_documents(&base, ResourceDocument::Absent, &format!("{base}/")).await;
     let dir = tempfile::tempdir().unwrap();
     let mut client = client_for(&format!("{served}/mcp"), dir.path());
 
@@ -1037,4 +1061,26 @@ async fn an_issuer_reached_by_the_origin_fallback_tolerates_a_trailing_slash() {
         .initialize()
         .await
         .expect("the origin fallback tolerates a trailing slash");
+}
+
+/// The third assignment site: a valid protected-resource document that names no
+/// authorization server. It reaches the same fallback as a missing document,
+/// but by a different branch, and a mis-tag there would be invisible to both
+/// tests above.
+#[tokio::test]
+async fn resource_metadata_naming_no_authorization_server_falls_back_to_the_origin() {
+    let base = free_addr().await;
+    let served = serve_oauth_documents(
+        &base,
+        ResourceDocument::WithoutAuthorizationServer,
+        &format!("{base}/"),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client_for(&format!("{served}/mcp"), dir.path());
+
+    client
+        .initialize()
+        .await
+        .expect("a document naming no authorization server falls back to the origin");
 }
