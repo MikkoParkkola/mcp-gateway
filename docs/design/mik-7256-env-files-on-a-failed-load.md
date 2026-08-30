@@ -826,10 +826,11 @@ contains:
   single site claimed as both. `MCP_GATEWAY_FIREWALL_SKIP_KEYS` is the case that
   forced this: an earlier draft had it in the registry while a criterion asserted
   the scanner applies the new exclusion set on the next scan, and only one can
-  hold. Source settles it — `free_text_keys` reads the variable inside the
-  per-key loop with no caching (`src/security/firewall/input_scanner.rs:71,150`)
-  — so it is a live reader with no registry entry, and the criterion asserting
-  live application is the correct one.
+  hold. Source settles it — `active_free_text_keys` resolves the variable once
+  per scan with no caching across scans
+  (`src/security/firewall/input_scanner.rs:157`) — so it is a live reader with
+  no registry entry, and the criterion asserting live application is the correct
+  one.
 
 Both are the same defect seen twice — the reload reporting on the patch when it
 should report on what it applied — and one of them decides whether a revoked
@@ -1421,7 +1422,7 @@ env file can supply. Sweeping every `std::env::var` call in `src/` found one
 further live consumer and two diagnostics.
 
 The live one is the runtime provenance signing key. `GatewayServer::run` read
-`BNAUT_ATTESTATION_SIGNING_KEY` and its key id straight from the process
+`GATEWAY_ATTESTATION_SIGNING_KEY` and its key id straight from the process
 environment, so a key declared in an env file no longer reached it and the
 signer refused to install. That fails closed — unsigned results rather than
 forgeable ones — but it silently disables a feature the operator configured.
