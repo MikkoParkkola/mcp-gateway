@@ -136,9 +136,9 @@ routing input.
 
 MRTR.6 is about a legacy backend holding an RPC open. A continuation for a modern backend is
 self-contained — `backend_request_state` is the backend's own state
-(`src/protocol/continuation.rs:74-76`) and any replica holding the key could resume it. The pin is
-therefore enforced whenever the mint recorded a live `InFlight` hold, which is the case the
-requirement names.
+(`src/protocol/continuation.rs:74-76`), so resuming it needs nothing that lives outside the token
+and the key that sealed it. The pin is therefore enforced only where the mint recorded a live
+`InFlight` hold, which is the case the requirement names.
 
 Note that clause 1 already confines *every* continuation to its origin, because only the origin can
 open it. What clause 3 adds is the case that survives on the origin itself: a continuation minted
