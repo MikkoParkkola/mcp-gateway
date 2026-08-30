@@ -410,14 +410,15 @@ The 2025 path is unchanged, fully tested and shippable. `server.modern_protocol`
 and that already is the isolation — no client can reach any of the open findings. Two real options:
 
 1. **Ship 4.0.0 as the legacy-safe groundwork**, modern path documented as preview with the findings listed. The default-off switch is what makes this honest.
-2. **Hold the tag** until the transport findings and the subscription model are closed and re-reviewed.
+2. **Hold the tag** until the five numbered open findings above are closed and re-reviewed.
 
 Removing the modern path is *not* a third option worth its cost: the switch already achieves the
 isolation removal would buy.
 
 What changed since this recommendation was first written is the size of option 2. It was
-"twenty-six findings, several of them systematic". It is now **no outstanding construction on the
-transport itself** — the `subscriptions/listen` stream landed, recorded above — leaving two
-deployment gates that bind only on multi-replica, the task model's distance from its extension
-specification, and a parsed `logLevel` with no reader. Nothing here waits on a page that cannot
-be reached: the tasks schema was read and the inventory now rests on it.
+"twenty-six findings, several of them systematic"; it is now the five numbered findings above and
+nothing else. That list is the only inventory — this paragraph deliberately does not restate it,
+because the two earlier revisions that did both drifted from it within a round. Two things about
+its shape are worth saying once: no construction remains on the transport itself, the
+`subscriptions/listen` stream having landed, and nothing on the list waits on a source that
+cannot be reached, the tasks schema having been read.
