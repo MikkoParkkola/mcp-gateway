@@ -22,10 +22,12 @@ was made, not for what remains.
 |---|---|---|---|
 | 1 | Consumed-continuation ledger is process-local; a second replica spends one continuation twice | §11 stop-the-line, gated BEFORE-PRODUCTION | DEFERRED to 4.1.0 under the single-replica constraint below |
 | 2 | Mint counter is process-local, so a restart resets the NIST envelope bound | same | same shape as #1 |
-| 3 | Task model unverified — the specification page 404s at the indexed path | §12 finding, unverified | re-fetch from another path; if still 404, record as residual with an owner |
-| 4 | Failed-task payload shape unverified, same cause | same | same |
-| 5 | §12 ran ONE vendor over eight rounds; the gate requires two | §12 BLOCKING | second vendor pass when quota returns (grok and kimi are both rate-limited as of 2026-08-29) |
-| 6 | MIK-7256 has a reviewed design and test plan, no tests and no implementation | §P2 onward | next in the pipeline |
+| 3 | Task model unverified — the specification page 404s at the indexed path | §12 finding, unverified | **RESOLVED.** Found at `/extensions/tasks/overview`; the branch is short of it and the extension ships not advertised. Conformance owned by MIK-7311 |
+| 4 | Failed-task payload shape unverified, same cause | same | **RESOLVED**, same source |
+| 5 | §12 ran ONE vendor over eight rounds; the gate requires two | §12 BLOCKING | **STILL OPEN, and now an operator decision** — see below |
+| 6 | MIK-7256 has a reviewed design and test plan, no tests and no implementation | §P2 onward | in the pipeline |
+| 7 | §4 coverage is measured and **below** the Standard floor by 2.6 points | §4 BLOCKING | MIK-7324. Mutation, the other half of §4, is now measured and passing on `src/protocol` (28 caught / 2 missed, both survivors closed) |
+| 8 | Multi-round-trip tool calls are built and unreachable — a 2026 backend that asks a question cannot complete a call | §2 WIRED, on the branch's headline feature | MIK-7325. Design reviewed, six findings, all six verified at source and repaired; confirmation pass in flight |
 
 ### Gaps 1 and 2 — deferred, and on whose assumption
 
@@ -79,6 +81,8 @@ The finder-unavailable clock under the repair protocol started at the round-18 l
 
 ## Order
 
+Steps 1 and 3 are done and step 5 is half done; what follows them is now the queue below.
+
 1. Verify and close the six no-work tickets; fix the three known-wrong Linear states.
 2. MIK-7256 through the process: failing tests, implementation, self-QA, review, docs.
 3. Gaps 3 and 4 are resolved as checks and turned into defects: the tasks specification
@@ -102,6 +106,37 @@ The finder-unavailable clock under the repair protocol started at the round-18 l
    so a stamp minted against the older diff does not cover what is being pushed. Then the
    DoD comment on each ticket.
 7. Open the PR, land it, then §P5 housekeeping.
+
+## The queue as it now stands
+
+Ordered by what blocks what, not by size. Each item is finished before the next starts, because
+each later item's review has to see the earlier one's code.
+
+| # | work | why it is here | gate it closes |
+|---|---|---|---|
+| 1 | MRTR wiring (MIK-7325) — test plan reviewed **as a plan**, failing tests, response side, retry side | the headline feature is currently declined at the door; a fixture backend emitting `input_required` does not exist yet and must be written first | §2 WIRED |
+| 2 | Tasks-extension conformance (MIK-7311) — two statuses, two required fields, an error payload shape, a capability check | the extension is unadvertised, so this is conformance rather than a live defect; fetch the specification page again before writing anything | §12 finding |
+| 3 | Coverage on the five named modules (MIK-7324) | §4's failing half; `src/main.rs` is the sharpest, 22 added lines and none executed | §4 |
+| 4 | Mutation over the rest of the branch diff, on Spark, module by module | the measured 93.3% covers `src/protocol` only, and a subset is a lower bound | §4 |
+| 5 | Version bump to 4.0.0 everywhere (step 4 above), then re-run §3, §4, §5 at the final head | a tag built from a tree calling itself 3.5.0 ships a lie in `--version` | §3, §4, §5 |
+| 6 | Second-vendor review against the final head's full diff, then the DoD evidence comment on each ticket | a ratification stamp binds to a diff hash, so an older stamp covers nothing being pushed | §12, §1 |
+| 7 | Deploy — MIK-7265 closes on deploy, not on merge. Production is 3.4.0 and answers a foreign `Origin` with HTTP 200 | a merge is not a deployment | §11 |
+
+### The §12 blocker is not a waiting problem
+
+Gap 5 has stopped being a matter of patience. The second vendor is exhausted on **both** of its
+routes: the xAI quota is spent, and the GitHub Copilot fallback answers
+`Monthly ... quota exceeded` on a fresh session as well as on a resume. Waiting does not fix a
+monthly quota. Three ways out, and the choice is the operator's:
+
+| option | cost |
+|---|---|
+| use Kimi as the second vendor for the remaining passes | no filesystem access, so every review must carry its material inline; already in use for the design confirmation pass |
+| buy quota on either route | money, and it restores the reviewer that has done the eight rounds of context |
+| record §12 as satisfied by one vendor plus Kimi, and say so in the release notes | honest, and weaker than the gate asks for; `ratify` will refuse the push, so it needs an audited bypass |
+
+Doing nothing is the fourth option and it holds the tag indefinitely.
+
 
 ## Design events during implementation (§P3)
 
