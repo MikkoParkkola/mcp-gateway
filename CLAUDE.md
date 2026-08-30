@@ -145,6 +145,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 | **Capability definitions public (mcp-gateway) / private (mcp-gateway-private)** | Public catalog for community; private API credentials / deploy configs | Mix private capabilities into the public catalog |
 | **`cargo clippy --all-targets -- -D warnings` + `cargo fmt --check`** gates | Zero-debt discipline in Rust source | Ship code with lints suppressed ad hoc |
 | **Mixed per-file licensing: MIT core + PolyForm Noncommercial 1.0.0 EE** | Core gateway stays MIT for adoption; security firewall, agent-identity, data-flow, message-signing, policy, response-inspect/scanner, scope-collision, tool-integrity, cost-accounting, key-server, and transparency-log paths require commercial terms for commercial use (see [LICENSE-EE.md](LICENSE-EE.md), v2.11.0+) | Collapse package metadata back to plain MIT |
+| **MCP tool schemas stay flat + close to Claude Code canonical shapes** (MIK-6865) | Opus 4.8 / Sonnet 5 invent trailing keys on nested-object-in-array schemas (~20% in long histories). Nested-object-in-array requires fail-closed validation (`validate_arguments` recurses) or an explicit `additionalProperties: true` opt-in. | Add array-of-objects / nested-object params without a repair/fail-closed layer |
 
 ## Anti-Patterns (things agents get wrong in this repo)
 
@@ -154,6 +155,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 - **Adding `unsafe` without an ADR** — the `deny(unsafe_code)` gate is deliberate; any exception needs `docs/architecture/` justification.
 - **Duplicating MIK-2985 annotation policy work across mcp-gateway and mcp-gateway-private** — resolve the pass-through vs override decision once in an ADR and apply to both.
 - **Ignoring `benchmarks/public_claims.json` drift** — the CI check is there because README numerical claims have drifted before.
+- **Nested-object-in-array tool schemas without fail-closed validation** — Opus 4.8/Sonnet 5 invent trailing keys (`type`, `oldText2`, …) on off-distribution nested shapes. Keep schemas flat; if nesting is required, `validate_arguments` must reject unknown nested keys (MIK-6865).
 
 ## Guidance for Agents
 

@@ -586,6 +586,64 @@ fn build_base_tools_all_have_object_input_schema() {
 }
 
 #[test]
+fn validate_code_mode_execute_args_rejects_invented_chain_key() {
+    let err = validate_code_mode_execute_args(&json!({
+        "chain": [{
+            "tool": "linear:linear_get_issue",
+            "arguments": { "identifier": "MIK-6865" },
+            "type": "invented"
+        }]
+    }))
+    .expect_err("invented chain-step key must fail closed");
+    let message = err.to_string();
+    assert!(
+        message.contains("type"),
+        "error must name the invented key, got {message}"
+    );
+}
+
+#[test]
+fn validate_code_mode_execute_args_accepts_declared_chain() {
+    validate_code_mode_execute_args(&json!({
+        "chain": [{
+            "tool": "linear:linear_get_issue",
+            "arguments": { "identifier": "MIK-6865" }
+        }]
+    }))
+    .expect("declared chain step must pass");
+}
+
+#[test]
+fn meta_tools_are_all_schema_shape_classified() {
+    use crate::capability::{SchemaShapeRisk, classify_schema_shape};
+    let mut tools = build_meta_tools(true, true, true, true, 10, 2);
+    tools.extend(build_code_mode_tools());
+    assert!(!tools.is_empty());
+    for tool in &tools {
+        let shape = classify_schema_shape(&tool.input_schema);
+        assert!(
+            matches!(
+                shape,
+                SchemaShapeRisk::Flat
+                    | SchemaShapeRisk::NestedScalarArray
+                    | SchemaShapeRisk::NestedObjectArray
+            ),
+            "meta tool {} unclassified",
+            tool.name
+        );
+    }
+    let execute = tools
+        .iter()
+        .find(|t| t.name == "gateway_execute")
+        .expect("gateway_execute is on the meta surface");
+    assert_eq!(
+        classify_schema_shape(&execute.input_schema),
+        SchemaShapeRisk::NestedObjectArray,
+        "gateway_execute.chain is the nested-object-array surface"
+    );
+}
+
+#[test]
 fn build_stats_tool_has_price_parameter() {
     let tool = build_stats_tool();
     assert_eq!(tool.name, "gateway_get_stats");

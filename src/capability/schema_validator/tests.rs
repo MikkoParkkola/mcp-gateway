@@ -491,3 +491,327 @@ fn coerced_args_used_in_valid_result() {
     assert_eq!(result.coerced["query"], json!("test"));
     assert_eq!(result.coerced["count"], json!(5));
 }
+
+// ── Nested object / array-of-objects fail-closed (MIK-6865) ─────────────
+//
+// Opus 4.8 / Sonnet 5 invent trailing keys on nested-object-in-array
+// schemas (Ronacher 2026-07-04). Top-level extra keys already fail closed;
+// nested invented keys must too. The probe keys are the observed zoo, not
+// a hardcoded expected-value table: the assertion is "validator rejects
+// the invented key", decided by validate_arguments on a live schema.
+
+fn ronacher_edits_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "edits": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "oldText": { "type": "string" },
+                        "newText": { "type": "string" }
+                    },
+                    "required": ["oldText", "newText"]
+                }
+            }
+        },
+        "required": ["edits"]
+    })
+}
+
+fn ronacher_valid_edits() -> Value {
+    json!({ "edits": [{ "oldText": "alpha", "newText": "beta" }] })
+}
+
+#[test]
+fn nested_object_array_valid_payload_is_accepted() {
+    let result = validate_arguments(&ronacher_valid_edits(), &ronacher_edits_schema());
+    assert!(
+        result.is_valid(),
+        "declared nested fields must still pass; violations={:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn nested_object_array_invented_trailing_key_is_rejected() {
+    let result = validate_arguments(
+        &json!({
+            "edits": [{
+                "oldText": "alpha",
+                "newText": "beta",
+                "type": "invented"
+            }]
+        }),
+        &ronacher_edits_schema(),
+    );
+    assert!(
+        !result.is_valid(),
+        "invented nested key must fail-closed; violations={:?}",
+        result.violations
+    );
+    assert!(
+        result
+            .violations
+            .iter()
+            .any(|v| v.param.contains("type") && v.message.contains("unknown")),
+        "violation must name the invented nested key, got {:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn nested_object_array_probe_accept_rate_is_zero() {
+    // SCHEMA.1 fail-fast: rate of invented nested keys that the validator
+    // accepts. Origin/main accepted the whole zoo (rate = 1.0). Fail-closed
+    // target is 0. Rate is computed from validate_arguments, not a fixture.
+    let invented = [
+        "type",
+        "requireUnique",
+        "in_file",
+        "oldText2",
+        "event.0.additionalProperties",
+    ];
+    let schema = ronacher_edits_schema();
+    let mut accepted = 0usize;
+    for key in invented {
+        let mut item = serde_json::Map::new();
+        item.insert("oldText".into(), json!("alpha"));
+        item.insert("newText".into(), json!("beta"));
+        item.insert(key.into(), json!("invented"));
+        let args = json!({ "edits": [Value::Object(item)] });
+        if validate_arguments(&args, &schema).is_valid() {
+            accepted += 1;
+        }
+    }
+    assert_eq!(
+        accepted,
+        0,
+        "nested invented-key accept rate must be 0 (fail-closed), got {accepted}/{}",
+        invented.len()
+    );
+}
+
+#[test]
+fn nested_object_invented_key_is_rejected() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "edit": {
+                "type": "object",
+                "properties": {
+                    "oldText": { "type": "string" },
+                    "newText": { "type": "string" }
+                },
+                "required": ["oldText", "newText"]
+            }
+        }
+    });
+    let result = validate_arguments(
+        &json!({ "edit": { "oldText": "a", "newText": "b", "requireUnique": true } }),
+        &schema,
+    );
+    assert!(
+        !result.is_valid(),
+        "invented key on a nested object must fail-closed; violations={:?}",
+        result.violations
+    );
+    assert!(
+        result
+            .violations
+            .iter()
+            .any(|v| v.param.contains("requireUnique")),
+        "violation must name requireUnique, got {:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn nested_object_missing_required_field_is_rejected() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "edit": {
+                "type": "object",
+                "properties": {
+                    "oldText": { "type": "string" },
+                    "newText": { "type": "string" }
+                },
+                "required": ["oldText", "newText"]
+            }
+        }
+    });
+    let result = validate_arguments(&json!({ "edit": { "oldText": "a" } }), &schema);
+    assert!(!result.is_valid());
+    assert!(
+        result
+            .violations
+            .iter()
+            .any(|v| v.param.contains("newText") && v.message.contains("missing")),
+        "nested required field must be reported, got {:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn nested_scalar_array_values_pass_without_object_keys() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "labelIds": { "type": "array", "items": { "type": "string" } }
+        }
+    });
+    let result = validate_arguments(&json!({ "labelIds": ["a", "b"] }), &schema);
+    assert!(
+        result.is_valid(),
+        "scalar arrays are not the key-invention surface; violations={:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn gateway_execute_chain_invented_step_key_is_rejected() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "tool": { "type": "string" },
+            "arguments": { "type": "object" },
+            "chain": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "tool": { "type": "string" },
+                        "arguments": { "type": "object" }
+                    },
+                    "required": ["tool"]
+                }
+            }
+        }
+    });
+    let result = validate_arguments(
+        &json!({
+            "chain": [{
+                "tool": "linear:linear_get_issue",
+                "arguments": { "identifier": "MIK-6865" },
+                "type": "invented"
+            }]
+        }),
+        &schema,
+    );
+    assert!(
+        !result.is_valid(),
+        "invented key on a chain step must fail-closed; violations={:?}",
+        result.violations
+    );
+    assert!(
+        result.violations.iter().any(|v| v.param.contains("type")),
+        "violation must name the invented chain-step key, got {:?}",
+        result.violations
+    );
+}
+
+#[test]
+fn nested_additional_properties_true_allows_extra_keys() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "edit": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                    "oldText": { "type": "string" }
+                }
+            }
+        }
+    });
+    let result = validate_arguments(
+        &json!({ "edit": { "oldText": "a", "extra": "ok" } }),
+        &schema,
+    );
+    assert!(
+        result.is_valid(),
+        "nested additionalProperties:true is the explicit opt-in; violations={:?}",
+        result.violations
+    );
+}
+
+// ── Schema-shape classification (MCPGW.SCHEMA.2) ────────────────────────
+
+#[test]
+fn classify_flat_schema() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "query": { "type": "string" },
+            "count": { "type": "integer" }
+        }
+    });
+    assert_eq!(classify_schema_shape(&schema), SchemaShapeRisk::Flat);
+}
+
+#[test]
+fn classify_nested_scalar_array() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "labelIds": { "type": "array", "items": { "type": "string" } }
+        }
+    });
+    assert_eq!(
+        classify_schema_shape(&schema),
+        SchemaShapeRisk::NestedScalarArray
+    );
+}
+
+#[test]
+fn classify_nested_object_array() {
+    assert_eq!(
+        classify_schema_shape(&ronacher_edits_schema()),
+        SchemaShapeRisk::NestedObjectArray
+    );
+}
+
+#[test]
+fn classify_nested_object_parameter() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "arguments": { "type": "object" }
+        }
+    });
+    assert_eq!(
+        classify_schema_shape(&schema),
+        SchemaShapeRisk::NestedObjectArray
+    );
+}
+
+#[test]
+fn audit_schema_shapes_classifies_every_tool() {
+    let edits = ronacher_edits_schema();
+    let flat = json!({"type": "object", "properties": {"q": {"type": "string"}}});
+    let labels = json!({
+        "type": "object",
+        "properties": { "labelIds": { "type": "array", "items": { "type": "string" } } }
+    });
+    let tools = [("edits", &edits), ("search", &flat), ("labels", &labels)];
+    let audit = audit_schema_shapes(tools);
+    assert_eq!(audit.len(), 3);
+    assert!(
+        audit.iter().all(|row| matches!(
+            row.shape_risk,
+            SchemaShapeRisk::Flat
+                | SchemaShapeRisk::NestedScalarArray
+                | SchemaShapeRisk::NestedObjectArray
+        )),
+        "every tool must be classified, got {audit:?}"
+    );
+    let by_name: std::collections::BTreeMap<_, _> = audit
+        .into_iter()
+        .map(|row| (row.tool, row.shape_risk))
+        .collect();
+    assert_eq!(by_name["edits"], SchemaShapeRisk::NestedObjectArray);
+    assert_eq!(by_name["search"], SchemaShapeRisk::Flat);
+    assert_eq!(by_name["labels"], SchemaShapeRisk::NestedScalarArray);
+}

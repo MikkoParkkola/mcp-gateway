@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use crate::cache::ResponseCache;
-use crate::capability::validate_output;
+use crate::capability::{validate_arguments, validate_output};
 use crate::context_integrity::{
     ContextActionRisk, ContextIntegrityDecisionKind, ContextIntegrityEvaluation,
     ContextIntegrityInput, ContextProvenance, ContextTrustBoundary,
@@ -139,6 +139,26 @@ async fn call_capability_tool_with_identity(
         },
     )
     .await
+}
+
+/// Fail-closed input validation against a tool's declared `inputSchema`.
+///
+/// Missing schema (cache miss / unlisted tool) is a no-op — we cannot
+/// enforce a contract we do not have. A present schema rejects invented
+/// keys at every nesting level (MIK-6865).
+fn enforce_input_schema(
+    arguments: Value,
+    input_schema: Option<&Value>,
+) -> std::result::Result<Value, String> {
+    let Some(schema) = input_schema else {
+        return Ok(arguments);
+    };
+    let validation = validate_arguments(&arguments, schema);
+    if validation.is_valid() {
+        Ok(validation.coerced)
+    } else {
+        Err(validation.format_error(schema))
+    }
 }
 
 fn enforce_output_schema(
@@ -1900,6 +1920,25 @@ impl MetaMcp {
             .get(server)
             .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
 
+        let input_schema = self
+            .get_tool_registry()
+            .and_then(|registry| registry.get(&format!("{server}:{tool}")))
+            .map(|entry| entry.tool.input_schema)
+            .or_else(|| {
+                backend
+                    .get_cached_tool(tool)
+                    .map(|cached| cached.input_schema)
+            });
+        let arguments = match enforce_input_schema(arguments, input_schema.as_ref()) {
+            Ok(coerced) => coerced,
+            Err(message) => {
+                return Ok(json!({
+                    "content": [{ "type": "text", "text": message }],
+                    "isError": true
+                }));
+            }
+        };
+
         // Eagerly check the cached tool list for a "did you mean?" hint.
         // Only fires when the cache is populated and the tool is not found there.
         // We still dispatch to the backend in case the cache is stale.
@@ -2478,7 +2517,7 @@ mod response_transform_tests {
     use crate::provider::transforms::ResponseTransform;
     use crate::transform::{RedactRule, TransformConfig};
 
-    use super::{apply_capability_projection, enforce_output_schema};
+    use super::{apply_capability_projection, enforce_input_schema, enforce_output_schema};
 
     /// Prove the component used by `dispatch_to_backend`: given a non-empty
     /// `response_transform` in a capability definition, `ResponseTransform`
@@ -2843,6 +2882,75 @@ mod response_transform_tests {
 
         assert_eq!(result["isError"], json!(true));
         assert_eq!(result["content"][0]["text"], json!("bad input"));
+    }
+
+    #[test]
+    fn enforce_input_schema_rejects_nested_invented_key() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "edits": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "oldText": { "type": "string" },
+                            "newText": { "type": "string" }
+                        },
+                        "required": ["oldText", "newText"]
+                    }
+                }
+            },
+            "required": ["edits"]
+        });
+        let err = enforce_input_schema(
+            json!({
+                "edits": [{
+                    "oldText": "a",
+                    "newText": "b",
+                    "type": "invented"
+                }]
+            }),
+            Some(&schema),
+        )
+        .expect_err("invented nested key must fail closed");
+        assert!(
+            err.contains("type"),
+            "error must name the invented key, got {err}"
+        );
+    }
+
+    #[test]
+    fn enforce_input_schema_accepts_declared_nested_payload() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "edits": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "oldText": { "type": "string" },
+                            "newText": { "type": "string" }
+                        }
+                    }
+                }
+            }
+        });
+        let coerced = enforce_input_schema(
+            json!({ "edits": [{ "oldText": "a", "newText": "b" }] }),
+            Some(&schema),
+        )
+        .expect("declared nested fields must pass");
+        assert_eq!(coerced["edits"][0]["oldText"], json!("a"));
+        assert_eq!(coerced["edits"][0]["newText"], json!("b"));
+    }
+
+    #[test]
+    fn enforce_input_schema_skips_when_schema_absent() {
+        let args = json!({ "anything": true });
+        let out = enforce_input_schema(args.clone(), None).expect("no schema is a no-op");
+        assert_eq!(out, args);
     }
 
     #[tokio::test]

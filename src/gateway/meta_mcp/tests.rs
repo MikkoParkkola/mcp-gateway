@@ -410,8 +410,10 @@ async fn code_mode_execute_chain_step_missing_tool_field_returns_error() {
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
-        msg.contains("step 0") || msg.contains("missing 'tool'"),
-        "Expected error about step 0, got: {msg}"
+        msg.contains("step 0")
+            || msg.contains("missing 'tool'")
+            || (msg.contains("chain[0].tool") && msg.contains("missing")),
+        "Expected error about step 0 missing tool, got: {msg}"
     );
 }
 

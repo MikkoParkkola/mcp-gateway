@@ -1,0 +1,16 @@
+{
+  "probe": "ronacher-edits-array",
+  "gate": "MCPGW.SCHEMA.1",
+  "invented_keys": [
+    "type",
+    "requireUnique",
+    "in_file",
+    "oldText2",
+    "event.0.additionalProperties"
+  ],
+  "samples": 5,
+  "accepted": 0,
+  "rate": 0.0,
+  "decision": "fail-closed",
+  "note": "Rate is the fraction of invented nested keys that validate_arguments accepts. Origin/main accepted 5/5 (rate 1.0). Fail-closed target is 0. This is the gateway validator probe, not a live Opus-4.8 client-repair measurement: the gateway fail-closes even if a slop harness would have stripped the keys first."
+}

@@ -24,7 +24,7 @@ use super::super::meta_mcp_helpers::{
     build_search_response, build_suggestions, extract_bool_or, extract_optional_str,
     extract_required_str, extract_search_limit, is_glob_pattern, parse_code_mode_tool_ref,
     parse_tool_arguments, ranked_results_to_json, tool_matches_glob, tool_matches_query,
-    tool_name_matches_glob,
+    tool_name_matches_glob, validate_code_mode_execute_args,
 };
 use super::MetaMcp;
 use super::support::{
@@ -446,6 +446,8 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
+        validate_code_mode_execute_args(args)?;
+
         // Chain mode: sequential execution
         if let Some(chain) = args.get("chain").and_then(Value::as_array) {
             return self.execute_chain(chain.clone(), session_id, caller).await;

@@ -22,10 +22,26 @@
 //!    be one of the listed options (checked after coercion).
 //! 5. **String constraints** – `minLength`, `maxLength`, and numeric
 //!    `minimum` / `maximum` are checked where declared.
+//! 6. **Nested objects and array items** – the same required / unknown-key /
+//!    type rules apply recursively. Invented keys on nested-object-in-array
+//!    payloads fail closed (MIK-6865). A nested schema may opt out with
+//!    `additionalProperties: true`. Depth is capped to bound hostile input.
 
 use std::fmt::Write as _;
 
 use serde_json::Value;
+
+mod shape;
+
+pub use shape::{
+    SchemaShapeAuditEntry, SchemaShapeRisk, audit_schema_shapes, classify_schema_shape,
+};
+
+/// Maximum nesting depth walked by input/output validation.
+///
+/// Hostile payloads can nest objects/arrays arbitrarily; past this depth the
+/// call fails closed rather than walking until the process blows the stack.
+const MAX_SCHEMA_DEPTH: u8 = 8;
 
 /// A single validation violation with a human-readable, LLM-actionable message.
 #[derive(Debug, Clone, PartialEq)]
@@ -117,7 +133,7 @@ impl SchemaValidationResult {
 pub fn validate_arguments(arguments: &Value, input_schema: &Value) -> SchemaValidationResult {
     // Inputs are strict: an unrecognised parameter is almost always a caller
     // typo or a hallucinated field, so it is reported as a violation.
-    validate_object(arguments, input_schema, true)
+    validate_object(arguments, input_schema, true, "", 0)
 }
 
 /// Core object validator shared by [`validate_arguments`] and [`validate_output`].
@@ -126,12 +142,25 @@ pub fn validate_arguments(arguments: &Value, input_schema: &Value) -> SchemaVali
 /// are treated: strict (`true`) for inputs, lenient (`false`) for outputs, where
 /// upstream APIs legitimately return extra fields the declared schema does not
 /// enumerate (e.g. Brave's `mixed`/`type`, Exa's `costDollars`/`searchTime`).
+/// Nested object schemas may override with `additionalProperties: true`.
 #[must_use]
 fn validate_object(
     arguments: &Value,
     input_schema: &Value,
     reject_extra_keys: bool,
+    path: &str,
+    depth: u8,
 ) -> SchemaValidationResult {
+    if depth >= MAX_SCHEMA_DEPTH {
+        return SchemaValidationResult {
+            violations: vec![ValidationViolation::new(
+                path,
+                "nested schema exceeds maximum depth",
+            )],
+            coerced: arguments.clone(),
+        };
+    }
+
     // No schema → nothing to validate.
     if input_schema.is_null() || input_schema == &Value::Object(serde_json::Map::new()) {
         return SchemaValidationResult {
@@ -139,6 +168,8 @@ fn validate_object(
             coerced: arguments.clone(),
         };
     }
+
+    let reject_extra_keys = extra_keys_rejected(input_schema, reject_extra_keys);
 
     let properties = input_schema.get("properties").and_then(Value::as_object);
 
@@ -156,52 +187,14 @@ fn validate_object(
         .map(|arr| arr.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
 
-    // Normalise arguments to an object; null / missing → treat as empty object.
-    let arg_map = match arguments {
-        Value::Object(m) => m.clone(),
-        Value::Null => serde_json::Map::new(),
-        _ => {
-            return SchemaValidationResult {
-                violations: vec![ValidationViolation::new(
-                    "",
-                    "Arguments must be a JSON object",
-                )],
-                coerced: arguments.clone(),
-            };
-        }
+    let arg_map = match object_arg_map(arguments, path) {
+        Ok(map) => map,
+        Err(result) => return result,
     };
 
-    let mut violations = Vec::new();
+    let mut violations =
+        required_and_unknown_violations(&arg_map, properties, &required, reject_extra_keys, path);
     let mut coerced_map = serde_json::Map::new();
-
-    // Step 1 – required parameters.
-    for name in &required {
-        match arg_map.get(*name) {
-            None => violations.push(ValidationViolation::new(
-                *name,
-                "required parameter is missing",
-            )),
-            Some(Value::Null) => violations.push(ValidationViolation::new(
-                *name,
-                "required parameter must not be null",
-            )),
-            _ => {}
-        }
-    }
-
-    // Step 2 – extra keys not declared in the schema (strict for inputs only).
-    for key in arg_map.keys() {
-        if reject_extra_keys && !properties.contains_key(key.as_str()) {
-            let known: Vec<&str> = properties.keys().map(String::as_str).collect();
-            violations.push(ValidationViolation::new(
-                key,
-                format!(
-                    "unknown parameter — valid parameters are: {}",
-                    known.join(", ")
-                ),
-            ));
-        }
-    }
 
     // Early exit: if there are unknown params or missing required, stop here so
     // the error message is clear and not cluttered by cascading type errors.
@@ -212,7 +205,7 @@ fn validate_object(
         };
     }
 
-    // Steps 3-5 – per-property type, enum, and constraint validation.
+    // Steps 3-6 – per-property type, enum, constraint, and nested validation.
     for (name, prop_schema) in properties {
         let Some(raw_value) = arg_map.get(name.as_str()) else {
             // Optional parameter not provided — skip.
@@ -224,7 +217,14 @@ fn validate_object(
             continue;
         }
 
-        let (coerced_value, type_violations) = validate_property(name, raw_value, prop_schema);
+        let param = join_path(path, name);
+        let (coerced_value, type_violations) = validate_property(
+            &param,
+            raw_value,
+            prop_schema,
+            reject_extra_keys,
+            depth.saturating_add(1),
+        );
 
         violations.extend(type_violations);
         coerced_map.insert(name.clone(), coerced_value);
@@ -243,6 +243,85 @@ fn validate_object(
     }
 }
 
+fn object_arg_map(
+    arguments: &Value,
+    path: &str,
+) -> std::result::Result<serde_json::Map<String, Value>, SchemaValidationResult> {
+    match arguments {
+        Value::Object(m) => Ok(m.clone()),
+        Value::Null if path.is_empty() => Ok(serde_json::Map::new()),
+        _ => {
+            let message = if path.is_empty() {
+                "Arguments must be a JSON object".to_string()
+            } else {
+                "must be a JSON object".to_string()
+            };
+            Err(SchemaValidationResult {
+                violations: vec![ValidationViolation::new(path, message)],
+                coerced: arguments.clone(),
+            })
+        }
+    }
+}
+
+fn required_and_unknown_violations(
+    arg_map: &serde_json::Map<String, Value>,
+    properties: &serde_json::Map<String, Value>,
+    required: &[&str],
+    reject_extra_keys: bool,
+    path: &str,
+) -> Vec<ValidationViolation> {
+    let mut violations = Vec::new();
+    for name in required {
+        let param = join_path(path, name);
+        match arg_map.get(*name) {
+            None => violations.push(ValidationViolation::new(
+                param,
+                "required parameter is missing",
+            )),
+            Some(Value::Null) => violations.push(ValidationViolation::new(
+                param,
+                "required parameter must not be null",
+            )),
+            _ => {}
+        }
+    }
+    if reject_extra_keys {
+        let known: Vec<&str> = properties.keys().map(String::as_str).collect();
+        let known_list = known.join(", ");
+        for key in arg_map.keys() {
+            if !properties.contains_key(key.as_str()) {
+                violations.push(ValidationViolation::new(
+                    join_path(path, key),
+                    format!("unknown parameter — valid parameters are: {known_list}"),
+                ));
+            }
+        }
+    }
+    violations
+}
+
+fn extra_keys_rejected(schema: &Value, default: bool) -> bool {
+    match schema.get("additionalProperties") {
+        Some(Value::Bool(true)) => false,
+        Some(Value::Bool(false)) => true,
+        _ => default,
+    }
+}
+
+fn join_path(parent: &str, key: &str) -> String {
+    if parent.is_empty() {
+        key.to_string()
+    } else {
+        format!("{parent}.{key}")
+    }
+}
+
+fn items_are_objects(items_schema: &Value) -> bool {
+    items_schema.get("type").and_then(Value::as_str) == Some("object")
+        || items_schema.get("properties").is_some()
+}
+
 /// Validate `result` against `output_schema`.
 ///
 /// This uses the same bounded JSON Schema subset as [`validate_arguments`]:
@@ -258,7 +337,7 @@ pub fn validate_output(result: &Value, output_schema: &Value) -> SchemaValidatio
     // enumerate (e.g. Brave's `mixed`/`type`, Exa's `costDollars`). Required and
     // type checks always apply.
     let allows_extra = output_schema.get("additionalProperties") == Some(&Value::Bool(true));
-    validate_object(result, output_schema, !allows_extra)
+    validate_object(result, output_schema, !allows_extra, "", 0)
 }
 
 // ── Per-property validation ───────────────────────────────────────────────────
@@ -270,6 +349,8 @@ fn validate_property(
     name: &str,
     value: &Value,
     prop_schema: &Value,
+    reject_extra_keys: bool,
+    depth: u8,
 ) -> (Value, Vec<ValidationViolation>) {
     let declared_type = prop_schema.get("type").and_then(Value::as_str);
     let mut violations = Vec::new();
@@ -287,7 +368,7 @@ fn validate_property(
         value.clone()
     };
 
-    // Only proceed to enum / constraint checks if type was valid.
+    // Only proceed to enum / constraint / nested checks if type was valid.
     if violations.is_empty() {
         // Enum check.
         if let Some(enum_values) = prop_schema.get("enum").and_then(Value::as_array)
@@ -336,7 +417,51 @@ fn validate_property(
         }
     }
 
+    if !violations.is_empty() {
+        return (coerced, violations);
+    }
+
+    let is_object = declared_type == Some("object") || prop_schema.get("properties").is_some();
+    if is_object {
+        let nested = validate_object(&coerced, prop_schema, reject_extra_keys, name, depth);
+        return (nested.coerced, nested.violations);
+    }
+
+    if declared_type == Some("array")
+        && let Some(items_schema) = prop_schema.get("items")
+        && let Some(array) = coerced.as_array()
+    {
+        return validate_array_items(name, array, items_schema, reject_extra_keys, depth);
+    }
+
     (coerced, violations)
+}
+
+fn validate_array_items(
+    path: &str,
+    array: &[Value],
+    items_schema: &Value,
+    reject_extra_keys: bool,
+    depth: u8,
+) -> (Value, Vec<ValidationViolation>) {
+    let mut violations = Vec::new();
+    let mut coerced_items = Vec::with_capacity(array.len());
+    let object_items = items_are_objects(items_schema);
+    for (i, element) in array.iter().enumerate() {
+        let item_path = format!("{path}[{i}]");
+        if object_items {
+            let nested =
+                validate_object(element, items_schema, reject_extra_keys, &item_path, depth);
+            violations.extend(nested.violations);
+            coerced_items.push(nested.coerced);
+        } else {
+            let (coerced, item_violations) =
+                validate_property(&item_path, element, items_schema, reject_extra_keys, depth);
+            violations.extend(item_violations);
+            coerced_items.push(coerced);
+        }
+    }
+    (Value::Array(coerced_items), violations)
 }
 
 // ── Type coercion ─────────────────────────────────────────────────────────────

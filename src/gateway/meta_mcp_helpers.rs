@@ -568,6 +568,18 @@ pub(crate) fn parse_tool_arguments(args: &Value) -> Result<Value> {
     Ok(arguments)
 }
 
+/// Fail-closed validation of `gateway_execute` arguments against its declared
+/// schema (MIK-6865). Invented keys on `chain[]` items are rejected.
+pub(crate) fn validate_code_mode_execute_args(args: &Value) -> Result<()> {
+    let schema = build_code_mode_execute_tool().input_schema;
+    let validation = crate::capability::validate_arguments(args, &schema);
+    if validation.is_valid() {
+        Ok(())
+    } else {
+        Err(Error::json_rpc(-32602, validation.format_error(&schema)))
+    }
+}
+
 /// Extract the price per million from stats arguments, defaulting to 15.0.
 pub(crate) fn extract_price_per_million(args: &Value) -> f64 {
     extract_f64_or(args, "price_per_million", 15.0)

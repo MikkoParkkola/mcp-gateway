@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Fail-closed nested input-schema validation (MIK-6865).** `validate_arguments`
+  now rejects invented keys on nested objects and array-of-object items, not
+  only at the top level. MCP dispatch and `gateway_execute` chain steps use the
+  same rule. Nested `additionalProperties: true` remains the explicit opt-in.
+  Tool schemas should stay flat; nested-object-in-array requires this layer.
+
 ## [3.5.0] - 2026-08-28
 
 ### Added
