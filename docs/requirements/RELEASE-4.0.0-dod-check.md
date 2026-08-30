@@ -462,10 +462,10 @@ that had been omitted since the code rounds. What can be said is what was checke
 remains on the transport itself, the `subscriptions/listen` stream having landed, and nothing on the
 list waits on a source that cannot be reached, the tasks schema having been read.
 
-## Rounds 9–14 — the confirmation pass on this document
+## Rounds 9–17 — the confirmation pass on this document
 
-The last six rounds reviewed this document rather than the code, both vendors on identical
-material, scope declared in the prompt each time.
+The last nine rounds reviewed this document rather than the code, both vendors on identical
+material, scope declared in the prompt each time. Rounds 15 to 17 reviewed this table.
 
 | Round | Material | Findings | Verdict |
 |---|---|---|---|
@@ -474,7 +474,10 @@ material, scope declared in the prompt each time.
 | 11 | the closing paraphrase deleted | no finding at any gate; 1 improvement (gpt), 2 (grok) | SHIP / SHIP |
 | 12 | two omitted findings added to the inventory | 4 (gpt), 1 + 2 improvements (grok); both vendors on the same false claim | SHIP-WITH-FIXES |
 | 13 | the repairs to round 12 | 2 + 1 improvement (gpt); grok found none | SHIP-WITH-FIXES / SHIP |
-| 14 | the repairs to round 13 | 1 improvement (gpt), 1 (grok) | **SHIP** / **SHIP** |
+| 14 | the repairs to round 13 | 1 improvement (gpt), 1 (grok) | SHIP / SHIP |
+| 15 | this history table itself | 2 LOW bookkeeping errors (gpt); grok found none | SHIP-WITH-FIXES / SHIP |
+| 16 | the repairs to round 15 | 1 LOW (grok); gpt found none | SHIP / SHIP-WITH-FIXES |
+| 17 | one clause deleted | none | **SHIP** / **SHIP** |
 
 Rounds 12 to 14 are the same pattern one level down. Round 12 asked whether the document's open
 inventory matched the reviews that produced it, and it did not: a MEDIUM config-reload finding and a
