@@ -1019,6 +1019,48 @@ mod envelope_size {
     }
 
     #[test]
+    fn a_token_of_exactly_the_permitted_size_is_judged_on_its_contents() {
+        // The bound is "longer than", so a token *at* the limit passes the
+        // length gate and is refused, if at all, for what it contains. Nothing
+        // pinned that boundary: the oversized test above uses 64 KiB and the
+        // ordinary one a few hundred bytes, so relaxing the comparison to `>=`
+        // changed no test's outcome. `cargo-mutants` made exactly that
+        // substitution in `Keyring::open` and the suite stayed green.
+        let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
+        // `MAX_ENVELOPE_LEN` is private to its module; 8 KiB is its value, and
+        // a token one byte longer is the case the test above covers.
+        let at_limit = "A".repeat(8 * 1024);
+
+        let refusal = keyring.open(&at_limit, 1_500).err();
+        assert!(
+            refusal.is_some() && refusal != Some(ContinuationError::TooLarge),
+            "a token at the limit must be judged on its contents, not its length: {refusal:?}"
+        );
+    }
+
+    #[test]
+    fn a_client_facing_refusal_still_tells_the_caller_something() {
+        // Its sibling above pins what a refusal must not reveal, and an empty
+        // string satisfies that perfectly — which is why `cargo-mutants` could
+        // replace `client_message` with `""` and leave the suite green. A
+        // refusal a caller cannot read is not a refusal.
+        for internal in [
+            ContinuationError::UnknownKey(3),
+            ContinuationError::UnknownVersion(9),
+            ContinuationError::NotAuthentic,
+            ContinuationError::Expired,
+            ContinuationError::Malformed,
+            ContinuationError::TooLarge,
+        ] {
+            let shown = internal.client_message();
+            assert!(
+                shown.contains("continuation"),
+                "a refusal must name what was refused: {shown:?}"
+            );
+        }
+    }
+
+    #[test]
     fn an_ordinary_envelope_is_unaffected_by_the_bound() {
         // The bound must sit above real backend state, or it is an outage
         // rather than a guard.
