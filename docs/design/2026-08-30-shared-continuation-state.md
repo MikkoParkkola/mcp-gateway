@@ -200,7 +200,9 @@ extracted when the forwarder exists and has a shape to fit.
    deliberately does **not** name the replica that could have served it: nothing outside the sealed
    envelope can make that claim without being forgeable.
 4. **A single-replica deployment is no longer a documented requirement** of the modern protocol
-   path. `docs/DEPLOYMENT.md:125-142` is rewritten in this change to say what now holds.
+   path. `docs/DEPLOYMENT.md:125-142` is rewritten in this change to say what now holds — which is
+   that a retry is *refused* unless it lands on the minting process, not that multi-replica is now
+   free. An operator reading the second thing would file every origin-miss refusal as a regression.
 
 ## Residual, named
 
@@ -218,6 +220,14 @@ so the two are never separated. `CHANGELOG.md:110-114` states this.
   per-process value works; a value generated at startup is the candidate. The StatefulSet case that
   motivated this question — a restarted replica reusing its predecessor's name — is answered by row
   5 of the outcome matrix: the key died with the process, so nothing the successor is handed opens.
+- *What does a wrong-replica refusal look like on the wire?* — deferred to the increment that
+  builds the refusal. Owner: the MRTR.5 increment. What resolves it: read how
+  `src/gateway/router/handlers.rs` returns a typed error today and follow that shape rather than
+  inventing one. It matters because the refusal is the one error a client can usefully retry — a
+  retry against a round-robin service reaches the origin roughly one time in *n* — so if the
+  transport carries a retryable signal at all, this refusal earns it. If it resolves badly, and no
+  retryable signal exists on this path, the refusal is still correct and the release notes carry
+  the consequence instead.
 - *Does any client fail to echo the continuation on the retry?* — checkable against the
   specification's client requirements and the gateway's stdio dispatcher, which has no session
   concept at all. Stdio is single-process by construction. If an HTTP client may omit it, the
