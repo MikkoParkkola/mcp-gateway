@@ -220,6 +220,19 @@ impl Provider for OverlayEnv<'_> {
     }
 }
 
+/// Whether a load substitutes the environment into the config it returns.
+///
+/// A config destined for a rewrite must stay [`Expansion::Literal`]: the write
+/// path serialises the whole struct, so a substituted secret becomes a
+/// plaintext secret on disk.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Expansion {
+    /// Resolve `env:` references and expand `${VAR}` patterns.
+    Resolve,
+    /// Leave every reference exactly as the file spells it.
+    Literal,
+}
+
 impl Config {
     /// Candidate config file locations searched when `--config` is not specified.
     ///
@@ -333,7 +346,49 @@ impl Config {
     /// not parse, and [`Error::ConfigValidation`] when it parses but is invalid.
     pub fn load(path: Option<&Path>) -> Result<Self> {
         let resolved = Self::prepare(path)?;
-        Ok(Self::evaluate(resolved.as_deref(), &SystemHome, Tolerance::Warn)?.config)
+        Ok(Self::evaluate(
+            resolved.as_deref(),
+            &SystemHome,
+            Tolerance::Warn,
+            Expansion::Resolve,
+        )?
+        .config)
+    }
+
+    /// Load the config exactly as it is written, leaving `env:` references and
+    /// `${VAR}` patterns unexpanded.
+    ///
+    /// Every read-modify-write of the config file goes through this. A loader
+    /// that resolves secrets in memory turns the next write into a plaintext
+    /// dump of every credential the file merely referenced, because the whole
+    /// struct is serialised back.
+    ///
+    /// # Errors
+    ///
+    /// As [`Config::load`].
+    pub fn load_literal(path: Option<&Path>) -> Result<Self> {
+        let resolved = Self::prepare(path)?;
+        Ok(Self::evaluate(
+            resolved.as_deref(),
+            &SystemHome,
+            Tolerance::Warn,
+            Expansion::Literal,
+        )?
+        .config)
+    }
+
+    /// The overlay this config's own `env_files` produce.
+    ///
+    /// Lets a config that was never evaluated — one built in memory, or loaded
+    /// literally — still be validated against the environment it declares.
+    #[must_use]
+    pub fn env_overlay(&self) -> EnvOverlay {
+        let mut overlay = EnvOverlay::none();
+        for entry in &self.env_files {
+            let resolved = Self::expand_home(entry, &overlay, &SystemHome);
+            overlay.apply_file_tolerant(&resolved);
+        }
+        overlay
     }
 
     /// Load a config together with the environment it was evaluated against.
@@ -351,7 +406,12 @@ impl Config {
         home: &dyn HomeResolver,
     ) -> Result<Evaluated> {
         let resolved = Self::prepare(path)?;
-        Self::evaluate(resolved.as_deref(), home, Tolerance::Fail)
+        Self::evaluate(
+            resolved.as_deref(),
+            home,
+            Tolerance::Fail,
+            Expansion::Resolve,
+        )
     }
 
     /// Re-evaluate against env files the running process already recorded.
@@ -367,7 +427,12 @@ impl Config {
     ) -> Result<Evaluated> {
         let resolved = Self::prepare(path)?;
         let overlay = EnvOverlay::from_paths_checked(env_paths.as_paths())?;
-        Self::finish(resolved.as_deref(), overlay, env_paths.clone())
+        Self::finish(
+            resolved.as_deref(),
+            overlay,
+            env_paths.clone(),
+            Expansion::Resolve,
+        )
     }
 
     /// Resolve `~` and apply env files in sequence, then build the config.
@@ -380,6 +445,7 @@ impl Config {
         path: Option<&Path>,
         home: &dyn HomeResolver,
         tolerance: Tolerance,
+        expansion: Expansion,
     ) -> Result<Evaluated> {
         let spec: EnvFileConfig = Self::figment(path, &EnvOverlay::none())
             .extract()
@@ -396,7 +462,12 @@ impl Config {
             }
             paths.push(resolved);
         }
-        Self::finish(path, overlay, ResolvedEnvFiles::new(paths, tilde))
+        Self::finish(
+            path,
+            overlay,
+            ResolvedEnvFiles::new(paths, tilde),
+            expansion,
+        )
     }
 
     /// Substitutes a leading `~` with the home in force at this point in the
@@ -416,11 +487,15 @@ impl Config {
         path: Option<&Path>,
         overlay: EnvOverlay,
         env_paths: ResolvedEnvFiles,
+        expansion: Expansion,
     ) -> Result<Evaluated> {
         let mut config: Self = Self::figment(path, &overlay)
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
-        let secret_refs = config.expand_env_vars(&overlay);
+        let secret_refs = match expansion {
+            Expansion::Resolve => config.expand_env_vars(&overlay),
+            Expansion::Literal => BTreeSet::new(),
+        };
         config.validate_with_env(&overlay)?;
         Self::warn_on_retired_keys(path);
         Ok(Evaluated {

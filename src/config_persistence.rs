@@ -10,10 +10,13 @@ use crate::config::Config;
 
 /// Load config from `path`, returning `Config::default()` when the file is absent
 /// or cannot be parsed.
+///
+/// Literal, per [`Config::load_literal`]: every caller here is on a
+/// read-modify-write path, and a resolved secret would be written back out.
 #[must_use]
 pub fn load_config_or_default(path: &Path) -> Config {
     if path.exists() {
-        Config::load(Some(path)).unwrap_or_else(|e| {
+        Config::load_literal(Some(path)).unwrap_or_else(|e| {
             tracing::warn!(error = %e, "Could not load config, using defaults");
             Config::default()
         })
@@ -24,12 +27,14 @@ pub fn load_config_or_default(path: &Path) -> Config {
 
 /// Load config from `path`, returning `Config::default()` when the file is absent.
 ///
+/// Literal, per [`Config::load_literal`].
+///
 /// # Errors
 ///
 /// Returns an error when the file exists but cannot be parsed.
 pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
     if path.exists() {
-        Config::load(Some(path))
+        Config::load_literal(Some(path))
     } else {
         Ok(Config::default())
     }
@@ -42,7 +47,7 @@ pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
 /// Returns `Err` on validation, serialisation, or I/O failure.
 pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
     config
-        .validate()
+        .validate_with_env(&config.env_overlay())
         .map_err(|e| format!("Failed to validate config: {e}"))?;
     let yaml =
         serde_yaml::to_string(config).map_err(|e| format!("Failed to serialize config: {e}"))?;
@@ -496,5 +501,48 @@ mod tests {
 
         assert!(matches!(result, Err(msg) if msg.contains("Failed to validate config")));
         assert!(!path.exists());
+    }
+
+    /// A config edit must not turn secret *references* into secret *values* on
+    /// disk. The read-modify-write helpers behind `mcp-gateway add` and the
+    /// admin UI load the file, apply one change, and serialise the whole
+    /// struct back — so anything the loader resolved in memory is written out
+    /// in plaintext, into a file an operator keeps in version control.
+    #[test]
+    fn a_config_rewrite_keeps_secret_references_unresolved() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env_path = dir.path().join("secrets.env");
+        std::fs::write(
+            &env_path,
+            "FALSIFIER_TOKEN=tok-must-not-land\nFALSIFIER_HEADER=hdr-must-not-land\n",
+        )
+        .expect("write env file");
+        let path = dir.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            format!(
+                "env_files:\n  - {}\nauth:\n  enabled: true\n  bearer_token: env:FALSIFIER_TOKEN\nbackends:\n  demo:\n    http_url: https://example.invalid/mcp\n    headers:\n      Authorization: \"Bearer ${{FALSIFIER_HEADER}}\"\n",
+                env_path.display()
+            ),
+        )
+        .expect("write config");
+
+        let mut config = load_config_or_default(&path);
+        config.server.port = 9191;
+        write_config(&path, &config).expect("rewrite the config");
+
+        let written = std::fs::read_to_string(&path).expect("read the config back");
+        assert!(
+            !written.contains("tok-must-not-land"),
+            "the bearer token was written in plaintext:\n{written}"
+        );
+        assert!(
+            !written.contains("hdr-must-not-land"),
+            "the expanded header was written in plaintext:\n{written}"
+        );
+        assert!(
+            written.contains("env:FALSIFIER_TOKEN"),
+            "the reference must survive the rewrite:\n{written}"
+        );
     }
 }
