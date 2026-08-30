@@ -9,13 +9,20 @@ the head, that is said in the same line rather than rounded up.
 
 ## Verdict, first
 
-**The 2025 path is done and shippable. The 2026 path has no unbuilt piece left; what remains is
-gated on production topology and on two specification pages that do not resolve.**
+**The 2025 path is done and shippable. The 2026 core path has no unbuilt piece left; what remains is
+gated on production topology, plus a tasks extension this release deliberately does not advertise.**
 
-Eight independent review rounds produced **42 findings. Thirty-eight are closed**, each with a probe
-that makes its own fix fail and only its own fix. Of the four that remain, two cannot be verified
-against a specification page that returns 404, and two are gated on multi-replica production —
-neither is reachable by a client while the switch defaults off.
+Eight independent review rounds produced **42 findings, and a later scope audit added a
+forty-third. Thirty-eight are closed**, each with a probe
+that makes its own fix fail and only its own fix. Of the five that remain, two are gated on
+multi-replica production, two are conformance gaps in a tasks extension this release does not
+advertise, and one is a parsed protocol field with no consumer. None is reachable by a client while
+the switch defaults off.
+
+An earlier revision of this paragraph said two of them could not be verified against a specification
+page returning 404. That was a wrong path rather than a missing document: the page was found and
+fetched, and both findings are now stated against it. The claim is corrected here rather than left
+standing beside the body that contradicts it.
 
 Two findings were closed by **removing** a mechanism rather than repairing it, because in both cases
 what existed was worse than nothing: retry fields merged into tool arguments while forwarding the
@@ -96,7 +103,7 @@ path is the thing most likely to break, so it is the thing most tested.
 
 - `cargo audit`: **0 vulnerabilities**, 425 dependencies. One `yanked` warning, identical on `main`.
 - `#![deny(unsafe_code)]` holds; no dependency added.
-- Nine security findings from review were closed in this round; three remain open and are listed below.
+- Nine security findings from review were closed in this round; two remain open and are listed below.
 
 ## §12 Review — one vendor, eight rounds, findings recorded
 
@@ -213,7 +220,7 @@ died. That was misread twice here before anyone looked at the process tree.
 
 ## What is honestly NOT finished
 
-Four findings remain open. None is reachable by a client while `server.modern_protocol` defaults off.
+Five findings remain open. None is reachable by a client while `server.modern_protocol` defaults off.
 
 1. **The consumed-continuation ledger is process-local.** A second replica would let one continuation be spent once on each. Gated BEFORE-PRODUCTION; needs a shared atomic insert-if-absent store.
 
@@ -241,6 +248,26 @@ Four findings remain open. None is reachable by a client while `server.modern_pr
    `src/protocol/tasks.rs:37` holds `error: Option<String>`; the specification's terminal
    states put the final `result` on `completed` and the JSON-RPC `error` object on
    `failed`. A client parsing the error would get a message where an object is required.
+
+5. **The per-request `logLevel` is parsed and never read.** `classify_request` lifts
+   `io.modelcontextprotocol/logLevel` into `RequestFields::log_level`
+   (`src/protocol/meta.rs:196-199`), and no consumer exists: the only other `log_level`
+   symbols in the tree are the CLI's own flag and the legacy global `LoggingLevel` behind
+   `logging/setLevel` (`src/gateway/meta_mcp/protocol.rs:279`), which is an unrelated
+   mechanism and is itself refused on the modern path. Requirement STATELESS.7 is a
+   MUST-NOT — do not emit `notifications/message` for a request that declared no level —
+   and it holds only because the modern path emits none at all. Nothing positive was built,
+   so the requirement is satisfied vacuously and the field is dead on the parse side.
+
+   The key's *presence* is load-bearing and stays: `meta.rs:150` counts it as an era
+   declaration, so a request carrying `logLevel` and omitting the required pair is
+   malformed rather than quietly legacy. Only the lifted value has no reader.
+
+   Same disposition as `gateway_declares()` below, for the same reason: the repair is to
+   consume it, and consuming it means building per-request log delivery, which is a feature
+   this release did not set out to add. Recorded rather than repaired. Deleting the field
+   was rejected — it is the protocol's own key, and the next release that wires log
+   delivery needs the parse it would remove.
 
 ### Disposition of 3 and 4 — the extension ships not implemented
 
