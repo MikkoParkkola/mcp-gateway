@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
+use serde_json::json;
 
 // Helper to build a Tool for testing
 fn make_tool(name: &str, description: Option<&str>) -> Tool {
@@ -495,16 +496,36 @@ fn build_code_mode_search_tool_has_limit_parameter() {
 fn build_code_mode_search_tool_has_include_schema_parameter() {
     // GIVEN: code mode search tool definition
     // WHEN: inspecting the input schema
-    // THEN: 'include_schema' boolean parameter with default true is present
+    // THEN: deprecated include_schema is still present, without a true default
     let tool = build_code_mode_search_tool();
     assert_eq!(
         tool.input_schema["properties"]["include_schema"]["type"],
         "boolean"
     );
-    assert_eq!(
-        tool.input_schema["properties"]["include_schema"]["default"],
-        true
+    assert!(
+        tool.input_schema["properties"]["include_schema"]
+            .get("default")
+            .is_none()
     );
+    let desc = tool.input_schema["properties"]["include_schema"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(desc.to_ascii_lowercase().contains("deprecated"), "{desc}");
+}
+
+#[test]
+fn build_code_mode_search_tool_documents_tier_ladder() {
+    let tool = build_code_mode_search_tool();
+    let desc = tool.description.as_deref().unwrap();
+    for needle in ["L0", "l1", "l2", "explain"] {
+        assert!(desc.contains(needle), "missing {needle} in: {desc}");
+    }
+    assert_eq!(
+        tool.input_schema["properties"]["detail"]["enum"],
+        json!(["l0", "l1", "l2"])
+    );
+    assert_eq!(tool.input_schema["properties"]["detail"]["default"], "l0");
+    assert_eq!(tool.input_schema["properties"]["explain"]["default"], false);
 }
 
 #[test]

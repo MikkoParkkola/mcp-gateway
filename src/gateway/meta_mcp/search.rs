@@ -34,7 +34,6 @@ use super::support::{
 
 #[derive(Clone, Copy)]
 struct CodeModeSearchOptions {
-    include_schema: bool,
     use_glob: bool,
 }
 
@@ -208,8 +207,7 @@ impl MetaMcp {
                 }
                 collect_tool_tags_for_code_mode(&tool, all_tags);
                 if Self::code_mode_tool_matches(&cap.name, &tool, query, options.use_glob) {
-                    let mut entry =
-                        build_code_mode_match_json(&cap.name, &tool, options.include_schema);
+                    let mut entry = build_code_mode_match_json(&cap.name, &tool, true);
                     if cap_killed {
                         entry["status"] = json!("disabled");
                     }
@@ -260,11 +258,7 @@ impl MetaMcp {
                 }
                 for tool in enriched {
                     if Self::code_mode_tool_matches(&backend.name, &tool, query, options.use_glob) {
-                        let mut entry = build_code_mode_match_json(
-                            &backend.name,
-                            &tool,
-                            options.include_schema,
-                        );
+                        let mut entry = build_code_mode_match_json(&backend.name, &tool, true);
                         if backend_killed {
                             entry["status"] = json!("disabled");
                         }
@@ -367,7 +361,9 @@ impl MetaMcp {
     /// Behaves like `search_tools` but:
     /// - Supports glob patterns (`*`, `?`) on tool names in addition to keyword matching.
     /// - Returns tool references in `"server:tool_name"` format (for use with `gateway_execute`).
-    /// - Optionally includes the full `input_schema` for each result (`include_schema`, default `true`).
+    /// - Defaults to L0 (name, one-line purpose, score). `detail=l1|l2` or
+    ///   deprecated `include_schema=true` (maps to L2) selects more. Ranking
+    ///   diagnostics are omitted unless `explain` is true.
     pub(super) async fn code_mode_search(
         &self,
         args: &Value,
@@ -376,14 +372,11 @@ impl MetaMcp {
         let raw_query = extract_required_str(args, "query")?;
         let query = raw_query.to_lowercase();
         let limit = extract_search_limit(args);
-        let include_schema = extract_bool_or(args, "include_schema", true);
+        let disclosure = crate::gateway::search_disclosure::resolve_search_disclosure(args)?;
         let profile = self.active_profile(session_id);
         let use_glob = is_glob_pattern(&query);
         let current_state = self.current_search_state(session_id);
-        let options = CodeModeSearchOptions {
-            include_schema,
-            use_glob,
-        };
+        let options = CodeModeSearchOptions { use_glob };
 
         let mut matches: Vec<Value> = Vec::new();
         let mut all_tags: Vec<String> = Vec::new();
@@ -414,10 +407,14 @@ impl MetaMcp {
                 .filter_map(json_to_code_mode_search_result)
                 .collect();
             let ranked = ranker.rank(search_results, &query);
-            matches = ranked_results_to_code_mode_json(ranked, include_schema, &matches);
+            matches = ranked_results_to_code_mode_json(ranked, disclosure.explain, &matches);
         }
 
         matches.truncate(limit);
+        matches = matches
+            .into_iter()
+            .map(|m| crate::gateway::search_disclosure::project_code_mode_match(m, disclosure))
+            .collect();
 
         let suggestions = if matches.is_empty() && !use_glob {
             build_suggestions(&query, &all_tags)
@@ -729,6 +726,7 @@ impl MetaMcp {
     ) -> Result<Value> {
         let query = extract_required_str(args, "query")?.to_lowercase();
         let limit = extract_search_limit(args);
+        let explain = extract_bool_or(args, "explain", false);
         let profile = self.active_profile(session_id);
         let search_start = std::time::Instant::now();
         let current_state = self.current_search_state(session_id);
@@ -762,7 +760,7 @@ impl MetaMcp {
         if let Some(ref ranker) = self.ranker {
             let search_results: Vec<_> = matches.iter().filter_map(json_to_search_result).collect();
             let ranked = ranker.rank(search_results, &query);
-            matches = ranked_results_to_json(ranked);
+            matches = ranked_results_to_json(ranked, explain);
         }
 
         // Truncate to requested limit AFTER ranking

@@ -22,13 +22,14 @@ with coarse metadata:
 
 Unsafe, high-risk, policy-denied, unauthorized, unhealthy, and very low-trust
 tools are suppressed before relevance scoring can promote them. Included tools
-carry a `ranking` payload with deterministic reasons and numeric signals so
-users can inspect why a tool was included or downgraded.
+carry a `score`. The `ranking` payload (deterministic reasons and numeric
+signals) is omitted unless the caller sets `explain: true` — scoring
+diagnostics are a debug surface, not a default response field (MIK-7084).
 
 ## Signal Schema
 
-Every included result exposes the coarse `ranking.signals` object. Scores are
-normalized to `0.0..=1.0` unless noted.
+When `explain: true`, every included result exposes the coarse
+`ranking.signals` object. Scores are normalized to `0.0..=1.0` unless noted.
 
 | Signal | Meaning | Default |
 |--------|---------|---------|
