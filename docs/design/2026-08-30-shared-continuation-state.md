@@ -75,8 +75,27 @@ any change to what a continuation *contains*.
 
 ## The mechanism
 
-**A continuation is openable only on the replica that minted it, and it names that replica in
-cleartext so any other replica can refuse it by name.**
+**A continuation is openable only on the replica that minted it. Every other replica refuses it,
+explicitly, without being able to evaluate it.**
+
+The outcome is total over where a retry lands:
+
+| the retry reaches | what happens | which requirement |
+|---|---|---|
+| the minting replica, first time | opens, consumed under the local mutex, resumes | MRTR.5 single-use |
+| the minting replica, again | refused as already spent, by the same mutex | MRTR.5 single-use |
+| the minting replica, after `expires_at` | refused as expired | MRTR.5 expiry |
+| any other replica | refused: the envelope does not authenticate under that process's key | MRTR.5 cross-replica |
+| the minting replica after a restart | refused: the key died with the process | MRTR.5 cross-replica |
+
+No row silently starts a second exchange, which is what MRTR.6 forbids. Every refusal is a refusal —
+the requirement asks the retry to reach the holder *or fail explicitly*, and rows 2 through 5 are
+that failure.
+
+Two operational consequences follow from that matrix and belong in the release notes. A client
+retrying against a round-robin service is refused on every replica but the minting one, so a retry
+is a coin flip rather than a rare miss. And a rolling restart invalidates every continuation
+outstanding against each replaced process, because the key goes with it.
 
 ### 1. Key material is per process, and is never shared
 
@@ -97,23 +116,21 @@ The invariant to carry forward, because a future change could quietly break it:
 A configured, shared key without a shared ledger is exactly the deployment MRTR.5 forbids, and it
 would look like an ordinary configuration convenience.
 
-### 2. The origin travels in cleartext, outside the sealed envelope
+### 2. The origin stays sealed, and nothing outside the envelope claims it
 
-The wire form becomes `{origin}.{envelope}`, where `origin` is the minting replica's identity and
-`envelope` is today's b64 blob unchanged.
+An earlier revision put the minting replica's identity in a cleartext prefix, `{origin}.{envelope}`,
+so a non-origin replica could name the holder in its refusal. That is deleted.
 
-Without this, a retry landing on the wrong replica fails as `NotAuthentic` — indistinguishable from
-tampering, and useless to the operator reading the log. MRTR.6 asks for the opposite: *fail
-explicitly*. The prefix lets any replica name the holder without opening anything.
+It was unauthenticated and client-controlled, so the identity it named was whatever the caller
+wrote. The diagnostic it bought — "wrong replica, minted on *X*" — is therefore forgeable, and an
+operator log that confidently names the wrong process is worse than one that names none: it is a
+false lead presented as a fact. It also changed the wire form of a token for a benefit the
+requirement never asked for. MRTR.6 requires the retry to *fail explicitly*, not to be *diagnosed
+accurately*, and a typed refusal satisfies the words as written.
 
-- A replica whose identity differs from the prefix refuses with a distinct, typed error, before any
-  key lookup.
-- The origin replica opens the envelope and compares the sealed `origin_replica` to the prefix. A
-  disagreement is refused. **The prefix is trusted for routing and for nothing else**: it is
-  unauthenticated, so an attacker can rewrite it, and the only thing rewriting it can achieve is
-  being refused by a different replica — or reaching the origin, where the sealed copy is what
-  decides.
-- The client-facing message stays the existing constant. The replica identity is not in the body.
+`Payload::origin_replica` therefore stays where it already is, sealed inside the envelope, and is
+read only by the replica that can open it — where it is a consistency assertion rather than a
+routing input.
 
 ### 3. The pin binds only where the requirement binds
 
@@ -124,9 +141,11 @@ therefore enforced whenever the mint recorded a live `InFlight` hold, which is t
 requirement names.
 
 Note that clause 1 already confines *every* continuation to its origin, because only the origin can
-open it. Clause 3 is about which error the caller gets, not about which replica can redeem: a
-legacy-backed retry on the wrong replica is refused as a wrong-replica error, and the general case
-is refused as a failure to authenticate. Both are refusals; only one is actionable.
+open it. What clause 3 adds is the case that survives on the origin itself: a continuation minted
+against a live `InFlight` hold, redeemed after that hold is gone — the deadline passed, or the
+backend dropped the connection. The token still opens and the ledger still has it unspent, so
+without the pin the gateway would do the one thing MRTR.6 forbids and open a *second* exchange with
+the legacy backend. With it, the missing hold is a refusal.
 
 ### Why not an external store
 
@@ -152,9 +171,9 @@ conclusion `docs/DEPLOYMENT.md:141` already reached.
 ### Why not replica-to-replica forwarding, yet
 
 Forwarding is the eventual answer for the deployment that wants a retry to *succeed* on any
-replica, and it is strictly this design plus a forwarder: the forwarder's routing input is the
-cleartext origin introduced here. It needs peer discovery, peer authentication, a hop timeout,
-loop prevention, and — because key material is per process — a way to hand the exchange over rather
+replica. It needs a routing input this design deliberately does not supply — the origin is sealed,
+so a non-origin replica cannot read it — plus peer discovery, peer authentication, a hop timeout,
+loop prevention, and, because key material is per process, a way to hand the exchange over rather
 than the token. None of those exist. MRTR.6 is satisfied without it, in the requirement's own
 words.
 
@@ -176,11 +195,11 @@ extracted when the forwarder exists and has a shape to fit.
 2. **A continuation presented to a non-origin replica is refused, not evaluated.** The origin check
    precedes any key lookup, so redeemability is never decided by a replica that cannot hold the
    exchange.
-3. **The refusal is explicit and typed**, distinct from "expired", "tampered" and "already spent",
-   so an operator can tell a misrouted retry from a replay attempt.
-4. **The origin rides in a cleartext prefix outside the sealed envelope**, trusted for routing only
-   and checked against the sealed copy on the origin.
-5. **A single-replica deployment is no longer a documented requirement** of the modern protocol
+3. **The refusal is explicit and typed**, distinct from "expired" and "already spent", so an
+   operator can tell a continuation that cannot be authenticated here from a replay attempt. It
+   deliberately does **not** name the replica that could have served it: nothing outside the sealed
+   envelope can make that claim without being forgeable.
+4. **A single-replica deployment is no longer a documented requirement** of the modern protocol
    path. `docs/DEPLOYMENT.md:125-142` is rewritten in this change to say what now holds.
 
 ## Residual, named
@@ -194,16 +213,11 @@ so the two are never separated. `CHANGELOG.md:110-114` states this.
 
 ## Open questions, scheduled
 
-- *What names a replica?* — checkable, and it must be answered before implementation. The identity
-  must be unique per process and stable for one continuation lifetime. The hostname is **not**
-  sufficient: on a StatefulSet the name is reused across a restart, so a restarted replica would
-  claim its predecessor's tokens by name — and then fail to open them, because the key died with
-  the process. The refusal would be correct but the diagnosis misleading. A per-process value
-  generated at startup, defaulting to a random identifier and overridable by configuration, is the
-  candidate; the check is a test-plan row.
-- *Is the prefix separator safe against the token alphabet?* — checkable. The envelope is standard
-  base64, so the separator must be outside that alphabet and outside whatever the identity may
-  contain. A single `.` with a refusal on any identity containing one is the candidate.
+- *What names a replica?* — answered by the deletion above. With no routing decision resting on the
+  name, `origin_replica` is a sealed assertion read only by the process that minted it, so any
+  per-process value works; a value generated at startup is the candidate. The StatefulSet case that
+  motivated this question — a restarted replica reusing its predecessor's name — is answered by row
+  5 of the outcome matrix: the key died with the process, so nothing the successor is handed opens.
 - *Does any client fail to echo the continuation on the retry?* — checkable against the
   specification's client requirements and the gateway's stdio dispatcher, which has no session
   concept at all. Stdio is single-process by construction. If an HTTP client may omit it, the
