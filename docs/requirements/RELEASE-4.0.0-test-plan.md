@@ -256,6 +256,71 @@ constructible is not that the bridge is correct. It removes the reason to stop, 
 
 ---
 
+## Increment 5 — Multi-round-trip tool calls (MIK-7325)
+
+The branch's headline feature, and today it is declined at the door: a retry's `inputResponses` and
+`requestState` are extracted and then deliberately not forwarded (`handlers.rs:834-859`), so a
+backend that asks a question cannot complete a call. Design reviewed to SHIP over three rounds:
+`docs/design/2026-08-30-mrtr-wiring.md`.
+
+### The fixture this increment cannot start without
+
+**No backend in the tree returns `input_required`.** `rg 'input_required'` finds only `mrtr.rs`,
+`handlers.rs`, two acceptance-criteria test files, and the A2A translator's unrelated
+`TaskState::InputRequired`. Every response-side row below would otherwise assert against a shape
+nothing emits — a suite that passes because the condition it observes never occurs. The fixture
+backend is therefore the increment's first commit, not a detail inside a later one, and it must be
+able to answer twice: once with `input_required`, then with a completed result once the answers
+arrive.
+
+### Coverage rows
+
+| AC | Case | Level | Type | Can it fail? |
+|---|---|---|---|---|
+| MRTR.1 | A retry carries the client's answers to the backend as siblings of `arguments`, not merged into it | I | positive | Yes — the current code forwards neither |
+| MRTR.1 | A tool with an argument literally named `requestState` is not overwritten by the retry plumbing | I | boundary | Yes — this is the failure the first attempt shipped |
+| MRTR.2 | The `requestState` returned to the client is **not** the backend's value | I | security | Yes — a pass-through implementation fails on inequality |
+| MRTR.2 | The backend receives its **own** state back on the retry, not the gateway's envelope | I | positive | Yes |
+| MRTR.3 | A retry whose token was minted for a different caller is refused | I | security | Yes |
+| MRTR.3 | A retry whose token has one byte flipped is refused, and the message names no internal detail | U | security | Yes |
+| MRTR.4 | A token minted for tool A is refused when presented on a call to tool B | I | security | Yes — this is what `original_request_digest` exists for, and it is currently constructed nowhere |
+| MRTR.4 | A caller with no credential gets **no continuation at all**; the interim result is refused, not minted | I | security | Yes — the tempting implementation mints against a shared constant and passes every other row |
+| MRTR.5 | A token redeemed once is refused the second time | I | security | Yes |
+| MRTR.5 | A token minted before the keyring is regenerated does not open after it | U | security | Yes — this is the round-2 finding's own test |
+| MRTR.5 | A mint requesting more than 300 seconds gets 300 | U | boundary | Yes — the API accepts a caller-supplied `expires_at` today |
+| MRTR.5 | *Cross-replica* enforcement | — | **NOT COVERED** | Out of scope by design decision 2: single-use is process-local for 4.0.0 and MIK-7312 owns the durable ledger. Stated, not silent |
+| MRTR.6 | Legacy backend holding an open exchange | — | **NOT COVERED** | Same reason: a retry is routed to one process because there is one process |
+| MRTR.7 | Legacy-client bridge | — | **NOT COVERED** | Out of scope by design decision 1. The release notes say a pre-2026 client gets what it gets today |
+| MRTR.8 | An abandoned continuation leaves nothing behind once its deadline passes | U | resource | Yes — the ledger reclaims on deadline, so a retention bug shows as a non-empty ledger |
+| MRTR.8 | The ledger at capacity refuses rather than forgetting a live entry | U | security | Yes — the opposite implementation is the natural one and it reopens replay |
+| MRTR.9 | An input request of a type the client did not declare is refused before anything is minted | I | security | Yes — nothing checks client capability today |
+| MRTR.10 | An `input_required` result leaves **no** idempotency entry — not `Completed`, and not a live `InFlight` | I | security | Yes — declining to complete while leaving `InFlight` passes a naive version of this row, so the case asserts the entry is *absent* |
+| MRTR.10 | A second caller with identical arguments reaches the backend rather than the first caller's interim answer | I | security | Yes |
+| MRTR.10 | The backend observes a **different** JSON-RPC id on the retry than on the initial call | I | conformance | Yes — the specification says MUST, and whether the gateway holds it is unverified |
+| MRTR.10 | A backend answering `input_required` a *second* time, on the retry, is refused rather than minted again | I | boundary | Yes — the payload carries no round counter, so the cap exists only if this refusal does |
+
+### The three NOT COVERED rows are the plan's most important cells
+
+Each names a requirement this release does not meet and says which decision put it there. That is
+the difference between a limit and a gap: a limit is written down before the tests are, and appears
+in the release notes; a gap is discovered by whoever deploys it. MRTR.5's cross-replica half,
+MRTR.6 and MRTR.7 are limits. If the operator holds the release for any of them, the design reopens
+rather than the plan.
+
+### What would make this increment's suite dishonest
+
+Two shapes, both cheap to build by accident:
+
+- **A fixture that answers the question itself.** If the fixture backend completes on the first
+  call rather than asking, every response-side row goes green while the feature does nothing. The
+  fixture must be asserted to have asked — a test on the test.
+- **A binding test whose two callers are the same caller.** MRTR.3 and MRTR.4 compare a token
+  against a principal; if the harness builds both from one credential, the comparison is between a
+  value and itself and no binding is being checked at all. Each of those rows needs two genuinely
+  different principals constructed independently.
+
+---
+
 ## Later increments — planned, not yet detailed
 
 Listed so the shape of the whole is visible and so no increment is quietly dropped. Each gets its own
@@ -266,7 +331,7 @@ row set before its code is written, not before the release ends.
 | 2 — Stateless dispatch | STATELESS.1–8 | Needs the dual-era fixture pair from increment 1 |
 | 3 — Headers | HEADER.1–6 | HEADER.6 is a security case: a mismatched header must not reach authorization |
 | 4 — Results, errors, cache fields | RESULT.\*, ERROR.\*, CACHE.\*, ORDER.\* | CACHE.2 needs two principals and a shared cache to be a real test |
-| 5 — MRTR and the bridge | MRTR.1–10 | The largest. U8 runs first: if the four era pairs cannot be constructed, the design reopens |
+| 5 — MRTR and the bridge | MRTR.1–10 | **Detailed below.** Design: `docs/design/2026-08-30-mrtr-wiring.md`, reviewed to SHIP |
 | 6 — Controls that must survive | CONFIRM.\*, TENANT.\*, CONTROL.1–5 | Every case asserts a **refusal**, never a computed value |
 | 7 — Identity | IDENT.1–5 | IDENT.1 is negative-first: a forged `clientInfo` must change no authorization outcome |
 | 8 — Subscriptions | SUB.1–4 | Follows increment 6; the multiplexer is session-keyed today |
