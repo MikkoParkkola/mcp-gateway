@@ -273,27 +273,33 @@ backend is therefore the increment's first commit, not a detail inside a later o
 able to answer twice: once with `input_required`, then with a completed result once the answers
 arrive.
 
+It needs a **second mode** as well, and the reason is a row further down. The one-round-trip cap is
+observed only by a backend that asks *again* on the retry — against a fixture specified to complete
+on its second call, that row either never reaches its condition or stays red against a correct
+implementation. So the fixture is parameterised by how many times it asks: once (the ordinary
+exchange) and twice (the cap).
+
 ### Coverage rows
 
 | AC | Case | Level | Type | Can it fail? |
 |---|---|---|---|---|
 | MRTR.1 | A retry carries the client's answers to the backend as siblings of `arguments`, not merged into it | I | positive | Yes — the current code forwards neither |
 | MRTR.1 | A tool with an argument literally named `requestState` is not overwritten by the retry plumbing | I | boundary | Yes — this is the failure the first attempt shipped |
-| MRTR.2 | The `requestState` returned to the client is **not** the backend's value | I | security | Yes — a pass-through implementation fails on inequality |
+| MRTR.2 | The `requestState` returned to the client does not **contain** the backend's value, which the fixture pins to a distinctive literal | I | security | Yes — asserting only that the two strings differ passes an envelope that embeds the backend's state verbatim, which is the leak the AC is about |
 | MRTR.2 | The backend receives its **own** state back on the retry, not the gateway's envelope | I | positive | Yes |
 | MRTR.4 | A retry whose token was minted for a different caller is refused, run once per authentication scheme the fingerprint table names — API key, agent JWT, mTLS | I | security | Yes — and one parameter per scheme, because a fingerprint that ignored the scheme tag would pass a single-scheme case while letting two schemes collide |
 | MRTR.2 | A backend that answers `input_required` while returning no `requestState` of its own completes, and its retry carries none either | I | positive | Yes — `InputRequired::request_state` is optional (mrtr.rs:125) and `Payload::backend_request_state` is not (continuation.rs:68), so the tempting adapter substitutes an empty string and hands the backend state it never issued |
-| MRTR.3 | A retry whose token has one byte flipped is refused, and the message names no internal detail | U | security | Yes |
+| MRTR.3 | A retry whose token has one byte flipped is refused, and the HTTP response body is the `client_message` literal — naming no key id, no version, no `jti` | I | security | Yes — at U level this can only re-read `ContinuationError::client_message`, which is already a constant; the leak the row is about is what the wired handler puts on the wire |
 | MRTR.4 | A token minted for tool A is refused when presented on a call to tool B | I | security | Yes — this is what `original_request_digest` exists for, and it is currently constructed nowhere |
 | MRTR.4 | A token minted for `book_flight` with `{"seat": "12A"}` is refused when presented with `{"seat": "14B"}` | I | security | Yes — a digest over the tool name alone passes the tool-A/tool-B row above and fails this one, and the AC says bound to *the original request*, not to the tool |
 | MRTR.4 | A caller with no credential gets **no continuation at all**; the interim result is refused, not minted | I | security | Yes — the tempting implementation mints against a shared constant and passes every other row |
 | MRTR.5 | A token redeemed once is refused the second time | I | security | Yes |
-| MRTR.5 | A token minted by one `AppState` is refused by a second one built through the **production constructor**, and the second one's ledger is empty | I | security | Yes — but only at this level. The unit version (build keyring A, mint, build keyring B, fail to open) proves AES key separation and nothing about the restart, because the two keyrings are chosen by the fixture. The case has to go through the path that actually constructs the pair, since the property under test is that *no* path builds one without the other |
+| MRTR.5 | A token minted by one `AppState` is refused by a second one built through the **production constructor**, and the second one's ledger is empty | I | security | Yes — but only at this level. The unit version (build keyring A, mint, build keyring B, fail to open) proves AES key separation and nothing about the restart, because the two keyrings are chosen by the fixture. The case has to go through the path that actually constructs the pair, since the property under test is that *no* path builds one without the other. What this row witnesses is precisely **restart kills continuations** — regenerated keys make the envelope fail to open *before* the spent-list is consulted, so it cannot also witness keys outliving the ledger. That invariant is carried by the single `AppState` owner, not by this test |
 | MRTR.5 | A token past its `expires_at` is refused, with the clock advanced rather than the payload hand-edited | I | security | Yes — the expiry check exists (continuation.rs:401), the *derivation* of `expires_at` from the mint does not |
 | MRTR.5 | Two retries of one token dispatched concurrently: exactly one reaches the backend | I | security | Yes — the AC says enforcement MUST be atomic, and a check-then-insert ledger passes every sequential row in this table while failing this one |
-| MRTR.5 | A mint requesting more than 300 seconds gets 300 | U | boundary | Yes — the API accepts a caller-supplied `expires_at` today |
+| MRTR.5 | A continuation minted with an injected `now` expires at exactly `now + 300` | U | boundary | Yes — `Keyring::mint` takes a whole `Payload` (continuation.rs:316) and seals whatever `expires_at` it is handed; `Payload`'s fields are public and nothing derives the deadline. The row the design's clamp implied — "a mint requesting more than 300 seconds gets 300" — could not be written, because there is no request parameter to over-ask with, which is why the lifetime became a constant instead |
 | MRTR.5 | *Cross-replica* enforcement | — | **NOT COVERED** | Out of scope by design decision 2: single-use is process-local for 4.0.0 and MIK-7312 owns the durable ledger. Stated, not silent |
-| MRTR.6 | Legacy backend holding an open exchange | — | **NOT COVERED** | Same reason: a retry is routed to one process because there is one process |
+| MRTR.6 | Legacy backend holding an open exchange | — | **NOT COVERED** | Out of scope by the design's FOR: the 4.0.0 claim covers modern backends that return `input_required`. A backend that instead holds an RPC open across the question is not something this release drives, so the gateway starts no second exchange with one. Process count is not the reason and would not be one |
 | MRTR.7 | Legacy-client bridge | — | **NOT COVERED** | Out of scope by design decision 1. The release notes say a pre-2026 client gets what it gets today |
 | MRTR.8 | Minting a continuation that is never retried adds **nothing** to any gateway-side collection | I | resource | Yes — and the row it replaces could not fail. `ConsumedLedger` records *spent* tokens, so an abandoned one was never in it: there was nothing for a deadline to reclaim, and consuming the token to get an entry stops it being abandoned. The honest property is that abandonment costs nothing because minting stores nothing, and a design that later parked per-mint state would fail this |
 | MRTR.8 | A consumed token's ledger entry does not outlive its expiry | U | resource | Yes — this is the growth the ledger *can* have, since an entry is only added on redemption |
@@ -302,8 +308,27 @@ arrive.
 | MRTR.10 | An `input_required` result leaves **no** idempotency entry — not `Completed`, and not a live `InFlight` | I | security | Yes — declining to complete while leaving `InFlight` passes a naive version of this row, so the case asserts the entry is *absent* |
 | MRTR.10 | Two retries differing only in `requestState` derive different idempotency keys, and a retry's key differs from its originating call's | U | positive | Yes — `derive_key` hashes `arguments` (idempotency.rs:296) and the retry fields are siblings of it, so a key built from `arguments` alone collides across both pairs |
 | MRTR.10 | A second caller with identical arguments reaches the backend rather than the first caller's interim answer | I | security | Yes |
-| MRTR.10 | The backend observes a **different** JSON-RPC id on the retry than on the initial call | I | conformance | Yes — the specification says MUST, and whether the gateway holds it is unverified |
 | MRTR.10 | A backend answering `input_required` a *second* time, on the retry, is refused rather than minted again | I | boundary | Yes — the payload carries no round counter, so the cap exists only if this refusal does |
+
+### What the map deliberately leaves out
+
+Four notes, so that absences read as decisions rather than oversights.
+
+- The continuation keyring and the `ConsumedLedger` are constructed **together, as one owner in
+  `AppState`**, and that construction is part of the first commit beside the asking backend. Two
+  independently built halves is the failure the keyring row above exists to detect, and it is
+  cheaper to make unbuildable than to test for.
+- `tests/mik_7212_acs.rs` is already green. It is **pre-existing U evidence** about the envelope
+  primitives, not coverage of this increment: every row above is red against `handlers.rs` today,
+  and a map that counted the existing file would be ticked off by a suite with no production call
+  site behind it.
+- A malformed retry still returns 400 and never reaches the backend. That refusal exists at
+  `handlers.rs:884` today and this increment **deletes** it, so the row moves rather than
+  disappearing: the guard against a destructive call running twice has to survive its own
+  replacement.
+- **stdio is N/A for this increment**, for the reason the discover rows already give: the modern
+  path is streamable HTTP. The second dispatcher also calls `extract_tools_call_params` and will
+  not carry `RetryFields`, and saying so makes it a stated limit rather than a silent gap.
 
 ### The three NOT COVERED rows are the plan's most important cells
 
