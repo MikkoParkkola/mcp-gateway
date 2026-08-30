@@ -215,24 +215,12 @@ A lifetime is a trade-off, not a fact about the code, so it was **asked, not mea
   would have had to hold roughly three times as many live entries and MRTR.8's capacity row would
   have moved with it.
 
-## Test plan sketch
+## Test plan
 
-One row per behaviour; the plan proper follows the design review. All of them need the fixture
-backend the first unknown says does not exist yet.
-
-- a legacy (no `resultType`) result passes through byte-identical — the regression that matters most
-- an `input_required` result yields an interim response whose `requestState` is *not* the backend's
-- an `input_required` result leaves no `Completed` idempotency entry, and a second caller with
-  identical arguments reaches the backend rather than the first caller's continuation
-- a retry with a valid token reaches the backend with the backend's state and the client's answers
-- a retry with a token minted for a different caller is refused, and the message says nothing useful
-- a replayed token is refused the second time
-- a token minted before the keyring is regenerated is refused after it, rather than opening
-- a mint asking for a lifetime beyond 300 seconds gets 300, not what it asked for
-- a malformed retry is refused without dispatching (the existing behaviour, kept)
-- an interim result for an unauthenticated caller is refused, and nothing is minted
-- an interim result whose `requestState` is absent completes, and the retry carries no `requestState`
-- an input request of a type the client did not declare is refused before minting
-- the backend observes a *different* JSON-RPC id on the retry than on the initial call
-- a backend returning `input_required` a second time, on the retry, is refused
+Superseded. The sketch that stood here listed one row per behaviour before the plan existed; it has
+been replaced by the detailed coverage map in `docs/requirements/RELEASE-4.0.0-test-plan.md`
+(increment 5), which reviewed to SHIP-WITH-FIXES twice and no longer matches the sketch in two
+places: the JSON-RPC id row was deleted, because every transport already allocates through
+`next_id`, and the lifetime clamp became a constant, because there is no mint parameter to clamp.
+An implementer following the sketch would have resurrected both. The map is the specification.
 
