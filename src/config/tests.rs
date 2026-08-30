@@ -1397,3 +1397,67 @@ fn a_substitution_naming_a_defined_key_is_detected_and_a_quoted_one_is_not() {
         );
     }
 }
+
+/// `Env::prefixed(..)` parsed each value before handing it to Figment, and
+/// `Figment::extract` does not coerce a string into a number or a bool. A
+/// provider that stores raw strings therefore breaks every non-string field an
+/// operator can override, which is silent until deserialisation fails.
+#[test]
+fn overlay_env_parses_values_the_way_the_figment_env_provider_did() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("typed.env");
+    std::fs::write(
+        &path,
+        "MCP_GATEWAY_SERVER__PORT=9090\nMCP_GATEWAY_SERVER__ENABLED=true\n",
+    )
+    .expect("write env file");
+
+    let overlay = EnvOverlay::from_paths(std::slice::from_ref(&path));
+    let data = OverlayEnv::new(&overlay).data().expect("provider data");
+    let server = data
+        .get(&Profile::Default)
+        .and_then(|dict| dict.get("server"))
+        .and_then(Value::as_dict)
+        .expect("the nested server dictionary");
+
+    assert!(
+        matches!(server.get("port"), Some(Value::Num(..))),
+        "a numeric override must reach Figment as a number: {:?}",
+        server.get("port")
+    );
+    assert!(
+        matches!(server.get("enabled"), Some(Value::Bool(..))),
+        "a boolean override must reach Figment as a bool: {:?}",
+        server.get("enabled")
+    );
+}
+
+/// `Env` reads the process environment through `vars_os`, so a non-UTF-8
+/// variable belonging to some other part of the system is lossily converted.
+/// `std::env::vars` panics on the same input, which would abort a load over a
+/// variable the gateway never reads.
+#[cfg(unix)]
+#[test]
+fn overlay_env_survives_a_non_utf8_process_variable() {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let overlay = EnvOverlay::none();
+    let vars = OverlayEnv::new(&overlay).merged_vars(
+        [
+            (
+                std::ffi::OsString::from_vec(vec![b'X', 0xff]),
+                std::ffi::OsString::from("value"),
+            ),
+            (
+                std::ffi::OsString::from("MCP_GATEWAY_SERVER__PORT"),
+                std::ffi::OsString::from_vec(vec![0xff, b'9']),
+            ),
+        ]
+        .into_iter(),
+    );
+
+    assert!(
+        vars.contains_key("MCP_GATEWAY_SERVER__PORT"),
+        "a lossily converted value must still be offered to Figment: {vars:?}"
+    );
+}

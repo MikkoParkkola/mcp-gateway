@@ -147,13 +147,42 @@ impl<'a> OverlayEnv<'a> {
         Self { overlay }
     }
 
+    /// The variables the provider sees: `base` overlaid with the env files.
+    ///
+    /// `base` is the process environment as `OsString` pairs, converted the way
+    /// `Env` converts them. Reading it through `std::env::vars` instead would
+    /// panic the process on a single non-UTF-8 variable belonging to someone
+    /// else, which is a startup failure `Env` never had.
+    fn merged_vars<I>(&self, base: I) -> std::collections::BTreeMap<String, String>
+    where
+        I: Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    {
+        let mut merged: std::collections::BTreeMap<String, String> = base
+            .filter(|(key, _)| !key.is_empty())
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+        // Process environment first so an env-file assignment wins, which is
+        // the precedence `EnvOverlay::resolve` states.
+        merged.extend(self.overlay.effective_vars());
+        merged
+    }
+
     /// Places `value` at the path `parts` names, creating dictionaries on the
     /// way down — the nesting `__` in a key stands for.
     fn insert_nested(dict: &mut Dict, parts: &[String], value: String) {
         match parts {
             [] => {}
             [leaf] => {
-                dict.insert(leaf.clone(), Value::from(value));
+                // Parsed, not stored as a string: `Env` reads `9090` as a
+                // number and `[a, b]` as a list, and `Figment::extract` does
+                // not coerce a string into either. Inserting the raw string
+                // would fail every non-string field an operator can override.
+                dict.insert(leaf.clone(), value.parse().expect("infallible"));
             }
             [head, tail @ ..] => {
                 let entry = dict
@@ -176,13 +205,8 @@ impl Provider for OverlayEnv<'_> {
     }
 
     fn data(&self) -> figment::Result<Map<Profile, Dict>> {
-        // Process environment first so an env-file assignment wins, which is
-        // the precedence `EnvOverlay::resolve` states.
-        let mut merged: std::collections::BTreeMap<String, String> = std::env::vars().collect();
-        merged.extend(self.overlay.effective_vars());
-
         let mut dict = Dict::new();
-        for (key, value) in merged {
+        for (key, value) in self.merged_vars(std::env::vars_os()) {
             let Some(rest) = key.strip_prefix(Self::PREFIX) else {
                 continue;
             };
