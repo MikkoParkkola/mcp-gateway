@@ -109,6 +109,17 @@ that is why they are the ones quoted.
 Under either reading the answer is the same and the gate does not turn on the ambiguity: 77.40% is
 below the floor, and 90% is below the 100% §5 asks of new and changed code.
 
+**A choice this document made, named rather than assumed (§P3).** The canonical §4 states the
+thresholds without saying what they range over, and the two candidate scopes give opposite verdicts:
+the crate as a whole is 83.16% and clears the Standard floor, while the files this branch touched are
+77.40% and do not. This document applies the threshold to the change rather than to the codebase,
+which is the stricter of the two and the one consistent with §5 asking 100% of new and changed code —
+a release gate that a large well-covered codebase can satisfy while the change under review is
+untested would not be measuring the change. Recording it because it is a judgment, not a reading:
+a reviewer may take the other one. **It is not load-bearing on the verdict today.** Mutation is
+unmeasured either way, so §4 stands BLOCKED under both scopes, and the choice only starts deciding
+anything once MIK-7324 closes the mutation half.
+
 **Where the untested code sits.** The "what if it resolves badly" row below undertook to name
 specific modules rather than a percentage, and this is that list — added lines reached by no test,
 worst first:
