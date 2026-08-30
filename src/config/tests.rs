@@ -1350,3 +1350,36 @@ fn a_key_deleted_from_an_env_file_stops_resolving_after_a_reload() {
         "the reload must still apply the file's remaining assignments"
     );
 }
+
+/// ENVFILE.12: a substitution naming a key the env files themselves define is
+/// a reload hazard, because `dotenvy` expands it against the process
+/// environment and nothing writes that environment any more. The scanner has
+/// to tell a live substitution from a token the parser would never expand.
+#[test]
+fn a_substitution_naming_a_defined_key_is_detected_and_a_quoted_one_is_not() {
+    use std::collections::BTreeSet;
+    let defined: BTreeSet<String> = ["BASE".to_string()].into_iter().collect();
+    let dir = tempfile::tempdir().unwrap();
+
+    let cases = [
+        ("URL=${BASE}/v1\n", Some("BASE"), "a braced substitution"),
+        ("URL=$BASE/v1\n", Some("BASE"), "an unbraced substitution"),
+        ("URL=x${BASE}y\n", Some("BASE"), "a substitution mid-value"),
+        ("# URL=${BASE}\n", None, "a whole-line comment"),
+        ("URL='${BASE}'\n", None, "a single-quoted value"),
+        ("URL=\\${BASE}\n", None, "an escaped substitution"),
+        ("URL=${OTHER}\n", None, "a key the files do not define"),
+        ("URL=plain\n", None, "no substitution at all"),
+        ("URL=plain # ${BASE}\n", None, "a trailing comment"),
+    ];
+
+    for (index, (body, expected, what)) in cases.iter().enumerate() {
+        let path = dir.path().join(format!("case{index}.env"));
+        std::fs::write(&path, body).unwrap();
+        assert_eq!(
+            crate::config::substitution_naming_defined_key(&path, &defined).as_deref(),
+            *expected,
+            "{what} was classified wrongly"
+        );
+    }
+}

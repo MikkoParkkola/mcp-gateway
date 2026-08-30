@@ -42,7 +42,7 @@ Searches run for this table (cited, not recalled):
 | ENVFILE.10.4 | PARTIAL | `:2398` covers the empty-patch half over the derived holder set; the non-empty-patch repeat the criterion also requires is absent | E3 |
 | ENVFILE.11 | NO TEST | an added path must not activate its variables | E2 |
 | ENVFILE.11a | PASS | `envfile_19e_*` (`src/config_reload/tests.rs:2095`), `envfile_19f_*` (`:2176`) | E3 |
-| ENVFILE.12 | **FAIL** | Not implemented, not merely untested. `dotenvy` performs `${K}` expansion inside `apply_file` (`src/config/env_overlay.rs:184`) and nothing scans for a substitution naming a key the same files define. The identifier appears only in the design document | E2 |
+| ENVFILE.12 | PASS | `substitution_naming_defined_key` (`src/config/env_overlay.rs`) scans each env file for a `${K}` or `$K` naming a key the files define, ignoring whole-line comments, single-quoted values, escapes and trailing comments; `load_config_patch` (`src/config_reload/mod.rs`) refuses the reload with the file and key named and no value. Startup does not run the scan. Covered by a nine-case classification test and a reload test, both of which fail when the scanner is neutered | E2+E3 |
 | ENVFILE.13 | PASS | `a_key_deleted_from_an_env_file_stops_resolving_after_a_reload` (`src/config/tests.rs`) asserts the unset half. The baseline half needs no separate capture: `resolve` falls through to the process environment, and nothing in the crate writes it (`rg 'set_var|remove_var' src/` returns nothing), so a key's pre-overlay value is still readable after any number of reloads. The unused `EnvOverlay::baseline` accessor that stored a second copy was removed | E2+E3 |
 | ENVFILE.14 | PARTIAL | `resolve_reads_a_variable_the_env_overlay_assigns` (`src/secrets.rs:235`) proves overlay resolution; rotation-without-restart on the live request path is not asserted | E3 |
 | ENVFILE.15 | NO TEST | admin-UI edit naming an overlay-supplied key | E2 |
@@ -51,9 +51,9 @@ Searches run for this table (cited, not recalled):
 | ENVFILE.19b | PASS | `free_text_override_from_an_env_file_reaches_the_scanner` (`src/security/firewall/input_scanner.rs:264`), `an_env_file_endpoint_reaches_the_environment_scan` (`src/discovery/config_scanner.rs:758`) | E3 |
 | ENVFILE.19c | PASS | `src/config_reload/tests.rs:1983` | E3 |
 
-**Totals over the 26 acceptance criteria: 8 PASS, 6 PARTIAL, 11 NO TEST, 1 FAIL.**
+**Totals over the 26 acceptance criteria: 9 PASS, 6 PARTIAL, 11 NO TEST, 0 FAIL.**
 
-Two rows have been verified at source since the table was drafted: ENVFILE.13, now PASS, and ENVFILE.12, which stays FAIL. The remaining rows were mapped by reading each criterion against the tests that appear to cover it; no test names its criterion, so the mapping is prose matching rather than traceability. `rg 'MIK\.ENVFILE\.' src/ tests/` returns nothing for all 26 identifiers.
+Two rows have been verified at source and closed since the table was drafted: ENVFILE.13 and ENVFILE.12, both now PASS. The remaining rows were mapped by reading each criterion against the tests that appear to cover it; no test names its criterion, so the mapping is prose matching rather than traceability. `rg 'MIK\.ENVFILE\.' src/ tests/` returns nothing for all 26 identifiers.
 
 ## Test-plan cases that are not acceptance criteria
 

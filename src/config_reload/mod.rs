@@ -1261,6 +1261,20 @@ fn load_config_patch(
     // against a half-read env file is refused instead of published.
     let evaluated = Config::load_with_overlay(Some(config_path), env.env_paths())
         .map_err(|e| format!("Failed to parse config: {e}"))?;
+    // MIK.ENVFILE.12: refuse a reload whose env files substitute a key those
+    // same files define. `dotenvy` expands the reference against the process
+    // environment, which is no longer written, so the value it resolved to at
+    // startup is not the value it would resolve to now.
+    let defined = evaluated.overlay.owned_keys();
+    for path in env.env_paths().as_paths() {
+        if let Some(key) = crate::config::substitution_naming_defined_key(path, defined) {
+            return Err(format!(
+                "Refusing reload: env file {} substitutes {key}, a key the env files themselves                  define. Its value is resolved from the process environment, which the gateway                  does not write, so a reload would not reproduce what startup read. Inline the                  value or export the key before starting.",
+                path.display()
+            ));
+        }
+    }
+
     let patch = compute_diff(&old_config, &evaluated.config);
 
     Ok(EvaluatedReload {

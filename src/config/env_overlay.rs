@@ -84,6 +84,80 @@ pub struct EnvOverlay {
     owned: BTreeSet<String>,
 }
 
+/// The name of a substitution in `path` that refers to a key `defined`
+/// contains, if there is one.
+///
+/// `dotenvy` expands `${K}` and `$K` against the process environment and the
+/// keys it has already read from the same file. Nothing in this crate writes
+/// the process environment, so a reference to a key another env file assigns
+/// resolves to nothing on a reload while it resolved to a value at startup,
+/// when the loader this change replaced still exported it. The config would
+/// change meaning without anyone editing it, which is why a reload carrying
+/// one is refused rather than repaired.
+///
+/// Only a substitution the parser would actually expand counts: a whole-line
+/// comment, a single-quoted value, an escaped `\$` and a trailing comment are
+/// all inert.
+pub(crate) fn substitution_naming_defined_key(
+    path: &Path,
+    defined: &BTreeSet<String>,
+) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines().find_map(|line| {
+        let line = line.trim_start();
+        if line.starts_with('#') {
+            return None;
+        }
+        let (_, value) = line.split_once('=')?;
+        let value = value.trim_start();
+        if value.starts_with('\'') {
+            return None;
+        }
+        let value = match value.strip_prefix('"') {
+            // A double-quoted value ends at its closing quote; everything after
+            // it is a comment.
+            Some(rest) => rest.split('"').next().unwrap_or(rest),
+            // An unquoted value ends at the first ` #`.
+            None => value.split(" #").next().unwrap_or(value),
+        };
+        first_substitution(value, defined)
+    })
+}
+
+/// The first `${K}` or `$K` in `value` naming a key in `defined`.
+fn first_substitution(value: &str, defined: &BTreeSet<String>) -> Option<String> {
+    let bytes: Vec<char> = value.chars().collect();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == '\\' {
+            i += 2;
+            continue;
+        }
+        if bytes[i] != '$' {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        let braced = bytes.get(j) == Some(&'{');
+        if braced {
+            j += 1;
+        }
+        let start = j;
+        while bytes
+            .get(j)
+            .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+        {
+            j += 1;
+        }
+        let name: String = bytes[start..j].iter().collect();
+        if !name.is_empty() && defined.contains(&name) {
+            return Some(name);
+        }
+        i = j.max(i + 1);
+    }
+    None
+}
+
 impl EnvOverlay {
     /// No env files: every lookup falls through to the process environment.
     #[must_use]

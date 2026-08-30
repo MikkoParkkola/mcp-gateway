@@ -2491,3 +2491,41 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
         );
     }
 }
+
+#[test]
+fn load_config_patch_refuses_a_substitution_naming_a_defined_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let env_path = dir.path().join("gateway.env");
+    let config_path = dir.path().join("gateway.yaml");
+    std::fs::write(
+        &config_path,
+        format!("env_files:\n  - \"{}\"\n", env_path.display()),
+    )
+    .unwrap();
+    std::fs::write(
+        &env_path,
+        "MCP_GW_TEST_BASE=https://host\nMCP_GW_TEST_URL=${MCP_GW_TEST_BASE}/v1\n",
+    )
+    .unwrap();
+
+    // GIVEN: startup accepts the files unchanged
+    let startup = Config::load_evaluated(Some(&config_path)).unwrap();
+
+    // WHEN: the same files are reloaded
+    let live_config = std::sync::Arc::new(LiveConfig::new(startup.config.clone()));
+    let env = LiveEnv::new(startup.overlay, startup.env_paths);
+    let result = load_config_patch(&config_path, &live_config, &env);
+
+    // THEN: the reload is refused, naming the file and the key, with no value
+    let Err(message) = result else {
+        panic!("a substitution naming a defined key must refuse the reload")
+    };
+    assert!(
+        message.contains("MCP_GW_TEST_BASE") && message.contains("gateway.env"),
+        "the refusal must name the key and the file: {message}"
+    );
+    assert!(
+        !message.contains("https://host"),
+        "the refusal must not log a value: {message}"
+    );
+}

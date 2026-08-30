@@ -1435,6 +1435,19 @@ same recorded paths, so every env-file value is derived again and the only
 thing inheritance could add is a key whose line was deleted. `EnvOverlay::inheriting`
 is gone and `Config::load_with_overlay` no longer takes a previous overlay.
 
+A second criterion was closed the same way. `dotenvy` expands `${K}` and `$K`
+while it parses, against the process environment and the keys already read from
+the same file. Nothing writes the process environment any more, so a reference
+to a key another env file assigns resolves to nothing on a reload while it
+resolved to a value at startup, back when the loader exported it. Rather than
+reproduce the old expansion, a reload carrying such a reference is refused:
+`substitution_naming_defined_key` scans each recorded file for a substitution
+naming a key the files define, and `load_config_patch` turns a hit into a
+refusal that names the file and the key and no value. Startup does not run the
+scan, so the same files still start a gateway. Inert spellings — a whole-line
+comment, a single-quoted value, an escaped `\$`, a trailing comment — do not
+refuse, because the parser would not have expanded them either.
+
 This is a design event under the process rules: it changes what an observable
 reload does, in service of an acceptance criterion the code did not meet. The
 old behaviour matched the process-mutating loader this change replaced, so the
