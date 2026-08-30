@@ -24,7 +24,7 @@ was made, not for what remains.
 | 2 | Mint counter is process-local, so a restart resets the NIST envelope bound | same | same shape as #1 |
 | 3 | Task model unverified — the specification page 404s at the indexed path | §12 finding, unverified | **RESOLVED.** Found at `/extensions/tasks/overview`; the branch is short of it and the extension ships not advertised. Conformance owned by MIK-7311 |
 | 4 | Failed-task payload shape unverified, same cause | same | **RESOLVED**, same source |
-| 5 | §12 ran ONE vendor over eight rounds; the gate requires two | §12 BLOCKING | **STILL OPEN, and now an operator decision** — see below |
+| 5 | §12 ran ONE vendor over eight rounds; the gate requires two | §12 BLOCKING | **RESOLVED.** The second vendor is back, routed through a shim that presents native grok behind the Copilot argv (`~/.claude/bin/copilot-as-grok`); Copilot's own monthly quota is spent. Two vendors have since reviewed the MRTR design and test plan |
 | 6 | MIK-7256 has a reviewed design and test plan, no tests and no implementation | §P2 onward | in the pipeline |
 | 7 | §4 coverage is measured and **below** the Standard floor by 2.6 points | §4 BLOCKING | MIK-7324. Mutation, the other half of §4, is now measured and passing on `src/protocol` (28 caught / 2 missed, both survivors closed) |
 | 8 | Multi-round-trip tool calls are built and unreachable — a 2026 backend that asks a question cannot complete a call | §2 WIRED, on the branch's headline feature | MIK-7325. Design reviewed, six findings, all six verified at source and repaired; confirmation pass in flight |
@@ -114,7 +114,9 @@ each later item's review has to see the earlier one's code.
 
 | # | work | why it is here | gate it closes |
 |---|---|---|---|
-| 1 | MRTR wiring (MIK-7325) — test plan reviewed **as a plan**, failing tests, response side, retry side | the headline feature is currently declined at the door; a fixture backend emitting `input_required` does not exist yet and must be written first | §2 WIRED |
+| 1 | MRTR wiring (MIK-7325) — test plan reviewed **as a plan** over two rounds and a confirmation pass, then failing tests, response side, retry side | the headline feature is currently declined at the door; a fixture backend emitting `input_required` does not exist yet and must be written first | §2 WIRED |
+| 1a | Shared continuation state (MIK-7312) — design, review, test plan, then the ledger and the in-flight table behind one storage backend | MRTR.5 and MRTR.6 say MUST and the operator held the release for them on 2026-08-30. `InFlight` is already replica-aware; only the storage is process-local | MRTR.5, MRTR.6 |
+| 1b | Legacy-client bridge — design, review, test plan, then wiring `Bridge::to_legacy_client` (mrtr.rs:186), which has no caller | MRTR.7 says MUST, same decision. The translation exists; issuing the requests over the client's transport mid-call is the missing half | MRTR.7 |
 | 2 | Tasks-extension conformance (MIK-7311) — two statuses, two required fields, an error payload shape, a capability check | the extension is unadvertised, so this is conformance rather than a live defect; fetch the specification page again before writing anything | §12 finding |
 | 3 | Coverage on the five named modules (MIK-7324) | §4's failing half; `src/main.rs` is the sharpest, 22 added lines and none executed | §4 |
 | 4 | Mutation over the rest of the branch diff, on Spark, module by module | the measured 93.3% covers `src/protocol` only, and a subset is a lower bound | §4 |
@@ -122,21 +124,14 @@ each later item's review has to see the earlier one's code.
 | 6 | Second-vendor review against the final head's full diff, then the DoD evidence comment on each ticket | a ratification stamp binds to a diff hash, so an older stamp covers nothing being pushed | §12, §1 |
 | 7 | Deploy — MIK-7265 closes on deploy, not on merge. Production is 3.4.0 and answers a foreign `Origin` with HTTP 200 | a merge is not a deployment | §11 |
 
-### The §12 blocker is not a waiting problem
+### The §12 blocker resolved, and not by waiting
 
-Gap 5 has stopped being a matter of patience. The second vendor is exhausted on **both** of its
-routes: the xAI quota is spent, and the GitHub Copilot fallback answers
-`Monthly ... quota exceeded` on a fresh session as well as on a resume. Waiting does not fix a
-monthly quota. Three ways out, and the choice is the operator's:
-
-| option | cost |
-|---|---|
-| use Kimi as the second vendor for the remaining passes | no filesystem access, so every review must carry its material inline; already in use for the design confirmation pass |
-| buy quota on either route | money, and it restores the reviewer that has done the eight rounds of context |
-| record §12 as satisfied by one vendor plus Kimi, and say so in the release notes | honest, and weaker than the gate asks for; `ratify` will refuse the push, so it needs an audited bypass |
-
-Doing nothing is the fourth option and it holds the tag indefinitely.
-
+Both of the second vendor's routes were exhausted at once, which is what made it look permanent: the
+xAI quota was spent and the GitHub Copilot fallback answered `monthly quota exceeded` on a fresh
+session. The two were not the same outage. xAI came back; Copilot did not. The review wrapper only
+knew how to speak Copilot's command line, so a small shim now presents the native tool behind that
+same argument shape, and the wrapper cannot tell the difference. Two vendors have reviewed the MRTR
+design (three rounds), its test plan (two rounds), and the repairs (a confirmation pass each).
 
 ## Design events during implementation (§P3)
 
