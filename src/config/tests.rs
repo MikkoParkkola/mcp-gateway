@@ -1592,4 +1592,15 @@ fn a_literal_load_leaves_an_env_file_override_out_of_the_config() {
         !rewritten.contains("9090"),
         "the rewrite must not persist an env-file override: {rewritten}"
     );
+    // Asserting only the absence would also pass for a rewrite that lost the
+    // port and the env-file list entirely, which is data loss wearing the same
+    // output as a correct write.
+    assert!(
+        rewritten.contains("8080"),
+        "the rewrite must keep the port the file spells: {rewritten}"
+    );
+    assert!(
+        rewritten.contains(&env_path.display().to_string()),
+        "the rewrite must keep the env-file list the config declares: {rewritten}"
+    );
 }
