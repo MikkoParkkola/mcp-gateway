@@ -250,3 +250,59 @@ places: the JSON-RPC id row was deleted, because every transport already allocat
 `next_id`, and the lifetime clamp became a constant, because there is no mint parameter to clamp.
 An implementer following the sketch would have resurrected both. The map is the specification.
 
+
+## Design events (increment 2)
+
+Recorded per development-process §P3: decisions the design did not make, named at
+the moment they were made.
+
+### DE-1 — the response-side edit belongs in `invoke.rs`, not `handlers.rs`
+
+The design says "two edits, one on each side of `dispatch_to_backend`", and the
+brief says "thread the keyring into `dispatch_to_backend`". An earlier reading
+put the mint in `handlers.rs`, where `AppState` already carries the keyring and
+the edit is smaller.
+
+That reading is wrong, and design decision 3 is what makes it wrong. Idempotency
+and the response cache are written **inside** the invoke chain
+(`src/gateway/meta_mcp/invoke.rs:789`, `:851`, `:1040`, `:1276`), before any
+result reaches `handlers.rs`. Decision 3 requires that an `input_required`
+result remove the in-flight entry and write neither cache — an interim answer
+cached under the original key is the dangerous half. Recognising `input_required`
+one layer up is too late: the write has already happened.
+
+So both edits sit around `dispatch_to_backend` in `invoke.rs`, and the
+continuation state reaches them on `MetaMcpCallerContext` rather than being read
+from `AppState`. One seam instead of two, and the keyring is in scope for the
+retry side in the same place.
+
+### DE-2 — MRTR.9 has no source of truth for "what the client declared"
+
+MRTR.9 requires the gateway not to send an `inputRequest` of a type the client
+has not declared support for. **Nothing records client capabilities.**
+`handle_initialize` (`src/gateway/meta_mcp/mod.rs:1011`) takes `&self`, reads
+`params` for the protocol version alone, and stores nothing per session. There
+is no per-session capability store to consult, and no `elicitation` capability
+is read from an initialize payload anywhere in `src/`.
+
+This is not a gap in the wiring; it is a missing subsystem the requirement
+assumes exists. Increment 2 is scoped to two edits around one function, and a
+per-session client-capability store is neither of them.
+
+Disposal per §P0: **write it into the design** — it changes what the thing
+should be, not what it currently does. MRTR.9 does not close in increment 2, and
+test-plan rows 312 and 313 do not run here. The task brief's "Closes MRTR.9" is
+the claim this event withdraws.
+
+What a later increment needs, stated so it is not rediscovered:
+
+- `handle_initialize` must persist the client's declared capabilities against the
+  session, which means `&self` gains interior mutability or the store moves to
+  the session registry.
+- The check then belongs immediately before the mint, on the `input_required`
+  path in `invoke.rs`: an interim result naming an undeclared request type is
+  refused **before** anything is minted, so a refusal cannot leave a live
+  continuation behind.
+- Until that exists, the gateway forwards whatever request types a backend names.
+  That is the current behaviour, unchanged by this increment, and it is now
+  recorded rather than assumed.
