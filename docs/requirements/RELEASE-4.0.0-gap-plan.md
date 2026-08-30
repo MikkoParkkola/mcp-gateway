@@ -28,7 +28,7 @@ refused at the door.
 | Tasks extension is dead code | `protocol::tasks::Task`/`TaskStatus` have no production call site; `tasks/get`/`tasks/update` fall through to method-not-found honestly | nothing — needs a keep/delete decision |
 | Header/result/error/cache/order criteria | six gaps found, six criteria confirmed clean | see requirements sweep |
 | Blocking criteria outside MRTR | at least eight, in tenancy, stateless confirmation, session expiry, log correlation, cache invalidation, error codes, tasks and extensions | increments 10-17; source rows in `RELEASE-4.0.0-audit-partial.md` |
-| Diff coverage under floor | 61 branch-touched files average 77.40% lines against an 80% Standard floor; mutation coverage unmeasured | DoD §4 |
+| Diff coverage under floor | 61 branch-touched files average 77.40% lines against an 80% Standard floor; mutation coverage unmeasured. Measured before increments 1 and 2a landed their tests, so it is a starting point, not the current number | DoD §4 |
 
 Test position, separately: six acceptance criteria have no case at any level, two cases cannot fail
 against the defect they are attached to, and the existing `tests/mik_7212_acs.rs` exercises
@@ -38,8 +38,9 @@ test plan says this itself at lines 327-330.
 Re-verified on 2026-08-31 against the current tree: the retry refusal, the uncalled
 `Bridge::to_legacy_client`, the zero-caller `EraCache` and the dead tasks extension all still hold
 exactly as the audit described. Only the continuation-state row had gone stale, and it is removed
-above. That is the measured reliability of the audit rows: one in five, and the one that moved moved
-because the work was done, not because the reading was wrong.
+above. One in five of the section 1 rows re-read that day
+had moved, and it moved because the work was done, not because the reading was wrong. That is a rate
+over five rows, not over the audit.
 
 ## 2. The sequence
 
@@ -52,8 +53,12 @@ against an earlier tree and has been removed from section 1. `ContinuationState`
 (`protocol/continuation.rs:664-742`) owns the keyring, ledger and in-flight table behind one
 lifecycle, generates its key material and replica name per process, and is constructed in the
 production `AppState` builder at `gateway/server/mod.rs:1171` — not under `cfg(test)`. Both test rows
-this increment asked for exist in `tests/mik_7312_continuation_state.rs`: reachability from the
-production `AppState`, and a token minted by one `AppState` refused by another. Design recorded in
+this increment asked for exist in `tests/mik_7312_continuation_state.rs`: reachability from an
+`AppState`, and a token minted by one `AppState` refused by another. The reachability test builds its
+own `AppState` with the same `ContinuationState::new()` call the server makes rather than invoking
+the server's builder, so it proves the state is usable through the struct, not that production
+constructs it. That second half is evidence from reading `server/mod.rs:1171`, and a test could only
+carry it by driving `serve` itself. Design recorded in
 `docs/design/2026-08-30-shared-continuation-state.md`. Nothing is left to do here; increment 2b is
 the next open item.
 
@@ -174,6 +179,24 @@ in this release.
 methods (`capability/definition/mod.rs:1113-1152`). Shipping with a known bypass of an
 external-callback declaration is an owner's decision in the same shape as increment 8, not something
 an increment can close on its own authority.
+
+**All eight cited locations re-read on 2026-08-31.** Six hold as the rows describe: the -32002
+return, `gateway_declares` with its single definition and no caller, `session_lifecycle` declared at
+`gateway/mod.rs:19` and referenced nowhere else, a cache key built only from server, tool, arguments,
+projection and identity, `forward_elicitation_with_response` taking a `session_id`, and the
+`registers_external_callback` check at `capability/definition/mod.rs:1150`. Two moved:
+
+- **12 is smaller than S.** The live `trace_id` is in scope at the log call (`invoke.rs:1298`) — the
+  `warn!` three lines below already uses it. The correlation key is the session id with a literal
+  fallback, so the fix is an argument, not plumbing. Size XS.
+- **16 is not a blank page.** Per-user backend pooling exists with stated isolation invariants
+  (`backend/pool.rs`, IDP.3 and IDP.5) and cross-tenant isolation tests. The audit row's "no guard
+  anywhere in `src/`" is wrong as stated. What the criterion asks — data minimisation across
+  tenants — is a different question from backend isolation, and separating the two is now the first
+  deliverable rather than writing requirements from nothing.
+
+Two of ten rows checked across both passes were stale, both in the direction of the work being
+further along than the audit recorded.
 
 ### Still open, and it will not resolve itself
 
