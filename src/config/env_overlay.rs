@@ -329,6 +329,7 @@ impl EnvOverlay {
 #[derive(Debug)]
 pub struct LiveEnv {
     overlay: RwLock<Arc<EnvOverlay>>,
+    startup: Arc<EnvOverlay>,
     env_paths: ResolvedEnvFiles,
 }
 
@@ -346,6 +347,7 @@ impl LiveEnv {
     /// The environment a successful load produced, ready to be published.
     pub fn new(overlay: Arc<EnvOverlay>, env_paths: ResolvedEnvFiles) -> Self {
         Self {
+            startup: Arc::clone(&overlay),
             overlay: RwLock::new(overlay),
             env_paths,
         }
@@ -366,6 +368,18 @@ impl LiveEnv {
             .overlay
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = overlay;
+    }
+
+    /// The overlay startup published, which never changes.
+    ///
+    /// What a holder built once at startup actually captured. A restart
+    /// requirement is outstanding until the process restarts, so it must be
+    /// measured against this rather than against the last published overlay —
+    /// comparing against the latter reports a rotation on the reload that
+    /// carried it and then silently forgets it.
+    #[must_use]
+    pub fn startup(&self) -> &Arc<EnvOverlay> {
+        &self.startup
     }
 
     /// The paths startup recorded. A reload reuses these; it never resolves

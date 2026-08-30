@@ -2529,3 +2529,75 @@ fn load_config_patch_refuses_a_substitution_naming_a_defined_key() {
         "the refusal must not log a value: {message}"
     );
 }
+
+// -------------------------------------------------------------------------
+// Startup-only environment keys
+// -------------------------------------------------------------------------
+
+/// Builds an overlay holding exactly `assignments`.
+fn overlay_of(dir: &std::path::Path, name: &str, assignments: &str) -> Arc<EnvOverlay> {
+    let path = dir.join(name);
+    std::fs::write(&path, assignments).expect("write env file");
+    Arc::new(EnvOverlay::from_paths(std::slice::from_ref(&path)))
+}
+
+fn reload_of(overlay: Arc<EnvOverlay>, secret_refs: &[&str]) -> EvaluatedReload {
+    EvaluatedReload {
+        config: Config::default(),
+        patch: ConfigPatch::default(),
+        overlay,
+        secret_refs: secret_refs.iter().map(ToString::to_string).collect(),
+    }
+}
+
+/// A restart requirement is outstanding until the process restarts, so every
+/// reload in between must keep reporting it. Measuring against the last
+/// published overlay reports the rotation once and then forgets it, because
+/// the second reload compares the new value against itself.
+#[test]
+fn a_rotated_secret_stays_reported_until_the_process_restarts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let startup = overlay_of(dir.path(), "startup.env", "ROTATING_SECRET=old\n");
+    let rotated = overlay_of(dir.path(), "rotated.env", "ROTATING_SECRET=new\n");
+    let env = LiveEnv::new(startup, ResolvedEnvFiles::default());
+    let evaluated = reload_of(Arc::clone(&rotated), &["ROTATING_SECRET"]);
+
+    assert_eq!(
+        changed_startup_env_keys(&env, &evaluated),
+        vec!["ROTATING_SECRET".to_string()],
+        "the reload that carries the rotation must report it"
+    );
+
+    env.set(rotated);
+    assert_eq!(
+        changed_startup_env_keys(&env, &evaluated),
+        vec!["ROTATING_SECRET".to_string()],
+        "a later reload must still report it: nothing has restarted"
+    );
+}
+
+/// The attestation signer is built once at startup, straight off the overlay.
+/// Its keys appear in no config field, so tracking only the config's own
+/// `env:` references leaves a rotation invisible while the running signer
+/// keeps using the superseded key.
+#[test]
+fn a_rotated_attestation_key_is_reported_although_no_config_field_names_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let startup = overlay_of(
+        dir.path(),
+        "startup.env",
+        "GATEWAY_ATTESTATION_SIGNING_KEY=old\n",
+    );
+    let rotated = overlay_of(
+        dir.path(),
+        "rotated.env",
+        "GATEWAY_ATTESTATION_SIGNING_KEY=new\n",
+    );
+    let env = LiveEnv::new(startup, ResolvedEnvFiles::default());
+
+    assert_eq!(
+        changed_startup_env_keys(&env, &reload_of(rotated, &[])),
+        vec!["GATEWAY_ATTESTATION_SIGNING_KEY".to_string()],
+        "a startup-only key nothing references must still be reported"
+    );
+}

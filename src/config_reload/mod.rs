@@ -1287,6 +1287,17 @@ fn load_config_patch(
     })
 }
 
+/// Startup-only environment keys no config field names.
+///
+/// The attestation signer is built once, during startup, straight off the
+/// overlay — these names appear in no config file, so a rotation is invisible
+/// both to the config diff and to the config's own `env:` references.
+const IMPLICIT_STARTUP_ENV_KEYS: &[&str] = &[
+    crate::attestation::wiring::ATTESTATION_MODE_ENV,
+    crate::attestation::wiring::ATTESTATION_SIGNING_KEY_ENV,
+    crate::attestation::wiring::ATTESTATION_KEY_ID_ENV,
+];
+
 /// Startup-only environment keys a restart would read differently.
 ///
 /// Two kinds, and neither is visible in the config diff:
@@ -1303,13 +1314,16 @@ fn load_config_patch(
 /// Names only. The values are secrets and a reload report is not a place to
 /// print one.
 fn changed_startup_env_keys(env: &LiveEnv, evaluated: &EvaluatedReload) -> Vec<String> {
-    let previous = env.get();
-    let mut keys: Vec<String> = evaluated
+    let startup = env.startup();
+    let keys: std::collections::BTreeSet<String> = evaluated
         .secret_refs
         .iter()
-        .filter(|name| previous.resolve(name) != evaluated.overlay.resolve(name))
-        .cloned()
+        .map(String::as_str)
+        .chain(IMPLICIT_STARTUP_ENV_KEYS.iter().copied())
+        .filter(|name| startup.resolve(name) != evaluated.overlay.resolve(name))
+        .map(ToString::to_string)
         .collect();
+    let mut keys: Vec<String> = keys.into_iter().collect();
     if env.env_paths().has_tilde_entry() && evaluated.overlay.assigns("HOME") {
         keys.push("HOME".to_string());
     }
@@ -1546,8 +1560,8 @@ impl ReloadContext {
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
         let evaluated = load_config_patch(&self.config_path, &self.live_config, &self.env)?;
-        // Computed against the overlay still in force, so it must run before
-        // either publish below.
+        // Measured against the overlay startup captured, so a requirement stays
+        // reported on every reload until the process actually restarts.
         let env_restart_keys = changed_startup_env_keys(&self.env, &evaluated);
         let EvaluatedReload {
             config: new_config,
