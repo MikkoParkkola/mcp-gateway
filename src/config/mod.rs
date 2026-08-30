@@ -489,7 +489,16 @@ impl Config {
         env_paths: ResolvedEnvFiles,
         expansion: Expansion,
     ) -> Result<Evaluated> {
-        let mut config: Self = Self::figment(path, &overlay)
+        let figment = match expansion {
+            Expansion::Resolve => Self::figment(path, &overlay),
+            // A rewrite path round-trips the FILE. Merging `MCP_GATEWAY_*`
+            // here would materialise onto the struct a value nothing spells in
+            // YAML, and the next write would persist it: the same defect as a
+            // resolved secret, arriving through the prefix rather than through
+            // `env:`.
+            Expansion::Literal => Self::yaml(path),
+        };
+        let mut config: Self = figment
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
         let secret_refs = match expansion {
@@ -568,13 +577,17 @@ impl Config {
         }
     }
 
-    fn figment(path: Option<&Path>, overlay: &EnvOverlay) -> Figment {
+    /// The config file alone, with no environment layered over it.
+    fn yaml(path: Option<&Path>) -> Figment {
         let mut figment = Figment::new();
         if let Some(path) = path {
             figment = figment.merge(Yaml::file(path));
         }
+        figment
+    }
 
-        figment.merge(OverlayEnv::new(overlay))
+    fn figment(path: Option<&Path>, overlay: &EnvOverlay) -> Figment {
+        Self::yaml(path).merge(OverlayEnv::new(overlay))
     }
 
     /// Expand `${VAR}` and `${VAR:-default}` patterns in config values.
