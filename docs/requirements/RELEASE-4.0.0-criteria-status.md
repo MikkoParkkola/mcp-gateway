@@ -99,7 +99,7 @@ Note: CONTROL/STATELESS group source is `audit-notes/criteria-control-stateless.
 
 ## What this audit does not cover
 
-This file audits 43 criteria. The requirements list 76. The 33 it never reached are not passing and
+This file audits 43 criteria. The requirements list 73. The 30 it never reached are not passing and
 not failing — they are unexamined, and a reader totalling the rows above will read a release as
 further along than it is.
 
