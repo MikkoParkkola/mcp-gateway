@@ -67,11 +67,19 @@ pub struct ProxyManager {
     multiplexer: Arc<NotificationMultiplexer>,
     /// Cached roots from the most recent `roots/list` response
     cached_roots: RwLock<Vec<Root>>,
-    /// In-flight `sampling/createMessage` requests awaiting client responses.
+    /// In-flight `sampling/createMessage` / `elicitation/create` requests.
     ///
     /// Key: generated request ID (e.g. `"sampling-<uuid>"`).
-    /// Value: oneshot sender that delivers the client's response body.
-    pending_sampling: RwLock<HashMap<String, oneshot::Sender<Value>>>,
+    /// Value: the originating session plus the oneshot that delivers its reply.
+    /// The session is part of the keying so a second client that guesses or
+    /// observes the request id cannot win the race (MIK-7251 / MIK.SAMPLE.2).
+    pending_sampling: RwLock<HashMap<String, PendingSample>>,
+}
+
+/// A waiting sampling/elicitation call, bound to the session that was prompted.
+struct PendingSample {
+    session_id: String,
+    tx: oneshot::Sender<Value>,
 }
 
 impl ProxyManager {
@@ -91,29 +99,51 @@ impl ProxyManager {
 
     /// Register a pending sampling request and return its response receiver.
     ///
-    /// Stores the sender side internally; the caller awaits the returned
-    /// receiver to obtain the client's response when it arrives via
-    /// [`Self::resolve_pending`].
-    pub fn register_pending(&self, id: String) -> oneshot::Receiver<Value> {
+    /// Stores the sender side internally, bound to `session_id`. The caller
+    /// awaits the returned receiver; only a POST-back from that same session
+    /// may complete it via [`Self::resolve_pending`].
+    pub fn register_pending(
+        &self,
+        id: String,
+        session_id: impl Into<String>,
+    ) -> oneshot::Receiver<Value> {
         let (tx, rx) = oneshot::channel();
-        self.pending_sampling.write().insert(id, tx);
+        self.pending_sampling.write().insert(
+            id,
+            PendingSample {
+                session_id: session_id.into(),
+                tx,
+            },
+        );
         rx
     }
 
     /// Deliver a client response to the caller waiting on `id`.
     ///
-    /// Returns `true` if the ID was found and the response was dispatched,
-    /// `false` if no caller is waiting for this ID (already timed out or
-    /// unknown).
-    pub fn resolve_pending(&self, id: &str, response: Value) -> bool {
-        let tx = self.pending_sampling.write().remove(id);
-        match tx {
-            Some(sender) => {
+    /// Returns `true` if the ID was found, `session_id` matches the session
+    /// that was prompted, and the response was dispatched. Returns `false`
+    /// without consuming the pending entry when the session does not match
+    /// (another client answering is refused, not raced) or when no caller is
+    /// waiting (already timed out or unknown).
+    pub fn resolve_pending(&self, id: &str, session_id: &str, response: Value) -> bool {
+        let mut pending = self.pending_sampling.write();
+        match pending.get(id) {
+            None => false,
+            Some(entry) if entry.session_id != session_id => {
+                warn!(
+                    %id,
+                    attempted_session = %session_id,
+                    owner_session = %entry.session_id,
+                    "Refused sampling/elicitation POST-back from a session that was not prompted"
+                );
+                false
+            }
+            Some(_) => {
+                let entry = pending.remove(id).expect("entry present");
                 // If the receiver has already been dropped (timeout), send fails silently.
-                let _ = sender.send(response);
+                let _ = entry.tx.send(response);
                 true
             }
-            None => false,
         }
     }
 
@@ -158,7 +188,7 @@ impl ProxyManager {
     ) -> Result<Value, SamplingError> {
         let id = format!("sampling-{}", Uuid::new_v4());
 
-        let rx = self.register_pending(id.clone());
+        let rx = self.register_pending(id.clone(), session_id);
 
         let data = json!({
             "jsonrpc": "2.0",
@@ -218,7 +248,7 @@ impl ProxyManager {
     ) -> Result<Value, SamplingError> {
         let id = format!("elicitation-{}", Uuid::new_v4());
 
-        let rx = self.register_pending(id.clone());
+        let rx = self.register_pending(id.clone(), session_id);
 
         let data = json!({
             "jsonrpc": "2.0",
@@ -433,9 +463,9 @@ mod tests {
         let proxy = ProxyManager::new(mux);
 
         // WHEN: we register a pending request and immediately resolve it
-        let rx = proxy.register_pending("sampling-abc".to_string());
+        let rx = proxy.register_pending("sampling-abc".to_string(), "session-a");
         let response = json!({"result": "done"});
-        let resolved = proxy.resolve_pending("sampling-abc", response.clone());
+        let resolved = proxy.resolve_pending("sampling-abc", "session-a", response.clone());
 
         // THEN: resolve returns true and the receiver gets the value
         assert!(resolved);
@@ -450,7 +480,7 @@ mod tests {
         let proxy = ProxyManager::new(mux);
 
         // WHEN: we try to resolve an ID that was never registered
-        let resolved = proxy.resolve_pending("sampling-unknown", json!({}));
+        let resolved = proxy.resolve_pending("sampling-unknown", "session-a", json!({}));
 
         // THEN: returns false — no waiting caller
         assert!(!resolved);
@@ -461,13 +491,13 @@ mod tests {
         // GIVEN: a registered pending request
         let mux = make_multiplexer();
         let proxy = ProxyManager::new(mux);
-        let _rx = proxy.register_pending("sampling-xyz".to_string());
+        let _rx = proxy.register_pending("sampling-xyz".to_string(), "session-a");
 
         // WHEN: we cancel it
         proxy.cancel_pending("sampling-xyz");
 
         // THEN: resolving after cancellation returns false (entry gone)
-        let resolved = proxy.resolve_pending("sampling-xyz", json!({}));
+        let resolved = proxy.resolve_pending("sampling-xyz", "session-a", json!({}));
         assert!(!resolved);
     }
 
@@ -476,14 +506,94 @@ mod tests {
         // GIVEN: a pending request where the receiver has been dropped
         let mux = make_multiplexer();
         let proxy = ProxyManager::new(mux);
-        let rx = proxy.register_pending("sampling-dropped".to_string());
+        let rx = proxy.register_pending("sampling-dropped".to_string(), "session-a");
         drop(rx); // simulate timeout dropping the receiver
 
         // WHEN: the client posts back a response
-        let resolved = proxy.resolve_pending("sampling-dropped", json!({"ok": true}));
+        let resolved = proxy.resolve_pending("sampling-dropped", "session-a", json!({"ok": true}));
 
         // THEN: returns true (entry existed) but send fails silently — no panic
         assert!(resolved);
+    }
+
+    #[tokio::test]
+    async fn resolve_pending_from_other_session_is_refused_and_does_not_race() {
+        let mux = make_multiplexer();
+        let proxy = ProxyManager::new(mux);
+
+        let rx = proxy.register_pending("sampling-owned".to_string(), "session-a");
+        let interloper = json!({"result": "hijack"});
+        assert!(
+            !proxy.resolve_pending("sampling-owned", "session-b", interloper),
+            "a POST-back from a session that was not prompted must be refused"
+        );
+
+        let genuine = json!({"result": "from-owner"});
+        assert!(
+            proxy.resolve_pending("sampling-owned", "session-a", genuine.clone()),
+            "the originating session must still be able to answer after a refused interloper"
+        );
+        let received = rx.await.expect("owner reply must still be delivered");
+        assert_eq!(received, genuine);
+    }
+
+    #[tokio::test]
+    async fn sampling_request_reaches_only_the_originating_session() {
+        let mux = make_multiplexer();
+        let (session_a, mut rx_a) = mux.get_or_create_session(Some("sess-a"));
+        let (_session_b, mut rx_b) = mux.get_or_create_session(Some("sess-b"));
+        let proxy = Arc::new(ProxyManager::new(Arc::clone(&mux)));
+
+        let params = SamplingCreateMessageParams {
+            messages: vec![SamplingMessage {
+                role: "user".to_string(),
+                content: Content::Text {
+                    text: "secret prompt".to_string(),
+                    annotations: None,
+                },
+            }],
+            tools: None,
+            tool_choice: None,
+            model_preferences: None,
+            system_prompt: None,
+            max_tokens: 16,
+        };
+
+        let proxy_for_task = Arc::clone(&proxy);
+        let origin = session_a.clone();
+        let wait = tokio::spawn(async move {
+            proxy_for_task
+                .forward_sampling_with_response(&origin, &params, Duration::from_secs(2))
+                .await
+        });
+
+        let delivered = tokio::time::timeout(Duration::from_millis(500), rx_a.recv())
+            .await
+            .expect("originating session must receive the sampling request")
+            .expect("channel open");
+        assert_eq!(delivered.data["method"], "sampling/createMessage");
+        assert_eq!(
+            delivered.data["params"]["messages"][0]["content"]["text"],
+            "secret prompt"
+        );
+
+        assert!(
+            rx_b.try_recv().is_err(),
+            "the other session must see nothing of the prompt"
+        );
+
+        let request_id = delivered.data["id"]
+            .as_str()
+            .expect("sampling request carries an id")
+            .to_string();
+        assert!(proxy.resolve_pending(
+            &request_id,
+            &session_a,
+            json!({"result": {"role": "assistant", "content": {"type": "text", "text": "ok"}}})
+        ));
+        wait.await
+            .expect("forward task join")
+            .expect("originating session answered");
     }
 
     #[test]
