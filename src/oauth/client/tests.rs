@@ -784,8 +784,8 @@ fn client_at_issuer(dir: &std::path::Path, issuer: &str) -> OAuthClient {
 fn a_client_id_is_read_back_under_the_issuer_that_registered_it() {
     // The stable half. Keying must not drift between runs, or the gateway
     // re-registers on every restart and pops a browser tab each time.
-    let dir = std::env::temp_dir().join("oauth_issuer_key_same");
-    let _ = std::fs::remove_dir_all(&dir);
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
     let issuer = "https://auth.example.com";
 
     let client = client_at_issuer(&dir, issuer);
@@ -813,8 +813,8 @@ fn a_client_id_from_another_issuer_is_not_reused() {
     // different authorization server, and MUST re-register when it changes.
     // Keyed by backend alone, moving a backend to a new authorization server
     // silently presents a client id that server never issued.
-    let dir = std::env::temp_dir().join("oauth_issuer_key_other");
-    let _ = std::fs::remove_dir_all(&dir);
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     let other = client_at_issuer(&dir, "https://auth.example.com");
     other
@@ -843,8 +843,8 @@ fn a_client_id_stored_without_an_issuer_is_not_reused() {
     // a credential written by a version that keyed on the backend alone
     // cannot be attributed to any issuer, so it is not served to one. The
     // gateway re-registers, which is what the specification asks for.
-    let dir = std::env::temp_dir().join("oauth_issuer_key_legacy");
-    let _ = std::fs::remove_dir_all(&dir);
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
 
     let client = client_at_issuer(&dir, "https://auth.example.com");
     client
