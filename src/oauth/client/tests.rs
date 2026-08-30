@@ -924,3 +924,117 @@ fn a_configured_client_id_belongs_to_the_operator_and_survives() {
         "a configured client id is not the previous issuer's to take away"
     );
 }
+
+// =========================================================================
+// Issuer provenance through `initialize`
+// =========================================================================
+
+/// Serve both well-known documents from one address: protected-resource
+/// metadata that advertises `advertised_as` (or none at all), and
+/// authorization-server metadata claiming `issuer_claimed`.
+///
+/// Serving address and claimed identity are separate parameters so a test can
+/// make them differ by exactly one character.
+async fn serve_oauth_documents(
+    base: &str,
+    advertised_as: Option<String>,
+    issuer_claimed: &str,
+) -> String {
+    use axum::{Router, response::IntoResponse, routing::get};
+
+    let addr: std::net::SocketAddr = base.trim_start_matches("http://").parse().unwrap();
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+
+    let as_body = serde_json::json!({
+        "issuer": issuer_claimed,
+        "authorization_endpoint": format!("{issuer_claimed}authorize"),
+        "token_endpoint": format!("{issuer_claimed}token"),
+    });
+    let resource = base.to_string();
+    let prm_body = advertised_as.map(|auth_server| {
+        serde_json::json!({ "resource": resource, "authorization_servers": [auth_server] })
+    });
+
+    let app = Router::new()
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(move || {
+                let body = as_body.clone();
+                async move { axum::Json(body) }
+            }),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(move || {
+                let body = prm_body.clone();
+                async move {
+                    // No document is the fallback path, not an empty one: an
+                    // empty body would parse into metadata advertising nothing.
+                    body.map_or_else(
+                        || axum::http::StatusCode::NOT_FOUND.into_response(),
+                        |b| axum::Json(b).into_response(),
+                    )
+                }
+            }),
+        );
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    base.to_string()
+}
+
+fn client_for(resource_url: &str, dir: &std::path::Path) -> OAuthClient {
+    OAuthClient::new(
+        Client::new(),
+        "issuer-provenance".to_string(),
+        resource_url.to_string(),
+        vec![],
+        Arc::new(TokenStorage::new(dir.to_path_buf()).unwrap()),
+        OAuthClientConfig::default(),
+    )
+}
+
+async fn free_addr() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    format!("http://{addr}")
+}
+
+/// The comparison arm is only half the control: which arm runs is decided by
+/// three assignments in `initialize`, and a mis-tagged advertised identifier
+/// would leave every metadata test green. Driven end to end from the resource
+/// URL so the classification itself is under test.
+#[tokio::test]
+async fn an_issuer_advertised_by_protected_resource_metadata_is_compared_exactly() {
+    let base = free_addr().await;
+    let served = serve_oauth_documents(&base, Some(base.clone()), &format!("{base}/")).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client_for(&format!("{served}/mcp"), dir.path());
+
+    let err = client
+        .initialize()
+        .await
+        .expect_err("an advertised identifier differing by a trailing slash must be refused");
+    assert!(
+        err.to_string().contains("issuer mismatch"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Same documents, minus the advertisement. Nothing then reflects the server's
+/// own spelling, so the synthesised origin tolerates the slash and an Auth0-
+/// shaped server stays reachable.
+#[tokio::test]
+async fn an_issuer_reached_by_the_origin_fallback_tolerates_a_trailing_slash() {
+    let base = free_addr().await;
+    let served = serve_oauth_documents(&base, None, &format!("{base}/")).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client_for(&format!("{served}/mcp"), dir.path());
+
+    client
+        .initialize()
+        .await
+        .expect("the origin fallback tolerates a trailing slash");
+}

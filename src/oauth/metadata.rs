@@ -165,9 +165,12 @@ impl AuthorizationServerMetadata {
         // identifier satisfy a discovery aimed at a different one.
         let issuer_matches = match source {
             IssuerSource::Advertised => metadata.issuer == base_url,
-            IssuerSource::Origin => {
-                metadata.issuer.trim_end_matches('/') == base_url.trim_end_matches('/')
-            }
+            // Only the response side is trimmed. `base_url()` never produces a
+            // trailing slash, so trimming it too would be a normalisation with
+            // nothing to normalise -- and would quietly restore the both-sides
+            // comparison for any future caller that passed a slash-terminated
+            // string as an origin.
+            IssuerSource::Origin => metadata.issuer.trim_end_matches('/') == base_url,
         };
         if !issuer_matches {
             return Err(Error::OAuth(format!(
