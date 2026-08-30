@@ -1295,7 +1295,11 @@ const IMPLICIT_STARTUP_ENV_KEYS: &[&str] = &[
 ///
 /// The `HOME` rule is deliberately conservative: any assignment of `HOME` by
 /// either run's env files, or any change in the value they leave standing, is
-/// reported. A restart notice about `HOME` may be early, never absent.
+/// reported. The notice is never absent when a restart would read different
+/// files, and it does not clear: a config whose env files assign `HOME` beside
+/// a `~` entry reports `HOME` on every reload, and restarting does not settle
+/// it, because the next startup's env files assign it again. It says a restart
+/// *could* read different files, never that one is outstanding.
 ///
 /// It has to be, because the question the rule is really answering — would a
 /// restart open different files than startup did — cannot be answered from
@@ -1331,8 +1335,8 @@ fn changed_startup_env_keys(env: &LiveEnv, evaluated: &EvaluatedReload) -> Vec<S
     // restored and compares equal (ENVFILE.19i). Comparing values alone cannot
     // see that, and neither can the reload overlay alone: deleting the move
     // leaves nothing there to notice, and the value it restored may be the
-    // process environment's own (ENVFILE.19j). Either run's assignment counts.
-    // The notice may be early, never absent.
+    // process environment's own (ENVFILE.19j). Either run's assignment counts,
+    // so the notice never clears for such a config — see the fn doc.
     if env.env_paths().has_tilde_entry()
         && (startup.assigns("HOME")
             || evaluated.overlay.assigns("HOME")

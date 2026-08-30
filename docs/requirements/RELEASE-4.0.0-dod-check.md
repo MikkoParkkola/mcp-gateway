@@ -350,8 +350,9 @@ a test, not because of the switch.
    observed failing on the value comparison — two entries, the first moving HOME and the file the
    second names restoring it, finals equal, `HOME` absent from the report. The rule now fires on
    either an assignment or a value change beside a tilde entry
-   (`src/config_reload/mod.rs:1325-1332`), which is statable in one line: *a restart notice about
-   HOME may be early, never absent*. This is a deliberate design event, not a repair: ENVFILE.19g
+   (`src/config_reload/mod.rs:1325-1332`), which is statable in one line: *the notice is never
+   absent when a restart would read different files, and it does not clear*. This is a deliberate
+   design event, not a repair: ENVFILE.19g
    now asserts the notice it previously asserted away, because nothing available at reload can tell
    its harmless case apart from 19i's real one without re-expanding `~`, which the design forbids.
    19h keeps its assertion and loses its false premise — its sole entry relocates nothing; it is
@@ -371,6 +372,20 @@ a test, not because of the switch.
    outcomes are harness artifacts rather than evidence. The `HOME` assertions are unaffected and
    are what these rows test; re-seeding a helper shared by the whole family is a change to other
    tests' fixtures and out of this change's scope.
+
+   Closure re-check, both vendors, on the repaired head: SHIP (gpt 2026-08-30T16:15:34Z, grok
+   16:16:32Z, identical material). No further findings, and this was the last round on this
+   predicate: three examinations each found a new corner rather than damage to a repair, which is
+   the signal to stop patching and refer the question upward — which the open owner question below
+   already does.
+
+   The conservative rule has a consequence worth stating plainly, because it is what an operator
+   sees: for a config whose env files assign `HOME` beside a `~` entry, the notice fires on every
+   reload and a restart does not settle it — the next startup's env files assign `HOME` again, so
+   it returns immediately. The notice reports that a restart *could* read different files, not
+   that one is outstanding. It is fail-safe and it is noisy, and the noise is permanent for that
+   config shape. That is the strongest argument for the *no* branch of the owner question below:
+   the mechanism cannot both stay silent-free and stay actionable.
 
    What remains for the owner is one question, and it is about behaviour rather than mechanism:
    *should setting HOME in an env file be able to move where a later env file is looked for?*
