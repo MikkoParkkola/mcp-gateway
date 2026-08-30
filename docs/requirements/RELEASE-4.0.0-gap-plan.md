@@ -5,14 +5,14 @@
 
 Assessed 2026-08-30 by four independent audits (requirements-vs-code, unwired production paths,
 test-plan coverage, docs and release mechanics). Every gap below was verified by reading source,
-never inferred from a document. The requirements sweep was still running when this was written;
-its remaining batches amend section 1, they do not invalidate the sequence.
+never inferred from a document. The requirements sweep has not run to completion;
+its remaining batches amend section 1 and add increments, they do not invalidate the sequence.
 
 A second audit died on an output ceiling partway through emitting its rows. What
 it had produced is recovered in `RELEASE-4.0.0-audit-partial.md` and is a floor
 on the blocking count, not a total: at least eight of its findings sit outside
-MRTR entirely, which is the first measured evidence of how far section 2 is
-undersized.
+MRTR entirely, which is the first measured evidence of how far section 2 was
+undersized. Section 2 now carries them as increments 10-17.
 
 ## 1. Where the release actually stands
 
@@ -28,7 +28,7 @@ refused at the door.
 | Outbound era probing unwired | `EraCache::resolve_with`/`classify` implemented and tested, zero callers in `src/backend` or `src/transport` | outbound modern/legacy negotiation |
 | Tasks extension is dead code | `protocol::tasks::Task`/`TaskStatus` have no production call site; `tasks/get`/`tasks/update` fall through to method-not-found honestly | nothing — needs a keep/delete decision |
 | Header/result/error/cache/order criteria | six gaps found, six criteria confirmed clean | see requirements sweep |
-| Blocking criteria outside MRTR | at least eight, in tenancy, stateless confirmation, session expiry, log correlation, cache invalidation, error codes, tasks and extensions | see `RELEASE-4.0.0-audit-partial.md` |
+| Blocking criteria outside MRTR | at least eight, in tenancy, stateless confirmation, session expiry, log correlation, cache invalidation, error codes, tasks and extensions | increments 10-17; source rows in `RELEASE-4.0.0-audit-partial.md` |
 | Diff coverage under floor | 61 branch-touched files average 77.40% lines against an 80% Standard floor; mutation coverage unmeasured | DoD §4 |
 
 Test position, separately: six acceptance criteria have no case at any level, two cases cannot fail
@@ -69,7 +69,11 @@ a final answer. MRTR.10 has a second half on the same path: `resolve_idempotency
 (`support.rs:31-46`, called from `invoke.rs:779-790`) derives the key from server, tool and
 arguments alone, so two retries carrying different `inputResponses` collide on one key and the
 second is answered from cache. A sweep note calls that a different call path from `tools/call`;
-reading the call site shows it is the same one. Tests: the integration rows the plan already names, plus a pass-through row and a
+reading the call site shows it is the same one. The fix must cover both branches of that helper:
+an explicit client-supplied `idempotency_key` returns at `support.rs:38-43` before the derivation
+runs, so extending the derivation alone leaves a client that reuses its own key colliding exactly
+as before. Either both branches carry the continuation fields, or the plan says a reused client
+key is the client's problem — it cannot leave the question open. Tests: the integration rows the plan already names, plus a pass-through row and a
 fresh-JSON-RPC-id row that a fixture transport can fail. Pass-through asserts value equality and
 that no `requestState` key was added, not byte identity — the crate does not preserve key order.
 
@@ -105,6 +109,67 @@ invalidates every outstanding continuation. The `docs/DEPLOYMENT.md` rewrite thi
 originally carried is already committed — its "Replica Count and `server.modern_protocol`" section
 states the refusal, names the per-process key material as the mechanism, and rules out a
 sticky-session workaround. Nothing is left to do there.
+
+**Increments 10-17 come from the recovered audit rows**, which sit outside MRTR entirely. Each row
+is the killed agent's claim with a file:line, verified here only as far as the cited location
+existing — so re-reading the source is the first step of every increment below, not an optional
+check. Sizes differ by more than an order of magnitude and that difference is the point: 10 is
+plausibly a one-line change, 16 is a subsystem that does not exist.
+
+**10 — Resource-not-found returns the code the spec names (XS).** Closes MIK-7272.ERROR.2.
+`resources.rs:276-280` returns -32002 where the row says the spec requires -32602. Confirm the spec
+text before editing — the requirement is the claim under test here, not the code. Tests: one row per
+error path, and a check that no existing client contract asserts -32002.
+
+**11 — The gateway declares its own extensions (S).** Closes EXT.1.
+`ExtensionSet::gateway_declares()` at `protocol/extensions.rs:59-64` has zero callers, so the
+gateway advertises nothing about itself while requiring declarations from clients. Wire it into the
+initialize response; deciding what the set actually contains is a design question with a short
+answer, not a wiring fix.
+
+**12 — Transparency-log correlation is a real request id (S).** Closes MIK-7215.CONTROL.3. The
+correlation key is the literal string it falls back to on every stateless request, because the live
+`trace_id` is never passed in (`invoke.rs:1299-1314,429`). This lands next to increment 2a, which
+already moves caller identity into that scope — sequence it after 2b so the two do not collide on
+the same signatures. Tests: a stateless request whose log entry carries the request's own id.
+
+**13 — Session expiry is reachable (M).** Closes MIK-7215.CONTROL.4. The `session_lifecycle` module
+is declared at `gateway/mod.rs:19` and referenced nowhere else. Either wire expiry into the session
+path or delete the module and record why — a declared-but-unreferenced lifecycle is worse than an
+absent one, because it reads as coverage.
+
+**14 — Cache invalidation on policy change (M).** Closes MIK-7213.CACHE.4. Invalidation is TTL-only
+at `invoke.rs:835-839`, so a revoked grant keeps being honoured until the entry ages out. Needs a
+policy epoch that participates in the cache key. Overlaps increment 2b, which already touches the
+key derivation in that file; do 2b first and extend the same key rather than adding a second
+mechanism beside it.
+
+**15 — Destructive-op confirmation on the stateless path (M, design first).** Closes
+MIK-7215.CONFIRM.2. Confirmation requires an SSE session today (`proxy.rs:213-260`) and the modern
+stateless path has no session to hold one in. That is a design event, not a wiring gap: the question
+is what a confirmation *is* without a session, and the continuation machinery from increments 1-4 is
+the obvious candidate to carry it. Design reviewed before any code.
+
+**16 — Cross-tenant data minimisation (L, requirements first).** Closes MIK-7215.TENANT.1. The audit
+found no guard anywhere in `src/`. This is the only item in the plan with nothing to read, so it
+starts with requirements rather than a design: what a tenant boundary means here, what crosses it
+today, and what the criterion is actually asking for. It is the largest item and the one most likely
+to move the release date — sizing it honestly is the first deliverable, not a commitment to build it
+in this release.
+
+**17 — NFR.SEC.6 owner decision (S, owner call).** MIK-7262 is open: the
+`registers_external_callback` override is silently skipped for read-only, non-mutating and no-schema
+methods (`capability/definition/mod.rs:1113-1152`). Shipping with a known bypass of an
+external-callback declaration is an owner's decision in the same shape as increment 8, not something
+an increment can close on its own authority.
+
+### Still open, and it will not resolve itself
+
+The recovered audit is a floor, not a total. One row (SCHEMA.1, concerning `gateway_execute`'s
+`chain` parameter) was truncated mid-emit and its finding is unrecoverable. Some criterion groups
+were never reached at all, and the four-group sweep in `RELEASE-4.0.0-criteria-status.md` covers a
+different, also partial, slice. Re-running the sweep to completion is a prerequisite for calling this
+plan sized — not an increment, because its output changes what the increments are.
 
 ## 3. Not blocking the release
 
