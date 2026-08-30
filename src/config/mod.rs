@@ -499,11 +499,11 @@ impl Config {
         // expands to nothing and the value is lost without an edit.
         if let Some((path, key)) = overlay.substitution_naming_owned_key() {
             return Err(Error::Config(format!(
-                "Refusing to load config: env file {} substitutes {key}, a key the env files \
-                 themselves define. That reference is resolved from the process environment, \
-                 which the gateway does not write, so it would expand to nothing and the value \
-                 would be lost without an edit. Inline the value or export the key before \
-                 starting.",
+                "Refusing to load config: env file {} substitutes {key}, a key only another \
+                 env file defines. Each env file is expanded on its own, so that reference is \
+                 resolved from the process environment, which the gateway does not write: it \
+                 would expand to nothing and the value would be lost without an edit. Inline \
+                 the value, or move the assignment into this same file above the reference.",
                 path.display()
             )));
         }

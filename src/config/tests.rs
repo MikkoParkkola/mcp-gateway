@@ -1604,3 +1604,51 @@ fn a_literal_load_leaves_an_env_file_override_out_of_the_config() {
         "the rewrite must keep the env-file list the config declares: {rewritten}"
     );
 }
+
+/// A file that supplies a key and then substitutes it resolves within its own
+/// buffer, so the startup guard must let it through.
+///
+/// The guard compares against the keys *every* env file owns. Before this, a
+/// file's own earlier assignment made its later reference look like the silent
+/// cross-file read the guard exists to refuse, and a configuration that loads
+/// exactly as written could not start the gateway.
+#[test]
+fn a_file_substituting_a_key_it_defined_itself_is_not_refused() {
+    let file = "BASE=https://api.invalid-test\nENDPOINT=${BASE}/v1\n";
+
+    let parsed: std::collections::HashMap<String, String> =
+        dotenvy::from_read_iter(std::io::Cursor::new(file.as_bytes()))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("dotenvy must parse the fixture")
+            .into_iter()
+            .collect();
+    assert_eq!(
+        parsed.get("ENDPOINT").map(String::as_str),
+        Some("https://api.invalid-test/v1"),
+        "dotenvy must expand the same-file reference, or this case proves nothing"
+    );
+
+    let defined = ["BASE".to_string(), "ENDPOINT".to_string()]
+        .into_iter()
+        .collect();
+    assert_eq!(
+        super::env_overlay::substitution_naming_defined_key(file, &defined),
+        None,
+        "a reference the same file already supplied is not a cross-file read"
+    );
+}
+
+/// The other half: a reference to a key this file never assigns is still
+/// refused, so the fix above did not simply switch the guard off.
+#[test]
+fn a_reference_to_a_key_another_file_owns_is_still_refused() {
+    let file = "ENDPOINT=${BASE}/v1\n";
+    let defined = ["BASE".to_string(), "ENDPOINT".to_string()]
+        .into_iter()
+        .collect();
+    assert_eq!(
+        super::env_overlay::substitution_naming_defined_key(file, &defined).as_deref(),
+        Some("BASE"),
+        "a key supplied only by another env file does not resolve here"
+    );
+}

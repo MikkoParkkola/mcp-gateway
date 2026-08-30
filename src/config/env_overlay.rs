@@ -126,31 +126,43 @@ pub(crate) fn substitution_naming_defined_key(
     text: &str,
     defined: &BTreeSet<String>,
 ) -> Option<String> {
-    let mut pending: Option<String> = None;
+    // A key this same file has already assigned resolves within the file:
+    // dotenvy substitutes from earlier lines of the buffer it is reading. So
+    // each assignment drops its own key as the scan passes it, and what
+    // remains is the set this file never supplies. Comparing against every
+    // key all the files own refused `A=1` followed by `B=${A}` -- a
+    // configuration that resolves exactly as written.
+    let mut unresolved_here = defined.clone();
+    let mut pending: Option<(Option<String>, String)> = None;
     for line in text.lines() {
-        let value = if let Some(mut open) = pending.take() {
+        let (key, value) = if let Some((key, mut open)) = pending.take() {
             open.push('\n');
             open.push_str(line);
-            open
+            (key, open)
         } else {
             let line = line.trim_start();
             if line.starts_with('#') {
                 continue;
             }
-            let Some((_, value)) = line.split_once('=') else {
+            let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
-            value.trim_start().to_string()
+            let key = key.trim().trim_start_matches("export ").trim().to_string();
+            (Some(key), value.trim_start().to_string())
         };
         // Rescanning the whole value on each continuation keeps the quote
         // state in one place; env-file values are short enough for that to
         // cost nothing.
-        let (found, unbalanced) = first_expanded_substitution(&value, defined);
+        let (found, unbalanced) = first_expanded_substitution(&value, &unresolved_here);
         if found.is_some() {
             return found;
         }
         if unbalanced {
-            pending = Some(value);
+            pending = Some((key, value));
+            continue;
+        }
+        if let Some(key) = key {
+            unresolved_here.remove(&key);
         }
     }
     None

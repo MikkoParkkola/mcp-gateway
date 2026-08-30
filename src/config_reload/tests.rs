@@ -2536,14 +2536,23 @@ async fn envfile_10c_a_byte_identical_patch_still_reports_the_rotated_startup_on
 #[test]
 fn load_config_patch_refuses_a_substitution_naming_a_defined_key() {
     let dir = tempfile::tempdir().unwrap();
+    // Two files: the reference has to live in a *different* file from the
+    // assignment. A file substituting a key it supplies itself resolves within
+    // its own buffer and is not what this guard refuses.
+    let defining_path = dir.path().join("defining.env");
     let env_path = dir.path().join("gateway.env");
     let config_path = dir.path().join("gateway.yaml");
     std::fs::write(
         &config_path,
-        format!("env_files:\n  - \"{}\"\n", env_path.display()),
+        format!(
+            "env_files:\n  - \"{}\"\n  - \"{}\"\n",
+            defining_path.display(),
+            env_path.display()
+        ),
     )
     .unwrap();
-    std::fs::write(&env_path, "MCP_GW_TEST_BASE=https://host\n").unwrap();
+    std::fs::write(&defining_path, "MCP_GW_TEST_BASE=https://host\n").unwrap();
+    std::fs::write(&env_path, "MCP_GW_TEST_OTHER=plain\n").unwrap();
 
     // GIVEN: a gateway started from env files that hold no substitution
     let startup = Config::load_evaluated(Some(&config_path)).unwrap();
@@ -2553,7 +2562,7 @@ fn load_config_patch_refuses_a_substitution_naming_a_defined_key() {
     // only way the reload path ever sees one.
     std::fs::write(
         &env_path,
-        "MCP_GW_TEST_BASE=https://host\nMCP_GW_TEST_URL=${MCP_GW_TEST_BASE}/v1\n",
+        "MCP_GW_TEST_OTHER=plain\nMCP_GW_TEST_URL=${MCP_GW_TEST_BASE}/v1\n",
     )
     .unwrap();
     let live_config = std::sync::Arc::new(LiveConfig::new(startup.config.clone()));
