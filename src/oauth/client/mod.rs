@@ -773,6 +773,16 @@ impl OAuthClient {
 
         debug!(code = %callback_result.code, "Received authorization code");
 
+        // RFC 9207, before the code is redeemed: a code that came from another
+        // authorization server must not be sent to this one's token endpoint.
+        validate_issuer(callback_result.iss.as_deref(), &auth_meta.issuer).map_err(|mismatch| {
+            warn!(
+                event = "oauth.callback.issuer_mismatch",
+                "authorization response named an issuer other than the recorded one"
+            );
+            Error::OAuth(mismatch)
+        })?;
+
         // Exchange code for token
         let token = self
             .exchange_code(&callback_result.code, &actual_callback_url, &code_verifier)

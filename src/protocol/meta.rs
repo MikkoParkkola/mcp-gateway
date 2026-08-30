@@ -115,7 +115,7 @@ pub enum RequestShape {
 /// never reached the unsupported-version refusal.
 #[must_use]
 pub fn classify_request(params: Option<&Value>, header_version: Option<&str>) -> RequestShape {
-    let header_declares_modern = header_version.is_some_and(|v| declares_modern_era(v));
+    let header_declares_modern = header_version.is_some_and(declares_modern_era);
 
     let meta = params
         .and_then(|p| p.get("_meta"))
