@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Mikko Parkkola -->
 <!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
 
-# Shared continuation state across replicas
+# Continuation state across replicas
 
 Queue item 1a. Tracks MIK-7312. Blocks the MRTR wiring suite, because the wiring's storage owner
 cannot be built twice.
@@ -21,55 +21,27 @@ than one gateway process.
 The operator held the 4.0.0 release for both on 2026-08-30, rejecting both ship-with-a-stated-limit
 and drop-the-feature.
 
-The gap is storage, not logic. `ConsumedLedger` (`src/protocol/continuation.rs:437`) is already
-atomic — one `tokio::sync::Mutex` around a check-and-consume — and `InFlight` (:558) is already
-replica-aware, keying `{backend_id}:{uuid}` to `(holder, deadline)` and answering `route()` with
-`Here` or `Elsewhere { replica }`. Both hold their state in a process-local `HashMap`. Two replicas
-therefore keep two ledgers, and a token spent on one is unspent on the other: an attacker who
-replays a captured continuation against a second replica redeems it a second time, which is exactly
-what MRTR.5's last sentence forbids.
+`ConsumedLedger` (`src/protocol/continuation.rs:437`) is already atomic — one `tokio::sync::Mutex`
+around a check-and-consume — and `InFlight` (:558) is already replica-aware, keying
+`{backend_id}:{uuid}` to `(holder, deadline)` and answering `route()` with `Here` or
+`Elsewhere { replica }`. Both hold their state in a process-local `HashMap`.
 
 ## Two problems, not one
 
-Reading MRTR.5 and MRTR.6 as a single "shared state" problem is what makes an external store look
-like the answer. They are different problems with different lower bounds.
+**MRTR.6 cannot be solved by a shared store.** The thing that must be reached is a live RPC held
+open in one process's memory — a socket and a pending future. Shared *data* does not move it. The
+two mechanisms that satisfy MRTR.6 are forwarding the retry to the holder, or failing explicitly on
+a recorded holder. The requirement names the second in its own words. `origin_replica` already
+carries that fact inside the sealed envelope, with no lookup.
 
-**MRTR.6 cannot be solved by any shared store.** The thing that must be reached is a live RPC held
-open in one process's memory — a socket and a pending future. No amount of shared *data* moves it.
-The only two mechanisms that satisfy MRTR.6 are pinning the retry to the replica that holds the
-exchange, or forwarding the retry to it. A Redis satisfies neither; it can record *where* the
-exchange lives, which is a fact `origin_replica` already carries inside the sealed envelope with no
-lookup at all.
+**MRTR.5 is satisfied by the key material, not by consensus.** If a continuation can be *opened* on
+exactly one replica, the set of replicas that can spend it twice is empty, and the one replica that
+can spend it at all already does so atomically under a local mutex.
 
-**MRTR.5 is then satisfied by construction, not by consensus.** If a continuation is redeemable on
-exactly one replica, the set of replicas that can redeem it twice is empty, and the one replica that
-can redeem it at all already does so atomically under a local mutex. A shared store does not improve
-this — it *degrades* it, by introducing partition, `maxmemory` eviction and stale-follower reads,
-each of which resolves to two callers both seeing a token unspent. That is precisely the failure the
-requirement's last sentence exists to forbid, reintroduced by the mechanism chosen to prevent it.
-
-## Constraints, measured
-
-- **The gateway already requires session affinity.** `NotificationMultiplexer` holds
-  `sessions: RwLock<HashMap<String, Arc<ClientSession>>>` (`src/gateway/streaming.rs`) — process
-  local — and `src/gateway/router/handlers.rs` branches on `state.multiplexer.has_session(id)`. A
-  streamable-HTTP client whose follow-up lands on a second replica is already an unknown session
-  today. Pinning continuations therefore adds **no** deployment requirement that a multi-replica
-  deployment does not already have; it extends an existing one to a second kind of state.
-- **The gateway already mints the affinity carrier.** `streaming.rs` issues `gw-{uuid}` when a
-  client presents no `Mcp-Session-Id`. An origin hint can ride in the identifier the protocol already
-  defines and the gateway already controls, rather than in a bespoke header nobody's ingress knows.
-- **No shared store exists to reuse.** `Cargo.toml` carries no `redis`, `sqlx`, `rusqlite`,
-  `postgres`, `etcd`, `nats` or `object_store` dependency; the only storage-shaped crate is
-  `dashmap = "6.2"` (`Cargo.toml:99`), which is process-local. A shared store is a new runtime
-  dependency and a new operational surface, not a library swap.
-- **No peer discovery exists.** `src/kubernetes/cluster.rs` is an apply-plan adapter for operator
-  commands, not cluster membership; nothing under `src/` resolves sibling replica addresses. A
-  replica cannot today forward anything to another replica, because it cannot name one.
-- **The token already carries its origin.** `Payload::origin_replica` travels sealed inside the
-  envelope, so every replica knows the origin from the token alone.
-- **The keyring is per-run.** Standing decision, unchanged here: persistent key material is
-  permitted only alongside a durable ledger. A restart kills continuations in flight, deliberately.
+That second sentence is a design decision, not an observation, and it is the one this document
+makes. Nothing in the tree constructs a `Keyring` outside tests today (`Keyring::new` has 24 call
+sites, all in `tests/mik_7212_acs.rs`), so the key-material policy is still open, and it is the
+thing that decides whether MRTR.5 holds.
 
 ## What is in scope
 
@@ -77,80 +49,162 @@ Making MRTR.5 and MRTR.6 hold on a multi-replica deployment, and nothing else. O
 legacy-client bridge (queue item 1b, MRTR.7), the MRTR wiring itself (item 1), key persistence, and
 any change to what a continuation *contains*.
 
+## Constraints, measured
+
+- **No shared store exists to reuse.** `Cargo.toml` carries no `redis`, `sqlx`, `rusqlite`,
+  `postgres`, `etcd`, `nats` or `object_store` dependency; the only storage-shaped crate is
+  `dashmap = "6.2"` (`Cargo.toml:99`), which is process-local.
+- **No peer discovery exists.** `src/kubernetes/cluster.rs` is an apply-plan adapter for operator
+  commands, not cluster membership; nothing under `src/` resolves a sibling replica's address. A
+  replica cannot forward anything today, because it cannot name a peer.
+- **The modern path has no steerable identifier.** MIK-7215.STATELESS.3 requires that the gateway
+  MUST NOT emit `Mcp-Session-Id` on the modern path. The continuation travels in the request
+  *body*, as `requestState`. There is therefore no header, cookie or path an ingress can steer on:
+  affinity is not merely unconfigured on this path, it is unavailable. `docs/DEPLOYMENT.md:141`
+  already says so — "continuations are presented by whichever client holds one, and session
+  affinity does not constrain which replica that reaches".
+- **The gateway does not already require affinity on this path.** `has_session` is consulted on
+  DELETE only (`src/gateway/router/handlers.rs:264`); the POST path calls `get_or_create`
+  (:169-214), which inserts on whichever replica receives the request. The shipped chart defaults
+  to two replicas (`deploy/helm/mcp-gateway/values.yaml:11-16`).
+- **The token already carries its origin.** `Payload::origin_replica` travels sealed inside the
+  envelope.
+- **The envelope is `b64(version ‖ kid ‖ nonce ‖ ciphertext)`** with `[version, kid]` as
+  additional authenticated data (`continuation.rs:367-404`). Anything outside that b64 is
+  unauthenticated by construction, and is visible without a key.
+
 ## The mechanism
 
-**A continuation is redeemable only on the replica that minted it, and the origin travels in the
-session identifier the protocol already carries.**
+**A continuation is openable only on the replica that minted it, and it names that replica in
+cleartext so any other replica can refuse it by name.**
 
-- The response side stamps `origin_replica` into the sealed payload, as it already can, and returns
-  the interim result under a session id whose prefix is the origin's stable identity. A client that
-  speaks streamable HTTP echoes `Mcp-Session-Id` on the retry because the protocol tells it to; an
-  ingress steers on that header or on the cookie mirroring it, which nginx, Envoy and ALB all do with
-  stock configuration.
-- The retry side opens the envelope, compares `origin_replica` to its own identity, and on a
-  mismatch refuses with a distinct, typed error **before the spent-list is consulted at all**. There
-  is no path on which a non-origin replica evaluates redeemability, so there is no state for a
-  partition or a stale read to disagree about.
-- On the origin, enforcement is the existing atomic check-and-consume, unchanged.
+### 1. Key material is per process, and is never shared
 
-This satisfies MRTR.6 in the requirement's own words — "or fail explicitly" — and satisfies MRTR.5
-by construction rather than by agreement between processes.
+Each process generates its continuation key at startup and never writes it anywhere. This is the
+standing keyring decision — persistent key material only alongside a durable ledger — stated as the
+*enforcement mechanism* rather than as a caveat.
+
+The consequence is the requirement: a token sealed on replica A is `NotAuthentic` on replica B,
+because B does not hold A's key. B cannot evaluate redeemability, so there is no second ledger for
+a partition or a stale read to disagree about. MRTR.5's cross-replica clause holds
+cryptographically, with no shared store, no new dependency and no affinity.
+
+The invariant to carry forward, because a future change could quietly break it:
+
+> Continuation key material is never shared between processes unless the consumed-ledger is shared
+> in the same change.
+
+A configured, shared key without a shared ledger is exactly the deployment MRTR.5 forbids, and it
+would look like an ordinary configuration convenience.
+
+### 2. The origin travels in cleartext, outside the sealed envelope
+
+The wire form becomes `{origin}.{envelope}`, where `origin` is the minting replica's identity and
+`envelope` is today's b64 blob unchanged.
+
+Without this, a retry landing on the wrong replica fails as `NotAuthentic` — indistinguishable from
+tampering, and useless to the operator reading the log. MRTR.6 asks for the opposite: *fail
+explicitly*. The prefix lets any replica name the holder without opening anything.
+
+- A replica whose identity differs from the prefix refuses with a distinct, typed error, before any
+  key lookup.
+- The origin replica opens the envelope and compares the sealed `origin_replica` to the prefix. A
+  disagreement is refused. **The prefix is trusted for routing and for nothing else**: it is
+  unauthenticated, so an attacker can rewrite it, and the only thing rewriting it can achieve is
+  being refused by a different replica — or reaching the origin, where the sealed copy is what
+  decides.
+- The client-facing message stays the existing constant. The replica identity is not in the body.
+
+### 3. The pin binds only where the requirement binds
+
+MRTR.6 is about a legacy backend holding an RPC open. A continuation for a modern backend is
+self-contained — `backend_request_state` is the backend's own state
+(`src/protocol/continuation.rs:74-76`) and any replica holding the key could resume it. The pin is
+therefore enforced whenever the mint recorded a live `InFlight` hold, which is the case the
+requirement names.
+
+Note that clause 1 already confines *every* continuation to its origin, because only the origin can
+open it. Clause 3 is about which error the caller gets, not about which replica can redeem: a
+legacy-backed retry on the wrong replica is refused as a wrong-replica error, and the general case
+is refused as a failure to authenticate. Both are refusals; only one is actionable.
 
 ### Why not an external store
 
-Rejected on the merits, not on cost: it does not satisfy MRTR.6 at all, and for MRTR.5 it replaces a
-guarantee that holds by construction with one that holds only while the store is healthy. It also
-makes an external service a hard requirement of the gateway's headline feature — a single-binary
-deployment that today needs nothing would need a Redis to answer a tool call that asks a question.
+Rejected on the merits. It does not satisfy MRTR.6 at all — no store moves a live RPC — and for
+MRTR.5 it is not needed once key material is per process. It would also make an external service a
+hard requirement of the gateway's headline feature: a single-binary deployment that today needs
+nothing would need a Redis to answer a tool call that asks a question.
+
+The honest form of the rejection matters. It is **not** that every store fails open: a linearizable
+conditional write (`SET NX` against a single primary, a unique-constraint insert) fails *closed*,
+and would satisfy MRTR.5 correctly on its own terms. The rejection is that it buys a guarantee we
+already have by construction, at the price of a runtime dependency, an availability coupling and an
+operational surface — and that the failure modes it does add (partition, `maxmemory` eviction,
+stale-follower reads on a replicated deployment) are only avoided by choosing the strict
+configuration and keeping it.
+
+### Why not session affinity
+
+It cannot be built on the modern path: MIK-7215.STATELESS.3 forbids the identifier it would steer
+on, and the continuation rides in the request body where no proxy can see it. This is the same
+conclusion `docs/DEPLOYMENT.md:141` already reached.
 
 ### Why not replica-to-replica forwarding, yet
 
-Forwarding is the eventual answer for deployments that cannot configure affinity, and it is strictly
-*this* design plus a forwarder: the forwarder's routing input is the origin pin introduced here. It
-needs peer discovery, peer authentication, a hop timeout and loop prevention, none of which exist.
-Building it now would be building the second half first.
+Forwarding is the eventual answer for the deployment that wants a retry to *succeed* on any
+replica, and it is strictly this design plus a forwarder: the forwarder's routing input is the
+cleartext origin introduced here. It needs peer discovery, peer authentication, a hop timeout,
+loop prevention, and — because key material is per process — a way to hand the exchange over rather
+than the token. None of those exist. MRTR.6 is satisfied without it, in the requirement's own
+words.
 
 ## The shape
 
-One trait, one implementation, one owner.
+`AppState` constructs the keyring and the `ConsumedLedger` once, as one owner with one lifecycle —
+the standing decision that a keyring outliving its ledger is a replay window. `InFlight` sits
+beside them.
 
-```
-trait ContinuationStore {
-    async fn consume(&self, jti: &str, expires_at: u64, now: u64) -> bool;
-    async fn hold(&self, backend_id: &str, expires_at: u64) -> Option<String>;
-    async fn route(&self, key: &str) -> Routing;
-}
-```
-
-`LocalStore` wraps the `ConsumedLedger` and `InFlight` that already exist, unchanged in behaviour.
-The trait is a seam for the forwarding work above, which needs to consult the same table from a
-second call site; it is not a placeholder for a store this release argues against.
-
-`AppState` constructs the store once and owns it, keyring beside it, with one lifecycle — the
-standing decision that a keyring outliving its ledger is a replay window.
+No trait. An earlier draft introduced a `ContinuationStore` seam for the forwarding work; there is
+no second implementation and no second call site, so it is an abstraction over one thing. It can be
+extracted when the forwarder exists and has a shape to fit.
 
 ## Decisions this design makes
 
-1. **A continuation presented to a non-origin replica is refused, not evaluated.** The origin check
-   precedes the spent-list, so redeemability is never decided by a replica that does not hold the
+1. **Continuation key material is generated per process and never shared**, and sharing it without
+   sharing the ledger is forbidden in the same breath. This is what makes MRTR.5 hold across
+   replicas.
+2. **A continuation presented to a non-origin replica is refused, not evaluated.** The origin check
+   precedes any key lookup, so redeemability is never decided by a replica that cannot hold the
    exchange.
-2. **The refusal is explicit and typed**, distinct from "expired", "tampered" and "already spent", so
-   an operator reading a log can tell an affinity misconfiguration from a replay attempt. The
-   client-facing message stays the existing constant; the replica identity is not in the body.
-3. **The origin rides in `Mcp-Session-Id`**, not a bespoke header, so that steering it is stock
-   ingress configuration rather than a custom rule.
-4. **Affinity is documented as an existing requirement being extended**, not as a new one — the
-   deployment documentation states what streaming already needs and notes that continuations now
-   need the same.
+3. **The refusal is explicit and typed**, distinct from "expired", "tampered" and "already spent",
+   so an operator can tell a misrouted retry from a replay attempt.
+4. **The origin rides in a cleartext prefix outside the sealed envelope**, trusted for routing only
+   and checked against the sealed copy on the origin.
+5. **A single-replica deployment is no longer a documented requirement** of the modern protocol
+   path. `docs/DEPLOYMENT.md:125-142` is rewritten in this change to say what now holds.
+
+## Residual, named
+
+**The mint counter is still process-local.** `Keyring::minted` (`continuation.rs:237-249`) bounds
+how many envelopes one key may seal, and two replicas each count their own. That is correct here
+rather than a gap: the bound exists because AES-GCM with random nonces degrades after a number of
+seals *under one key*, and with per-process keys each counter bounds exactly the key it belongs to.
+It would become a real gap the moment key material were shared — which decision 1 forbids. Recorded
+so the two are never separated. `CHANGELOG.md:110-114` states this.
 
 ## Open questions, scheduled
 
-- *What names a replica?* — checkable. The identity must be stable for at least one continuation
-  lifetime and unique per process, and it is now also a session-id prefix, so it must be safe in a
-  header value. A configuration value defaulting to the hostname; the check is a test-plan row, not
-  an assumption here.
-- *Does a client that does not echo `Mcp-Session-Id` exist on the retry path?* — checkable against
-  the specification's client requirements and the gateway's own stdio dispatcher, which has no
-  session header at all. Stdio is single-process by construction, so the question is whether any
-  HTTP client may omit it; if one may, the refusal in decision 1 is the outcome and the release
-  notes say so. Resolved before implementation, not assumed.
+- *What names a replica?* — checkable, and it must be answered before implementation. The identity
+  must be unique per process and stable for one continuation lifetime. The hostname is **not**
+  sufficient: on a StatefulSet the name is reused across a restart, so a restarted replica would
+  claim its predecessor's tokens by name — and then fail to open them, because the key died with
+  the process. The refusal would be correct but the diagnosis misleading. A per-process value
+  generated at startup, defaulting to a random identifier and overridable by configuration, is the
+  candidate; the check is a test-plan row.
+- *Is the prefix separator safe against the token alphabet?* — checkable. The envelope is standard
+  base64, so the separator must be outside that alphabet and outside whatever the identity may
+  contain. A single `.` with a refusal on any identity containing one is the candidate.
+- *Does any client fail to echo the continuation on the retry?* — checkable against the
+  specification's client requirements and the gateway's stdio dispatcher, which has no session
+  concept at all. Stdio is single-process by construction. If an HTTP client may omit it, the
+  refusal in decision 2 is the outcome and the release notes say so.
