@@ -2334,8 +2334,8 @@ async fn envfile_19h_a_reload_removing_the_home_assignment_reports_restart_requi
     // THEN: the restart is reported, and it names `HOME`
     assert!(
         outcome.restart_required,
-        "removing the `HOME` assignment moves where a restart would read: \
-         outcome was {outcome:?}"
+        "the value left standing changed, which the rule reports whether or not \
+         this particular entry moved: outcome was {outcome:?}"
     );
     assert!(
         outcome.pending_restart_fields.iter().any(|f| *f == "HOME"),
@@ -2413,6 +2413,69 @@ async fn envfile_19i_home_moved_before_a_later_tilde_entry_reports_restart_requi
     assert!(
         outcome.pending_restart_fields.iter().any(|f| *f == "HOME"),
         "the report must name HOME; got {:?}",
+        outcome.pending_restart_fields
+    );
+}
+
+/// ENVFILE.19j — the 19i move DELETED, with startup's restored value equal to
+/// the process environment's.
+///
+/// The case that survives checking the reload overlay alone. Startup moved
+/// `HOME` before a later `~` entry and a file after it restored the process
+/// home; the reload deletes both lines. Nothing on the reload side assigns
+/// `HOME`, and the value it leaves standing is the process home — the same one
+/// startup ended on — so both an assignment check over the reload overlay and a
+/// comparison of final values are silent. A restart would expand the entry
+/// against the process home instead of the moved one. Only startup's OWN
+/// assignment records that the expansion base was ever moved.
+#[tokio::test]
+async fn envfile_19j_deleting_the_move_still_reports_when_the_restored_value_is_the_process_home() {
+    let process_home = std::env::var("HOME").expect("the process must have a HOME");
+    let home_b = tempfile::tempdir().unwrap();
+    let cfg_dir = tempfile::tempdir().unwrap();
+
+    // GIVEN: a first file that moves `HOME`, and a `~/...` entry whose file
+    // puts it back exactly where the process environment has it
+    let mover = env_file(
+        cfg_dir.path(),
+        "mover.env",
+        &format!("HOME={}\n", home_b.path().display()),
+    );
+    let late = env_file(
+        home_b.path(),
+        "late.env",
+        &format!("HOME={process_home}\nMCP_GW_TEST_ENVFILE19J_KEY=startup-value\n"),
+    );
+    let cfg = config_naming_env_files(cfg_dir.path(), &[mover.to_str().unwrap(), "~/late.env"]);
+
+    let home = RecordingHome::based_at(home_b.path());
+    let startup = startup_through(&cfg, &home);
+    assert_eq!(
+        startup.env_paths.as_paths().last().unwrap(),
+        &home_b.path().join("late.env"),
+        "fixture: the tilde entry must have expanded against the MOVED home"
+    );
+    assert_eq!(
+        startup.overlay.resolve("HOME").as_deref(),
+        Some(process_home.as_str()),
+        "fixture: startup must end on the process home, or the value \
+         comparison would catch this on its own"
+    );
+
+    // WHEN: both `HOME` lines are deleted
+    home.finish_startup();
+    std::fs::write(&mover, "MCP_GW_TEST_ENVFILE19J_KEY=rotated-value\n").unwrap();
+    std::fs::write(&late, "MCP_GW_TEST_ENVFILE19J_OTHER=x\n").unwrap();
+
+    let ctx = reload_context_with_env(&cfg, &startup);
+    let outcome = ctx.reload_outcome().await.unwrap();
+
+    // THEN: the report still names HOME
+    assert!(
+        outcome.pending_restart_fields.iter().any(|f| *f == "HOME"),
+        "a restart would expand `~/late.env` against {process_home} instead of \
+         {}, reading a file this process never opened; got {:?}",
+        home_b.path().display(),
         outcome.pending_restart_fields
     );
 }

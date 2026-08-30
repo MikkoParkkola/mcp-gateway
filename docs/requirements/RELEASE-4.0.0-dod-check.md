@@ -355,8 +355,22 @@ a test, not because of the switch.
    now asserts the notice it previously asserted away, because nothing available at reload can tell
    its harmless case apart from 19i's real one without re-expanding `~`, which the design forbids.
    19h keeps its assertion and loses its false premise — its sole entry relocates nothing; it is
-   the value branch's test, not the relocation case. `config_reload` is 80/80; lib 3762/3762;
-   clippy and fmt clean.
+   the value branch's test, not the relocation case.
+
+   Both vendors then found the same remaining silence, independently: checking assignment on the
+   *reload* overlay alone misses a startup move that the reload DELETES, when the value startup
+   restored happens to equal the process environment's. ENVFILE.19j reproduces it — observed
+   silent, `["env_files", "default_routing_profile"]` with no `HOME` — and the predicate now reads
+   either run's assignment (`startup.assigns("HOME") || evaluated.overlay.assigns("HOME") ||`
+   values differ). Only startup's own assignment records that the expansion base was ever moved.
+   The function doc was rewritten with it; it still taught the value-only rule.
+   `config_reload` is 81/81; lib 3763/3763; clippy and fmt clean.
+
+   One reviewer improvement is recorded and not taken: the ENVFILE.19 fixtures seed the running
+   config with `Config::default()`, so `restart_required` and the `env_files` field in these
+   outcomes are harness artifacts rather than evidence. The `HOME` assertions are unaffected and
+   are what these rows test; re-seeding a helper shared by the whole family is a change to other
+   tests' fixtures and out of this change's scope.
 
    What remains for the owner is one question, and it is about behaviour rather than mechanism:
    *should setting HOME in an env file be able to move where a later env file is looked for?*

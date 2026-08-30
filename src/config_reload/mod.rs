@@ -1293,21 +1293,24 @@ const IMPLICIT_STARTUP_ENV_KEYS: &[&str] = &[
 ///   entry was spelled with `~`. A restart resolves that entry against the new
 ///   home and opens a different file.
 ///
-/// The `HOME` rule is a comparison, not a presence check, because the presence
-/// check was wrong in both directions. An overlay that re-states the same
-/// `HOME` moves nothing, and demanding a restart on every later reload of an
-/// unchanged file teaches an operator to ignore the notice. An overlay that
-/// *removes* a `HOME` assignment startup had assigns nothing to notice, while
-/// `HOME` falls back to the process environment and relocates every `~` entry —
-/// the case that moves most is the one a presence check cannot see.
+/// The `HOME` rule is deliberately conservative: any assignment of `HOME` by
+/// either run's env files, or any change in the value they leave standing, is
+/// reported. A restart notice about `HOME` may be early, never absent.
 ///
-/// The comparison is sound without resolving `~` a second time, which the
-/// design forbids: nothing here writes the process environment
-/// (`EnvOverlay::resolve`), so the fall-through both sides read is the same
-/// baseline, and a restart applying the same files in the same order arrives at
-/// the value this overlay already holds. Reordering is not this rule's to
-/// catch — an edit to the `env_files` list is reported as `env_files` by the
-/// config diff.
+/// It has to be, because the question the rule is really answering — would a
+/// restart open different files than startup did — cannot be answered from
+/// values. `~` in entry N is expanded against the `HOME` in force at THAT point
+/// in the sequence (`Config::evaluate`), so an env file can move where a later
+/// entry is read while a file after it restores the final value, leaving both
+/// runs equal on every value comparison. Answering exactly would mean expanding
+/// `~` a second time, which the design forbids. Both runs' assignments count:
+/// deleting the move leaves nothing to notice on the reload side, and the
+/// restored value can equal the process environment's, so only startup's own
+/// assignment records that the expansion base was ever moved.
+///
+/// The accepted cost is a notice that fires when nothing moved — re-stating an
+/// unchanged `HOME` beside a `~` entry (ENVFILE.19g). Reordering is not this
+/// rule's to catch: an edit to the `env_files` list is reported as `env_files`.
 ///
 /// Names only. The values are secrets and a reload report is not a place to
 /// print one.
@@ -1326,10 +1329,13 @@ fn changed_startup_env_keys(env: &LiveEnv, evaluated: &EvaluatedReload) -> Vec<S
     // sequence (`Config::evaluate`), not the one left standing at the end, so
     // an env file can move where a LATER entry reads while the final value is
     // restored and compares equal (ENVFILE.19i). Comparing values alone cannot
-    // see that, so an assignment counts too: the notice may be early, never
-    // absent.
+    // see that, and neither can the reload overlay alone: deleting the move
+    // leaves nothing there to notice, and the value it restored may be the
+    // process environment's own (ENVFILE.19j). Either run's assignment counts.
+    // The notice may be early, never absent.
     if env.env_paths().has_tilde_entry()
-        && (evaluated.overlay.assigns("HOME")
+        && (startup.assigns("HOME")
+            || evaluated.overlay.assigns("HOME")
             || startup.resolve("HOME") != evaluated.overlay.resolve("HOME"))
     {
         keys.push("HOME".to_string());
