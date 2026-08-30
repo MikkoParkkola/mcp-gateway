@@ -2300,6 +2300,43 @@ async fn envfile_6b_the_restart_report_names_the_key_and_carries_neither_value()
     );
 }
 
+/// A cross-file substitution is refused at startup, not only on reload.
+///
+/// The loader this change replaced exported each file into the process
+/// environment, so a later file's `${KEY}` resolved. Nothing writes the process
+/// environment now, so the reference expands to nothing and the value is lost
+/// without an edit. The reload path refused that; startup accepted it silently.
+#[test]
+fn a_cross_file_substitution_is_refused_at_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = env_file(
+        dir.path(),
+        "base.env",
+        "MCP_GW_TEST_XFILE_BASE=host.invalid\n",
+    );
+    let user = env_file(
+        dir.path(),
+        "user.env",
+        "MCP_GW_TEST_XFILE_URL=https://${MCP_GW_TEST_XFILE_BASE}/api\n",
+    );
+    let cfg = config_naming_env_files(
+        dir.path(),
+        &[&base.to_string_lossy(), &user.to_string_lossy()],
+    );
+
+    let err = Config::load_evaluated(Some(&cfg))
+        .expect_err("a cross-file substitution must not load silently");
+    let message = err.to_string();
+    assert!(
+        message.contains("MCP_GW_TEST_XFILE_BASE"),
+        "the refusal must name the key; got {message}"
+    );
+    assert!(
+        message.contains(&*user.to_string_lossy()),
+        "the refusal must name the file that substitutes; got {message}"
+    );
+}
+
 /// The malformed line every 6c case uses. Carries a value so the no-secrets half
 /// of the assertion has something to catch: a malformed line in a credential
 /// file is a credential.
@@ -2506,16 +2543,19 @@ fn load_config_patch_refuses_a_substitution_naming_a_defined_key() {
         format!("env_files:\n  - \"{}\"\n", env_path.display()),
     )
     .unwrap();
+    std::fs::write(&env_path, "MCP_GW_TEST_BASE=https://host\n").unwrap();
+
+    // GIVEN: a gateway started from env files that hold no substitution
+    let startup = Config::load_evaluated(Some(&config_path)).unwrap();
+
+    // WHEN: a cross-file substitution is added and the files are reloaded.
+    // Startup refuses these files outright, so an edit after startup is the
+    // only way the reload path ever sees one.
     std::fs::write(
         &env_path,
         "MCP_GW_TEST_BASE=https://host\nMCP_GW_TEST_URL=${MCP_GW_TEST_BASE}/v1\n",
     )
     .unwrap();
-
-    // GIVEN: startup accepts the files unchanged
-    let startup = Config::load_evaluated(Some(&config_path)).unwrap();
-
-    // WHEN: the same files are reloaded
     let live_config = std::sync::Arc::new(LiveConfig::new(startup.config.clone()));
     let env = LiveEnv::new(startup.overlay, startup.env_paths);
     let result = load_config_patch(&config_path, &live_config, &env);

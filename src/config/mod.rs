@@ -489,6 +489,25 @@ impl Config {
         env_paths: ResolvedEnvFiles,
         expansion: Expansion,
     ) -> Result<Evaluated> {
+        // Both entry points funnel through here, so the refusal lives here
+        // rather than at each of them: startup accepted a cross-file
+        // substitution silently for as long as only the reload path checked.
+        //
+        // `dotenvy` expands a reference against the process environment and the
+        // keys already read from the same file. Nothing writes the process
+        // environment now, so a reference to a key another env file defines
+        // expands to nothing and the value is lost without an edit.
+        if let Some((path, key)) = overlay.substitution_naming_owned_key() {
+            return Err(Error::Config(format!(
+                "Refusing to load config: env file {} substitutes {key}, a key the env files \
+                 themselves define. That reference is resolved from the process environment, \
+                 which the gateway does not write, so it would expand to nothing and the value \
+                 would be lost without an edit. Inline the value or export the key before \
+                 starting.",
+                path.display()
+            )));
+        }
+
         let figment = match expansion {
             Expansion::Resolve => Self::figment(path, &overlay),
             // A rewrite path round-trips the FILE. Merging `MCP_GATEWAY_*`
