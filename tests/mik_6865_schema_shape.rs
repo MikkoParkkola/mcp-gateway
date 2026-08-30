@@ -80,6 +80,11 @@ fn schema_shape_audit_file_matches_catalog() {
         .iter()
         .map(|(name, schema)| (name.clone(), classify_schema_shape(schema)))
         .collect();
+    assert_eq!(
+        computed.len(),
+        loaded.len(),
+        "duplicate capability names would collapse the audit"
+    );
 
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("probe/schema-shape-audit.json");
     if std::env::var_os("GENERATE_SCHEMA_SHAPE_AUDIT").is_some() {

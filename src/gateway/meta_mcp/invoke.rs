@@ -151,6 +151,7 @@ fn enforce_input_schema(
     input_schema: Option<&Value>,
 ) -> std::result::Result<Value, String> {
     let Some(schema) = input_schema else {
+        tracing::debug!("MCP input schema unavailable; skipping fail-closed nested-key check");
         return Ok(arguments);
     };
     let validation = validate_arguments(&arguments, schema);
@@ -2824,6 +2825,27 @@ mod response_transform_tests {
         // The raw payload (including the extra field) is preserved.
         assert_eq!(result.get("data").and_then(|v| v.as_str()), Some("ok"));
         assert_eq!(result.get("extra").and_then(|v| v.as_str()), Some("value"));
+    }
+
+    #[test]
+    fn enforce_output_schema_passes_through_nested_extra_fields_advisory() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "issue": {
+                    "type": "object",
+                    "properties": { "id": { "type": "string" } }
+                }
+            }
+        });
+        let result = enforce_output_schema(
+            "demo",
+            "get",
+            json!({ "issue": { "id": "abc", "extra": "kept" } }),
+            Some(&schema),
+        );
+        assert_eq!(result["issue"]["id"], json!("abc"));
+        assert_eq!(result["issue"]["extra"], json!("kept"));
     }
 
     #[test]

@@ -81,6 +81,27 @@ fn validate_output_tolerates_extra_fields_when_schema_opts_in() {
 }
 
 #[test]
+fn validate_output_rejects_nested_extra_keys_by_default() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "issue": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" }
+                }
+            }
+        }
+    });
+    let result = validate_output(&json!({ "issue": { "id": "abc", "exfil": "x" } }), &schema);
+    assert!(
+        !result.is_valid(),
+        "nested extra output fields fail closed; violations={:?}",
+        result.violations
+    );
+}
+
+#[test]
 fn validate_output_rejects_extra_fields_by_default() {
     // No additionalProperties → fail closed (anti-exfiltration default).
     let schema = schema_with_props(json!({ "web": { "type": "object" } }), &[]);
