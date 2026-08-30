@@ -1639,6 +1639,44 @@ must not refuse a reload. The library stays the oracle for its own lexical
 rules — every fixture is checked against `dotenvy`'s parse of the same bytes,
 in both directions.
 
+### A design event: the startup process export was removed, not kept (2026-08-30)
+
+Found by the final full-branch review, then verified at source. `origin/main` applies every
+configured env file to the **process** environment at startup: `Config::load_env_files_from_paths`
+calls `dotenvy::from_path_override(path)` (`origin/main:src/config/mod.rs:325`, reached from
+`:220`). The shipped change removes that call. Nothing in the current tree mutates the process
+environment — `rg 'set_var|from_path_override' src` returns nothing — and the crate's
+`#![deny(unsafe_code)]` makes restoring a direct write impossible anyway.
+
+This was the right shape for the ticket, and it was not stated as a decision. The design's own
+shape section prescribed keeping the startup export ("applies the env files to the process exactly
+as today"); the implementation dropped it and the prescription was corrected afterwards to match
+what shipped. A decision the design did not make must be named when it is made, not documented
+after the fact.
+
+Most readers were converted with it: attestation wiring (`src/attestation/wiring.rs:121`), the
+provenance key (`src/gateway/server/mod.rs:342`), secret resolution, the firewall input scanner and
+the discovery config scanner all take an `EnvOverlay` now. The residue is three operator-facing
+keys still read straight from the process, which an env file could set before this change and
+cannot set after it:
+
+| key | read at | consequence |
+|---|---|---|
+| `ATTESTATION_MODE_ENV` | `src/attestation/` | attestation mode set in an env file is ignored |
+| `ATTESTATION_FLAG_ENV` | `src/attestation/` | same, for the enable flag |
+| `MCP_GATEWAY_FIREWALL_SKIP_KEYS` | firewall | skip-list set in an env file is ignored |
+
+`MCP_GATEWAY_CONFIG_DIR` is also read from the process and must stay there: it is read to find the
+config, before any env file is known.
+
+The reviewer's stated impact — outbound traffic losing its proxy — does **not** hold. No proxy
+environment variable is read or set anywhere in `src`, on this branch or on `main`.
+
+Open, for the operator: convert those three reads to the overlay, or accept that env files no
+longer configure them and say so in the documentation. Not repaired here; the change is under
+review and this widens its surface.
+
+
 ### A third finding that died at source (2026-08-30)
 
 The final review reported that the scanner "opens single quotes inside double
