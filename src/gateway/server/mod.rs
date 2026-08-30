@@ -1168,6 +1168,7 @@ impl Gateway {
             build_control_plane_store(&self.config, self.config_path.as_deref());
 
         let state = Arc::new(AppState {
+            continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
             env: Some(Arc::clone(&self.env)),
             backends: Arc::clone(&self.backends),
             meta_mcp,

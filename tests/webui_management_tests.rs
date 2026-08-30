@@ -93,6 +93,7 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
     let capability_dirs = cap_dir.map(|d| vec![d.to_string()]).unwrap_or_default();
 
     Arc::new(AppState {
+        continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
         meta_mcp,
@@ -172,6 +173,7 @@ fn make_app_state_with_reload(
 
     (
         Arc::new(AppState {
+            continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
             env: None,
             backends,
             meta_mcp,

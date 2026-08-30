@@ -107,11 +107,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Streamable HTTP. It is additive, and it is the only probe that works in both
   directions once the handshake is gone.
 
-  **With the switch on, run one replica.** The consumed-continuation ledger and
-  the mint counter are both process-local, so a second replica can spend one
-  continuation twice and issue one counter value twice. This binds only when
-  `server.modern_protocol` is on; with it off, scale as before. MIK-7312 owns
-  the shared store that removes the constraint.
+  **With the switch on, a retry reaches one replica.** The consumed-continuation
+  ledger and the mint counter are process-local, and so is the continuation key
+  each process generates at startup: an envelope opens only on the replica that
+  minted it, which is what makes a continuation single-use across replicas
+  without a shared store. The cost is that a retry landing on any other replica
+  is refused, and a restart invalidates the continuations outstanding against
+  the process it replaced. This binds only when `server.modern_protocol` is on;
+  with it off, scale as before.
 
   **The tasks extension is not implemented.** `io.modelcontextprotocol/tasks` is
   never advertised, so no client negotiates it. The types in the tree are short

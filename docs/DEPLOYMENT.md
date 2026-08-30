@@ -124,9 +124,12 @@ Applied exports print any backup file and a rollback command. Use that rollback 
 ## Replica Count and `server.modern_protocol`
 
 **Run a single replica while `server.modern_protocol` is on.** The
-consumed-continuation ledger and the mint counter are process-local, so two
-replicas can each accept the same continuation and each issue the same counter
-value. Neither is detected at runtime — the second spend simply succeeds.
+consumed-continuation ledger and the mint counter are process-local. Each
+process now generates its own continuation key at startup and shares it with
+nobody, so a continuation opens only on the replica that minted it and no other
+replica can spend it a second time — but a retry that lands elsewhere is
+refused rather than served, and a restart invalidates every continuation
+outstanding against the process it replaced.
 
 This constraint binds only on the modern protocol path. `server.modern_protocol`
 is off by default, and with it off there is no such limit: scale horizontally as
@@ -136,10 +139,14 @@ The shipped Helm chart and Kubernetes manifests default to two replicas, which i
 correct for the default configuration. Turning the switch on is what makes that count
 wrong, so the change to one replica belongs with the change that enables it.
 
-If you need both horizontal scale and the 2026-07-28 revision, wait for the
-shared insert-if-absent store tracked as MIK-7312. Do not work around it with a
-sticky-session load balancer: continuations are presented by whichever client
-holds one, and session affinity does not constrain which replica that reaches.
+If you need both horizontal scale and the 2026-07-28 revision: MIK-7312 settled
+the mechanism as per-process key material rather than the shared store this
+document previously pointed at, so a multi-replica deployment refuses a retry on
+every replica but the minting one instead of serving it twice. Whether that is
+acceptable is a deployment decision, not a correctness one. Do not work around it
+with a sticky-session load balancer: continuations are presented by whichever
+client holds one, they travel in the request body, and session affinity does not
+constrain which replica that reaches.
 
 ## Kubernetes Enterprise Alpha
 

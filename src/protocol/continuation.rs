@@ -430,9 +430,12 @@ impl Keyring {
 /// * **Retained at least as long as the envelope.** Forgetting a spent `jti`
 ///   while its envelope still opens is a replay window with extra steps.
 ///
-/// Single-process today. A multi-replica deployment needs this shared, which is
-/// the same gap `origin_replica` names in the payload; both are the design's
-/// stated next step rather than an oversight.
+/// Process-local, and correct that way rather than pending a shared store. Key
+/// material is generated per process and never shared ([`ContinuationState`]),
+/// so an envelope opens on exactly one replica and only that replica can spend
+/// it — leaving no second ledger for a partition or a stale read to disagree
+/// with. Sharing the keys without sharing this table is what would break it,
+/// which is the invariant [`ContinuationState`] carries.
 #[derive(Debug)]
 pub struct ConsumedLedger {
     capacity: usize,
@@ -631,5 +634,111 @@ impl InFlight {
     /// Whether nothing is held.
     pub async fn is_empty(&self) -> bool {
         self.len().await == 0
+    }
+}
+
+/// The three pieces of continuation state, with one owner and one lifetime.
+///
+/// They are separable types and are deliberately not separable fields. A
+/// keyring that outlives its ledger is a replay window: envelopes minted before
+/// the ledger was replaced still open, and the memory of them being spent is
+/// gone. Constructing all three together, and replacing them only together, is
+/// what closes it.
+///
+/// **The invariant this type carries, because a future change could break it
+/// while looking like a configuration convenience:**
+///
+/// > Continuation key material is never shared between processes unless the
+/// > consumed-ledger is shared in the same change.
+///
+/// That is not a caveat, it is the enforcement mechanism for MRTR.5. Key
+/// material is generated here, per process, and written nowhere. So an envelope
+/// sealed by one replica is `NotAuthentic` on every other one, the set of
+/// replicas that can spend it twice is empty, and the one replica that can
+/// spend it at all does so atomically under [`ConsumedLedger`]'s own mutex —
+/// no shared store, no session affinity, no consensus. A configured shared key
+/// without a shared ledger is exactly the deployment the requirement forbids.
+///
+/// See `docs/design/2026-08-30-shared-continuation-state.md`.
+#[derive(Debug)]
+pub struct ContinuationState {
+    replica: String,
+    keyring: Keyring,
+    ledger: ConsumedLedger,
+    in_flight: InFlight,
+}
+
+/// How many spent continuations one process remembers at once.
+///
+/// An availability figure, never a safety one: at capacity the ledger refuses a
+/// redemption rather than forgetting one, so the cost of it being too small is
+/// a client retrying an elicitation, not a replay. Sized for a busy gateway's
+/// unexpired continuations, which live minutes rather than hours.
+const CONSUMED_LEDGER_CAPACITY: usize = 65_536;
+
+/// How many legacy exchanges one process holds open at once.
+///
+/// Also availability, and also a refusal rather than growth: a client may start
+/// an elicitation and never retry, so this table's occupants arrive at a rate
+/// the client chooses. Smaller than the ledger because each entry is a live RPC
+/// against a backend, not a remembered string.
+const IN_FLIGHT_CAPACITY: usize = 4_096;
+
+impl ContinuationState {
+    /// Build the state for this process, generating its key material.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the platform RNG cannot produce a key. A process that cannot
+    /// generate one cannot seal a continuation, so it cannot serve the modern
+    /// protocol path — failing at startup says that once, where an operator
+    /// sees it, rather than on the first elicitation a user reaches.
+    #[must_use]
+    pub fn new() -> Self {
+        let rng = SystemRandom::new();
+        let mut key = [0u8; 32];
+        rng.fill(&mut key)
+            .expect("platform RNG must produce a continuation key");
+        // Named by the process, for the process: `origin_replica` is sealed
+        // inside the envelope and read only by the replica that minted it, so
+        // any per-process value works and a generated one cannot collide with
+        // a restarted predecessor's.
+        let replica = uuid::Uuid::new_v4().to_string();
+        Self {
+            keyring: Keyring::new(&[(1, key)]).expect("a single 32-byte key is a valid keyring"),
+            ledger: ConsumedLedger::new(CONSUMED_LEDGER_CAPACITY),
+            in_flight: InFlight::new(&replica, IN_FLIGHT_CAPACITY),
+            replica,
+        }
+    }
+
+    /// The keys this process mints and opens with.
+    #[must_use]
+    pub fn keyring(&self) -> &Keyring {
+        &self.keyring
+    }
+
+    /// The continuations this process has already spent.
+    #[must_use]
+    pub fn ledger(&self) -> &ConsumedLedger {
+        &self.ledger
+    }
+
+    /// The legacy exchanges this process is holding open.
+    #[must_use]
+    pub fn in_flight(&self) -> &InFlight {
+        &self.in_flight
+    }
+
+    /// What this process calls itself in a minted `origin_replica`.
+    #[must_use]
+    pub fn replica(&self) -> &str {
+        &self.replica
+    }
+}
+
+impl Default for ContinuationState {
+    fn default() -> Self {
+        Self::new()
     }
 }

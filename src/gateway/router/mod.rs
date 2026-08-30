@@ -83,6 +83,14 @@ pub struct AppState {
     /// Whether URLs declared in `backends:` config are pre-authorised
     /// (skip runtime SSRF check at proxy time). MIK-3529.
     pub trust_configured_backends: bool,
+    /// Continuation keys, spent-ledger and held legacy exchanges — one owner,
+    /// one lifetime, generated per process at startup.
+    ///
+    /// Not three fields: a keyring outliving its ledger is a replay window. The
+    /// keys are never shared with another process, which is what makes a
+    /// continuation single-use across replicas without a shared store. See
+    /// [`crate::protocol::continuation::ContinuationState`].
+    pub continuation: Arc<crate::protocol::continuation::ContinuationState>,
     /// In-flight request tracker for graceful drain.
     /// Each in-flight request holds a permit; shutdown waits for all permits
     /// to be returned.

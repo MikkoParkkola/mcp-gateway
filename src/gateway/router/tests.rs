@@ -45,6 +45,7 @@ fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Ar
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
         meta_mcp,
@@ -98,6 +99,7 @@ fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
         meta_mcp,
@@ -147,6 +149,7 @@ fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
         meta_mcp,
@@ -215,6 +218,7 @@ fn test_router_app_state_with_provenance_backend(backend: Arc<Backend>) -> Arc<A
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
         meta_mcp,
@@ -295,6 +299,7 @@ fn test_router_app_state_minting_without_route_audit(backend: Arc<Backend>) -> A
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
         meta_mcp,
@@ -347,6 +352,7 @@ fn test_router_app_state_with_ssrf(
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
         meta_mcp,
@@ -413,6 +419,7 @@ fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
         meta_mcp,
