@@ -306,3 +306,42 @@ What a later increment needs, stated so it is not rediscovered:
 - Until that exists, the gateway forwards whatever request types a backend names.
   That is the current behaviour, unchanged by this increment, and it is now
   recorded rather than assumed.
+
+### The seam, mapped
+
+Line numbers against 9f16fae8, so a later reader can tell drift from error.
+
+| what | where |
+|---|---|
+| refusal to delete (`is_retry` arm only) | `router/handlers.rs:872-889` |
+| the `is_malformed` arm that STAYS | `router/handlers.rs:862-871` |
+| `dispatch_to_backend` definition, 11 params | `meta_mcp/invoke.rs:1788` |
+| its only call site | `meta_mcp/invoke.rs:929` |
+| outbound params built here — siblings go here | `meta_mcp/invoke.rs:1910` |
+| idempotency + cache writes, all AFTER the call site | `invoke.rs:789, 851, 1040, 1276` |
+
+The outbound shape is one line today:
+
+```rust
+let base_params = json!({ "name": tool, "arguments": arguments });
+```
+
+`inputResponses` and `requestState` are inserted into that object beside
+`arguments`, never into it. That placement is the whole of MRTR.1's boundary
+case: a tool whose own argument is named `requestState` is untouched, because
+nothing ever writes inside `arguments`.
+
+Two distinct shapes, easily conflated, and conflating them is the security
+defect MRTR.2 names:
+
+- `RetryFields` (`protocol/mrtr.rs:34`) is the **inbound** shape — what the
+  client sent, including the gateway's own sealed token. Attacker-controlled.
+- the **outbound** shape is the backend's own opaque state, recovered by opening
+  that token. A second small struct, because reusing `RetryFields` here is what
+  forwards a client-supplied string to a backend as if the gateway had issued it.
+
+The mint belongs at the call site (`invoke.rs:929`), not inside
+`dispatch_to_backend` and not in `handlers.rs`: it must run after the result
+arrives and before the idempotency and cache writes below it, so an
+`input_required` result can suppress both. That ordering is design decision 3,
+and it is the reason for DE-1.
