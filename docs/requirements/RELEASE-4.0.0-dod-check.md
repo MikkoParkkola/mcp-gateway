@@ -15,10 +15,11 @@ one parsed protocol field with no consumer.**
 
 Eight independent review rounds produced **42 findings, a later scope audit added a forty-third, and
 the confirmation pass on this document found two more that had never been written down. Thirty-eight
-are closed**, each with a probe that makes its own fix fail and only its own fix. Of the seven that
-remain, two are gated on multi-replica production, two are conformance gaps in a tasks extension this
+are closed**, each with a probe that makes its own fix fail and only its own fix. Of the seven recorded
+open, two are gated on multi-replica production, two are conformance gaps in a tasks extension this
 release does not advertise, one is a parsed protocol field with no consumer, one misreports whether a
-config reload needs a restart, and one is test hygiene. The first five are unreachable by a client
+config reload needs a restart, and one is test hygiene. Seven is what is currently recorded open,
+which is not the same claim as seven being all there are. The first five are unreachable by a client
 while the switch defaults off. The reload finding is not a protocol path and the switch does not
 bound it; the last exists only in a test.
 
@@ -290,8 +291,9 @@ a test, not because of the switch.
    was rejected — it is the protocol's own key, and the next release that wires log
    delivery needs the parse it would remove.
 
-6. **A reload reports `restart_required` for `HOME` even when nothing about `HOME` changed.**
-   `changed_startup_env_keys` filters every other key on whether its resolved value actually
+6. **Restart detection for `HOME` is wrong in both directions.** A reload reports
+   `restart_required` whenever startup recorded a `~` entry and the overlay assigns `HOME`, changed
+   or not. `changed_startup_env_keys` filters every other key on whether its resolved value actually
    differs from startup, then pushes `HOME` past that filter on presence alone:
    `if env.env_paths().has_tilde_entry() && evaluated.overlay.assigns("HOME")`
    (`src/config_reload/mod.rs:1311-1312`). The sequential `HOME` + `~/…` layout that branch
@@ -303,9 +305,15 @@ a test, not because of the switch.
    *removes* a HOME assignment startup had — leaving the recorded `~` entries to resolve
    somewhere else on a restart — pushes nothing and is compared against nothing. The common case
    over-reports and is merely noisy; the removal case under-reports and is the one that matters.
-   Gated BEFORE-DEPLOY. A repair emits `HOME` whenever the overlay's HOME assignment differs from
-   startup's in presence or in value — which is a comparison this function does not currently make
-   for `HOME` at all, in either branch.
+   Gated BEFORE-DEPLOY.
+
+   This document does not prescribe the repair, having got it wrong once: comparing the overlay's
+   final HOME against startup's is not sufficient. `~` resolves at the point each env file is
+   applied, and `EnvPaths` keeps those paths in application order
+   (`src/config/env_overlay.rs:45-48`), so moving an unchanged `HOME` assignment across a tilde
+   entry changes where that entry resolves while every value comparison still reports equal. What
+   the check has to be sensitive to is the HOME in force *at each tilde-spelled entry*, against what
+   was in force there at startup — assignment, removal and reordering alike.
 
 One further finding is open and gates nothing: the OAuth metadata tests release an ephemeral port
 before rebinding it — once inline at `src/oauth/metadata.rs:322-324` and once in the `free_addr`
