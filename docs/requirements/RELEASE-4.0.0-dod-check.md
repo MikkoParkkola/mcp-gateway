@@ -13,12 +13,14 @@ the head, that is said in the same line rather than rounded up.
 gated on production topology, a tasks extension this release deliberately does not advertise, and
 one parsed protocol field with no consumer.**
 
-Eight independent review rounds produced **42 findings, and a later scope audit added a
-forty-third. Thirty-eight are closed**, each with a probe
-that makes its own fix fail and only its own fix. Of the five that remain, two are gated on
-multi-replica production, two are conformance gaps in a tasks extension this release does not
-advertise, and one is a parsed protocol field with no consumer. None is reachable by a client while
-the switch defaults off.
+Eight independent review rounds produced **42 findings, a later scope audit added a forty-third, and
+the confirmation pass on this document found two more that had never been written down. Thirty-eight
+are closed**, each with a probe that makes its own fix fail and only its own fix. Of the seven that
+remain, two are gated on multi-replica production, two are conformance gaps in a tasks extension this
+release does not advertise, one is a parsed protocol field with no consumer, one over-reports a
+restart requirement on config reload, and one is test hygiene. Six of the seven are unreachable by a
+client while the switch defaults off; the seventh is in config reload and is independent of the
+switch, and it errs by asking for a restart that is not needed rather than by skipping one that is.
 
 An earlier revision of this paragraph said two of them could not be verified against a specification
 page returning 404. That was a wrong path rather than a missing document: the page was found and
@@ -221,7 +223,9 @@ died. That was misread twice here before anyone looked at the process tree.
 
 ## What is honestly NOT finished
 
-Five findings remain open. None is reachable by a client while `server.modern_protocol` defaults off.
+Seven findings remain open: six numbered here, and one test-hygiene item recorded after them.
+Six of the seven are unreachable by a client while `server.modern_protocol` defaults off. Finding 6
+is not a protocol path at all and the switch does not bound it.
 
 1. **The consumed-continuation ledger is process-local.** A second replica would let one continuation be spent once on each. Gated BEFORE-PRODUCTION; needs a shared atomic insert-if-absent store.
 
@@ -284,6 +288,23 @@ Five findings remain open. None is reachable by a client while `server.modern_pr
    this release did not set out to add. Recorded rather than repaired. Deleting the field
    was rejected — it is the protocol's own key, and the next release that wires log
    delivery needs the parse it would remove.
+
+6. **A reload reports `restart_required` for `HOME` even when nothing about `HOME` changed.**
+   `changed_startup_env_keys` filters every other key on whether its resolved value actually
+   differs from startup, then pushes `HOME` past that filter on presence alone:
+   `if env.env_paths().has_tilde_entry() && evaluated.overlay.assigns("HOME")`
+   (`src/config_reload/mod.rs:1311-1312`). The sequential `HOME` + `~/…` layout that branch
+   exists to serve therefore makes every later reload report a restart it does not need. The
+   direction is the safe one — it over-reports, never under-reports — so nothing is left
+   unguarded; the cost is an operator told to restart on every reload, which is how a signal
+   stops being read. Gated BEFORE-DEPLOY. The repair is to emit `HOME` only when the overlay's
+   assignment differs from startup's in presence or value, which is the comparison the line
+   above already performs for every other key.
+
+One further finding is open and gates nothing: the OAuth metadata tests release an ephemeral port
+before rebinding it (`src/oauth/metadata.rs:330`), so a concurrent process can take it in between.
+Graded LOW / UNLIKELY / LATER. It is test hygiene rather than a shipped defect, and it is recorded
+here so the inventory can claim to be complete.
 
 ### Disposition of 3 and 4 — the extension ships not implemented
 
@@ -410,14 +431,14 @@ The 2025 path is unchanged, fully tested and shippable. `server.modern_protocol`
 and that already is the isolation — no client can reach any of the open findings. Two real options:
 
 1. **Ship 4.0.0 as the legacy-safe groundwork**, modern path documented as preview with the findings listed. The default-off switch is what makes this honest.
-2. **Hold the tag** until the five numbered open findings above are closed and re-reviewed.
+2. **Hold the tag** until the six numbered open findings above are closed and re-reviewed.
 
 Removing the modern path is *not* a third option worth its cost: the switch already achieves the
 isolation removal would buy.
 
 What changed since this recommendation was first written is the size of option 2. It was
-"twenty-six findings, several of them systematic"; it is now the five numbered findings above and
-nothing else. That list is the only inventory — this paragraph deliberately does not restate it,
+"twenty-six findings, several of them systematic"; it is now the six numbered findings above, plus
+the one test-hygiene item that gates nothing. That list is the only inventory — this paragraph deliberately does not restate it,
 because the two earlier revisions that did both drifted from it within a round. Two things about
 its shape are worth saying once: no construction remains on the transport itself, the
 `subscriptions/listen` stream having landed, and nothing on the list waits on a source that
@@ -430,9 +451,9 @@ material, scope declared in the prompt each time.
 
 | Round | Material | Findings | Verdict |
 |---|---|---|---|
-| 9 | the tasks gap inventory rewritten against the schema | 1 MEDIUM, both vendors, the same one | SHIP-WITH-FIXES |
+| 9 | the tasks gap inventory rewritten against the schema | 1 MEDIUM (gpt), 1 improvement (grok), the same one | SHIP-WITH-FIXES |
 | 10 | the repair to round 9 | 2 MEDIUM (gpt), 2 improvements (grok), the same passage | SHIP-WITH-FIXES / SHIP |
-| 11 | the closing paraphrase deleted | none | **SHIP** / **SHIP** |
+| 11 | the closing paraphrase deleted | no finding at any gate; 1 improvement (gpt), 2 (grok) | **SHIP** / **SHIP** |
 
 Rounds 9 and 10 both found their defect in the previous round's repair, in the same paragraph:
 a prose summary of the numbered open-findings list, which fell out of date each time the list
