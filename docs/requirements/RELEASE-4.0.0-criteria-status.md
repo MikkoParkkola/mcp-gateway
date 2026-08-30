@@ -96,3 +96,26 @@ Note: `MIK-6704.IDENT.4` is not a gap — that ID slot is filed under ticket `MI
 
 Note: CONTROL/STATELESS group source is `audit-notes/criteria-control-stateless.md`; its own summary tally (MET 12, UNWIRED 1, ABSENT 2) matches the rows above.
 
+
+## What this audit does not cover
+
+This file audits 43 criteria. The requirements list 76. The 33 it never reached are not passing and
+not failing — they are unexamined, and a reader totalling the rows above will read a release as
+further along than it is.
+
+| Group | Criteria | Audited here |
+|---|---|---|
+| MIK-7272 (ERROR, EXT, OAUTH, ORDER, OTEL, RESULT, SUB, TASK) | 17 | none |
+| MIK-7217.DISCOVER | 7 | none |
+| MIK-7246.CONFIRM | 3 | none |
+| MIK-7214.HEADER.7-9 | 3 | none — added 2026-08-31 after the spec was read directly |
+| MIK-7214.HEADER.5 | 1 | audited against a requirement now known to have been wrong |
+
+`RELEASE-4.0.0-near-done-triage.md` reaches some of them, under a different identifier scheme —
+`HDR` where this file says `HEADER`, `CONF` where the requirements say `CONFIRM`, plus `SESSION`,
+`SPEC` and `FIXTURE` groups that appear in no requirement row. Where the two overlap they disagree:
+this file scores five of six header criteria met, that one scores three of six, and neither is
+wrong, because they are scoring different criteria under similar names. Two ledgers with two
+schemes and no mapping between them is not redundancy, it is a release with no single answer to
+"how much is done". Reconciling them onto the requirement IDs is a prerequisite for calling the
+release ready, not a tidying task to do afterwards.
