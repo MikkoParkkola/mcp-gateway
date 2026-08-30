@@ -429,20 +429,10 @@ impl MetaMcp {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
         trace::with_trace_id(trace_id, async move {
-            self.invoke_tool_traced(
-                args,
-                session_id,
-                caller.is_admin,
-                caller.api_key_name,
-                caller.agent_id,
-                caller.grant_subject.as_ref(),
-                caller.verified_identity,
-                caller.authorizer,
-                &trace_id_clone,
-            )
-            .await
-            // Single delivery boundary: unwrap the guard-sealed result.
-            .map(GuardedValue::into_inner)
+            self.invoke_tool_traced(args, session_id, caller, &trace_id_clone)
+                .await
+                // Single delivery boundary: unwrap the guard-sealed result.
+                .map(GuardedValue::into_inner)
         })
         .await
     }
@@ -531,20 +521,23 @@ impl MetaMcp {
     /// Returns a [`GuardedValue`]: every success path must produce one, so the
     /// render guard cannot be bypassed at the chokepoint (MIK-6690).
     #[allow(clippy::too_many_lines)] // Complex dispatch logic; splitting further harms readability
-    #[allow(clippy::too_many_arguments)] // Caller context threaded explicitly (identity, keys, trace)
-    #[allow(clippy::too_many_arguments)]
     async fn invoke_tool_traced(
         &self,
         args: &Value,
         session_id: Option<&str>,
-        caller_is_admin: bool,
-        api_key_name: Option<&str>,
-        agent_id: Option<&str>,
-        caller_identity: Option<&GrantSubject>,
-        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
-        authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync),
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
         trace_id: &str,
     ) -> Result<GuardedValue> {
+        // Unpacked once, here, so the context travels whole across the call
+        // boundary for the same reason `invoke_tool` takes it whole: no call
+        // site can pass an authorizer without the identity it authorizes.
+        let authorizer = caller.authorizer;
+        let api_key_name = caller.api_key_name;
+        let agent_id = caller.agent_id;
+        let caller_identity = caller.grant_subject.as_ref();
+        let verified_identity = caller.verified_identity;
+        let caller_is_admin = caller.is_admin;
+
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
 
@@ -3212,6 +3205,7 @@ mod identity_propagation_enforcement_tests {
             agent_id: None,
             grant_subject: None,
             is_admin: false,
+            may_request_input: false,
         };
         let args = json!({ "tool": "mem:read", "arguments": {} });
         m.code_mode_execute(&args, Some("s1"), &caller)
@@ -3238,6 +3232,7 @@ mod identity_propagation_enforcement_tests {
             grant_subject: None,
             verified_identity: None,
             is_admin: false,
+            may_request_input: false,
         };
         let args = json!({ "tool": "mem:read", "arguments": {} });
         let err = m
@@ -3269,6 +3264,7 @@ mod identity_propagation_enforcement_tests {
             agent_id: None,
             grant_subject: None,
             is_admin: false,
+            may_request_input: false,
         };
         let args = json!({ "tool": "mem:read", "arguments": {} });
         let err = m

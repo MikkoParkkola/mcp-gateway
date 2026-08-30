@@ -590,6 +590,16 @@ pub(super) async fn meta_mcp_handler(
     }
     let is_modern = matches!(shape, crate::protocol::meta::RequestShape::Modern(_));
 
+    // Read here, where `fields` is still in scope, because the caller context is
+    // built ~500 lines below and outside that block. A fresh read rather than
+    // the per-method check below it: that one answers "did the client declare
+    // the capability THIS method needs", which is a different question.
+    let may_request_input = matches!(
+        shape,
+        crate::protocol::meta::RequestShape::Modern(ref f)
+            if f.declares_capability("elicitation")
+    );
+
     debug!(method = %method, session_id = %session_id, "Meta-MCP request");
 
     if let crate::protocol::meta::RequestShape::Modern(ref fields) = shape {
@@ -1103,6 +1113,7 @@ pub(super) async fn meta_mcp_handler(
                         grant_subject,
                         verified_identity: verified_identity.as_ref(),
                         is_admin: client.as_ref().is_some_and(|c| c.admin),
+                        may_request_input,
                     },
                 )
                 .await;

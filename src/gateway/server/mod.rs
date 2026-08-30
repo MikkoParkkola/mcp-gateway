@@ -1728,6 +1728,9 @@ impl Gateway {
                             // alone, so stdio was never checked and the default
                             // non-admin context went unnoticed.
                             is_admin: true,
+                            // stdio carries no per-request capability
+                            // declaration to read, and absent means absent.
+                            may_request_input: false,
                             api_key_name: None,
                             agent_id: None,
                             grant_subject: None,

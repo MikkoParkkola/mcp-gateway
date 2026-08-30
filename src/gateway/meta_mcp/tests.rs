@@ -31,6 +31,7 @@ fn allow_all_ctx_named<'a>(
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
+        may_request_input: false,
     }
 }
 
@@ -48,6 +49,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
+        may_request_input: false,
     }
 }
 
@@ -685,6 +687,7 @@ providers:
                     grant_subject: Some(subject),
                     verified_identity: None,
                     is_admin: false,
+                    may_request_input: false,
                 }
             },
         )
@@ -1233,6 +1236,7 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
             // a credential.
             MetaMcpCallerContext {
                 is_admin: true,
+                may_request_input: false,
                 ..allow_all_ctx()
             },
         )
@@ -2341,6 +2345,7 @@ auth:
     // the point: the guard is what differs, not the outcome.
     let admin_caller = MetaMcpCallerContext {
         is_admin: true,
+        may_request_input: false,
         ..allow_all_ctx()
     };
     let admin = meta.invoke_tool(&args, None, &admin_caller).await;
@@ -2436,6 +2441,7 @@ async fn global_meta_tool_reaches_an_admin_caller() {
             Some("sess-dispatcher-admin"),
             crate::gateway::meta_mcp::MetaMcpCallerContext {
                 is_admin: true,
+                may_request_input: false,
                 ..allow_all_ctx()
             },
         )

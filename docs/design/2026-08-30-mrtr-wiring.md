@@ -265,7 +265,7 @@ the edit is smaller.
 
 That reading is wrong, and design decision 3 is what makes it wrong. Idempotency
 and the response cache are written **inside** the invoke chain
-(`src/gateway/meta_mcp/invoke.rs:789`, `:851`, `:1040`, `:1276`), before any
+(`src/gateway/meta_mcp/invoke.rs:793`, `:845`, `:1034`, `:1270`), before any
 result reaches `handlers.rs`. Decision 3 requires that an `input_required`
 result remove the in-flight entry and write neither cache — an interim answer
 cached under the original key is the dangerous half. Recognising `input_required`
@@ -334,6 +334,11 @@ The struct is one frame above the mint site and no parameter carries the
 keyring. Decision 3 therefore cannot be implemented without a signature change,
 which DE-2 said returns this to a design question. It has.
 
+The `invoke.rs` line numbers in the paragraph above describe the tree as it was
+when the question was asked, before DE-3 changed the signature. They are kept as
+read rather than rewritten, because rewriting them would falsify the record of
+what was found. Every other citation in this document points at the current tree.
+
 `Is ContinuationState constructed on the production path, or only in tests?` —
 searched the whole crate for `ContinuationState::new` — **production**, once, at
 `server/mod.rs:1171`, into the field declared at `router/mod.rs:93`. Increment 1
@@ -348,6 +353,51 @@ the smallest form is the boolean the check already computes at `:690`, hoisted,
 not the struct cloned. This is a second wiring gap, in the same increment, and
 it was not in the plan.
 
+### DE-3 — the caller context travels whole one frame further down
+
+`invoke_tool_traced` now takes `caller: &MetaMcpCallerContext<'_>` in place of
+the six caller fields `invoke_tool` used to flatten into it. The struct is
+unpacked into locals at the top of the body, so the ~1,300 lines below read
+unchanged; only the boundary moved.
+
+This applies an existing decision rather than making a new one. The comment at
+`invoke.rs:420-422` already states the rule for the frame above — the context
+travels whole "rather than five loose parameters" so that "the authorizer
+travels with the identity it authorizes, so no call site can pass one without
+the other." `invoke_tool_traced` is private with exactly one call site, so the
+same argument holds with none of the cost that would make it debatable.
+
+The alternative was to add the keyring and continuation handle as two more loose
+parameters. Rejected: it takes a signature the codebase already apologises for
+with `#[allow(clippy::too_many_arguments)]` and makes it worse, and it
+reproduces exactly the coupling the comment above exists to prevent. Both
+`too_many_arguments` allows are now deleted, which is the measurable half of the
+argument — the parameter count fell from nine to four.
+
+`trace_id` stays a separate parameter. It is not caller identity and does not
+belong on that struct.
+
+### DE-4 — stdio callers cannot be asked for more input
+
+`MetaMcpCallerContext` gains `may_request_input`, named for the question it
+answers rather than for where the answer comes from. On HTTP it is read at
+`handlers.rs:591`, inside the `Modern(ref fields)` block where the declaration
+is still in scope, and carried the ~500 lines to the construction site. It is a
+fresh read of `declares_capability("elicitation")`, not the boolean at `:690`:
+that one answers "did the client declare the capability THIS method needs",
+which is a different question that happens to share a helper.
+
+On stdio (`server/mod.rs:1730`) there is no per-request declaration to read, so
+the value is `false`. That is a decision, not a default: `meta.rs:70-77` already
+states the specification's rule that explicitly-absent is still absent, and the
+same reading applies to a transport that cannot declare at all. A stdio client
+is therefore never sent a continuation. If stdio should be able to elicit, it
+needs its own declaration mechanism, and that is a design question, not a
+constant to flip.
+
+Nothing reads the field yet. It is wired at both construction sites so the next
+increment adds the refusal, not the plumbing.
+
 ### The seam, mapped
 
 Line numbers against 9f16fae8, so a later reader can tell drift from error.
@@ -356,22 +406,22 @@ Line numbers against 9f16fae8, so a later reader can tell drift from error.
 |---|---|
 | refusal to delete (`is_retry` arm only) | `router/handlers.rs:872-889` |
 | the `is_malformed` arm that STAYS | `router/handlers.rs:862-871` |
-| `dispatch_to_backend` definition, 11 params | `meta_mcp/invoke.rs:1788` |
-| its only call site | `meta_mcp/invoke.rs:929` |
-| outbound params built here — siblings go here | `meta_mcp/invoke.rs:1910` |
-| idempotency + cache writes, all AFTER the call site | `invoke.rs:799, 851, 1040, 1276` |
+| `dispatch_to_backend` definition, 11 params | `meta_mcp/invoke.rs:1781` |
+| its only call site | `meta_mcp/invoke.rs:923` |
+| outbound params built here — siblings go here | `meta_mcp/invoke.rs:1902` |
+| idempotency + cache writes, all AFTER the call site | `invoke.rs:793, 845, 1034, 1270` |
 
 The four are not interchangeable, and decision 3 touches exactly one of them:
 
 | site | what it does | under decision 3 |
 |---|---|---|
-| `:799` | `enforce` — cache read plus in-flight registration | untouched; runs before dispatch |
-| `:851` | `mark_completed` on a response-cache hit | untouched; no backend call happened |
-| `:1040` | `remove` on dispatch error | must also fire for `input_required` |
-| `:1276` | `mark_completed` on success | the write that must be skipped |
+| `:793` | `enforce` — cache read plus in-flight registration | untouched; runs before dispatch |
+| `:845` | `mark_completed` on a response-cache hit | untouched; no backend call happened |
+| `:1034` | `remove` on dispatch error | must also fire for `input_required` |
+| `:1270` | `mark_completed` on success | the write that must be skipped |
 
 An `input_required` result is neither a success nor an error today, so it falls
-through `:1276` and would be cached as a final answer. That is the write
+through `:1270` and would be cached as a final answer. That is the write
 decision 3 suppresses.
 
 The outbound shape is one line today:
@@ -394,7 +444,7 @@ defect MRTR.2 names:
   that token. A second small struct, because reusing `RetryFields` here is what
   forwards a client-supplied string to a backend as if the gateway had issued it.
 
-The mint belongs at the call site (`invoke.rs:929`), not inside
+The mint belongs at the call site (`invoke.rs:923`), not inside
 `dispatch_to_backend` and not in `handlers.rs`: it must run after the result
 arrives and before the idempotency and cache writes below it, so an
 `input_required` result can suppress both. That ordering is design decision 3,

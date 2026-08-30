@@ -128,6 +128,13 @@ pub struct MetaMcpCallerContext<'a> {
     /// admin-only PARAMETERS cannot be gated by the tool-name allow-list in
     /// `router::authorization`, which only knows whole tools.
     pub is_admin: bool,
+    /// Whether this caller can be asked for more input part-way through a call.
+    ///
+    /// Named for the question it answers, not for where the answer came from:
+    /// on HTTP it is the client's declared `elicitation` capability, on stdio
+    /// there is no per-request declaration to read. Absent means absent — a
+    /// caller that never declared the capability is never sent a continuation.
+    pub may_request_input: bool,
 }
 
 // ============================================================================
