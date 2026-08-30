@@ -220,6 +220,44 @@ it hands a backend a value the client controls.
    disappoint: minting happens on the gateway's own response path, never at a client's request. The number bounds two things at once and both are now
    measurable: how long a stolen token is worth stealing, and how much work a restart destroys.
 
+5. **The continuation identifier joins the key on every branch, including the client's own.**
+   `resolve_idempotency_key` (`meta_mcp/support.rs:40-42`) returns a caller-supplied
+   `idempotency_key` before derivation ever runs, so a rule that folded continuation fields into the
+   derived key alone would leave the client-supplied branch untouched. Two retries answering the
+   same paused call with *different* answers under one reused client key would then collide, and the
+   second would be served the first's completed response. Decision 3 keeps the interim result out of
+   both caches; it says nothing about two completed retries.
+
+   So the fold happens **after** the branch, not inside it: whatever base the resolver returns —
+   caller-supplied or derived — the continuation identifier is mixed into it on the one path that
+   produces the final key. A retry cannot hash to another retry's entry regardless of which branch
+   supplied its base, which is the difference between a defect made unreachable and one made
+   inexpressible. The same fold applies to the response-cache key, which is built separately
+   (`ResponseCache::build_key`) and shares the same blind spot.
+
+6. **A redeemed continuation is spent at the moment it opens.** `ConsumedLedger::consume`
+   (`continuation.rs:478`) exists and has no caller outside its own tests. The retry path calls it
+   on a successful `open`, before dispatching anything to the backend. Without that call the
+   single-use property in decision 4 is a claim about a data structure nobody writes to: a captured
+   envelope replays freely for its whole 300 seconds, on the very replica that minted it, which is
+   the case the in-memory ledger was supposed to cover. This is not the cross-replica work deferred
+   to MIK-7312 — it is the local half, and it costs one call.
+
+## Reviewed — 2026-08-31
+
+Both vendors returned SHIP-WITH-FIXES on this design. Dispositions, so the next reader does not
+re-derive them:
+
+- The cache finding is **already answered more strongly than it was raised**. Grok proposed skipping
+  `cache.set`/`mark_completed` when the result is not `complete`; decision 3 removes the in-flight
+  entry and writes to neither cache, because declining to complete leaves a live `InFlight` entry
+  that answers every other caller with `DuplicateRequest`. Recorded rather than re-fixed.
+- The idempotency and single-use findings became decisions 5 and 6 above.
+- The reviewer's note to keep `RetryFields` threaded through `handle_tools_call`
+  (`meta_mcp/mod.rs:1225-1262`, whose signature takes only `arguments`) stands as written: the
+  refusal arm is replaced by a dispatch that carries the retry fields, never by deleting the arm and
+  letting a retry fall through as a fresh call.
+
 ## Unknowns, scheduled
 
 | unknown | how it is settled |
