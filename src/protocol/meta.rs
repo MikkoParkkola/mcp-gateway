@@ -102,13 +102,20 @@ pub enum RequestShape {
 /// intermediary routes on, omit the body metadata, and take the legacy path
 /// past the feature gate and every mirrored-header check behind it.
 ///
-/// Only a header naming a **modern** version counts as a declaration. 2025
+/// Only a header naming the **modern era** counts as a declaration. 2025
 /// defines `MCP-Protocol-Version` too, so treating mere presence as modern
 /// would refuse every conforming 2025 client — the likelier mistake, and the
 /// more damaging one.
+///
+/// The era, not the served list: [`declares_modern_era`], the same predicate
+/// the router uses to decide a request gets no session. One question, one
+/// owner. When these were two predicates, a `2026-` revision this build does
+/// not serve was skipped for session minting and classified `Legacy`, so it
+/// took the legacy destructive-confirmation policy with an empty session id and
+/// never reached the unsupported-version refusal.
 #[must_use]
 pub fn classify_request(params: Option<&Value>, header_version: Option<&str>) -> RequestShape {
-    let header_declares_modern = header_version.is_some_and(|v| MODERN_VERSIONS.contains(&v));
+    let header_declares_modern = header_version.is_some_and(|v| declares_modern_era(v));
 
     let meta = params
         .and_then(|p| p.get("_meta"))

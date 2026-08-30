@@ -1136,6 +1136,23 @@ mod classification {
     }
 
     #[test]
+    fn an_unserved_2026_version_header_without_body_metadata_is_malformed() {
+        // Adversarial review, 2026-08-30, confirmed at source: the router skips
+        // session minting on `declares_modern_era` (any `2026-*`) while the
+        // classifier read the narrower `MODERN_VERSIONS`. A revision this build
+        // does not serve therefore got no session AND the legacy path — the
+        // legacy destructive-confirmation policy, with an empty session id,
+        // never reaching the -32022 unsupported-version refusal. Two predicates
+        // deciding one question is the defect; the answer is one predicate.
+        let shape = classify_request(Some(&json!({})), Some("2026-11-25"));
+        assert!(
+            matches!(shape, RequestShape::Malformed { .. }),
+            "a header declaring an unserved 2026 revision with no body metadata \
+             must be refused, not treated as legacy, got {shape:?}"
+        );
+    }
+
+    #[test]
     fn a_legacy_version_header_is_not_a_modern_declaration() {
         // 2025 defines this header too. Treating its mere presence as a modern
         // declaration would refuse every conforming 2025 client — the likelier
