@@ -15,14 +15,12 @@ complete. What else remains is gated on production topology, a tasks extension t
 deliberately does not advertise, and one parsed protocol field with no consumer.**
 
 Eight independent review rounds produced **42 findings, a later scope audit added a forty-third, and
-the confirmation pass on this document found two more that had never been written down. Thirty-eight
-are closed**, each with a probe that makes its own fix fail and only its own fix. Of the seven recorded
+the confirmation pass on this document found two more that had never been written down. Thirty-nine
+are closed**, each with a probe that makes its own fix fail and only its own fix. Of the six recorded
 open, two are gated on multi-replica production, two are conformance gaps in a tasks extension this
-release does not advertise, one is a parsed protocol field with no consumer, one misreports whether a
-config reload needs a restart, and one is test hygiene. Seven is what is currently recorded open,
-which is not the same claim as seven being all there are. The first five are unreachable by a client
-while the switch defaults off. The reload finding is not a protocol path and the switch does not
-bound it; the last exists only in a test.
+release does not advertise, one is a parsed protocol field with no consumer, and one is test hygiene.
+Six is what is currently recorded open, which is not the same claim as six being all there are. The
+first five are unreachable by a client while the switch defaults off; the last exists only in a test.
 
 An earlier revision of this paragraph said two of them could not be verified against a specification
 page returning 404. That was a wrong path rather than a missing document: the page was found and
@@ -283,10 +281,15 @@ died. That was misread twice here before anyone looked at the process tree.
 
 ## What is honestly NOT finished
 
-Seven findings are recorded open: six numbered here, and one test-hygiene item after them.
-Findings 1 to 5 are unreachable by a client while `server.modern_protocol` defaults off. Finding 6
-is in config reload, which the switch does not bound. The seventh is unreachable because it lives in
-a test, not because of the switch.
+Six findings are recorded open: five numbered here, and one test-hygiene item after them.
+Findings 1 to 5 are unreachable by a client while `server.modern_protocol` defaults off. The sixth
+is unreachable because it lives in a test, not because of the switch.
+
+Item 6 below is **closed**, and is kept for its analysis rather than as an open item. Its repair is
+in the tree at `src/config_reload/mod.rs:1340-1344`, where the notice now fires on either run's
+`HOME` assignment beside a `~` entry or on a changed value. An earlier revision of this document
+counted it open in this summary while recording it repaired further down; the count above is the
+corrected one.
 
 1. **The consumed-continuation ledger is process-local.** A second replica would let one continuation be spent once on each. Gated BEFORE-PRODUCTION; needs a shared atomic insert-if-absent store.
 
@@ -386,7 +389,8 @@ a test, not because of the switch.
    (ENVFILE.19e) still holds. New rows ENVFILE.19g (re-stated HOME reports nothing) and
    ENVFILE.19h (removed assignment reports HOME) were written first and observed failing on the
    presence check — 19g reporting `HOME` with nothing moved, 19h omitting it with everything
-   moved. `config_reload` is 79/79.
+   moved. `config_reload` is 79/79. **This finding is closed** — see the repair cited in the
+   summary above.
 
    **Closure re-check found the layer is wrong (2026-08-30).** Both vendors returned
    SHIP-WITH-FIXES on the repair commit and converged on one defect: comparing the *final* HOME
@@ -584,8 +588,9 @@ The path in the original finding, `firewall/mod.rs`, does not exist; the file is
 
 The 2025 path is unchanged, fully tested and shippable. `server.modern_protocol` defaults **off**,
 and that is the isolation for findings 1 to 5 — no client reaches a modern protocol path while the
-switch is off. It does not cover the other two. Finding 6 is in config reload, which any
-authenticated operator can trigger regardless of the switch; the port race exists only in tests.
+switch is off. It does not cover the remaining item, the port race, which exists only in tests.
+Finding 6 was in config reload, which any authenticated operator can trigger regardless of the
+switch, and so was never covered by the switch either.
 
 Finding 6 has since been repaired rather than accepted, on the operator's instruction that anything
 fixable gets fixed and that the rules left standing should be ones any user can state. The rule that

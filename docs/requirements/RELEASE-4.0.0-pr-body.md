@@ -24,8 +24,11 @@ paths, and `server`/`discover` gained surface. Those are described in
 - Coverage and mutation measurement. Neither was run for this branch, so §4 of the DoD
   check stands BLOCKED rather than passing; MIK-7324 owns both figures.
 
-Both are stated in `CHANGELOG.md` and `docs/DEPLOYMENT.md` rather than left for a
-deployer to discover.
+The first three are stated in `CHANGELOG.md` rather than left for a deployer to
+discover, and the multi-replica limit again in `docs/DEPLOYMENT.md`, which is where a
+deployer looks for it. The fourth is a gap in this release's own record rather than
+anything a deployer acts on, so it is stated here and in the DoD check, not in the
+changelog.
 
 ## Tickets
 

@@ -1,9 +1,11 @@
 # 4.0.0 — execution plan to a passing DoD check
 
-Durable checkpoint. Authority for scope: `RFC-0061-protocol-2026-07-28-release-scope.md`
-(manifest) and `RELEASE-4.0.0-requirements.md`. Authority for what is already done:
-`RELEASE-4.0.0-dod-check.md`. This file records only what REMAINS and in what order,
-so the work survives a session boundary.
+**Superseded historical record. It is not the authority for anything.** It was written as a
+durable checkpoint of what remained, and the work it lists has since been done or re-owned. Read
+it for why decisions were made. For scope, read `RFC-0061-protocol-2026-07-28-release-scope.md`
+and `RELEASE-4.0.0-requirements.md`; for current status and what is still open, read
+`RELEASE-4.0.0-dod-check.md`, which is the only current account. Every "remaining", "blocking"
+and "next" below describes the state at the time of writing, not the state now.
 
 ## State at the time of writing
 
