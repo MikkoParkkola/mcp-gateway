@@ -17,10 +17,10 @@ Eight independent review rounds produced **42 findings, a later scope audit adde
 the confirmation pass on this document found two more that had never been written down. Thirty-eight
 are closed**, each with a probe that makes its own fix fail and only its own fix. Of the seven that
 remain, two are gated on multi-replica production, two are conformance gaps in a tasks extension this
-release does not advertise, one is a parsed protocol field with no consumer, one over-reports a
-restart requirement on config reload, and one is test hygiene. Six of the seven are unreachable by a
-client while the switch defaults off; the seventh is in config reload and is independent of the
-switch, and it errs by asking for a restart that is not needed rather than by skipping one that is.
+release does not advertise, one is a parsed protocol field with no consumer, one misreports whether a
+config reload needs a restart, and one is test hygiene. The first five are unreachable by a client
+while the switch defaults off. The reload finding is not a protocol path and the switch does not
+bound it; the last exists only in a test.
 
 An earlier revision of this paragraph said two of them could not be verified against a specification
 page returning 404. That was a wrong path rather than a missing document: the page was found and
@@ -223,9 +223,10 @@ died. That was misread twice here before anyone looked at the process tree.
 
 ## What is honestly NOT finished
 
-Seven findings remain open: six numbered here, and one test-hygiene item recorded after them.
-Six of the seven are unreachable by a client while `server.modern_protocol` defaults off. Finding 6
-is not a protocol path at all and the switch does not bound it.
+Seven findings are recorded open: six numbered here, and one test-hygiene item after them.
+Findings 1 to 5 are unreachable by a client while `server.modern_protocol` defaults off. Finding 6
+is in config reload, which the switch does not bound. The seventh is unreachable because it lives in
+a test, not because of the switch.
 
 1. **The consumed-continuation ledger is process-local.** A second replica would let one continuation be spent once on each. Gated BEFORE-PRODUCTION; needs a shared atomic insert-if-absent store.
 
@@ -294,17 +295,23 @@ is not a protocol path at all and the switch does not bound it.
    differs from startup, then pushes `HOME` past that filter on presence alone:
    `if env.env_paths().has_tilde_entry() && evaluated.overlay.assigns("HOME")`
    (`src/config_reload/mod.rs:1311-1312`). The sequential `HOME` + `~/…` layout that branch
-   exists to serve therefore makes every later reload report a restart it does not need. The
-   direction is the safe one — it over-reports, never under-reports — so nothing is left
-   unguarded; the cost is an operator told to restart on every reload, which is how a signal
-   stops being read. Gated BEFORE-DEPLOY. The repair is to emit `HOME` only when the overlay's
-   assignment differs from startup's in presence or value, which is the comparison the line
-   above already performs for every other key.
+   exists to serve therefore makes every later reload report a restart it does not need.
+
+   It errs in both directions, and the second direction was missed when this finding was first
+   written down. `HOME` is not in `IMPLICIT_STARTUP_ENV_KEYS` (`:1279-1283`), and it reaches the
+   value filter only if the config happens to name it as a secret reference. So an overlay that
+   *removes* a HOME assignment startup had — leaving the recorded `~` entries to resolve
+   somewhere else on a restart — pushes nothing and is compared against nothing. The common case
+   over-reports and is merely noisy; the removal case under-reports and is the one that matters.
+   Gated BEFORE-DEPLOY. A repair emits `HOME` whenever the overlay's HOME assignment differs from
+   startup's in presence or in value — which is a comparison this function does not currently make
+   for `HOME` at all, in either branch.
 
 One further finding is open and gates nothing: the OAuth metadata tests release an ephemeral port
-before rebinding it (`src/oauth/metadata.rs:330`), so a concurrent process can take it in between.
-Graded LOW / UNLIKELY / LATER. It is test hygiene rather than a shipped defect, and it is recorded
-here so the inventory can claim to be complete.
+before rebinding it — once inline at `src/oauth/metadata.rs:322-324` and once in the `free_addr`
+helper at `:332-337` — so a concurrent process can take it in between.
+Graded LOW / UNLIKELY / LATER. It is test hygiene rather than a shipped defect, recorded because it
+was found and never written down.
 
 ### Disposition of 3 and 4 — the extension ships not implemented
 
@@ -428,7 +435,10 @@ The path in the original finding, `firewall/mod.rs`, does not exist; the file is
 ## The decision, which is the operator's
 
 The 2025 path is unchanged, fully tested and shippable. `server.modern_protocol` defaults **off**,
-and that already is the isolation — no client can reach any of the open findings. Two real options:
+and that is the isolation for findings 1 to 5 — no client reaches a modern protocol path while the
+switch is off. It does not cover the other two. Finding 6 is in config reload, which any
+authenticated operator can trigger regardless of the switch; the port race exists only in tests.
+Two real options:
 
 1. **Ship 4.0.0 as the legacy-safe groundwork**, modern path documented as preview with the findings listed. The default-off switch is what makes this honest.
 2. **Hold the tag** until the six numbered open findings above are closed and re-reviewed.
@@ -437,12 +447,12 @@ Removing the modern path is *not* a third option worth its cost: the switch alre
 isolation removal would buy.
 
 What changed since this recommendation was first written is the size of option 2. It was
-"twenty-six findings, several of them systematic"; it is now the six numbered findings above, plus
-the one test-hygiene item that gates nothing. That list is the only inventory — this paragraph deliberately does not restate it,
-because the two earlier revisions that did both drifted from it within a round. Two things about
-its shape are worth saying once: no construction remains on the transport itself, the
-`subscriptions/listen` stream having landed, and nothing on the list waits on a source that
-cannot be reached, the tasks schema having been read.
+"twenty-six findings, several of them systematic". It is now the numbered findings above and the
+test-hygiene item after them, and this paragraph does not restate them or claim they are all of
+them: three revisions tried, two drifted within a round, and the confirmation pass then found two
+that had been omitted since the code rounds. What can be said is what was checked — no construction
+remains on the transport itself, the `subscriptions/listen` stream having landed, and nothing on the
+list waits on a source that cannot be reached, the tasks schema having been read.
 
 ## Rounds 9–11 — the confirmation pass on this document
 
