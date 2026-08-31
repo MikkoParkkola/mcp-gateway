@@ -2464,3 +2464,107 @@ async fn global_meta_tool_reaches_an_admin_caller() {
          tool's business: {message}"
     );
 }
+
+/// A caller context that permits everything and declares the given input
+/// capabilities.
+///
+/// Separate from [`allow_all_ctx_named`] rather than a parameter added to it:
+/// every existing call site passes no declaration, and a widened signature
+/// would make each of them state a value it has no opinion about.
+fn allow_all_ctx_declaring(
+    declared: &[String],
+) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        authorizer: &ALLOW_ALL,
+        api_key_name: None,
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: false,
+        input_capabilities: declared,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+    }
+}
+
+/// A backend that answers every `tools/call` with an interim result asking for
+/// an elicitation.
+fn backend_asking_for_elicitation() -> Arc<BackendRegistry> {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::transport::Transport;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "booking",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let transport: Arc<dyn Transport> = Arc::new(ToolCallTestTransport {
+        result: json!({
+            "resultType": "input_required",
+            "inputRequests": {
+                "confirm": {
+                    "method": "elicitation/create",
+                    "params": { "message": "Charge the card?" }
+                }
+            },
+            "requestState": "backend-opaque"
+        }),
+    });
+    backend.set_transport_for_test(transport);
+    let _ = registry.register(backend);
+    registry
+}
+
+fn book_flight() -> serde_json::Value {
+    json!({ "server": "booking", "tool": "book_flight", "arguments": {} })
+}
+
+// MRTR.9 end-to-end: the refusal happens on the live invoke path, not only in
+// the protocol type. A client that declared no input capability is never handed
+// an `inputRequests` entry it has no handler for.
+#[tokio::test]
+async fn an_undeclared_input_request_is_refused_at_the_gateway() {
+    let meta = MetaMcp::new(backend_asking_for_elicitation());
+    let err = meta
+        .invoke_tool(
+            &book_flight(),
+            Some("session-1"),
+            &allow_all_ctx_declaring(&[]),
+        )
+        .await
+        .expect_err("a client that declared nothing must not be asked");
+
+    assert_eq!(
+        err.to_rpc_code(),
+        -32021,
+        "the refusal must reuse the gateway's undeclared-capability code"
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains("elicitation"),
+        "the refusal must name the capability the client would have had to \
+         declare, so it can act on it: {message}"
+    );
+}
+
+// The other half of the same gate: it must not be a blanket refusal of every
+// interim result. A declared capability passes through.
+#[tokio::test]
+async fn a_declared_input_request_passes_the_gateway_gate() {
+    let meta = MetaMcp::new(backend_asking_for_elicitation());
+    let declared = vec!["elicitation".to_string()];
+    let result = meta
+        .invoke_tool(
+            &book_flight(),
+            Some("session-1"),
+            &allow_all_ctx_declaring(&declared),
+        )
+        .await
+        .expect("a declared capability must not be refused");
+    assert_eq!(
+        result["resultType"], "input_required",
+        "the interim result must reach the client intact: {result:#}"
+    );
+}

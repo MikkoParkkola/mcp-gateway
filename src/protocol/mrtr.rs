@@ -235,6 +235,54 @@ impl InputRequired {
                 .map(str::to_string),
         })
     }
+
+    /// The first request this client cannot be asked, if there is one.
+    ///
+    /// A server **MUST NOT** send an `inputRequests` entry of a type the client
+    /// has not declared support for. Checked per entry rather than per result:
+    /// a client that declared `elicitation` and not `sampling` may legitimately
+    /// be sent the one and not the other, and a whole-result verdict cannot
+    /// tell those apart.
+    ///
+    /// A method carrying no known capability is refused too. The declaration
+    /// vocabulary *is* the set of capability names, so a method outside it
+    /// cannot have been declared, and relaying a question the gateway cannot
+    /// classify asks the client for a permission it was never given the chance
+    /// to withhold.
+    #[must_use]
+    pub fn undeclared<'a>(&'a self, declared: &[String]) -> Option<Undeclared<'a>> {
+        self.requests.iter().find_map(|(key, request)| {
+            let method = request.get("method").and_then(Value::as_str).unwrap_or("");
+            let capability = crate::protocol::meta::required_capability(method);
+            match capability {
+                Some(name) if declared.iter().any(|declared| declared == name) => None,
+                _ => Some(Undeclared {
+                    key,
+                    method,
+                    capability,
+                }),
+            }
+        })
+    }
+}
+
+/// A question that cannot be put to this client.
+///
+/// Carries the method and the capability separately because the two refusals
+/// are not the same refusal: a known method the client did not declare can name
+/// the capability it would have had to declare, and an unrecognised method has
+/// no capability to name. Collapsing them to one string would report the second
+/// as if the client had merely omitted a declaration it could still add.
+#[derive(Debug, Clone, Copy)]
+pub struct Undeclared<'a> {
+    /// The server's own key for the entry, so a refusal names which question
+    /// was refused rather than only its type.
+    pub key: &'a str,
+    /// The method the entry asked with. Empty when the entry carried none.
+    pub method: &'a str,
+    /// The capability the client would have had to declare, when the method is
+    /// one this revision defines.
+    pub capability: Option<&'static str>,
 }
 
 /// One question, translated for a client that expects to be asked directly.

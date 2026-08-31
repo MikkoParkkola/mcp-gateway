@@ -354,6 +354,45 @@ fn json_is_populated(value: &Value) -> bool {
     }
 }
 
+/// The refusal for an interim result naming a request type this client cannot
+/// be asked (MRTR.9).
+///
+/// `-32021` with a `requiredCapabilities` payload is the router's existing
+/// answer to "the client did not declare that", reused here so one condition
+/// meets a client in one shape however the request reached it. An unrecognised
+/// method carries no payload: there is no capability name a client could add to
+/// its declaration to make the request acceptable, and naming one would invite
+/// exactly that.
+fn undeclared_input_request(
+    server: &str,
+    tool: &str,
+    refused: &crate::protocol::mrtr::Undeclared<'_>,
+) -> Error {
+    let (message, data) = match refused.capability {
+        Some(capability) => (
+            format!(
+                "Tool '{tool}' on server '{server}' asked for input '{}', which needs the \
+                 '{capability}' capability the client did not declare",
+                refused.key
+            ),
+            Some(json!({ "requiredCapabilities": [capability] })),
+        ),
+        None => (
+            format!(
+                "Tool '{tool}' on server '{server}' asked for input '{}' of unrecognised type \
+                 '{}', which no client can have declared",
+                refused.key, refused.method
+            ),
+            None,
+        ),
+    };
+    Error::JsonRpc {
+        code: -32021,
+        message,
+        data,
+    }
+}
+
 /// Monotonically increasing request counter for load-balanced cache key slot selection.
 ///
 /// Global across all backends; overflow wraps (u64 → effectively infinite for our purposes).
@@ -1102,6 +1141,26 @@ impl MetaMcp {
                              key will not re-execute it."
                 }],
             }));
+        }
+
+        // MRTR.9: a question the client never said it could answer is refused
+        // where the backend's interim result is first seen — before a
+        // continuation is minted and before the result is cached, so nothing
+        // survives the refusal. Relaying it instead leaves the client holding
+        // an `inputRequests` entry it has no handler for and the backend
+        // holding an exchange that can never be completed.
+        if let Some(interim) = crate::protocol::mrtr::InputRequired::from_result(&result)
+            && let Some(refused) = interim.undeclared(caller.input_capabilities)
+        {
+            warn!(
+                server,
+                tool,
+                trace_id,
+                request_key = refused.key,
+                method = refused.method,
+                "Backend asked for input of a type the client did not declare"
+            );
+            return Err(undeclared_input_request(server, tool, &refused));
         }
 
         // === POST-INVOKE: Response contract gate (issue #133, D1) ===
