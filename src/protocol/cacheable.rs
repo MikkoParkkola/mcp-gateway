@@ -27,6 +27,40 @@ pub enum CacheScope {
     Private,
 }
 
+/// The methods whose responses carry `ttlMs` and `cacheScope`.
+///
+/// This set and the decision table below are one decision seen from two sides,
+/// which is why they live in one module rather than beside the router: a method
+/// declared cacheable here with no row there is a scope nobody decided.
+pub const CACHEABLE_METHODS: &[&str] = &[
+    "tools/list",
+    "prompts/list",
+    "resources/list",
+    "resources/read",
+    "resources/templates/list",
+];
+
+/// The MIK-7213.CACHE.3 decision table — which endpoints may ever be `public`.
+///
+/// Source: `docs/design/2026-08-31-cluster-f-response-cache-keying.md`
+/// §CACHE.3. Each row records a decision about one endpoint, and no row is
+/// `public`:
+///
+/// - the three list methods and `resources/templates/list` vary by the
+///   credential presented, which decides which backends a caller sees;
+/// - `resources/read` returns content that is backend- and grant-dependent.
+///
+/// An endpoint absent from this table resolves `Private` (see
+/// [`CacheScope::for_endpoint`]), so the table fails closed: adding a cacheable
+/// endpoint cannot widen a cache scope by omission.
+const CACHE_SCOPE_TABLE: &[(&str, CacheScope)] = &[
+    ("tools/list", CacheScope::Private),
+    ("prompts/list", CacheScope::Private),
+    ("resources/list", CacheScope::Private),
+    ("resources/read", CacheScope::Private),
+    ("resources/templates/list", CacheScope::Private),
+];
+
 impl CacheScope {
     /// The wire value.
     #[must_use]
@@ -41,6 +75,12 @@ impl CacheScope {
     ///
     /// One argument, and it is the whole decision: if the assembly consulted
     /// anything about who asked, the answer is private.
+    ///
+    /// Which endpoints may ever answer `false` here is not this function's to
+    /// decide: that is the CACHE.3 decision table
+    /// (`docs/design/2026-08-31-cluster-f-response-cache-keying.md` §CACHE.3),
+    /// encoded in [`CACHE_SCOPE_TABLE`] and read through
+    /// [`CacheScope::for_endpoint`].
     #[must_use]
     pub const fn for_list(caller_dependent: bool) -> Self {
         if caller_dependent {
@@ -57,13 +97,75 @@ impl CacheScope {
     /// That variation is legal (credentials are per-request input, not
     /// connection state) and it is exactly what `private` describes.
     ///
-    /// A future `public` needs the decision table MIK-7213 asks for, naming a
-    /// response that provably does not vary. It is not reached by relaxing this
-    /// function.
+    /// A future `public` is a change to that endpoint's row in the CACHE.3
+    /// decision table (`docs/design/2026-08-31-cluster-f-response-cache-keying.md`
+    /// §CACHE.3, encoded in [`CACHE_SCOPE_TABLE`]), naming a response that
+    /// provably does not vary. It is not reached by relaxing this function.
     #[must_use]
     pub const fn current_for_tools_list() -> Self {
-        Self::for_list(true)
+        Self::for_endpoint_table_row("tools/list")
     }
+
+    /// The row this method has in the CACHE.3 decision table, if it has one.
+    ///
+    /// `None` is a finding, not a default: every method in
+    /// [`CACHEABLE_METHODS`] is expected to have a row, and a missing one means
+    /// a response is emitting `cacheScope` under a scope nobody recorded.
+    #[must_use]
+    pub fn table_row(method: &str) -> Option<Self> {
+        let mut i = 0;
+        while i < CACHE_SCOPE_TABLE.len() {
+            let (name, scope) = CACHE_SCOPE_TABLE[i];
+            if str_eq(name, method) {
+                return Some(scope);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// The scope this method's response may claim, per the CACHE.3 decision
+    /// table.
+    ///
+    /// Table: `docs/design/2026-08-31-cluster-f-response-cache-keying.md`
+    /// §CACHE.3, encoded in [`CACHE_SCOPE_TABLE`]. An endpoint with no row is
+    /// `Private` — it has not proved invariance, so it cannot claim it.
+    #[must_use]
+    pub fn for_endpoint(method: &str) -> Self {
+        match Self::table_row(method) {
+            Some(scope) => scope,
+            None => Self::Private,
+        }
+    }
+
+    /// [`Self::for_endpoint`] in a const context, for the table's own rows.
+    const fn for_endpoint_table_row(method: &str) -> Self {
+        let mut i = 0;
+        while i < CACHE_SCOPE_TABLE.len() {
+            let (name, scope) = CACHE_SCOPE_TABLE[i];
+            if str_eq(name, method) {
+                return scope;
+            }
+            i += 1;
+        }
+        Self::Private
+    }
+}
+
+/// `==` on `&str` is not usable in a const context; this is.
+const fn str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 /// The `resultType` of a result, defaulting as the specification requires.
