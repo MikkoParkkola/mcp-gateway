@@ -382,7 +382,7 @@ fn mint_continuation(
         crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)?,
         crate::protocol::mrtr::original_request_digest(server, tool, arguments),
         continuation.replica().to_string(),
-        crate::backend::pool::now_unix_secs(),
+        crate::protocol::continuation::now_unix_secs(),
     );
     match continuation.keyring().mint(&payload) {
         Ok(envelope) => Some(envelope),

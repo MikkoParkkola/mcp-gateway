@@ -116,6 +116,19 @@ impl std::fmt::Debug for Payload {
 /// keys arrive with the durable ledger (MIK-7312) and not before.
 const CONTINUATION_LIFETIME_SECS: u64 = 300;
 
+/// Wall-clock seconds since the Unix epoch — the unit `mint` and `open` measure
+/// `now` and `expires_at` in.
+///
+/// Lives beside them rather than being borrowed from another module: the expiry
+/// contract is defined here, so the clock that feeds it belongs to the same
+/// unit. A pre-epoch clock yields 0, which expires every continuation rather
+/// than minting one that never expires.
+pub(crate) fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 impl Payload {
     /// Seal the facts of one interim exchange, valid from `now`.
     ///

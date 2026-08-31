@@ -2610,7 +2610,7 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
     let payload = meta
         .continuation()
         .keyring()
-        .open(state, crate::backend::pool::now_unix_secs())
+        .open(state, crate::protocol::continuation::now_unix_secs())
         .expect("the envelope must open on the replica that minted it");
     assert_eq!(
         payload.backend_request_state.as_deref(),
