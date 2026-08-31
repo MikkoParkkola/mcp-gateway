@@ -502,5 +502,6 @@ pub struct Evaluated {
     /// Recorded before substitution, because after it the config holds the
     /// value and the reference is gone. A reload compares these names across
     /// overlays to report a rotation no running holder can take.
+    // ci-allow-secret-debug: names only, recorded before substitution; values live in `config`.
     pub secret_refs: std::collections::BTreeSet<String>,
 }
