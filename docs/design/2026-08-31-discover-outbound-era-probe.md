@@ -327,9 +327,10 @@ they compose into a single repair.
 
 The first: that set *is* the Modern signal. The only evidence that could correct a wrongly-cached
 `Modern` was evidence that would have produced `Modern`. A legacy peer whose own extension happens
-to answer `-32020` is cached Modern, then answers the era-conditional request `-32601`, which
-`classify` itself calls "the honest legacy answer" (`src/protocol/era.rs:91-93`) — not in the
-invalidation set, so the entry never heals. Rare *and permanent*.
+to answer `-32020` is cached Modern, then answers `-32601` to a request the gateway shaped
+*because* it cached Modern — the code `classify` itself calls "the honest legacy answer"
+(`src/protocol/era.rs:91-93`) — and that code is not in the invalidation set, so the entry never
+heals. Rare *and permanent*.
 
 The second: nothing would have re-probed anyway. `resolve_with` is called from exactly one place,
 `start_entry`, which a connected backend's requests do not go through
@@ -504,7 +505,7 @@ and are labelled as regression rows in the table rather than counted as evidence
 | 6 | HTTP probe frame captured at the mock → carries neither `MCP-Protocol-Version` nor `MCP-Session-Id`, asserted on **both** the start-path probe and a re-probe frame | §3a: the probe must not carry the handshake's negotiated version | HEAD inserts both unconditionally (`src/transport/http/mod.rs:570,:605`), so this fails on HEAD *and* fails against a probe naively sent via `Transport::request` — the only row that catches that mistake |
 | 7 | two backends, one Modern fixture and one Legacy fixture, started together → each reads its own era | DISCOVER.5's per-backend caching | no era to read |
 | 8 | one backend, probe answered once, then N tool calls → the fixture records exactly one `server/discover` | the era is cached, not re-derived per request | vacuous on HEAD (zero probes); it becomes meaningful only once row 1 passes, and is listed as a *regression* row, not evidence of the increment |
-| 9 | cached `Modern`, an era-conditional request returns `-32601` → era re-resolves and reads `Legacy` | DISCOVER.5's invalidation clause, in the direction that matters. Without this row a probe-time collision is permanent | neither the invalidation nor a resolver reachable from the request path exists |
+| 9 | cached `Modern`, a request the gateway shaped for Modern returns `-32601` → a probe is issued and the era reads `Legacy` | DISCOVER.5's invalidation clause, in the direction that matters. Without this row a probe-time collision is permanent | neither the invalidation nor a resolver reachable from the request path exists |
 | 10 | cached `Modern`, an ordinary tool call returns `-32602` → no probe is issued and the era is unchanged | the trigger set is real; without it row 9 passes on a cache that re-probes on everything | nothing probes, so this row passes vacuously on HEAD — recorded as a regression row, not hidden |
 | 11 | a peer that triggers three times inside one 30s window → the fixture records exactly one extra `server/discover` | the rate limit. Revision 3 asserted a `Legacy` pin here; the pin is deleted, and the assertion is now on probe *count*, which is what the limit actually constrains | no bound exists |
 | 12 | `force_restart` on a shared stdio slot → era invalidated before the new child is probed | a restart is a new process (`src/backend/lifecycle.rs:821-885`) | no era, no invalidation on restart |
