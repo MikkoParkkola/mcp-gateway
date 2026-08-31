@@ -142,14 +142,22 @@ advertised and validated. Nothing in the tree advertises one. This axis is upstr
 two: deleting the automatic derivation with no carrier leaves the criterion unsatisfiable, and
 keeping it leaves the silent-dedup defect P2.
 
-ASKED of the operator on 2026-08-31 with four options; no answer within the turn. WORKING
-ASSUMPTION, not an answer — an optional `idempotency_key` argument on the `gateway_invoke` schema
-for the meta route, and an `Idempotency-Key` HTTP header on `POST /mcp/{name}`. Reasons: it covers
-both ingresses, it adds no meta-tool so the compact-surface decision in `CLAUDE.md` is untouched,
-and the header spelling is the industry convention. The rejected alternatives and their costs are
-in the questions table. This assumption is what the rest of the design is written against; it is
-NOT settled, and no code lands on it until the operator confirms, because it changes the
-advertised tool surface, which this repo treats as a locked decision.
+DECIDED 2026-08-31, by the operator's instruction: support MCP as specified, and where the
+specification is silent the carrier is an internal choice to be made on engineering grounds.
+
+The specification is not silent. `_meta` is the protocol's own field for out-of-band data on a
+request, so the meta route carries the key at `params._meta["io.mcp-gateway/idempotency-key"]`.
+That is protocol-native, survives over stdio where a client has no HTTP layer at all, and adds
+nothing to the tool schema, so the compact-surface decision in `CLAUDE.md` is untouched. The
+direct route `POST /mcp/{name}` has no schema to advertise into and is raw JSON-RPC passthrough,
+so it takes the key from an `Idempotency-Key` HTTP header, which is the industry spelling.
+
+Rejected: an `idempotency_key` tool argument, because it puts a gateway-internal concern into
+every backend tool's advertised surface. Rejected: a header on both routes, because a stdio
+client has no headers and would be left unprotected. Rejected: keeping automatic derivation as a
+fallback, because it is defect P2 — deriving a key for a client that never asked for one silently
+collapses deliberate repeats for 24 hours. Protection applies when a key is present and never
+otherwise.
 
 ## Open questions — each scheduled, none assumed
 
