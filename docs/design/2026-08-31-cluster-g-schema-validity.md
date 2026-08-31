@@ -144,7 +144,10 @@ this repository.**
 - An unmaintained validator on the untrusted-input path attracts a RUSTSEC
   `unmaintained` advisory. The CI `audit` job (`ci.yml:212`) runs `cargo audit`,
   and the release path depends on it. A RUSTSEC advisory against `boon` becomes a
-  blocked release, on someone else's schedule.
+  blocked release, on someone else's schedule. No such advisory exists today:
+  U3's `cargo audit` run covered every candidate and returned nothing. The risk
+  is prospective, so the tiebreak is really which failure mode is preferable to
+  own — a larger build, or a release blocked on a third party's advisory timing.
 - `jsonschema`'s bulk has no wired consequence: 26 additional packages on an
   existing 386, and a one-off compile cost behind `Swatinem/rust-cache`, which
   that same job already uses.
@@ -284,6 +287,11 @@ Rule for the implementing increment:
    dialect. `jsonschema` auto-detects; draft-07, 2019-09 and 2020-12 are all
    supported.
 2. If `$schema` is absent, default to **2020-12**, matching the MCP specification.
+
+Both steps are the crate's own default behaviour: `jsonschema::meta::validate`
+honours an explicit `$schema` and falls back to 2020-12 when none is present,
+measured in U7. The implementer calls that function and writes no dialect
+branch of their own.
 
 Without rule 1 the security guard becomes an availability incident: correct
 draft-07 tools would silently disappear from the surface.
@@ -445,6 +453,9 @@ drop-versus-warn default in §6 is explicitly held open until U10 has a number.
    real `handle_tools_list` and metaschema-validates every `inputSchema` and
    `outputSchema` it returns. Nothing ships in the binary. Release-blocking
    criterion moves `UNTESTED` → `MET` with a test path as its evidence.
+   This design does not touch that status row; increment 1 owns the edit, and
+   `docs/requirements/RELEASE-4.0.0-criteria-status.md` line 102 deliberately
+   still reads `UNTESTED`.
 2. **Increment 2 — the untrusted half.** Promote the crate to `[dependencies]`,
    add the check to `prepare_tool_metadata`, ship in warn + metric mode, and
    record the drop-versus-warn default as a decision the operator makes on the
