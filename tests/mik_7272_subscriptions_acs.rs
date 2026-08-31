@@ -607,4 +607,231 @@ mod http {
             "a 2025 client has no tasks extension: {body}"
         );
     }
+
+    /// A GET on /mcp, with whatever era headers the caller sent.
+    ///
+    /// The SSE body is deliberately never read: it is an open stream, so a test
+    /// that read it to completion would hang rather than fail. The stream's
+    /// identity is its status and content type, which is what SUB.1.3 asserts.
+    async fn get_mcp(
+        state: &Arc<AppState>,
+        headers: &[(&str, &str)],
+    ) -> (StatusCode, Option<String>, Option<String>, Option<Value>) {
+        let mut builder = Request::builder()
+            .method("GET")
+            .uri("/mcp")
+            .header("accept", "text/event-stream");
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        let response = create_router(Arc::clone(state))
+            .oneshot(builder.body(Body::empty()).expect("request"))
+            .await
+            .expect("router must answer");
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let allow = response
+            .headers()
+            .get(axum::http::header::ALLOW)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let streaming = content_type
+            .as_deref()
+            .is_some_and(|ct| ct.contains("text/event-stream"));
+        if streaming {
+            return (status, content_type, allow, None);
+        }
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body must read");
+        (
+            status,
+            content_type,
+            allow,
+            Some(serde_json::from_slice(&bytes).unwrap_or(Value::Null)),
+        )
+    }
+
+    /// MIK-7272.SUB.1.1 -- the 2026 revision deleted GET /mcp, so a caller
+    /// declaring that era is refused and told which method replaced it.
+    #[tokio::test]
+    async fn ac_sub_1_1_modern_get_is_refused_and_names_the_replacement() {
+        let state = state(true);
+        let (status, content_type, allow, body) =
+            get_mcp(&state, &[("mcp-protocol-version", "2026-07-28")]).await;
+        assert_eq!(
+            status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "modern GET must be refused"
+        );
+        assert!(
+            !content_type
+                .as_deref()
+                .unwrap_or("")
+                .contains("text/event-stream"),
+            "a refusal must not look like a stream: {content_type:?}"
+        );
+        assert_eq!(
+            allow.as_deref(),
+            Some("POST"),
+            "RFC 9110 requires a 405 to name the methods that do work"
+        );
+        let body = body.expect("a refusal carries a JSON-RPC body");
+        assert_eq!(body["error"]["code"], json!(-32600), "body: {body}");
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("subscriptions/listen"),
+            "the refusal must name the replacement: {message}"
+        );
+    }
+
+    /// MIK-7272.SUB.1.2 -- with the modern era switched off, the same caller
+    /// gets the unsupported-version answer the POST path already gives it.
+    #[tokio::test]
+    async fn ac_sub_1_2_modern_get_is_unsupported_when_modern_is_off() {
+        let state = state(false);
+        let (status, _, _, body) = get_mcp(&state, &[("mcp-protocol-version", "2026-07-28")]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let body = body.expect("a refusal carries a JSON-RPC body");
+        assert_eq!(body["error"]["code"], json!(-32022), "body: {body}");
+        assert_eq!(
+            body["error"]["data"]["supportedVersions"],
+            json!([]),
+            "a gateway serving no modern version supports none: {body}"
+        );
+    }
+
+    /// MIK-7272.SUB.1.2b -- a 2026 revision this build does not serve is
+    /// stateless, so it is refused, but naming `subscriptions/listen` would
+    /// send it to a method that refuses that same version.
+    #[tokio::test]
+    async fn ac_sub_1_2b_unserved_2026_revision_is_not_told_to_use_listen() {
+        let state = state(true);
+        let (status, _, _, body) = get_mcp(&state, &[("mcp-protocol-version", "2026-11-01")]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let body = body.expect("a refusal carries a JSON-RPC body");
+        assert_eq!(body["error"]["code"], json!(-32022), "body: {body}");
+        assert_eq!(
+            body["error"]["data"]["supportedVersions"],
+            json!(["2026-07-28"]),
+            "the answer must say what this build does serve: {body}"
+        );
+        assert!(
+            !body["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("subscriptions/listen"),
+            "an unserved revision must not be sent to a method it cannot call: {body}"
+        );
+    }
+
+    /// MIK-7272.SUB.1.3 -- the negative control. A caller that declared nothing,
+    /// or declared a 2025 revision, still gets its stream; without this row,
+    /// "refuse every GET" would satisfy every other row here.
+    #[tokio::test]
+    async fn ac_sub_1_3_legacy_get_still_opens_the_stream() {
+        let state = state(true);
+        for headers in [
+            &[][..],
+            &[("mcp-protocol-version", "2025-06-18")][..],
+            &[("mcp-protocol-version", "2025-11-25")][..],
+        ] {
+            let (status, content_type, _, _) = get_mcp(&state, headers).await;
+            assert_eq!(status, StatusCode::OK, "legacy GET {headers:?} must stream");
+            assert!(
+                content_type
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("text/event-stream"),
+                "legacy GET {headers:?} must stream: {content_type:?}"
+            );
+        }
+    }
+
+    /// MIK-7272.SUB.3.1 -- the refusal must happen before any session work. A
+    /// gate placed after `get_or_create_session_for` would mint an entry per
+    /// refused caller, and `create_sse_response` would overwrite the event id
+    /// the owner is resuming from.
+    #[tokio::test]
+    async fn ac_sub_3_1_refused_modern_get_leaves_resumption_state_alone() {
+        let state = state(true);
+
+        // Seeded through the real legacy path, not a fixture: the same handler
+        // under test is what stores the id.
+        let (status, _, _, _) = get_mcp(
+            &state,
+            &[
+                ("mcp-session-id", "sub3-probe"),
+                ("last-event-id", "seed-1"),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "the seeding GET must have streamed");
+        assert_eq!(
+            state.multiplexer.last_event_id("sub3-probe"),
+            Some("seed-1".to_string()),
+            "seeding failed, so the assertion below would pass vacuously"
+        );
+        let sessions_before = state.multiplexer.session_count();
+
+        let (status, _, _, _) = get_mcp(
+            &state,
+            &[
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-session-id", "sub3-probe"),
+                ("last-event-id", "seed-2"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "modern GET must be refused"
+        );
+        assert_eq!(
+            state.multiplexer.last_event_id("sub3-probe"),
+            Some("seed-1".to_string()),
+            "a refused caller must not move the owner's resumption point"
+        );
+        assert_eq!(
+            state.multiplexer.session_count(),
+            sessions_before,
+            "a refused caller must not mint a session"
+        );
+    }
+
+    /// MIK-7272.SUB.1.4 -- two field lines and one comma-combined line are the
+    /// same ambiguity, because an intermediary may fold the first into the
+    /// second. Reading only the first token serves a modern client its stream.
+    #[tokio::test]
+    async fn ac_sub_1_4_duplicate_protocol_version_is_refused() {
+        let state = state(true);
+        for headers in [
+            &[
+                ("mcp-protocol-version", "2025-06-18"),
+                ("mcp-protocol-version", "2026-07-28"),
+            ][..],
+            &[("mcp-protocol-version", "2025-06-18, 2026-07-28")][..],
+        ] {
+            let (status, content_type, _, body) = get_mcp(&state, headers).await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "ambiguous version {headers:?} must be refused"
+            );
+            assert!(
+                !content_type
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("text/event-stream"),
+                "ambiguous version {headers:?} must not stream"
+            );
+            let body = body.expect("a refusal carries a JSON-RPC body");
+            assert_eq!(body["error"]["code"], json!(-32020), "body: {body}");
+        }
+    }
 }

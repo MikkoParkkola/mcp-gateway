@@ -164,12 +164,114 @@ fn session_owner_key(client: Option<&AuthenticatedClient>) -> String {
     })
 }
 
+/// The stateless path's answer to a protocol version this build cannot serve.
+///
+/// The client is told which revisions it *could* retry on rather than left to
+/// guess. Shared by the POST classifier and the `GET /mcp` era gate so the two
+/// cannot drift into giving one client two different answers.
+fn unsupported_version_error(
+    id: Option<crate::protocol::RequestId>,
+    version: &str,
+    modern_enabled: bool,
+) -> JsonRpcResponse {
+    let supported: &[&str] = if modern_enabled {
+        crate::protocol::meta::MODERN_VERSIONS
+    } else {
+        &[]
+    };
+    JsonRpcResponse::error_with_data(
+        id,
+        crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION,
+        format!("unsupported protocol version '{version}'"),
+        serde_json::json!({ "supportedVersions": supported }),
+    )
+}
+
+/// The refusal a `GET /mcp` earns from the era it declares, if any.
+///
+/// `None` means the caller did not declare the 2026 era, and keeps the stream
+/// it has always had. The header is tokenised rather than read: RFC 9110 lets
+/// any intermediary fold two field lines into one comma-separated value, so
+/// counting field lines alone would serve `2025-06-18, 2026-07-28` on its first
+/// token. A GET has no body, so this tokenisation is the whole check -- the
+/// POST path can lean on its header-against-body comparison, and this cannot.
+fn get_era_refusal(state: &AppState, headers: &HeaderMap) -> Option<axum::response::Response> {
+    let tokens: Vec<&str> = headers
+        .get_all("mcp-protocol-version")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .collect();
+
+    let version = match tokens.as_slice() {
+        [] => return None,
+        [only] => *only,
+        _ => {
+            return Some(
+                build_http_error_response(
+                    None,
+                    crate::protocol::era::HEADER_MISMATCH,
+                    "mcp-protocol-version appears more than once",
+                    StatusCode::BAD_REQUEST,
+                )
+                .into_response(),
+            );
+        }
+    };
+
+    // Broader than the served list on purpose: a 2026 revision this build does
+    // not serve is still stateless, so it is not a legacy caller. Which refusal
+    // it gets is the served list's question, below.
+    if !crate::protocol::meta::declares_modern_era(version) {
+        return None;
+    }
+
+    let modern_enabled = state.live_config.running().server.modern_protocol;
+    if modern_enabled && crate::protocol::meta::MODERN_VERSIONS.contains(&version) {
+        // The status is the specification's, not a choice: "HTTP GET or DELETE
+        // to the MCP endpoint: respond with `405 Method Not Allowed`". RFC 9110
+        // then requires a 405 to name the methods that do work, so `Allow`
+        // carries POST rather than leaving the caller to guess.
+        let mut response = build_http_error_response(
+            None,
+            -32600,
+            "GET /mcp was removed in MCP 2026-07-28; use subscriptions/listen",
+            StatusCode::METHOD_NOT_ALLOWED,
+        )
+        .into_response();
+        response.headers_mut().insert(
+            axum::http::header::ALLOW,
+            axum::http::HeaderValue::from_static("POST"),
+        );
+        return Some(response);
+    }
+
+    // Naming `subscriptions/listen` here would send the caller to a method that
+    // refuses this same version, so it gets the POST path's answer instead.
+    Some(
+        build_http_response(
+            &unsupported_version_error(None, version, modern_enabled),
+            StatusCode::BAD_REQUEST,
+        )
+        .into_response(),
+    )
+}
+
 pub(super) async fn mcp_sse_handler(
     State(state): State<Arc<AppState>>,
     client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let client = client.map(|axum::Extension(c)| c);
+
+    // Before the streaming and Accept checks, and before any session work: a
+    // refusal that ran later would mint a session per refused caller and
+    // overwrite the resumption point of whoever owns the id it presented.
+    if let Some(refusal) = get_era_refusal(&state, &headers) {
+        return refusal;
+    }
     // Check if streaming is enabled
     if !state.streaming_config.enabled {
         return build_http_error_response(
@@ -609,21 +711,11 @@ pub(super) async fn meta_mcp_handler(
         if !modern_enabled
             || !crate::protocol::meta::MODERN_VERSIONS.contains(&fields.protocol_version.as_str())
         {
-            let mut rpc = crate::protocol::JsonRpcResponse::error(
-                id.clone(),
-                -32022,
-                format!("unsupported protocol version '{}'", fields.protocol_version),
+            return build_response(
+                unsupported_version_error(id.clone(), &fields.protocol_version, modern_enabled),
+                &session_id,
+                StatusCode::BAD_REQUEST,
             );
-            if let Some(ref mut error) = rpc.error {
-                error.data = Some(serde_json::json!({
-                    "supportedVersions": if modern_enabled {
-                        crate::protocol::meta::MODERN_VERSIONS
-                    } else {
-                        &[]
-                    },
-                }));
-            }
-            return build_response(rpc, &session_id, StatusCode::BAD_REQUEST);
         }
 
         // Header against body, before anything acts on either. The

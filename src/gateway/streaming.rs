@@ -227,6 +227,25 @@ impl NotificationMultiplexer {
         self.sessions.read().contains_key(session_id)
     }
 
+    /// The event id stored for `session_id`, if that session exists.
+    ///
+    /// Read-only, and it exists because the absence of a write is what MIK-7272
+    /// SUB.3 asserts: a refused modern GET must leave resumption state alone.
+    /// Inferring that from "no session was created" tests a weaker claim.
+    ///
+    /// Hidden from the published API surface: it exists for observation, not
+    /// for callers. Rust has no test-only public visibility and the criterion
+    /// it serves is end-to-end, so an integration test is the only place the
+    /// assertion can live.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn last_event_id(&self, session_id: &str) -> Option<String> {
+        self.sessions
+            .read()
+            .get(session_id)
+            .and_then(|session| session.last_event_id.read().clone())
+    }
+
     /// Get session count
     pub fn session_count(&self) -> usize {
         self.sessions.read().len()
