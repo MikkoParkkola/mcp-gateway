@@ -119,6 +119,37 @@ Failing test first, then the change. These need no wave-1 output and can start i
 Clusters A and E are owned by other sessions. Coordinate before touching
 `src/protocol/continuation.rs`, `src/security/firewall/`, or their test files.
 
+## Open for the operator
+
+Four decisions are the requester's, not the team lead's, and are recorded here rather than in the
+design that raised each one so they survive a session boundary. None blocks the work that does not
+turn on it. Each names what changes either way, so an answer costs a sentence.
+
+**1. SUB.2's second clause — amend it, or pull a transport rewrite into v4.0.0.** Request-scoped
+notifications cannot be routed by request key as designed: the notifications are destroyed in the
+transports, below any layer the router can key (`http/mod.rs:929-944` returns the first `data:` line
+of an SSE response and discards the rest; `stdio.rs:416-431` drops any message without an `id`).
+Meeting the criterion as written moves the capture site into both transports. The alternative
+narrows a release-blocking criterion, which is why it is not the team lead's call. Cluster B's
+design gives both sides and deliberately makes no recommendation.
+
+**2. SCHEMA.1 — what happens to a backend that publishes an invalid schema.** The criterion says
+tool schemas MUST remain valid under JSON Schema 2020-12, unqualified, and the gateway republishes
+proxied backend schemas. Three postures: refuse the backend, publish and flag, or degrade the
+schema. Cluster G scoped backend-supplied schemas OUT, which leaves a stated limit against a MUST —
+an unmet requirement, not a design choice, until this is answered.
+
+**3. Whether 2025-11-25 clients are still served.** `ServerTasksCapability` and
+`ClientTasksCapability` (`src/protocol/types.rs`) have zero readers and both carry a `list` field
+that the pinned 2026-07-28 text calls the shape it deliberately dropped. They are a superseded
+declaration surface. Deleting them is an API break this release does not need; keeping them
+advertises a shape we do not honour. NFR.COMPAT.1 requires 2025-11-25 be served, so the audit of
+the non-functional block may answer this without the operator.
+
+**4. The two-route reading, already recorded below.** SUB.4 and OTEL.1 were scoped to cover the
+direct `POST /mcp/{name}` route as well as the meta-MCP surface, on an unconfirmed reading of the
+full-scope direction. "Meta-MCP only" removes one separable clause from each design.
+
 ## What would make this plan wrong
 
 - ~~If TASK.1 is dropped from v4.0.0, SUB.4 loses its alternative branch.~~ CLOSED: the operator
