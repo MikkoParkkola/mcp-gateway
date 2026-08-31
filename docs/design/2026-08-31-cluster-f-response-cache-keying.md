@@ -219,7 +219,7 @@ inputs produced one key" unstateable rather than untested.
 | `server`, `tool`, `args_hash` | as today (`cache.rs:223-226`) | — |
 | `principal` | the caller identity, resolved below | **must fail closed** |
 | `profile` | `RoutingProfile::name` from `active_profile(session_id)` (`meta_mcp/mod.rs:971-981`), already resolved at `invoke.rs:710` | none — `active_profile` always returns a profile, falling back to `profile_registry.default_name()` |
-| `proto` | negotiated protocol revision | fixed literal |
+| `proto` | the caller's declared protocol revision, threaded from `router/handlers.rs:210-219` | **must fail closed** — no revision, no cache |
 | `shape` | today's `projection_key_suffix` | fixed literal |
 
 The `profile` segment has **no** feature-gated absent case. `routing_profile`
@@ -304,15 +304,26 @@ cannot land without choosing one.
 *client* declared it can accept must not be served to a client that declared
 something else. Same two exits: key it, or refuse to cache the continuation.
 
-`proto` is the third, and it is the weakest slot in the tuple. Today it is a
-**fixed literal**, because `MetaMcpCallerContext` carries no negotiated
-protocol version — so the segment satisfies CACHE.4's protocol dimension by
-spelling, not by behaviour. Stated rather than quietly counted: when the
-negotiated revision reaches this struct, the segment takes its value; until
-then a constant occupies the slot and covers nothing. If MRTR lands a
-per-session revision *without* threading it here, this becomes a keying bug of
-exactly the kind the second safety claim below is about, and it is written down
-here so that lands as a known row rather than a discovery.
+`proto` is the third, and revision 2 recorded it as a *stated limit* — a fixed
+literal "covering nothing" until some future revision threads a version through.
+That was an unmet requirement wearing an honest-limit costume, and the check
+that settles it is one grep, run rather than deferred.
+
+**The constant is not admissible.** `SUPPORTED_VERSIONS` holds four revisions
+concurrently (`protocol/mod.rs:43`), the caller's declared revision is read
+**per request** at the transport edge (`router/handlers.rs:210-219`), and the
+gateway already branches on it. A single literal therefore asserts a
+one-revision world that does not exist. `handle_initialize` computes
+`negotiate_version(client_version)` (`meta_mcp/mod.rs:1053`) and only *logs* it
+— nothing stores or forwards it, which is why revision 2 could mistake "not
+plumbed" for "not applicable".
+
+So `proto` takes the same two exits as the two inputs above, and neither is
+future work: **thread the declared revision from `handlers.rs:210-219` into
+`MetaMcpCallerContext` and key it, or refuse to cache.** The value already
+exists at the edge, so this is plumbing, not a new negotiation mechanism.
+Whichever is chosen ships **with** the keyed cache — CACHE.4's protocol
+dimension is not met by a constant, and this design no longer claims it is.
 
 ## Policy epoch
 
@@ -539,12 +550,45 @@ the static-credential premise — so the case fails on `HEAD` and passes once th
 tuple carries a principal. Asserted at the key, with the body-level statement as
 the property it stands for.
 
+### Case 3 — a denied agent must not be served from cache
+
+Cases 1 and 2 falsify **key collision**. The ordering move demoted that claim:
+the primary safety argument is now *authorization runs before the read*, and an
+argument carried by prose while its two siblings carry tests is the weaker half
+of this design, not the stronger one.
+
+A caller denied by `GrantAgent::Exact` invokes a capability for which a warm
+entry exists under the same `{server, tool, args_hash}`, written by a caller the
+grant does allow. The assertion is that the denial is returned and **no body is
+returned**.
+
+It **fails on `HEAD`** for the reason already traced above: the cache read is at
+`invoke.rs:840` and `enforce_identity_grants` is reached at `:1849`, inside
+`dispatch_to_backend`. A hit short-circuits before the grant is ever evaluated,
+so today the denied caller receives the body. It passes once the call moves to
+the chokepoint at `:543-557`.
+
+This case needs a live cache, unlike the other two — the thing under test is
+*which code runs first*, and that is not observable at the key. Accepted
+deliberately: the harness risk named in Case 1 is the price of testing an
+ordering claim, and the alternative is testing nothing.
+
+**Design event, named here rather than left for a vendor to find (§P3).**
+Moving `enforce_identity_grants` to the chokepoint makes it fire on paths that
+never reached `dispatch_to_backend` — a cache hit, and any early return between
+`:557` and `:1849`. Callers who previously received a cached body, or a
+different error, now receive the grant denial. That is a change to an observable
+contract for refused callers, it is deliberate, and it is what the fix *is*: the
+denial is the correct answer and the body was the defect. Existing tests
+asserting the old error shape on those paths are expected to move.
+
 ### What "passing" means
 
 Both cases must **fail against `HEAD`** before the implementation lands, on the
 `assert_ne!` named — not on a missing import, a panic, or a setup error. Read the
 assertion, not the exit code. Both then pass once the key carries a principal
-and refuses to cache when there is none.
+and refuses to cache when there is none. Case 3 must fail on the returned body,
+not on a setup error, and pass once the grant check runs at the chokepoint.
 
 ## Revision 3 — dispositions
 
@@ -557,7 +601,7 @@ stops treating it as one.
 
 | # | vendor | finding | disposition |
 |---|---|---|---|
-| B1 | GPT (CRITICAL) + Grok (HIGH, as the `agent_id` omission) | grant evaluation, including agent binding and expiry, runs *after* the cache read | **eliminated.** Verified at source: `enforce_identity_grants` (`invoke.rs:1444`) is called at `:1849`, inside `dispatch_to_backend`, and the read is at `:840`. The move to the chokepoint (`:543-557`) is free — synchronous, no `.await`, no permit, one read lock, every argument already in scope at `:534-542`, and its `cap_def` from the lookup the chokepoint already runs at `:588-591`. With it moved, the safety argument is *gate ordering*, and the key's job shrinks to response-varying inputs. Two vendors asked for `agent_id` in the key; under ordering it belongs to the gate, and that is written into the principal section rather than left as a silent omission |
+| B1 | GPT (CRITICAL) + Grok (HIGH, as the `agent_id` omission) | grant evaluation, including agent binding and expiry, runs *after* the cache read | **eliminated.** Verified at source: `enforce_identity_grants` (`invoke.rs:1444`) is called at `:1849`, inside `dispatch_to_backend`, and the read is at `:840`. The move to the chokepoint (`:543-557`) is free — synchronous, no `.await`, no permit, one read lock, every argument already in scope at `:534-542`, and its `cap_def` from the lookup the chokepoint already runs at `:588-591`. With it moved, the safety argument is *gate ordering*, and the key's job shrinks to response-varying inputs. Two vendors asked for `agent_id` in the key; under ordering it belongs to the gate, and that is written into the principal section rather than left as a silent omission. The ordering claim carries its own disproof artifact (Case 3), because a claim promoted to primary while its evidence stays prose is the half of this design most likely to be wrong |
 | B2 | GPT (CRITICAL) | an epoch bump between authorization and insert publishes a response under the post-revocation epoch | **eliminated by construction.** The key is built once at the read and the same value carried to the write, so a mid-flight bump makes the insert land under the *old* epoch — unreachable, not newly reachable. Revision 2 implied this and never said it; it is now stated, and it is the same elimination that already kills a divergent read/write key. No snapshot-validation protocol is needed, so none is specified |
 | B3 | GPT (HIGH) | the principal drops `api_key_name` and `agent_id` | **split.** `api_key_name` was already rung 2 in revision 2 and stays, now with the injective encoding Grok's K5 asked for. `agent_id` is **disposed, not added**: it is a grant input evaluated by `enforce_identity_grants`, which now runs first, and it does not vary the body of a call that was permitted |
 | B4 | GPT (HIGH) | the capability tuple omits `allow_loopback_egress`, which changes whether the request may execute | **accepted, inverted.** Not a key segment: `allow_loopback_egress == true` (`execution_context.rs:19`, gate at `:41-48`) means **do not cache**. A bit that decides whether a request may execute at all is an authorization input, and keying it would leave a permitted-context body sitting in the store waiting for the next key collision to find it |
@@ -573,7 +617,7 @@ stops treating it as one.
 | N1 | GPT (MEDIUM) | request-specific `_context_integrity` provenance — trace ID and subject — stays inside the cached value | **recorded as an observation, not a ticket.** Verified real: `apply_context_integrity` runs at `:1253` and `:1493`, writing subject (`:1507`) and `trace_id` (`:1504`), and `:1298` caches the decorated body. It is a pre-existing property of what today's cache stores, unchanged by this design, and outside what §P0 declares this change is FOR. Filing it would buy a queue entry and a human's attention for a defect nobody is currently paying for; recording it costs a line and survives |
 | N2 | GPT (LOW) + Grok | source anchors mix committed `HEAD` with the dirty working tree, and the `invoke.rs` cache-site lines point at an idempotency debug log | **repaired.** Every citation regenerated against one named commit, recorded in the document; the cache sites now read `:840` and `:1294` |
 | N3 | GPT | SCOPE-CHALLENGE: name `MetaMcpCallerContext.input_capabilities` beside `retry` | **accepted**, added to the fail-closed section under the same two exits |
-| N4 | Grok | treat protocol revision as fail-closed rather than a fixed-literal segment | **accepted as a stated limit.** The segment cannot take a value that does not exist yet; what changes is that the document now says the constant covers nothing, instead of letting a spelled slot count as coverage |
+| N4 | Grok | treat protocol revision as fail-closed rather than a fixed-literal segment | **accepted in full, after a first pass got it wrong.** That pass recorded a *stated limit* — a constant "covering nothing" until some future revision plumbed a value. Running the check instead of deferring it killed that: four revisions are served concurrently (`protocol/mod.rs:43`), the caller's declared revision is read per request at `router/handlers.rs:210-219`, and `handle_initialize` computes the negotiated value and only logs it (`meta_mcp/mod.rs:1053`). A constant asserts a one-revision world that does not exist, so `proto` now takes the same two exits as `retry` — key it from the value already at the edge, or refuse to cache — and ships with the change. An honest limit against a MUST is an unmet requirement, not a disclosure |
 | N5 | Grok | give `exposure: Shared` with no `caller_identity` an explicit shared-namespace principal instead of rung 3 | **accepted.** An opted-in shared capability stays cacheable without reopening `Personal` isolation, which is the same revert-pressure argument that produced gateway rung 2 |
 | N6 | Grok | replace "the policy write path" with a file:line, or fold it into the `LiveConfig` row | **row deleted.** Searching `config_reload/mod.rs` and `invoke.rs` for `tool_policy` returns nothing: there is no live-swap seam. An unlocatable bump site is a bump that never fires, dressed as coverage |
 | N7 | GPT | property-based injectivity tests over arbitrary Unicode and delimiter-containing segments, for both encodings | **accepted, into the §P2 test plan** for CACHE.4 — not into the disproof artifact, which has one job: fail on `HEAD`. A property test over a not-yet-existing encoder cannot do that |
