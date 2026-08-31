@@ -1,6 +1,6 @@
 # Cluster B — extension declaration and trace metadata (MIK-7272 EXT.1, OTEL.1)
 
-Status: §P1 design, awaiting dual-vendor review. No code. No test plan (§P2 follows review).
+Status: §P1 design, reviewed. No code. Test plan (§P2): `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`.
 
 Evidence base: every `file:line` below is read from commit `5c7e64f4` (`git show 5c7e64f4:<path>`),
 not from the working tree — four other sessions hold uncommitted edits in this checkout, so a
@@ -417,7 +417,9 @@ been invented for any of them.
 - **Changing `_meta` conventions repo-wide.** The bare-vs-prefixed inconsistency (2.2) is stated
   as a finding; harmonising every other key is not this change.
 - **The rest of the W3C `traceparent` grammar.** The four predicates in 3.4b came into scope with F7, and that is a scope move recorded here: the drop-rather-than-forward rule depends on rejecting the right input, so the check that decides it belongs to this change. Everything else in `trace.rs` stays out — later versions carrying more than four parts, and `tracestate` grammar beyond the length bound (4.2).
-- **The test plan.** §P2 follows this review.
+- **The test plan.** Written: `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`.
+  It answers §4.2's deferred bounds by recording them as still-unpinned (its §6.1) rather than
+  inventing a number, and it names four criteria clauses with no honest failing case (its §6).
 
 ## 6. Findings raised, not designed around
 
