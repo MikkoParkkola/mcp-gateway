@@ -128,5 +128,12 @@ Clusters A and E are owned by other sessions. Coordinate before touching
   the direct `POST /mcp/{name}` route as well as the meta-MCP surface on an unconfirmed reading of
   the full-scope direction. An operator answer of "meta-MCP only" removes one separable clause from
   each design and changes nothing else.
+- If the era cache should be keyed per pool slot rather than per backend name, cluster C's
+  DISCOVER.5 changes by one field, one lookup and one section. It is keyed per backend NAME on the
+  team lead's call, provisional and not operator-confirmed: era is a property of the peer process,
+  and every slot of one named backend dials the same command or URL, so per-slot keying means one
+  probe per user slot against the same remote. The named residual is that one slot's mis-detection
+  reaches its siblings; DISCOVER.5's re-probe half is what pays for it, and per-slot has no
+  equivalent.
 - If cluster A slips, H slips with it and MRTR.10a's key contents stay open, which leaves
   SUB.4 implementable but not fully specified.
