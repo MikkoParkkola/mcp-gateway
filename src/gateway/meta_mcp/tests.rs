@@ -2499,8 +2499,7 @@ fn active_profile_ignores_a_profile_bound_to_the_sessionless_key() {
 
     // THEN: it is the default, not the one that was written
     assert_eq!(
-        profile.name,
-        "research",
+        profile.name, "research",
         "an empty session id means no session, so there is no session profile \
          to read; reading one lets any modern caller narrow every other \
          modern caller's tool set"
@@ -2566,12 +2565,7 @@ fn initialize_binds_no_profile_without_a_session() {
         let mm = make_meta_mcp_with_profiles();
 
         // WHEN: the handshake runs
-        let _ = mm.handle_initialize(
-            RequestId::Number(1),
-            params.as_ref(),
-            Some(""),
-            header,
-        );
+        let _ = mm.handle_initialize(RequestId::Number(1), params.as_ref(), Some(""), header);
 
         // THEN: no profile was bound to the shared key
         assert_eq!(

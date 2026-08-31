@@ -3113,3 +3113,36 @@ async fn sampling_without_a_live_stream_fails_instead_of_hanging() {
         "body: {body}"
     );
 }
+
+/// A modern request gets no session, even when it offers one.
+///
+/// The pin under `meta_mcp::session_key`, which reads an empty session id as
+/// "no session" and refuses the routing-profile meta-tools on that basis. That
+/// reading is only sound while this branch holds: mint a session here and the
+/// profile becomes per-connection state again, silently reopening ORDER.2
+/// (`docs/requirements/RELEASE-4.0.0-requirements.md`). The response header is
+/// the observable side of it — `attach_session_header` emits nothing for an
+/// empty id, so a minted session would show up here as a header.
+#[tokio::test]
+async fn a_modern_request_is_given_no_session_even_when_it_offers_one() {
+    let router = create_router(test_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        // Offered deliberately: the modern path must decline it, not adopt it.
+        .header("mcp-session-id", "sess-offered-by-client")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    assert!(
+        response.headers().get("mcp-session-id").is_none(),
+        "a 2026-07-28 caller has no session; answering with one would give it \
+         per-connection state its own revision removed"
+    );
+}
