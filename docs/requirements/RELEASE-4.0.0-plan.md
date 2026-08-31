@@ -231,6 +231,31 @@ operator. Two clauses survive it and are genuinely yours: whether the direct rou
 own instrumentation rather than merely being out of the shared path, and whether CACHE.1-4 bind on
 HTTP only or across all transports — the second moves where stdio exits and nothing else.
 
+**5. ORDER.2 — RESOLVED by adopting the issue-449 design; the release absorbs it.** The question
+looked like "may per-session routing profiles be removed", and it was asked in that form on
+2026-08-31. That framing was wrong, and the operator caught it: the work already exists.
+`docs/design/2026-08-31-meta-tool-exposure.md` answers GitHub issue 449 (Bruce-Poating, open,
+"allow operators to trim the exposed `gateway_*` meta-tool surface"), and both vendors reviewed it
+and rejected its first shape — an operator-configured allow-list — in favour of an
+**authorization-derived** surface. Its `449.EXPOSE.1-7` are superseded; `449.DERIVE.1-9` replace
+them.
+
+That shape is what `ORDER.2` permits in its own text: the tool set MUST NOT vary per connection but
+MAY vary by the authorization presented on the request
+(`docs/requirements/RELEASE-4.0.0-requirements.md:128`). So the conforming answer and the answer a
+user asked for are the same answer, and it is already designed and reviewed.
+
+**Decision (operator, 2026-08-31): implement `449.DERIVE.1-9` inside v4.0.0.** Profiles are not
+removed — `449.DERIVE.5` lists the profile tools only when routing profiles are configured. The two
+options this closes off are recorded so they are not re-proposed: shipping the modern path
+profile-blind while legacy keeps profiles (leaves two behaviours and a restatable finding), and
+holding `ORDER.2` open (ships a knowingly non-conforming release).
+
+*What this costs, stated plainly:* nine acceptance criteria move into the release, and `tools/list`
+has no caller context today, so that plumbing is real work standing between here and the version
+flip. *What it retires:* the `gateway_set_profile` stale-list defect — a profile change never fires
+`notifications/tools/list_changed`, so clients are handed a stale list today.
+
 ## What would make this plan wrong
 
 - ~~If TASK.1 is dropped from v4.0.0, SUB.4 loses its alternative branch.~~ CLOSED: the operator
