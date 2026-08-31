@@ -114,7 +114,7 @@ pub(super) fn json_to_code_mode_search_result(v: &Value) -> Option<crate::rankin
 /// match JSON by looking up the original entry by its `"tool"` field.
 pub(super) fn ranked_results_to_code_mode_json(
     ranked: Vec<crate::ranking::SearchResult>,
-    _include_schema: bool,
+    explain: bool,
     originals: &[Value],
 ) -> Vec<Value> {
     ranked
@@ -129,14 +129,12 @@ pub(super) fn ranked_results_to_code_mode_json(
                 .map(|mut value| {
                     if let Value::Object(ref mut map) = value {
                         map.insert("score".to_string(), json!(r.score));
-                        map.insert(
-                            "ranking".to_string(),
-                            json!({
-                                "included": r.explanation.included,
-                                "reasons": r.explanation.reasons,
-                                "signals": r.signals
-                            }),
-                        );
+                        if explain {
+                            map.insert(
+                                "ranking".to_string(),
+                                crate::gateway::search_disclosure::ranking_debug_object(&r),
+                            );
+                        }
                     }
                     value
                 })

@@ -3,6 +3,7 @@
 //! Tests for `meta_mcp_tool_defs` — extracted for LOC compliance.
 
 use super::*;
+use serde_json::json;
 
 // ── build_meta_tools ────────────────────────────────────────────────
 
@@ -342,6 +343,14 @@ fn build_code_mode_search_tool_has_limit_and_schema_params() {
     assert_eq!(tool.input_schema["properties"]["limit"]["type"], "integer");
     assert_eq!(
         tool.input_schema["properties"]["include_schema"]["type"],
+        "boolean"
+    );
+    assert_eq!(
+        tool.input_schema["properties"]["detail"]["enum"],
+        json!(["l0", "l1", "l2"])
+    );
+    assert_eq!(
+        tool.input_schema["properties"]["explain"]["type"],
         "boolean"
     );
 }

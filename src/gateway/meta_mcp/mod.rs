@@ -1384,3 +1384,7 @@ mod tests;
 #[cfg(test)]
 #[path = "authz_tests.rs"]
 mod authz_tests;
+
+#[cfg(test)]
+#[path = "search_disclosure_e2e.rs"]
+mod search_disclosure_e2e;
