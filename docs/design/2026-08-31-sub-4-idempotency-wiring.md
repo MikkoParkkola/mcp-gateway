@@ -1,135 +1,170 @@
 # MIK-7272.SUB.4 — idempotency protection for reissued side-effecting calls
 
-Status: proposed, revision 2. No code written. Revision 1 was reviewed by GPT-5.x and Grok,
-both `SHIP-WITH-FIXES`; this revision is the repair. Awaiting re-review.
+Status: proposed, revision 3. No code written. Revisions 1 and 2 were reviewed by GPT-5.x and
+Grok; both returned `SHIP-WITH-FIXES` on revision 2. This revision is the repair.
 
 ## Scope
 
-FOR: deciding how a side-effecting call, reissued after a broken stream with a new request
-id, becomes protected — which is what MIK-7272.SUB.4 requires.
+FOR: deciding how a side-effecting call, reissued after a broken stream with a new request id,
+becomes protected — which is what MIK-7272.SUB.4 requires.
 
 OUT:
 - the tasks extension (MIK-7272.TASK.1, ABSENT). It is the criterion's other branch and a far
   larger surface; this design neither builds it nor depends on it.
 - idempotency key *derivation* as an algorithm. `derive_key` and `RetryFields` exist and are
-  tested. What is in scope is *when a key is derived at all* — see prerequisite 2.
-- MIK-7212.MRTR.10a (`inputResponses`/`requestState` inside the key), a separate ABSENT
-  criterion. Noted as a dependency: enforcing on a key that omits them protects the wrong set.
+  tested. What is in scope is *when a key is derived at all*, and *what it is bound to*.
 
 ## Problem
 
-The idempotency machinery is complete and unreachable.
+The idempotency machinery is complete and unreachable, and it has no way in.
 
 - `MetaMcp::idempotency_cache` is initialised to `None` (`src/gateway/meta_mcp/mod.rs:393`).
-- Its only populator, `MetaMcp::enable_idempotency` (`src/gateway/meta_mcp/mod.rs:580`), is
-  marked `#[allow(dead_code)]` and has zero callers: `rg --hidden --no-ignore
-  'enable_idempotency' .` returns one hit, its own definition.
+- Its only populator, `MetaMcp::enable_idempotency` (`src/gateway/meta_mcp/mod.rs:580`), has
+  zero callers: `rg --hidden --no-ignore 'enable_idempotency' .` returns its own definition.
 - No configuration key gates it: `rg -n 'idempotency' src/config/mod.rs` returns nothing.
+- It carries `#[allow(dead_code)]`, which silences the warning the `-D warnings` gate would
+  otherwise have raised. That the attribute is *why* it survived is inferred (I), not read.
 
 So the enforcement site (`src/gateway/meta_mcp/invoke.rs:792`) takes the `None` branch in every
-build that has ever shipped. `resolve_idempotency_key` runs, derives a key, and nothing
-consumes it. The `#[allow(dead_code)]` attribute is why this survived the `-D warnings` gate:
-it silences the exact warning that would have reported the unused setter.
+build that has ever shipped.
 
-A second gap compounds it. `POST /mcp/{name}` — the direct backend route,
-`src/gateway/router/backend_handlers.rs:338-353` — does not go through `invoke_tool_traced`. It
-re-enforces OAuth isolation and tool policy locally but never calls `resolve_idempotency_key`,
-whose sole call site is `meta_mcp/invoke.rs:782`. Revision 1 attributed that bypass to "ADR-008
-rung 2"; that was a misreading, corrected below, and no ADR sanctions it.
+Two further gaps compound it, both found in review and verified at source.
 
-## The cache cannot simply be turned on
+**No advertised way for a client to send a key.** `resolve_idempotency_key` reads
+`args["idempotency_key"]` (`src/gateway/meta_mcp/support.rs:40`), and that string appears in
+exactly six places in the tree, all internal: the module doc, the function, and its call site.
+It is in no tool schema. A client cannot discover it, so today the *only* reachable protection
+is the automatic derivation — which is itself defect P2 below. This is the finding that
+reshapes the design: "enforce only on an explicit client key" is not an available option until
+a carrier exists on both routes.
 
-Review found three defects in the existing implementation. Each was verified at source. Wiring
+**The direct route bypasses the machinery entirely.** `POST /mcp/{name}`
+(`src/gateway/router/backend_handlers.rs:338-353`) does not go through `invoke_tool_traced` and
+never calls `resolve_idempotency_key`, whose sole call site is `meta_mcp/invoke.rs:782`.
+Revision 1 attributed that bypass to "ADR-008 rung 2"; that was a misreading. ADR-008 rung 2 is
+client-native OAuth passthrough and says nothing about HTTP routing. No ADR sanctions the
+bypass.
+
+## The cache cannot simply be turned on — seven prerequisites
+
+Review found seven defects in the existing implementation. Each was verified at source. Wiring
 the cache without fixing them ships a regression, so they are prerequisites, not follow-ups.
 
 **P1 — enforcement is not atomic.** `enforce` (`src/idempotency.rs:337`) calls `cache.check(key)`
-and then `cache.mark_in_flight(key)` as two separate `DashMap` operations. Two concurrent
-retries can both observe `Proceed` and both execute the side effect — the exact duplication
-SUB.4 exists to prevent. Fix: one atomic entry transition, with a concurrent same-key
-falsifier proving the old code fails it.
+then `cache.mark_in_flight(key)` as two separate `DashMap` operations. Two concurrent retries can
+both observe `Proceed` and both execute — the exact duplication SUB.4 exists to prevent. Fix: one
+atomic entry transition, with a concurrent same-key falsifier proving the old code fails it.
 
 **P2 — a keyless call gets an automatic key.** `resolve_idempotency_key`
-(`src/gateway/meta_mcp/support.rs:26-45`) derives a key from `(server, tool, arguments)`
-whenever a cache is active, whether or not the client supplied one. Turning the cache on
-therefore silently deduplicates *intentional* identical side effects for 24 hours. This is not
-a footnote: it makes revision 1's own third test row unsatisfiable. Fix: enforce only on an
-explicit retry key, or gate the automatic derivation on a declared-retry signal.
+(`src/gateway/meta_mcp/support.rs:26-45`) derives a key from `(server, tool, arguments)` whenever a
+cache is active, whether or not the client supplied one. Turning the cache on therefore silently
+deduplicates *intentional* identical side effects for 24 hours. Fix depends on the carrier
+question below: deleting the derivation is only safe once clients can send a key.
 
 **P3 — the entry map is unbounded.** `IdempotencyCache { entries: DashMap<...> }`
-(`src/idempotency.rs:93`) has no capacity policy, and `COMPLETED_TTL` is 24 hours
-(`src/idempotency.rs:31`). Ordinary volume, or attacker-chosen unique keys, retains entries
-for a day. Fix: a bounded capacity that fails closed for new protected side effects when full.
+(`src/idempotency.rs:93`) has no capacity policy and `COMPLETED_TTL` is 24 hours. RESOLVED: take
+the response cache's bound, `DEFAULT_MAX_ENTRIES = 10_000` (`src/config/features/cache.rs:12`), and
+reject its policy. `ResponseCache::enforce_max_entries` evicts the oldest
+(`src/cache.rs:185-204`), which for a side-effect guard would silently re-admit a duplicate.
+Fail closed instead: refuse a new protected side effect at the bound.
+
+**P4 — `_full` calls are unprotected.** `let idem_key = if want_full { None }`
+(`src/gateway/meta_mcp/invoke.rs:779`) forces the key to `None` for every raw-output call, so an
+irreversible tool invoked through that path can execute twice however the rest is wired. Fix:
+keep idempotency active and isolate the replay payload with an explicit key suffix, as the
+projection suffix already does.
+
+**P5 — an explicit key is not bound to the request.** The client key is used verbatim
+(`src/gateway/meta_mcp/support.rs:40`) with no fingerprint of `(server, tool, arguments)`. Reusing
+one key across two different calls replays the first result and silently skips the second
+mutation. Fix: store the canonical request fingerprint with the entry and reject mismatched reuse
+rather than replaying.
+
+**P6 — a reservation can be abandoned.** `enforce` marks in-flight before dispatch, but
+post-dispatch early returns exist — the contract-gate block at
+`src/gateway/meta_mcp/invoke.rs:1149` returns `Err` without reaching `mark_completed`. The entry
+then sits `InFlight` until it times out, locking the caller out and afterwards admitting a
+duplicate of work that already ran. Fix: an owned reservation that reaches a terminal state on
+every exit after dispatch.
+
+**P7 — the in-flight window is a fixed five minutes.** `IN_FLIGHT_TIMEOUT`
+(`src/idempotency.rs:37`) expires a reservation after 5 minutes regardless of whether the original
+call is still running, so a long backend call can be duplicated mid-flight. The constant is
+verified; whether a configured backend timeout exceeds it is NOT — no such default was found in
+`src/config/features/`. Scheduled: find the effective backend call timeout before choosing between
+tying validity to the invocation lifecycle and simply raising the constant.
 
 ## Constraints, measured
 
-- The response cache is `Option<Arc<ResponseCache>>` (`src/gateway/meta_mcp/mod.rs:185`) and is
-  `None` when `config.cache.enabled` is false (`src/gateway/server/mod.rs:465-475`). Revision 1
-  claimed it was non-optional; that was inferred from initializer shorthand and is wrong. The
-  consequence matters twice: idempotency cannot lean on the response cache for correctness,
-  and MIK-7212.MRTR.10b's evidence — which rests on the response-cache guard — is conditional
-  on that flag and needs its status re-checked.
-- The response cache already collapses two identical sequential calls before the backend runs
-  (`src/gateway/meta_mcp/invoke.rs:828-833`), so any test asserting "the backend ran once"
-  passes today, unwired. Every test in this design must defeat that.
+- The response cache is `Option<Arc<ResponseCache>>` (`src/gateway/meta_mcp/mod.rs:185`), `None`
+  when `config.cache.enabled` is false (`src/gateway/server/mod.rs:465-475`), and enabled by
+  default (`src/config/features/cache.rs:32`). Idempotency cannot lean on it for correctness.
+- `cache.set` runs immediately after the backend result and *before* the client stream
+  (`src/gateway/meta_mcp/invoke.rs:1260-1268`). Revision 2 claimed a post-execution abort leaves no
+  cached response; that is wrong. It leaves a cache hit that serves the reissue and holds a
+  mutation counter at 1 with idempotency entirely unwired. Every SUB.4 test must therefore run
+  with the response cache OFF — see the fixture invariant below.
 - TTLs already exist: `COMPLETED_TTL` 24h and `IN_FLIGHT_TIMEOUT` 5m (`src/idempotency.rs:30-37`).
-  They are the defaults. Copying `config.cache.default_ttl` instead would shrink the protection
-  window to a minute.
-- ADR-008 INV-3 requires the `cache_binding` (user + audience) to be mixed into both cache
-  keys, and it is — but at the CALL SITE. `invoke.rs:773` builds an `identity_suffix` from the
-  resolved credential and appends it to the idempotency key at `:789` and to the response-cache
-  key at `:831`/`:1263`. Neither `derive_key` nor `ResponseCache::build_key` knows about it.
-  That placement is the whole reason the direct route is a security question and not just a
-  coverage gap: a second call site must re-apply the binding by hand, which is the shape ADR-008
-  itself records going wrong once (`CapabilityExecutor::fetch_oauth_token` bypassing the guard,
-  ADR-008:117). Extending coverage should push the binding INTO the derivation, not copy the
-  suffix to a second site.
+  Copying `config.cache.default_ttl` instead would shrink protection to a minute.
+- ADR-008 INV-3 requires the `cache_binding` (user + audience) in both cache keys, and it is —
+  but at the CALL SITE. `invoke.rs:773` builds an `identity_suffix` and appends it at `:789`,
+  `:831` and `:1263`. Neither `derive_key` nor `ResponseCache::build_key` knows about it. DECIDED:
+  extending coverage pushes the binding INTO the derivation. Copying the suffix to a second call
+  site is exactly the shape ADR-008:117 already records failing.
 - `IdempotencyCache::check` evicts on access (`src/idempotency.rs:147-176`), so the background
-  cleanup task that `enable_idempotency` spawns is an optimisation, not a correctness
-  requirement. Revision 1 priced it as an unavoidable cost of enabling. It is not.
+  cleanup task is an optimisation, not a correctness requirement.
+- MIK-7212.MRTR.10a (continuation fields inside the key) is promoted from a noted dependency to a
+  PREREQUISITE. Wiring SUB.4 on a key that omits those fields makes continuation collisions live
+  rather than dormant.
 
-## Two decisions, not three options
+## Two decisions, plus one the review created
 
-Revision 1 offered options A/B/C. Both reviewers found they were not a spanning set: C is B
-plus a second axis, and the axes are independent. They are separated here, and neither is
-decided in this document — see the open questions.
+**Axis 1 — activation.** Off by default and opt-in | on by default and opt-out | mandatory. Off
+by default cannot satisfy a criterion that says a reissue MUST be protected, so it is rejected on
+the requirement, not on cost. The remaining choice turns on whether an operator may switch off a
+MUST.
 
-**Axis 1 — activation.** Off by default and opt-in | on by default and opt-out | mandatory,
-not disableable. Off-by-default cannot satisfy a criterion that says a reissue MUST be
-protected, so it is rejected on the requirement, not on cost. The choice is between
-on-by-default and mandatory, and it turns on whether an operator may switch off a MUST.
+**Axis 2 — coverage.** Meta route alone | both routes. Meta-only leaves a documented ingress
+unprotected, which the criterion does not permit. Both routes is the requirement's answer, and
+placement is settled above: the binding goes in the derivation.
 
-**Axis 2 — coverage.** The meta route alone | both routes. Meta-only leaves a documented
-ingress a client can reach unprotected, which the criterion does not permit. Both routes is
-therefore the requirement's answer, and the open part is *placement*: INV-3 says the binding
-must be in the key, and it currently reaches the key from the call site. Duplicating the suffix
-at a second site satisfies the criterion and reproduces a failure ADR-008 has already recorded.
-
-Revision 1's recommendation is withdrawn — it was made while the ADR question was open, which
-both reviewers named. The ADR has now been read; what replaces the recommendation is the
-placement question above, which is an engineering choice, not an operator one.
+**Axis 3 — the key carrier, new in this revision.** Protection needs a key a client can actually
+send, on both routes, advertised and validated. Nothing in the tree advertises one. Until this is
+decided, P2's fix cannot be chosen: deleting the automatic derivation with no carrier leaves the
+criterion unsatisfiable, and keeping it leaves the silent-dedup defect. This axis is upstream of
+the other two.
 
 ## Open questions — each scheduled, none assumed
 
 | question | how it is settled | state |
 |---|---|---|
-| May an operator disable protection a criterion states as MUST? | ASK the operator. Only they can weigh a MUST against an escape hatch. | OPEN — blocks axis 1, blocks all code |
-| Does ADR-008 bear on the direct route's bypass? | CHECKED: read end to end. It does not. Rung 2 is client-native OAuth passthrough — the client holds the token and attaches it per request — and says nothing about HTTP routing. What ADR-008 *does* bind is INV-3, above. CHANGED: the bypass loses its justification, and axis 2 gains a placement constraint. | RESOLVED |
-| Should P2's automatic key be deleted or gated on a declared retry? | ASK the operator: deleting it narrows protection to clients that send a key; gating it keeps protection and needs a signal that does not exist yet. | OPEN — blocks P2, blocks all code |
-| What capacity bound, and what happens at the bound? | CHECK what `ResponseCache::with_max_entries` uses, then decide fail-closed vs evict-oldest. Fail-closed is the safe default for a side-effect guard. | OPEN — blocks P3 |
+| What carries a retry key, on both routes? | DESIGN decision, then ASK: it changes the advertised tool surface, which this repo treats as a locked decision. Must be advertised, validated, and tested before axis 1 or P2 can be answered. | OPEN — blocks P2, axis 1, all code |
+| May an operator disable protection a criterion states as MUST? | ASK the operator. Only they can weigh a MUST against an escape hatch. | OPEN — blocks axis 1 |
+| Does ADR-008 bear on the direct route's bypass? | CHECKED end to end. It does not; rung 2 is client-native OAuth passthrough. What it does bind is INV-3. CHANGED: the bypass loses its justification and axis 2 gains a placement constraint. | RESOLVED |
+| What capacity bound, and what happens at the bound? | CHECKED `src/config/features/cache.rs:12` and `src/cache.rs:185-204`: bound 10_000, policy evict-oldest. CHANGED: take the number, reject the policy, fail closed. | RESOLVED |
+| Does a configured backend timeout exceed `IN_FLIGHT_TIMEOUT`? | CHECK the effective backend call timeout; none found in `src/config/features/`. | OPEN — blocks P7 |
 
 Nothing is deferred; nothing is implemented while any of the open ones is open.
 
-## Test plan — one row per criterion, each able to fail today
+## Test plan
 
-Every row states what defeats the response cache, because a row it can satisfy proves nothing.
+**Fixture invariant, applying to every row: `config.cache.enabled = false`.** Three reviewers
+independently found rows that pass through the response cache rather than the code under test.
+The response cache stores before transmission, so no argument about *when* a stream aborts can
+defeat it. Turning it off in the fixture is the only mechanism that does, and stating it once as
+an invariant is what stops the defect returning row by row.
 
-| criterion | case | how it fails today | defeats the response cache |
-|---|---|---|---|
-| SUB.4, meta route | abort the first response *after* the backend executed, reissue with a new request id and the same retry key, assert a mutation counter on a `destructiveHint` tool increments once | unwired: the counter reaches 2 | the abort happens post-execution, so no cached response exists to serve |
-| SUB.4, concurrency (P1) | two same-key requests in flight together; exactly one executes, the other gets `409` or the cached result | non-atomic `enforce` lets both proceed | both are in flight, so neither can be a cache hit |
-| SUB.4, direct route | the same post-execution reissue through `POST /mcp/{name}` | that route never resolves a key | the direct route is outside the meta response cache |
-| no false dedup (P2) | two *unrelated* `(server, tool, arguments)` tuples with no client key; both backends run | if the automatic key survives unchanged, this stays red after the fix, which is the signal | different arguments give different cache keys |
-| bound (P3) | fill to capacity, assert a new protected side effect is refused rather than admitted | unbounded map admits it | not a caching question |
+| criterion | case | how it fails today |
+|---|---|---|
+| SUB.4, meta route | abort after the backend executed, reissue with a new request id and the same retry key, assert a mutation counter on a `destructiveHint` tool reads 1 | unwired: the counter reaches 2 |
+| SUB.4, concurrency (P1) | two same-key requests in flight together; exactly one executes, the other gets `409` or the stored result | non-atomic `enforce` lets both proceed |
+| SUB.4, direct route | the same post-execution reissue through `POST /mcp/{name}` | that route never resolves a key |
+| no false dedup (P2) | the *identical* keyless call issued twice, both backends must run | red once the cache is wired with auto-derivation intact — which is the point of the row |
+| `_full` protection (P4) | the meta-route case again with `_full` requested | `want_full` forces the key to `None` |
+| key/request binding (P5) | one key reused for a different `(server, tool, arguments)`; the second call must be refused, not replayed | the key is used verbatim, so the first result is replayed |
+| reservation release (P6) | a call that trips the contract gate after dispatch; a later same-key call must not be locked out | the entry stays `InFlight` until timeout |
+| bound (P3) | fill to 10_000, assert a new protected side effect is refused rather than admitted | unbounded map admits it |
+| MRTR.10b regression | a non-final `InputRequired` result through the newly wired path must leave the call retryable, not stored as completed | SUB.4 is the change that first populates the cache, so this guard has never run in production; its only coverage calls `mark_completed` directly |
 
-The assertion is a mutation counter on the tool, not the response body: two identical bodies
+The assertion is a mutation counter on the tool, never the response body: two identical bodies
 are also what executing twice produces.
