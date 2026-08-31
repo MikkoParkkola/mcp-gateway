@@ -407,28 +407,41 @@ question in disguise: a modern-only peer is unreachable until HEADER.9 offers a 
 peer is a known cost, ranked A3 below, and revision 4 takes its repair rather than accepting it.
 Both have an owner and a trigger; neither blocks anything in this increment.
 
-Revision 4 opens one deferral, and it is a *requirements* question, not a design one.
+Revision 4 opened one deferral and it was **closed the same day** by the team-lead. It is recorded
+here in full, because the answer is provisional and a later reader must be able to see what it rests
+on.
 
-**Deferred: is "per backend" the right cache key when the pool is keyed per user?** DISCOVER.5's
+**Answered: "per backend" means per backend *name*.** DISCOVER.5's
 text says the era "MUST be cached per backend"
 (`docs/requirements/RELEASE-4.0.0-criteria-status.md:182`). GPT's review argues that under
 `PoolKey::PerUser` one backend name can front two slots whose peers differ, so a per-backend key can
 publish one slot's era to the other. That is a tension with the acceptance criterion as written, and
 narrowing an acceptance criterion needs the requester's recorded agreement — it is not a repair this
-design may make on its own. It is **not** resolved by inventing a generation-tagged cache with
+design may make on its own. It was **not** resolved by inventing a generation-tagged cache with
 compare-and-swap invalidation at revision 4; a concurrency protocol invented in a late review round
 is exactly the shape that produced this round.
 
-| field | value |
-|---|---|
-| owner | team-lead, to put to the requester; tracked against MIK-7217 DISCOVER.5 |
-| what would resolve it | an answer to one question: does DISCOVER.5's "per backend" mean per backend *name*, or per pool slot? Asked, not measured — only the requester can settle it |
-| when | before the cache key is written; the probe seam, the trait method and the classifier do not depend on it |
-| what if it resolves badly | if the answer is "per slot", the key gains the pool key and A2 disappears; the change is one field and one lookup, in a cache that has exactly one reader. Nothing else in this design moves |
+Recorded in the askable form the process requires:
 
-Nothing implemented in this increment depends on the answer: the era's *value* is produced by the
-probe, which is per-connection either way, and the only consumer is the outbound shaping path that
-does not exist yet (HEADER.9).
+> *Does DISCOVER.5's "per backend" mean per backend name, or per pool slot?* — asked of the
+> team-lead, 2026-08-31 — **per backend name**, team-lead's call on the full-scope direction,
+> **provisional and not operator-confirmed** — closed A2, kept the shared in-flight resolution
+> (A3), and fixed the cache key.
+
+The reason, stated so it does not have to be quoted from a message: era is a property of the peer
+*process*, and every slot of one named backend is dialled from the same configured command or URL,
+so a per-slot key would issue one probe per user slot against what is almost always the same remote
+— a probe storm bounded only by user count, which is the opposite of what DISCOVER.5's caching
+clause exists for. The residual is real and named: one slot's mis-detection is published to its
+siblings. That is precisely what DISCOVER.5's re-probe half repairs, and per-slot has no comparable
+self-correction to pay for its cost.
+
+Two consequences travel with the answer. Revision 4's shared in-flight resolution (A3) is
+**load-bearing under this reading** — per-slot entries could not contend in the first place — so it
+stays and the design is coherent as written. And if the operator later says per slot, the change is
+the cache key alone plus dropping that repair: one field, one lookup, one section. Not a redesign.
+The same provisional status is noted beside the plan's other unconfirmed full-scope reading
+(`docs/requirements/RELEASE-4.0.0-plan.md:115`).
 
 - *Does a pre-`initialize` probe reach an SSE peer?* — read `src/transport/http/mod.rs:200,:327,:434-435,:815-821` and `src/config/mod.rs:1532,:1546` — no: `message_url` is unset until the handshake, and `streamable_http` defaults false — killed the revision-1 placement, which is the whole of revision 2.
 - *Does it reach an OAuth peer?* — read `src/transport/http/mod.rs:378-421,:640-645` — no: the token is acquired inside `initialize()` — second, independent kill of the same placement.
@@ -542,6 +555,14 @@ mechanism is proven by construction rather than by traffic. Revision 1 stated th
 HEADER.9; the accurate statement is narrower — it depends on a peer, and HEADER.9 is merely when we
 expect to meet one. The criteria file should record it that way.
 
+**For a release reviewer, in one line: the modern-detection arm ships in 4.0.0 untestable against a
+real peer.** No 2026 revision is offered by our outbound handshake (`src/protocol/mod.rs:26,:43`),
+so no live backend can produce the Modern outcome until MIK-7214.HEADER.9 lands, and that criterion
+is ABSENT (`docs/requirements/RELEASE-4.0.0-criteria-status.md:233`). "Accepted limit" reads smaller
+than it is. This changes nothing in the design and it does constrain the closure comment: DISCOVER.4
+and DISCOVER.5 may be claimed as *specified and proven by fixture*, never as exercised in
+production.
+
 ## Revision 2 — findings and dispositions
 
 | # | finding | disposition |
@@ -609,13 +630,20 @@ source. A SHIP on a fenced item is silence I asked for, not confirmation, and mu
 agreement. GPT raised it anyway, as its first finding — so on this one item there is a real verdict,
 recorded below. The revision-4 brief drops the fence.
 
+**The process finding, stated so no one re-adds a fence.** A fence suppresses exactly the item most
+worth hearing, and the evidence is in this round: the fenced item **died at source** the moment a
+reviewer ignored the instruction — the requirement it quoted does not exist. Had both vendors
+obeyed, that error would have survived the round wearing two SHIPs. A brief may hand a reviewer
+evidence ("this was verified at `<file:line>`, here is what was found"); it may not tell a reviewer
+what not to say. Evidence narrows a finding on its merits; a fence narrows the record.
+
 | # | finding | vendor | disposition |
 |---|---|---|---|
 | H1 | probing after `initialize` violates DISCOVER.4, which "explicitly requires probing first" | gpt (fence breached) | **died at source** — DISCOVER.4's text (`docs/requirements/RELEASE-4.0.0-criteria-status.md:181`) requires the gateway to *detect* the era by attempting `server/discover`; it prescribes no ordering relative to `initialize`, and the quoted requirement does not exist. Worth more than a quiet SHIP: a reviewer told to leave the item alone reached for it regardless and got the criterion wrong, which is the strongest evidence available that the disposal holds. The reachability half stays an accepted limit owned by HEADER.9 |
 | H2 | the HTTP probe still constructs both forbidden headers, because `send_request` builds them | gpt | **repaired, and it was self-contradiction** — `build_headers` inserts both unconditionally (`src/transport/http/mod.rs:570,:605`); revision 3's own test row 6 cited those lines while §3a claimed a subtraction. §3a now names the decision — the builder takes a mode, the probe passes the probe mode — without designing the spelling |
 | H3 | "era-conditional" is not an operational definition; an ordinary answer can classify | gpt + grok, independently | **eliminated** — `classify` is fed only `ProbeOutcome`. An ordinary answer can *trigger* a probe and nothing else, so the term is deleted rather than sharpened. After this the finding cannot be restated: there is no definition left to misapply, and a wrong trigger costs one rate-limited probe, never a misclassification |
 | H4 | the Legacy pin strands a peer that triggers twice for unrelated reasons | gpt + grok, independently | **eliminated** — the pin is deleted. With H3's cut the loop it was bounding cannot form; the ≤1 probe/30s rate limit is the whole bound |
-| H5 | one backend-wide era spans per-user slots whose peers may differ | gpt | **deferred, with four fields, as a requirements question** — DISCOVER.5 says "cached per backend" and only the requester can say whether that means per name or per slot. Explicitly *not* resolved by adopting GPT's generation-tagged compare-and-swap cache: inventing a concurrency protocol in a late review round is the move that produced this round. No correctness property depends on the answer; A3's repair — sharing the in-flight resolution — is load-bearing only under the per-name reading, because per-slot entries cannot contend in the first place |
+| H5 | one backend-wide era spans per-user slots whose peers may differ | gpt | **raised as a requirements question, answered by the team-lead the same day: per backend name, provisional** — DISCOVER.5 says "cached per backend" and only the requester can say whether that means per name or per slot. Explicitly *not* resolved by adopting GPT's generation-tagged compare-and-swap cache: inventing a concurrency protocol in a late review round is the move that produced this round. The reasoning, the residual and the one-field reversal cost are recorded under Open questions. A3's repair is load-bearing under the answer given |
 | H6 | treating a closed pipe as `NoAnswer` and still returning Ok publishes a dead transport | gpt | **repaired** — split into test rows 4 and 4b: an *answered* negative probe does not fail a start; a transport that died before answering fails the start on its own terms |
 | H7 | uncached `NoAnswer` serialises N waiters at 10s each | gpt | **repaired, not accepted** — concurrent waiters share the in-flight resolution; `NoAnswer` stays durably uncached. Revision 3 conflated sharing a future with caching a result and accepted a cost it had invented. A3 changes from an assumption to a decision |
 | H8 | test row 5 cannot go green: the fixture dies at `initialize`, never reaching the probe | grok | **repaired** — the fixture now completes the handshake and hangs on `server/discover`. The assertion is termination plus `Legacy`, not latency; a broken bound fails by exhausting the harness timeout |
@@ -631,7 +659,7 @@ recorded below. The revision-4 brief drops the fence.
 | S4 | row 5 asserted latency where A3 refuses latency assertions | self | **superseded by H8** — Grok found the deeper defect (the fixture never reaches the probe); row 5 is rewritten around termination, and the inconsistency goes with it |
 
 Revision 4, counted from the table above: two eliminated, seven repaired, one died at source, one
-deferred with an owner, one rejected with its reason, one improvement accepted and applied, one
+answered by the lead, one rejected with its reason, one improvement accepted and applied, one
 disclosed, four folded or superseded — eighteen rows. The eliminations are again the ones that
 matter: after H3 and H4 the classifier has one input type and one bound, and neither finding can be
 restated. No revision-5 dual review is run in this session — revision 3's repairs generated four of
