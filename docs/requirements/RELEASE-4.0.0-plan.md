@@ -256,6 +256,27 @@ has no caller context today, so that plumbing is real work standing between here
 flip. *What it retires:* the `gateway_set_profile` stale-list defect — a profile change never fires
 `notifications/tools/list_changed`, so clients are handed a stale list today.
 
+## One commit's history is wrong, and it is staying that way
+
+`b55116d1 docs(cluster-f): plan the response-cache keying tests as tests` contains, besides its
+cluster-F plan, four `src/` changes that belong to the protocol mis-parse repair: the extraction of
+`parse_sse_response` (`src/transport/http/mod.rs:273`) and the three tests that fail against the
+current deserializer — `response_deser_rejects_frame_carrying_method`,
+`message_enum_still_classifies_both_frame_shapes` and
+`handle_response_rejects_inbound_request_and_leaves_caller_pending`. They were swept in by a
+whole-tree stage from a session that did not own them. Nothing was lost and the fix is not in that
+commit, so the branch is red between `b55116d1` and the repair commit that follows it.
+
+The history is not being rewritten. Several sessions hold this branch checked out, and rebasing
+underneath them costs more than a wrong commit message does. What the rewrite would have bought is
+bought here instead: a reader who bisects into the red window, or who wonders why tests for a
+protocol defect arrived inside a caching plan, has the answer without having to reconstruct it. The
+repair commit names the same thing from the other end.
+
+Staging by explicit path — never `git add -A`, never `git commit -a` — is now the rule for every
+session on this branch, and `git status --porcelain` before each commit is what enforces it: a
+modified file you did not touch is somebody's work in progress, and committing it is not tidiness.
+
 ## What would make this plan wrong
 
 - ~~If TASK.1 is dropped from v4.0.0, SUB.4 loses its alternative branch.~~ CLOSED: the operator
