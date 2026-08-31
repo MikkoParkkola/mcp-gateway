@@ -510,3 +510,5 @@ fn collect_valid_params(schema: &Value) -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) mod meta;

@@ -65,6 +65,12 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 
+# JSON Schema 2020-12 meta-validation (docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity.md).
+# default-features = false excludes resolve-http/resolve-file: meta-validation
+# must never dereference a $ref over the network or filesystem (SSRF / path
+# traversal at the dependency level, not an app-level check).
+jsonschema = { version = "0.52", default-features = false }
+
 # Configuration
 figment = { version = "0.10", features = ["yaml", "env"] }
 

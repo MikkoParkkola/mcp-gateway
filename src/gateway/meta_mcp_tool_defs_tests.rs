@@ -459,3 +459,77 @@ fn config_default_exposes_every_meta_tool() {
     let exposure = MetaToolExposure::from_names(&config.exposed_meta_tools);
     assert!(exposure.is_exposed("gateway_kill_server"));
 }
+
+// ── P3 (test plan): the 19 compile-time meta-tool schemas meta-validate ────
+//
+// docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity-test-plan.md
+// (MIK-6865.SCHEMA.1). Population and name set fixed by the design doc's
+// "Implementer decisions — Increment 1" section: the 17 names from
+// `build_meta_tools` with every optional flag true, plus the 2 disjoint
+// Code Mode names — re-derived from source, not a hand-maintained literal
+// list that could drift the moment a meta-tool is added.
+
+const P3_EXPECTED_TOOL_NAMES: [&str; 19] = [
+    "gateway_list_servers",
+    "gateway_list_tools",
+    "gateway_search_tools",
+    "gateway_invoke",
+    "gateway_get_stats",
+    "gateway_run_playbook",
+    "gateway_webhook_status",
+    "gateway_kill_server",
+    "gateway_revive_server",
+    "gateway_set_profile",
+    "gateway_get_profile",
+    "gateway_list_disabled_capabilities",
+    "gateway_list_profiles",
+    "gateway_set_state",
+    "gateway_reload_config",
+    "gateway_cost_report",
+    "gateway_reload_capabilities",
+    "gateway_search",
+    "gateway_execute",
+];
+
+fn p3_population() -> Vec<Tool> {
+    let mut tools = build_meta_tools(true, true, true, true, 0, 0);
+    tools.extend(build_code_mode_tools());
+    tools
+}
+
+/// P3 — count and identity: a count alone passes if a definition is deleted
+/// and another added, so the exact name set is asserted alongside the count.
+#[test]
+fn p3_population_is_exactly_the_19_named_gateway_tools() {
+    let tools = p3_population();
+    assert_eq!(tools.len(), 19, "expected exactly 19 gateway_* tool defs");
+
+    let names: std::collections::HashSet<&str> =
+        tools.iter().map(|t| t.name.as_str()).collect();
+    let expected: std::collections::HashSet<&str> =
+        P3_EXPECTED_TOOL_NAMES.into_iter().collect();
+    assert_eq!(names, expected);
+}
+
+/// P3 — every `inputSchema` meta-validates against 2020-12, and every
+/// `outputSchema` does too when present. Failure names the offending tool
+/// and the validator's own error, so a regression says which schema broke
+/// rather than "one of nineteen".
+#[test]
+fn p3_every_tool_schema_meta_validates_under_2020_12() {
+    for tool in p3_population() {
+        crate::capability::schema_validator::meta::validate_2020_12(&tool.input_schema)
+            .unwrap_or_else(|error| {
+                panic!("{}: inputSchema failed 2020-12 meta-validation: {error}", tool.name)
+            });
+        if let Some(output_schema) = &tool.output_schema {
+            crate::capability::schema_validator::meta::validate_2020_12(output_schema)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{}: outputSchema failed 2020-12 meta-validation: {error}",
+                        tool.name
+                    )
+                });
+        }
+    }
+}

@@ -380,8 +380,36 @@ that turns out to be on a hot path.
   the new dependency or anything it pulls blocks the merge.
 - **Licensing:** `jsonschema` is MIT, matching the MIT core. `boon` is MIT OR Apache-2.0. Neither
   touches the PolyForm EE surface.
-- **D27 coupling:** unresolved until U2 returns a number. This gates adoption of option A, not the
-  design.
+- **D27 coupling:** **resolved 2026-08-31, option A confirmed.** Spike at
+  `/private/tmp/claude-501/-Users-mikko-github/7292a5ab-547b-4299-8eef-e4e0fb012027/scratchpad/schema-spike`
+  (`cargo tree -e normal --prefix none`, diffed against this repo's own `Cargo.lock` package names):
+  **26 net-new transitive crates** in the isolated spike with
+  `jsonschema = { version = "0.52", default-features = false }`. None is an HTTP or async-runtime
+  crate — `rg -i "reqwest|ureq|hyper|tokio|async"` over the spike's dependency tree returns nothing,
+  because `resolve-http` (`reqwest`+`rustls`) and `resolve-async` (`reqwest`+`tokio`+`async-trait`)
+  are both optional features the default excludes, confirmed by reading the vendored
+  `jsonschema-0.52.1/Cargo.toml` `[features]` table directly rather than docs.rs. **Re-measured
+  in-tree 2026-08-31** after adding the dependency to this repo's own `Cargo.toml` and running
+  `cargo check --lib` (an additive-only lock update — `git diff Cargo.lock` shows zero `-name =`
+  lines, so no already-pinned crate was bumped): **27 net-new transitive crates**, one more than the
+  isolated spike (this repo's existing tree already satisfies one of `jsonschema`'s transitive deps
+  differently than the spike's bare `Cargo.toml` did — not investigated further, since the gate is
+  the HTTP/async-runtime check, not the exact count). That check re-run in-tree: `git diff Cargo.lock`
+  grepped for `reqwest|hyper|tokio|async-trait|h2|rustls|native-tls` as new `+name =` lines returns
+  nothing. Accepted; boon was not spiked as U3 never triggers.
+- **Trust boundary (C15), not just coupling:** `resolve-file` is *also* excluded by
+  `default-features = false` — confirmed the same way, in the same feature table. Seam 3
+  meta-validates schema documents supplied by backends the operator does not control; with both
+  `resolve-http` and `resolve-file` off, the crate has **no compiled-in capability** to dereference a
+  `$ref` over the network or the filesystem during meta-validation, closing both an SSRF vector (a
+  backend schema containing `{"$ref": "http://169.254.169.254/..."}`) and a path-traversal one
+  (`{"$ref": "file:///etc/passwd"}`) before either construct reaches a check. Empirically probed:
+  meta-validating `{"$ref": "http://127.0.0.1:1/does-not-exist#"}` (a port nothing serves) returned
+  `Ok` in 0ms — meta-validation treats `$ref` as an opaque string against the meta-schema's own
+  `format: uri-reference`, it does not resolve it, and there is no HTTP client in the dependency tree
+  to attempt the resolution even if a future code change tried. This closes the review finding
+  recorded below ("disable `jsonschema` default features") with a verified mechanism, not an
+  assertion.
 
 ## Test plan — one row per assertion, and whether it can fail today
 
@@ -449,10 +477,10 @@ Deferred, each with owner, resolving check, trigger and fallback:
 
 | id | question | owner | check | trigger | if it resolves badly |
 |---|---|---|---|---|---|
-| **U2** | Transitive dependency delta for `jsonschema` 0.52.1, against D27 | implementer | `cargo add --dry-run jsonschema` | before adding the dependency | take option B; if boon also breaches, D27 needs an explicit justification recorded, not a silent pass |
-| **U3** | Does `boon` expose a meta-validation entry point in its own docs? | implementer | docs.rs page for `boon` 0.6.1 | only if U2 forces the fallback | express meta-validation as compiling the document against the 2020-12 meta-schema as an instance |
+| **U2** — *retired, answered* | Transitive dependency delta for `jsonschema` 0.52.1, against D27 | implementer | `cargo tree -e normal --prefix none` in a scratch spike, diffed against this repo's `Cargo.lock`, package names only (see Dependency gates section) | before adding the dependency | **26 net-new crates, none an HTTP/async-runtime crate; option A confirmed, boon not needed** |
+| **U3** — *moot* | Does `boon` expose a meta-validation entry point in its own docs? | implementer | docs.rs page for `boon` 0.6.1 | only if U2 forces the fallback | U2 did not force the fallback; not evaluated |
 | **U4** | Startup cost of meta-validating 110+ capabilities at load | implementer | median of five timed `load_from_directory` runs over the capability directory, before and after | before merge | validate on first publish rather than at load; the seam does not move, only when it runs |
-| **U5** | Which construct actually splits draft-07 from 2020-12, for G4 | implementer | run the selected validator over the `items`-as-array candidate under both dialects | before writing the G4 fixture | try further candidates; if none splits them, drop G4 and record that the dialect pin has no disproof — a finding, not a formality |
+| **U5** — *retired, answered* | Which construct actually splits draft-07 from 2020-12, for G4 | implementer | ran `jsonschema::draft202012::meta::validator().validate(...)` over two candidates in the scratch spike | before writing the G4 fixture | **`{"items": [{"type": "string"}]}` splits them** — 2020-12's meta-schema requires `items` to be `boolean` or `object` (tuple-form moved to `prefixItems`), error: `[{"type":"string"}] is not of types "boolean", "object"`. Backup candidate `{"$id": "#someAnchor"}` also splits (2020-12 requires `$id` to match `^[^#]*#?$`, no fragment) if a second disproof is ever wanted. |
 | **U7** — *answered; now a confirmation* | Does the criterion cover `outputSchema` as well as `inputSchema`? | team lead — **answered 2026-08-31: both, and it was never a widening.** The population is "tool schemas exposed by the gateway"; a published `Tool` carries both fields, so both are bound. `inputSchema` was named because that is where the failure was found | what remains is *checkable*: read the seam-3 predicate for both fields, and run **G11** — valid `inputSchema`, invalid `outputSchema`, tool dropped | before merge, as a confirmation rather than a gate | none needed. There is no narrowing to fall back to; a predicate reading one field fails G11 |
 | **U8** | Whether the added rejected-set slot and its invoke-time lookup cost anything measurable on the hot invoke path | implementer | time `gateway_invoke` against a mock backend, 1,000 calls, before and after, median of five | before merge, alongside U4 | keep the set but consult it only when the cached list is populated, which is the same condition the "did you mean?" hint already uses |
 | **U8b** | The direct-route cost, which U8 as written cannot see | implementer | time the **direct** per-backend `tools/list` route against a mock backend publishing 50 tools, 1,000 requests, before and after, median of five — a separate measurement, not a wider reading of U8 | before merge, alongside U8 | hoist the direct route onto the cached list so seam 3 runs per fill there too; weakening the check is not on the table |
@@ -523,3 +551,42 @@ executable. The count going from one to six is itself the argument for reviewing
 | **Confirmation pass, GPT, 2026-08-31: the settled-decisions table still asserts both disproved facts** | **fixed, by correcting the rows in place rather than rewriting them clean.** Both rows now show what was believed, what disproved it and why the first answer looked settled. A settled-decisions table that quietly acquires the right answer is the exact artefact this document argues against elsewhere; leaving the correction visible is the point. |
 | **Team lead, 2026-08-31: `outputSchema` was recorded as a widening** | **corrected — it never was one.** The criterion's population is "tool schemas exposed by the gateway", and a published `Tool` carries both fields on one surface. Seam 3 validating both is correct as specified; the narrowing fallback is gone, and U7 becomes a confirmation with G11 as its executable half. Nothing moved, so no scope receipt is owed. |
 | The 19 meta-tool schemas declare no `$schema` | **no change needed.** Pinning the dialect at the check makes the declaration unnecessary; adding it to 19 literals would be the larger diff and would give the check something to disagree with. |
+
+## Implementer decisions — Increment 1 (dependency + shared validator wiring)
+
+Recorded per §P3 — none changes an acceptance criterion or a contract; all are "how", not "what".
+
+- **P3 population re-derived from source, not carried from an earlier session.** `rg -n 'name: "gateway_'
+  src/gateway/meta_mcp_tool_defs.rs` returns exactly 19 literals: the 17 from `build_meta_tools` with
+  every flag true (4 base + stats + cost_report + webhooks + 8 unconditional + reload + reload_capabilities)
+  plus the 2 from `build_code_mode_tools` (`gateway_search`, `gateway_execute` — distinct names from the
+  base surface's `gateway_search_tools`, no overlap). `build_meta_tools_all_enabled_has_17_tools` in
+  `meta_mcp_tool_defs_tests.rs:59` already pins the 17; the 19 is the union with the disjoint Code Mode
+  pair. P3's assertion set is these 19 exact names, not a count alone, per the test plan.
+- **P4's both-directions probe, run before writing the test, not assumed.** Extended the scratch spike:
+  `jsonschema::draft7::meta::validator().validate(&json!({"items":[{"type":"string"}]}))` returns `Ok`
+  (clean under draft-07); `jsonschema::draft202012::meta::validator()` on the same fixture returns the
+  same error U5 already recorded. Both directions confirmed on one fixture, empirically, not inferred
+  from U5 alone. P4 needs no separate falsifier probe beyond this: the test-plan's falsifier-obligations
+  section scopes the probe requirement to rows *green on HEAD* (P3, P6b, P8, P9, P12a); P4 is red on
+  HEAD today because the crate is absent, which is the row's own stated state, not a compile accident
+  the plan overlooked.
+- **Module placement for the shared meta-validator: `src/capability/schema_validator/meta.rs`, `pub(crate)`.**
+  Checked D27 first: `rg "use crate::backend" src/capability/` and `rg "use crate::capability" src/backend/`
+  both return nothing today — no edge between the two siblings in either direction, so a new
+  `backend -> capability` edge (seam 3 calling in) cannot create a cycle. `gateway` already depends on
+  both (`use crate::capability` and `use crate::backend` both appear under `src/gateway/`), so this adds
+  one new sibling edge rather than a new module. Placed beside the existing (currently private)
+  `schema_validator` instance-validator so the opposite-directions distinction — meta-validates the
+  *schema document*, `schema_validator` validates *arguments against* a schema — sits in one file's
+  neighbourhood. `mod schema_validator;` in `src/capability/mod.rs` widens from private to `pub(crate)`
+  to make this reachable from `gateway` and `backend`; this is a crate-internal-only widening (no new
+  external API surface, D28 does not count it) made necessary by the design's own three-seam structure,
+  not a new design decision — the design already committed to one shared validator across three call
+  sites when it named seam 3 as a predicate reusing the same construct as seam 1/2 (see the settled
+  questions table). No `OnceLock`-cached validator instance is exposed publicly; only the `pub(crate) fn`
+  entry point is.
+- **D27 net-new-crate count re-measured in-tree: 27, not the spike's 26** — see the Dependency gates
+  section above. Additive-only lock change confirmed (`git diff Cargo.lock` has zero `-name =` lines);
+  no HTTP/async-runtime crate among the new entries, re-checked against the repo's actual `Cargo.lock`
+  rather than trusting the spike's isolated result to still hold.

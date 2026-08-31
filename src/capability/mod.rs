@@ -43,7 +43,7 @@ mod loader;
 mod openapi;
 mod parser;
 mod response_cache;
-mod schema_validator;
+pub(crate) mod schema_validator;
 pub mod validator;
 mod watcher;
 
