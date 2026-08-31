@@ -214,6 +214,7 @@ finding.
 | CACHE.2 | A list whose content depends on the caller is `private` | I | **security** | Yes |
 | CACHE.3 | **No `public` is emitted from a filtered assembly, anywhere** | C | security | Yes — the ticket's own stop-the-line |
 | CACHE.4 | Two callers with different credentials are never served each other's cached list | I | security | Yes — needs two principals and a live cache to be a real test, not one |
+| CACHE.4 | **Superseded in detail** by [`docs/design/2026-08-31-cluster-f-response-cache-keying-test-plan.md`](../design/2026-08-31-cluster-f-response-cache-keying-test-plan.md) — one row per response-varying input, plus the hit-control/miss-half fixture doctrine the single row above cannot carry | I, U | security | Yes — see that document's per-row column |
 | ORDER.1 | `tools/list` order is stable across repeated calls | I | positive | Yes |
 | ORDER.1 | Order is stable across two *different* callers when the tool set is the same | I | boundary | Yes — a `HashMap` iteration order passes the first row and fails this one |
 | ORDER.2 | A modern list does not vary with anything session-derived | I | security | Yes |

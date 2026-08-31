@@ -504,6 +504,43 @@ pub struct SamplingCreateMessageResult {
 
 #[cfg(test)]
 mod tests {
+    /// A frame carrying `method` is a request or notification. Deserializing it
+    /// as a response is what let an inbound `sampling/createMessage` be handed
+    /// back to a waiting caller as its (empty) answer.
+    #[test]
+    fn response_deser_rejects_frame_carrying_method() {
+        let frame = r#"{"jsonrpc":"2.0","id":5,"method":"sampling/createMessage","params":{}}"#;
+        let outcome = serde_json::from_str::<JsonRpcResponse>(frame);
+        assert!(
+            outcome.is_err(),
+            "expected rejection, got {:?}",
+            outcome.ok()
+        );
+    }
+
+    /// The stricter impl must not shift how the untagged `JsonRpcMessage` enum
+    /// classifies either frame shape.
+    #[test]
+    fn message_enum_still_classifies_both_frame_shapes() {
+        let req = r#"{"jsonrpc":"2.0","id":5,"method":"tools/list","params":{}}"#;
+        assert!(matches!(
+            serde_json::from_str::<JsonRpcMessage>(req).unwrap(),
+            JsonRpcMessage::Request(_)
+        ));
+
+        let res = r#"{"jsonrpc":"2.0","id":5,"result":{"tools":[]}}"#;
+        assert!(matches!(
+            serde_json::from_str::<JsonRpcMessage>(res).unwrap(),
+            JsonRpcMessage::Response(_)
+        ));
+
+        let note = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+        assert!(matches!(
+            serde_json::from_str::<JsonRpcMessage>(note).unwrap(),
+            JsonRpcMessage::Notification(_)
+        ));
+    }
+
     use super::*;
     use serde_json::json;
 

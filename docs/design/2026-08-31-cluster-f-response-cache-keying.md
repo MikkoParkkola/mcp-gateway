@@ -659,6 +659,24 @@ recorded as an observation for the CACHE.2 owner, not filed.
 
 **Deferred:** none. Nothing in this design waits on an unanswered question.
 
+## Test plan
+
+The full §P2 test plan is a sibling document:
+[`2026-08-31-cluster-f-response-cache-keying-test-plan.md`](2026-08-31-cluster-f-response-cache-keying-test-plan.md).
+It decomposes CACHE.4 into one row per response-varying input, carries the
+fixture doctrine (hit control + miss half) that a single cross-principal row
+cannot, records the A1-A9 sweep, and declares the one rule carried by review
+rather than by the suite.
+
+**Scope receipt — the direct route moves from OUT to IN-as-guarded.** This
+document settles `POST /mcp/{name}` as out of scope on the ground that it keeps
+no cache, so there is nothing on it to key. The team lead reads CACHE.4 as
+binding on *any shared cache the gateway keeps*, which makes "no cache here
+today" a claim needing a **guard** rather than an exemption. The test plan
+carries that guard (row 5.g). No second key shape is designed and none is
+implied: what exists is a case that goes red if a shared cache ever appears on
+that door.
+
 ## Disproof artifact
 
 CACHE.4's evidence type is `T, I` and the test plan currently marks its own
