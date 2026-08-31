@@ -1,5 +1,8 @@
 # ShadowRadar Passive Discovery
 
+Enterprise-governance comparison (Willow / Webrix, MIK-5843):
+[docs/competitive/willow-enterprise-agent-governance.md](competitive/willow-enterprise-agent-governance.md).
+
 ShadowRadar is the local, passive inventory path for unmanaged MCP servers. It
 helps operators find MCP endpoints that exist in client configs, environment
 hints, local process metadata, or gateway-adjacent discovery output before
