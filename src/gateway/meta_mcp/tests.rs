@@ -2508,7 +2508,7 @@ fn active_profile_ignores_a_profile_bound_to_the_sessionless_key() {
 
 /// `gateway_set_profile` is refused, not silently applied under the shared key.
 #[test]
-fn set_profile_is_refused_without_a_session() {
+fn ac_order_2_set_profile_is_refused_without_a_session() {
     // GIVEN: a sessionless (modern) caller
     let mm = make_meta_mcp_with_profiles();
     let args = json!({ "profile": "coding" });
@@ -2536,7 +2536,7 @@ fn set_profile_is_refused_without_a_session() {
 /// rely on — the design note removes both halves of the pair, not just the
 /// writer.
 #[test]
-fn get_profile_is_refused_without_a_session() {
+fn ac_order_2_get_profile_is_refused_without_a_session() {
     // GIVEN: a sessionless (modern) caller
     let mm = make_meta_mcp_with_profiles();
 
@@ -2556,7 +2556,7 @@ fn get_profile_is_refused_without_a_session() {
 /// `params.profile` body field. Closing only the meta-tool would leave the
 /// handshake able to pin a profile under the shared key.
 #[test]
-fn initialize_binds_no_profile_without_a_session() {
+fn ac_order_2_initialize_binds_no_profile_without_a_session() {
     for (label, params, header) in [
         ("header", None, Some("coding")),
         ("body", Some(json!({ "profile": "coding" })), None),

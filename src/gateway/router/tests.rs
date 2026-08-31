@@ -3146,7 +3146,7 @@ fn modern_router_app_state() -> Arc<AppState> {
 /// the observable side of it — `attach_session_header` emits nothing for an
 /// empty id, so a minted session would show up here as a header.
 #[tokio::test]
-async fn a_modern_request_is_given_no_session_even_when_it_offers_one() {
+async fn ac_order_2_a_modern_request_is_given_no_session_even_when_it_offers_one() {
     let router = create_router(modern_router_app_state());
     let request = axum::http::Request::builder()
         .method("POST")
@@ -3204,7 +3204,7 @@ async fn a_modern_request_is_given_no_session_even_when_it_offers_one() {
 /// closed path and by a write that silently landed somewhere useless, and only
 /// the refusal tells the two apart.
 #[tokio::test]
-async fn a_modern_caller_is_refused_gateway_set_profile() {
+async fn ac_order_2_a_modern_caller_is_refused_gateway_set_profile() {
     let router = create_router(modern_router_app_state());
     let request = axum::http::Request::builder()
         .method("POST")

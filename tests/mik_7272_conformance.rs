@@ -64,11 +64,11 @@ const MAJOR: &[Row] = &[
             // variance -- so the profile writers and readers are named here
             // too, or the row reads as covered while the stronger clause is
             // verified by nothing.
-            "gateway::router::tests::a_modern_request_is_given_no_session_even_when_it_offers_one",
-            "gateway::router::tests::a_modern_caller_is_refused_gateway_set_profile",
-            "gateway::meta_mcp::tests::set_profile_is_refused_without_a_session",
-            "gateway::meta_mcp::tests::get_profile_is_refused_without_a_session",
-            "gateway::meta_mcp::tests::initialize_binds_no_profile_without_a_session",
+            "gateway::router::tests::ac_order_2_a_modern_request_is_given_no_session_even_when_it_offers_one",
+            "gateway::router::tests::ac_order_2_a_modern_caller_is_refused_gateway_set_profile",
+            "gateway::meta_mcp::tests::ac_order_2_set_profile_is_refused_without_a_session",
+            "gateway::meta_mcp::tests::ac_order_2_get_profile_is_refused_without_a_session",
+            "gateway::meta_mcp::tests::ac_order_2_initialize_binds_no_profile_without_a_session",
         ],
     },
     Row {
