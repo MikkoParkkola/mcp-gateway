@@ -43,8 +43,8 @@ Deferred, carrying the four fields §P1 requires:
 
 | field | value |
 |---|---|
-| owner | **MIK-7312**, filed before the tag, not "we" |
-| what would resolve it | a shared atomic insert-if-absent store behind both the ledger and the mint counter |
+| owner | **MIK-7312** owns the 4.0.0 half (item 1a, per-process keys). The deferred half below has no ticket yet and needs one before the tag |
+| what would resolve it | a shared atomic insert-if-absent store behind both the ledger and the mint counter. This is the **4.1.0** question only. Item 1a deliberately rejects a shared store for 4.0.0 — per-process keys are what make a continuation single-use across replicas without one — so the two are not alternatives to be chosen between. Read as a straight choice, as an earlier draft of this document invited, MIK-7312 appeared both deferred past the tag and queued inside it |
 | when | before the first multi-replica deployment of the modern path, whichever release that lands in |
 | what if it resolves badly | the modern path stays single-replica; the release notes carry the constraint, and the deployment documentation refuses multi-replica while `modern_protocol` is on |
 
@@ -112,13 +112,19 @@ Steps 1 and 3 are done and step 5 is half done; what follows them is now the que
 Ordered by what blocks what, not by size. Each item is finished before the next starts, because
 each later item's review has to see the earlier one's code.
 
+**The labels are not the order.** Item 1's retry side consumes the key material built in 1a and the
+arm chosen in 1a', so within this group the execution order is **1a, 1a', then 1, then 1b and 1c**.
+Item 1's response side can start earlier; its retry side cannot. The review found this scheduled
+backwards, which is worth more than it looks: the first increment as numbered could not have started.
+
 | # | work | why it is here | gate it closes |
 |---|---|---|---|
 | 1 | MRTR wiring (MIK-7325) — test plan reviewed **as a plan** over two rounds and a confirmation pass, then failing tests, response side, retry side | the headline feature is currently declined at the door; a fixture backend emitting `input_required` does not exist yet and must be written first | §2 WIRED |
 | 1a | Continuation state (MIK-7312) — design, review, test plan, then per-process key material plus a process-local consumed ledger. **Not** a shared storage backend: the design rejects one, because per-process keys are what make a continuation single-use across replicas | MRTR.5 says MUST and the operator held the release for it on 2026-08-30. MRTR.6 is *not* closed here: no table of held legacy exchanges exists to correlate a retry against, so the origin path refuses rather than resumes | MRTR.5 |
 | 1a' | MRTR.6 closure — either build the retry-to-exchange mapping, or make the explicit refusal permanent and document it as the answer | MRTR.6 says MUST and 1a leaves it on the refusal arm. Deciding which arm ships is a design event, not an implementation detail | MRTR.6 |
+| 1c | Idempotency and cacheability under continuations (MRTR.9, MRTR.10) | both blocking, and until this review neither appeared anywhere in this plan: item 1 is scoped to MRTR.1-.8. `derive_key` (`idempotency.rs:296-299`) hashes tool name and arguments only, `resolve_idempotency_key` (`meta_mcp/support.rs:31-46`) never passes the continuation fields, so two different continuations of one tool call collide on one key. `cacheable::result_type_of` (`protocol/cacheable.rs:78`) has zero production callers while `mark_completed` (`idempotency.rs:198-203`) caches unconditionally at `invoke.rs:852,1277` — an `input_required` result is cached as if it were final | MRTR.9, MRTR.10 |
 | 1b | Legacy-client bridge — design, review, test plan, then wiring `Bridge::to_legacy_client` (mrtr.rs:186), which has no caller | MRTR.7 says MUST, same decision. The translation exists; issuing the requests over the client's transport mid-call is the missing half | MRTR.7 |
-| 2 | Tasks-extension conformance (MIK-7311, and TASK.1) — two statuses, two required fields, an error payload shape, a capability check | the extension is unadvertised, so this is conformance rather than a live defect; fetch the specification page again before writing anything | §12 finding |
+| 2 | Tasks-extension conformance (MIK-7311, and TASK.1) — two statuses, two required fields, an error payload shape, a capability check. **Undersized as written**: TASK.1 also requires `tasks/get`, `tasks/update`, the task lifecycle and the long-running-call wiring that produces a task in the first place, none of which the four items above cover | the extension is unadvertised, so this is conformance rather than a live defect; fetch the specification page again before writing anything | §12 finding |
 | 3 | Coverage on the five named modules (MIK-7324) — **runs after the wiring increments**, see Order | §4's failing half; `src/main.rs` is the sharpest, 22 added lines and none executed | §4 |
 | 4 | Mutation over the rest of the branch diff, on Spark, module by module — **runs after the wiring increments**, see Order | the measured 93.3% covers `src/protocol` only, and a subset is a lower bound | §4 |
 | 5 | Version bump to 4.0.0 everywhere (step 4 above), then re-run §3, §4, §5 at the final head | a tag built from a tree calling itself 3.5.0 ships a lie in `--version` | §3, §4, §5 |
@@ -195,15 +201,19 @@ Read as a plan the queue is not wrong, it is short. That is the finding.
 | # | increment | criteria closed | why these belong together |
 |---|---|---|---|
 | 5 | Shared-cache key correctness | CACHE.3, CACHE.4 | The key covers 2 of 8 response-varying dimensions (`invoke.rs:639-640,780`), both conditional, with zero tests. A cache keyed on less than what varies the response serves one caller's result to another. This is a data-disclosure defect wearing a performance feature's clothes, and it outranks everything else in this table. CACHE.3's missing decision table is the same gap stated as documentation |
-| 6 | Outbound request envelope | HEADER.5, HEADER.9 | Both are the outbound half of the request builder: mirroring an argument onto `Mcp-Param-{name}`, and carrying the modern `_meta` envelope. One mechanism, one design, one review. HEADER.5's validation half already exists (`param_headers.rs::mirrored_params`) and is waiting for a sender |
+| 6 | Outbound request envelope | HEADER.5, HEADER.9 | Both are the outbound half of the request builder: mirroring an argument onto `Mcp-Param-{name}`, and carrying the modern `_meta` envelope. One mechanism, one design, one review. HEADER.5's validation half already exists (`param_headers.rs::mirrored_params`) and is waiting for a sender. **HEADER.9 depends on increment 9**: carrying a modern `_meta` envelope per backend requires knowing each backend's era, and the era detector plus the per-backend `EraCache` redesign are increment 9's work. Either 9 runs first or HEADER.9 splits out of this increment |
 | 7 | Principal-keyed control plane | TENANT.1, CONTROL.2, CONTROL.3, CONTROL.4 | Every one says the same thing: key on the authenticated principal or the trace id, never on the session. Splitting them means designing that substitution four times. **First task, before any design: reconcile with the in-flight work in another session** (`src/security/firewall/tenant_guard.rs`, `principal_window.rs`, both untracked). That is a task with an output, not a caution — starting anywhere else rebuilds what already exists, and the cost of colliding grows daily |
 | 8 | Modern-path conformance | RESULT.2, ERROR.2, ORDER.2, SUB.1, SUB.2, SUB.3, SUB.4 | Seven corrections to what the 2026 path returns and advertises: a default when a backend reply omits a field, `-32602` for resource-not-found, a tool set that cannot vary per connection, removal of SSE resumability, and the retry-after-broken-stream case that has code but no test. SUB.1, SUB.2 and SUB.3 join it because the sweep showed all three are **one defect**: `mcp_sse_handler` (`handlers.rs:167-260`) carries no era or `MCP-Protocol-Version` gate anywhere in the function, so the GET endpoint was supplemented rather than replaced and `Last-Event-ID` is read unconditionally at `:206`. SUB.1 and SUB.2 were filed under evidence quality on the strength of a `MET*` that is not in the status file's own vocabulary — a partial-credit status invented mid-document, and this is what it concealed |
-| 9 | Build the outbound side of the protocol surface | EXT.1, OTEL.1, DISCOVER.4, DISCOVER.5 | Not a tidy-up and not four wirings. `ExtensionSet::gateway_declares` and `TraceContext` are built, unit-tested and have zero production call sites; the era detector has nothing that sends a probe, and `EraCache` (`era.rs:111`) holds one `Option<Era>` under one mutex where DISCOVER.5 requires per-backend keying, so the cache is redesigned rather than wired. The title said declare-or-delete while the body described construction — sizing this as a tidy-up is how it stayed last in the queue. The deletion arm survives only because HEADER.5 took it three days ago and that precedent should be visible when this is decided |
+| 9 | Build the outbound side of the protocol surface | EXT.1, OTEL.1, DISCOVER.4, DISCOVER.5 | Not a tidy-up and not four wirings. `ExtensionSet::gateway_declares` and `TraceContext` are built, unit-tested and have zero production call sites — and OTEL.1 additionally requires baggage propagation, which `TraceContext` does not carry at all, so that criterion needs a field before it needs a caller; the era detector has nothing that sends a probe, and `EraCache` (`era.rs:111`) holds one `Option<Era>` under one mutex where DISCOVER.5 requires per-backend keying, so the cache is redesigned rather than wired. The title said declare-or-delete while the body described construction — sizing this as a tidy-up is how it stayed last in the queue. The deletion arm survives only because HEADER.5 took it three days ago and that precedent should be visible when this is decided |
 | 10 | Close the four evidence-quality criteria | SCHEMA.1, SURFACE.1, ORDER.3, CONTROL.5 | Two are MET with a caveat and two on inference. Each is either a criterion that passes or evidence nobody has produced, and today the record cannot tell which. Cheap here, expensive as a seventh gap discovered at tag time. Given an increment because a bullet in a prose section has no owner and no gate |
 
-CONFIRM.2 is not in the table: the destructive-confirmation gate must be reachable through the MRTR
-path, so it closes when item 1 wires that path or it does not close at all. It rides on item 1 as an
-acceptance criterion, not as an increment.
+**CONFIRM.2 needs its own increment and does not have one.** This document previously had it riding
+on item 1 as an acceptance criterion, on the reasoning that the destructive-confirmation gate has to
+be reachable through the MRTR path. Reaching the path is necessary and not sufficient: confirmation
+is still session-bound elicitation, and wiring a continuation does not make it continuation-borne.
+An increment that closes CONFIRM.2 has to move the confirmation exchange onto the continuation
+itself. Sized as an acceptance criterion on someone else's increment, it would have been discovered
+open at tag time.
 
 ### The largest single lever is already queued
 
@@ -248,16 +258,19 @@ rows, not carried forward.
 
 ### Order, and the one thing that reorders it
 
-Items 1, 1a, 1a', 1b, 2 stand as written. **Items 3 and 4 move to after the wiring increments**,
+Within the first group the order is **1a, 1a', 1, 1b, 1c** — not the label order; see the note under
+the queue table. Item 2 follows. **Items 3 and 4 move to after the wiring increments**,
 and that is this plan's own finding turned on itself: coverage and mutation cannot see the unwired
 class, because those lines *do* execute — under tests. Raising coverage on a module nothing imports
 buys a green number over dead code, and `src/main.rs` with 22 added lines and none executed is
 exactly that shape. Measure the tree that ships, not the tree that compiles.
 
-The six new increments then run 5, 7, 6, 8, 9, 10 —
-cache-key disclosure first because it is the only orphan that is a live security defect, the
-principal-keyed plane second because another session is already inside those files and the cost of
-colliding grows daily.
+The six new increments then run **5, 7, 9, 6, 8, 10** — cache-key disclosure first because it is the
+only orphan that is a live security defect, the principal-keyed plane second because another session
+is already inside those files and the cost of colliding grows daily. **9 moves ahead of 6**, which
+the review corrected: 6 closes HEADER.9, HEADER.9 needs a per-backend era, and the era detector and
+the `EraCache` redesign are 9's work. The old order asked 6 to close a criterion whose mechanism did
+not exist yet.
 
 The reordering trigger: if the DISCOVER sweep returns a blocking criterion in a module any of these
 increments touches, that increment absorbs it rather than queueing behind it. Discovering a
