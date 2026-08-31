@@ -88,10 +88,13 @@ See 4.1.
 
 `build_initialize_result(negotiated_version, instructions)`
 (`src/gateway/meta_mcp_helpers.rs:144-176`) is the single place `ServerCapabilities` is
-constructed. Its result is returned by `initialize` and is also embedded verbatim as the
-`capabilities` member of the `server/discover` response (assigned `src/gateway/meta_mcp/mod.rs:1018`,
-emitted at :1015-1022; :989 is a comment, not the assignment). Declaring in one and not the other is not reachable from here: both read
-the same builder.
+constructed. It has two production callers: `discover_document`
+(`src/gateway/meta_mcp/mod.rs:1003`) and `handle_initialize` (`mod.rs:1084`). Its result is
+returned by `initialize` and is also embedded verbatim as the `capabilities` member of the
+`server/discover` response (assigned `mod.rs:1037`). Declaring in one and not the other is not
+reachable from here: both read the same builder. Line anchors in this section were re-read at
+`fb994c43`; the file has moved twice during this review, so the symbol names are the durable
+part and the numbers are a convenience.
 
 ### 2.4 Per-request client capabilities are already read
 
@@ -191,10 +194,17 @@ The four states this criterion has to keep apart, and what each selects:
 
 Row two is what this change ships and row one is what it replaces, which is why the honest
 red-on-HEAD case is a serialisation check: `build_initialize_result`
-(`meta_mcp_helpers.rs:144`) and `discover_document` (`mod.rs:983`) emit no `extensions` key at
+(`meta_mcp_helpers.rs:144`) and `discover_document` (`mod.rs:1002`) emit no `extensions` key at
 all, because `ServerCapabilities` (`types.rs:232-254`) has no such field. The existing
 `ac_ext_1_*` tests stay green either way, so they cannot prove EXT.1 — a test plan that only
 extends them proves nothing new.
+
+Adding the field is not the same as wiring it. `build_initialize_result` ends in
+`..Default::default()` (`meta_mcp_helpers.rs:164`), so a newly added `extensions` field arrives
+at its default on every response until the builder assigns it explicitly. That is a
+silent-success shape: the struct change compiles, the key appears on the wire, and the value is
+empty. The populate is the work; the struct change on its own closes nothing, and a test that
+only asserts the key is present would pass against it.
 
 ### 3.2 EXT.1 — honouring a client that does not support an extension
 
@@ -274,6 +284,16 @@ Honest sizing: this follows the module's existing shape rather than forcing a ne
 it already has four unit tests at `invoke.rs:474-503` that a sibling can be tested the same way.
 It is a named decision because it changes when the gateway writes `_meta` on the backend hop, not
 because it needs new machinery.
+
+What this change can and cannot falsify, said as two claims because they have two owners. The
+write site itself can go red on HEAD: a unit case beside `invoke.rs:474-503` that calls
+`dispatch_to_backend` with no cache key and asserts the outbound params carry the three trace
+keys fails today, for the reason 3.4a names. What is genuinely absent is an end-to-end case —
+client sends `traceparent`, a real backend receives it over HTTP — because no backend-capture
+harness exists in this tree. That second gap is not this cluster's to price alone: cluster B1's
+stream-isolation work reaches the same missing harness. If both designs name it, it stops being
+a per-cluster cost and becomes an item with an owner. Recorded here so the second discovery
+happens in a design rather than in an implementation.
 
 Also corrected here: an earlier draft pointed at §2.6 for the write site. §2.6 is the direct
 route, which carries no `_meta` at all. The write site is `dispatch_to_backend` on the meta-MCP
@@ -413,6 +433,15 @@ Recorded here so they survive between revisions of this document.
 | F6 | `POST /mcp/{name}` carries no `_meta` and bypasses `invoke_tool_traced`, with no ADR sanctioning it — inherited from SUB.4, whose carrier question is still unanswered. | Inherited dependency, not re-asked. Recorded at 4.4.3. |
 | F7 | `trace.rs:38-51` accepts uppercase hex, version `ff`, and an all-zero `parent-id`, and rejects any future-version `traceparent` carrying more than four fields. An earlier draft of this design called that parse strict. | Fixed inside this change (3.4b). OTEL.1's drop-not-forward rule is only as good as the predicate that decides what is invalid, so this is not separable from the criterion. |
 | F8 | The one site that writes outbound `_meta` (`invoke.rs:1934-1938`) writes it only when a prompt-cache key is present; the other arm sends no `_meta` at all. | Fixed inside this change (3.4a): the trace write is unconditional and merges with the cache key rather than depending on it. |
+
+### 6.1 Review leads that died as stated and survived as repairs
+
+Recorded in their corrected form, because the reviewer's wording would send a later reader to
+the wrong conclusion.
+
+| as raised | what was actually wrong |
+|---|---|
+| "the exact OTEL wire contract is deferred and the cited §4.1 does not exist" (gpt) | §4.1 exists, at line 206, as the resolved-questions table. The defect was a cross-reference pointing there for the key spelling, which at the time was deferred in §4.2. The reference is corrected, and the SEP-414 read now settles the spelling in §4.1, so the deferral is gone rather than re-pointed. |
 
 ## 7. What closing these criteria requires
 
