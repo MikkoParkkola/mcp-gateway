@@ -15,8 +15,24 @@ leaves backend-supplied schemas out (§P0). That remainder is a real, named part
 a nicety: owner = team lead, to be scoped as its own change, because it is a policy question
 (reject the backend? publish and flag? degrade the tool?) rather than a validity one. A stated
 limit against a MUST is an unmet requirement; recording it here is what stops the eventual
-closure comment claiming MET. If SCHEMA.1's own text scopes to gateway-authored schemas, quote
-that text into this paragraph and the remainder disappears — that check has not been run.
+closure comment claiming MET.
+
+**The check has now been run, and the remainder survives it.** SCHEMA.1 is split across two rows
+in `docs/requirements/RELEASE-4.0.0-criteria-status.md:101-102`, quoted verbatim so the next
+reader does not re-derive this:
+
+| row | criterion text | status | evidence |
+|---|---|---|---|
+| `:101` | "tool schemas MUST avoid nested-object-in-array shapes" | MET | `tests/mik_7272_exploit_acs.rs:323,343,365` via real `MetaMcp::handle_tools_list` |
+| `:102` | "tool schemas MUST remain valid under JSON Schema 2020-12" | UNTESTED | — this design |
+
+"Tool schemas" is **unqualified in both rows**. Nothing scopes it to gateway-authored schemas, so
+the hoped-for escape is not in the text. The sibling clause settles it the other way: its evidence
+runs through `MetaMcp::handle_tools_list`, and that entry point publishes proxied backend tools on
+the same surface — `handle_tools_list_for_session` appends `self.surfaced_tools` and tags each
+`backend:{server}` or `capability:{server}` (`meta_mcp/mod.rs:1133-1141` at `112a392c`). The
+population the MET clause was measured against therefore *includes* backend schemas, and the
+UNTESTED clause inherits the same population. The remainder is real and stays named.
 
 ## §P0 Scope
 
@@ -28,7 +44,7 @@ meta-schema, at the point where an invalid document can still be rejected cheapl
 
 | out of scope | why |
 |---|---|
-| schemas supplied by upstream MCP **backends** and proxied through | not authored here; rejecting a backend schema is a routing policy decision, not a validity one. Team-lead call, accepted. |
+| schemas supplied by upstream MCP **backends** and proxied through | not authored here; what to *do* with an invalid backend schema is a routing policy decision, not a validity one. Team-lead call, accepted — but this is an exclusion against a MUST, so it is carried as the deferred unknown below, not as a clean boundary. |
 | validating tool *arguments* against a schema | already exists — `src/capability/schema_validator/mod.rs`. Opposite direction, see Problem. |
 | semantic quality of a schema, i.e. is it a *good* schema | 2020-12 admits keywords it does not define; the criterion is "valid", not "well-designed". |
 | A2A and trust-descriptor payload shape beyond the embedded `inputSchema` | descriptor structure is its own contract. |
@@ -214,8 +230,12 @@ Deferred, each with owner, resolving check, trigger and fallback:
 | **U2** | Transitive dependency delta for `jsonschema` 0.52.1, against D27 | implementer | `cargo add --dry-run jsonschema` | before adding the dependency | take option B; if boon also breaches, D27 needs an explicit justification recorded, not a silent pass |
 | **U3** | Does `boon` expose a meta-validation entry point in its own docs? | implementer | docs.rs page for `boon` 0.6.1 | only if U2 forces the fallback | express meta-validation as compiling the document against the 2020-12 meta-schema as an instance |
 | **U4** | Startup cost of meta-validating 110+ capabilities at load | implementer | median of five timed `load_from_directory` runs over the capability directory, before and after | before merge | validate on first publish rather than at load; the seam does not move, only when it runs |
-
 | **U5** | Which construct actually splits draft-07 from 2020-12, for G4 | implementer | run the selected validator over the `items`-as-array candidate under both dialects | before writing the G4 fixture | try further candidates; if none splits them, drop G4 and record that the dialect pin has no disproof — a finding, not a formality |
+| **U6** | What the gateway does with a **backend-supplied** schema that fails 2020-12 meta-validation — reject the tool, publish it and flag, or degrade it | team lead | *askable, not checkable*: a behaviour change for every deployment proxying a backend with a draft-07 schema, so it is the operator's call, put to them as its own change | before SCHEMA.1's closure comment is written — this is the clause that stops it reading MET | the remainder stays open and SCHEMA.1 closes as partial, naming `:102` over backend-supplied schemas as the unmet part |
+
+U6 is the one deferral here that blocks something: not this design's implementation, but SCHEMA.1's
+closure. It is an **askable** unknown — no command settles it, because the question is which
+behaviour the operator wants, and a check that cannot come back "no" is not a check.
 
 U4 and U5 block nothing else in the design; U2 blocks only the choice between A and B. None of
 these is a residual-risk paragraph, and none is closed by naming a command instead of running it.
@@ -224,6 +244,6 @@ these is a residual-risk paragraph, and none is closed by naming a command inste
 
 | finding | disposal |
 |---|---|
-| Backend-supplied schemas are never meta-validated | **observation.** Real, out of scope by §P0, and a policy question rather than a validity one. Recorded here so the next reader does not rediscover it as a gap. |
+| Backend-supplied schemas are never meta-validated | **deferred unknown, four fields recorded** (was: observation). SCHEMA.1's text does not scope to gateway-authored schemas and the MET clause was measured over a population that includes backend tools, so this is a remainder against a MUST rather than a neighbouring concern. Out of scope by §P0 for the *policy*, not disposed. Recorded here so the next reader does not rediscover it as a gap. |
 | `src/capability/schema_validator/mod.rs` validates a bounded subset and will silently accept constructs 2020-12 defines | **observation.** Independent of SCHEMA.1: it is instance validation. If it becomes a defect it is its own change. |
 | The 19 meta-tool schemas declare no `$schema` | **no change needed.** Pinning the dialect at the check makes the declaration unnecessary; adding it to 19 literals would be the larger diff and would give the check something to disagree with. |

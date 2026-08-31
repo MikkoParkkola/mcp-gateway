@@ -396,6 +396,7 @@ been invented for any of them.
   one variant; adding more is a later change.
 - **Changing `_meta` conventions repo-wide.** The bare-vs-prefixed inconsistency (2.2) is stated
   as a finding; harmonising every other key is not this change.
+- **The rest of the W3C `traceparent` grammar.** The four predicates in 3.4b came into scope with F7, and that is a scope move recorded here: the drop-rather-than-forward rule depends on rejecting the right input, so the check that decides it belongs to this change. Everything else in `trace.rs` stays out — later versions carrying more than four parts, and `tracestate` grammar beyond the length bound (4.2).
 - **The test plan.** §P2 follows this review.
 
 ## 6. Findings raised, not designed around
@@ -409,9 +410,9 @@ Recorded here so they survive between revisions of this document.
 | F3 | Three surfaces use "trace" with different meanings: `src/protocol/trace.rs` (forwards, never mints, `_meta`), `src/tracing_context/` (mints roots, HTTP headers, unwired), and `augment_with_trace` (`support.rs:266`, mints a client-facing correlation `trace_id`, live). | 4.3 — make ownership explicit in code; deleting `tracing_context` stays operator-gated and is not a condition of closing OTEL.1 (see 7). `augment_with_trace` stays but is named as correlation-only, not W3C propagation. Operator decision at 4.4.2. |
 | F4 | `tracestate` is copied verbatim with no validation and no length bound (`trace.rs:56`+), today, before `baggage` exists. | Fixed inside this change: 3.4 bounds both fields, not just the new one. |
 | F5 | The bare `traceparent` / `tracestate` `_meta` keys are inconsistent with every other `_meta` key in the tree, which is reverse-DNS (`meta.rs:41-50`). Legal per `MetaObject`, but a convention split. | 4.1 resolves it: SEP-414 is Final and makes these keys an explicit exception to the reverse-DNS convention. One spelling on both sides, bare. Repo-wide alignment of the other keys is out of scope (§5). |
+| F6 | `POST /mcp/{name}` carries no `_meta` and bypasses `invoke_tool_traced`, with no ADR sanctioning it — inherited from SUB.4, whose carrier question is still unanswered. | Inherited dependency, not re-asked. Recorded at 4.4.3. |
 | F7 | `trace.rs:38-51` accepts uppercase hex, version `ff`, and an all-zero `parent-id`, and rejects any future-version `traceparent` carrying more than four fields. An earlier draft of this design called that parse strict. | Fixed inside this change (3.4b). OTEL.1's drop-not-forward rule is only as good as the predicate that decides what is invalid, so this is not separable from the criterion. |
 | F8 | The one site that writes outbound `_meta` (`invoke.rs:1934-1938`) writes it only when a prompt-cache key is present; the other arm sends no `_meta` at all. | Fixed inside this change (3.4a): the trace write is unconditional and merges with the cache key rather than depending on it. |
-| F6 | `POST /mcp/{name}` carries no `_meta` and bypasses `invoke_tool_traced`, with no ADR sanctioning it — inherited from SUB.4, whose carrier question is still unanswered. | Inherited dependency, not re-asked. Recorded at 4.4.3. |
 
 ## 7. What closing these criteria requires
 
@@ -437,8 +438,8 @@ F7 and F8 are fixed inside this change; F3 is disposed of by the comment or the 
 whichever the operator picks.
 
 On effort: the estimate moves for one reason only, and it is Q3 — whether the second route
-(`POST /mcp/{name}`, 4.4.3) must also carry trace `_meta`. It does not move for 3.4a. Making the
+(`POST /mcp/{name}`, 4.4.3) must also carry trace `_meta`. 3.4a and F7 are bounded, not free: making the
 write unconditional is a sibling function beside `inject_cache_key`, which already takes an
-optional params object and already has unit tests at `invoke.rs:474-503`; the seam exists. Nor
-does it move for F7 — four predicates and one test row each. Otherwise this stays what
+optional params object and already has unit tests at `invoke.rs:474-503`, so the seam exists;
+F7 is four predicates with one test row each. Neither is large enough to move the estimate. Otherwise this stays what
 `docs/requirements/RELEASE-4.0.0-criteria-status.md:162` says it is: wiring plus one struct field.
