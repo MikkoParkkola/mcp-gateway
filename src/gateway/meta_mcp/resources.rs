@@ -24,11 +24,12 @@ use tracing::warn;
 
 use crate::protocol::{
     JsonRpcResponse, RequestId, Resource, ResourceContents, ResourceTemplate, ResourcesListResult,
-    ResourcesTemplatesListResult,
+    ResourcesTemplatesListResult, Tool,
 };
 use crate::security::sanitize_resource_metadata;
 
 use super::super::meta_mcp_helpers::{extract_nested_optional_str, missing_parameter_response};
+use super::super::meta_mcp_tool_defs::{CallerRole, MetaToolSurface, build_meta_tools};
 use super::MetaMcp;
 
 /// JSON-RPC 2.0 standard "Invalid params" code.
@@ -128,9 +129,8 @@ Query aggregate statistics (cache hit rate, token savings) with:
     .to_string()
 }
 
-/// Content for the routing guide resource.
-fn routing_content() -> String {
-    "\
+/// The routing guide, minus the sections that describe optional tools.
+const ROUTING_BASE: &str = "\
 # MCP Gateway — Routing Guide
 
 ## Backend categories
@@ -156,7 +156,10 @@ without extra search round-trips.
 
 Example chain:
   linear_create_issue -> linear_get_issue -> linear_add_comment
+";
 
+/// Routing-profile prose, appended only when the profile tools are advertised.
+const ROUTING_PROFILES: &str = "
 ## Routing profiles
 
 A routing profile restricts the visible toolset to the current task,
@@ -165,24 +168,49 @@ reducing noise and accidental invocations of unrelated backends.
   gateway_list_profiles()          — see available profiles
   gateway_set_profile(profile=X)  — activate a profile for this session
   gateway_get_profile()            — show current active profile
+";
 
+/// Kill-switch prose, appended only when the kill-switch tools are advertised.
+const ROUTING_KILL_SWITCH: &str = "
 ## Kill switch and recovery
 
 If a backend misbehaves you can stop routing to it immediately:
   gateway_kill_server(server=X)
   gateway_revive_server(server=X)  — re-enables and resets error budget
-"
-    .to_string()
+";
+
+/// Content for the routing guide resource, for a caller offered `advertised`.
+///
+/// A section that tells the reader to call a tool is emitted only when that
+/// tool is in the caller's own `tools/list` (449.DERIVE.8). Gating on the
+/// advertised names rather than on a second copy of the exposure conditions
+/// is what stops the guide advertising a tool the list withheld.
+fn routing_content(advertised: &[Tool]) -> String {
+    let offers = |name: &str| advertised.iter().any(|tool| tool.name == name);
+
+    let mut content = String::from(ROUTING_BASE);
+    if offers("gateway_set_profile") {
+        content.push_str(ROUTING_PROFILES);
+    }
+    if offers("gateway_kill_server") {
+        content.push_str(ROUTING_KILL_SWITCH);
+    }
+    content
 }
 
 /// Attempt to serve a gateway-owned guide resource by URI.
 ///
 /// Returns `Some(JsonRpcResponse)` when the URI matches a known guide;
 /// `None` when the URI belongs to a backend and should be routed normally.
-fn try_serve_guide(id: RequestId, uri: &str) -> Option<JsonRpcResponse> {
+///
+/// `surface` is the caller's own meta-tool exposure, so the routing guide
+/// describes the tools that caller was actually offered (449.DERIVE.8). The
+/// tool list is built here rather than by the caller so a backend URI — the
+/// common case — costs nothing.
+fn try_serve_guide(id: RequestId, uri: &str, surface: MetaToolSurface) -> Option<JsonRpcResponse> {
     let text = match uri {
         URI_QUICKSTART => quickstart_content(),
-        URI_ROUTING => routing_content(),
+        URI_ROUTING => routing_content(&build_meta_tools(surface, 0, 0)),
         _ => return None,
     };
     let contents = vec![ResourceContents::Text {
@@ -274,17 +302,22 @@ impl MetaMcp {
     ///
     /// Gateway-owned `gateway://` URIs are served inline without forwarding to any
     /// backend.  All other URIs are routed to the backend that owns them.
+    ///
+    /// `role` is the caller's admin fact, the same one `tools/list` gates on, so
+    /// the routing guide cannot describe a tool this caller was not offered
+    /// (449.DERIVE.8).
     pub async fn handle_resources_read(
         &self,
         id: RequestId,
         params: Option<&Value>,
+        role: CallerRole,
     ) -> JsonRpcResponse {
         let Some(uri) = extract_nested_optional_str(params, "uri") else {
             return missing_parameter_response(&id, "uri");
         };
 
         // Gateway-owned guides are served inline — no backend round-trip.
-        if let Some(response) = try_serve_guide(id.clone(), uri) {
+        if let Some(response) = try_serve_guide(id.clone(), uri, self.meta_tool_surface(role)) {
             return response;
         }
 
@@ -483,7 +516,7 @@ mod tests {
         // WHEN: calling try_serve_guide
         // THEN: Some(response) is returned
         let id = RequestId::Number(1);
-        let response = try_serve_guide(id, URI_QUICKSTART);
+        let response = try_serve_guide(id, URI_QUICKSTART, MetaToolSurface::all());
         assert!(response.is_some());
     }
 
@@ -493,7 +526,7 @@ mod tests {
         // WHEN: calling try_serve_guide
         // THEN: Some(response) is returned
         let id = RequestId::Number(2);
-        let response = try_serve_guide(id, URI_ROUTING);
+        let response = try_serve_guide(id, URI_ROUTING, MetaToolSurface::all());
         assert!(response.is_some());
     }
 
@@ -503,7 +536,7 @@ mod tests {
         // WHEN: calling try_serve_guide
         // THEN: None is returned (falls through to backend routing)
         let id = RequestId::Number(3);
-        let response = try_serve_guide(id, "gateway://unknown/resource");
+        let response = try_serve_guide(id, "gateway://unknown/resource", MetaToolSurface::all());
         assert!(response.is_none());
     }
 
@@ -513,7 +546,7 @@ mod tests {
         // WHEN: serving the guide
         // THEN: the result JSON has a non-empty "contents" array
         let id = RequestId::Number(4);
-        let resp = try_serve_guide(id, URI_QUICKSTART).unwrap();
+        let resp = try_serve_guide(id, URI_QUICKSTART, MetaToolSurface::all()).unwrap();
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
         assert!(result["contents"].is_array());
@@ -529,13 +562,62 @@ mod tests {
         assert!(content.contains("gateway_invoke"));
     }
 
+    /// The routing guide is generated from the caller's own advertised tools,
+    /// so every name it teaches is a name that caller may actually invoke.
+    fn guide_for(surface: MetaToolSurface) -> String {
+        routing_content(&build_meta_tools(surface, 0, 0))
+    }
+
     #[test]
     fn routing_content_mentions_backend_categories() {
-        // GIVEN/WHEN: generating routing guide text
+        // GIVEN: a gateway advertising its whole surface
+        // WHEN: generating routing guide text
         // THEN: category keywords and profile commands appear
-        let content = routing_content();
+        let content = guide_for(MetaToolSurface::all());
         assert!(content.contains("gateway_set_profile"));
         assert!(content.contains("gateway_list_profiles"));
         assert!(content.contains("chains_with"));
+    }
+
+    /// AC 449.DERIVE.8 — the guide never teaches an admin tool to a caller
+    /// whose `tools/list` omits it, because both derive from one surface.
+    #[test]
+    fn routing_content_omits_kill_switch_for_a_standard_caller() {
+        // GIVEN: every feature enabled, but a non-admin caller
+        let surface = MetaToolSurface {
+            is_admin: false,
+            ..MetaToolSurface::all()
+        };
+        // WHEN: generating the routing guide
+        let content = routing_content(&build_meta_tools(surface, 0, 0));
+        // THEN: the admin-only kill switch is not advertised in prose either
+        assert!(!content.contains("gateway_kill_server"));
+        assert!(!content.contains("gateway_revive_server"));
+    }
+
+    /// AC 449.DERIVE.8 — an admin caller keeps the kill-switch section, so the
+    /// omission above is a property of the role, not of the prose.
+    #[test]
+    fn routing_content_keeps_kill_switch_for_an_admin_caller() {
+        // GIVEN/WHEN: an admin caller's routing guide
+        let content = guide_for(MetaToolSurface::all());
+        // THEN: the kill switch is taught
+        assert!(content.contains("gateway_kill_server"));
+    }
+
+    /// AC 449.DERIVE.8 — a feature that is not configured is not taught,
+    /// on the same derivation as the role gate.
+    #[test]
+    fn routing_content_omits_profiles_when_profiles_are_unconfigured() {
+        // GIVEN: an admin gateway with no profiles configured
+        let surface = MetaToolSurface {
+            profiles: false,
+            ..MetaToolSurface::all()
+        };
+        // WHEN: generating the routing guide
+        let content = routing_content(&build_meta_tools(surface, 0, 0));
+        // THEN: no profile command appears
+        assert!(!content.contains("gateway_set_profile"));
+        assert!(!content.contains("gateway_list_profiles"));
     }
 }

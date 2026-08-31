@@ -52,11 +52,10 @@ use crate::trust::{
 use crate::{Error, Result};
 
 use super::meta_mcp_helpers::{
-    build_code_mode_tools, build_discovery_preamble, build_initialize_result, build_meta_tools,
-    build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
-    wrap_tool_success,
+    CallerRole, MetaToolSurface, build_code_mode_tools, build_discovery_preamble,
+    build_initialize_result, build_meta_tools, build_routing_instructions, did_you_mean,
+    extract_client_version, extract_required_str, wrap_tool_success,
 };
-use super::meta_mcp_tool_defs::{MetaToolExposure, build_meta_tools_filtered};
 use super::webhooks::WebhookRegistry;
 
 mod invoke;
@@ -257,13 +256,6 @@ pub struct MetaMcp {
     /// Pre-built from `surfaced_tools` so `handle_tools_call` only pays one
     /// `HashMap` lookup instead of a linear scan on every call.
     pub(super) surfaced_tools_map: HashMap<String, String>,
-    /// Which meta-tools the operator exposes (GH issue 449).
-    ///
-    /// Exposes everything by default; narrowed via
-    /// [`MetaMcp::with_meta_tool_exposure`] from `meta_mcp.exposed_meta_tools`.
-    /// Consulted by both `tools/list` and `tools/call`, so a concealed tool
-    /// cannot be listed-but-callable or callable-but-unlisted.
-    pub(super) meta_tool_exposure: MetaToolExposure,
     /// Session-scoped dynamically promoted tools (SEP-1862 / Phase 3).
     ///
     /// Keyed by session ID.  Each entry is a list of `"server:tool"` strings
@@ -425,7 +417,6 @@ impl MetaMcp {
             cost_registry: None,
             surfaced_tools: Vec::new(),
             surfaced_tools_map: HashMap::new(),
-            meta_tool_exposure: MetaToolExposure::expose_all(),
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
             session_state: SessionStateStore::new(),
@@ -564,17 +555,6 @@ impl MetaMcp {
     #[must_use]
     pub fn with_trusted_identity_headers(mut self, enabled: bool) -> Self {
         self.caller_identity_header_trust = CallerIdentityHeaderTrust::from_enabled(enabled);
-        self
-    }
-
-    /// Restrict the meta-tools this gateway lists and executes.
-    ///
-    /// Takes the raw `meta_mcp.exposed_meta_tools` names. Empty exposes every
-    /// meta-tool. Unrecognised names are warned about and dropped rather than
-    /// aborting startup, matching [`MetaMcp::with_surfaced_tools`].
-    #[must_use]
-    pub fn with_meta_tool_exposure(mut self, names: &[String]) -> Self {
-        self.meta_tool_exposure = MetaToolExposure::from_names(names);
         self
     }
 
@@ -1138,13 +1118,42 @@ impl MetaMcp {
         (tool_count, server_count)
     }
 
+    /// Which meta-tools this deployment has anything to say about, for this caller.
+    ///
+    /// The four feature flags were already derived this way; `playbooks`,
+    /// `profiles` and `session_states` join them, so a gateway with no
+    /// playbooks does not advertise `gateway_run_playbook` (449.DERIVE.4-7).
+    /// `is_admin` comes from the caller rather than the deployment, which is
+    /// what lets one gateway show the operator key a tool it hides from the
+    /// agent key — the thing a deployment-wide name list could not express.
+    pub(super) fn meta_tool_surface(&self, role: CallerRole) -> MetaToolSurface {
+        MetaToolSurface {
+            stats: self.stats.is_some(),
+            webhooks: self.get_webhook_registry().is_some(),
+            reload: self.get_reload_context().is_some(),
+            // The cost tracker is always constructed, so the report always has
+            // a source to read.
+            cost_report: true,
+            playbooks: !self.playbook_engine.read().is_empty(),
+            profiles: !self.profile_registry.is_empty(),
+            session_states: self
+                .get_capabilities()
+                .is_some_and(|caps| caps.has_state_gated_capabilities()),
+            is_admin: role.is_admin(),
+        }
+    }
+
     /// Handle `tools/list` — Code Mode returns 2 tools; Traditional returns full set.
     ///
     /// When surfaced tools are configured, their schemas are appended after the
     /// meta-tools (subject to routing profile filtering).  Tools whose backend
     /// cache is empty are silently omitted rather than blocking the response.
+    ///
+    /// Lists as an admin. Used by tests and by the public-claims benchmark,
+    /// both of which want the full roster; every transport goes through a
+    /// variant that names the caller's role.
     pub fn handle_tools_list(&self, id: RequestId) -> JsonRpcResponse {
-        self.handle_tools_list_for_session(id, None)
+        self.handle_tools_list_for_session(id, None, CallerRole::Admin)
     }
 
     /// Session-aware variant of `handle_tools_list` used by the router.
@@ -1152,20 +1161,13 @@ impl MetaMcp {
         &self,
         id: RequestId,
         session_id: Option<&str>,
+        role: CallerRole,
     ) -> JsonRpcResponse {
         let tools = if self.code_mode_enabled {
             build_code_mode_tools()
         } else {
             let (tool_count, server_count) = self.backend_counts();
-            build_meta_tools_filtered(
-                self.stats.is_some(),
-                self.get_webhook_registry().is_some(),
-                self.get_reload_context().is_some(),
-                true, // cost_report always enabled (tracker is always present)
-                tool_count,
-                server_count,
-                &self.meta_tool_exposure,
-            )
+            build_meta_tools(self.meta_tool_surface(role), tool_count, server_count)
         };
         let mut tool_descriptors =
             project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
@@ -1221,12 +1223,13 @@ impl MetaMcp {
         id: RequestId,
         #[cfg_attr(not(feature = "spec-preview"), allow(unused_variables))] params: Option<&Value>,
         session_id: Option<&str>,
+        role: CallerRole,
     ) -> JsonRpcResponse {
         #[cfg(feature = "spec-preview")]
         if let Some(q) = params.and_then(|p| p.get("query")).and_then(Value::as_str) {
-            return self.handle_tools_list_filtered(id, q, session_id);
+            return self.handle_tools_list_filtered(id, q, session_id, role);
         }
-        self.handle_tools_list_for_session(id, session_id)
+        self.handle_tools_list_for_session(id, session_id, role)
     }
 
     /// Variant of [`handle_tools_list_with_params`] that accepts a per-request
@@ -1246,6 +1249,7 @@ impl MetaMcp {
         params: Option<&Value>,
         session_id: Option<&str>,
         url_override: bool,
+        role: CallerRole,
     ) -> JsonRpcResponse {
         let effective_code_mode = self.code_mode_enabled || url_override;
         if effective_code_mode && !self.code_mode_enabled {
@@ -1259,7 +1263,7 @@ impl MetaMcp {
             );
         }
         // No override (or static config already handles it): follow normal path.
-        self.handle_tools_list_with_params(id, params, session_id)
+        self.handle_tools_list_with_params(id, params, session_id, role)
     }
 
     /// Handle `tools/call` — dispatch to the appropriate handler.
@@ -1321,18 +1325,6 @@ impl MetaMcp {
                 Ok(content) => JsonRpcResponse::success_serialized(id, content),
                 Err(e) => error_response_preserving_status(id, &e),
             };
-        }
-
-        // Same predicate as the list path, so the listed set and the callable
-        // set cannot disagree. The envelope is built by the same constructor and
-        // the same responder as the fallback arm below, and carries no
-        // `did_you_mean` hint: a hint would match the concealed name exactly and
-        // confirm that the tool exists and is merely hidden.
-        if !self.meta_tool_exposure.is_exposed(tool_name) {
-            return error_response_preserving_status(
-                id,
-                &Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
-            );
         }
 
         let result = match tool_name {

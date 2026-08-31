@@ -20,10 +20,11 @@ use crate::{Error, Result};
 // The individual builders are used via `super::*` in the tests sub-module.
 #[allow(unused_imports)]
 pub(crate) use super::meta_mcp_tool_defs::{
-    build_base_tools, build_code_mode_execute_tool, build_code_mode_search_tool,
-    build_code_mode_tools, build_kill_server_tool, build_list_disabled_capabilities_tool,
-    build_meta_tools, build_reload_capabilities_tool, build_reload_config_tool,
-    build_revive_server_tool, build_set_state_tool, build_stats_tool, build_webhook_status_tool,
+    CallerRole, MetaToolSurface, build_base_tools, build_code_mode_execute_tool,
+    build_code_mode_search_tool, build_code_mode_tools, build_kill_server_tool,
+    build_list_disabled_capabilities_tool, build_meta_tools, build_reload_capabilities_tool,
+    build_reload_config_tool, build_revive_server_tool, build_set_state_tool, build_stats_tool,
+    build_webhook_status_tool,
 };
 
 // ============================================================================

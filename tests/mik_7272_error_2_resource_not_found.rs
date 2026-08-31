@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use mcp_gateway::backend::BackendRegistry;
-use mcp_gateway::gateway::test_helpers::MetaMcp;
+use mcp_gateway::gateway::test_helpers::{CallerRole, MetaMcp};
 use mcp_gateway::protocol::{JsonRpcResponse, RequestId};
 use serde_json::json;
 
@@ -47,7 +47,7 @@ fn assert_invalid_params(response: &JsonRpcResponse, method: &str) {
 async fn ac_error_2_resources_read_answers_invalid_params() {
     let params = json!({ "uri": UNOWNED_URI });
     let response = meta_mcp()
-        .handle_resources_read(RequestId::Number(1), Some(&params))
+        .handle_resources_read(RequestId::Number(1), Some(&params), CallerRole::Admin)
         .await;
     assert_invalid_params(&response, "resources/read");
 }

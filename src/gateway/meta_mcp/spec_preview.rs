@@ -37,10 +37,11 @@ impl MetaMcp {
         id: RequestId,
         query: &str,
         session_id: Option<&str>,
+        role: crate::gateway::meta_mcp_tool_defs::CallerRole,
     ) -> JsonRpcResponse {
         let query = query.trim().to_lowercase();
         if query.is_empty() {
-            return self.handle_tools_list_for_session(id, session_id);
+            return self.handle_tools_list_for_session(id, session_id, role);
         }
 
         let profile = self.active_profile(session_id);
@@ -274,6 +275,7 @@ mod tests {
 
     use crate::backend::BackendRegistry;
     use crate::gateway::meta_mcp::MAX_PROMOTED_PER_SESSION;
+    use crate::gateway::meta_mcp_tool_defs::CallerRole;
     use crate::protocol::{RequestId, Tool};
 
     use super::super::MetaMcp;
@@ -363,7 +365,8 @@ mod tests {
         // GIVEN: MetaMcp with no backends and an empty query
         let m = meta();
         // WHEN: filtered list is called with blank query
-        let resp = m.handle_tools_list_filtered(RequestId::Number(1), "  ", None);
+        let resp =
+            m.handle_tools_list_filtered(RequestId::Number(1), "  ", None, CallerRole::Admin);
         // THEN: no error, returns the standard meta-tool list
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().unwrap().len();
@@ -376,7 +379,8 @@ mod tests {
         // GIVEN: MetaMcp with no backends
         let m = meta();
         // WHEN: filtered list is called with a real query
-        let resp = m.handle_tools_list_filtered(RequestId::Number(2), "search", None);
+        let resp =
+            m.handle_tools_list_filtered(RequestId::Number(2), "search", None, CallerRole::Admin);
         // THEN: no error, zero tools (no backends cached)
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().unwrap().len();
@@ -389,7 +393,8 @@ mod tests {
     fn handle_tools_list_with_params_no_query_uses_standard_path() {
         // GIVEN: no query in params
         let m = meta();
-        let resp = m.handle_tools_list_with_params(RequestId::Number(3), None, None);
+        let resp =
+            m.handle_tools_list_with_params(RequestId::Number(3), None, None, CallerRole::Admin);
         // THEN: returns standard tools/list (meta-tools present)
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
@@ -407,7 +412,12 @@ mod tests {
         // GIVEN: query param present
         let m = meta();
         let params = json!({ "query": "totally_nonexistent_xyz" });
-        let resp = m.handle_tools_list_with_params(RequestId::Number(4), Some(&params), None);
+        let resp = m.handle_tools_list_with_params(
+            RequestId::Number(4),
+            Some(&params),
+            None,
+            CallerRole::Admin,
+        );
         // THEN: no error, no meta-tools returned (filtered path, no backends)
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();

@@ -162,14 +162,15 @@ async fn test_stdio_initialize_produces_valid_response() {
 #[tokio::test]
 async fn test_stdio_tools_list_returns_meta_tools() {
     use mcp_gateway::backend::BackendRegistry;
-    use mcp_gateway::gateway::test_helpers::MetaMcp;
+    use mcp_gateway::gateway::test_helpers::{CallerRole, MetaMcp};
     use std::sync::Arc;
 
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
 
     let id = RequestId::Number(2);
-    let response = meta_mcp.handle_tools_list_with_params(id, None, Some("stdio-test"));
+    let response =
+        meta_mcp.handle_tools_list_with_params(id, None, Some("stdio-test"), CallerRole::Admin);
 
     let serialized = serde_json::to_value(&response).expect("serialize");
     assert!(

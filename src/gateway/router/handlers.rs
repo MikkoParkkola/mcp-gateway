@@ -922,6 +922,11 @@ pub(super) async fn meta_mcp_handler(
             params.as_ref(),
             Some(session_id.as_str()),
             code_mode_url_active,
+            // Same admin fact the `tools/call` arm below gates on, so a tool
+            // this caller cannot invoke is not advertised to it (449.DERIVE.1).
+            crate::gateway::meta_mcp_tool_defs::CallerRole::from_admin(
+                client.as_ref().is_some_and(|c| c.admin),
+            ),
         ),
         "tools/call" => {
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
@@ -1239,7 +1244,16 @@ pub(super) async fn meta_mcp_handler(
         "resources/read" => {
             state
                 .meta_mcp
-                .handle_resources_read(id, params.as_ref())
+                .handle_resources_read(
+                    id,
+                    params.as_ref(),
+                    // Same admin fact `tools/list` gates on, so the routing
+                    // guide describes only what this caller was offered
+                    // (449.DERIVE.8).
+                    crate::gateway::meta_mcp_tool_defs::CallerRole::from_admin(
+                        client.as_ref().is_some_and(|c| c.admin),
+                    ),
+                )
                 .await
         }
         "resources/templates/list" => {

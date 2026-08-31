@@ -362,6 +362,15 @@ impl ProfileRegistry {
         self.profiles.contains_key(name)
     }
 
+    /// Return `true` when no profile is configured.
+    ///
+    /// Distinct from `profile_names().is_empty()`, which allocates a sorted
+    /// `Vec` to answer a question `tools/list` asks on every request.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.profiles.is_empty()
+    }
+
     /// Return the names of all configured profiles.
     #[must_use]
     pub fn profile_names(&self) -> Vec<&str> {

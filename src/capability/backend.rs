@@ -346,6 +346,22 @@ impl CapabilityBackend {
             .collect()
     }
 
+    /// Whether any capability is gated on a workflow state.
+    ///
+    /// Answers "are session states configured at all", which `tools/list` asks
+    /// on every request to decide whether `gateway_set_state` is worth
+    /// advertising. Scans entries under the read lock and returns a `bool`
+    /// rather than going through `list_capabilities`, which clones every
+    /// definition.
+    #[must_use]
+    pub fn has_state_gated_capabilities(&self) -> bool {
+        self.capabilities
+            .read()
+            .entries
+            .iter()
+            .any(|entry| !entry.visible_in_states.is_empty())
+    }
+
     /// Get a specific capability by name — O(1) via the name index.
     pub fn get(&self, name: &str) -> Option<CapabilityDefinition> {
         self.capabilities.read().get(name).cloned()

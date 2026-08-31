@@ -4,64 +4,211 @@
 
 use super::*;
 
-// ── build_meta_tools ────────────────────────────────────────────────
+// ── build_meta_tools: authorization-derived exposure (449.DERIVE.1-9) ──
+
+use crate::gateway::router::ADMIN_META_TOOLS;
+
+/// Names of the tools `build_meta_tools` produced for `surface`.
+fn listed(surface: MetaToolSurface) -> Vec<String> {
+    build_meta_tools(surface, 42, 3)
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect()
+}
+
+/// The surface of a gateway with no optional subsystem configured.
+fn bare(is_admin: bool) -> MetaToolSurface {
+    MetaToolSurface {
+        is_admin,
+        ..MetaToolSurface::default()
+    }
+}
 
 #[test]
-fn build_meta_tools_base_count_without_optional_features() {
-    // GIVEN: no stats, webhooks, reload, or cost_report; 42 tools, 3 servers
-    // WHEN: building meta tools
-    // THEN: 4 base + 1 playbook + 2 kill/revive + 2 set/get profile + 1 disabled-caps
-    //       + 1 list-profiles + 1 set-state + 1 reload-capabilities = 13
-    let tools = build_meta_tools(false, false, false, false, 42, 3);
-    assert_eq!(tools.len(), 13);
-    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"gateway_list_servers"));
-    assert!(names.contains(&"gateway_invoke"));
-    assert!(names.contains(&"gateway_run_playbook"));
-    assert!(names.contains(&"gateway_kill_server"));
-    assert!(names.contains(&"gateway_revive_server"));
-    assert!(names.contains(&"gateway_list_profiles"));
-    assert!(!names.contains(&"gateway_get_stats"));
-    assert!(!names.contains(&"gateway_webhook_status"));
-    assert!(!names.contains(&"gateway_reload_config"));
-    assert!(!names.contains(&"gateway_cost_report"));
+fn build_meta_tools_omits_every_admin_tool_from_a_standard_caller() {
+    // GIVEN: every subsystem configured, but the caller does not hold admin
+    // WHEN: building that caller's meta-tool list
+    // THEN: no tool in ADMIN_META_TOOLS appears (449.DERIVE.1)
+    let names = listed(MetaToolSurface {
+        is_admin: false,
+        ..MetaToolSurface::all()
+    });
+    for admin_tool in ADMIN_META_TOOLS {
+        assert!(
+            !names.iter().any(|name| name == admin_tool),
+            "standard caller was offered admin tool {admin_tool}: {names:?}"
+        );
+    }
+}
+
+#[test]
+fn build_meta_tools_admin_roster_is_unchanged_at_seventeen() {
+    // GIVEN: an admin caller on a fully configured gateway
+    // WHEN: building the meta-tool list
+    // THEN: the roster is the same 17 tools as before authorization gating
+    //       (449.DERIVE.2) — 4 base + stats + cost + webhook + playbook
+    //       + kill + revive + 3 profile + disabled-caps + set-state
+    //       + reload-config + reload-capabilities
+    let names = listed(MetaToolSurface::all());
+    assert_eq!(names.len(), 17, "{names:?}");
+    for expected in [
+        "gateway_list_servers",
+        "gateway_invoke",
+        "gateway_get_stats",
+        "gateway_cost_report",
+        "gateway_webhook_status",
+        "gateway_run_playbook",
+        "gateway_kill_server",
+        "gateway_revive_server",
+        "gateway_list_profiles",
+        "gateway_reload_config",
+    ] {
+        assert!(names.iter().any(|name| name == expected), "{names:?}");
+    }
+}
+
+#[test]
+fn build_meta_tools_lists_playbook_tool_only_when_playbooks_configured() {
+    // GIVEN: an admin caller, playbooks off then on
+    // WHEN: building each list
+    // THEN: gateway_run_playbook follows the flag (449.DERIVE.4)
+    let without = listed(bare(true));
+    assert!(!without.iter().any(|name| name == "gateway_run_playbook"));
+
+    let with = listed(MetaToolSurface {
+        playbooks: true,
+        ..bare(true)
+    });
+    assert!(with.iter().any(|name| name == "gateway_run_playbook"));
+}
+
+#[test]
+fn build_meta_tools_lists_profile_tools_only_when_profiles_configured() {
+    // GIVEN: an admin caller, routing profiles off then on
+    // WHEN: building each list
+    // THEN: all three profile tools follow the flag together (449.DERIVE.5)
+    const PROFILE_TOOLS: [&str; 3] = [
+        "gateway_set_profile",
+        "gateway_get_profile",
+        "gateway_list_profiles",
+    ];
+
+    let without = listed(bare(true));
+    for tool in PROFILE_TOOLS {
+        assert!(!without.iter().any(|name| name == tool), "{without:?}");
+    }
+
+    let with = listed(MetaToolSurface {
+        profiles: true,
+        ..bare(true)
+    });
+    for tool in PROFILE_TOOLS {
+        assert!(with.iter().any(|name| name == tool), "{with:?}");
+    }
+}
+
+#[test]
+fn build_meta_tools_lists_set_state_only_when_session_states_configured() {
+    // GIVEN: an admin caller, state-gated capabilities off then on
+    // WHEN: building each list
+    // THEN: gateway_set_state follows the flag (449.DERIVE.6)
+    let without = listed(bare(true));
+    assert!(!without.iter().any(|name| name == "gateway_set_state"));
+
+    let with = listed(MetaToolSurface {
+        session_states: true,
+        ..bare(true)
+    });
+    assert!(with.iter().any(|name| name == "gateway_set_state"));
+}
+
+#[test]
+fn build_meta_tools_read_only_gateway_advertises_the_core_surface_only() {
+    // GIVEN: a gateway with no optional subsystem and a non-admin caller
+    // WHEN: building the meta-tool list
+    // THEN: only the core surface is advertised (449.DERIVE.7)
+    let mut names = listed(bare(false));
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "gateway_invoke",
+            "gateway_list_disabled_capabilities",
+            "gateway_list_servers",
+            "gateway_list_tools",
+            "gateway_search_tools",
+        ],
+        "core surface drifted"
+    );
+}
+
+#[test]
+fn build_meta_tools_admin_only_difference_is_exactly_the_admin_constant() {
+    // GIVEN: one fully configured gateway seen by an admin and a standard caller
+    // WHEN: diffing the two listings
+    // THEN: the difference is exactly ADMIN_META_TOOLS, so adding a name to that
+    //       constant changes exposure with no second edit here (449.DERIVE.9)
+    let admin = listed(MetaToolSurface::all());
+    let standard = listed(MetaToolSurface {
+        is_admin: false,
+        ..MetaToolSurface::all()
+    });
+
+    let mut difference: Vec<&str> = admin
+        .iter()
+        .filter(|name| !standard.contains(name))
+        .map(String::as_str)
+        .collect();
+    difference.sort_unstable();
+
+    let mut expected: Vec<&str> = ADMIN_META_TOOLS.to_vec();
+    expected.sort_unstable();
+
+    assert_eq!(difference, expected);
+}
+
+#[test]
+fn build_meta_tools_bare_admin_gateway_has_eight_tools() {
+    // GIVEN: an admin caller and no optional subsystem configured
+    // WHEN: building the meta-tool list
+    // THEN: core surface + kill/revive + reload-capabilities = 8
+    assert_eq!(listed(bare(true)).len(), 8);
 }
 
 #[test]
 fn build_meta_tools_with_stats_adds_stats_tool() {
-    let tools = build_meta_tools(true, false, false, false, 0, 0);
-    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"gateway_get_stats"));
+    let names = listed(MetaToolSurface {
+        stats: true,
+        ..bare(true)
+    });
+    assert!(names.iter().any(|name| name == "gateway_get_stats"));
 }
 
 #[test]
 fn build_meta_tools_with_webhooks_adds_webhook_tool() {
-    let tools = build_meta_tools(false, true, false, false, 0, 0);
-    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"gateway_webhook_status"));
+    let names = listed(MetaToolSurface {
+        webhooks: true,
+        ..bare(true)
+    });
+    assert!(names.iter().any(|name| name == "gateway_webhook_status"));
 }
 
 #[test]
 fn build_meta_tools_with_reload_adds_reload_tool() {
-    let tools = build_meta_tools(false, false, true, false, 0, 0);
-    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"gateway_reload_config"));
+    let names = listed(MetaToolSurface {
+        reload: true,
+        ..bare(true)
+    });
+    assert!(names.iter().any(|name| name == "gateway_reload_config"));
 }
 
 #[test]
 fn build_meta_tools_with_cost_report_adds_cost_report_tool() {
-    let tools = build_meta_tools(false, false, false, true, 0, 0);
-    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"gateway_cost_report"));
-}
-
-#[test]
-fn build_meta_tools_all_enabled_has_17_tools() {
-    // 4 base + 1 stats + 1 cost_report + 1 webhooks + 1 playbook + 2 kill/revive
-    // + 2 set/get profile + 1 disabled-caps + 1 list-profiles + 1 reload-config
-    // + 1 set-state + 1 reload-capabilities = 17
-    let tools = build_meta_tools(true, true, true, true, 0, 0);
-    assert_eq!(tools.len(), 17);
+    let names = listed(MetaToolSurface {
+        cost_report: true,
+        ..bare(true)
+    });
+    assert!(names.iter().any(|name| name == "gateway_cost_report"));
 }
 
 #[test]
@@ -136,7 +283,7 @@ fn base_tool_read_only_hints_match_spec() {
 
 #[test]
 fn all_gateway_meta_tools_have_complete_annotations_with_titles() {
-    let mut tools = build_meta_tools(true, true, true, true, 42, 3);
+    let mut tools = build_meta_tools(MetaToolSurface::all(), 42, 3);
     tools.extend(build_code_mode_tools());
 
     for tool in tools {
@@ -366,96 +513,4 @@ fn all_code_mode_tools_have_descriptions() {
             tool.name
         );
     }
-}
-
-// ── meta-tool exposure (GH issue 449) ───────────────────────────────
-
-/// 449.EXPOSE.1 — an empty allow-list is "expose everything", so an existing
-/// deployment that never sets the field keeps today's roster exactly.
-#[test]
-fn empty_allow_list_exposes_the_whole_roster() {
-    let exposure = MetaToolExposure::from_names(&[]);
-    let all = build_meta_tools(true, true, true, true, 42, 3);
-    let filtered = build_meta_tools_filtered(true, true, true, true, 42, 3, &exposure);
-    assert_eq!(
-        filtered.len(),
-        all.len(),
-        "empty allow-list must not drop any meta-tool"
-    );
-}
-
-/// 449.EXPOSE.2 — a non-empty allow-list yields only the named tools.
-#[test]
-fn allow_list_yields_only_the_named_tools() {
-    let exposure = MetaToolExposure::from_names(&[
-        "gateway_invoke".to_string(),
-        "gateway_list_servers".to_string(),
-    ]);
-    let filtered = build_meta_tools_filtered(true, true, true, true, 42, 3, &exposure);
-    let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(
-        names,
-        vec!["gateway_list_servers", "gateway_invoke"],
-        "allow-list must yield exactly the named tools"
-    );
-}
-
-/// 449.EXPOSE.3 — the predicate the list path uses is the same one the call
-/// path consults, so it must answer for an omitted tool directly.
-#[test]
-fn predicate_hides_an_omitted_tool_and_keeps_a_named_one() {
-    let exposure = MetaToolExposure::from_names(&["gateway_invoke".to_string()]);
-    assert!(exposure.is_exposed("gateway_invoke"));
-    assert!(
-        !exposure.is_exposed("gateway_kill_server"),
-        "a meta-tool absent from the allow-list must not be callable"
-    );
-}
-
-/// 449.EXPOSE.4 — the allow-list governs only the tools it can list. Surfaced
-/// backend tools and Code Mode's fixed surface must pass through untouched.
-#[test]
-fn predicate_does_not_govern_names_outside_the_builder_roster() {
-    let exposure = MetaToolExposure::from_names(&["gateway_invoke".to_string()]);
-    assert!(
-        exposure.is_exposed("some_backend_tool"),
-        "surfaced backend tools are not meta-tools"
-    );
-    assert!(
-        exposure.is_exposed("gateway_execute"),
-        "Code Mode's surface is out of scope for the meta-tool allow-list"
-    );
-}
-
-/// 449.EXPOSE.5 — an unrecognised name is dropped with a warning, never fatal
-/// (precedent: surfaced.rs:31-33). The recognised entries still apply.
-#[test]
-fn unrecognised_configured_name_is_dropped_not_fatal() {
-    let exposure = MetaToolExposure::from_names(&[
-        "gateway_invoke".to_string(),
-        "gateway_typo_not_a_tool".to_string(),
-    ]);
-    assert!(exposure.is_exposed("gateway_invoke"));
-    assert!(!exposure.is_exposed("gateway_kill_server"));
-}
-
-/// 449.EXPOSE.6 — the unfiltered builder keeps its existing six-argument form
-/// and its existing output, so the call site in `meta_mcp/mod.rs` still compiles.
-#[test]
-fn unfiltered_builder_is_unchanged_by_the_exposure_work() {
-    let tools = build_meta_tools(false, false, false, false, 42, 3);
-    assert_eq!(tools.len(), 13);
-}
-
-/// 449.EXPOSE.7 — the config default exposes everything, so upgrading without
-/// touching config.yaml changes nothing.
-#[test]
-fn config_default_exposes_every_meta_tool() {
-    let config = crate::config::MetaMcpConfig::default();
-    assert!(
-        config.exposed_meta_tools.is_empty(),
-        "default must be expose-all"
-    );
-    let exposure = MetaToolExposure::from_names(&config.exposed_meta_tools);
-    assert!(exposure.is_exposed("gateway_kill_server"));
 }

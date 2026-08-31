@@ -548,7 +548,6 @@ impl Gateway {
         .with_projection_mode(self.config.meta_mcp.projection_mode)
         .with_secret_injector(secret_injector)
         .with_surfaced_tools(self.config.meta_mcp.surfaced_tools.clone())
-        .with_meta_tool_exposure(&self.config.meta_mcp.exposed_meta_tools)
         .with_trusted_identity_headers(
             self.config
                 .security
@@ -1696,9 +1695,15 @@ impl Gateway {
                 )
             }
             "initialize" => meta_mcp.handle_initialize(id, params.as_ref(), Some(session_id), None),
-            "tools/list" => {
-                meta_mcp.handle_tools_list_with_params(id, params.as_ref(), Some(session_id))
-            }
+            "tools/list" => meta_mcp.handle_tools_list_with_params(
+                id,
+                params.as_ref(),
+                Some(session_id),
+                // stdio marks its caller admin for the same reason the
+                // `tools/call` arm below does: the client that spawned the
+                // process already holds whatever the operator holds.
+                crate::gateway::meta_mcp_tool_defs::CallerRole::Admin,
+            ),
             "tools/call" => {
                 let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
                 let tool_name = tool_name.to_string();
@@ -1747,7 +1752,16 @@ impl Gateway {
             "prompts/list" => meta_mcp.handle_prompts_list(id, params.as_ref()).await,
             "prompts/get" => meta_mcp.handle_prompts_get(id, params.as_ref()).await,
             "resources/list" => meta_mcp.handle_resources_list(id, params.as_ref()).await,
-            "resources/read" => meta_mcp.handle_resources_read(id, params.as_ref()).await,
+            "resources/read" => {
+                meta_mcp
+                    .handle_resources_read(
+                        id,
+                        params.as_ref(),
+                        // Admin for the same reason `tools/list` above is.
+                        crate::gateway::meta_mcp_tool_defs::CallerRole::Admin,
+                    )
+                    .await
+            }
             "resources/templates/list" => {
                 meta_mcp
                     .handle_resources_templates_list(id, params.as_ref())

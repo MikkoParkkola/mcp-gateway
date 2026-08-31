@@ -48,5 +48,6 @@ pub mod test_helpers {
     pub use super::meta_mcp::MetaMcp;
     pub use super::meta_mcp::prune_constant_signals;
     pub use super::meta_mcp::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
+    pub use super::meta_mcp_tool_defs::CallerRole;
     pub use super::router::{AppState, create_router};
 }

@@ -535,41 +535,127 @@ pub(crate) fn build_cost_report_tool() -> Tool {
     }
 }
 
-/// Construct the full meta-tool list, optionally including stats, webhooks, playbooks, and reload.
+/// Whether a caller's meta-tool listing includes the admin-only tools.
 ///
-/// `tool_count` and `server_count` are threaded into [`build_base_tools`] so descriptions
-/// reflect live registry state rather than static placeholder text.
-#[allow(clippy::fn_params_excessive_bools)] // 4 feature flags; enum would be over-engineered
+/// An enum rather than a `bool` parameter: the listing entry points already
+/// carry `code_mode_url_active`, and two adjacent bare `true`s at a call site
+/// are unreadable and trivially transposed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallerRole {
+    /// The caller holds admin; the full roster is listed.
+    Admin,
+    /// The caller does not; tools in `ADMIN_META_TOOLS` are omitted.
+    Standard,
+}
+
+impl CallerRole {
+    /// Resolve from the caller's admin flag.
+    #[must_use]
+    pub fn from_admin(is_admin: bool) -> Self {
+        if is_admin {
+            Self::Admin
+        } else {
+            Self::Standard
+        }
+    }
+
+    /// Whether admin-only tools are listed for this caller.
+    #[must_use]
+    pub fn is_admin(self) -> bool {
+        matches!(self, Self::Admin)
+    }
+}
+
+/// What a caller may see: which subsystems are configured, and whether the
+/// caller holds admin.
+///
+/// One record rather than eight positional `bool`s. Every field answers
+/// "is there anything here to talk about", so a tool absent from the list is
+/// absent because the feature behind it is unconfigured or the caller may not
+/// invoke it — never because a name list was edited (GH issue 449).
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct MetaToolSurface {
+    /// Statistics collection is enabled.
+    pub stats: bool,
+    /// A webhook registry is present.
+    pub webhooks: bool,
+    /// Config reload is wired.
+    pub reload: bool,
+    /// Cost reporting is available.
+    pub cost_report: bool,
+    /// At least one playbook is loaded.
+    pub playbooks: bool,
+    /// At least one routing profile is configured.
+    pub profiles: bool,
+    /// At least one capability is gated on a workflow state.
+    pub session_states: bool,
+    /// The caller holds admin, so admin-only meta-tools are listed for it.
+    pub is_admin: bool,
+}
+
+impl MetaToolSurface {
+    /// Every subsystem configured, caller is admin — the full roster.
+    ///
+    /// Used where the complete definition set is wanted regardless of
+    /// deployment, such as looking a tool's schema up by name.
+    pub(crate) fn all() -> Self {
+        Self {
+            stats: true,
+            webhooks: true,
+            reload: true,
+            cost_report: true,
+            playbooks: true,
+            profiles: true,
+            session_states: true,
+            is_admin: true,
+        }
+    }
+}
+
+/// Construct the meta-tool list this caller may see.
+///
+/// `tool_count` and `server_count` are threaded into [`build_base_tools`] so
+/// descriptions reflect live registry state rather than static placeholder text.
+///
+/// Admin-only tools are removed with [`is_admin_meta_tool`] — the same
+/// predicate `tools/call` rejects on — so the listed set and the callable set
+/// cannot drift apart (449.DERIVE.9).
 pub(crate) fn build_meta_tools(
-    stats_enabled: bool,
-    webhooks_enabled: bool,
-    reload_enabled: bool,
-    cost_report_enabled: bool,
+    surface: MetaToolSurface,
     tool_count: usize,
     server_count: usize,
 ) -> Vec<Tool> {
     let mut tools = build_base_tools(tool_count, server_count);
-    if stats_enabled {
+    if surface.stats {
         tools.push(build_stats_tool());
     }
-    if cost_report_enabled {
+    if surface.cost_report {
         tools.push(build_cost_report_tool());
     }
-    if webhooks_enabled {
+    if surface.webhooks {
         tools.push(build_webhook_status_tool());
     }
-    tools.push(build_playbook_tool());
+    if surface.playbooks {
+        tools.push(build_playbook_tool());
+    }
     tools.push(build_kill_server_tool());
     tools.push(build_revive_server_tool());
-    tools.push(build_set_profile_tool());
-    tools.push(build_get_profile_tool());
+    if surface.profiles {
+        tools.push(build_set_profile_tool());
+        tools.push(build_get_profile_tool());
+        tools.push(build_list_profiles_tool());
+    }
     tools.push(build_list_disabled_capabilities_tool());
-    tools.push(build_list_profiles_tool());
-    tools.push(build_set_state_tool());
-    if reload_enabled {
+    if surface.session_states {
+        tools.push(build_set_state_tool());
+    }
+    if surface.reload {
         tools.push(build_reload_config_tool());
     }
     tools.push(build_reload_capabilities_tool());
+    if !surface.is_admin {
+        tools.retain(|tool| !crate::gateway::router::is_admin_meta_tool(&tool.name));
+    }
     tools
 }
 
@@ -717,120 +803,3 @@ pub(crate) fn build_code_mode_tools() -> Vec<Tool> {
 #[cfg(test)]
 #[path = "meta_mcp_tool_defs_tests.rs"]
 mod tests;
-
-// ============================================================================
-// Meta-tool exposure (GH issue 449)
-// ============================================================================
-
-/// Every meta-tool name `build_meta_tools` can produce.
-///
-/// Derived from the builder with all optional features on, so it cannot drift
-/// from what the gateway actually lists. Deliberately not a hard-coded roster:
-/// three hand-maintained copies already exist elsewhere and two of them list
-/// Code Mode tools this builder never emits.
-fn governed_meta_tool_names() -> &'static std::collections::HashSet<String> {
-    static NAMES: std::sync::OnceLock<std::collections::HashSet<String>> =
-        std::sync::OnceLock::new();
-    NAMES.get_or_init(|| {
-        build_meta_tools(true, true, true, true, 0, 0)
-            .into_iter()
-            .map(|t| t.name)
-            .collect()
-    })
-}
-
-/// Which meta-tools an operator has chosen to expose.
-///
-/// One predicate, consumed by both `tools/list` and `tools/call`. Hiding a
-/// tool from the list while still executing it is security theatre, so the
-/// listed set is *derived from* this predicate rather than maintained beside
-/// it — the two cannot disagree.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct MetaToolExposure {
-    /// `None` exposes everything. `Some` is an allow-list of meta-tool names.
-    allowed: Option<std::collections::HashSet<String>>,
-}
-
-impl MetaToolExposure {
-    /// Expose every meta-tool — the behaviour of a gateway that configures none.
-    pub(crate) fn expose_all() -> Self {
-        Self { allowed: None }
-    }
-
-    /// Build the predicate from `meta_mcp.exposed_meta_tools`.
-    ///
-    /// Empty means expose-all. Unrecognised names are warned about and dropped
-    /// rather than aborting startup, matching `surfaced_tools`: a typo must not
-    /// take a production gateway down.
-    pub(crate) fn from_names(names: &[String]) -> Self {
-        if names.is_empty() {
-            return Self::expose_all();
-        }
-        let governed = governed_meta_tool_names();
-        let allowed: std::collections::HashSet<String> = names
-            .iter()
-            .filter(|name| {
-                let known = governed.contains(*name);
-                if !known {
-                    tracing::warn!(
-                        meta_tool = %name,
-                        "meta_mcp.exposed_meta_tools names an unrecognised meta-tool; dropping it"
-                    );
-                }
-                known
-            })
-            .cloned()
-            .collect();
-        // A dropped `surfaced_tools` entry costs one pinned tool. An allow-list
-        // that was meant to name gateway_invoke and missed leaves a gateway that
-        // can list backends and invoke nothing, which is worth saying out loud.
-        if !allowed.contains("gateway_invoke") {
-            tracing::warn!(
-                "meta_mcp.exposed_meta_tools omits gateway_invoke; \
-                 backend tools will be unreachable through this gateway"
-            );
-        }
-        Self {
-            allowed: Some(allowed),
-        }
-    }
-
-    /// Whether `name` may be listed and called.
-    ///
-    /// Names outside the builder's roster are always exposed: surfaced backend
-    /// tools and Code Mode's fixed two-tool surface are not meta-tools, and an
-    /// operator's meta-tool allow-list has nothing to say about them.
-    pub(crate) fn is_exposed(&self, name: &str) -> bool {
-        match &self.allowed {
-            None => true,
-            Some(allowed) => allowed.contains(name) || !governed_meta_tool_names().contains(name),
-        }
-    }
-}
-
-/// `build_meta_tools`, restricted to what the operator exposes.
-///
-/// The filter is the whole difference: the listed set is the predicate's
-/// output, so `tools/list` and `tools/call` cannot disagree about a tool.
-#[allow(clippy::fn_params_excessive_bools)]
-pub(crate) fn build_meta_tools_filtered(
-    stats_enabled: bool,
-    webhooks_enabled: bool,
-    reload_enabled: bool,
-    cost_report_enabled: bool,
-    tool_count: usize,
-    server_count: usize,
-    exposure: &MetaToolExposure,
-) -> Vec<Tool> {
-    build_meta_tools(
-        stats_enabled,
-        webhooks_enabled,
-        reload_enabled,
-        cost_report_enabled,
-        tool_count,
-        server_count,
-    )
-    .into_iter()
-    .filter(|tool| exposure.is_exposed(&tool.name))
-    .collect()
-}
