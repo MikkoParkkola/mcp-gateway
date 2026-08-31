@@ -277,6 +277,17 @@ Staging by explicit path — never `git add -A`, never `git commit -a` — is no
 session on this branch, and `git status --porcelain` before each commit is what enforces it: a
 modified file you did not touch is somebody's work in progress, and committing it is not tidiness.
 
+It happened a second time, in the other direction, and the rule as written does not stop it.
+`e7448fc9 docs(cluster-g): close the confirmation pass` carries the cluster-B connection-invariance
+test plan's review repairs — 219 insertions the cluster-G session did not write. That session staged
+by explicit path. So did the cluster-B session, moments earlier. **The index is shared across every
+worktree on this branch**, so a file staged by one session and not yet committed is picked up by the
+next session's commit whatever paths that commit names. Explicit-path staging protects the other
+sessions from you; it does not protect you from them. What does: stage and commit in one step, close
+together, and re-read `git log -1 --format=%H -- <your path>` afterwards rather than trusting that
+`git commit` reported your own work. Again not rewritten, for the same reason — sessions are live on
+this branch, and a wrong author line costs less than a rebase underneath four of them.
+
 ## What would make this plan wrong
 
 - ~~If TASK.1 is dropped from v4.0.0, SUB.4 loses its alternative branch.~~ CLOSED: the operator
