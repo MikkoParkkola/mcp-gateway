@@ -20,7 +20,7 @@ use url::Url;
 use super::callback;
 use super::metadata::{self, AuthorizationServerMetadata, ProtectedResourceMetadata};
 use super::storage::{TokenInfo, TokenStorage};
-use crate::security::{request_error_category, safe_oauth_http_error};
+use crate::security::{request_error_category, safe_oauth_http_error, safe_reqwest_message};
 use crate::{Error, Result};
 
 /// Provenance of a `client_id` (MIK-6750 r7, Defect 2).
@@ -429,10 +429,12 @@ impl OAuthClient {
             )));
         }
 
-        let token_response: TokenResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::OAuth(format!("Failed to parse credentials response: {e}")))?;
+        let token_response: TokenResponse = response.json().await.map_err(|e| {
+            Error::OAuth(safe_reqwest_message(
+                "Failed to parse credentials response",
+                &e,
+            ))
+        })?;
 
         let token = TokenInfo::from_response(
             token_response.access_token,
@@ -771,10 +773,9 @@ impl OAuthClient {
             )));
         }
 
-        let token_response: TokenResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::OAuth(format!("Failed to parse token response: {e}")))?;
+        let token_response: TokenResponse = response.json().await.map_err(|e| {
+            Error::OAuth(safe_reqwest_message("Failed to parse token response", &e))
+        })?;
 
         // #143 — structured telemetry: token exchange success event.
         info!(
@@ -833,10 +834,9 @@ impl OAuthClient {
             )));
         }
 
-        let token_response: TokenResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::OAuth(format!("Failed to parse refresh response: {e}")))?;
+        let token_response: TokenResponse = response.json().await.map_err(|e| {
+            Error::OAuth(safe_reqwest_message("Failed to parse refresh response", &e))
+        })?;
 
         let token = TokenInfo::from_response(
             token_response.access_token,
@@ -995,10 +995,12 @@ impl OAuthClient {
             )));
         }
 
-        let reg_response: ClientRegistrationResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::OAuth(format!("Failed to parse registration response: {e}")))?;
+        let reg_response: ClientRegistrationResponse = response.json().await.map_err(|e| {
+            Error::OAuth(safe_reqwest_message(
+                "Failed to parse registration response",
+                &e,
+            ))
+        })?;
 
         info!(client_id = %reg_response.client_id, "Registered OAuth client");
         Ok(reg_response.client_id)

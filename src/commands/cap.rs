@@ -480,17 +480,20 @@ fn print_discover_empty() {
 
 fn print_discovered_servers(servers: &[mcp_gateway::discovery::DiscoveredServer], format: &str) {
     match format {
-        "json" => {
+        "json" | "yaml" => {
             let redacted: Vec<_> = servers
                 .iter()
-                .map(mcp_gateway::discovery::DiscoveredServer::diagnostic_value)
+                .map(mcp_gateway::discovery::DiscoveredServer::redacted_for_diagnostics)
                 .collect();
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&redacted).unwrap_or_default()
-            );
+            if format == "json" {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&redacted).unwrap_or_default()
+                );
+            } else {
+                println!("{}", serde_yaml::to_string(&redacted).unwrap_or_default());
+            }
         }
-        "yaml" => println!("{}", serde_yaml::to_string(servers).unwrap_or_default()),
         _ => {
             println!("Discovered {} MCP server(s):\n", servers.len());
             for server in servers {

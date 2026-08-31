@@ -89,31 +89,34 @@ impl DiscoveredServer {
         }
     }
 
-    /// Operator-facing JSON: names and origins, never argv or credential-bearing URLs.
+    /// Clone with argv and credential-bearing URLs replaced. Same serde shape
+    /// as the live server, so JSON and YAML discovery output stay compatible.
     #[must_use]
-    pub fn diagnostic_value(&self) -> serde_json::Value {
+    pub fn redacted_for_diagnostics(&self) -> Self {
         use crate::security::{diagnostic_url, summarize_stdio_command};
-        let (transport, command, url) = match &self.transport {
+        let mut redacted = self.clone();
+        match &mut redacted.transport {
             TransportConfig::Stdio { command, .. } => {
-                ("stdio", Some(summarize_stdio_command(command)), None)
+                *command = summarize_stdio_command(command);
             }
             TransportConfig::Http { http_url, .. } => {
-                ("http", None, Some(diagnostic_url(http_url)))
+                *http_url = diagnostic_url(http_url);
             }
             #[cfg(feature = "a2a")]
-            TransportConfig::A2a { a2a_url, .. } => ("a2a", None, Some(diagnostic_url(a2a_url))),
-        };
-        serde_json::json!({
-            "name": self.name,
-            "description": self.description,
-            "source": format!("{:?}", self.source),
-            "transport": transport,
-            "command": command,
-            "url": url,
-            "config_path": self.metadata.config_path.as_ref().map(|p| p.display().to_string()),
-            "pid": self.metadata.pid,
-            "port": self.metadata.port,
-        })
+            TransportConfig::A2a { a2a_url, .. } => {
+                *a2a_url = diagnostic_url(a2a_url);
+            }
+        }
+        if let Some(command) = redacted.metadata.command.as_mut() {
+            *command = summarize_stdio_command(command);
+        }
+        redacted
+    }
+
+    /// Operator-facing JSON: the redacted clone, never argv or secrets.
+    #[must_use]
+    pub fn diagnostic_value(&self) -> serde_json::Value {
+        serde_json::to_value(self.redacted_for_diagnostics()).unwrap_or(serde_json::Value::Null)
     }
 }
 
@@ -198,5 +201,38 @@ impl AutoDiscovery {
 impl Default for AutoDiscovery {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod yaml_redaction_tests {
+    use super::*;
+
+    const CANARY: &str = "SENTINEL_SWEEP_7222";
+
+    #[test]
+    fn yaml_of_redacted_server_keeps_schema_and_drops_canary() {
+        let server = DiscoveredServer {
+            name: "leaky".into(),
+            description: "d".into(),
+            source: DiscoverySource::Environment,
+            transport: TransportConfig::Stdio {
+                command: format!("node --token {CANARY} server.js"),
+                cwd: None,
+                protocol_version: None,
+            },
+            metadata: ServerMetadata {
+                command: Some(format!("node --token {CANARY}")),
+                ..ServerMetadata::default()
+            },
+        };
+        let yaml = serde_yaml::to_string(&server.redacted_for_diagnostics()).expect("yaml");
+        assert!(!yaml.contains(CANARY), "{yaml}");
+        assert!(yaml.contains("command:"), "{yaml}");
+        let raw = serde_yaml::to_string(&server).expect("raw");
+        assert!(
+            raw.contains(CANARY),
+            "fixture is only useful if raw YAML would leak"
+        );
     }
 }

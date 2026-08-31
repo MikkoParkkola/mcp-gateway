@@ -23,15 +23,23 @@ pub fn request_error_category(error: &reqwest::Error) -> &'static str {
         "connection failed"
     } else if error.is_redirect() {
         "redirect rejected"
+    } else if error.is_decode() {
+        "response parse failed"
     } else {
         "request failed"
     }
 }
 
+/// Context + category, never `reqwest::Error` Display (that embeds the URL).
+#[must_use]
+pub fn safe_reqwest_message(context: &str, error: &reqwest::Error) -> String {
+    format!("{context}: {}", request_error_category(error))
+}
+
 /// Transport-layer reqwest failure: context + category, never `{e}`.
 #[must_use]
 pub fn safe_request_error(context: &str, error: &reqwest::Error) -> Error {
-    Error::Transport(format!("{context}: {}", request_error_category(error)))
+    Error::Transport(safe_reqwest_message(context, error))
 }
 
 /// HTTP status without an untrusted body, except the session-expiry signal.

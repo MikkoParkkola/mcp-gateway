@@ -4,7 +4,8 @@
 use mcp_gateway::config::TransportConfig;
 use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
 use mcp_gateway::security::{
-    diagnostic_url, safe_http_status_error, safe_oauth_http_error, summarize_stdio_command,
+    diagnostic_url, request_error_category, safe_http_status_error, safe_oauth_http_error,
+    safe_reqwest_message, summarize_stdio_command,
 };
 use reqwest::StatusCode;
 
@@ -58,6 +59,27 @@ fn sweep4_discovery_json_redacts_command_and_url() {
     let json = http.diagnostic_value().to_string();
     assert!(!json.contains(CANARY), "{json}");
     assert!(json.contains("https://api.example.com"), "{json}");
+    assert!(
+        json.contains("\"http_url\""),
+        "JSON must keep nested TransportConfig keys, got {json}"
+    );
+
+    let yaml_stdio = server.redacted_for_diagnostics();
+    match &yaml_stdio.transport {
+        TransportConfig::Stdio { command, .. } => {
+            assert!(!command.contains(CANARY), "{command}");
+            assert!(command.contains("argument(s) redacted"), "{command}");
+        }
+        other => panic!("expected stdio, got {other:?}"),
+    }
+    let yaml_http = http.redacted_for_diagnostics();
+    match &yaml_http.transport {
+        TransportConfig::Http { http_url, .. } => {
+            assert!(!http_url.contains(CANARY), "{http_url}");
+            assert!(http_url.contains("https://api.example.com"), "{http_url}");
+        }
+        other => panic!("expected http, got {other:?}"),
+    }
 }
 
 #[test]
@@ -80,4 +102,43 @@ fn sweep5_canary_through_every_helper() {
     );
     assert!(expired.to_string().contains("session expired"), "{expired}");
     assert!(!expired.to_string().contains(CANARY));
+}
+
+#[tokio::test]
+async fn sweep_decode_error_must_not_echo_url_credentials() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let body = b"not-json";
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        use tokio::io::AsyncWriteExt;
+        let _ = stream.write_all(response.as_bytes()).await;
+        let _ = stream.write_all(body).await;
+    });
+
+    // reqwest lifts userinfo into Basic auth and strips it from Error Display.
+    // Query parameters stay (reqwest 0.13 docs: "an API key as a query parameter").
+    let url = format!("http://127.0.0.1:{}/token?api_key={CANARY}", addr.port());
+    let err = reqwest::Client::new()
+        .get(&url)
+        .send()
+        .await
+        .expect("send")
+        .json::<serde_json::Value>()
+        .await
+        .expect_err("malformed body must fail decode");
+    assert!(
+        err.to_string().contains(CANARY),
+        "fixture is only useful if Display would leak; got {}",
+        err
+    );
+    let safe = safe_reqwest_message("Failed to parse token response", &err);
+    assert!(!safe.contains(CANARY), "{safe}");
+    assert_eq!(request_error_category(&err), "response parse failed");
 }
