@@ -195,7 +195,7 @@ fn build_initialize_result_passes_instructions_through() {
 
 #[test]
 fn discovery_preamble_contains_all_four_meta_tools() {
-    let preamble = build_discovery_preamble(10, 2);
+    let preamble = build_discovery_preamble(10, 2, &MetaToolExposure::expose_all());
     assert!(preamble.contains("gateway_search_tools"));
     assert!(preamble.contains("gateway_list_tools"));
     assert!(preamble.contains("gateway_list_servers"));
@@ -207,7 +207,7 @@ fn discovery_preamble_contains_first_keyword() {
     // GIVEN: any tool/server counts
     // WHEN: building the preamble
     // THEN: "FIRST" appears to emphasize search-before-invoke pattern
-    let preamble = build_discovery_preamble(0, 0);
+    let preamble = build_discovery_preamble(0, 0, &MetaToolExposure::expose_all());
     assert!(
         preamble.contains("FIRST"),
         "preamble must include FIRST to guide agent behavior"
@@ -217,7 +217,7 @@ fn discovery_preamble_contains_first_keyword() {
 #[test]
 fn discovery_preamble_includes_tool_count() {
     // GIVEN: 42 tools across 3 backends
-    let preamble = build_discovery_preamble(42, 3);
+    let preamble = build_discovery_preamble(42, 3, &MetaToolExposure::expose_all());
     // THEN: the count appears in the text
     assert!(
         preamble.contains("42 tools"),
@@ -228,7 +228,7 @@ fn discovery_preamble_includes_tool_count() {
 #[test]
 fn discovery_preamble_includes_server_count() {
     // GIVEN: 42 tools across 3 backends
-    let preamble = build_discovery_preamble(42, 3);
+    let preamble = build_discovery_preamble(42, 3, &MetaToolExposure::expose_all());
     assert!(
         preamble.contains("3 backends"),
         "preamble must include backend/server count"
@@ -238,7 +238,7 @@ fn discovery_preamble_includes_server_count() {
 #[test]
 fn discovery_preamble_with_zero_counts_is_valid() {
     // GIVEN: no tools or backends yet (empty gateway)
-    let preamble = build_discovery_preamble(0, 0);
+    let preamble = build_discovery_preamble(0, 0, &MetaToolExposure::expose_all());
     assert!(preamble.contains("0 tools"));
     assert!(preamble.contains("0 backends"));
 }
@@ -736,4 +736,27 @@ fn ranked_results_to_json_converts_correctly() {
 fn ranked_results_to_json_empty_input() {
     let json_results = ranked_results_to_json(vec![]);
     assert!(json_results.is_empty());
+}
+
+#[test]
+fn expose_all_reproduces_the_unfiltered_preamble() {
+    // The conditional assembly must be byte-identical to the single `format!`
+    // it replaced. Every other assertion here is `contains`, so a dropped line
+    // or a lost newline on the default path would pass all of them.
+    let expected = "This server manages 42 tools across 3 backends.\n\
+         Use gateway_search_tools FIRST to find relevant tools by keyword before invoking.\n\
+         Tool schemas are not listed directly so the prompt stays compact.\n\
+         \n\
+         Discovery pattern:\n\
+         1. gateway_search_tools(query=\"your keyword\") -- find tools matching your need\n\
+         2. gateway_invoke(server=\"X\", tool=\"Y\", arguments={...}) -- call the tool\n\
+         \n\
+         Direct listing (when you know the backend):\n\
+         - gateway_list_tools(server=\"brave\") -- list tools from a specific backend\n\
+         - gateway_list_servers -- list all backends with status\n";
+
+    assert_eq!(
+        build_discovery_preamble(42, 3, &MetaToolExposure::expose_all()),
+        expected
+    );
 }

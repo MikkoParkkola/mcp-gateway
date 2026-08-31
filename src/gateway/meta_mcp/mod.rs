@@ -1145,7 +1145,7 @@ impl MetaMcp {
             server_count += 1;
         }
 
-        let mut instructions = build_discovery_preamble(tool_count, server_count);
+        let mut instructions = build_discovery_preamble(tool_count, server_count, &self.meta_tool_exposure);
 
         if let Some(cap) = self.get_capabilities() {
             let caps = cap.list_capabilities();
@@ -1184,7 +1184,7 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> JsonRpcResponse {
         let tools = if self.code_mode_enabled {
-            build_code_mode_tools()
+            self.meta_tool_exposure.filter(build_code_mode_tools())
         } else {
             let (tool_count, server_count) = self.backend_counts();
             build_meta_tools_filtered(
@@ -1280,7 +1280,9 @@ impl MetaMcp {
         let effective_code_mode = self.code_mode_enabled || url_override;
         if effective_code_mode && !self.code_mode_enabled {
             // URL-activated Code Mode: return the two fixed tools directly.
-            let tools = build_code_mode_tools();
+            // Still filtered - a URL parameter must not widen what the
+            // operator exposed.
+            let tools = self.meta_tool_exposure.filter(build_code_mode_tools());
             let tool_descriptors =
                 project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
             return JsonRpcResponse::success(

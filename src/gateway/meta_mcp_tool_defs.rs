@@ -732,8 +732,13 @@ fn governed_meta_tool_names() -> &'static std::collections::HashSet<String> {
     static NAMES: std::sync::OnceLock<std::collections::HashSet<String>> =
         std::sync::OnceLock::new();
     NAMES.get_or_init(|| {
+        // Every built-in the dispatcher recognises, from *both* builders. Code
+        // Mode's `gateway_execute` reaches every backend tool, so leaving it
+        // outside the governed set left an operator allow-list with an escape
+        // hatch: the tool stayed callable whatever the operator named.
         build_meta_tools(true, true, true, true, 0, 0)
             .into_iter()
+            .chain(build_code_mode_tools())
             .map(|t| t.name)
             .collect()
     })
@@ -797,14 +802,22 @@ impl MetaToolExposure {
 
     /// Whether `name` may be listed and called.
     ///
-    /// Names outside the builder's roster are always exposed: surfaced backend
-    /// tools and Code Mode's fixed two-tool surface are not meta-tools, and an
-    /// operator's meta-tool allow-list has nothing to say about them.
+    /// Names outside the builders' roster are always exposed: surfaced backend
+    /// tools are not meta-tools, and an operator's meta-tool allow-list has
+    /// nothing to say about them.
     pub(crate) fn is_exposed(&self, name: &str) -> bool {
         match &self.allowed {
             None => true,
             Some(allowed) => allowed.contains(name) || !governed_meta_tool_names().contains(name),
         }
+    }
+
+    /// Drop from `tools` everything this gateway does not expose.
+    ///
+    /// Every list path goes through here, so a builder added later is filtered
+    /// by construction rather than by remembering to filter it.
+    pub(crate) fn filter(&self, tools: Vec<Tool>) -> Vec<Tool> {
+        tools.into_iter().filter(|t| self.is_exposed(&t.name)).collect()
     }
 }
 
@@ -822,15 +835,12 @@ pub(crate) fn build_meta_tools_filtered(
     server_count: usize,
     exposure: &MetaToolExposure,
 ) -> Vec<Tool> {
-    build_meta_tools(
+    exposure.filter(build_meta_tools(
         stats_enabled,
         webhooks_enabled,
         reload_enabled,
         cost_report_enabled,
         tool_count,
         server_count,
-    )
-    .into_iter()
-    .filter(|tool| exposure.is_exposed(&tool.name))
-    .collect()
+    ))
 }

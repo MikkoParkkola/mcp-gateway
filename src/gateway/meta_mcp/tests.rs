@@ -2678,3 +2678,51 @@ async fn no_allow_list_exposes_everything() {
         "an unconfigured gateway exposes every meta-tool: {response:?}"
     );
 }
+
+#[tokio::test]
+async fn unexposed_code_mode_tool_is_refused_on_call() {
+    // `gateway_execute` reaches every backend tool. It sits in a different
+    // builder from the rest of the meta-tools, and was outside the governed
+    // set, so an allow-list naming only `gateway_invoke` still left it
+    // callable. Both builders are governed now.
+    let response = exposure_only_invoke()
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_execute",
+            json!({"tool": "mem:read", "arguments": {}}),
+            None,
+            allow_all_ctx(),
+        )
+        .await;
+
+    let error = response
+        .error
+        .expect("an unexposed Code Mode tool must be refused on call");
+    assert_eq!(
+        error.code, -32601,
+        "and refused as an unknown tool: {error:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_refusal_does_not_name_the_allow_list() {
+    // The gate's whole disclosure property is that its refusal is
+    // indistinguishable from the unrecognised-tool fallback. Asserting only the
+    // error code lets someone reword the message to "not exposed" and ship a
+    // disclosure oracle with every other test still green.
+    let response = exposure_only_invoke()
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_list_tools",
+            json!({}),
+            None,
+            allow_all_ctx(),
+        )
+        .await;
+
+    let error = response.error.expect("an unexposed meta-tool is refused");
+    assert_eq!(
+        error.message, "Unknown tool: gateway_list_tools",
+        "the refusal must be worded exactly like the fallback, with nothing appended"
+    );
+}

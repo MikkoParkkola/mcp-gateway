@@ -1270,6 +1270,9 @@ pub struct MetaMcpConfig {
     ///
     /// Unrecognised names are logged and dropped rather than aborting startup
     /// (same policy as `surfaced_tools`).
+    ///
+    /// The list is read once at startup, so an edit takes effect on restart
+    /// rather than on `gateway_reload_config` (same as `surfaced_tools`).
     #[serde(default)]
     pub exposed_meta_tools: Vec<String>,
 }

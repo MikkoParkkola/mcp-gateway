@@ -8,6 +8,7 @@
 use serde_json::{Value, json};
 
 use crate::failsafe::CircuitBreakerStats;
+use crate::gateway::meta_mcp_tool_defs::MetaToolExposure;
 use crate::protocol::{
     Content, Info, InitializeResult, JsonRpcResponse, PromptsCapability, RequestId,
     ResourcesCapability, ServerCapabilities, Tool, ToolsCallResult, ToolsCapability,
@@ -185,29 +186,63 @@ pub(crate) fn build_initialize_result(
 ///
 /// * `tool_count`   — total number of tools currently cached across all backends
 /// * `server_count` — number of registered backends (running or not)
+/// * `exposure`     — the meta-tool allow-list; only exposed tools are named
 ///
 /// # Examples
 ///
 /// ```ignore
-/// let preamble = build_discovery_preamble(42, 3);
+/// let preamble = build_discovery_preamble(42, 3, &MetaToolExposure::expose_all());
 /// assert!(preamble.contains("42 tools"));
 /// assert!(preamble.contains("3 backends"));
 /// assert!(preamble.contains("FIRST"));
 /// ```
-pub(crate) fn build_discovery_preamble(tool_count: usize, server_count: usize) -> String {
-    format!(
-        "This server manages {tool_count} tools across {server_count} backends.\n\
-         Use gateway_search_tools FIRST to find relevant tools by keyword before invoking.\n\
-         Tool schemas are not listed directly so the prompt stays compact.\n\
-         \n\
-         Discovery pattern:\n\
-         1. gateway_search_tools(query=\"your keyword\") -- find tools matching your need\n\
-         2. gateway_invoke(server=\"X\", tool=\"Y\", arguments={{...}}) -- call the tool\n\
-         \n\
-         Direct listing (when you know the backend):\n\
-         - gateway_list_tools(server=\"brave\") -- list tools from a specific backend\n\
-         - gateway_list_servers -- list all backends with status\n"
-    )
+pub(crate) fn build_discovery_preamble(
+    tool_count: usize,
+    server_count: usize,
+    exposure: &MetaToolExposure,
+) -> String {
+    // Only name tools the operator actually exposed. `initialize` reaches every
+    // client before any `tools/list`, so an unfiltered preamble would announce
+    // the existence of tools the allow-list hides - the same disclosure the
+    // refusal path is worded to avoid - and would steer clients into calls the
+    // gateway then refuses.
+    let mut out = format!("This server manages {tool_count} tools across {server_count} backends.\n");
+    let search = exposure.is_exposed("gateway_search_tools");
+    let invoke = exposure.is_exposed("gateway_invoke");
+    let list_tools = exposure.is_exposed("gateway_list_tools");
+    let list_servers = exposure.is_exposed("gateway_list_servers");
+
+    if search {
+        out.push_str(
+            "Use gateway_search_tools FIRST to find relevant tools by keyword before invoking.\n",
+        );
+    }
+    out.push_str("Tool schemas are not listed directly so the prompt stays compact.\n");
+
+    if search || invoke {
+        out.push_str("\nDiscovery pattern:\n");
+        if search {
+            out.push_str(
+                "1. gateway_search_tools(query=\"your keyword\") -- find tools matching your need\n",
+            );
+        }
+        if invoke {
+            out.push_str(
+                "2. gateway_invoke(server=\"X\", tool=\"Y\", arguments={...}) -- call the tool\n",
+            );
+        }
+    }
+
+    if list_tools || list_servers {
+        out.push_str("\nDirect listing (when you know the backend):\n");
+        if list_tools {
+            out.push_str("- gateway_list_tools(server=\"brave\") -- list tools from a specific backend\n");
+        }
+        if list_servers {
+            out.push_str("- gateway_list_servers -- list all backends with status\n");
+        }
+    }
+    out
 }
 
 /// Build dynamic routing instructions from capability metadata.
