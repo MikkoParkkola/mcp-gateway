@@ -450,7 +450,14 @@ above, and each is disposed of explicitly rather than dropped.
 
 Collected, not answered. Each changes what gets built.
 
-**§4.1 — Are per-session routing profiles a supported product feature that must
+**§4.1 — RESOLVED 2026-08-31, by the operator, asked and answered: remove them
+outright (option b).** `gateway_set_profile` and `gateway_get_profile` leave the
+modern path; the tool surface is decided by the authorization presented on each
+request, which `ORDER.2` explicitly permits. The break is accepted knowingly:
+`ARCHITECTURE.md:56` documents the tool publicly, so a client calling it will be
+refused rather than silently narrowed. The question as originally posed follows.
+
+**Are per-session routing profiles a supported product feature that must
 be preserved for existing clients, or may they be removed outright?**
 This decides between ORDER.2 option (a) and option (b). It cannot be answered
 from the code: `src/gateway/router/authorization.rs:41-70` records a deliberate
