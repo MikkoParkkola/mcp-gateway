@@ -118,7 +118,7 @@ each later item's review has to see the earlier one's code.
 | 1a | Continuation state (MIK-7312) — design, review, test plan, then per-process key material plus a process-local consumed ledger. **Not** a shared storage backend: the design rejects one, because per-process keys are what make a continuation single-use across replicas | MRTR.5 says MUST and the operator held the release for it on 2026-08-30. MRTR.6 is *not* closed here: no table of held legacy exchanges exists to correlate a retry against, so the origin path refuses rather than resumes | MRTR.5 |
 | 1a' | MRTR.6 closure — either build the retry-to-exchange mapping, or make the explicit refusal permanent and document it as the answer | MRTR.6 says MUST and 1a leaves it on the refusal arm. Deciding which arm ships is a design event, not an implementation detail | MRTR.6 |
 | 1b | Legacy-client bridge — design, review, test plan, then wiring `Bridge::to_legacy_client` (mrtr.rs:186), which has no caller | MRTR.7 says MUST, same decision. The translation exists; issuing the requests over the client's transport mid-call is the missing half | MRTR.7 |
-| 2 | Tasks-extension conformance (MIK-7311) — two statuses, two required fields, an error payload shape, a capability check | the extension is unadvertised, so this is conformance rather than a live defect; fetch the specification page again before writing anything | §12 finding |
+| 2 | Tasks-extension conformance (MIK-7311, and TASK.1) — two statuses, two required fields, an error payload shape, a capability check | the extension is unadvertised, so this is conformance rather than a live defect; fetch the specification page again before writing anything | §12 finding |
 | 3 | Coverage on the five named modules (MIK-7324) — **runs after the wiring increments**, see Order | §4's failing half; `src/main.rs` is the sharpest, 22 added lines and none executed | §4 |
 | 4 | Mutation over the rest of the branch diff, on Spark, module by module — **runs after the wiring increments**, see Order | the measured 93.3% covers `src/protocol` only, and a subset is a lower bound | §4 |
 | 5 | Version bump to 4.0.0 everywhere (step 4 above), then re-run §3, §4, §5 at the final head | a tag built from a tree calling itself 3.5.0 ships a lie in `--version` | §3, §4, §5 |
@@ -183,9 +183,10 @@ and one feature flag.
 ## The queue does not cover the release, and the sweep says by how much
 
 `RELEASE-4.0.0-criteria-status.md` verified acceptance criteria against `src/` and `tests/`
-directly, never against another document's claim. Result: 33 MET, 14 ABSENT, 12 UNWIRED, 4 MET
-with a caveat, 1 UNTESTED. Thirty-three criteria are blocking, and the queue above owns fourteen of
-them. The other nineteen have no owner anywhere.
+directly, never against another document's claim. Coverage is complete: **73 criteria, 31 blocking**, counted from
+the table rows rather than from any summary line above them — this document twice carried a total
+its own source contradicted. The queue above owns fourteen. The other seventeen had no owner
+anywhere, which is what the increments below exist to fix.
 
 Read as a plan the queue is not wrong, it is short. That is the finding.
 
@@ -196,9 +197,9 @@ Read as a plan the queue is not wrong, it is short. That is the finding.
 | 5 | Shared-cache key correctness | CACHE.3, CACHE.4 | The key covers 2 of 8 response-varying dimensions (`invoke.rs:639-640,780`), both conditional, with zero tests. A cache keyed on less than what varies the response serves one caller's result to another. This is a data-disclosure defect wearing a performance feature's clothes, and it outranks everything else in this table. CACHE.3's missing decision table is the same gap stated as documentation |
 | 6 | Outbound request envelope | HEADER.5, HEADER.9 | Both are the outbound half of the request builder: mirroring an argument onto `Mcp-Param-{name}`, and carrying the modern `_meta` envelope. One mechanism, one design, one review. HEADER.5's validation half already exists (`param_headers.rs::mirrored_params`) and is waiting for a sender |
 | 7 | Principal-keyed control plane | TENANT.1, CONTROL.2, CONTROL.3, CONTROL.4 | Every one says the same thing: key on the authenticated principal or the trace id, never on the session. Splitting them means designing that substitution four times. **First task, before any design: reconcile with the in-flight work in another session** (`src/security/firewall/tenant_guard.rs`, `principal_window.rs`, both untracked). That is a task with an output, not a caution — starting anywhere else rebuilds what already exists, and the cost of colliding grows daily |
-| 8 | Modern-path conformance | RESULT.2, ERROR.2, ORDER.2, SUB.3, SUB.4 | Five corrections to what the 2026 path returns and advertises: a default when a backend reply omits a field, `-32602` for resource-not-found, a tool set that cannot vary per connection, removal of SSE resumability, and the retry-after-broken-stream case that has code but no test |
+| 8 | Modern-path conformance | RESULT.2, ERROR.2, ORDER.2, SUB.1, SUB.2, SUB.3, SUB.4 | Seven corrections to what the 2026 path returns and advertises: a default when a backend reply omits a field, `-32602` for resource-not-found, a tool set that cannot vary per connection, removal of SSE resumability, and the retry-after-broken-stream case that has code but no test. SUB.1, SUB.2 and SUB.3 join it because the sweep showed all three are **one defect**: `mcp_sse_handler` (`handlers.rs:167-260`) carries no era or `MCP-Protocol-Version` gate anywhere in the function, so the GET endpoint was supplemented rather than replaced and `Last-Event-ID` is read unconditionally at `:206`. SUB.1 and SUB.2 were filed under evidence quality on the strength of a `MET*` that is not in the status file's own vocabulary — a partial-credit status invented mid-document, and this is what it concealed |
 | 9 | Build the outbound side of the protocol surface | EXT.1, OTEL.1, DISCOVER.4, DISCOVER.5 | Not a tidy-up and not four wirings. `ExtensionSet::gateway_declares` and `TraceContext` are built, unit-tested and have zero production call sites; the era detector has nothing that sends a probe, and `EraCache` (`era.rs:111`) holds one `Option<Era>` under one mutex where DISCOVER.5 requires per-backend keying, so the cache is redesigned rather than wired. The title said declare-or-delete while the body described construction — sizing this as a tidy-up is how it stayed last in the queue. The deletion arm survives only because HEADER.5 took it three days ago and that precedent should be visible when this is decided |
-| 10 | Close the six evidence-quality criteria | SCHEMA.1, SURFACE.1, SUB.1, SUB.2, ORDER.3, CONTROL.5 | Four are MET with a caveat and two on inference. Each is either a criterion that passes or evidence nobody has produced, and today the record cannot tell which. Cheap here, expensive as a seventh gap discovered at tag time. Given an increment because a bullet in a prose section has no owner and no gate |
+| 10 | Close the four evidence-quality criteria | SCHEMA.1, SURFACE.1, ORDER.3, CONTROL.5 | Two are MET with a caveat and two on inference. Each is either a criterion that passes or evidence nobody has produced, and today the record cannot tell which. Cheap here, expensive as a seventh gap discovered at tag time. Given an increment because a bullet in a prose section has no owner and no gate |
 
 CONFIRM.2 is not in the table: the destructive-confirmation gate must be reachable through the MRTR
 path, so it closes when item 1 wires that path or it does not close at all. It rides on item 1 as an
@@ -214,12 +215,19 @@ increment. Nothing else in this plan has that ratio, which is why it stays first
 ### Three things this plan still does not know
 
 - ~~MIK-7217.DISCOVER, unswept~~ — **swept 2026-08-31, 5 MET and 2 blocking**, raising the count
-  from 31 to 33 exactly as predicted. Both blockers (DISCOVER.4, DISCOVER.5) are the era detector,
-  and they join increment 9.
-- **Ten of the seventy-three criteria have never been read against source** (63 of 73 swept). 33 is
-  a floor, not a total, and a plan claiming full scope cannot be complete while a seventh of the
-  criteria are unexamined. A sweep is in flight, briefed exactly as the DISCOVER one was — that
-  brief found two blockers in seven criteria, so the expected yield here is not zero.
+  from 31 to 33 as predicted — since revised back to 31 by the full sweep, because HEADER.7 and .8
+  cleared in the same window. Both blockers (DISCOVER.4, DISCOVER.5) are the era detector, and they
+  join increment 9.
+- ~~Ten of the seventy-three criteria have never been read against source~~ — **false when written,
+  and the way it was false is the finding.** The rows existed. They landed in `3b0ced13`, a commit
+  whose message never mentions them, and that sweeper left the header reading `63 of 73` and the
+  prose still saying those groups were unswept — both falsified by their own commit. Every reader
+  after it, this plan included, inherited a gap that had already been closed. A sweep that updates
+  rows without updating the counter is indistinguishable from no sweep at all.
+  The dispatched sweep re-verified all ten against source rather than trusting the rows, which is
+  the only reason this is a paragraph and not a wasted increment: **7 of the 10 are blocking**, and
+  the three OAUTH criteria are genuinely MET on production paths (`oauth/client/mod.rs:87` called at
+  `:840`, `:58` at `:1100`, `:381-386` reaching disk through `storage.rs:178`). Coverage is 73 of 73.
 - **Four criteria are MET with a caveat and two are MET on inference** (SCHEMA.1, SURFACE.1,
   SUB.1, SUB.2; ORDER.3, CONTROL.5). Each is either a criterion that passes or evidence that has
   not been produced yet, and today nobody can tell which from the record. Resolving six caveats is
