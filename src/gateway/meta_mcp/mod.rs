@@ -968,18 +968,48 @@ impl MetaMcp {
     }
 
     /// Resolve the active `RoutingProfile` for a session.
+    ///
+    /// A caller with no session gets the default and cannot be given anything
+    /// else: see [`session_key`] for why an empty id is no session at all.
+    /// This is the one site `surfaced`, `invoke` and `spec_preview` read the
+    /// profile through, so closing it closes the read for all three.
     pub(super) fn active_profile(
         &self,
         session_id: Option<&str>,
     ) -> crate::routing_profile::RoutingProfile {
         let default_name = self.profile_registry.default_name();
-        let name = session_id.map_or_else(
+        let name = session_key(session_id).map_or_else(
             || default_name.to_string(),
             |sid| self.session_profiles.get_profile_name(sid, default_name),
         );
         self.profile_registry.get(&name)
     }
 }
+
+/// The session a request belongs to, if it has one.
+///
+/// MCP 2026-07-28 removed protocol-level sessions, and the router spells that
+/// absence as an empty id rather than `None` (`router::handlers`, the
+/// `declares_modern_by_header` branch). The rest of the router already reads
+/// it that way — `router::helpers::attach_session_header` omits the header
+/// rather than emitting an empty one — so an empty id is not a session with an
+/// unusual name, it is the absence of one.
+///
+/// Routing profiles must read it the same way or they break `ORDER.2`: the
+/// empty key is shared by *every* sessionless caller, so a profile stored
+/// under it does not merely vary the tool set per connection, it varies it
+/// across connections.
+fn session_key(session_id: Option<&str>) -> Option<&str> {
+    session_id.filter(|sid| !sid.is_empty())
+}
+
+/// Refusal shared by the two routing-profile meta-tools.
+///
+/// Both are refused, not only the writer: answering `gateway_get_profile`
+/// would describe a selection the caller cannot make and cannot rely on.
+const NO_SESSION_FOR_PROFILE: &str = "Routing profiles are per-session, and this connection has no session. \
+     MCP 2026-07-28 removed protocol-level sessions; the tool set is decided \
+     by the authorization presented on each request.";
 
 // ============================================================================
 // MCP protocol handlers — initialize + tools
@@ -1063,7 +1093,7 @@ impl MetaMcp {
                 .and_then(serde_json::Value::as_str)
         });
 
-        if let (Some(sid), Some(name)) = (session_id, profile_hint) {
+        if let (Some(sid), Some(name)) = (session_key(session_id), profile_hint) {
             if self.profile_registry.contains(name) {
                 self.session_profiles.set_profile(sid, name);
                 debug!(
@@ -1413,10 +1443,8 @@ impl MetaMcp {
 
 impl MetaMcp {
     fn set_profile(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
-        let Some(sid) = session_id else {
-            return Err(Error::Protocol(
-                "gateway_set_profile requires a session (send Mcp-Session-Id header)".to_string(),
-            ));
+        let Some(sid) = session_key(session_id) else {
+            return Err(Error::Protocol(NO_SESSION_FOR_PROFILE.to_string()));
         };
 
         let profile_name = extract_required_str(args, "profile")?;
@@ -1443,12 +1471,14 @@ impl MetaMcp {
         }))
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     fn get_profile(&self, session_id: Option<&str>) -> Result<Value> {
-        let profile = self.active_profile(session_id);
+        let Some(sid) = session_key(session_id) else {
+            return Err(Error::Protocol(NO_SESSION_FOR_PROFILE.to_string()));
+        };
+        let profile = self.active_profile(Some(sid));
         Ok(json!({
             "profile": profile.name,
-            "session_id": session_id,
+            "session_id": sid,
             "description": profile.describe(),
             "available_profiles": self.profile_registry.profile_names(),
         }))
