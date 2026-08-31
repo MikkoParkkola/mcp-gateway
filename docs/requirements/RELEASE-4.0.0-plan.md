@@ -146,19 +146,26 @@ declaration surface. Deleting them is an API break this release does not need; k
 advertises a shape we do not honour. NFR.COMPAT.1 requires 2025-11-25 be served, so the audit of
 the non-functional block may answer this without the operator.
 
-**4. The two-route reading, already recorded below.** SUB.4 and OTEL.1 were scoped to cover the
-direct `POST /mcp/{name}` route as well as the meta-MCP surface, on an unconfirmed reading of the
-full-scope direction. "Meta-MCP only" removes one separable clause from each design.
+**4. What the direct route needs, now that reachability is settled.** The two-route question was
+half a code fact and nobody had read the code. `backend_handlers.rs:724` says the direct
+`POST /mcp/{name}` route bypasses `invoke_tool_traced`, and `:594` says it keeps no per-user cache,
+so the cache, idempotency and chokepoint machinery sits on the meta-MCP surface alone and the second
+door is out of reach by construction, not by assumption. That half needed a source read, not an
+operator. Two clauses survive it and are genuinely yours: whether the direct route should get its
+own instrumentation rather than merely being out of the shared path, and whether CACHE.1-4 bind on
+HTTP only or across all transports — the second moves where stdio exits and nothing else.
 
 ## What would make this plan wrong
 
 - ~~If TASK.1 is dropped from v4.0.0, SUB.4 loses its alternative branch.~~ CLOSED: the operator
   directed the full scope on 2026-08-31, so TASK.1 ships in v4.0.0 and SUB.4 keeps both routes.
   The design says how the two coexist, not which one wins.
-- If the two-route assumption is wrong, OTEL.1 and SUB.4 both shrink. They were scoped to cover
-  the direct `POST /mcp/{name}` route as well as the meta-MCP surface on an unconfirmed reading of
-  the full-scope direction. An operator answer of "meta-MCP only" removes one separable clause from
-  each design and changes nothing else.
+- ~~If the two-route assumption is wrong, OTEL.1 and SUB.4 both shrink.~~ CLOSED for reachability
+  on 2026-08-31 by reading the source rather than asking: the direct `POST /mcp/{name}` route
+  bypasses `invoke_tool_traced` (`backend_handlers.rs:724`) and holds no per-user cache (`:594`),
+  so the shared machinery cannot reach it whatever the scope decision says. The assumption had been
+  carried through three designs unread. What is still open is narrower and is item 4 above: whether
+  that route deserves its own instrumentation, and whether CACHE.1-4 are HTTP-only.
 - If the era cache should be keyed per pool slot rather than per backend name, cluster C's
   DISCOVER.5 changes by one field, one lookup and one section. It is keyed per backend NAME on the
   team lead's call, provisional and not operator-confirmed: era is a property of the peer process,
