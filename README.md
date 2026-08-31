@@ -260,7 +260,7 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 | **Changing MCP config** | Restart the AI session, lose context | Restart gateway (~8ms), session stays alive |
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
-The gateway exposes 14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced. The base discovery quartet stays fixed; the rest are operator helpers for stats, cost, playbooks, profile control, disabled-capability visibility, reload, and webhook status.
+By default the gateway exposes 14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced; `meta_mcp.exposed_meta_tools` narrows that set (see below). The base discovery quartet stays fixed; the rest are operator helpers for stats, cost, playbooks, profile control, disabled-capability visibility, reload, and webhook status.
 
 ### Code Mode: two tools instead of the meta-tool set
 
@@ -270,6 +270,29 @@ Setting `code_mode.enabled: true` makes `tools/list` return exactly two tools, `
 code_mode:
   enabled: true
 ```
+
+### Restricting the meta-tool set
+
+`meta_mcp.exposed_meta_tools` names the meta-tools a gateway lists and executes.
+Omitted or empty exposes all of them, which is what a gateway does unless it is
+configured otherwise.
+
+```yaml
+meta_mcp:
+  exposed_meta_tools:
+    - gateway_search_tools
+    - gateway_invoke
+```
+
+It is an allow-list rather than a deny-list, so a meta-tool added in a later
+release is invisible to a gateway that pins a list instead of appearing on it
+unannounced. A name that is not a meta-tool is logged and dropped rather than
+failing startup, so a typo cannot stop a gateway from starting. Tools named in
+`meta_mcp.surfaced_tools` are not meta-tools and are unaffected.
+
+One list governs both `tools/list` and `tools/call`. A meta-tool that is not
+exposed is refused with the same `-32601` and the same message a name that does
+not exist receives, so the listed set and the callable set cannot disagree.
 
 
 ## Security

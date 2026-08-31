@@ -56,6 +56,7 @@ use super::meta_mcp_helpers::{
     build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
     wrap_tool_success,
 };
+use super::meta_mcp_tool_defs::{MetaToolExposure, build_meta_tools_filtered};
 use super::webhooks::WebhookRegistry;
 
 mod invoke;
@@ -256,6 +257,13 @@ pub struct MetaMcp {
     /// Pre-built from `surfaced_tools` so `handle_tools_call` only pays one
     /// `HashMap` lookup instead of a linear scan on every call.
     pub(super) surfaced_tools_map: HashMap<String, String>,
+    /// Which meta-tools the operator exposes (GH issue 449).
+    ///
+    /// Exposes everything by default; narrowed via
+    /// [`MetaMcp::with_meta_tool_exposure`] from `meta_mcp.exposed_meta_tools`.
+    /// Consulted by both `tools/list` and `tools/call`, so a concealed tool
+    /// cannot be listed-but-callable or callable-but-unlisted.
+    pub(super) meta_tool_exposure: MetaToolExposure,
     /// Session-scoped dynamically promoted tools (SEP-1862 / Phase 3).
     ///
     /// Keyed by session ID.  Each entry is a list of `"server:tool"` strings
@@ -417,6 +425,7 @@ impl MetaMcp {
             cost_registry: None,
             surfaced_tools: Vec::new(),
             surfaced_tools_map: HashMap::new(),
+            meta_tool_exposure: MetaToolExposure::expose_all(),
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
             session_state: SessionStateStore::new(),
@@ -555,6 +564,17 @@ impl MetaMcp {
     #[must_use]
     pub fn with_trusted_identity_headers(mut self, enabled: bool) -> Self {
         self.caller_identity_header_trust = CallerIdentityHeaderTrust::from_enabled(enabled);
+        self
+    }
+
+    /// Restrict the meta-tools this gateway lists and executes.
+    ///
+    /// Takes the raw `meta_mcp.exposed_meta_tools` names. Empty exposes every
+    /// meta-tool. Unrecognised names are warned about and dropped rather than
+    /// aborting startup, matching [`MetaMcp::with_surfaced_tools`].
+    #[must_use]
+    pub fn with_meta_tool_exposure(mut self, names: &[String]) -> Self {
+        self.meta_tool_exposure = MetaToolExposure::from_names(names);
         self
     }
 
@@ -1137,13 +1157,14 @@ impl MetaMcp {
             build_code_mode_tools()
         } else {
             let (tool_count, server_count) = self.backend_counts();
-            build_meta_tools(
+            build_meta_tools_filtered(
                 self.stats.is_some(),
                 self.get_webhook_registry().is_some(),
                 self.get_reload_context().is_some(),
                 true, // cost_report always enabled (tracker is always present)
                 tool_count,
                 server_count,
+                &self.meta_tool_exposure,
             )
         };
         let mut tool_descriptors =
@@ -1300,6 +1321,18 @@ impl MetaMcp {
                 Ok(content) => JsonRpcResponse::success_serialized(id, content),
                 Err(e) => error_response_preserving_status(id, &e),
             };
+        }
+
+        // Same predicate as the list path, so the listed set and the callable
+        // set cannot disagree. The envelope is built by the same constructor and
+        // the same responder as the fallback arm below, and carries no
+        // `did_you_mean` hint: a hint would match the concealed name exactly and
+        // confirm that the tool exists and is merely hidden.
+        if !self.meta_tool_exposure.is_exposed(tool_name) {
+            return error_response_preserving_status(
+                id,
+                &Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
+            );
         }
 
         let result = match tool_name {

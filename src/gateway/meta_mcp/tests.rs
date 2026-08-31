@@ -2464,3 +2464,182 @@ async fn global_meta_tool_reaches_an_admin_caller() {
          tool's business: {message}"
     );
 }
+
+// ── GH issue 449: meta-tool exposure, end to end through MetaMcp ──────────
+//
+// `meta_mcp_tool_defs_tests.rs` covers the predicate and the filtered builder
+// in isolation. These cover the two call sites the predicate was dead at: the
+// listed set, the callable set, and the two surfaces it must not touch.
+
+/// An allow-list naming one meta-tool, for tests whose subject is concealment.
+///
+/// `gateway_list_servers` is the exposed one throughout: it is not in
+/// `ADMIN_META_TOOLS`, so the admin gate cannot decide these tests for us, and
+/// it succeeds against an empty registry.
+fn one_tool_allow_list() -> Vec<String> {
+    vec!["gateway_list_servers".to_string()]
+}
+
+#[test]
+fn restrictive_allow_list_omits_the_unnamed_meta_tools_from_tools_list() {
+    // GIVEN: a gateway exposing only gateway_list_servers
+    let mm = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_meta_tool_exposure(&one_tool_allow_list());
+
+    // WHEN: tools/list
+    let response = mm.handle_tools_list(RequestId::Number(1));
+
+    // THEN: the named tool is listed and the others are gone
+    let result = response.result.expect("tools/list must succeed");
+    let names: Vec<&str> = result["tools"]
+        .as_array()
+        .expect("tools must be an array")
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["gateway_list_servers"],
+        "only the allow-listed meta-tool may be listed"
+    );
+}
+
+#[tokio::test]
+async fn a_concealed_meta_tool_is_refused_by_tools_call() {
+    // GIVEN: the same gateway, where gateway_invoke is concealed
+    let mm = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_meta_tool_exposure(&one_tool_allow_list());
+
+    // WHEN: calling the concealed tool, and a name that exists nowhere
+    let concealed = mm
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_invoke",
+            json!({}),
+            None,
+            allow_all_ctx(),
+        )
+        .await;
+    let absent = mm
+        .handle_tools_call(
+            RequestId::Number(1),
+            "totally_not_a_gateway_tool",
+            json!({}),
+            None,
+            allow_all_ctx(),
+        )
+        .await;
+
+    // THEN: refused, and the two responses differ only in the echoed name.
+    // Compared field for field rather than by substring: an error that merely
+    // says "Unknown tool" while carrying a different code, or a `data` payload
+    // the absent-name path does not carry, is still an oracle telling a caller
+    // that the tool exists and is concealed.
+    let hidden_err = concealed.error.expect("a concealed tool must be refused");
+    let absent_err = absent.error.expect("an absent tool must be refused");
+    assert_eq!(hidden_err.code, -32601, "concealed tool code");
+    // `ends_with`, not equality: the responder renders the error through
+    // `Display`, which prefixes "JSON-RPC error {code}: ". What matters is the
+    // tail — no `did_you_mean` hint may follow the name and confirm that the
+    // concealed tool exists.
+    assert!(
+        hidden_err.message.ends_with("Unknown tool: gateway_invoke"),
+        "no did_you_mean hint may confirm the concealed tool, got: {}",
+        hidden_err.message
+    );
+    assert_eq!(hidden_err.code, absent_err.code, "codes must match");
+    assert_eq!(hidden_err.data, absent_err.data, "data payloads must match");
+    assert_eq!(
+        hidden_err.message.replace("gateway_invoke", "X"),
+        absent_err
+            .message
+            .replace("totally_not_a_gateway_tool", "X"),
+        "messages must differ only in the echoed tool name"
+    );
+    assert!(concealed.result.is_none(), "a refusal must carry no result");
+}
+
+#[tokio::test]
+async fn empty_exposure_config_lists_and_calls_every_meta_tool() {
+    // GIVEN: a gateway configured the way every existing deployment is —
+    // `exposed_meta_tools` absent, which deserialises to an empty Vec
+    let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_meta_tool_exposure(&[]);
+
+    // WHEN: tools/list, and a call to a tool no allow-list named
+    let response = mm.handle_tools_list(RequestId::Number(1));
+    let called = mm
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_list_servers",
+            json!({}),
+            None,
+            allow_all_ctx(),
+        )
+        .await;
+
+    // THEN: the whole roster is listed, and the call is not refused
+    let names: Vec<&str> = response.result.expect("tools/list must succeed")["tools"]
+        .as_array()
+        .expect("tools must be an array")
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"gateway_invoke") && names.contains(&"gateway_list_servers"),
+        "an empty config must expose the whole roster, got: {names:?}"
+    );
+    assert!(
+        names.len() > 1,
+        "an empty config must not behave like an allow-list, got: {names:?}"
+    );
+    assert!(
+        called.error.is_none(),
+        "an empty config must not refuse a meta-tool: {:?}",
+        called.error
+    );
+}
+
+#[tokio::test]
+async fn a_restrictive_allow_list_does_not_govern_surfaced_backend_tools() {
+    // GIVEN: a restrictive allow-list alongside a surfaced backend tool, which
+    // is not a meta-tool and which an operator's meta-tool list cannot name
+    let surfaced = vec![SurfacedToolConfig {
+        server: "srv".to_string(),
+        tool: "my_surfaced_tool".to_string(),
+    }];
+    let mm = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_surfaced_tools(surfaced)
+        .with_meta_tool_exposure(&one_tool_allow_list());
+
+    // WHEN: listing, and calling the surfaced tool
+    let response = mm.handle_tools_list(RequestId::Number(1));
+    let called = mm
+        .handle_tools_call(
+            RequestId::Number(1),
+            "my_surfaced_tool",
+            json!({}),
+            None,
+            allow_all_ctx(),
+        )
+        .await;
+
+    // THEN: still listed, and dispatched rather than refused as absent. The
+    // call fails with a backend error because "srv" does not exist; what
+    // matters is that it reached dispatch at all.
+    let names: Vec<&str> = response.result.expect("tools/list must succeed")["tools"]
+        .as_array()
+        .expect("tools must be an array")
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"my_surfaced_tool"),
+        "a surfaced tool must survive a meta-tool allow-list, got: {names:?}"
+    );
+    if let Some(err) = &called.error {
+        assert_ne!(
+            err.code, -32601,
+            "a surfaced tool must not be refused as absent: {err:?}"
+        );
+    }
+}

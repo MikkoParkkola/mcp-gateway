@@ -548,6 +548,7 @@ impl Gateway {
         .with_projection_mode(self.config.meta_mcp.projection_mode)
         .with_secret_injector(secret_injector)
         .with_surfaced_tools(self.config.meta_mcp.surfaced_tools.clone())
+        .with_meta_tool_exposure(&self.config.meta_mcp.exposed_meta_tools)
         .with_trusted_identity_headers(
             self.config
                 .security

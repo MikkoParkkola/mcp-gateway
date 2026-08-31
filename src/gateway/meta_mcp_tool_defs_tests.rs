@@ -440,7 +440,7 @@ fn unrecognised_configured_name_is_dropped_not_fatal() {
 }
 
 /// 449.EXPOSE.6 — the unfiltered builder keeps its existing six-argument form
-/// and its existing output, so the call site in meta_mcp/mod.rs still compiles.
+/// and its existing output, so the call site in `meta_mcp/mod.rs` still compiles.
 #[test]
 fn unfiltered_builder_is_unchanged_by_the_exposure_work() {
     let tools = build_meta_tools(false, false, false, false, 42, 3);
