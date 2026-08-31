@@ -412,18 +412,20 @@ fn predicate_hides_an_omitted_tool_and_keeps_a_named_one() {
     );
 }
 
-/// 449.EXPOSE.4 — the allow-list governs only the tools it can list. Surfaced
-/// backend tools and Code Mode's fixed surface must pass through untouched.
+/// 449.EXPOSE.4 — the allow-list governs every name a builder can produce, and
+/// nothing else. Surfaced backend tools pass through untouched; Code Mode's
+/// `gateway_execute` is a built-in, so an allow-list that omits it hides it.
 #[test]
-fn predicate_does_not_govern_names_outside_the_builder_roster() {
+fn predicate_governs_the_builder_roster_and_nothing_else() {
     let exposure = MetaToolExposure::from_names(&["gateway_invoke".to_string()]);
     assert!(
         exposure.is_exposed("some_backend_tool"),
         "surfaced backend tools are not meta-tools"
     );
     assert!(
-        exposure.is_exposed("gateway_execute"),
-        "Code Mode's surface is out of scope for the meta-tool allow-list"
+        !exposure.is_exposed("gateway_execute"),
+        "Code Mode reaches every backend tool, so an omitted gateway_execute \
+         must not stay callable"
     );
 }
 

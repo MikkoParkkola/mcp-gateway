@@ -182,7 +182,7 @@ the config is available.
 | 449.EXPOSE.1 | Empty/omitted `exposed_meta_tools` lists exactly today's roster |
 | 449.EXPOSE.2 | A non-empty list yields only the named tools in `tools/list` |
 | 449.EXPOSE.3 | `is_exposed` is false for an omitted tool and true for a named one |
-| 449.EXPOSE.4 | A name outside the builder's roster is exposed (surfaced/Code Mode unaffected) |
+| 449.EXPOSE.4 | A name outside the builder's roster is exposed (surfaced tools unaffected); every name a builder produces, Code Mode's included, is governed |
 | 449.EXPOSE.5 | An unrecognised configured name is dropped, not fatal |
 | 449.EXPOSE.6 | `build_meta_tools` (unfiltered) behaviour is unchanged |
 | 449.EXPOSE.7 | `MetaMcpConfig::default()` exposes everything |
