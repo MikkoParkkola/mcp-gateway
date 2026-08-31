@@ -1,12 +1,14 @@
-# v4.0.0 release plan — closing the 26 blocking criteria
+# v4.0.0 release plan — closing the 27 blocking criteria
 
 Companion to `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is the status SSOT.
 This file is the ORDER OF WORK, not a second status table. When the two disagree, the status
 doc wins.
 
-Standing: 43 MET, plus 4 qualified MET (2 `MET (I)`, 1 residual, 1 caveat). 26 criteria are
-blocking — 17 UNWIRED (code exists, nothing calls it), 12 ABSENT (nothing implements it), 0
-UNTESTED as of 2026-08-31.
+Standing as of 2026-08-31: 45 MET, plus 3 qualified MET (1 `MET (I)`, 1 residual, 1 caveat). 27
+criteria are blocking — 16 UNWIRED (code exists, nothing calls it), 10 ABSENT (nothing implements
+it), 1 UNTESTED. Every number here is counted from the blocking column of the status doc's tables,
+never carried forward by hand; an earlier revision of this paragraph said 26 blocking and split it
+17/12/0, which sums to 29.
 
 ## The shape of the problem
 
@@ -105,8 +107,8 @@ Clusters A and E are owned by other sessions. Coordinate before touching
 
 ## What would make this plan wrong
 
-- If TASK.1 is dropped from v4.0.0, SUB.4 loses its alternative branch and its design
-  narrows to the idempotency route alone. That is a scope decision for the operator, not an
-  engineering one, and it is worth asking before wave 1 finishes.
+- ~~If TASK.1 is dropped from v4.0.0, SUB.4 loses its alternative branch.~~ CLOSED: the operator
+  directed the full scope on 2026-08-31, so TASK.1 ships in v4.0.0 and SUB.4 keeps both routes.
+  The design says how the two coexist, not which one wins.
 - If cluster A slips, H slips with it and MRTR.10a's key contents stay open, which leaves
   SUB.4 implementable but not fully specified.
