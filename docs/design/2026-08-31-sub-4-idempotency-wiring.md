@@ -151,8 +151,11 @@ advertised and validated. Nothing in the tree advertises one. This axis is upstr
 two: deleting the automatic derivation with no carrier leaves the criterion unsatisfiable, and
 keeping it leaves the silent-dedup defect P2.
 
-DECIDED 2026-08-31, by the operator's instruction: support MCP as specified, and where the
-specification is silent the carrier is an internal choice to be made on engineering grounds.
+PROPOSED, NOT DECIDED. An earlier revision recorded this axis as settled "by the operator's
+instruction". No such instruction appears in the session record, and this document's own
+open-questions table states the question was asked and drew no answer. The attribution is
+withdrawn: what follows is the design's own recommendation, and it carries the weight of a
+recommendation until a person confirms it.
 
 The specification is not silent. `_meta` is the protocol's own field for out-of-band data on a
 request, so the meta route carries the key at `params._meta["io.mcp-gateway/idempotency-key"]`.
