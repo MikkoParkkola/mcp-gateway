@@ -52,6 +52,19 @@ Rationale: 2025-06-18 and 2025-11-25 are the two revisions currently in wide cli
 
 **This is a decision, not a fact — it needs the unknown below resolved before it is frozen.**
 
+### U1 measurement (MIK-7218) — 2026-08-31
+
+Instrumentation landed in `src/protocol_revision_telemetry.rs`. It records
+`initialize.params.protocolVersion` and `_meta["io.modelcontextprotocol/protocolVersion"]`
+per session, exposes unattributed as its own series, and shadow-logs every
+`tools/list` filter set plus the `cacheScope` the decision table would emit.
+
+**Production window: not elapsed.** Snapshot at instrument time: 0 attributed
+sessions, 0 total. Attribution rate 0.0, below the 80% stop criterion.
+
+**Pre-registered 2% rule: not applied.** The stop criterion forbids narrowing
+on partial data. Decision 2 stays unfrozen. No revision is retired.
+
 ## Unknowns, each with a fail-fast (§P1)
 
 An unknown without a scheduled check is a defect. Five; one resolved, four outstanding:

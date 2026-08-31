@@ -64,6 +64,7 @@ pub mod playbook;
 pub mod projection;
 pub mod protocol;
 pub mod protocol_imports;
+pub mod protocol_revision_telemetry;
 pub mod provider;
 pub mod ranking;
 pub mod registry;

@@ -981,6 +981,11 @@ impl MetaMcp {
             negotiated = negotiated_version,
             "Protocol version negotiation"
         );
+        crate::protocol_revision_telemetry::observe_inbound(
+            session_id.unwrap_or("no-session"),
+            params,
+            None,
+        );
 
         let profile_hint = header_profile.or_else(|| {
             params
