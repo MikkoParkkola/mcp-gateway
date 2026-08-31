@@ -532,6 +532,26 @@ were never reached at all, and the four-group sweep in `RELEASE-4.0.0-criteria-s
 different, also partial, slice. Re-running the sweep to completion is a prerequisite for calling this
 plan sized — not an increment, because its output changes what the increments are.
 
+### The one decision the source cannot make
+
+Three cluster designs are reviewed and carry a `SHIP-WITH-FIXES` verdict from each vendor: cluster B
+connection invariance, cluster B capability and trace metadata, and cluster F response-cache keying.
+Their findings are disposed inside the designs, so what remains there is implementation, not more
+design rounds.
+
+One item is not implementation. `MIK-6865.SCHEMA.1` requires that "tool schemas exposed by the
+gateway ... remain valid under JSON Schema 2020-12"
+(`docs/requirements/RELEASE-4.0.0-requirements.md:200`). The cluster G design scopes upstream backend
+schemas out of the validity work and records that exclusion as a deferred unknown against a MUST,
+not as a clean boundary
+(`docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity.md:47,247`) — the population the MET
+clause was measured over includes backend tools. What to do when a backend publishes an invalid
+schema is a routing-policy choice with a user-visible cost either way: refusing the backend trades
+availability for conformance, publishing it with a flag leaves the MUST unmet, and stripping the
+offending subschema changes what the client is told a tool accepts. No specification settles it,
+because MCP has no notion of a gateway aggregating backends. It is an owner decision and it blocks
+SCHEMA.1.
+
 ## 3. Not blocking the release
 
 - Stale npm version in `npm/package.json:3` — CI syncs it at publish; the guard is hygiene.
