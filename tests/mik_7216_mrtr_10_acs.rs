@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7216 / MRTR.10 — a non-final result must not be cached as if it were final.
 //!
 //! MCP 2026 lets a tool call return `resultType: "input_required"`, meaning the

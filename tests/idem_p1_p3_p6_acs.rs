@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Regression tests for the three idempotency-guard defects P1, P3 and P6.
 //!
 //! P1: `enforce` admitted two concurrent retries of the same key.

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7214.HEADER.7/.8 — `x-mcp-header` schema validation.
 //!
 //! HEADER.7 names six constraints; each has a case here. HEADER.8 requires a
