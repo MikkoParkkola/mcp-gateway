@@ -36,7 +36,16 @@ no per-user cache". So the response cache, the idempotency store and the
 chokepoint all sit on the meta-MCP door alone; the direct door is out of reach
 of this design by construction, not by assumption. It is named here because a
 reader who assumes symmetry will look for a second key shape that does not
-exist. One clause does *not* follow automatically: the `proto` segment is read
+exist.
+
+**This closes a question that was being carried as an operator one.** The
+two-route reading has been treated as an open ask across sibling scopes. It is
+not an ask: it is a **checkable**, and the two lines above are the check. Which
+routes reach `invoke_tool_traced` is a fact in the source, answerable by reading
+it, and an unknown a source read can close never needed the operator. Recorded
+in one line so the next design that inherits the assumption inherits the answer
+with it. The clause this does *not* close is the transport-scope one below —
+that one is genuinely askable. One clause does *not* follow automatically: the `proto` segment is read
 from the meta-MCP POST handler's `declared_version` (`handlers.rs:572`), which
 an HTTP request carries and a **stdio** session does not — stdio negotiates a revision at `initialize`
 (`meta_mcp/mod.rs:1053`) and the value is currently only logged. For stdio,
