@@ -515,6 +515,15 @@ pub(super) async fn meta_mcp_handler(
         return build_accepted_response(&session_id);
     }
 
+    let inbound_meta = crate::protocol_revision_telemetry::request_meta(&request, params.as_ref());
+    if method != "initialize" {
+        crate::protocol_revision_telemetry::observe_inbound(
+            session_id.as_str(),
+            None,
+            inbound_meta,
+        );
+    }
+
     // For requests, id is guaranteed to exist (checked in parse_request)
     let id = id.expect("id should exist for non-notification requests");
 
@@ -532,12 +541,22 @@ pub(super) async fn meta_mcp_handler(
             Some(session_id.as_str()),
             header_profile.as_deref(),
         ),
-        "tools/list" => state.meta_mcp.handle_tools_list_with_url_override(
-            id,
-            params.as_ref(),
-            Some(session_id.as_str()),
-            code_mode_url_active,
-        ),
+        "tools/list" => {
+            let profile_bound = header_profile.is_some();
+            crate::protocol_revision_telemetry::observe_tools_list(
+                crate::protocol_revision_telemetry::ListFilters {
+                    principal: client.is_some(),
+                    profile: profile_bound,
+                    session: true,
+                },
+            );
+            state.meta_mcp.handle_tools_list_with_url_override(
+                id,
+                params.as_ref(),
+                Some(session_id.as_str()),
+                code_mode_url_active,
+            )
+        }
         "tools/call" => {
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
 

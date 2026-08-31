@@ -1636,6 +1636,13 @@ impl Gateway {
         let response = match method.as_str() {
             "initialize" => meta_mcp.handle_initialize(id, params.as_ref(), Some(session_id), None),
             "tools/list" => {
+                crate::protocol_revision_telemetry::observe_tools_list(
+                    crate::protocol_revision_telemetry::ListFilters {
+                        principal: false,
+                        profile: false,
+                        session: true,
+                    },
+                );
                 meta_mcp.handle_tools_list_with_params(id, params.as_ref(), Some(session_id))
             }
             "tools/call" => {
