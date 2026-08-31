@@ -137,13 +137,39 @@ pub(crate) fn extract_f64_or(args: &Value, key: &str, default: f64) -> f64 {
     args.get(key).and_then(Value::as_f64).unwrap_or(default)
 }
 
+/// The extensions this gateway has actually implemented and enabled, keyed
+/// by reverse-DNS identifier with each value carrying that extension's
+/// settings object.
+///
+/// Empty today. `Extension::Tasks` (`protocol::extensions`) exists as a
+/// request-shape mechanism, but nothing on a request path is gated on it —
+/// declaring it here before MIK-7311 wires real behaviour would advertise a
+/// capability no handler honours, which is a worse failure than the
+/// currently-unwired field this function replaces (`protocol/extensions.rs`
+/// on `ExtensionSet::gateway_declares`).
+///
+/// This is the single source `build_initialize_result` populates
+/// `ServerCapabilities.extensions` from — never a static list read inline —
+/// so the day an extension is implemented, one call site changes.
+pub(crate) fn implemented_extensions() -> std::collections::HashMap<String, Value> {
+    std::collections::HashMap::new()
+}
+
 /// Build the `InitializeResult` for a given negotiated protocol version.
 ///
 /// `instructions` is appended after the static preamble; pass an empty string
 /// to get the minimal discovery-only text.
+///
+/// `extensions` is the wire value for `ServerCapabilities.extensions` —
+/// callers pass [`implemented_extensions`] in production. Taking it as a
+/// parameter rather than reading a module-level constant keeps the value
+/// injectable: production always calls it, tests can call this function with
+/// a synthetic source to prove the field really varies with its input rather
+/// than merely existing.
 pub(crate) fn build_initialize_result(
     negotiated_version: &str,
     instructions: &str,
+    extensions: std::collections::HashMap<String, Value>,
 ) -> InitializeResult {
     InitializeResult {
         protocol_version: negotiated_version.to_string(),
@@ -161,6 +187,7 @@ pub(crate) fn build_initialize_result(
             }),
             prompts: Some(PromptsCapability { list_changed: true }),
             logging: Some(std::collections::HashMap::new()),
+            extensions,
             ..Default::default()
         },
         server_info: Info {

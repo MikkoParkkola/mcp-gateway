@@ -236,6 +236,15 @@ pub struct ServerCapabilities {
     /// Experimental capabilities
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<HashMap<String, Value>>,
+    /// Protocol extensions this gateway declares (MCP 2026-07-28), keyed by
+    /// reverse-DNS identifier. Always present, never `skip_serializing_if`:
+    /// an absent key and an empty object are different statements — one says
+    /// "extensions unknown to this build", the other "this build speaks the
+    /// mechanism and currently declares none" (`protocol/extensions.rs`).
+    /// `#[serde(default)]` keeps deserialization tolerant of a peer or an
+    /// older fixture that omits the key; this gateway itself always writes it.
+    #[serde(default)]
+    pub extensions: HashMap<String, Value>,
     /// Logging capability
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logging: Option<HashMap<String, Value>>,
