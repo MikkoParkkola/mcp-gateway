@@ -1474,3 +1474,7 @@ mod tests;
 #[cfg(test)]
 #[path = "authz_tests.rs"]
 mod authz_tests;
+
+#[cfg(test)]
+#[path = "trace_correlation_tests.rs"]
+mod trace_correlation_tests;

@@ -1331,7 +1331,16 @@ impl MetaMcp {
             let response_hash =
                 format!("sha256:{}", sha256_hex(canonical_json(&result).as_bytes()));
             let caller = api_key_name.unwrap_or("anonymous");
-            let sid = session_id.unwrap_or("unknown");
+            // MIK-7215.CONTROL.3: the log's correlation key must survive the
+            // removal of sessions. The W3C trace id carried in `_meta` spans
+            // the whole call rather than one connection, so it is used where
+            // present; `session_id` remains the fallback for a legacy caller
+            // that never sent one.
+            let otel_trace_id = args
+                .get("_meta")
+                .and_then(crate::protocol::trace::TraceContext::from_meta)
+                .map(|tc| tc.trace_id().to_string());
+            let sid = otel_trace_id.as_deref().or(session_id).unwrap_or("unknown");
             if let Err(e) =
                 tl.log_invocation(sid, caller, server, tool, &request_hash, &response_hash)
             {
