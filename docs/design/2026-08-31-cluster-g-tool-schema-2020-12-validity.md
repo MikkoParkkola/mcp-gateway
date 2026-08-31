@@ -7,6 +7,17 @@ Anchor commit: **`112a392c`**. Every file:line below was read at that commit, vi
 `git show 112a392c:src/capability/loader.rs` and equivalents, including files left dirty in the
 working tree by a concurrent session. No citation mixes revisions.
 
+**This change addresses SCHEMA.1 partially, and the closure comment must say so.** The criterion
+covers *every* tool schema the gateway publishes, and a proxied backend tool is published on the
+gateway surface. This design covers the two populations the gateway itself authors — the 19
+compile-time meta-tool definitions and the capability YAML the loader reads — and explicitly
+leaves backend-supplied schemas out (§P0). That remainder is a real, named part of SCHEMA.1, not
+a nicety: owner = team lead, to be scoped as its own change, because it is a policy question
+(reject the backend? publish and flag? degrade the tool?) rather than a validity one. A stated
+limit against a MUST is an unmet requirement; recording it here is what stops the eventual
+closure comment claiming MET. If SCHEMA.1's own text scopes to gateway-authored schemas, quote
+that text into this paragraph and the remainder disappears — that check has not been run.
+
 ## §P0 Scope
 
 **FOR:** meta-validating the schema *documents* the gateway publishes on its own MCP
@@ -53,6 +64,7 @@ Each row is a command run in this session at `112a392c`.
 | Feature flags were genuinely honored | `cargo tree --no-default-features --edges normal` -> 705 lines vs `--all-features --edges normal` -> 739. Two identical counts would have proven nothing. |
 | No schema dep in either manifest | `rg -n schema Cargo.toml` -> no match; the same search over `crates/gateway-core/Cargo.toml`, widened to valico and boon -> no match |
 | **No published schema declares a dialect** | searching src/ and capabilities/ for `2020-12`, `draft-07` and `$schema` -> only `src/validator/sarif.rs:19` and `src/validator/sarif.rs:366`, a serde field rename on SARIF output. Zero tool schemas carry `$schema`. |
+| **A malformed schema survives YAML deserialization** | `SchemaDefinition.input` and `.output` are untyped `serde_json::Value` (`src/capability/definition/mod.rs:216-224`). Serde imposes no shape, so a fixture like `required: "name"` reaches the validator instead of dying at parse time — which is what makes G1 an executable case rather than one that passes for the wrong reason. |
 | Gateway own meta tools: 19 schemas, compile-time literals | `src/gateway/meta_mcp_tool_defs.rs` — 19 `gateway_*` defs, each an `input_schema: json!` literal at lines 37, 55, 79, 111, 137, 184, 211, 243, 299, 326, 353, 379 and onward |
 | Capability schemas are runtime data | `src/capability/definition/mod.rs:1015` — `input_schema: self.schema.input.clone()`, straight from YAML |
 | Capability YAML is loaded from a runtime directory, not a repo path | `CapabilityLoader::load_from_directory(dir)` called at `src/gateway/server/mod.rs:873`, `src/gateway/server/mod.rs:922` and `src/gateway/server/mod.rs:1515` with a configured directory; `src/capability/loader.rs:46` recurses it |
@@ -96,8 +108,19 @@ startup-abort path.
 No published tool schema carries `$schema` (measured above). A meta-validation entry point that
 **infers** the dialect from `$schema` would therefore fall back to a default, and a document that
 did declare `draft-07` would be validated as draft-07 and pass. That is not the criterion.
-SCHEMA.1 says 2020-12, so the implementation uses the entry point that takes an explicit draft,
-and the assertion is against 2020-12 regardless of what the document nominates. See U1.
+SCHEMA.1 says 2020-12, so the assertion must be against 2020-12 regardless of what the document
+nominates.
+
+**The obvious spelling of that is wrong, which is why it is here and not left to the
+implementer.** Every free function in `jsonschema`'s `meta` module — `validate`, `validate_for`,
+`is_valid`, `is_valid_for`, `validator_for` — documents "Draft version is detected
+automatically", and `_for` denotes a *foreign representation* (`pub fn validate_for<F: …>`), not
+a draft argument. None of them pins a dialect. The pin is
+`jsonschema::meta::options().with_draft(Draft::Draft202012)`: `meta::options()` returns a
+`ValidationOptions`, which carries a `with_draft` method. Source: docs.rs for `jsonschema`
+0.52.1, read 2026-08-31 — one source, so the exact call has to compile before it is load-bearing.
+An implementer reaching for `meta::is_valid` would have shipped auto-detection and G4 is the
+case that would have caught it.
 
 ## Enforcement — two seams, matching the two populations
 
@@ -145,10 +168,22 @@ the chosen validator has reported it invalid, on the keyword the case names.
 
 | case | assertion | fails on HEAD? |
 |---|---|---|
-| **G1** — capability YAML whose `schema.input` sets `required` to a string instead of an array | `load_from_directory` over a directory containing only that file returns zero capabilities, and the issue list carries the new `CAP-` code at severity Error | **Yes.** On HEAD the file loads and the tool is published. The assertion is on absence, so it fails red before the change and passes only once seam 2 exists. |
+| **G1** — capability YAML whose `schema.input` sets `required` to a string instead of an array | `load_from_directory` over a directory containing only that file returns zero capabilities, **and the issue list carries the new `CAP-` code specifically** — a non-empty error list is not the assertion, because a fixture can die for a reason that never reaches meta-validation | **Yes.** On HEAD the file loads and the tool is published. The assertion is on absence, so it fails red before the change and passes only once seam 2 exists. |
 | **G2** — the same capability, reached through `tools/list` | the tool name is absent from the published surface | **Yes**, same mechanism, one level up — this is the case that ties the criterion to what a client actually sees. |
 | **G3** — all 19 `gateway_*` defs meta-validate against 2020-12 | every published `inputSchema`, and every `outputSchema` present, is valid under 2020-12 | **No — and this is stated, not hidden.** The defs are expected to be valid already, so this is a *regression guard*, not a disproof. Its falsifier is the §P2 probe below. |
 | **G4** — a schema declaring `"$schema": "http://json-schema.org/draft-07/schema#"` and using a construct legal in draft-07 but not in 2020-12 | the check reports invalid | **Yes.** Nothing today reads `$schema` at all. This is the case that proves the dialect is pinned rather than inferred, and it is the only case that distinguishes option A used correctly from option A used carelessly. |
+
+**G4 must name its construct, and the obvious candidates do not work.** Most draft-07-isms stay
+*legal* under 2020-12: `definitions` and `dependencies` are simply keywords 2020-12 does not
+define, and an undefined keyword is permitted, so neither fails meta-validation. A row reading
+"some construct" is the defect class this repo has already shipped once — a test-plan row naming
+a parameter that does not exist. The candidate is **`items` as an array** (`{"items": [{"type":
+"string"}]}`): 2020-12 constrains `items` to a single schema, the array form having moved to
+`prefixItems`, so the document should fail 2020-12 and pass draft-07. **Candidate, not yet fact.**
+The binding fixture rule applies here as everywhere in this plan: the construct is chosen by
+*running* the selected validator against both dialects and keeping one that actually splits them.
+If none does, G4 is dropped with that result recorded, and the dialect-pinning decision loses its
+only disproof — which is itself a finding, not a formality.
 
 ### Falsifier probe for G3 (required, because G3 is green on HEAD)
 
@@ -169,17 +204,20 @@ Settled in this session, with the answer recorded:
 | Where should validation fire, and what happens on failure? | read `src/capability/loader.rs:111` through `src/capability/loader.rs:155` and `src/capability/validator/mod.rs:137` | Per-capability, fail-closed, gateway still starts | Removed an operator question the repo already answers, and removed the temptation to invent a startup abort |
 | Does the OpenAPI generator bypass the loader? | `src/gateway/ui/import.rs:172` | No — it writes YAML into the load directory | Kept the generator in scope without a second seam |
 | Does the repo already meta-validate anywhere? | searched src/ and capabilities/ for `2020-12`, `draft-07`, `$schema` | No, and no schema declares a dialect | Turned dialect pinning into an explicit design decision |
+| Does the `meta` module pin 2020-12, or infer it? | read the `meta` module and `fn.validate_for` pages on docs.rs for `jsonschema` 0.52.1 | Every `meta` free function auto-detects the draft; `_for` means foreign representation, not draft. The pin is `meta::options().with_draft(…)` | Named the exact call in the design instead of leaving the wrong one to be discovered in review; retired U1 |
+| Can a malformed schema reach the validator, or does serde reject it first? | `git show 112a392c:src/capability/definition/mod.rs` | `input`/`output` are untyped `serde_json::Value` | Made G1 executable — the fixture reaches the check rather than dying at parse |
 
 Deferred, each with owner, resolving check, trigger and fallback:
 
 | id | question | owner | check | trigger | if it resolves badly |
 |---|---|---|---|---|---|
-| **U1** | Does the explicit-draft meta entry point pin 2020-12 regardless of a document `$schema`? | implementer | read the `meta` module signatures on the docs.rs page for `jsonschema` 0.52.1 | before the first implementation commit | inject `"$schema": "https://json-schema.org/draft/2020-12/schema"` into a clone of the document before validating; G4 is the test that proves it either way |
 | **U2** | Transitive dependency delta for `jsonschema` 0.52.1, against D27 | implementer | `cargo add --dry-run jsonschema` | before adding the dependency | take option B; if boon also breaches, D27 needs an explicit justification recorded, not a silent pass |
 | **U3** | Does `boon` expose a meta-validation entry point in its own docs? | implementer | docs.rs page for `boon` 0.6.1 | only if U2 forces the fallback | express meta-validation as compiling the document against the 2020-12 meta-schema as an instance |
 | **U4** | Startup cost of meta-validating 110+ capabilities at load | implementer | median of five timed `load_from_directory` runs over the capability directory, before and after | before merge | validate on first publish rather than at load; the seam does not move, only when it runs |
 
-U1 and U4 block nothing else in the design; U2 blocks only the choice between A and B. None of
+| **U5** | Which construct actually splits draft-07 from 2020-12, for G4 | implementer | run the selected validator over the `items`-as-array candidate under both dialects | before writing the G4 fixture | try further candidates; if none splits them, drop G4 and record that the dialect pin has no disproof — a finding, not a formality |
+
+U4 and U5 block nothing else in the design; U2 blocks only the choice between A and B. None of
 these is a residual-risk paragraph, and none is closed by naming a command instead of running it.
 
 ## Dispositions
@@ -188,4 +226,4 @@ these is a residual-risk paragraph, and none is closed by naming a command inste
 |---|---|
 | Backend-supplied schemas are never meta-validated | **observation.** Real, out of scope by §P0, and a policy question rather than a validity one. Recorded here so the next reader does not rediscover it as a gap. |
 | `src/capability/schema_validator/mod.rs` validates a bounded subset and will silently accept constructs 2020-12 defines | **observation.** Independent of SCHEMA.1: it is instance validation. If it becomes a defect it is its own change. |
-| The 19 meta-tool schemas declare no `$schema` | **fix in this change.** Pinning the dialect at the check makes the declaration unnecessary; adding it to 19 literals would be the larger diff. |
+| The 19 meta-tool schemas declare no `$schema` | **no change needed.** Pinning the dialect at the check makes the declaration unnecessary; adding it to 19 literals would be the larger diff and would give the check something to disagree with. |
