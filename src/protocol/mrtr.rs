@@ -113,7 +113,10 @@ impl RetryFields {
 
         // A non-string key is refused rather than ignored: ignoring it runs the
         // call unprotected, which is the outcome the client asked to prevent.
-        let idempotency_key = match params.get("_meta").and_then(|m| m.get(IDEMPOTENCY_KEY_META)) {
+        let idempotency_key = match params
+            .get("_meta")
+            .and_then(|m| m.get(IDEMPOTENCY_KEY_META))
+        {
             None => None,
             Some(Value::String(key)) if !key.is_empty() => Some(key.clone()),
             Some(_) => {

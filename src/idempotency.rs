@@ -305,11 +305,10 @@ impl IdempotencyCache {
 
     /// Register `key` as in-flight.  Overwrites any stale entry.
     pub fn mark_in_flight(&self, key: &str) {
-        self.entries
-            .insert(
-                key.to_string(),
-                Entry::new(IdempotencyState::InFlight(Instant::now()), ""),
-            );
+        self.entries.insert(
+            key.to_string(),
+            Entry::new(IdempotencyState::InFlight(Instant::now()), ""),
+        );
     }
 
     /// Transition `key` from in-flight to completed with `result`.
@@ -566,7 +565,11 @@ pub enum GuardOutcome {
 /// is an opaque string it chose; nothing about the string says which call it
 /// was minted for, so without binding, one key reused for a second, different
 /// call is served the first call's result as though it were its own.
-pub fn enforce(cache: &Arc<IdempotencyCache>, key: &str, fingerprint: &str) -> Result<GuardOutcome> {
+pub fn enforce(
+    cache: &Arc<IdempotencyCache>,
+    key: &str,
+    fingerprint: &str,
+) -> Result<GuardOutcome> {
     match cache.admit(key, fingerprint) {
         AdmitOutcome::Proceed => Ok(GuardOutcome::Proceed(IdempotencyReservation::new(
             Arc::clone(cache),
@@ -756,12 +759,15 @@ mod tests {
         // Insert an entry with a timestamp in the distant past
         cache.entries.insert(
             "stale".to_string(),
-            IdempotencyState::InFlight(
-                Instant::now()
-                    .checked_sub(IN_FLIGHT_TIMEOUT)
-                    .unwrap()
-                    .checked_sub(Duration::from_secs(1))
-                    .unwrap(),
+            Entry::new(
+                IdempotencyState::InFlight(
+                    Instant::now()
+                        .checked_sub(IN_FLIGHT_TIMEOUT)
+                        .unwrap()
+                        .checked_sub(Duration::from_secs(1))
+                        .unwrap(),
+                ),
+                "",
             ),
         );
         assert!(matches!(cache.check("stale"), CheckOutcome::Proceed));
@@ -776,13 +782,16 @@ mod tests {
         let cache = IdempotencyCache::new();
         cache.entries.insert(
             "old".to_string(),
-            IdempotencyState::Completed(
-                json!(null),
-                Instant::now()
-                    .checked_sub(COMPLETED_TTL)
-                    .unwrap()
-                    .checked_sub(Duration::from_secs(1))
-                    .unwrap(),
+            Entry::new(
+                IdempotencyState::Completed(
+                    json!(null),
+                    Instant::now()
+                        .checked_sub(COMPLETED_TTL)
+                        .unwrap()
+                        .checked_sub(Duration::from_secs(1))
+                        .unwrap(),
+                ),
+                "",
             ),
         );
         assert!(matches!(cache.check("old"), CheckOutcome::Proceed));
@@ -801,13 +810,16 @@ mod tests {
         cache.mark_completed("fresh", json!(1));
         cache.entries.insert(
             "stale".to_string(),
-            IdempotencyState::Completed(
-                json!(2),
-                Instant::now()
-                    .checked_sub(COMPLETED_TTL)
-                    .unwrap()
-                    .checked_sub(Duration::from_secs(1))
-                    .unwrap(),
+            Entry::new(
+                IdempotencyState::Completed(
+                    json!(2),
+                    Instant::now()
+                        .checked_sub(COMPLETED_TTL)
+                        .unwrap()
+                        .checked_sub(Duration::from_secs(1))
+                        .unwrap(),
+                ),
+                "",
             ),
         );
 
@@ -825,7 +837,7 @@ mod tests {
         // WHEN: enforcing on a new key
         // THEN: Proceed, and the key is now in-flight
         let cache = Arc::new(IdempotencyCache::new());
-        let outcome = enforce(&cache, "k1").expect("should not fail");
+        let outcome = enforce(&cache, "k1", "fp1").expect("should not fail");
         assert!(matches!(outcome, GuardOutcome::Proceed(_)));
         assert!(matches!(cache.check("k1"), CheckOutcome::InFlight));
     }
@@ -839,7 +851,7 @@ mod tests {
         let expected = json!({"done": true});
         cache.mark_in_flight("k2");
         cache.mark_completed("k2", expected.clone());
-        match enforce(&cache, "k2").expect("should not fail") {
+        match enforce(&cache, "k2", "fp2").expect("should not fail") {
             GuardOutcome::CachedResult(v) => assert_eq!(v, expected),
             GuardOutcome::Proceed(_) => panic!("expected CachedResult"),
         }
@@ -852,7 +864,7 @@ mod tests {
         // THEN: Err with code 409
         let cache = Arc::new(IdempotencyCache::new());
         cache.mark_in_flight("k3");
-        let err = enforce(&cache, "k3").expect_err("should return 409");
+        let err = enforce(&cache, "k3", "fp3").expect_err("should return 409");
         match err {
             crate::Error::JsonRpc { code, .. } => assert_eq!(code, 409),
             _ => panic!("expected JsonRpc error"),
@@ -927,13 +939,16 @@ mod tests {
         let cache = Arc::new(IdempotencyCache::new());
         cache.entries.insert(
             "stale".to_string(),
-            IdempotencyState::Completed(
-                json!(null),
-                Instant::now()
-                    .checked_sub(COMPLETED_TTL)
-                    .unwrap()
-                    .checked_sub(Duration::from_secs(1))
-                    .unwrap(),
+            Entry::new(
+                IdempotencyState::Completed(
+                    json!(null),
+                    Instant::now()
+                        .checked_sub(COMPLETED_TTL)
+                        .unwrap()
+                        .checked_sub(Duration::from_secs(1))
+                        .unwrap(),
+                ),
+                "",
             ),
         );
 
