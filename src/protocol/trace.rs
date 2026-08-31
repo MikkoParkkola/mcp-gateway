@@ -20,6 +20,7 @@ pub struct TraceContext {
     traceparent: String,
     trace_id: String,
     tracestate: Option<String>,
+    baggage: Option<String>,
 }
 
 impl TraceContext {
@@ -50,13 +51,17 @@ impl TraceContext {
             return None;
         }
 
+        // `tracestate` and `baggage` are opaque to the gateway: W3C makes them
+        // vendor- and application-defined, so the only correct handling is to
+        // carry the bytes onward. Parsing them would invent a schema the spec
+        // does not give and would drop entries this gateway failed to model.
+        let passthrough = |key: &str| meta.get(key).and_then(Value::as_str).map(str::to_string);
+
         Some(Self {
             traceparent: traceparent.to_string(),
             trace_id: trace_id.to_string(),
-            tracestate: meta
-                .get("tracestate")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            tracestate: passthrough("tracestate"),
+            baggage: passthrough("baggage"),
         })
     }
 
@@ -70,11 +75,65 @@ impl TraceContext {
     #[must_use]
     pub fn to_meta(&self) -> Value {
         let mut meta = json!({ "traceparent": self.traceparent });
-        if let Some(ref state) = self.tracestate
-            && let Some(object) = meta.as_object_mut()
-        {
-            object.insert("tracestate".to_string(), Value::String(state.clone()));
+        if let Some(object) = meta.as_object_mut() {
+            for (key, value) in [
+                ("tracestate", self.tracestate.as_ref()),
+                ("baggage", self.baggage.as_ref()),
+            ] {
+                if let Some(value) = value {
+                    object.insert(key.to_string(), Value::String(value.clone()));
+                }
+            }
         }
         meta
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TraceContext;
+    use serde_json::json;
+
+    const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+    #[test]
+    fn baggage_survives_the_hop() {
+        // MIK-7272.OTEL.1 names three fields; baggage carries the application
+        // state that makes the other two useful to the caller.
+        let inbound = json!({
+            "traceparent": TRACEPARENT,
+            "tracestate": "vendor=opaque",
+            "baggage": "userId=alice,region=eu-north-1",
+        });
+
+        let onward = TraceContext::from_meta(&inbound)
+            .expect("a well-formed traceparent parses")
+            .to_meta();
+
+        assert_eq!(onward["baggage"], json!("userId=alice,region=eu-north-1"));
+        assert_eq!(onward["tracestate"], json!("vendor=opaque"));
+        assert_eq!(onward["traceparent"], json!(TRACEPARENT));
+    }
+
+    #[test]
+    fn absent_baggage_emits_no_key() {
+        // A caller that sent no baggage must not have an empty one invented,
+        // or every backend sees a field the client never wrote.
+        let onward = TraceContext::from_meta(&json!({ "traceparent": TRACEPARENT }))
+            .expect("a well-formed traceparent parses")
+            .to_meta();
+
+        assert!(onward.get("baggage").is_none(), "got {onward}");
+        assert!(onward.get("tracestate").is_none(), "got {onward}");
+    }
+
+    #[test]
+    fn baggage_alone_does_not_rescue_a_malformed_traceparent() {
+        // Guards the parse order: baggage must never become a correlation key
+        // in its own right.
+        assert_eq!(
+            TraceContext::from_meta(&json!({ "baggage": "userId=alice" })),
+            None
+        );
     }
 }
