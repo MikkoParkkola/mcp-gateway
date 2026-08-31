@@ -25,6 +25,20 @@ for one caller can never be served to another.
   `negotiate.rs`) — structurally distinct from CACHE.1-4, per
   `RELEASE-4.0.0-criteria-status.md:73`
 
+**Both doors, and the clause that depends on it is marked.** The gateway is
+reachable two ways: the meta-MCP surface (`gateway_invoke` and friends) and the
+direct per-server route `POST /mcp/{name}` (`router/handlers.rs`). Both land in
+`invoke_tool_traced`, so the chokepoint rule and the key shape bind on both. One
+clause does *not* follow automatically: the `proto` segment is read from the
+POST handler's `declared_version`, which the direct route has and a **stdio**
+session does not — stdio negotiates a revision at `initialize`
+(`meta_mcp/mod.rs:1053`) and the value is currently only logged. For stdio,
+`proto` is either threaded from the negotiated value or the transport does not
+cache. Marked because the full-scope reading is **the team lead's assumption
+from the release plan, not an operator confirmation**; if the scope narrows to
+the meta-MCP door alone, this paragraph and the stdio exit are what change, and
+nothing else in the design does.
+
 **Scope moved in revision 3, and this is the receipt.** Revisions 1 and 2 put
 *all* of `invoke.rs` OUT, because a sibling change owns the file. Revision 3
 specifies a change inside it — moving grant enforcement above the cache read —
@@ -47,7 +61,7 @@ already succeeded, and neither key contains the principal unconditionally.
 
 | cache | key | built | read | written |
 |---|---|---|---|---|
-| response cache | `{server}:{tool}:{args_hash}` + two conditional suffixes | `ResponseCache::build_key`, `cache.rs:223-226` | `invoke_tool_traced`, `invoke.rs:840-844` | `invoke.rs:1294-1298` |
+| response cache | `{server}:{tool}:{args_hash}` + two conditional suffixes | `ResponseCache::build_key`, `cache.rs:223-226` | `invoke_tool_traced`, `invoke.rs:835-838` | `invoke.rs:1286-1291` |
 | capability executor cache | `{capability.name}:{params_hash}` | `capability/executor/params.rs:245-258` | `executor/mod.rs:301` | `executor/mod.rs:334` |
 
 Caching is **on by default** (`config/features/cache.rs:21,32` —
@@ -82,7 +96,7 @@ pub fn build_key(server: &str, tool: &str, arguments: &Value) -> String {
 Both call sites then append the same two suffixes by hand:
 
 ```rust
-// src/gateway/meta_mcp/invoke.rs:840-844 (read) and 1294-1298 (write)
+// src/gateway/meta_mcp/invoke.rs:835-836 (read) and 1288-1289 (write)
 let base = ResponseCache::build_key(server, tool, &arguments);
 format!("{base}{projection_key_suffix}{identity_suffix}")
 ```
@@ -101,7 +115,7 @@ did not encode — `agent_id`, `api_key_name`,
 patch, and the finding stays permanently stateable, because the next round finds
 a fifth. The level is wrong, not the list.
 
-**The file already states the rule this design restores.** `invoke.rs:543-557`
+**The file already states the rule this design restores.** `invoke.rs:544-558`
 is labelled "THE AUTHORIZATION CHOKEPOINT (MIK-7252)" and says why it sits at
 the top of `invoke_tool_traced`:
 
@@ -110,9 +124,42 @@ the top of `invoke_tool_traced`:
 > read**, no idempotency entry, no credential minted, no budget consulted.
 
 Grant enforcement is the one gate that escaped it. `enforce_identity_grants`
-(`invoke.rs:1444`) is called at `:1849`, inside `dispatch_to_backend` — *after*
-the cache read at `:840`. So a caller denied by `GrantAgent::Exact` can be
+(`invoke.rs:1437`) is called at `:1842`, inside `dispatch_to_backend` — *after*
+the cache read at `:838`. So a caller denied by `GrantAgent::Exact` can be
 served another agent's cached body, exactly as both vendors said.
+
+**Above WHICH cache read: the answer is all of them.** Revision 3 said "above
+the response-cache read at `:838`" and that is not far enough. The idempotency
+cache short-circuits *first*, at `:796-810`, returning `GuardedValue::from_cache`
+on a hit. A chokepoint inserted at `:837` leaves a second shared cache on the
+same path still serving a denied caller. The predicate is not "above the
+response cache" but **above the first line that can return a cached body**,
+which on HEAD is `:796`.
+
+**And not only grants.** `CapabilityBackend::execute` runs
+`validate_personal_capability_identity` and `validate_oauth_isolation`
+(`backend.rs:401-406`) — the OAuth-account guard for multi-user deployments —
+*inside dispatch*, so a cache hit never reaches them either. Naming that as a
+third patch would repeat revision 2's mistake. The rule is the elimination:
+**no authorization predicate may live below a cache read.** Enumerated today:
+grants (`invoke.rs:1842`), personal-capability identity and OAuth isolation
+(`backend.rs:401-406`). The rule is what holds when a fourth appears; the list
+is only what the rule currently binds.
+
+**The repair for the ordering created a second defect, and that is repaired
+here, not deferred.** Moving grants above the cache means the definition is
+authorized at `:796` and dispatch re-fetches it at `:1839` — and the capability
+registry has a live writer: `CapabilityWatcher` calls `backend.reload()` on file
+change (`src/capability/watcher.rs:159`). Two lookups of one name across a
+reload boundary can return two different definitions, so a caller may be
+authorized against the old definition and executed against a newly personal one.
+Adding the early check *and keeping* the dispatch check is the patch — it leaves
+the finding stateable, because two checks against two lookups still authorize
+something other than what runs. The elimination is to **carry one immutable
+authorized definition through dispatch**: resolve `cap_def` once at the
+chokepoint, authorize *that value*, and pass it down rather than re-resolving by
+name. After that, "authorized one definition, executed another" cannot be
+stated.
 
 **The move is free, and this was verified rather than assumed.**
 `enforce_identity_grants` is synchronous, has no `.await`, takes no permit, and
@@ -120,12 +167,17 @@ holds one read lock. All five of its arguments are already in scope at the
 chokepoint: `api_key_name` (`:535`), `agent_id` (`:536`), `caller_identity`
 (`:537`), `tool` (`:542`). Its `cap_def` argument comes from a pure
 `get_capabilities()` + `server == capabilities.name` + `capabilities.get(tool)`
-lookup — the *same* lookup the chokepoint already performs at `:588-591` for the
+lookup — the *same* lookup the chokepoint already performs at `:589-593` for the
 admin gate. Nothing the cache read produces is an input to it.
 
 One implementation trap, named because the naive move steps in it: the call is
-**conditional on the capability path**. Mirror `:588-591` — an MCP backend has
-no `cap_def`, and an unconditional call has nothing to pass.
+**conditional on the capability path**, and the condition to mirror is
+`dispatch_to_backend`'s own predicate at **`invoke.rs:1839-1842`** — the
+`cap.get(tool)` that immediately precedes the grant call — *not* the admin gate
+at `:589-593`. The admin gate carries `!caller_is_admin` and
+`creates_caller_addressed_external_state`; copying it would skip grants for
+callers the current dispatch path still checks, which is a privilege regression
+wearing the costume of a faithful mirror.
 
 ### The safety argument, now two claims instead of one
 
@@ -172,7 +224,7 @@ scores the key at "2 of 8". Both numbers are corrected here from source.
 |---|---|---|---|
 | 1 | backend | **yes, unconditional** | `server` is the first field of `build_key` (`cache.rs:225`) |
 | 2 | authorization binding | **conditional** — empty on the static-credential path | `invoke.rs:773-777`, `unwrap_or_default()` |
-| 3 | routing profile | no | `RoutingProfile` (`routing_profile/mod.rs:82-84`), selected per session by `MetaMcp::active_profile` (`meta_mcp/mod.rs:971-981`) and already called on this path at `invoke.rs:710`, before the cache read at `:840`. Its `name` is not in any cache key |
+| 3 | routing profile | no | `RoutingProfile` (`routing_profile/mod.rs:82-84`), selected per session by `MetaMcp::active_profile` (`meta_mcp/mod.rs:971-981`) and already called on this path at `invoke.rs:710`, before the cache read at `:838`. Its `name` is not in any cache key |
 | 4 | Code Mode | **not response-varying — no component needed** | `code_mode_execute` re-enters `invoke_tool` with `{server, tool, arguments}` and returns its result unmodified (`meta_mcp/search.rs:466-479`). Same inputs, same path, same response. A key component would partition the cache without protecting anything |
 | 5 | preview query | **cannot reach this cache today** | spec-preview is a list surface (`meta_mcp/spec_preview.rs:3-6`); `ResponseCache` sits only on the `tools/call` invoke path |
 | 6 | cursor | **cannot reach this cache today** | every `next_cursor` site is a list/read surface: `spec_preview.rs:57`, `protocol.rs:176`, `resources.rs:268,348` |
@@ -212,6 +264,15 @@ by accident — it is last, so nothing follows it to be absorbed. Put a segment
 after it and the accident stops holding. Length prefixes make "two different
 inputs produced one key" unstateable rather than untested.
 
+Two properties, kept apart because they are proved differently. The **framing**
+is *injective*: distinct segment tuples produce distinct byte strings, and that
+is a property of the encoder alone, provable by inspection. The **finished key**
+is *collision-resistant*, not injective, because `args_hash` is a digest —
+fixed-width SHA-256 (`ResponseCache::hash_arguments`, `cache.rs`), 256 bits, and
+any digest maps a larger domain onto a smaller one. Calling the whole key
+injective would claim a property no hash has; calling the framing
+collision-resistant would understate what the length prefixes buy.
+
 | segment | source | absent value |
 |---|---|---|
 | `schema_ver` | a constant bumped when this shape changes | — |
@@ -219,7 +280,7 @@ inputs produced one key" unstateable rather than untested.
 | `server`, `tool`, `args_hash` | as today (`cache.rs:223-226`) | — |
 | `principal` | the caller identity, resolved below | **must fail closed** |
 | `profile` | `RoutingProfile::name` from `active_profile(session_id)` (`meta_mcp/mod.rs:971-981`), already resolved at `invoke.rs:710` | none — `active_profile` always returns a profile, falling back to `profile_registry.default_name()` |
-| `proto` | the caller's declared protocol revision, threaded from `router/handlers.rs:210-219` | **must fail closed** — no revision, no cache |
+| `proto` | the caller's declared protocol revision, threaded from the POST handler's `declared_version` (`router/handlers.rs:572`) | **must fail closed** — no revision, no cache |
 | `shape` | today's `projection_key_suffix` | fixed literal |
 
 The `profile` segment has **no** feature-gated absent case. `routing_profile`
@@ -248,6 +309,16 @@ Ordered, and the order matters because the last rung is the defect:
 the same encoder as the outer key. Concatenation would collapse two different
 (key, subject) pairs into one principal string, reintroducing one level down the
 cross-caller hit the outer length prefixing exists to make unstateable.
+
+**Revision 3 still broke that, in the absent-subject case, and this is the
+repair.** As written, a principal with no verified subject emitted the raw
+`api_key_name` while a principal with one emitted `<len>:<key>|<len>:<subject>`.
+Two shapes from one rung is not an encoding; a raw key whose text happens to
+read as a length-prefixed pair collides with the pair it spells. **Always emit
+the two-segment tuple.** A missing subject is length 0 — `<len>:<key>|0:` — never
+a shorter shape. The rule generalises: an optional field is encoded as present-
+and-empty, never as absent, because absence is what makes two encodings share a
+byte string.
 
 Rung 2 exists because rung 3 alone would take the default-on cache
 (`config/features/cache.rs:21,32`) dark for the most common deployment: a
@@ -311,7 +382,7 @@ that settles it is one grep, run rather than deferred.
 
 **The constant is not admissible.** `SUPPORTED_VERSIONS` holds four revisions
 concurrently (`protocol/mod.rs:43`), the caller's declared revision is read
-**per request** at the transport edge (`router/handlers.rs:210-219`), and the
+**per request** at the transport edge (`router/handlers.rs:572`), and the
 gateway already branches on it. A single literal therefore asserts a
 one-revision world that does not exist. `handle_initialize` computes
 `negotiate_version(client_version)` (`meta_mcp/mod.rs:1053`) and only *logs* it
@@ -319,11 +390,37 @@ one-revision world that does not exist. `handle_initialize` computes
 plumbed" for "not applicable".
 
 So `proto` takes the same two exits as the two inputs above, and neither is
-future work: **thread the declared revision from `handlers.rs:210-219` into
+future work: **thread the declared revision from `handlers.rs:572` into
 `MetaMcpCallerContext` and key it, or refuse to cache.** The value already
 exists at the edge, so this is plumbing, not a new negotiation mechanism.
 Whichever is chosen ships **with** the keyed cache — CACHE.4's protocol
 dimension is not met by a constant, and this design no longer claims it is.
+
+### What the cache stores — the body without its per-caller stamp
+
+Three review rounds raised the same finding: the cached value carries the
+*writer's* `_context_integrity` provenance — the subject at `:1500` and the
+`trace_id` at `:1497` — because `apply_context_integrity` (`:1486`) runs at
+`invoke.rs:1246` and the cache write is downstream of it (`:1286-1291`, verified
+at `5c7e64f4`). Two rounds recorded it as an out-of-scope observation. That was
+wrong, and the third sighting is what made it visible: §P0 says this change
+exists so that *a response produced for one caller can never be served to
+another*, and a body stamped with another caller's subject is precisely that.
+The disposition was reading "provenance" as a separate subsystem when the leak
+is the one this design is FOR.
+
+The repair is an ordering move, the same shape as the chokepoint: **the cache
+stores the undecorated body, and provenance is applied after the read, on both
+paths.** Move `apply_context_integrity` below the cache write on the miss path,
+and add it to the hit path where `GuardedValue::from_cache` returns. Then "the
+cached value carries a foreign subject" is unstateable, rather than partitioned
+by a key segment — the stamp is never in the store to be served. The
+idempotency-hit path already re-stamps (`invoke.rs:813-821` passes
+`CacheOutcome::Hit` to `maybe_stamp_provenance`), so the shape has a working
+precedent in this file; the response cache simply never adopted it.
+
+Sequenced, like the chokepoint move, after the sibling change that owns
+`invoke.rs` lands.
 
 ## Policy epoch
 
@@ -338,11 +435,19 @@ readers. Bumped on:
 | bump site | evidence |
 |---|---|
 | grant mutation | `MetaMcp::set_identity_grants` (`meta_mcp/mod.rs:814-816`) — the sole writer of `self.identity_grants` |
-| routing-profile registry edit | a change to `ProfileRegistry` *contents* — **not** a session's profile switch |
+| capability registry reload | `CapabilityWatcher` calls `backend.reload()` on file change (`capability/watcher.rs:159`). A reload can change credentials, provider, exposure and transforms, so entries produced under the old definition must not survive it |
 | config reload | `config_reload::LiveConfig` (`config_reload/mod.rs:243-268`) |
 
-A session's own profile switch does **not** bump. `profile` is already a key
-segment, so a switch changes that session's keys and nobody else's; bumping
+The routing-profile registry row is **deleted**, for the same reason the
+tool-policy row was: it cannot fire. `routing_profile::ProfileRegistry` is a
+plain `HashMap` behind an `Arc`, with no `&mut self` method and no interior
+mutability, and its own doc comment reads "Immutable registry of all named
+routing profiles, built once at startup" (`routing_profile/mod.rs:310-317`). It
+is constructed at `gateway/server/mod.rs:508` and never written again. A bump
+site with no writer is coverage theatre.
+
+A session's own profile switch does **not** bump either. `profile` is already a
+key segment, so a switch changes that session's keys and nobody else's; bumping
 would make every *other* caller's entries unreachable until TTL eviction, and a
 non-admin caller can trigger it at will (`non_admin_may_set_its_own_routing_profile`,
 `gateway/router/tests.rs:2983-3019`). Revision 2 listed the switch as a bump
@@ -362,6 +467,17 @@ post-revocation epoch. Revision 2 said "one owner, one constructed value" but
 never said *built once and carried*; the second half is the half that does the
 work, and it is the same elimination that already kills the divergent
 read/write key.
+
+**Built once *where*, though — and revision 3 named the wrong point.** "Once, at
+the read" leaves a window: a bump between authorization and the cache read makes
+the request snapshot N+1 and publish a body it was authorized to produce under
+N — a pre-revocation response entering the post-revocation namespace. The
+snapshot must be taken **at the chokepoint, before authorization runs**, and
+carried through read and write. Then a bump anywhere after it lands the entry
+under the epoch the request was actually authorized in, where post-bump readers
+cannot reach it. This costs nothing extra now that authorization has moved to
+the chokepoint: one atomic load, one line above the grant call, on the value the
+key already carries.
 
 Row 1 is not a duplicate of row 4. `set_identity_grants` replaces the store
 outright (`*self.identity_grants.write() = grants;`) and `config_reload` has no
@@ -452,7 +568,12 @@ scope and unused by the key.
   where the gate is enforced. Refusing to cache is the elimination; a key
   segment would merely partition the two.
 - `exposure: Shared` with no `caller_identity` resolves to an explicit
-  **shared-namespace principal**, not to rung 3. A capability whose exposure is
+  **shared-namespace principal**, not to rung 3. That principal is emitted by
+  the *same* encoder as every other, with a leading discriminant: `0:` for the
+  shared namespace, `1:` followed by the identity tuple otherwise. Without the
+  discriminant a shared capability and a `GrantSubject` whose text spells the
+  chosen sentinel serialize to one byte string, which is the collision this
+  section exists to remove. A capability whose exposure is
   declared `Shared` has opted into a caller-invariant answer, and taking its
   cache dark would be the same revert-pressure that rung 2 exists to avoid.
   Rung 3 stays for `Personal` with no identity.
@@ -480,9 +601,9 @@ recorded as an observation for the CACHE.2 owner, not filed.
 | what bumps the epoch? | listed the public surface of `src/config_reload/mod.rs`, then looked for the grant-store writer | `LiveConfig` at lines 243-268 is the reload seam; `MetaMcp::set_identity_grants` (`meta_mcp/mod.rs:814-816`) is the *only* writer of the grant store and `config_reload` has no grant hook | named the bump sites, and made the grant one a separate row rather than folding it into config reload. Revision 3 cut the list to three: the session profile-switch row and the tool-policy row are both deleted below |
 | which type is the routing profile? | read `src/tool_profiles/mod.rs:83-89` and `src/routing_profile/mod.rs:82-84`, then traced the invoke path | `RoutingProfile`, resolved by `active_profile` at `invoke.rs:710`. `tool_profiles` is per-user usage telemetry, not on this path | corrected row 3's evidence and the `profile` segment's source; removed a feature-gated absent case that does not exist |
 | is a colon join injective over these segments? | read `identity_propagation/mod.rs:291` and its test at `:707` | no — `cache_binding` contains colons | length-prefixed segments instead of a raw colon join |
-| can grant enforcement move above the cache read, and what does the move cost? | read `invoke.rs:524-591` (chokepoint), `:1444` (`enforce_identity_grants`), `:1849` (its call site inside `dispatch_to_backend`) | yes, and it is free — the function is synchronous, awaits nothing, takes no permit, holds one read lock, and all five arguments are in scope at `:534-542`; its `cap_def` comes from the same `get_capabilities()`/`get(tool)` lookup the chokepoint already does at `:588-591` | made ordering the elimination, split the safety argument in two, and dropped `agent_id` from the principal as a gate input rather than a keying one |
+| can grant enforcement move above the cache read, and what does the move cost? | read `invoke.rs:524-593` (chokepoint), `:1437` (`enforce_identity_grants`), `:1842` (its call site inside `dispatch_to_backend`) | yes, and it is free — the function is synchronous, awaits nothing, takes no permit, holds one read lock, and all five arguments are in scope at `:534-542`; its `cap_def` comes from the same `get_capabilities()`/`get(tool)` lookup the chokepoint already does at `:588-591` | made ordering the elimination, split the safety argument in two, and dropped `agent_id` from the principal as a gate input rather than a keying one |
 | what bumps the epoch on a tool-policy change? | searched `config_reload/mod.rs` and `invoke.rs` for `tool_policy` | nothing — no live-swap seam exists on either path; the type is consulted by the authorizer at the chokepoint | deleted the row. Revision 2's "the policy write path" named no location, and a bump site that cannot be found never fires |
-| does the epoch race survive the ordering move? | traced the key's lifetime across the read at `:840` and the write at `:1294` | no, but not because of the move — because the key is built once and carried, so a mid-flight bump makes the insert land under the old epoch and be unreachable | stated "build once, carry" explicitly; revision 2 implied it and never said it |
+| does the epoch race survive the ordering move? | traced the key's lifetime across the read at `:838` and the write at `:1294` | no, but not because of the move — because the key is built once and carried, so a mid-flight bump makes the insert land under the old epoch and be unreachable | stated "build once, carry" explicitly; revision 2 implied it and never said it |
 
 **Deferred:** none. Nothing in this design waits on an unanswered question.
 
@@ -563,10 +684,21 @@ grant does allow. The assertion is that the denial is returned and **no body is
 returned**.
 
 It **fails on `HEAD`** for the reason already traced above: the cache read is at
-`invoke.rs:840` and `enforce_identity_grants` is reached at `:1849`, inside
+`invoke.rs:838` and `enforce_identity_grants` is reached at `:1842`, inside
 `dispatch_to_backend`. A hit short-circuits before the grant is ever evaluated,
 so today the denied caller receives the body. It passes once the call moves to
-the chokepoint at `:543-557`.
+the chokepoint at `:544-558`.
+
+**The case must also go red against the half-move**, not only against `HEAD`.
+Insert `enforce_identity_grants` above the response-cache read at `:838` and
+leave the idempotency short-circuit at `:796-810` untouched: Case 3 must still
+fail, because a warm idempotency entry returns `GuardedValue::from_cache` before
+line 840 is ever reached. A case that only separates `HEAD` from the full move
+cannot tell a correct chokepoint from one placed hundreds of lines too low, and
+"above the cache read" is exactly the phrasing an implementer would satisfy by
+placing it at `:837`. Concretely: the harness runs the denied caller twice —
+once with the idempotency store warm, once cold — and both must return the
+denial.
 
 This case needs a live cache, unlike the other two — the thing under test is
 *which code runs first*, and that is not observable at the key. Accepted
@@ -576,7 +708,7 @@ ordering claim, and the alternative is testing nothing.
 **Design event, named here rather than left for a vendor to find (§P3).**
 Moving `enforce_identity_grants` to the chokepoint makes it fire on paths that
 never reached `dispatch_to_backend` — a cache hit, and any early return between
-`:557` and `:1849`. Callers who previously received a cached body, or a
+`:558` and `:1842`. Callers who previously received a cached body, or a
 different error, now receive the grant denial. That is a change to an observable
 contract for refused callers, it is deliberate, and it is what the fix *is*: the
 denial is the correct answer and the body was the defect. Existing tests
@@ -584,11 +716,38 @@ asserting the old error shape on those paths are expected to move.
 
 ### What "passing" means
 
-Both cases must **fail against `HEAD`** before the implementation lands, on the
-`assert_ne!` named — not on a missing import, a panic, or a setup error. Read the
-assertion, not the exit code. Both then pass once the key carries a principal
-and refuses to cache when there is none. Case 3 must fail on the returned body,
-not on a setup error, and pass once the grant check runs at the chokepoint.
+All three cases must **fail against `HEAD`** before the implementation lands.
+Cases 1 and 2 fail on the `assert_ne!` named — not on a missing import, a panic
+or a setup error. Read the assertion, not the exit code. Both pass once the key
+carries a principal and refuses to cache when there is none.
+
+Case 3 fails on the returned body, never on a setup error, and it has a second
+red state that is the point of it: it must **also** fail against a chokepoint
+placed above the response-cache read alone. It passes only when the grant check
+runs above the first line that can return a cached body, with the idempotency
+store warm and cold.
+
+## Revision 4 — dispositions
+
+Every finding from round 4 — both vendors, blocking and not — with what happened
+to it. A recurrence that is declined says why, in one line, so it does not
+arrive a fourth time as though it had never been read.
+
+| # | source | finding | disposition |
+|---|---|---|---|
+| R1 | Grok (HIGH) | rung 2 encodes an absent subject as a raw `api_key_name` but a present one as a two-segment tuple, so the two shapes are not injective | **repaired.** Always emit the tuple; a missing subject is length 0 (`0:`), never a shorter shape. Written into "Resolving the principal" as a general rule: an optional field is encoded present-and-empty, because absence is what lets two encodings share a byte string |
+| R2 | Grok (MEDIUM, CERTAIN) | `proto` is threaded from `handlers.rs:210-219`, which is `get_era_refusal` on `GET /mcp` and is not an input on the `tools/call` path | **repaired, claim verified at source first.** The cited range is the GET refusal path; the POST handler's `declared_version` (`handlers.rs:572`) is the value that exists per request. Corrected in the target-key table, in the fail-closed section, and in the revision-3 row that carried the wrong anchor. stdio is named explicitly: negotiated at `initialize` (`meta_mcp/mod.rs:1053`) or the transport does not cache |
+| R3 | Grok (IMPR) | cite `dispatch_to_backend`'s own capability predicate as the grant-move condition, not the admin gate at `:588-591` | **already in the design, and it stays.** The trap paragraph names `invoke.rs:1839-1842` — the `cap.get(tool)` immediately preceding the grant call — and states why copying the admin gate's `!caller_is_admin` would be a privilege regression. Recorded here because the two vendors reached the same line independently, which is evidence the paragraph is load-bearing rather than decorative |
+| R4 | Grok (IMPR) | give the executor's shared-namespace principal a discriminant in the same encoder | **repaired.** `0:` for the shared namespace, `1:` for the identity tuple. Without it a `GrantSubject` whose text spells the sentinel collides with shared-namespace entries — the same defect as R1, one level down |
+| R5 | Grok (IMPR) | delete the `ProfileRegistry` epoch bump; the registry has no live writer | **already deleted in revision 3**, on the same "a bump site with no writer is coverage theatre" reasoning, with the immutability quoted from `routing_profile/mod.rs:310-317` |
+| R6 | Grok (IMPR) | state that the chokepoint sits above the idempotency hit, and make Case 3 fail if grants are inserted only above `:838` | **repaired in the case, not only in the prose.** Revision 3 already moved the predicate to "above the first line that can return a cached body" (`:796`); what was missing is a case that can tell the two placements apart. Case 3 now runs the denied caller twice — idempotency store warm and cold — and both must return the denial. A case that only separates `HEAD` from the full move cannot catch a chokepoint placed at `:837` |
+| R7 | GPT (IMPR) | the key is described as injective, which a digest cannot be | **repaired.** Two properties, proved differently: the *framing* is injective (a property of the encoder, provable by inspection), the *finished key* is collision-resistant because `args_hash` is a 256-bit SHA-256 digest. Calling the whole key injective claims a property no hash has |
+| R8 | GPT (SCOPE-CHALLENGE) | `MetaMcpCallerContext.input_capabilities` is a dependency on cluster A before MRTR continuation responses can be cacheable | **accepted as a named dependency, and deliberately not designed here.** Cluster A owns that surface and is in flight; this design names the field, binds it to the same two exits as `retry` and `proto` (key it, or do not cache), and stops. Designing it here would fork a surface with an owner |
+| R9 | GPT (recurrence, third sighting) | request-specific `_context_integrity` provenance — subject and trace ID — is stored inside the cached body | **reversed and repaired.** Two rounds recorded it as an out-of-scope observation; the third sighting is what exposed the misreading. §P0 declares this change is FOR "a response produced for one caller can never be served to another", and a body stamped with the writer's subject *is* that. New section "What the cache stores": the store holds the undecorated body and provenance is applied after the read, on both hit and miss. Precedent already in the file — the idempotency-hit path re-stamps at `invoke.rs:815-822` |
+
+Anchors: every `file:line` in this revision was regenerated against **`5c7e64f4`**
+and the doc header records that commit. Revision 3 mixed committed and
+working-tree line numbers, which is how the `:210-219` anchor survived a round.
 
 ## Revision 3 — dispositions
 
@@ -601,7 +760,7 @@ stops treating it as one.
 
 | # | vendor | finding | disposition |
 |---|---|---|---|
-| B1 | GPT (CRITICAL) + Grok (HIGH, as the `agent_id` omission) | grant evaluation, including agent binding and expiry, runs *after* the cache read | **eliminated.** Verified at source: `enforce_identity_grants` (`invoke.rs:1444`) is called at `:1849`, inside `dispatch_to_backend`, and the read is at `:840`. The move to the chokepoint (`:543-557`) is free — synchronous, no `.await`, no permit, one read lock, every argument already in scope at `:534-542`, and its `cap_def` from the lookup the chokepoint already runs at `:588-591`. With it moved, the safety argument is *gate ordering*, and the key's job shrinks to response-varying inputs. Two vendors asked for `agent_id` in the key; under ordering it belongs to the gate, and that is written into the principal section rather than left as a silent omission. The ordering claim carries its own disproof artifact (Case 3), because a claim promoted to primary while its evidence stays prose is the half of this design most likely to be wrong |
+| B1 | GPT (CRITICAL) + Grok (HIGH, as the `agent_id` omission) | grant evaluation, including agent binding and expiry, runs *after* the cache read | **eliminated.** Verified at source: `enforce_identity_grants` (`invoke.rs:1437`) is called at `:1842`, inside `dispatch_to_backend`, and the read is at `:838`. The move to the chokepoint (`:543-557`) is free — synchronous, no `.await`, no permit, one read lock, every argument already in scope at `:534-542`, and its `cap_def` from the lookup the chokepoint already runs at `:588-591`. With it moved, the safety argument is *gate ordering*, and the key's job shrinks to response-varying inputs. Two vendors asked for `agent_id` in the key; under ordering it belongs to the gate, and that is written into the principal section rather than left as a silent omission. The ordering claim carries its own disproof artifact (Case 3), because a claim promoted to primary while its evidence stays prose is the half of this design most likely to be wrong |
 | B2 | GPT (CRITICAL) | an epoch bump between authorization and insert publishes a response under the post-revocation epoch | **eliminated by construction.** The key is built once at the read and the same value carried to the write, so a mid-flight bump makes the insert land under the *old* epoch — unreachable, not newly reachable. Revision 2 implied this and never said it; it is now stated, and it is the same elimination that already kills a divergent read/write key. No snapshot-validation protocol is needed, so none is specified |
 | B3 | GPT (HIGH) | the principal drops `api_key_name` and `agent_id` | **split.** `api_key_name` was already rung 2 in revision 2 and stays, now with the injective encoding Grok's K5 asked for. `agent_id` is **disposed, not added**: it is a grant input evaluated by `enforce_identity_grants`, which now runs first, and it does not vary the body of a call that was permitted |
 | B4 | GPT (HIGH) | the capability tuple omits `allow_loopback_egress`, which changes whether the request may execute | **accepted, inverted.** Not a key segment: `allow_loopback_egress == true` (`execution_context.rs:19`, gate at `:41-48`) means **do not cache**. A bit that decides whether a request may execute at all is an authorization input, and keying it would leave a permitted-context body sitting in the store waiting for the next key collision to find it |
@@ -614,10 +773,10 @@ stops treating it as one.
 
 | # | vendor | item | disposition |
 |---|---|---|---|
-| N1 | GPT (MEDIUM) | request-specific `_context_integrity` provenance — trace ID and subject — stays inside the cached value | **recorded as an observation, not a ticket.** Verified real: `apply_context_integrity` runs at `:1253` and `:1493`, writing subject (`:1507`) and `trace_id` (`:1504`), and `:1298` caches the decorated body. It is a pre-existing property of what today's cache stores, unchanged by this design, and outside what §P0 declares this change is FOR. Filing it would buy a queue entry and a human's attention for a defect nobody is currently paying for; recording it costs a line and survives |
-| N2 | GPT (LOW) + Grok | source anchors mix committed `HEAD` with the dirty working tree, and the `invoke.rs` cache-site lines point at an idempotency debug log | **repaired.** Every citation regenerated against one named commit, recorded in the document; the cache sites now read `:840` and `:1294` |
+| N1 | GPT (MEDIUM) | request-specific `_context_integrity` provenance — trace ID and subject — stays inside the cached value | **recorded as an observation, not a ticket.** Verified real: `apply_context_integrity` runs at `:1246` and is defined at `:1486`, writing subject (`:1500`) and `trace_id` (`:1497`), and `:1291` caches the decorated body. It is a pre-existing property of what today's cache stores, unchanged by this design, and outside what §P0 declares this change is FOR. **Superseded by R9: that reading was wrong and the finding is repaired, not observed.** Filing it would buy a queue entry and a human's attention for a defect nobody is currently paying for; recording it costs a line and survives |
+| N2 | GPT (LOW) + Grok | source anchors mix committed `HEAD` with the dirty working tree, and the `invoke.rs` cache-site lines point at an idempotency debug log | **repaired.** Every citation regenerated against one named commit, recorded in the document; the cache sites now read `:838` and `:1291` |
 | N3 | GPT | SCOPE-CHALLENGE: name `MetaMcpCallerContext.input_capabilities` beside `retry` | **accepted**, added to the fail-closed section under the same two exits |
-| N4 | Grok | treat protocol revision as fail-closed rather than a fixed-literal segment | **accepted in full, after a first pass got it wrong.** That pass recorded a *stated limit* — a constant "covering nothing" until some future revision plumbed a value. Running the check instead of deferring it killed that: four revisions are served concurrently (`protocol/mod.rs:43`), the caller's declared revision is read per request at `router/handlers.rs:210-219`, and `handle_initialize` computes the negotiated value and only logs it (`meta_mcp/mod.rs:1053`). A constant asserts a one-revision world that does not exist, so `proto` now takes the same two exits as `retry` — key it from the value already at the edge, or refuse to cache — and ships with the change. An honest limit against a MUST is an unmet requirement, not a disclosure |
+| N4 | Grok | treat protocol revision as fail-closed rather than a fixed-literal segment | **accepted in full, after a first pass got it wrong.** That pass recorded a *stated limit* — a constant "covering nothing" until some future revision plumbed a value. Running the check instead of deferring it killed that: four revisions are served concurrently (`protocol/mod.rs:43`), the caller's declared revision is read per request by the POST handler (`declared_version`, `router/handlers.rs:572`; the `handlers.rs:210-219` cited in the first pass is `get_era_refusal` on the GET path and is not an input to `tools/call`), and `handle_initialize` computes the negotiated value and only logs it (`meta_mcp/mod.rs:1053`). A constant asserts a one-revision world that does not exist, so `proto` now takes the same two exits as `retry` — key it from the value already at the edge, or refuse to cache — and ships with the change. An honest limit against a MUST is an unmet requirement, not a disclosure |
 | N5 | Grok | give `exposure: Shared` with no `caller_identity` an explicit shared-namespace principal instead of rung 3 | **accepted.** An opted-in shared capability stays cacheable without reopening `Personal` isolation, which is the same revert-pressure argument that produced gateway rung 2 |
 | N6 | Grok | replace "the policy write path" with a file:line, or fold it into the `LiveConfig` row | **row deleted.** Searching `config_reload/mod.rs` and `invoke.rs` for `tool_policy` returns nothing: there is no live-swap seam. An unlocatable bump site is a bump that never fires, dressed as coverage |
 | N7 | GPT | property-based injectivity tests over arbitrary Unicode and delimiter-containing segments, for both encodings | **accepted, into the §P2 test plan** for CACHE.4 — not into the disproof artifact, which has one job: fail on `HEAD`. A property test over a not-yet-existing encoder cannot do that |
