@@ -21,17 +21,21 @@ fn concurrent_enforce_on_one_key_admits_exactly_one_caller() {
         let cache = Arc::new(IdempotencyCache::new());
         let barrier = Arc::new(Barrier::new(RACERS));
         let key = format!("race-{round}");
+        // All racers retry the *same* request, so they share one fingerprint —
+        // that is what makes them retries rather than distinct calls.
+        let fingerprint = format!("fp-{round}");
 
         let handles: Vec<_> = (0..RACERS)
             .map(|_| {
                 let cache = Arc::clone(&cache);
                 let barrier = Arc::clone(&barrier);
                 let key = key.clone();
+                let fingerprint = fingerprint.clone();
                 std::thread::spawn(move || {
                     barrier.wait();
                     // The outcome is returned, not dropped, so a winning caller does
                     // not release its reservation before the others have voted.
-                    enforce(&cache, &key).map_err(|e| e.to_string())
+                    enforce(&cache, &key, &fingerprint).map_err(|e| e.to_string())
                 })
             })
             .collect();
@@ -60,7 +64,7 @@ fn enforce_fails_closed_at_the_entry_bound_without_evicting() {
         "precondition: cache is at the bound"
     );
 
-    let refused = enforce(&cache, "a-brand-new-key");
+    let refused = enforce(&cache, "a-brand-new-key", "fp-new");
     assert!(
         refused.is_err(),
         "a new protected side effect must be refused at the bound"
@@ -96,7 +100,8 @@ fn completed_entries_are_still_served_at_the_entry_bound() {
     ));
     assert_eq!(cache.len(), MAX_ENTRIES);
 
-    let outcome = enforce(&cache, "filler-7").expect("a completed entry must still be servable");
+    let outcome = enforce(&cache, "filler-7", "fp-filler-7")
+        .expect("a completed entry must still be servable");
     assert!(
         matches!(outcome, GuardOutcome::CachedResult(v) if v == json!({"resultType": "complete", "status": "ok"})),
         "at the bound a completed key must return its cached result, not a refusal"
@@ -111,7 +116,7 @@ fn abandoned_reservation_does_not_strand_an_in_flight_entry() {
     // Models an early return after dispatch: the guard goes out of scope
     // without the caller ever reaching `mark_completed`.
     let abandon = |key: &str| -> Result<(), String> {
-        let outcome = enforce(&cache, key).map_err(|e| e.to_string())?;
+        let outcome = enforce(&cache, key, &format!("fp-{key}")).map_err(|e| e.to_string())?;
         if matches!(outcome, GuardOutcome::CachedResult(_)) {
             return Ok(());
         }
@@ -145,7 +150,7 @@ fn abandoned_reservation_after_commit_does_not_readmit_a_duplicate() {
     // Models the response-contract gate (`meta_mcp/invoke.rs:1093`): the backend
     // has already acted, then a post-dispatch early return drops the guard.
     let blocked = |key: &str| -> Result<(), String> {
-        let outcome = enforce(&cache, key).map_err(|e| e.to_string())?;
+        let outcome = enforce(&cache, key, &format!("fp-{key}")).map_err(|e| e.to_string())?;
         if let GuardOutcome::Proceed(mut reservation) = outcome {
             reservation.commit(&dispatched);
         }
