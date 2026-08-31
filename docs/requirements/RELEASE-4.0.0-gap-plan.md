@@ -344,7 +344,7 @@ against the *whole* criterion, not the half the implementation covered.
 
 **HEADER.5 is a MUST with no opt-out, so declination is not this plan's call.** Earlier text here
 floated a recorded declination as a viable close. Re-reading the criterion at
-`requirements.md:104` — "Custom headers supplied through tool parameters (`x-mcp-header`) MUST be
+`docs/requirements/RELEASE-4.0.0-requirements.md:104` — "Custom headers supplied through tool parameters (`x-mcp-header`) MUST be
 accepted and forwarded" — there is no support-or-decide language in it; that reading came from
 applying the development process's disposal table to a conformance criterion, which is not
 something the criterion grants. RFC-0061:251 lists `x-mcp-header` in scope and records no
