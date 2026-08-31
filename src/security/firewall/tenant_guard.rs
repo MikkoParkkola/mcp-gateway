@@ -139,11 +139,11 @@ impl TenantGuard {
         match value {
             Value::Object(map) => {
                 for (key, child) in map {
-                    if self.config.arg_keys.iter().any(|k| k == key) {
-                        if let Some(tenant) = Self::tenant_name(child) {
-                            out.push(tenant);
-                            continue;
-                        }
+                    if self.config.arg_keys.iter().any(|k| k == key)
+                        && let Some(tenant) = Self::tenant_name(child)
+                    {
+                        out.push(tenant);
+                        continue;
                     }
                     self.collect(child, out);
                 }
