@@ -549,8 +549,13 @@ clause was measured over includes backend tools. What to do when a backend publi
 schema is a routing-policy choice with a user-visible cost either way: refusing the backend trades
 availability for conformance, publishing it with a flag leaves the MUST unmet, and stripping the
 offending subschema changes what the client is told a tool accepts. No specification settles it,
-because MCP has no notion of a gateway aggregating backends. It is an owner decision and it blocks
-SCHEMA.1.
+because MCP has no notion of a gateway aggregating backends.
+
+The owner settled it on 2026-08-31: **drop the failing tool and keep the rest of the backend.** Each
+backend tool's schema is validated at registration; one that fails is neither listed nor routable,
+and the rejection is logged and surfaced in diagnostics. The cluster G design has withdrawn its
+exclusion and carries the check, its scope receipt and the mixed-backend acceptance case. SCHEMA.1 no
+longer has an open decision in front of it — what remains is implementation.
 
 ## 3. Not blocking the release
 
