@@ -37,8 +37,8 @@ There is no COVERED row. F3 techniques describe fraud-actor goals in financial e
 | Tactic | ID | Gateway-boundary verdict | Why |
 |---|---|---|---|
 | Reconnaissance | TA0043 | GAP | Mail theft, IVR mapping, PIN peeking, card-dump capture, and phone-number spoofing are outside the process. Open-web search (T1593) is a backend choice, not a gateway detector. |
-| Resource Development | TA0042 | GAP, with one PARTIAL | Counterfeit cards, fake documents, fraudulent merchant accounts, and PAN/CVV generation are outside the process. PARTIAL: T1608 Stage Capabilities / T1195 Supply Chain Compromise when the staged capability is a local YAML or remote MCP backend the gateway loads. |
-| Initial Access | TA0001 | PARTIAL at the **gateway client**, GAP for **victim financial accounts** | mTLS, identity grants, attestation, and fail-closed OAuth isolation authenticate the AI client. They do not stop bank account takeover, SIM swap, or phishing of a cardholder. F1002 (public API abuse) is PARTIAL against the gateway HTTP surface (auth, origin/host checks, rate limits, SSRF). |
+| Resource Development | TA0042 | GAP, with one PARTIAL | Counterfeit cards, fake documents, fraudulent merchant accounts, and PAN/CVV generation are outside the process. PARTIAL: T1608 Stage Capabilities when the staged artifact is a **local** pinned YAML. T1195 is Initial Access in F3 v1.1, not this tactic. Remote provenance does not cover T1608 tool-schema staging. |
+| Initial Access | TA0001 | PARTIAL at the **gateway client**, GAP for **victim financial accounts** | mTLS, identity grants, attestation, and fail-closed OAuth isolation authenticate the AI client. They do not stop bank account takeover, SIM swap, or phishing of a cardholder. F1002 (public API abuse) is PARTIAL against the gateway HTTP surface (auth, origin/host checks, rate limits, SSRF). T1195 PARTIAL for local YAML pin only. |
 | Stealth | TA0005 | GAP | 3DS bypass, geolocation spoofing, virtual cards, PaReq manipulation, and structuring are payment-scheme and mule behaviors. The gateway does not inspect those channels. |
 | Defense Impairment | TA0112 | PARTIAL (policy), GAP (fraud-control sabotage) | Per-client denylists and the session sandbox can refuse tools that would change account settings **if those tools are connected**. There is no detector for "beneficiary added" or "e-delivery disabled" on a bank account. Email bombing (T1667) is GAP. |
 | Positioning | FA0001 | PARTIAL for API/tool positioning, GAP for the rest | See the FA0001 table. Card testing, payroll change, mail theft, ATM/mobile deposit, and browser malware are GAP. |
@@ -47,14 +47,14 @@ There is no COVERED row. F3 techniques describe fraud-actor goals in financial e
 
 ## Named-feature mapping (MIK-3031.F3.2)
 
-| Feature | Code | F3 IDs it can touch | Honest limit |
-|---|---|---|---|
-| Tool-poisoning detection | `src/validator/rules/tool_poisoning.rs` (`ToolPoisoningRule` at line 152, `impl Rule` at line 155) | TA0001 / T1195 (poisoned tool definition as an access path); TA0042 / T1608 (staged malicious descriptions); FA0001 F1002 when a poisoned description steers the agent into API abuse | Scans **tool description text** before it reaches the client. Does not inspect payment payloads, 3DS, or account-holder social engineering. |
-| Capability schema pinning | `src/capability/hash.rs` (`compute_capability_hash` at line 62); rug-pull unload in `src/capability/backend.rs` (`detect_rug_pulls`); remote backends in `src/security/remote_provenance.rs` | TA0001 / T1195 Supply Chain Compromise; TA0042 / T1608 Stage Capabilities | Pins **local YAML bytes** (and signed remote provenance when configured). A live backend that changes behavior without changing the pin envelope is outside this control unless remote provenance is required. |
-| HMAC inter-agent message signing | `src/security/message_signing.rs` (module docs lines 1–26; nonce cleanup at line 224); ADR-001 | TA0001 / T1557 Adversary-in-the-Middle; FA0001 / T1557; replay of `gateway_invoke` results | Opt-in (`SecurityConfig::message_signing.enabled`). HMAC-SHA256 on the response plus nonce replay protection. Not hop-by-hop across a multi-gateway mesh. Classical HMAC, not a payment MAC. |
-| BPD-bounded execution | **Not shipped.** Design only: `docs/design/BPD_DSL_DESIGN.md`. Runtime stand-ins: `src/session_sandbox.rs` (`SandboxEnforcer::check` at line 303), `src/cost_accounting/enforcer.rs` (`BudgetEnforcer::check` at line 180), `src/kill_switch/mod.rs` | TA0002 Execution (bound how much an agent can run); weak PARTIAL on FA0001 F1002 / F1012 / F1046 volume | Session call-count, duration, payload size, backend allow, tool deny. Cost enforcer is daily USD of **tool invocations**, not fraud loss. Kill switch disables a backend. None of these is a BPD document or `bpd validate` CLI. |
-| mTLS | `src/mtls/cert_manager.rs`, `src/mtls/identity.rs`, `src/mtls/access_control/mod.rs` (fail-closed `PolicyDecision::Deny` when rules exist but no verified identity, lines 87–110) | TA0001 Initial Access **to the gateway** | Authenticates the MCP/HTTP client certificate. Does not authenticate a cardholder, mule, or compromised end-user of a downstream bank. |
-| Idempotency | `src/idempotency.rs` (`IdempotencyCache::check` at line 149; auto-key from tool name + canonical JSON, lines 9–16) | Weak PARTIAL vs TA0002 F1015 (retry storms) and F1043 (duplicate execution), only for `gateway_invoke` | Stops duplicate **tool side effects** on LLM timeout retry. Does not reverse a bank transfer, block card churning, or detect friendly fraud. |
+| Feature | Default | Code | F3 IDs it can touch | Honest limit |
+|---|---|---|---|---|
+| Tool-poisoning detection | On for tool-list validation | `src/validator/rules/tool_poisoning.rs` (`ToolPoisoningRule` at line 152, `impl Rule` at line 155) | TA0001 / T1195 (poisoned tool definition as an access path); TA0042 / T1608 (staged malicious descriptions); FA0001 F1002 when a poisoned description steers the agent into API abuse | Scans **tool description text** before it reaches the client. Does not inspect payment payloads, 3DS, or account-holder social engineering. |
+| Capability schema pinning | Only files that carry a `sha256:` pin; remote provenance is a separate opt-in | `src/capability/hash.rs` (`compute_capability_hash` at line 62); rug-pull unload in `src/capability/backend.rs` (`detect_rug_pulls`); remote backends in `src/security/remote_provenance.rs` | Local pin: TA0001 / T1195 (tampered capability YAML at load). Remote provenance: **not** T1195 tool-schema coverage. TA0042 / T1608 only for the local YAML bytes | Local pin hashes YAML bytes. Remote provenance (`RemoteServerProvenancePayload`) signs backend name, transport, URL, subject, issuer, and issued-at only (`src/security/remote_provenance.rs` lines 62–75). It authenticates declared publisher and endpoint metadata. It does not pin tool schemas and does not detect a live server changing behavior behind the same URL. |
+| HMAC inter-agent message signing | Off (`SecurityConfig::message_signing.enabled`) | `src/security/message_signing.rs` (`MessageSigner::sign_response` at line 116; `NonceStore::check_and_register` at line 167). `previous_secret` is reserved for a future `verify_response()` API (line 74) | Weak PARTIAL on TA0001 / T1557 and FA0001 / T1557 **only for a consumer that verifies the HMAC** | Signs the **response body** (`canonical_json` of the response without `_signature`). Requests are not MACed. The request nonce is optional (`Option<&str>`) and is echoed in the signature block; there is no in-repo response-replay verifier. Not hop-by-hop across a multi-gateway mesh. Classical HMAC, not a payment MAC. |
+| BPD-bounded execution | **Not shipped.** Design only: `docs/design/BPD_DSL_DESIGN.md`. Runtime stand-ins (session/cost/kill) are separate | Runtime stand-ins: `src/session_sandbox.rs` (`SandboxEnforcer::check` at line 303), `src/cost_accounting/enforcer.rs` (`BudgetEnforcer::check` at line 180), `src/kill_switch/mod.rs` | TA0002 Execution (bound how much an agent can run); weak PARTIAL on FA0001 F1002 volume. Not F1012 / F1046 (those are payment-threshold tests, GAP) | Session call-count, duration, payload size, backend allow, tool deny. Cost enforcer is daily USD of **tool invocations**, not fraud loss. Kill switch disables a backend. None of these is a BPD document or `bpd validate` CLI. |
+| mTLS | Off until `mtls` rules are configured; then fail-closed | `src/mtls/cert_manager.rs`, `src/mtls/identity.rs`, `src/mtls/access_control/mod.rs` (fail-closed `PolicyDecision::Deny` when rules exist but no verified identity, lines 87–110) | TA0001 Initial Access **to the gateway** | Authenticates the MCP/HTTP client certificate. Does not authenticate a cardholder, mule, or compromised end-user of a downstream bank. |
+| Idempotency | On for `gateway_invoke` duplicate suppression | `src/idempotency.rs` (`IdempotencyCache::check` at line 149; auto-key from tool name + canonical JSON, lines 9–16) | **No F3 technique ID.** F1015 is card churning and F1043 is transaction reversal; both remain GAP under TA0002 | Operational safeguard: stops duplicate **tool side effects** on LLM timeout retry. Not a fraud mapping. |
 
 Related controls that the ticket did not name, but that sit on the same boundary:
 
@@ -91,7 +91,7 @@ F3-native tactic. 35 techniques in v1.1.
 | T1453 | Abuse Accessibility Features | GAP | |
 | T1531 | Account Access Removal | GAP | |
 | T1539 | Steal Web Session Cookie | GAP | |
-| T1557 | Adversary-in-the-Middle | PARTIAL | Only for gateway request/response integrity when message signing is enabled. Not a network MITM detector. |
+| T1557 | Adversary-in-the-Middle | PARTIAL (verifying consumer only) | A consumer that checks the HMAC can detect **response-body** tampering. Requests are not MACed. Not a network MITM detector. |
 
 ## FA0002 Monetization — technique table
 
@@ -113,15 +113,15 @@ If an operator connects a payments or banking MCP backend, these techniques beco
 
 **TA0043 Reconnaissance** — GAP: F1011, F1029, F1034, F1035, F1040, F1041, T1555, T1598. T1593 (search open websites) is a backend search tool, not a gateway control.
 
-**TA0042 Resource Development** — GAP: F1019, F1020, F1021, F1027, F1038, T1583, T1585, T1586, T1650. PARTIAL: T1608 / T1195 via capability pin + remote provenance.
+**TA0042 Resource Development** — GAP: F1019, F1020, F1021, F1027, F1038, T1583, T1585, T1586, T1650. PARTIAL: T1608 via **local** capability pin of staged YAML. T1195 is Initial Access only in F3 v1.1 (not listed here).
 
-**TA0001 Initial Access** — PARTIAL: F1002 (gateway HTTP), gateway-client identity (mTLS, grants, attestation, OAuth fail-closed). GAP: F1004, F1006, F1007, F1016, F1031, F1032, F1033, F1040, F1041, F1042, T1110, T1111, T1185, T1189, T1451, T1539, T1550, T1557 (network), T1621, T1660.
+**TA0001 Initial Access** — PARTIAL: F1002 (gateway HTTP); T1195 for **local YAML pin** (tamper at load), not remote tool-schema drift; gateway-client identity (mTLS, grants, attestation, OAuth fail-closed); T1557 only if a consumer verifies the response HMAC. GAP: F1004, F1006, F1007, F1016, F1031, F1032, F1033, F1040, F1041, F1042, T1110, T1111, T1185, T1189, T1451, T1539, T1550, T1557 (network MITM), T1621, T1660.
 
 **TA0005 Stealth** — GAP: F1001, F1022, F1023, F1030, F1031, F1032, F1036, F1039, F1040, F1045, F1048, T1070, T1672.
 
 **TA0112 Defense Impairment** — PARTIAL policy-only for F1005 if the mutating tool is connected and denied. GAP: T1667 Email Bombing; no sabotage detector for fraud-prevention systems.
 
-**TA0002 Execution** — PARTIAL: F1002 via sandbox/rate/cost; idempotency vs duplicate `gateway_invoke`. GAP: F1003, F1007, F1008, F1009, F1014, F1015 (card churning), F1024, F1028, F1037, F1043 (bank reversal), F1044, T1557 (network).
+**TA0002 Execution** — PARTIAL: F1002 via sandbox/rate/cost. GAP: F1003, F1007, F1008, F1009, F1014, F1015 (card churning), F1024, F1028, F1037, F1043 (transaction reversal), F1044, T1557 (network). Idempotency is a `gateway_invoke` retry guard, not an F1015 or F1043 control.
 
 ## Gaps that matter (MIK-3031.F3.3)
 
@@ -145,7 +145,7 @@ Kill-gate from the ticket ("F3 is fraud-specific and mcp-gateway is too broad to
 | F3 v1.1 tactic set | `public/f3-v1.1.json` in [fight-fraud-framework](https://github.com/center-for-threat-informed-defense/fight-fraud-framework); FA0001 / FA0002 are the F3-native tactic IDs |
 | Tool poisoning | `src/validator/rules/tool_poisoning.rs:152` |
 | Capability pin | `src/capability/hash.rs:62` |
-| HMAC + nonce | `src/security/message_signing.rs` module docs; ADR-001 |
+| HMAC response body | `src/security/message_signing.rs:116` (`sign_response`); nonce optional; no `verify_response` yet |
 | Session bounds | `src/session_sandbox.rs:303` |
 | Cost bounds | `src/cost_accounting/enforcer.rs:180` |
 | Idempotency | `src/idempotency.rs:149` |
