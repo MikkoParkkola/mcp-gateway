@@ -584,3 +584,6 @@ Part III and disposed of there; none of them blocks this design.
 - **The `spec-preview` promotion feature itself.** Its session-keyed input is
   classified in §I.2 and must be closed by whichever ORDER.2 option is chosen,
   but whether the feature should exist is not this note's question.
+
+The test plan named as the next step above is now written, as the sibling file
+`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md`.
