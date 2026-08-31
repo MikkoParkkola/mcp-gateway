@@ -532,6 +532,25 @@ were never reached at all, and the four-group sweep in `RELEASE-4.0.0-criteria-s
 different, also partial, slice. Re-running the sweep to completion is a prerequisite for calling this
 plan sized — not an increment, because its output changes what the increments are.
 
+### The direct route is not exempt, and the requirement text says so
+
+`POST /mcp/{name}` routes straight to one named backend. It bypasses `invoke_tool_traced`
+(`src/gateway/backend_handlers.rs:724`) and keeps no per-user cache (`:594`), so on that path there is
+today no trace propagation and no cache keying. Whether that matters looked like an owner question —
+does the release's caching and tracing work bind on every transport, or only on the meta-MCP invoke
+path? It is not an owner question. Both criteria answer it in their own text.
+`MIK-7213.CACHE.4` binds "**any** shared cache the gateway keeps"
+(`docs/requirements/RELEASE-4.0.0-requirements.md:126`) and `MIK-7272.OTEL.1` binds propagation
+"across the gateway hop" (`:197`) — the direct route is a gateway hop and any cache behind it is a
+cache the gateway keeps. Neither is scoped to a transport or to a handler.
+
+So the direct route is wired, not excused: trace `_meta` propagates through it and any cache it grows
+is keyed on the same request-derived inputs as the meta path. Removing the route instead would
+eliminate the divergence at the source and is the cheaper diff, but it deletes a documented HTTP
+surface, and no evidence has been gathered that nothing calls it — that is an owner decision and it
+is not needed to satisfy the criteria. Wiring it is ordinary engineering and it is what the
+requirements already ask for.
+
 ### The one decision the source cannot make
 
 Three cluster designs are reviewed and carry a `SHIP-WITH-FIXES` verdict from each vendor: cluster B
