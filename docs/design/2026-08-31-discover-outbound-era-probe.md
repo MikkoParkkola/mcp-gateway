@@ -254,8 +254,10 @@ slots, and a stdio slot is a separate child process that could in principle answ
 The era is keyed per backend anyway, because the alternative is worse: a per-slot era re-probes
 every user's first start, and the era is a property of the *server implementation*, which a
 per-user slot does not change. Two slots of one backend disagreeing means the operator pointed one
-name at two implementations, which breaks more than era. Recorded as a ranked assumption (A2) rather
-than hidden in the word "backend".
+name at two implementations, which breaks more than era. Revision 3 recorded this as a ranked
+assumption (A2) rather than hiding it in the word "backend"; revision 4 turned it into a question
+for the requester, and the team-lead answered it — per backend *name*, provisionally. See Open
+questions.
 
 **When it is learned.** Once, in `start_entry`, immediately after the transport is connected and
 before it is published to the pool entry — the same point on both arms
@@ -440,8 +442,9 @@ Two consequences travel with the answer. Revision 4's shared in-flight resolutio
 **load-bearing under this reading** — per-slot entries could not contend in the first place — so it
 stays and the design is coherent as written. And if the operator later says per slot, the change is
 the cache key alone plus dropping that repair: one field, one lookup, one section. Not a redesign.
-The same provisional status is noted beside the plan's other unconfirmed full-scope reading
-(`docs/requirements/RELEASE-4.0.0-plan.md:115`).
+The plan carries the same provisional status beside its other unconfirmed full-scope reading
+(`docs/requirements/RELEASE-4.0.0-plan.md:115`); that file is the team-lead's to write, and it holds
+another session's uncommitted work, so this design does not edit it.
 
 - *Does a pre-`initialize` probe reach an SSE peer?* — read `src/transport/http/mod.rs:200,:327,:434-435,:815-821` and `src/config/mod.rs:1532,:1546` — no: `message_url` is unset until the handshake, and `streamable_http` defaults false — killed the revision-1 placement, which is the whole of revision 2.
 - *Does it reach an OAuth peer?* — read `src/transport/http/mod.rs:378-421,:640-645` — no: the token is acquired inside `initialize()` — second, independent kill of the same placement.
@@ -466,7 +469,7 @@ Ranked by impact × uncertainty. Each names the cheapest thing that would falsif
 | # | assumption | if wrong | cheapest falsifier |
 |---|---|---|---|
 | A1 | A legacy peer answering `server/discover` with one of the three 2026 codes is unlikely enough to accept, given the correction path | a peer is framed modern for up to one contradiction window | test row 9 is exactly this scenario, run end-to-end; it also *is* the mitigation |
-| A2 | ~~Era is a property of the backend, not of a per-user pool slot~~ | — | **promoted out of this table**: GPT's review made it a question about what DISCOVER.5 requires, which an assumption table cannot settle. Deferred with four fields under Open questions |
+| A2 | ~~Era is a property of the backend, not of a per-user pool slot~~ | — | **promoted out of this table, then answered**: GPT's review made it a question about what DISCOVER.5 requires, which an assumption table cannot settle. The team-lead answered it — per backend *name*, provisional and not operator-confirmed — and the record is under Open questions, not here |
 | A3 | Serialised 10s waits on a stalled peer are acceptable versus caching a non-answer | N users starting a dead backend see N × 10s | **no longer assumed — repaired.** Concurrent waiters share the *in-flight* resolution and read its one outcome; `NoAnswer` remains uncached durably, so a later start still probes. Sharing an in-flight future and caching an outcome are different things, and revision 3 conflated them. No timing assertion is added: a latency test in CI is a flake with a ticket attached |
 
 Evidence marking used throughout: **V** = two or more independent sources, **I** = one, **A** = none.
@@ -620,7 +623,7 @@ input rule and the Legacy pin are deleted, and the two facts revision 3 got wron
 Counted honestly, because the target was the opposite: the design body grew from 479 lines to 538.
 Two *rules* were deleted — the "era-conditional" input restriction and the Legacy pin — and the
 mechanism they governed is simpler than it was. The added lines are record, not machinery: a
-four-field deferral, a disambiguation that stops a re-checker reaching the wrong constant, one test
+deferral and the decision that closed it, a disambiguation that stops a re-checker reaching the wrong constant, one test
 row split into two, and this table. A design document that grows every round is a signal worth
 watching even when each addition is defensible; it is recorded here rather than rounded away.
 
