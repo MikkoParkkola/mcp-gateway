@@ -43,6 +43,29 @@ pub(super) fn idempotency_key_for(
     Some(format!("{key}{projection_key_suffix}{identity_suffix}"))
 }
 
+/// Build the response-cache key for a `gateway_invoke` call.
+///
+/// One function rather than the expression repeated at the read and the write:
+/// a key derived in two places is a key that can be derived two ways, and a
+/// write that lands under a key no read computes is a cache that never hits
+/// while looking exactly like one that does.
+///
+/// The retry discriminator is the MRTR.10 binding. A retry reuses the original
+/// call's arguments, so without it two continuations answering the same gate
+/// differently share one entry and the first answer is served for the second.
+pub(super) fn response_cache_key_for(
+    server: &str,
+    tool: &str,
+    arguments: &Value,
+    projection_key_suffix: &str,
+    identity_suffix: &str,
+    retry: &crate::protocol::mrtr::RetryFields,
+) -> String {
+    let base = crate::cache::ResponseCache::build_key(server, tool, arguments);
+    let discriminator = retry.key_discriminator();
+    format!("{base}{projection_key_suffix}{identity_suffix}{discriminator}")
+}
+
 // ============================================================================
 // Tag collection
 // ============================================================================
@@ -463,5 +486,46 @@ mod tests {
     fn internal_invoke_args_preserves_non_object_arguments() {
         let args = internal_invoke_args("s", "t", json!("scalar"));
         assert_eq!(args["arguments"], json!("scalar"));
+    }
+
+    /// MRTR.10: two continuations of one call that differ only in the answers
+    /// the user gave MUST NOT share a response-cache entry. Removing the retry
+    /// argument from `response_cache_key_for` makes this assertion fail — which
+    /// is what stops that wiring being dropped by a later edit.
+    #[test]
+    fn response_cache_key_separates_two_answers_to_one_gate() {
+        use crate::protocol::mrtr::RetryFields;
+        let args = json!({"flight": "AY1337"});
+        let key_for = |answer: serde_json::Value| {
+            let retry = RetryFields {
+                input_responses: Some(answer),
+                request_state: Some("st-1".to_string()),
+                idempotency_key: None,
+                malformed: Vec::new(),
+            };
+            super::response_cache_key_for("air", "book", &args, "", "", &retry)
+        };
+        assert_ne!(
+            key_for(json!({"confirm": "accept"})),
+            key_for(json!({"confirm": "decline"})),
+            "a declined booking must not be served the accepted booking's result"
+        );
+    }
+
+    /// A call with no retry fields MUST derive exactly the key it derived
+    /// before MRTR.10 existed, or the upgrade silently empties every cache.
+    #[test]
+    fn response_cache_key_is_unchanged_for_an_ordinary_call() {
+        let args = json!({"q": 1});
+        let key = super::response_cache_key_for(
+            "srv",
+            "tool",
+            &args,
+            "|proj",
+            "|idp:x",
+            &crate::protocol::mrtr::NO_RETRY,
+        );
+        let before = crate::cache::ResponseCache::build_key("srv", "tool", &args);
+        assert_eq!(key, format!("{before}|proj|idp:x"));
     }
 }

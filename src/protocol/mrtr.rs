@@ -159,6 +159,39 @@ impl RetryFields {
     pub const fn is_retry(&self) -> bool {
         self.input_responses.is_some() || self.request_state.is_some()
     }
+
+    /// What distinguishes one continuation of a request from another, as a
+    /// suffix for a cache or idempotency key.
+    ///
+    /// A retry reuses the original call's `name`, `arguments` and idempotency
+    /// key — it *is* the same logical request — so every input the existing
+    /// derivations hash is identical across continuations. Only the retry pair
+    /// differs, and without it the answers to a confirmation gate collapse onto
+    /// one key: a user who accepts, then declines, is served the acceptance.
+    ///
+    /// Empty for a fresh call, so that every key derived before this existed is
+    /// derived byte-identically now. A discriminator that was merely *constant*
+    /// for fresh calls would still change the format, and changing the format
+    /// silently discards every warm entry in every running deployment.
+    ///
+    /// The NUL separator is the same device `idempotency::derive_key` uses, and
+    /// holds for the same reason: canonical JSON escapes control characters, so
+    /// no encoded value can contain the byte that divides the two fields.
+    #[must_use]
+    pub fn key_discriminator(&self) -> String {
+        if !self.is_retry() {
+            return String::new();
+        }
+        let responses = self
+            .input_responses
+            .as_ref()
+            .map(crate::hashing::canonical_json)
+            .unwrap_or_default();
+        let state = self.request_state.as_deref().unwrap_or_default();
+        let digest =
+            crate::hashing::sha256_hex_chunks([responses.as_bytes(), &b"\0"[..], state.as_bytes()]);
+        format!("|mrtr:{digest}")
+    }
 }
 
 /// A backend's interim result: it needs something before it can finish.

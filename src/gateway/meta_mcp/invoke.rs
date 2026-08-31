@@ -13,7 +13,6 @@ use std::time::Instant;
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
-use crate::cache::ResponseCache;
 use crate::capability::validate_output;
 use crate::context_integrity::{
     ContextActionRisk, ContextIntegrityDecisionKind, ContextIntegrityEvaluation,
@@ -121,7 +120,7 @@ use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, extract_cached_tokens, inject_cache_key};
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
-    idempotency_key_for, strip_backend_provenance,
+    idempotency_key_for, response_cache_key_for, strip_backend_provenance,
 };
 
 async fn call_capability_tool_with_identity(
@@ -790,9 +789,17 @@ impl MetaMcp {
         // chose, so nothing about it says which request it was minted for;
         // without this a key reused for a different call replays the first
         // call's result as though it were this one's.
-        let idem_fingerprint = idem_key
-            .as_ref()
-            .map(|_| derive_key(&format!("{server}:{tool}"), &arguments));
+        //
+        // The retry pair is part of that binding (MRTR.10). A retry reuses the
+        // client's key and the original arguments, so those alone cannot tell
+        // one continuation from another: a confirmation answered "accept" and
+        // then "decline" would fingerprint identically, and the decline would
+        // be served the acceptance.
+        let idem_fingerprint = idem_key.as_ref().map(|_| {
+            let base = derive_key(&format!("{server}:{tool}"), &arguments);
+            let discriminator = caller.retry.key_discriminator();
+            format!("{base}{discriminator}")
+        });
 
         // Owns the in-flight entry from admission until a terminal state. Its
         // `Drop` releases the key, so an early return after dispatch cannot
@@ -838,10 +845,14 @@ impl MetaMcp {
         }
 
         if !want_full && let Some(ref cache) = self.cache {
-            let cache_key = {
-                let base = ResponseCache::build_key(server, tool, &arguments);
-                format!("{base}{projection_key_suffix}{identity_suffix}")
-            };
+            let cache_key = response_cache_key_for(
+                server,
+                tool,
+                &arguments,
+                &projection_key_suffix,
+                &identity_suffix,
+                caller.retry,
+            );
             if let Some(cached) = cache.get(&cache_key) {
                 debug!(server, tool, trace_id, "Cache hit");
                 if let Some(ref stats) = self.stats {
@@ -1291,10 +1302,14 @@ impl MetaMcp {
         }
 
         if !want_full && let Some(ref cache) = self.cache {
-            let cache_key = {
-                let base = ResponseCache::build_key(server, tool, &arguments);
-                format!("{base}{projection_key_suffix}{identity_suffix}")
-            };
+            let cache_key = response_cache_key_for(
+                server,
+                tool,
+                &arguments,
+                &projection_key_suffix,
+                &identity_suffix,
+                caller.retry,
+            );
             if cache.set(&cache_key, result.clone(), self.default_cache_ttl) {
                 debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
             }

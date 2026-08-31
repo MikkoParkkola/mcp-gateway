@@ -1394,3 +1394,96 @@ mod era_resolution {
         assert_eq!(second, Era::Modern);
     }
 }
+
+// ── MRTR.10 — the retry pair discriminates a cached result ───────────────────
+//
+// A client's idempotency key is an opaque string it chose, and a retry reuses
+// it: the retry *is* the same logical request. So the key alone cannot tell one
+// continuation of that request from another, and the fingerprint bound to it
+// must. Without the retry pair in that fingerprint, a user who answers a
+// confirmation gate "accept" and then, on a second continuation, "decline" is
+// served the first answer's result — one side effect standing in for the
+// opposite one.
+
+use mcp_gateway::protocol::mrtr::RetryFields;
+use serde_json::json;
+
+fn retry(input_responses: Option<serde_json::Value>, request_state: Option<&str>) -> RetryFields {
+    RetryFields {
+        input_responses,
+        request_state: request_state.map(str::to_string),
+        idempotency_key: None,
+        malformed: Vec::new(),
+    }
+}
+
+#[test]
+fn ac_mrtr_10_a_fresh_call_contributes_nothing_to_the_key() {
+    // GIVEN a call carrying neither retry field
+    let fresh = retry(None, None);
+    // THEN it must not perturb the key, or every warm cache entry in every
+    // deployment is silently dropped by the upgrade that adds this.
+    assert_eq!(
+        fresh.key_discriminator(),
+        "",
+        "a fresh call must derive the same key it derived before MRTR.10"
+    );
+}
+
+#[test]
+fn ac_mrtr_10_different_answers_derive_different_keys() {
+    // GIVEN two continuations of one request that differ only in the answer
+    let accepted = retry(Some(json!({"confirm": {"action": "accept"}})), Some("st-1"));
+    let declined = retry(
+        Some(json!({"confirm": {"action": "decline"}})),
+        Some("st-1"),
+    );
+    // THEN the stored result of one must be unreachable by the other
+    assert_ne!(
+        accepted.key_discriminator(),
+        declined.key_discriminator(),
+        "answering a confirmation gate differently must not replay the first answer"
+    );
+}
+
+#[test]
+fn ac_mrtr_10_different_backend_state_derives_a_different_key() {
+    // GIVEN two continuations with the same answer against different state
+    let first = retry(Some(json!({"confirm": true})), Some("st-1"));
+    let second = retry(Some(json!({"confirm": true})), Some("st-2"));
+    // THEN they are distinct exchanges and must not share a cached result
+    assert_ne!(
+        first.key_discriminator(),
+        second.key_discriminator(),
+        "the backend's own state distinguishes two exchanges"
+    );
+}
+
+#[test]
+fn ac_mrtr_10_the_same_retry_derives_the_same_key() {
+    // GIVEN the same retry expressed with its JSON keys in either order
+    let one = retry(Some(json!({"a": 1, "b": 2})), Some("st-1"));
+    let two = retry(Some(json!({"b": 2, "a": 1})), Some("st-1"));
+    // THEN duplicate protection still recognises it, or the guard protects
+    // nothing: a key that changes per attempt admits every attempt.
+    assert_eq!(
+        one.key_discriminator(),
+        two.key_discriminator(),
+        "the discriminator must be stable across JSON key ordering"
+    );
+}
+
+#[test]
+fn ac_mrtr_10_the_two_fields_cannot_be_transposed() {
+    // GIVEN one retry whose state is a value, and another where that same value
+    // appears in the answers instead
+    let state_carries_it = retry(None, Some("x"));
+    let answers_carry_it = retry(Some(json!({"": "x"})), None);
+    // THEN they must not collide: concatenation without a separator is how two
+    // different requests come to share one key.
+    assert_ne!(
+        state_carries_it.key_discriminator(),
+        answers_carry_it.key_discriminator(),
+        "the fields must be separated, not concatenated"
+    );
+}
