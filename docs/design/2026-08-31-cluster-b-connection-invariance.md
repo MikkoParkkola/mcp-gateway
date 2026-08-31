@@ -287,6 +287,14 @@ that costs nothing only because no backend we drive emits one — which is exact
 what §0's absence evidence found, and is a property of our backends, not of our
 code.
 
+*Disposal (chosen, not overlooked):* this bug is **fixed inside this change**,
+not filed. It is a correctness defect in shipping code rather than a design gap,
+and the SUB.2 work moves the capture site into these same transports regardless —
+so the repair lands in the edit that already has to touch these lines. Filing it
+would buy a separate ticket and a human's attention and change nothing about when
+or where the fix happens. Recorded here so a later reader can see the disposal
+was made deliberately (team-lead, this round).
+
 So SUB.2's real prerequisite is **not** "a request key at the dispatch boundary".
 It is: each backend transport must read its stream to completion, separate
 notifications from the response, and hand the notifications to a per-invocation
