@@ -1257,7 +1257,15 @@ impl MetaMcp {
             }
         }
 
-        if !want_full && let Some(ref cache) = self.cache {
+        // A result the backend has not finished producing must not be stored:
+        // replaying an `input_required` from the cache returns the request for
+        // input rather than the answer, so the exchange can never complete.
+        // `is_final` defaults a missing `resultType` to complete, so every
+        // pre-2026 backend's result stays cacheable.
+        if !want_full
+            && crate::protocol::cacheable::is_final(&result)
+            && let Some(ref cache) = self.cache
+        {
             let cache_key = {
                 let base = ResponseCache::build_key(server, tool, &arguments);
                 format!("{base}{projection_key_suffix}{identity_suffix}")

@@ -81,3 +81,15 @@ pub fn result_type_of(result: &Value) -> &str {
         .and_then(Value::as_str)
         .unwrap_or("complete")
 }
+
+/// Whether `result` is a finished answer, and so safe to cache and replay.
+///
+/// Anything else — `"input_required"` above all — is a step in an exchange that
+/// is still running. Replaying one from a cache returns the *request* rather
+/// than the answer, and the call can never finish. Because
+/// [`result_type_of`] defaults a missing field to `"complete"`, every
+/// pre-2026 backend's result stays cacheable, as the specification requires.
+#[must_use]
+pub fn is_final(result: &Value) -> bool {
+    result_type_of(result) == "complete"
+}

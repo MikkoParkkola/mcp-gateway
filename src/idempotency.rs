@@ -195,7 +195,24 @@ impl IdempotencyCache {
     }
 
     /// Transition `key` from in-flight to completed with `result`.
+    ///
+    /// A result the backend has not finished producing is *not* stored, and any
+    /// in-flight entry for `key` is dropped so the call stays retryable. MCP
+    /// 2026 marks such a result with a `resultType` other than `"complete"` —
+    /// `"input_required"` being the case that matters, where the backend is
+    /// waiting for the caller to supply something. Caching that would make
+    /// every retry replay the request for input instead of running the call,
+    /// so the exchange could never complete.
+    ///
+    /// The guard lives here rather than at each call site because the property
+    /// belongs to the cache: nothing non-final should ever be servable from it,
+    /// including from call sites not yet written.
     pub fn mark_completed(&self, key: &str, result: Value) {
+        if !crate::protocol::cacheable::is_final(&result) {
+            self.entries.remove(key);
+            debug!(key, "Refused to cache a non-final result");
+            return;
+        }
         self.entries.insert(
             key.to_string(),
             IdempotencyState::Completed(result, Instant::now()),
