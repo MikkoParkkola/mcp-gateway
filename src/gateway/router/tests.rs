@@ -3210,7 +3210,12 @@ async fn a_modern_caller_is_refused_gateway_set_profile() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
-    let message = format!("{json}");
+    // The refusal must arrive as a JSON-RPC error, not as a successful result
+    // that happens to mention a session: the design decision is that the call
+    // BREAKS for a modern client, and the shape is what the client sees.
+    let message = json["error"]["message"].as_str().unwrap_or_else(|| {
+        panic!("gateway_set_profile must be refused with a JSON-RPC error: {json}")
+    });
     assert!(
         message.contains("no session"),
         "the refusal must say why, and the reason must be the true one — the \
