@@ -1633,16 +1633,21 @@ impl Gateway {
             return Some(resp.to_value_lossy());
         };
 
+        let inbound_meta =
+            crate::protocol_revision_telemetry::request_meta(request, params.as_ref());
+        crate::protocol_revision_telemetry::observe_inbound(
+            session_id,
+            if method == "initialize" {
+                params.as_ref()
+            } else {
+                None
+            },
+            inbound_meta,
+        );
+
         let response = match method.as_str() {
             "initialize" => meta_mcp.handle_initialize(id, params.as_ref(), Some(session_id), None),
             "tools/list" => {
-                crate::protocol_revision_telemetry::observe_tools_list(
-                    crate::protocol_revision_telemetry::ListFilters {
-                        principal: false,
-                        profile: false,
-                        session: true,
-                    },
-                );
                 meta_mcp.handle_tools_list_with_params(id, params.as_ref(), Some(session_id))
             }
             "tools/call" => {
