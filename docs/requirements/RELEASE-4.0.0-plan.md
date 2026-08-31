@@ -10,6 +10,18 @@ it), 1 UNTESTED. Every number here is counted from the blocking column of the st
 never carried forward by hand; an earlier revision of this paragraph said 26 blocking and split it
 17/12/0, which sums to 29.
 
+That 27 is now known to be INCOMPLETE, not conservative. The status doc it is counted
+from carries no row for any of the 22 non-functional requirements in section 4 of
+`docs/requirements/RELEASE-4.0.0-requirements.md` (lines 204-253): NFR.COMPAT.1-4,
+NFR.SEC.1-6, NFR.PERF.1-4, NFR.OBS.1-5, NFR.DOC.1-3. Each carries a verification method
+in the requirements table (T test, M measurement, D demonstration, I inspection), so each
+is a criterion, not a wish. Three are already known unmet: NFR.SEC.5 fails today because
+`cargo fmt --check` fails at `src/idempotency.rs:305`, `:566` and `src/protocol/mrtr.rs:113`,
+and NFR.PERF.1-2 require measurement against 3.5.0 that has not been run. An audit of the
+block is in flight; until it lands, treat 27 as a floor. Discovered 2026-08-31 by an audit
+of `tests/mik_7212_acs.rs`, which cites NFR.SEC.3 and NFR.SEC.4 as criteria it satisfies
+while the ledger holds neither.
+
 ## The shape of the problem
 
 Two thirds of the blocking set is not missing code. It is code that exists and is not
