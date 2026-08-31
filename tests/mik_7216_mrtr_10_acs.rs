@@ -100,3 +100,62 @@ fn the_response_cache_still_stores_final_and_legacy_results() {
         "a legacy backend's result omits resultType and must still be cached"
     );
 }
+
+// The guard must be "complete, or the field is absent" — not "anything except
+// input_required". A guard written the second way passes every case above,
+// because no case above presents a third value. These supply them: a type the
+// gateway has never heard of, and a field that is present but malformed. The
+// spec's default reading covers an *omitted* field; a present non-string is a
+// broken result, and treating it as complete would let a backend skip the
+// finality check by sending the field wrong.
+
+fn not_final() -> Vec<serde_json::Value> {
+    vec![
+        json!({"resultType": "some_future_type"}),
+        json!({"resultType": null}),
+        json!({"resultType": 42}),
+        json!({"resultType": {"kind": "complete"}}),
+    ]
+}
+
+#[test]
+fn neither_cache_stores_an_unrecognised_or_malformed_result_type() {
+    for value in not_final() {
+        let idem = IdempotencyCache::new();
+        idem.mark_in_flight("k");
+        assert!(
+            !idem.mark_completed("k", value.clone()),
+            "idempotency cache reported storing {value}, which is not a complete result"
+        );
+        assert!(
+            matches!(idem.check("k"), CheckOutcome::Proceed),
+            "{value} was served from the idempotency cache as if it were final"
+        );
+
+        let responses = ResponseCache::new();
+        let key = ResponseCache::build_key("srv", "tool", &value);
+        assert!(
+            !responses.set(&key, value.clone(), TTL),
+            "response cache reported storing {value}, which is not a complete result"
+        );
+        assert_eq!(
+            responses.get(&key),
+            None,
+            "{value} was served from the response cache as if it were final"
+        );
+    }
+}
+
+#[test]
+fn both_caches_report_the_writes_they_actually_make() {
+    // The invoke path logs "Cached result" from these return values, so a
+    // refusal that reported success would produce a log saying the opposite of
+    // what the cache did.
+    let idem = IdempotencyCache::new();
+    idem.mark_in_flight("k");
+    assert!(idem.mark_completed("k", json!({"resultType": "complete"})));
+
+    let responses = ResponseCache::new();
+    let key = ResponseCache::build_key("srv", "tool", &json!({"a": 1}));
+    assert!(responses.set(&key, json!({"v": 1}), TTL));
+}

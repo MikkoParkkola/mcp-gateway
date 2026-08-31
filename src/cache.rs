@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use serde_json::Value;
+use tracing::debug;
 
 use crate::hashing::canonical_json_sha256;
 
@@ -153,14 +154,18 @@ impl ResponseCache {
     ///   serving it from cache would replay a request for input instead of an
     ///   answer.
     /// * `ttl` - Time-to-live duration
-    pub fn set(&self, key: &str, value: Value, ttl: Duration) {
+    ///
+    /// Returns whether the value was stored, so a caller cannot log a write
+    /// that a refusal silently skipped.
+    pub fn set(&self, key: &str, value: Value, ttl: Duration) -> bool {
         // A result the backend has not finished producing is not stored:
         // replaying an `input_required` from the cache returns the request for
         // input rather than the answer, so the exchange could never complete.
         // `is_final` defaults a missing `resultType` to complete, so every
         // pre-2026 backend's result stays cacheable.
         if !crate::protocol::cacheable::is_final(&value) {
-            return;
+            debug!(key, "Refused to cache a non-final result");
+            return false;
         }
 
         // Enforce max_entries before inserting
@@ -174,6 +179,7 @@ impl ResponseCache {
             ttl,
         };
         self.entries.insert(key.to_string(), entry);
+        true
     }
 
     /// Enforce the maximum entry limit by evicting expired then oldest entries.

@@ -207,16 +207,17 @@ impl IdempotencyCache {
     /// The guard lives here rather than at each call site because the property
     /// belongs to the cache: nothing non-final should ever be servable from it,
     /// including from call sites not yet written.
-    pub fn mark_completed(&self, key: &str, result: Value) {
+    pub fn mark_completed(&self, key: &str, result: Value) -> bool {
         if !crate::protocol::cacheable::is_final(&result) {
             self.entries.remove(key);
             debug!(key, "Refused to cache a non-final result");
-            return;
+            return false;
         }
         self.entries.insert(
             key.to_string(),
             IdempotencyState::Completed(result, Instant::now()),
         );
+        true
     }
 
     /// Remove `key` entirely (used when a call fails and should be retryable).

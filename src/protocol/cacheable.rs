@@ -74,12 +74,18 @@ impl CacheScope {
 /// Every pre-2026 backend omits it. Reading the absence as anything else would
 /// make every legacy backend's answer unusable, which is why the default is
 /// specified rather than left to the implementer.
+///
+/// That default covers an **omitted** field and nothing else. A field that is
+/// present but not a string — `null`, a number, an object — is a malformed
+/// result, not a legacy one, and answering `"complete"` for it would let a
+/// backend opt out of the finality check by sending the field wrong. Those
+/// return `""`, which no specified `resultType` can equal.
 #[must_use]
 pub fn result_type_of(result: &Value) -> &str {
-    result
-        .get("resultType")
-        .and_then(Value::as_str)
-        .unwrap_or("complete")
+    match result.get("resultType") {
+        None => "complete",
+        Some(present) => present.as_str().unwrap_or(""),
+    }
 }
 
 /// Whether `result` is a finished answer, and so safe to cache and replay.

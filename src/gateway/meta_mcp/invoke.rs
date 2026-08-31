@@ -1262,12 +1262,14 @@ impl MetaMcp {
                 let base = ResponseCache::build_key(server, tool, &arguments);
                 format!("{base}{projection_key_suffix}{identity_suffix}")
             };
-            cache.set(&cache_key, result.clone(), self.default_cache_ttl);
-            debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
+            if cache.set(&cache_key, result.clone(), self.default_cache_ttl) {
+                debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
+            }
         }
 
-        if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
-            idem_cache.mark_completed(key, result.clone());
+        if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key)
+            && idem_cache.mark_completed(key, result.clone())
+        {
             debug!(
                 server,
                 tool, key, trace_id, "Idempotency entry marked completed"
