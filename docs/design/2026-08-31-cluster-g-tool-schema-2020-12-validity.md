@@ -37,9 +37,12 @@ reader does not re-derive this:
 the hoped-for escape is not in the text. The sibling clause settles it the other way: its evidence
 runs through `MetaMcp::handle_tools_list`, and that entry point publishes proxied backend tools on
 the same surface — `handle_tools_list_for_session` appends `self.surfaced_tools` and tags each
-`backend:{server}` or `capability:{server}` (`meta_mcp/mod.rs:1133-1141` at `112a392c`). The
-population the MET clause was measured against therefore *includes* backend schemas, and the
-UNTESTED clause inherits the same population. The remainder is real and stays named.
+`backend:{server}` or `capability:{server}` (`src/gateway/meta_mcp/mod.rs:1131` for the entry point
+and `:1157,:1159` for the tags, re-read at `149e553a`; the same code sat at `:1133-1141` at
+`112a392c`). The population the MET clause was measured against therefore *includes* backend
+schemas, and the UNTESTED clause inherited it too. **This paragraph is what put the question to the
+owner** — it is the evidence that the exclusion could not stand, and the ruling that followed is
+what closed the remainder.
 
 ## §P0 Scope
 
@@ -98,8 +101,11 @@ Each row is a command run in this session at `112a392c`.
 | OpenAPI-generated capabilities land in that same directory | `src/gateway/ui/import.rs:172` — `cap.write_to_file(&output_dir)`; the schema is built at `src/capability/openapi/convert.rs:370` by `build_input_schema`. Generated schemas re-enter through the loader, so a loader-level check covers the generator too. |
 | Publication surface | `src/protocol/types.rs:10` through `src/protocol/types.rs:40` — `Tool` carries `inputSchema: Value` and `outputSchema: Option<Value>` beside name, title, description, annotations, role, projection; also embedded at `src/trust/descriptor.rs:80` |
 
-Two populations, different risk profiles: **19 constants** that change only when someone edits
-Rust, and **110+ capability schemas** that arrive from a directory the operator controls.
+Three populations, three risk profiles: **19 constants** that change only when someone edits Rust;
+**110+ capability schemas** that arrive from a directory the operator controls; and **backend tool
+schemas**, which arrive over the wire from software nobody here controls, can change between two
+fetches of the same backend, and are the only population where the gateway is not the author of the
+document it publishes.
 
 ## Load-time precedent — this is not an open question
 
