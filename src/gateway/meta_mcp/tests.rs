@@ -2568,3 +2568,42 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
         "the interim result must reach the client intact: {result:#}"
     );
 }
+
+// The third thing that must not survive the refusal: the idempotency key.
+// After dispatch the gateway settles the key as completed so that a
+// post-dispatch gate cannot readmit a retry that would repeat the side effect.
+// An interim result is the backend stating it has *not* acted, so there is no
+// side effect to protect here — and settling one is not merely redundant, it is
+// permanent and false: the stored placeholder reads "side effect executed", so
+// a client that declared the capability it was missing and retried under the
+// same key would be served that sentence in place of its question, forever.
+#[tokio::test]
+async fn a_refused_input_request_leaves_the_idempotency_key_retryable() {
+    let mut meta = MetaMcp::new(backend_asking_for_elicitation());
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        Duration::from_secs(300),
+    );
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("client-chosen-key".to_string()),
+        ..Default::default()
+    };
+    let mut ctx = allow_all_ctx_declaring(&[]);
+    ctx.retry = &retry;
+
+    // The second attempt is the assertion. It stands for the client that read
+    // the refusal, declared the capability and came back with the same key: it
+    // must be judged on its merits rather than answered from what the first
+    // attempt left behind.
+    for attempt in ["first", "second"] {
+        let err = meta
+            .invoke_tool(&book_flight(), Some("session-1"), &ctx)
+            .await
+            .expect_err("a refusal must not be replaced by a stored result");
+        assert_eq!(
+            err.to_rpc_code(),
+            -32021,
+            "the {attempt} attempt must be refused as an undeclared capability"
+        );
+    }
+}

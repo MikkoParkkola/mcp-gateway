@@ -1124,13 +1124,29 @@ impl MetaMcp {
             }
         };
 
+        // Answering or asking? Read once, because the same verdict decides two
+        // things: whether the idempotency key may be settled as completed, and
+        // whether the question may be put to this client at all.
+        let interim = crate::protocol::mrtr::InputRequired::from_result(&result);
+
         // The backend has acted. Every early return below this point must settle
         // the idempotency key as completed rather than release it: a released key
         // readmits the retry that would execute the side effect a second time.
         // `release()` on the dispatch-error path above has already settled, so
         // this is a no-op there. The stored value withholds the response body on
         // purpose — a gate below may be about to block it.
-        if let Some(reservation) = idem_reservation.as_mut() {
+        //
+        // An interim result is excluded because there the backend has said it
+        // did *not* act: it stopped to ask. Settling one would be false and
+        // permanent — the placeholder reads "side effect executed", so a client
+        // that declared the capability it was missing and retried under the same
+        // key would be served that sentence in place of its question.
+        // `mark_completed` refuses a non-final result for this reason
+        // (`src/idempotency.rs:531-539`), and the placeholder is deliberately
+        // final-shaped, so only this condition keeps the rule for it.
+        if interim.is_none()
+            && let Some(reservation) = idem_reservation.as_mut()
+        {
             reservation.commit(&json!({
                 "resultType": "complete",
                 "isError": true,
@@ -1149,7 +1165,7 @@ impl MetaMcp {
         // survives the refusal. Relaying it instead leaves the client holding
         // an `inputRequests` entry it has no handler for and the backend
         // holding an exchange that can never be completed.
-        if let Some(interim) = crate::protocol::mrtr::InputRequired::from_result(&result)
+        if let Some(interim) = interim
             && let Some(refused) = interim.undeclared(caller.input_capabilities)
         {
             warn!(
