@@ -32,9 +32,10 @@ consumes it. The `#[allow(dead_code)]` attribute is why this survived the `-D wa
 it silences the exact warning that would have reported the unused setter.
 
 A second gap compounds it. `POST /mcp/{name}` — the direct backend route,
-`src/gateway/router/backend_handlers.rs:338-353` — bypasses `invoke_tool_traced` by design
-(ADR-008 rung 2). It re-enforces OAuth isolation and tool policy locally but never calls
-`resolve_idempotency_key`, whose sole call site is `meta_mcp/invoke.rs:782`.
+`src/gateway/router/backend_handlers.rs:338-353` — does not go through `invoke_tool_traced`. It
+re-enforces OAuth isolation and tool policy locally but never calls `resolve_idempotency_key`,
+whose sole call site is `meta_mcp/invoke.rs:782`. Revision 1 attributed that bypass to "ADR-008
+rung 2"; that was a misreading, corrected below, and no ADR sanctions it.
 
 ## The cache cannot simply be turned on
 
@@ -73,6 +74,15 @@ for a day. Fix: a bounded capacity that fails closed for new protected side effe
 - TTLs already exist: `COMPLETED_TTL` 24h and `IN_FLIGHT_TIMEOUT` 5m (`src/idempotency.rs:30-37`).
   They are the defaults. Copying `config.cache.default_ttl` instead would shrink the protection
   window to a minute.
+- ADR-008 INV-3 requires the `cache_binding` (user + audience) to be mixed into both cache
+  keys, and it is — but at the CALL SITE. `invoke.rs:773` builds an `identity_suffix` from the
+  resolved credential and appends it to the idempotency key at `:789` and to the response-cache
+  key at `:831`/`:1263`. Neither `derive_key` nor `ResponseCache::build_key` knows about it.
+  That placement is the whole reason the direct route is a security question and not just a
+  coverage gap: a second call site must re-apply the binding by hand, which is the shape ADR-008
+  itself records going wrong once (`CapabilityExecutor::fetch_oauth_token` bypassing the guard,
+  ADR-008:117). Extending coverage should push the binding INTO the derivation, not copy the
+  suffix to a second site.
 - `IdempotencyCache::check` evicts on access (`src/idempotency.rs:147-176`), so the background
   cleanup task that `enable_idempotency` spawns is an optimisation, not a correctness
   requirement. Revision 1 priced it as an unavoidable cost of enabling. It is not.
@@ -89,23 +99,25 @@ protected, so it is rejected on the requirement, not on cost. The choice is betw
 on-by-default and mandatory, and it turns on whether an operator may switch off a MUST.
 
 **Axis 2 — coverage.** The meta route alone | both routes. Meta-only leaves a documented
-ingress a client can reach unprotected, which the criterion does not permit. Both routes needs
-ADR-008 rung 2 revisited — and the established pattern there is to re-enforce a guard locally
-on the direct route, as the OAuth-isolation guard already does, not to remove the bypass.
+ingress a client can reach unprotected, which the criterion does not permit. Both routes is
+therefore the requirement's answer, and the open part is *placement*: INV-3 says the binding
+must be in the key, and it currently reaches the key from the call site. Duplicating the suffix
+at a second site satisfies the criterion and reproduces a failure ADR-008 has already recorded.
 
-The recommendation revision 1 froze is withdrawn. Recommending a coverage choice while the
-ADR-008 question is open was the defect both reviewers named; the ADR is read first.
+Revision 1's recommendation is withdrawn — it was made while the ADR question was open, which
+both reviewers named. The ADR has now been read; what replaces the recommendation is the
+placement question above, which is an engineering choice, not an operator one.
 
 ## Open questions — each scheduled, none assumed
 
 | question | how it is settled | state |
 |---|---|---|
 | May an operator disable protection a criterion states as MUST? | ASK the operator. Only they can weigh a MUST against an escape hatch. | OPEN — blocks axis 1, blocks all code |
-| Does ADR-008 rung 2's rationale bear on idempotency, or only on isolation? | CHECK: read the ADR end to end, then quote the clause. | OPEN — blocks axis 2, blocks all code |
+| Does ADR-008 bear on the direct route's bypass? | CHECKED: read end to end. It does not. Rung 2 is client-native OAuth passthrough — the client holds the token and attaches it per request — and says nothing about HTTP routing. What ADR-008 *does* bind is INV-3, above. CHANGED: the bypass loses its justification, and axis 2 gains a placement constraint. | RESOLVED |
 | Should P2's automatic key be deleted or gated on a declared retry? | ASK the operator: deleting it narrows protection to clients that send a key; gating it keeps protection and needs a signal that does not exist yet. | OPEN — blocks P2, blocks all code |
 | What capacity bound, and what happens at the bound? | CHECK what `ResponseCache::with_max_entries` uses, then decide fail-closed vs evict-oldest. Fail-closed is the safe default for a side-effect guard. | OPEN — blocks P3 |
 
-Nothing is deferred; nothing is implemented while any of the first three is open.
+Nothing is deferred; nothing is implemented while any of the open ones is open.
 
 ## Test plan — one row per criterion, each able to fail today
 
