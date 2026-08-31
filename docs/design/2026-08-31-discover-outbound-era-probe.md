@@ -211,7 +211,8 @@ taken after `start_lock` and never before it (constraint 3).
 ## Open questions
 
 Every question this design raised is answered here. **Nothing is deferred**; there is no four-field
-deferral block because there is no deferred unknown.
+deferral block because there is nothing deferred. The HEADER.9 ordering consequence named in
+constraint 1 is out-of-scope future work, not an open question this change depends on.
 
 - *Does a pre-`initialize` probe reach an SSE peer?* — read `src/transport/http/mod.rs:200,:327,:434-435,:815-821` and `src/config/mod.rs:1532,:1546` — no: `message_url` is unset until the handshake, and `streamable_http` defaults false — killed the revision-1 placement, which is the whole of revision 2.
 - *Does it reach an OAuth peer?* — read `src/transport/http/mod.rs:378-421,:640-645` — no: the token is acquired inside `initialize()` — second, independent kill of the same placement.
@@ -240,6 +241,19 @@ Component tests, driving `start_entry` against a fixture transport — not unit 
 Each row can fail today: none of them has a production caller to exercise, which is the point —
 they are written first and fail because the wiring does not exist.
 
+## What this increment does and does not claim
+
+It claims DISCOVER.4 for **both** transports: an era learned by probing, from positive evidence
+only, with no path deriving `Era` from the `initialize` result. It claims DISCOVER.5's caching half
+outright — per backend, in the type, with the herd collapse the detector was written for. Revision 1
+also claimed both only for HTTP; that restriction is gone, not weakened.
+
+The re-probe half is **specified and tested here, and unexercised in production until a peer emits
+one of the reserved codes**. The invalidation path and its negative case are in the test plan, so the
+mechanism is proven by construction rather than by traffic. Revision 1 stated this as a dependency on
+HEADER.9; the accurate statement is narrower — it depends on a peer, and HEADER.9 is merely when we
+expect to meet one. The criteria file should record it that way.
+
 ## Revision 2 — findings and dispositions
 
 | # | finding | disposition |
@@ -252,5 +266,7 @@ they are written first and fail because the wiring does not exist.
 | F6 | transport-kind snapshot has no reader | **eliminated** — field removed rather than documented |
 | F7 | probe timeout asserted without arithmetic | **repaired** — 10s stated against `warmstart.rs:751-759`'s 120s attempt and 2s/30s gaps |
 
-Two of the seven were patches; both say above why a patch is right. The other five removed the
-thing the finding was about, so the finding can no longer be stated.
+Four eliminated, two repaired, one closed on inspection. The four eliminations removed the thing the
+finding was about, so those findings can no longer be stated. The two repairs each say above why a
+patch is right rather than an elimination. F4 removed nothing: half of it was false at source, and
+what survived was kept with a corrected rationale.
