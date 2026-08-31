@@ -7,15 +7,22 @@ Anchor commit: **`112a392c`**. Every file:line below was read at that commit, vi
 `git show 112a392c:src/capability/loader.rs` and equivalents, including files left dirty in the
 working tree by a concurrent session. No citation mixes revisions.
 
-**This change addresses SCHEMA.1 partially, and the closure comment must say so.** The criterion
+Revision anchor: **`149e553a`** for the Seam-3 citations added when backend schemas came into
+scope. `src/backend/metadata.rs`, `src/backend/registry.rs` and `src/backend/ops.rs` are byte-identical
+between the two commits (`git diff 112a392c HEAD -- <path>` empty, working tree clean); the two
+`src/gateway/meta_mcp/` files moved, so every line number cited from them was re-read at
+`149e553a`. No citation mixes revisions.
+
+**This change now addresses SCHEMA.1 in full, and it did not start that way.** The criterion
 covers *every* tool schema the gateway publishes, and a proxied backend tool is published on the
-gateway surface. This design covers the two populations the gateway itself authors — the 19
-compile-time meta-tool definitions and the capability YAML the loader reads — and explicitly
-leaves backend-supplied schemas out (§P0). That remainder is a real, named part of SCHEMA.1, not
-a nicety: owner = team lead, to be scoped as its own change, because it is a policy question
-(reject the backend? publish and flag? degrade the tool?) rather than a validity one. A stated
-limit against a MUST is an unmet requirement; recording it here is what stops the eventual
-closure comment claiming MET.
+gateway surface. The first draft covered only the two populations the gateway itself authors — the
+19 compile-time meta-tool definitions and the capability YAML the loader reads — and left
+backend-supplied schemas out, because what to do with an invalid backend schema is a policy
+question (reject the tool? publish and flag? degrade it?) rather than a validity one. The owner
+has since answered that question, so the exclusion is withdrawn (§P0 receipt, U6, Dispositions)
+and the third population is in scope. **Three populations, three seams.** A stated limit against a
+MUST is an unmet requirement; the history is kept here so the closure comment cannot quietly
+inherit the old partial framing.
 
 **The check has now been run, and the remainder survives it.** SCHEMA.1 is split across two rows
 in `docs/requirements/RELEASE-4.0.0-criteria-status.md:101-102`, quoted verbatim so the next
@@ -38,7 +45,11 @@ UNTESTED clause inherits the same population. The remainder is real and stays na
 
 **FOR:** meta-validating the schema *documents* the gateway publishes on its own MCP
 surface — `Tool.inputSchema` and `Tool.outputSchema` — against the JSON Schema 2020-12
-meta-schema, at the point where an invalid document can still be rejected cheaply.
+meta-schema, at the point where an invalid document can still be rejected cheaply. Three
+populations reach that surface and each gets its own seam: the 19 compile-time meta-tool defs
+(seam 1), the capability YAML the loader reads (seam 2), and the tools an upstream MCP backend
+returns from `tools/list` (seam 3). A backend tool that fails is dropped from the catalogue and
+is not routable; the rest of the backend is unaffected.
 
 **OUT:**
 
@@ -138,7 +149,7 @@ a draft argument. None of them pins a dialect. The pin is
 An implementer reaching for `meta::is_valid` would have shipped auto-detection and G4 is the
 case that would have caught it.
 
-## Enforcement — two seams, matching the two populations
+## Enforcement — three seams, matching the three populations
 
 **Seam 1: the 19 compile-time defs — a unit test.**
 `src/gateway/meta_mcp_tool_defs.rs` holds `json!` literals. A load-time check over constants
@@ -157,7 +168,79 @@ previously running deployment, a capability whose schema is invalid stops being 
 skipped, logged, and the gateway starts. This is the behaviour the repo already has for every
 other structural error, and diverging from it here would be the surprising choice.
 
-No new subsystem, no new module, no new startup path.
+**Seam 3: the tools a backend returns — a second predicate in the filter that already exists.**
+`src/backend/annotations.rs:126` already drops individual tools from a backend list on a
+schema-shaped defect: `exclude_invalid_header_tools` runs `tools.retain(...)`, logs
+`warn!(server, tool, reason, "Excluding tool from tools/list: ...")` for each drop, and leaves the
+rest of the backend alone. Seam 3 is a second `retain` predicate beside it, meta-validating
+`inputSchema` — and `outputSchema` where present — inside the same
+`prepare_tool_metadata(server, tools)` entry point (`src/backend/annotations.rs:152`).
+
+That entry point is load-bearing and its own doc comment says why: it exists because exclusion
+once reached the direct-passthrough response only, so an invalid tool stayed visible through
+`Backend::get_tools_shared`. Both callers now go through it, and adding seam 3 anywhere else would
+reintroduce the exact divergence that comment records. `get_tools_shared`
+(`src/backend/metadata.rs:136-143`) calls it on the fetch path, inside `get_or_fetch_shared`, so
+the check runs **once per cache fill, not once per request**, and every aggregate reader —
+`tools/list`, search, surfaced tools — sees the filtered list.
+
+### Dropping the tool from the list is not enough to make it unroutable
+
+`gateway_invoke` deliberately dispatches names it cannot find in the cache
+(`src/gateway/meta_mcp/invoke.rs:1934-1938`, verbatim):
+
+> "Eagerly check the cached tool list for a 'did you mean?' hint. Only fires when the cache is
+> populated and the tool is not found there. **We still dispatch to the backend in case the cache
+> is stale.**"
+
+A tool filtered out of the cache is therefore indistinguishable from a tool the cache has not heard
+of yet, and stale-cache tolerance would route straight to it. The owner's ruling — "do not list
+**and do not route**" — needs the second half built, and it needs the gateway to remember *why* a
+name is missing.
+
+**Mechanism: a per-backend rejected-set, written at the same moment as the filter.** The retain
+predicate records `{tool name -> meta-validation error}` for each drop into a slot beside
+`tools_cache` on `Backend`, replaced wholesale on every fetch. `gateway_invoke` consults it before
+dispatch: a name in the rejected set is refused by the gateway with an error naming the tool, the
+backend and the validation failure, and nothing goes upstream. A name that is simply unknown keeps
+today's stale-cache behaviour untouched — the refusal is narrow, and it is the only thing that makes
+the "not routable" half of the ruling true.
+
+Set semantics fall out of the cache it shadows: replaced on every fill, so a backend that corrects
+its schema is served again at the next TTL expiry with no operator action, and no separate
+invalidation path is invented.
+
+**One interaction to get right:** `invalidate_tools_cache` (`src/backend/metadata.rs:39-46`)
+discards an *empty* tool list so warm-start re-asks a backend that answered with nothing. A backend
+whose every tool is rejected now also caches an empty list, so warm-start would re-fetch it on every
+attempt and get the same answer each time. The guard is one condition: discard the empty list only
+when the rejected set is *also* empty. Empty-because-rejected is a fact the gateway has already
+established, not a fetch worth repeating.
+
+### outputSchema — a decision this design makes past the letter of the ruling
+
+The ruling names `inputSchema`. `Tool` carries `outputSchema: Option<Value>` on the same struct
+(`src/protocol/types.rs:10-40`) and the gateway publishes it on the same surface, so validating one
+and not the other would leave a published schema document unchecked while the closure comment
+claimed SCHEMA.1 met in full. Seam 3 therefore validates both, `outputSchema` only when present.
+This widens the owner's literal wording, which makes it a design decision rather than an
+implementation detail, and it is recorded as U7 for confirmation. If the owner narrows it back to
+input-only, the change is one clause in one predicate.
+
+### Log and diagnostics
+
+Per rejected tool, one `warn!` at the drop, carrying backend name, tool name and the meta-validation
+error — beside the existing header-exclusion warning, at the same severity, once per cache fill
+rather than once per request. For the operator-visible half, `BackendStatus`
+(`src/backend/registry.rs:63`, built at `src/backend/ops.rs:474-489`) gains a rejected count
+alongside `tools_cached`; it already flows to the UI (`src/gateway/ui/mod.rs:146,162,539,551,791`)
+and to `gateway_list_servers` (`src/gateway/meta_mcp/surfaced.rs:184`). Without a distinct field the
+operator sees only a smaller `tools_cached` and cannot tell rejection from a backend that genuinely
+has fewer tools — which is the difference between a gateway working as designed and a backend that
+has broken.
+
+No new subsystem, no new module, no new startup path — seam 3 reuses the filter, the warning shape
+and the status struct that are already there.
 
 ## Cost
 
@@ -165,6 +248,12 @@ Load-time meta-validation runs once per capability at load, against a validator 
 reused. The measurement, not an adjective: time `CapabilityLoader::load_from_directory` over the
 110+ capability directory, before and after, same machine, same directory, median of five runs.
 Budget is §10 as written — P50 within +5%. If it breaches, the fallback is stated in U4.
+
+Seam 3 costs one meta-validation per backend tool per **cache fill**, not per request, because it sits
+inside `get_or_fetch_shared`. The per-request cost it does add is the rejected-set lookup on the
+invoke path, which is a map probe against a set that is empty for every healthy backend — measured
+under U8 rather than asserted, since "it is only a map lookup" is exactly the shape of claim that
+turns out to be on a hot path.
 
 ## Dependency gates
 
@@ -188,6 +277,10 @@ the chosen validator has reported it invalid, on the keyword the case names.
 | **G2** — the same capability, reached through `tools/list` | the tool name is absent from the published surface | **Yes**, same mechanism, one level up — this is the case that ties the criterion to what a client actually sees. |
 | **G3** — all 19 `gateway_*` defs meta-validate against 2020-12 | every published `inputSchema`, and every `outputSchema` present, is valid under 2020-12 | **No — and this is stated, not hidden.** The defs are expected to be valid already, so this is a *regression guard*, not a disproof. Its falsifier is the §P2 probe below. |
 | **G4** — a schema declaring `"$schema": "http://json-schema.org/draft-07/schema#"` and using a construct legal in draft-07 but not in 2020-12 | the check reports invalid | **Yes.** Nothing today reads `$schema` at all. This is the case that proves the dialect is pinned rather than inferred, and it is the only case that distinguishes option A used correctly from option A used carelessly. |
+| **G5** — a backend whose `tools/list` returns valid tools plus one whose `inputSchema` fails 2020-12 | `get_tools_shared` returns only the valid tools, the invalid name is absent from the published `tools/list`, and the valid names still invoke normally | **Yes.** On HEAD the whole list is cached and published verbatim; nothing meta-validates a backend schema. The blast-radius half of the ruling — one tool, not one backend — is the assertion that would fail if seam 3 were written as a whole-list rejection. |
+| **G6** — invoking the tool G5 rejected | `gateway_invoke` refuses with an error naming the tool and the validation failure, **and the backend receives no request** — asserted on the mock backend's call log, not on the error text alone | **Yes**, and it cannot pass without the rejected-set. Filtering the cache alone leaves the name looking merely unknown, and `invoke.rs:1934-1938` dispatches unknown names on purpose. This case is the design proof that the extra gate is load-bearing rather than defensive. |
+| **G7** — the backend of G5 corrects its schema, TTL expires, list is re-fetched | the previously rejected tool is published and routable again, with no operator action | **N/A on HEAD** — there is nothing to recover from. It guards the rejected-set's replacement semantics: a set that accumulated instead of being replaced would keep a fixed backend broken forever, and no other case would notice. |
+
 
 **G4 must name its construct, and the obvious candidates do not work.** Most draft-07-isms stay
 *legal* under 2020-12: `definitions` and `dependencies` are simply keywords 2020-12 does not
@@ -222,6 +315,10 @@ Settled in this session, with the answer recorded:
 | Does the repo already meta-validate anywhere? | searched src/ and capabilities/ for `2020-12`, `draft-07`, `$schema` | No, and no schema declares a dialect | Turned dialect pinning into an explicit design decision |
 | Does the `meta` module pin 2020-12, or infer it? | read the `meta` module and `fn.validate_for` pages on docs.rs for `jsonschema` 0.52.1 | Every `meta` free function auto-detects the draft; `_for` means foreign representation, not draft. The pin is `meta::options().with_draft(…)` | Named the exact call in the design instead of leaving the wrong one to be discovered in review; retired U1 |
 | Can a malformed schema reach the validator, or does serde reject it first? | `git show 112a392c:src/capability/definition/mod.rs` | `input`/`output` are untyped `serde_json::Value` | Made G1 executable — the fixture reaches the check rather than dying at parse |
+| What does the gateway do with a **backend-supplied** schema that fails 2020-12 — reject, publish and flag, or degrade? | *askable, not checkable*: put to the repository owner as its own question, because it is a behaviour change for every deployment proxying a backend with a draft-07 schema | Drop that tool from the catalogue and keep the rest of the backend: validate at registration, do not list and do not route a tool that fails, log it and surface it in diagnostics | Withdrew the §P0 exclusion, retired U6, gave SCHEMA.1 a path to closing without a remainder, and added seam 3 with G5-G7 |
+| Where can a backend tool be dropped without the two callers disagreeing? | read `src/backend/annotations.rs:126-155` and `src/backend/metadata.rs:136-143` | `prepare_tool_metadata` already exists as the single entry point, with a `retain`-based per-tool exclusion and a `warn!` shape to match; its doc comment records the divergence that made it the only entry point | Turned seam 3 from a new module into a second predicate in an existing filter, and fixed its position: once per cache fill, not once per request |
+| Does filtering the cached list make a rejected tool unroutable? | read `src/gateway/meta_mcp/invoke.rs:1934-1938` | No — the invoke path dispatches names missing from the cache on purpose, to tolerate a stale cache | Added the per-backend rejected-set and the invoke-time refusal; without it the owner's "do not route" half is unimplementable, and G6 is the case that proves it |
+| Does an all-rejected backend interact with warm-start? | read `src/backend/metadata.rs:39-46` | Yes — `invalidate_tools_cache` discards an empty list so warm-start re-asks, and every-tool-rejected produces an empty list | Added the one-condition guard: discard the empty list only when the rejected set is empty too |
 
 Deferred, each with owner, resolving check, trigger and fallback:
 
@@ -231,13 +328,20 @@ Deferred, each with owner, resolving check, trigger and fallback:
 | **U3** | Does `boon` expose a meta-validation entry point in its own docs? | implementer | docs.rs page for `boon` 0.6.1 | only if U2 forces the fallback | express meta-validation as compiling the document against the 2020-12 meta-schema as an instance |
 | **U4** | Startup cost of meta-validating 110+ capabilities at load | implementer | median of five timed `load_from_directory` runs over the capability directory, before and after | before merge | validate on first publish rather than at load; the seam does not move, only when it runs |
 | **U5** | Which construct actually splits draft-07 from 2020-12, for G4 | implementer | run the selected validator over the `items`-as-array candidate under both dialects | before writing the G4 fixture | try further candidates; if none splits them, drop G4 and record that the dialect pin has no disproof — a finding, not a formality |
-| **U6** | What the gateway does with a **backend-supplied** schema that fails 2020-12 meta-validation — reject the tool, publish it and flag, or degrade it | team lead | *askable, not checkable*: a behaviour change for every deployment proxying a backend with a draft-07 schema, so it is the operator's call, put to them as its own change | before SCHEMA.1's closure comment is written — this is the clause that stops it reading MET | the remainder stays open and SCHEMA.1 closes as partial, naming `:102` over backend-supplied schemas as the unmet part |
+| **U7** | Does the backend-schema ruling cover `outputSchema` as well as `inputSchema`? Seam 3 validates both; the ruling named only input | team lead | *askable, not checkable*: whether the owner intends the drop policy to extend to a published `outputSchema` a backend declares | before SCHEMA.1 closure comment is written, because the closure claims "every tool schema" | narrow seam 3 to `inputSchema` — one clause in one predicate — and record in the closure comment that backend `outputSchema` documents are published unvalidated, which reopens a remainder against `:102` |
+| **U8** | Whether the added rejected-set slot and its invoke-time lookup cost anything measurable on the hot invoke path | implementer | time `gateway_invoke` against a mock backend, 1,000 calls, before and after, median of five | before merge, alongside U4 | keep the set but consult it only when the cached list is populated, which is the same condition the "did you mean?" hint already uses |
 
-U6 is the one deferral here that blocks something: not this design's implementation, but SCHEMA.1's
-closure. It is an **askable** unknown — no command settles it, because the question is which
-behaviour the operator wants, and a check that cannot come back "no" is not a check.
+**U6 is retired**, answered in this session and recorded in the settled table above. It was the one
+deferral that blocked something — not this design's implementation, but SCHEMA.1's closure — and it
+was an **askable** unknown, because no command settles which behaviour the operator wants and a
+check that cannot come back "no" is not a check.
 
-U4 and U5 block nothing else in the design; U2 blocks only the choice between A and B. None of
+U7 inherits exactly that character and exactly that blocking position: it is askable, it does not
+block seam 3 being built, and it does block the closure comment claiming "every tool schema" without
+qualification. It is deliberately not folded into U6's answer, because the owner answered the
+question they were asked and this is a second question.
+
+U4, U5 and U8 block nothing else in the design; U2 blocks only the choice between A and B. None of
 these is a residual-risk paragraph, and none is closed by naming a command instead of running it.
 
 ### Scope receipt — 2026-08-31, the backend-schema exclusion is withdrawn
@@ -250,15 +354,18 @@ criterion could not close while the exclusion held. It was carried as a deferred
 this reason.
 
 The owner has now answered the policy question, so the thing that made it un-scopable is gone. The
-surface moves by one item: this design gains a validity check on each backend tool's `inputSchema` at
-registration, and a rejected tool is neither listed nor routable. Nothing else in FOR or OUT moves,
-and the acceptance criteria gain one case — a backend registering a mix of valid and invalid tools
-exposes the valid ones and only those.
+surface moves by one item: this design gains a validity check on each backend tool's schema at the
+point the tool list is cached, and a rejected tool is neither listed nor routable. Nothing else in FOR
+or OUT moves. The acceptance criteria gain three cases, not the one the ruling's wording suggests:
+G5 for the listing half, G6 for the routing half — which needs state the gateway does not have today,
+see the Dispositions row — and G7 for recovery when a backend fixes its schema.
 
 ## Dispositions
 
 | finding | disposal |
 |---|---|
 | Backend-supplied schemas are never meta-validated | **resolved by the owner, 2026-08-31; now in scope.** Question: what does the gateway do when a backend publishes a tool whose `inputSchema` is not valid under 2020-12? Asked of the repository owner. Answer: drop that tool from the catalogue and keep the rest of the backend — validate each backend tool's schema at registration, do not list and do not route a tool that fails, log the rejection and surface it in diagnostics. What it changed: SCHEMA.1 no longer carries a remainder against its MUST, the §P0 exclusion below is withdrawn, and this design gains a per-tool registration check whose blast radius is one tool rather than one backend. Rejected: publishing with a flag (leaves the MUST unmet and hands the client exactly the shapes the criterion exists to keep away from it), repairing the subschema (the gateway would assert a contract the backend never offered), and refusing the whole backend (forty-nine working tools removed for one broken one). |
+| Should seam 3 reuse or extend `src/capability/schema_validator/mod.rs`? | **neither — separate, deliberately.** That module answers "does this *argument object* satisfy this schema" (`validate_arguments:117`, `validate_output:252`) over a documented bounded subset: required params, rejection of undeclared params, type with coercion, enum, minLength/maxLength, minimum/maximum. Seam 3 asks the opposite question — is the schema *document* legal under a dialect — and answers it over the whole dialect. Extending the bounded subset to cover 2020-12 is option C rebuilt under a different name, and option C is rejected by the criterion. The two live side by side: one validates instances at invoke time, the other validates documents at ingest. |
+| The owner's ruling is not implementable as literally stated | **resolved in-design, and named here so the gap is visible.** "Do not list and do not route" reads like one action and is two: filtering the cached list satisfies the first half only, because `invoke.rs:1934-1938` dispatches uncached names on purpose to tolerate a stale cache. Building the second half needs state the gateway does not have today — the per-backend rejected-set. Recorded rather than silently absorbed, because an implementer working from the ruling alone would have shipped the listing half and believed the routing half came free. |
 | `src/capability/schema_validator/mod.rs` validates a bounded subset and will silently accept constructs 2020-12 defines | **observation.** Independent of SCHEMA.1: it is instance validation. If it becomes a defect it is its own change. |
 | The 19 meta-tool schemas declare no `$schema` | **no change needed.** Pinning the dialect at the check makes the declaration unnecessary; adding it to 19 literals would be the larger diff and would give the check something to disagree with. |
