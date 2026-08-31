@@ -5,26 +5,30 @@ SPDX-License-Identifier: MIT
 
 # Design — wiring the outbound era probe (MIK-7217 DISCOVER.4, DISCOVER.5)
 
-Status: proposed · Date: 2026-08-31
+Status: proposed · Revision: 2 · Date: 2026-08-31
 Tracking: MIK-7217 · Criteria: `docs/requirements/RELEASE-4.0.0-criteria-status.md:178-193`
 
 ## §P0 Scope
 
 **FOR:** making the gateway learn a *backend's* protocol era by probing it, and caching that
-answer per backend — so DISCOVER.4 and DISCOVER.5 stop being UNWIRED.
+answer per backend — so DISCOVER.4 and DISCOVER.5 stop being UNWIRED. Both transports.
 
 **OUT:**
 
 - the modern outbound request path (`_meta` envelopes, modern framing). That is
-  MIK-7214.HEADER.9, currently ABSENT and blocking; this design reserves a seam for it and
-  builds nothing on it.
+  MIK-7214.HEADER.9, currently ABSENT and blocking; this design builds nothing on it and,
+  as of revision 2, reserves nothing for it either.
 - adding `2026-07-28` to `SUPPORTED_VERSIONS`. `src/protocol/mod.rs:38-42` states plainly the
   revision is absent "until the modern request path exists… It is added in the increment that
   makes it true." This is not that increment.
-- **stdio backends.** A deferred unknown below, with the four fields. A decision, not an omission.
-- A2A backends — `src/backend/lifecycle.rs:372-383` refuses them on this path outright ("must be started via A2aProvider, not the legacy Backend::start() path").
+- A2A backends — `src/backend/lifecycle.rs:372-383` refuses them on this path outright ("must be
+  started via A2aProvider, not the legacy Backend::start() path").
 - the `src/lib.rs:23` `2024-10-07` doc residual noted under DISCOVER.7. One-line doc fix,
   unrelated mechanism, does not travel with this change.
+
+Revision 2 **narrowed nothing and widened one thing**: stdio moved from OUT to FOR. Recorded here
+because §P0 freezes scope at first dual review and a move needs a stated reason — the reason is in
+constraint 2, and it is a consequence of the revision-2 repair rather than a new appetite.
 
 ## Problem
 
@@ -48,211 +52,205 @@ files this under the shape already logged for EXT.1, OTEL.1 and TASK.1: built, t
 
 What the MET rows constrain, and this design must not break:
 
-- **DISCOVER.1's caveat** — the stdio arm passes `modern_enabled: false` unconditionally
-  (`src/gateway/server/mod.rs:1687-1693`), self-documented as a known limitation. This design does
-  not touch the inbound document, and must not make that caveat harder to lift.
+- **DISCOVER.1's caveat** — the *inbound* stdio arm passes `modern_enabled: false` unconditionally
+  (`src/gateway/server/mod.rs:1687-1693`). This design does not touch the inbound document, and
+  must not make that caveat harder to lift. It is not a precedent this design may cite for its own
+  coverage: a limitation inside a shipped mechanism is not a licence to exclude a transport class.
 - **DISCOVER.3's goldens** — `tests/mik_7217_acs.rs:213` compares the `initialize` result
   byte-for-byte against captured goldens. Nothing here changes the inbound result; if a golden
   moves, this design is wrong.
-- **DISCOVER.6's pinned budgets** — `warmstart.rs:751` pins `attempt_timeout` 120s,
+- **DISCOVER.6's pinned budgets** — `warmstart.rs:751-759` pins `attempt_timeout` 120s,
   `initial_gap` 2s, `max_gap` 30s. A probe inside the start path spends from that budget, so its
   timeout is chosen against those numbers, not freely.
 
 ## Measured constraints
 
-### 1. Where the probe may run is fixed by a lock, not by taste
+### 1. A probe on a transport that has not connected does not reach the peer
 
-The blocking constraint is `start_lock`, and it is worth stating precisely because the obvious
-reading blames the wrong thing.
+This is the constraint revision 1 got wrong, and it decides the whole design.
 
-A client request enters `Backend::call_tool` (`src/backend/ops.rs:198`), acquires a semaphore
-permit, and then at `:210` calls `ensure_entry_started` (`lifecycle.rs:187`), which takes the pool entry's
-`start_lock` (`src/backend/lifecycle.rs:209`, a `tokio::sync::Mutex` per `pool.rs:12,:62`) and runs `start_entry` beneath it. So the existing
-legacy handshake **already** runs while a permit is held. The probe does not introduce that
-position; it inherits it.
+Revision 1 placed the probe **between transport construction and `transport.initialize()`**, on the
+reasoning that the era should be learned "without trusting the handshake". Read at source, that
+placement cannot reach the peer's discover surface at all:
 
-The hard failure is narrower and worse: **a probe issued through the ordinary
-`Backend::request*` surface re-enters `ensure_entry_started` for the same entry, and the entry's
-`start_lock` is a non-reentrant `tokio::sync::Mutex`. That self-deadlocks.** Permit exhaustion
-(`Semaphore::new(100)`, `lifecycle.rs:140`, hardcoded, no config path) is a secondary
-degradation on top of it, not the primary defect.
+- **SSE backends — the configuration default.** `message_url` is `None` at construction
+  (`src/transport/http/mod.rs:200,:327`) and is written only inside `initialize()`, from the
+  endpoint the SSE handshake returns (`:434-435`). Before that, `get_message_url()` falls back to
+  `self.base_url` (`:815-821`) — the SSE **GET** endpoint. A pre-handshake probe therefore POSTs a
+  JSON-RPC request at a URL that does not accept one. `streamable_http` defaults to `false`
+  (`src/config/mod.rs:1532,:1546`), so this is the ordinary case, not a corner.
+- **OAuth backends.** The token is acquired *inside* `initialize()`: `oauth.initialize()` then
+  `oauth.authorize()` if no valid token (`src/transport/http/mod.rs:378-421`). A probe issued
+  earlier reaches `get_oauth_token()` (`src/transport/http/mod.rs:640-645`) on a client that has not
+  initialized, so it goes out unauthenticated and is rejected.
 
-The repository has already solved this exact shape once and wrote down why. `ops.rs:104` records
-that a cold tool cache "mirrors nothing rather than issuing a `tools/list` while this request
-holds its semaphore permit, which a concurrency-limited backend could not satisfy." This design
-follows that precedent rather than inventing a rule: **the probe is issued directly against the
-already-constructed transport, inside `start_entry`, never through `Backend::request*`.**
+Both failures land in the same place: transport error or non-2xx → `ProbeOutcome::NoAnswer` →
+`classify` answers **Legacy** (`src/protocol/era.rs:60-100`). The gateway would record a confident
+era for a peer it never asked. That is not a probe; it is a manufactured answer with a probe's
+shape, and it is *systematically* wrong for the default transport mode rather than occasionally
+wrong.
 
-Stated as an invariant the implementation must hold: **lock order is `start_lock` → era lock,
-never reversed, and the probe closure touches nothing that re-acquires `start_lock`.** That
-second clause is load-bearing because `EraCache::resolve_with` holds its own lock *across* the
-probe await by design (`era.rs:143-170`) — deliberately, so concurrent resolution collapses onto
-one probe rather than stampeding a peer that is by hypothesis already struggling
-(`era.rs:127-131`).
+Switching the probe from `Transport::request` to `HttpTransport::send_request` — the improvement
+both reviewers offered — fixes the real re-entry hazard at `src/transport/http/mod.rs:1019-1026` (a
+session-expiry branch that calls `self.initialize()` and retries) and fixes **neither** of the two
+failures above. The call surface was not the defect. The placement was.
 
-### 2. Ordering: HTTP separates spawn from handshake, stdio does not
+**Elimination: the probe is issued immediately after the transport is connected**, still inside
+`start_entry`, still directly on the transport. At that point the message endpoint is known, the
+OAuth token exists, and the probe reaches the peer. The defect "the probe is specified on a
+transport that has not connected" then cannot be stated, rather than being narrowed.
 
-For HTTP, `lifecycle.rs:353-368` constructs the transport and `:369` then calls `transport.initialize()` as
-a separate statement. A probe can be issued in between — which is where it belongs, because the
-whole point is to learn the era *without* trusting the handshake.
+DISCOVER.4 is not weakened by this. It forbids trusting a **version string**; it says nothing about
+ordering. The evidence is unchanged — the peer's own `server/discover` document, or one of the
+reserved 2026 error codes — and the handshake's `protocolVersion` is never read for era, before or
+after. Stated as an invariant the implementation must hold: **no code path derives `Era` from the
+`initialize` result.**
 
-For stdio, `stdio.rs:256`: `start()` calls `initialize()` internally, inside the
-spawn-then-teardown-on-failure block at `:246-261`. There is no seam. Probing before the
-handshake on stdio requires splitting `start()` into spawn and handshake halves, which means
-reworking teardown logic that exists for a stated reason.
+Named consequence, so HEADER.9 inherits it rather than discovering it: today the legacy handshake
+must run regardless, because `SUPPORTED_VERSIONS` has no modern revision to negotiate. When HEADER.9
+adds one, the era may need to *select* the handshake, which puts the probe back before it — on a
+connected transport, which is the part that has to be built either way. HEADER.9 re-opens this
+ordering question; it is named here as one rather than left to be rediscovered.
 
-**Decision: the first increment covers HTTP backends only.** Stdio is deferred with the four
-fields below. Naming this as a decision rather than a scope note, per §P3.
+### 2. With the probe after connection, both transports expose the same seam
 
-### 3. The era must eventually be readable where headers are built, and today it is not
+Revision 1 excluded stdio because `stdio::start()` calls `initialize()` internally at
+`src/transport/stdio.rs:256`, inside the spawn-then-teardown block at `src/transport/stdio.rs:246-261`
+— there is no seam *before* the handshake without splitting that function and reworking its
+teardown.
 
-`build_mcp_headers` (`src/transport/http/mod.rs:544`) is documented as the single source of truth
-for all outgoing request headers in that transport. It is `async fn` on `&self` of the transport,
-and reads `self.protocol_version` — the field the legacy handshake writes. **A transport has no
-reference to its `Backend`, so a `Backend`-owned era is not reachable there at all.** HEADER.9
-will therefore have to retrofit a path regardless of what this design does.
+After the constraint-1 repair, no such seam is needed. `start_entry` reaches an identical state on
+both arms: `transport.start().await?` for stdio (`src/backend/lifecycle.rs:344`) and
+`transport.initialize().await?` for HTTP (`src/backend/lifecycle.rs:369`) each return a
+**connected** transport, in the same match, before the transport is published to the pool entry. The
+probe goes there, once, for both.
 
-What this design does about it: resolve the era **once, at start**, and snapshot it next to
-`protocol_version` on the transport, rather than leaving HEADER.9 to await a `Backend`-owned
-mutex per outbound request on a path that is reachable while a permit is held. That is a seam
-reserved deliberately, and it is stated here so cluster D does not have to argue for it.
+**Decision: this increment covers stdio and HTTP.** The open item revision 1 deferred is withdrawn —
+not answered, *dissolved*: it asked whether to split `stdio::start()`, and the repair means nothing
+needs splitting. `src/transport/stdio.rs:246-261` is not touched. This is the operator's FULL-SCOPE
+directive met by construction rather than by appetite. No transport class is excluded, so
+DISCOVER.4/.5 move off UNWIRED without a coverage caveat.
+
+### 3. The probe must not re-enter the start path
+
+The narrow true statement from revision 1, kept, with the false half removed.
+
+Inside `start_entry`, the transport has not yet been published to the pool entry. A probe issued
+through the ordinary `Backend::request*` surface would call `ensure_entry_started`
+(`src/backend/lifecycle.rs:187`), find no connected transport at the early-out
+(`src/backend/lifecycle.rs:202-207`), and block on the entry's `start_lock`
+(`src/backend/lifecycle.rs:209`) — a non-reentrant `tokio::sync::Mutex` (`src/backend/pool.rs:12,:62`)
+that the caller already holds. That self-deadlocks.
+
+What revision 1 also claimed, and is **false**: that this makes lazy probing on the tool-call path
+deadlock. It does not. `ensure_entry_started` returns at `src/backend/lifecycle.rs:202-207`
+**without taking the lock** once the transport is connected, which is exactly the state a lazy probe
+would run in. That rationale is withdrawn; the honest reasons to reject lazy probing are in the
+options table, and they are about coverage and permits, not locks.
+
+So: **the probe is issued directly against the connected transport, inside `start_entry`, never
+through `Backend::request*`.** `src/backend/ops.rs:104` records the same shape being solved the same
+way for the cold tool cache. Lock order is `start_lock` → era lock, never reversed, and the probe
+closure touches nothing that re-acquires `start_lock` — load-bearing because `EraCache::resolve_with`
+holds its own lock *across* the probe await by design (`src/protocol/era.rs:143-170`), so concurrent
+resolution collapses onto one probe rather than stampeding a peer that is by hypothesis already
+struggling (`src/protocol/era.rs:127-131`).
 
 ## The design
 
-### Where the era lives
+**Where the era lives.** On `Backend`, alongside the two caches already there
+(`src/backend/mod.rs:200-207`). One `EraCache` per backend, constructed with the backend name so
+its own log lines identify the peer.
 
-`EraCache` becomes a **field on `Backend`**, alongside `tools_cache` and the other per-backend
-caches. The key *is* the instance: `BackendRegistry` already keys backends by name, so the
-existing single-`Option<Era>` shape at `era.rs:114-170` becomes correct unchanged, and "per
-backend" in DISCOVER.5 acquires the representation the criteria row says it lacks. Lifetime is
-the `Backend`'s — dropped on reload or removal. No TTL, because the spec caches for the peer's
-process lifetime, and `Backend` is reconstructed rather than revived on reload
-(`src/backend/mod.rs:200-207`).
+**When it is learned.** Once, in `start_entry`, immediately after the transport is connected and
+before it is published to the pool entry — the same point on both arms
+(`src/backend/lifecycle.rs:344` stdio, `:369` HTTP). The probe is issued directly against that
+transport, never through `Backend::request*` (constraint 3).
 
-Two alternatives, both rejected:
+**What counts as evidence.** Only what `src/protocol/era.rs:60-100` already accepts: a
+`server/discover` result, or one of the reserved 2026 error codes. Positive evidence only — a
+transport error, a timeout or a non-2xx is `ProbeOutcome::NoAnswer`, and `NoAnswer` classifies
+**Legacy**, which is the era the gateway already behaves as. A failed probe therefore costs nothing
+but the probe. The `initialize` result's `protocolVersion` is never consulted, before or after
+(DISCOVER.4's actual requirement).
 
-- **A global name-keyed `HashMap<String, Era>`.** Rejected: it re-asks a keying and eviction
-  question the registry already answers, and it puts the era further from the transport, making
-  HEADER.9 harder rather than easier.
-- **One `EraCache` per `PoolKey` slot.** Rejected: every slot for one backend talks to one peer,
-  so per-slot caching means N probes at a peer that is by hypothesis already struggling — exactly
-  the thundering herd `era.rs:127-131` was written to prevent.
+**What it costs.** The probe runs inside the warm-start attempt, which DISCOVER.6 pins at
+`attempt_timeout` 120s (`warmstart.rs:751-759`). The probe carries its own 10s timeout so a peer
+that accepts a connection and then stalls cannot eat the attempt budget; on expiry it is `NoAnswer`
+and start proceeds. 10s is chosen against the 120s attempt and the 2s/30s retry gaps, not freely: it
+is under a tenth of the attempt, and above the `initial_gap`, so a probe that is merely slow does
+not turn a healthy backend into a retry.
 
-### How the era is learned
+**Re-probing (DISCOVER.5's second half).** The cached era is invalidated when a request fails with
+one of the reserved codes that contradict it — the same `-32022 / -32020 / -32021` set the classifier
+already treats as era evidence. Nothing else invalidates: not a transport error, not a timeout, not
+a restart of the process. This is the "re-probed when a cached assumption fails" clause read
+literally — an assumption *fails* when the peer says the assumption is wrong, not when the network
+does.
 
-Inside `start_entry`, on the HTTP arm only, between transport construction and
-`transport.initialize()` (the seam is between `lifecycle.rs:368` and `:369`): resolve the backend's era through
-`EraCache::resolve_with`, whose probe closure sends a `server/discover` request **directly on the
-constructed transport**, and maps the reply into `ProbeOutcome` — a result document into
-`Result`, a JSON-RPC error into `Error(code)`, and a timeout or transport failure into `NoAnswer`.
-`classify` then decides. The legacy `initialize` runs afterwards regardless, because
-`SUPPORTED_VERSIONS` still has no modern revision to negotiate; the era is recorded, not yet
-acted on.
+**No transport snapshot.** Revision 1 proposed recording the transport kind alongside the era so a
+later reader could tell which arm produced it. It is removed, not narrowed: with both arms probing
+at the same seam there is one production path, nothing reads the field, and a stored value nobody
+reads is a second thing to keep true. If HEADER.9 needs it, HEADER.9 adds it with a reader.
 
-The probe's timeout is chosen against DISCOVER.6's pinned budgets, not freely: it runs inside a
-warm-start attempt bounded by `attempt_timeout` 120s (`warmstart.rs:751`), so a probe timeout must
-be a small fraction of that — the increment picks a value and pins it in a test beside the
-existing budget assertions, so a later edit that lets the probe eat the attempt fails a build.
-
-### Why the probe is sound and not merely correlated
-
-`classify` treats **only positive evidence** as Modern (`era.rs:60-100`):
-
-- a document whose `capabilities` is an object **and** whose `supportedVersions` array contains a
-  member of `MODERN_VERSIONS` (`era.rs:179-197`, `meta.rs:219`) — the peer's own statement of
-  what it will accept, contents rather than presence, which is the distinction adversarial review
-  added on 2026-08-29 for the dual-era peer mid-migration; or
-- one of `-32022` / `-32020` / `-32021` (`era.rs:34-39`). Sound because 2026-07-28 reserves
-  `-32020..=-32099` for the specification, so only a 2026 implementer knows those numbers.
-
-Everything else — `-32601`, an arbitrary application error, silence — is Legacy. The justification
-for that asymmetry is a **cost asymmetry**: a false Modern sends a request the peer cannot parse;
-a false Legacy costs one handshake the gateway was going to perform anyway.
-
-The one direction it is *not* sound: a modern peer that is merely unreachable reads Legacy. The
-mitigation already exists in the detector — `NoAnswer` is not cached (`era.rs:164-167`), so a
-transient outage does not pin a peer to the legacy path for the process lifetime.
-
-### Re-probing, and the honest limit on it
-
-DISCOVER.5's second half — "re-probed when a cached assumption fails" — has **no trigger that can
-fire today**, and this design says so rather than papering over it. A cached era can only be
-*wrong in a way the gateway notices* once the gateway sends something era-dependent, and it sends
-nothing era-dependent: `2026-07-28` is absent from `SUPPORTED_VERSIONS` by design
-(`src/protocol/mod.rs:38-42`), and no outbound `_meta` envelope exists (HEADER.9, ABSENT).
-
-So the invalidation path is designed and wired now, and becomes *fireable* when HEADER.9 lands.
-Its guard, mirroring `classify`'s asymmetry: **invalidate only on a recognised era-mismatch
-error**, never on a generic failure — otherwise a persistently failing peer re-probes on every
-request, which is the herd again by another route.
-
-### One owner of the era, and the rule that keeps the snapshot honest
-
-`Backend`'s `EraCache` is the owner. The transport's snapshot (constraint 3) is a copy, and two
-copies of one fact is the shape the repair protocol tells us to eliminate rather than patch. The
-elimination is an ordering rule, not a checker: **an era invalidation and a transport rebuild are
-the same event.** Invalidating the era means the next start re-probes, and a start on the HTTP arm
-constructs a new transport, which takes a fresh snapshot. There is no path that changes the era
-without replacing the transport that snapshotted it, so the two cannot drift — and the defect
-"transport holds a stale era" cannot be stated, rather than being detectable.
-
-This is a design decision made here, not by the criterion, and is named as one per §P3.
-
-### Interaction with the two existing caches
-
-- **Response cache** (`src/backend/cache.rs:223`, key `{server}:{tool}:{args_hash}`): the era stays
-  **out of the key**, as a stated decision. Era affects transport framing, not tool semantics, so
-  the same call with the same arguments has the same answer under either era. The one case that
-  would break it — a `_meta` value the backend echoes into a result — cannot arise here: the probe
-  response goes direct to the transport and never enters the tool-call path, and no outbound
-  `_meta` exists to echo (HEADER.9, OUT of scope). If HEADER.9 introduces an echoed `_meta`, this
-  decision is the thing it must revisit.
-- **`CachedMetadata`** (tools, resources, prompts): an era flip can change a peer's tool list, and
-  `invalidate_if` already exists at `cached_metadata.rs:100`. The era is resolved at start, before
-  any metadata for that transport is fetched, so within a single `Backend` lifetime there is no
-  window where metadata cached under one era is read under another. The invalidation hook is
-  therefore not wired in this increment; it becomes necessary at the same moment the re-probe
-  trigger does, and is named here so HEADER.9 inherits it as a known obligation rather than
-  discovering it.
+**Interaction with the two existing caches.** The tool cache (`src/backend/cache.rs:223`) and the
+metadata cache (`src/backend/cached_metadata.rs:96,:100,:245`) are unaffected: the era cache is
+consulted by nothing they call, and it is populated before either is warmed. The era's own lock is
+taken after `start_lock` and never before it (constraint 3).
 
 ## Options considered
 
-| option | why rejected |
+| option | why not |
 |---|---|
-| probe lazily on first tool call | that is the path holding a semaphore permit and, through `ensure_entry_started`, the `start_lock`. Re-entry self-deadlocks; `ops.rs:104` already records the repo's answer to this shape. |
-| probe from the warm-start task instead of `start_entry` | warm start is not the only way a backend starts — a cold client request starts one too (`ops.rs:210`, and again at `:343,:353` on the notify path), so the era would be resolved on one path and absent on the other. |
-| trust the `initialize` result's `protocolVersion` | this is exactly what DISCOVER.4 forbids: "by probing, not by trusting a version string". A legacy server does not answer a probe with "I am legacy" (`era.rs:5-19`); nor does its handshake prove modernity. |
-| split `stdio::start()` now, to cover both transports in one increment | touches teardown logic at `stdio.rs:246-261` that exists for a stated reason, in the same change that first wires a probe. Deferred below with its four fields. |
-| a background era-refresh task | invents a schedule nothing asks for and re-probes peers with no failure to justify it. YAGNI; the spec caches for the peer's process lifetime. |
+| probe before `initialize` (revision 1) | cannot reach the peer on SSE or OAuth backends; manufactures `Legacy` from a request that never arrived (constraint 1) |
+| lazy — probe on first tool call | the honest objection is coverage, not deadlock: a backend that is started and never called never gets an era, and the probe would then spend a request permit on the latency path a caller is waiting on. Start is where the gateway already pays connection cost |
+| trust `initialize`'s `protocolVersion` | DISCOVER.4 forbids exactly this |
+| split `stdio::start()` to expose a pre-handshake seam | needed only under the revision-1 placement; the repair removes the need, and the teardown block at `src/transport/stdio.rs:246-261` stays untouched |
+| HTTP-only this increment, stdio next | was revision 1's position; it survived only as a consequence of the wrong placement. Against the operator's FULL-SCOPE directive, and unnecessary once both arms share the seam |
 
 ## Open questions
 
-Resolved — question, what was run, what came back, what it changed:
+Every question this design raised is answered here. **Nothing is deferred**; there is no four-field
+deferral block because there is no deferred unknown.
 
-1. **Does the 100-permit semaphore have a configuration path?** — `rg -n 'semaphore|concurrency|max_concurrent' src/config/` (whole directory) — no matches; the limit at `lifecycle.rs:140` is hardcoded — **changed:** removed "raise the limit" from the options, and ranked permit exhaustion as a secondary degradation behind the `start_lock` re-entry, which is the real failure.
-2. **Can anything at header-build time reach a `Backend`-owned era?** — `rg -n 'build_mcp_headers|self.protocol_version' src/transport/http/mod.rs` — `build_mcp_headers` is `&self` on the transport and reads only `self.protocol_version`; a transport holds no `Backend` reference — **changed:** added the transport snapshot as a reserved seam (constraint 3) with a stated single-owner rule, instead of leaving HEADER.9 to await a `Backend`-owned mutex per outbound request.
-3. **Does stdio's `start()` separate spawning from the handshake?** — read `src/transport/stdio.rs:246-261` — it does not; `start()` calls `initialize()` at `:256` inside the spawn-then-teardown block — **changed:** cut stdio from this increment and deferred it below.
-4. **Is there an existing outbound `server/discover` sender to attach the detector to?** — `rg 'discover'` over `src/backend/`, `src/provider/`, `src/transport/` — only the prose word "discoverable" (`metadata.rs:43`, `cached_metadata.rs:96,:245`, `lifecycle.rs:985`) — **changed:** the increment must build the request path, not merely call `classify`; "wire up the detector" underestimates the work.
-5. **Does `start_entry` already run under `start_lock` while a request permit is held?** — read `src/backend/ops.rs:198,:210` and `src/backend/lifecycle.rs:209` — it does; `start_lock` is a non-reentrant `tokio::sync::Mutex` (`pool.rs:12,:62`) — **changed:** the probe is issued directly on the constructed transport rather than through `Backend::request*`, and the lock-order invariant is stated explicitly.
+- *Does a pre-`initialize` probe reach an SSE peer?* — read `src/transport/http/mod.rs:200,:327,:434-435,:815-821` and `src/config/mod.rs:1532,:1546` — no: `message_url` is unset until the handshake, and `streamable_http` defaults false — killed the revision-1 placement, which is the whole of revision 2.
+- *Does it reach an OAuth peer?* — read `src/transport/http/mod.rs:378-421,:640-645` — no: the token is acquired inside `initialize()` — second, independent kill of the same placement.
+- *Does a lazy probe on the tool-call path deadlock?* — read `src/backend/lifecycle.rs:187,:202-207,:209` — no: `ensure_entry_started` early-outs before taking `start_lock` when the transport is connected — withdrew a false rationale; lazy is still rejected, for coverage and permits instead.
+- *Does the stdio arm expose the seam this design needs?* — read `src/backend/lifecycle.rs:344,:369` and `src/transport/stdio.rs:246-261` — yes, after connection both arms are in the same match — moved stdio from OUT to FOR, dissolving revision 1's only deferral.
+- *Is `Transport::request` re-entrant on session expiry?* — read `src/transport/http/mod.rs:1019-1026` — yes, it can call `self.initialize()` and retry — the probe goes directly to the connected transport, so the branch is never entered from the start path.
+- *What timeout can the probe afford?* — read `warmstart.rs:751-759` — 120s attempt, 2s/30s gaps — fixed the probe timeout at 10s, and stated the arithmetic instead of asserting the number.
+- *Does anything read the transport-kind snapshot?* — searched `src/` — nothing — removed the field.
 
-Deferred:
+## Test plan delta
 
-| field | value |
+Component tests, driving `start_entry` against a fixture transport — not unit tests of
+`src/protocol/era.rs`, which is already covered and is not what is broken.
+
+| case | proves |
 |---|---|
-| question | whether stdio backends should be probed in this release, given that it requires splitting `stdio::start()` into spawn and handshake halves |
-| owner | MIK-7217, follow-up increment; the requester decides whether it lands before 4.0.0 |
-| what would resolve it | the requester's call on whether HTTP-only coverage of DISCOVER.4/.5 is acceptable for the release, plus a design pass over the teardown block at `stdio.rs:246-261` |
-| when | before the criteria file's DISCOVER.4/.5 rows move off UNWIRED to a full MET |
-| what if it resolves badly | if stdio must be covered, `stdio::start()` splits and the teardown path is redesigned — a larger change than this one. It does not invalidate this increment: the HTTP wiring, the `Backend` field and the probe soundness argument all stand unchanged. |
+| fixture answers `server/discover` → backend's cached era is Modern | DISCOVER.4 on the positive path |
+| fixture returns `-32022` → Modern | the error-code arm of the same classifier, reached through the real caller |
+| fixture errors on the probe → Legacy, and `start_entry` still succeeds | a failed probe does not fail a start |
+| fixture never answers → Legacy after the probe timeout, start succeeds | the 10s bound is real, not aspirational |
+| stdio fixture and HTTP fixture, same assertions | both arms are covered — the claim that replaces revision 1's deferral |
+| two backends, different eras, one probe each | DISCOVER.5's per-backend caching, and that the probe is not repeated per request |
+| cached Modern, then a request returns `-32020` → era re-probed | DISCOVER.5's invalidation clause |
+| a transport error after caching → era **not** invalidated | the negative half of the same clause; without it the previous row passes on a cache that invalidates on everything |
 
-Nothing in this increment depends on that answer. The HTTP path is complete on its own, and the
-criteria rows move from UNWIRED to a partial MET with a named caveat — the same shape DISCOVER.1
-already uses for its own stdio limitation.
+Each row can fail today: none of them has a production caller to exercise, which is the point —
+they are written first and fail because the wiring does not exist.
 
-## What this increment does and does not claim
+## Revision 2 — findings and dispositions
 
-It claims DISCOVER.4 for HTTP backends: an era learned by probing, from positive evidence only.
-It claims DISCOVER.5's caching half outright — per backend, in the type, with the herd collapse
-the detector was written for. It **does not** claim DISCOVER.5's re-probe half as live, because no
-trigger can fire until HEADER.9 lands, and the criteria file should record that rather than a
-mechanism that has never run.
+| # | finding | disposition |
+|---|---|---|
+| F1 | probe placed before `initialize` cannot reach SSE or OAuth peers | **eliminated** — probe moved after connection. Killed at source: `src/transport/http/mod.rs:200,:327,:434-435,:815-821`; `src/config/mod.rs:1532,:1546`; `:378-421,:640-645`. The reviewers' own fix (use `send_request`) would have left both failures standing |
+| F2 | stdio excluded, leaving DISCOVER.4/.5 partially wired | **eliminated** — the exclusion was an artefact of F1's placement. With the probe after connection, `src/backend/lifecycle.rs:344,:369` give both arms the same seam. Deferral dissolved, not answered |
+| F3 | `Transport::request` can re-enter `initialize()` on session expiry | **repaired** — probe issued directly against the connected transport, so `src/transport/http/mod.rs:1019-1026` is unreachable from the start path. A patch is right here because the hazard is local to a sound mechanism and the placement repair already removes the caller |
+| F4 | "lazy probing deadlocks" | **closed on inspection, and the rationale repaired** — `src/backend/lifecycle.rs:202-207` early-outs before `start_lock`, so the deadlock claim is false. The *narrow* claim (a probe from inside `start_entry` would deadlock) survives and is kept in constraint 3. Lazy stays rejected on coverage and permits |
+| F5 | scope should be reduced to HTTP for this increment | **eliminated** — full scope, per the operator's directive, and now free: the repair makes stdio cost nothing extra |
+| F6 | transport-kind snapshot has no reader | **eliminated** — field removed rather than documented |
+| F7 | probe timeout asserted without arithmetic | **repaired** — 10s stated against `warmstart.rs:751-759`'s 120s attempt and 2s/30s gaps |
+
+Two of the seven were patches; both say above why a patch is right. The other five removed the
+thing the finding was about, so the finding can no longer be stated.
