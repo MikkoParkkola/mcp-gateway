@@ -86,27 +86,19 @@ fn ac_result_2_an_explicit_result_type_is_honoured() {
 // ===========================================================================
 
 #[test]
-fn ac_cache_3_a_filtered_list_is_never_public() {
-    // The ticket's stop-the-line, as a rule the code holds: no `public` from a
-    // scoped assembly, anywhere. `filtered` here means the response depended on
-    // who asked.
-    assert_eq!(CacheScope::for_list(true), CacheScope::Private);
-}
-
-#[test]
 fn ac_cache_2_this_gateways_list_is_private() {
     // This gateway's `tools/list` varies by the credential presented — legally,
     // since credentials are per-request input rather than connection state. A
-    // response that varies by caller is private by construction.
-    assert_eq!(CacheScope::current_for_tools_list(), CacheScope::Private);
+    // response that varies by caller is private by construction, and the table
+    // is where that judgement is recorded.
+    assert_eq!(CacheScope::for_endpoint("tools/list"), CacheScope::Private);
 }
 
 #[test]
-fn ac_cache_3_public_requires_proof_not_a_default() {
-    // The burden runs the other way round: `public` says any intermediary may
-    // serve this to a caller the server has never seen. It is available only
-    // where the response provably does not depend on who asked.
-    assert_eq!(CacheScope::for_list(false), CacheScope::Public);
+fn ac_cache_3_the_two_scopes_keep_their_wire_values() {
+    // `public` says any intermediary may serve this to a caller the server has
+    // never seen. Both spellings are wire values, so a typo in either is a
+    // protocol defect rather than a rename.
     assert_eq!(CacheScope::Private.as_str(), "private");
     assert_eq!(CacheScope::Public.as_str(), "public");
 }
