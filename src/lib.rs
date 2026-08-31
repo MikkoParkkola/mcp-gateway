@@ -50,6 +50,7 @@ pub mod failsafe;
 mod fs_lock;
 pub mod gateway;
 mod hashing;
+pub mod honest_task_tokens;
 pub mod idempotency;
 pub mod identity_grants;
 pub mod identity_propagation;
