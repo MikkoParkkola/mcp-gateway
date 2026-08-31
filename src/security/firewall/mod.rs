@@ -10,7 +10,7 @@
 //! # Pipeline
 //!
 //! ```text
-//! Pre-invocation:  InputScanner → AnomalyDetector → resolve_action → AuditLogger
+//! Pre-invocation:  InputScanner → AnomalyDetector → TenantGuard → resolve_action → AuditLogger
 //! Post-invocation: ResponseScanner → Redactor     → resolve_action → AuditLogger
 //! ```
 //!
@@ -100,6 +100,13 @@ pub struct FirewallConfig {
     /// ```
     #[serde(default)]
     pub anomaly_block_threshold: Option<f64>,
+    /// Cross-tenant data-minimisation guard (MIK-7116.TENANT.1).
+    ///
+    /// Keys on the authenticated principal — never a session — and refuses a
+    /// principal that reaches across more distinct tenants than the
+    /// configured limit inside the configured window.
+    #[serde(default)]
+    pub tenant_guard: tenant_guard::TenantGuardConfig,
 }
 
 fn default_anomaly_threshold() -> f64 {
@@ -120,6 +127,7 @@ impl Default for FirewallConfig {
             rules: Vec::new(),
             anomaly_threshold: default_anomaly_threshold(),
             anomaly_block_threshold: None, // opt-in: None = log-only (backward compat)
+            tenant_guard: tenant_guard::TenantGuardConfig::default(), // opt-in: enabled=false
         }
     }
 }
@@ -175,6 +183,9 @@ pub enum ScanType {
     SequenceAnomaly,
     /// Memory-write tool argument contains a poisoning pattern (OWASP ASI06).
     MemoryPoisoning,
+    /// A principal reached across more distinct tenants than the
+    /// data-minimisation guard allows (MIK-7116.TENANT.1).
+    CrossTenantReach,
 }
 
 // ─── Runtime types ───────────────────────────────────────────────────────────
@@ -197,6 +208,9 @@ pub struct Firewall {
     redactor: redactor::Redactor,
     /// Anomaly detector using transition data.
     anomaly: Option<anomaly::AnomalyDetector>,
+    /// Cross-tenant data-minimisation guard, keyed on the authenticated
+    /// principal (MIK-7116.TENANT.1).
+    tenant_guard: tenant_guard::TenantGuard,
     /// Structured audit logger.
     audit: Option<audit::AuditLogger>,
 }
@@ -293,6 +307,7 @@ impl Firewall {
         } else {
             None
         };
+        let tenant_guard = tenant_guard::TenantGuard::new(config.tenant_guard.clone());
         let audit = config.audit_log.as_ref().map(|path| {
             audit::AuditLogger::new(path).unwrap_or_else(|e| {
                 tracing::warn!("Cannot open audit log {}: {e}", path.display());
@@ -308,6 +323,7 @@ impl Firewall {
             memory_scanner,
             redactor,
             anomaly,
+            tenant_guard,
             audit,
         }
     }
@@ -432,12 +448,18 @@ impl Firewall {
             }
         }
 
+        // 2b. Cross-tenant data-minimisation guard (MIK-7116.TENANT.1). Reuses
+        // `anomaly_identity` — the authenticated principal, never a session —
+        // for exactly the reason given at its computation above.
+        let tenant_blind =
+            self.check_tenant_guard(anomaly_identity, args, server, tool, &mut findings);
+
         // 3. Determine action from rules + finding severity.
         // A rule may downgrade an ordinary finding to Allow or Warn. It may not
         // downgrade this one: an unscoreable call was never examined, so there
         // is no judgement for a rule to soften. Forced after `resolve_action`
         // precisely so no rule can reach it.
-        let action = if anomaly_blind {
+        let action = if anomaly_blind || tenant_blind {
             FirewallAction::Block
         } else {
             self.resolve_action(tool, &findings)
@@ -457,6 +479,55 @@ impl Firewall {
         }
 
         verdict
+    }
+
+    /// Cross-tenant data-minimisation guard (MIK-7116.TENANT.1). Pushes a
+    /// finding into `findings` for a refused or unattributable call and
+    /// returns whether the caller must be force-blocked (unattributable —
+    /// no rule may soften an unmeasured call), mirroring `anomaly_blind`.
+    fn check_tenant_guard(
+        &self,
+        principal: Option<&str>,
+        args: &Value,
+        server: &str,
+        tool: &str,
+        findings: &mut Vec<Finding>,
+    ) -> bool {
+        match self.tenant_guard.check(principal, args) {
+            tenant_guard::TenantVerdict::Allowed => false,
+            tenant_guard::TenantVerdict::Refused { distinct, limit } => {
+                findings.push(Finding {
+                    scan_type: ScanType::CrossTenantReach,
+                    severity: Severity::High,
+                    description: format!(
+                        "Cross-tenant reach exceeded: principal touched {distinct} distinct \
+                         tenants (limit {limit})"
+                    ),
+                    matched: format!("{server}:{tool}"),
+                    location: FindingLocation::RequestArgs,
+                });
+                false
+            }
+            tenant_guard::TenantVerdict::Unattributable => {
+                tracing::warn!(
+                    server = server,
+                    tool = tool,
+                    "MIK-7116.TENANT.1: tenant guard has no principal to key on; \
+                     refusing rather than passing the call unmeasured"
+                );
+                findings.push(Finding {
+                    scan_type: ScanType::CrossTenantReach,
+                    severity: Severity::High,
+                    description:
+                        "Tenant-scoped call has no authenticated principal to key breadth on; \
+                         call refused unmeasured"
+                            .to_string(),
+                    matched: format!("{server}:{tool}"),
+                    location: FindingLocation::RequestArgs,
+                });
+                true
+            }
+        }
     }
 
     /// Post-invocation check: scan response content for credentials/injection.

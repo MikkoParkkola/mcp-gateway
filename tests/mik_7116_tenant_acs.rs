@@ -150,3 +150,95 @@ fn ac_tenant_1_a_disabled_guard_allows_everything() {
         TenantVerdict::Allowed
     ));
 }
+
+// ─── Wiring: the guard must actually sit on the request path ────────────────
+//
+// Every case above exercises `TenantGuard` directly — proof the unit is
+// correct, not proof anything calls it. `Firewall::check_request` is the
+// production consumer (`src/gateway/router/handlers.rs`,
+// `src/gateway/router/backend_handlers.rs`); these cases go through it.
+
+use mcp_gateway::security::firewall::{Firewall, FirewallConfig};
+
+fn wired_firewall(max_tenants: usize) -> Firewall {
+    let mut config = FirewallConfig {
+        enabled: true,
+        scan_requests: true,
+        ..FirewallConfig::default()
+    };
+    config.tenant_guard = TenantGuardConfig {
+        enabled: true,
+        max_tenants_per_window: max_tenants,
+        window_secs: 3600,
+        arg_keys: vec!["customer_id".to_string()],
+    };
+    Firewall::from_config(config, None)
+}
+
+#[test]
+fn ac_tenant_1_firewall_refuses_a_principal_reaching_across_tenants() {
+    let fw = wired_firewall(2);
+    let principal = "principal:a";
+
+    for cust in ["cust-1", "cust-2"] {
+        let verdict = fw.check_request(
+            "irrelevant-session",
+            "srv",
+            "tool",
+            &json!({ "customer_id": cust }),
+            "caller",
+            principal,
+        );
+        assert!(verdict.allowed, "first two distinct tenants stay allowed");
+    }
+
+    let verdict = fw.check_request(
+        "irrelevant-session",
+        "srv",
+        "tool",
+        &json!({ "customer_id": "cust-3" }),
+        "caller",
+        principal,
+    );
+    assert!(
+        !verdict.allowed,
+        "a third distinct tenant for the same principal must be refused \
+         at the firewall entry point, not just inside the unit"
+    );
+}
+
+#[test]
+fn ac_tenant_1_firewall_allows_one_tenant_worked_repeatedly() {
+    let fw = wired_firewall(2);
+
+    for _ in 0..5 {
+        let verdict = fw.check_request(
+            "irrelevant-session",
+            "srv",
+            "tool",
+            &json!({ "customer_id": "cust-1" }),
+            "caller",
+            "principal:a",
+        );
+        assert!(verdict.allowed);
+    }
+}
+
+#[test]
+fn ac_tenant_1_firewall_refuses_tenant_data_with_no_principal() {
+    let fw = wired_firewall(2);
+
+    let verdict = fw.check_request(
+        "irrelevant-session",
+        "srv",
+        "tool",
+        &json!({ "customer_id": "cust-1" }),
+        "caller",
+        "",
+    );
+    assert!(
+        !verdict.allowed,
+        "an unattributable tenant-scoped call must be refused, not passed \
+         through unmeasured"
+    );
+}
