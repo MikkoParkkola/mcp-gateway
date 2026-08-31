@@ -25,19 +25,30 @@ for one caller can never be served to another.
   `negotiate.rs`) — structurally distinct from CACHE.1-4, per
   `RELEASE-4.0.0-criteria-status.md:73`
 
-**Both doors, and the clause that depends on it is marked.** The gateway is
-reachable two ways: the meta-MCP surface (`gateway_invoke` and friends) and the
-direct per-server route `POST /mcp/{name}` (`router/handlers.rs`). Both land in
-`invoke_tool_traced`, so the chokepoint rule and the key shape bind on both. One
-clause does *not* follow automatically: the `proto` segment is read from the
-POST handler's `declared_version`, which the direct route has and a **stdio**
-session does not — stdio negotiates a revision at `initialize`
+**Both doors, and only one of them reaches this cache.** The gateway is
+reachable two ways: the meta-MCP surface (`gateway_invoke` and friends, served
+by `router/handlers.rs`) and the direct per-server route `POST /mcp/{name}`
+(`router/backend_handlers.rs`). The first review draft of this paragraph
+asserted that both land in `invoke_tool_traced`. **That was wrong, and the code
+says so in its own words**: `backend_handlers.rs:724` states "the direct backend
+route bypasses `invoke_tool_traced`", and `:594` states the direct route "keeps
+no per-user cache". So the response cache, the idempotency store and the
+chokepoint all sit on the meta-MCP door alone; the direct door is out of reach
+of this design by construction, not by assumption. It is named here because a
+reader who assumes symmetry will look for a second key shape that does not
+exist. One clause does *not* follow automatically: the `proto` segment is read
+from the meta-MCP POST handler's `declared_version` (`handlers.rs:572`), which
+an HTTP request carries and a **stdio** session does not — stdio negotiates a revision at `initialize`
 (`meta_mcp/mod.rs:1053`) and the value is currently only logged. For stdio,
 `proto` is either threaded from the negotiated value or the transport does not
-cache. Marked because the full-scope reading is **the team lead's assumption
-from the release plan, not an operator confirmation**; if the scope narrows to
-the meta-MCP door alone, this paragraph and the stdio exit are what change, and
-nothing else in the design does.
+cache. The scope question this
+paragraph used to hedge — whether the design must cover both doors — is
+**settled by the two lines above, not by an assumption**: the second door
+neither reaches `invoke_tool_traced` nor keeps a cache, so there is nothing on
+it to key. What remains an assumption is narrower and is marked as one: that
+CACHE.1-4 are read at full transport scope rather than HTTP-only is **the team
+lead's reading of the release plan, not an operator confirmation**. If it
+narrows to HTTP, the stdio exit is what changes, and nothing else does.
 
 **Scope moved in revision 3, and this is the receipt.** Revisions 1 and 2 put
 *all* of `invoke.rs` OUT, because a sibling change owns the file. Revision 3
@@ -47,6 +58,19 @@ ordering change is specified here, sequenced after the sibling change lands".
 The file is still not edited by this design; the edit is named, ordered, and
 owned. Calling that a wording clarification would be the thing the §P0 freeze
 exists to catch.
+
+**Scope moved again in revision 4, and this is that receipt.** R9 specifies a
+*second* edit inside `invoke.rs`, at a different place from revision 3's and
+with a different observable effect: revision 3 moves grant enforcement above the
+cache read, revision 4 moves the per-caller provenance stamp below the cache
+write and adds it to the hit path. Two named edits, not one. The boundary is now
+"two ordering changes are specified here, both sequenced after the sibling
+change lands". The reason the second one is in scope rather than a neighbouring
+concern is stated where the repair is: a body stamped with another caller's
+subject is exactly what §P0 says this change exists to prevent, which is why the
+same finding was wrongly disposed as an observation twice. Recorded because §P0
+freezes scope at the first dual review, and moving it a second time costs a
+paragraph, not a silent edit.
 
 **Source anchors.** Every `file:line` below is against **`5c7e64f4`**. The
 anchor that carries the meaning is the **symbol name**; the line number is a
@@ -410,9 +434,28 @@ The disposition was reading "provenance" as a separate subsystem when the leak
 is the one this design is FOR.
 
 The repair is an ordering move, the same shape as the chokepoint: **the cache
-stores the undecorated body, and provenance is applied after the read, on both
-paths.** Move `apply_context_integrity` below the cache write on the miss path,
-and add it to the hit path where `GuardedValue::from_cache` returns. Then "the
+stores the guarded body without its per-caller stamp, and the stamp is applied
+after the read, on both paths.**
+
+The distinction between *guard* and *stamp* is load-bearing, and the first draft
+of this repair got it wrong by saying "move `apply_context_integrity` below the
+cache write". `apply_context_integrity` (`invoke.rs:1486`) does two jobs in one
+call: it evaluates the context-integrity kernel (the render guard) and it writes
+the per-caller provenance (`provenance.subject` at `:1500`, the trace id at
+`:1497`). Only the second is per-caller. Moving the whole call below the write
+would put an **unguarded** body in the store, and the type says so in its own
+documentation — `GuardedValue::from_cache` (`invoke.rs:88-92`) reads "Cached
+results were guarded at store time (the cache is populated only after
+`apply_context_integrity`), so re-serving them is in-policy without re-running
+the guard." A repair that silently falsifies the precondition a sealing
+constructor documents is not an ordering move; it is a change to what
+`GuardedValue` guarantees, and it would have to say what replaces the seal.
+
+So: the guard call stays above the cache write, and the cached body is the
+post-guard body with the per-caller provenance fields omitted; the stamp is
+applied after the read on the hit path and after the write on the miss path.
+`from_cache`'s stated precondition holds unchanged and its comment needs no
+edit. Then "the
 cached value carries a foreign subject" is unstateable, rather than partitioned
 by a key segment — the stamp is never in the store to be served. The
 idempotency-hit path already re-stamps (`invoke.rs:813-821` passes
@@ -714,9 +757,25 @@ contract for refused callers, it is deliberate, and it is what the fix *is*: the
 denial is the correct answer and the body was the defect. Existing tests
 asserting the old error shape on those paths are expected to move.
 
+### Case 4 - the store must hold no per-caller stamp
+
+R9 asserts a new blocking behaviour, so it carries a case; an acceptance
+criterion with an empty evidence cell *is* the finding (§P2 Q1).
+
+Populate the cache as caller A, then read the **stored** value directly - not
+the returned one - and assert its `_context_integrity` carries neither a
+`subject` nor A's `trace_id`. Then invoke the same tool as caller B on a key
+that hits, and assert the *returned* body carries B's subject and B's trace id.
+
+It is red against `HEAD` by construction: `apply_context_integrity` runs at
+`invoke.rs:1246` and the cache write is downstream at `:1286-1291`, so the
+stored value cannot be unstamped. The first assertion is the one that must go
+red - a case that only checks the second half passes on `HEAD` whenever A and B
+happen to share an api-key name.
+
 ### What "passing" means
 
-All three cases must **fail against `HEAD`** before the implementation lands.
+All four cases must **fail against `HEAD`** before the implementation lands.
 Cases 1 and 2 fail on the `assert_ne!` named — not on a missing import, a panic
 or a setup error. Read the assertion, not the exit code. Both pass once the key
 carries a principal and refuses to cache when there is none.
@@ -743,7 +802,7 @@ arrive a fourth time as though it had never been read.
 | R6 | Grok (IMPR) | state that the chokepoint sits above the idempotency hit, and make Case 3 fail if grants are inserted only above `:838` | **repaired in the case, not only in the prose.** Revision 3 already moved the predicate to "above the first line that can return a cached body" (`:796`); what was missing is a case that can tell the two placements apart. Case 3 now runs the denied caller twice — idempotency store warm and cold — and both must return the denial. A case that only separates `HEAD` from the full move cannot catch a chokepoint placed at `:837` |
 | R7 | GPT (IMPR) | the key is described as injective, which a digest cannot be | **repaired.** Two properties, proved differently: the *framing* is injective (a property of the encoder, provable by inspection), the *finished key* is collision-resistant because `args_hash` is a 256-bit SHA-256 digest. Calling the whole key injective claims a property no hash has |
 | R8 | GPT (SCOPE-CHALLENGE) | `MetaMcpCallerContext.input_capabilities` is a dependency on cluster A before MRTR continuation responses can be cacheable | **accepted as a named dependency, and deliberately not designed here.** Cluster A owns that surface and is in flight; this design names the field, binds it to the same two exits as `retry` and `proto` (key it, or do not cache), and stops. Designing it here would fork a surface with an owner |
-| R9 | GPT (recurrence, third sighting) | request-specific `_context_integrity` provenance — subject and trace ID — is stored inside the cached body | **reversed and repaired.** Two rounds recorded it as an out-of-scope observation; the third sighting is what exposed the misreading. §P0 declares this change is FOR "a response produced for one caller can never be served to another", and a body stamped with the writer's subject *is* that. New section "What the cache stores": the store holds the undecorated body and provenance is applied after the read, on both hit and miss. Precedent already in the file — the idempotency-hit path re-stamps at `invoke.rs:815-822` |
+| R9 | GPT (recurrence, third sighting) | request-specific `_context_integrity` provenance — subject and trace ID — is stored inside the cached body | **reversed and repaired.** Two rounds recorded it as an out-of-scope observation; the third sighting is what exposed the misreading. §P0 declares this change is FOR "a response produced for one caller can never be served to another", and a body stamped with the writer's subject *is* that. New section "What the cache stores": the store holds the guarded body minus its per-caller stamp, and the stamp is applied after the read, on both hit and miss. Precedent already in the file — the idempotency-hit path re-stamps at `invoke.rs:815-822`. Corrected once inside this revision: the first draft said "move `apply_context_integrity` below the cache write", which would store an **unguarded** body and falsify the precondition `GuardedValue::from_cache` documents at `invoke.rs:88-92`. Guard stays, stamp moves. Carries Case 4 — a blocking behaviour claim with no disproof case is an empty evidence cell |
 
 Anchors: every `file:line` in this revision was regenerated against **`5c7e64f4`**
 and the doc header records that commit. Revision 3 mixed committed and
