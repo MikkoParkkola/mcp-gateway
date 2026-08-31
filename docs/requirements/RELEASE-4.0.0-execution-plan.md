@@ -179,3 +179,54 @@ function covers them. The remaining survivors are justified: the overlay's own b
 read, a separate binary outside the gateway startup path, two sites building a *child*
 process environment, two is-it-set diagnostics that never resolve a value, one enumerator
 and one feature flag.
+
+## The queue does not cover the release, and the sweep says by how much
+
+`RELEASE-4.0.0-criteria-status.md` verified acceptance criteria against `src/` and `tests/`
+directly, never against another document's claim. Result: 33 MET, 14 ABSENT, 12 UNWIRED, 4 MET
+with a caveat, 1 UNTESTED. Thirty-one criteria are blocking, and the queue above owns fourteen of
+them. The other seventeen have no owner anywhere.
+
+Read as a plan the queue is not wrong, it is short. That is the finding.
+
+### The seventeen collapse into five causes, not seventeen tasks
+
+| # | increment | criteria closed | why these belong together |
+|---|---|---|---|
+| 5 | Shared-cache key correctness | CACHE.3, CACHE.4 | The key covers 2 of 8 response-varying dimensions (`invoke.rs:639-640,780`), both conditional, with zero tests. A cache keyed on less than what varies the response serves one caller's result to another. This is a data-disclosure defect wearing a performance feature's clothes, and it outranks everything else in this table. CACHE.3's missing decision table is the same gap stated as documentation |
+| 6 | Outbound request envelope | HEADER.5, HEADER.9 | Both are the outbound half of the request builder: mirroring an argument onto `Mcp-Param-{name}`, and carrying the modern `_meta` envelope. One mechanism, one design, one review. HEADER.5's validation half already exists (`param_headers.rs::mirrored_params`) and is waiting for a sender |
+| 7 | Principal-keyed control plane | TENANT.1, CONTROL.2, CONTROL.3, CONTROL.4 | Every one says the same thing: key on the authenticated principal or the trace id, never on the session. Splitting them means designing that substitution four times. Work on the first two is already in flight in another session (`src/security/firewall/tenant_guard.rs`, `principal_window.rs`, both untracked) — this increment must start by reconciling with it, not by rebuilding it |
+| 8 | Modern-path conformance | RESULT.2, ERROR.2, ORDER.2, SUB.3, SUB.4 | Five corrections to what the 2026 path returns and advertises: a default when a backend reply omits a field, `-32602` for resource-not-found, a tool set that cannot vary per connection, removal of SSE resumability, and the retry-after-broken-stream case that has code but no test |
+| 9 | Declare-or-delete the unwired surface | EXT.1, OTEL.1 | `ExtensionSet::gateway_declares` and `TraceContext` are built, unit-tested, and have zero production call sites — each carries a doc comment admitting it. Full scope means wiring them, not deleting them; the deletion arm is recorded here only because HEADER.5 took it three days ago and the precedent should be visible when this is decided |
+
+CONFIRM.2 is not in the table: the destructive-confirmation gate must be reachable through the MRTR
+path, so it closes when item 1 wires that path or it does not close at all. It rides on item 1 as an
+acceptance criterion, not as an increment.
+
+### The largest single lever is already queued
+
+Twelve of the thirty-one blocking criteria are UNWIRED, and eight of those twelve are MRTR
+(MRTR.1-.8). That is one subsystem, fully built, fully unit-tested, with no production caller —
+`§2 WIRED` and `D7` in the DoD, and `§11` stop-the-line. Item 1 closes eight criteria in one
+increment. Nothing else in this plan has that ratio, which is why it stays first.
+
+### Two things this plan still does not know
+
+- **MIK-7217.DISCOVER, 7 criteria, unswept.** The blocking count of 31 is a floor. Sweeping
+  DISCOVER can only raise it, and it should happen before anyone commits to a release date rather
+  than after.
+- **Four criteria are MET with a caveat and two are MET on inference** (SCHEMA.1, SURFACE.1,
+  SUB.1, SUB.2; ORDER.3, CONTROL.5). Each is either a criterion that passes or evidence that has
+  not been produced yet, and today nobody can tell which from the record. Resolving six caveats is
+  cheap; discovering at tag time that one of them was a seventh gap is not.
+
+### Order, and the one thing that reorders it
+
+Items 1, 1a, 1a', 1b, 2 stand as written. The five new increments then run 5, 7, 6, 8, 9 —
+cache-key disclosure first because it is the only orphan that is a live security defect, the
+principal-keyed plane second because another session is already inside those files and the cost of
+colliding grows daily.
+
+The reordering trigger: if the DISCOVER sweep returns a blocking criterion in a module any of these
+increments touches, that increment absorbs it rather than queueing behind it. Discovering a
+neighbour's gap while already holding the file is the cheapest moment there will ever be to fix it.
