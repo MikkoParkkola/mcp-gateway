@@ -146,3 +146,47 @@ fn reserved_predicate_carves_out_the_mirror_prefix() {
     assert!(!is_reserved_header("Mcp-Param-Tenant"));
     assert!(!is_reserved_header("mcp-param-authorization"));
 }
+
+#[test]
+fn integer_property_declaring_an_unsafe_bound_is_rejected() {
+    // GIVEN an integer property whose declared maximum exceeds 2^53-1
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "seq": {
+                "type": "integer",
+                "maximum": 9_223_372_036_854_775_807i64,
+                "x-mcp-header": "Seq"
+            }
+        }
+    });
+    // THEN the tool is excludable at schema time, not merely omitted per call
+    assert_eq!(
+        mirrored_params(&schema),
+        Err(MirrorViolation::IntegerOutOfRange)
+    );
+}
+
+#[test]
+fn integer_property_declaring_safe_bounds_is_accepted() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "seq": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": SAFE_INTEGER_MAX,
+                "x-mcp-header": "Seq"
+            }
+        }
+    });
+    assert_eq!(mirrored_params(&schema).map(|m| m.len()), Ok(1));
+}
+
+#[test]
+fn integer_property_without_declared_bounds_stays_listed() {
+    // GIVEN no declared bound, there is nothing to exclude on; the per-call
+    // omission in `header_value_for` carries the constraint instead
+    let schema = schema_with("seq", "integer", "Seq");
+    assert_eq!(mirrored_params(&schema).map(|m| m.len()), Ok(1));
+}

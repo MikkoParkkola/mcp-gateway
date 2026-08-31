@@ -37,6 +37,9 @@ pub enum MirrorViolation {
     UnsupportedType,
     /// The annotation value is not a JSON string.
     NotAString,
+    /// An `integer` property declares a `minimum`/`maximum` bound outside the
+    /// IEEE-754 safe range.
+    IntegerOutOfRange,
 }
 
 impl std::fmt::Display for MirrorViolation {
@@ -48,6 +51,9 @@ impl std::fmt::Display for MirrorViolation {
             Self::Duplicate => "header name is declared twice (case-insensitively)",
             Self::UnsupportedType => "annotated property is not of type integer, string or boolean",
             Self::NotAString => "annotation value is not a string",
+            Self::IntegerOutOfRange => {
+                "integer property declares a bound outside the IEEE-754 safe range"
+            }
         };
         f.write_str(reason)
     }
@@ -97,6 +103,27 @@ fn type_is_mirrorable(schema: &Value) -> bool {
     )
 }
 
+/// Rejects an `integer` property whose declared bounds admit a value outside
+/// the IEEE-754 safe range.
+///
+/// This is the schema-time half of the safe-range constraint, and the only half
+/// that can exclude a tool (HEADER.8). Where the schema declares no bound there
+/// is nothing to exclude on, and [`header_value_for`] omits the offending
+/// header per call instead.
+fn bounds_are_safe(schema: &Value) -> bool {
+    if schema.get("type").and_then(Value::as_str) != Some("integer") {
+        return true;
+    }
+    ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"]
+        .iter()
+        .filter_map(|key| schema.get(*key))
+        .all(|bound| {
+            bound
+                .as_i64()
+                .is_some_and(|value| value.abs() <= SAFE_INTEGER_MAX)
+        })
+}
+
 /// Collects every `x-mcp-header` declaration in `input_schema`.
 ///
 /// Returns the first violation encountered; the caller excludes the tool.
@@ -129,6 +156,9 @@ pub fn mirrored_params(input_schema: &Value) -> Result<Vec<MirroredParam>, Mirro
         let name = validate_name(annotation)?;
         if !type_is_mirrorable(schema) {
             return Err(MirrorViolation::UnsupportedType);
+        }
+        if !bounds_are_safe(schema) {
+            return Err(MirrorViolation::IntegerOutOfRange);
         }
         let folded = name.to_ascii_lowercase();
         if seen.contains(&folded) {
