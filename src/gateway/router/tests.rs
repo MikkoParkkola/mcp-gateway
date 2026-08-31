@@ -2368,7 +2368,8 @@ async fn run_step_with_identity(
         grant_subject: None,
         verified_identity: None,
         is_admin: client.admin,
-        may_request_input: false,
+        input_capabilities: &[],
+        retry: &crate::protocol::mrtr::NO_RETRY,
     };
     state
         .meta_mcp
@@ -2568,7 +2569,8 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
-        may_request_input: false,
+        input_capabilities: &[],
+        retry: &crate::protocol::mrtr::NO_RETRY,
     };
     let response = state
         .meta_mcp
@@ -2924,7 +2926,8 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
-        may_request_input: false,
+        input_capabilities: &[],
+        retry: &crate::protocol::mrtr::NO_RETRY,
     };
     let response = state
         .meta_mcp

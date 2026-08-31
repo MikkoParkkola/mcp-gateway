@@ -51,6 +51,18 @@ pub struct RetryFields {
     pub malformed: Vec<&'static str>,
 }
 
+/// The absence of any retry fields.
+///
+/// A `static` rather than `Default::default()` so a borrowing caller context
+/// can hold it for `'static`: the overwhelming majority of call sites are fresh
+/// calls, and `Vec::new()` has a destructor, so a `const` would only ever be a
+/// temporary that dies at the end of the statement that names it.
+pub static NO_RETRY: RetryFields = RetryFields {
+    input_responses: None,
+    request_state: None,
+    malformed: Vec::new(),
+};
+
 impl RetryFields {
     /// Read the retry fields from a `tools/call` params object.
     #[must_use]

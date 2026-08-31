@@ -3205,7 +3205,8 @@ mod identity_propagation_enforcement_tests {
             agent_id: None,
             grant_subject: None,
             is_admin: false,
-            may_request_input: false,
+            input_capabilities: &[],
+            retry: &crate::protocol::mrtr::NO_RETRY,
         };
         let args = json!({ "tool": "mem:read", "arguments": {} });
         m.code_mode_execute(&args, Some("s1"), &caller)
@@ -3232,7 +3233,8 @@ mod identity_propagation_enforcement_tests {
             grant_subject: None,
             verified_identity: None,
             is_admin: false,
-            may_request_input: false,
+            input_capabilities: &[],
+            retry: &crate::protocol::mrtr::NO_RETRY,
         };
         let args = json!({ "tool": "mem:read", "arguments": {} });
         let err = m
@@ -3264,7 +3266,8 @@ mod identity_propagation_enforcement_tests {
             agent_id: None,
             grant_subject: None,
             is_admin: false,
-            may_request_input: false,
+            input_capabilities: &[],
+            retry: &crate::protocol::mrtr::NO_RETRY,
         };
         let args = json!({ "tool": "mem:read", "arguments": {} });
         let err = m

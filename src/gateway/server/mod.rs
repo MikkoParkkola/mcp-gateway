@@ -1730,7 +1730,8 @@ impl Gateway {
                             is_admin: true,
                             // stdio carries no per-request capability
                             // declaration to read, and absent means absent.
-                            may_request_input: false,
+                            input_capabilities: &[],
+                            retry: &crate::protocol::mrtr::NO_RETRY,
                             api_key_name: None,
                             agent_id: None,
                             grant_subject: None,

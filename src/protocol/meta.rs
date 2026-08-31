@@ -262,18 +262,21 @@ pub fn required_capability(method: &str) -> Option<&'static str> {
 }
 
 impl RequestShape {
-    /// Whether the caller may be asked for input mid-call.
+    /// The capabilities this request declared, in declaration order.
     ///
-    /// Only a modern request that declared `elicitation` may be. Legacy and
-    /// malformed shapes carry no declaration to read, and a capability the
-    /// client did not mention was not declared.
+    /// Empty for legacy and malformed shapes: neither carries a declaration to
+    /// read, and a capability the client did not mention was not declared.
     ///
-    /// Named rather than inlined at the call site so the capability string is
-    /// covered by a test: a typo in it would otherwise compile and still look
-    /// like a no-op.
+    /// The names travel rather than a single "may be asked for input" bit
+    /// because MRTR.9 refuses **per requested method** — a client that declared
+    /// `elicitation` and not `sampling` may be sent one and not the other, and
+    /// a boolean cannot tell those apart.
     #[must_use]
-    pub fn may_request_input(&self) -> bool {
-        matches!(self, RequestShape::Modern(f) if f.declares_capability("elicitation"))
+    pub fn declared_capabilities(&self) -> &[String] {
+        match self {
+            RequestShape::Modern(f) => &f.declared_capabilities,
+            _ => &[],
+        }
     }
 }
 
@@ -290,7 +293,7 @@ impl RequestFields {
 }
 
 #[cfg(test)]
-mod may_request_input_tests {
+mod declared_capabilities_tests {
     use super::{RequestShape, classify_request};
     use serde_json::json;
 
@@ -302,7 +305,7 @@ mod may_request_input_tests {
     }
 
     #[test]
-    fn a_modern_request_declaring_elicitation_may_be_asked_for_input() {
+    fn a_modern_request_carries_the_names_it_declared() {
         let shape = classify_request(
             Some(&modern_params(&json!({"elicitation": {}}))),
             Some("2026-07-28"),
@@ -311,49 +314,49 @@ mod may_request_input_tests {
             matches!(shape, RequestShape::Modern(_)),
             "fixture must be modern"
         );
-        assert!(shape.may_request_input());
+        assert_eq!(shape.declared_capabilities(), ["elicitation".to_string()]);
     }
 
     #[test]
-    fn a_modern_request_declaring_nothing_may_not_be_asked_for_input() {
+    fn declaring_nothing_carries_no_names() {
         let shape = classify_request(Some(&modern_params(&json!({}))), Some("2026-07-28"));
         assert!(
             matches!(shape, RequestShape::Modern(_)),
             "fixture must be modern"
         );
-        assert!(!shape.may_request_input());
+        assert!(shape.declared_capabilities().is_empty());
     }
 
     #[test]
-    fn declaring_a_different_capability_does_not_grant_input() {
-        // Guards the capability string itself: sampling and roots are the two
-        // neighbours a typo or a widened match would let through.
+    fn a_neighbouring_capability_is_carried_under_its_own_name() {
+        // The names must stay distinguishable: collapsing them to one bit is
+        // what MRTR.9's per-method refusal cannot be built on.
         for cap in ["sampling", "roots"] {
             let shape =
                 classify_request(Some(&modern_params(&json!({cap: {}}))), Some("2026-07-28"));
-            assert!(!shape.may_request_input(), "{cap} must not grant input");
+            assert_eq!(shape.declared_capabilities(), [cap.to_string()], "{cap}");
         }
     }
 
     #[test]
-    fn a_shape_that_failed_to_classify_may_not_be_asked_for_input() {
-        // The doc comment names this a false case, so something has to hold it
+    fn a_shape_that_failed_to_classify_declares_nothing() {
+        // The doc comment names this an empty case, so something has to hold it
         // there. Production does not reach it today -- the handler returns on a
         // failed classification before the field is read -- which is exactly why
-        // a mutant flipping this arm to true would otherwise go unnoticed.
+        // a mutant returning a non-empty slice would otherwise go unnoticed.
         let shape = RequestShape::Malformed {
             missing: vec!["protocolVersion"],
         };
-        assert!(!shape.may_request_input());
+        assert!(shape.declared_capabilities().is_empty());
     }
 
     #[test]
-    fn a_legacy_request_may_not_be_asked_for_input() {
+    fn a_legacy_request_declares_nothing() {
         let shape = classify_request(Some(&json!({})), Some("2025-11-25"));
         assert!(
             matches!(shape, RequestShape::Legacy),
             "fixture must be legacy"
         );
-        assert!(!shape.may_request_input());
+        assert!(shape.declared_capabilities().is_empty());
     }
 }

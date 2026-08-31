@@ -90,7 +90,8 @@ fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
-        may_request_input: false,
+        input_capabilities: &[],
+        retry: &crate::protocol::mrtr::NO_RETRY,
     }
 }
 

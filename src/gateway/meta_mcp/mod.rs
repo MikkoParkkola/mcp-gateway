@@ -128,13 +128,21 @@ pub struct MetaMcpCallerContext<'a> {
     /// admin-only PARAMETERS cannot be gated by the tool-name allow-list in
     /// `router::authorization`, which only knows whole tools.
     pub is_admin: bool,
-    /// Whether this caller can be asked for more input part-way through a call.
+    /// The capabilities this caller declared on **this** request.
     ///
-    /// Named for the question it answers, not for where the answer came from:
-    /// on HTTP it is the client's declared `elicitation` capability, on stdio
-    /// there is no per-request declaration to read. Absent means absent — a
-    /// caller that never declared the capability is never sent a continuation.
-    pub may_request_input: bool,
+    /// Names rather than a single "may be asked for input" bit, because MRTR.9
+    /// refuses per requested method: a client that declared `elicitation` and
+    /// not `sampling` may be sent one and not the other. On stdio there is no
+    /// per-request declaration to read, so the slice is empty — absent means
+    /// absent, and a caller that declared nothing is never sent a continuation.
+    pub input_capabilities: &'a [String],
+    /// The multi-round-trip fields this call carried, already parsed.
+    ///
+    /// Borrowed inbound shape, still attacker-controlled: `request_state` here
+    /// is whatever the client sent back, and only becomes trustworthy once the
+    /// gateway opens it as one of its own sealed envelopes. Nothing downstream
+    /// may forward this field to a backend verbatim.
+    pub retry: &'a crate::protocol::mrtr::RetryFields,
 }
 
 // ============================================================================

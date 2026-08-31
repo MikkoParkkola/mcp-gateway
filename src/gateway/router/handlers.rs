@@ -593,8 +593,12 @@ pub(super) async fn meta_mcp_handler(
     // Derived alongside `is_modern` so every shape-derived fact is read once,
     // here, rather than re-classified where the caller context is built. This
     // is not the per-method capability check further down: that one answers
-    // "did the client declare the capability THIS method needs".
-    let may_request_input = shape.may_request_input();
+    // "did the client declare the capability THIS method needs" for a method
+    // the *client* called; this one is consulted before the gateway asks the
+    // *client* for something. Owned rather than borrowed because `shape` is
+    // moved by the per-method check below, ~100 lines before the caller context
+    // is built.
+    let declared_capabilities: Vec<String> = shape.declared_capabilities().to_vec();
 
     debug!(method = %method, session_id = %session_id, "Meta-MCP request");
 
@@ -1109,7 +1113,8 @@ pub(super) async fn meta_mcp_handler(
                         grant_subject,
                         verified_identity: verified_identity.as_ref(),
                         is_admin: client.as_ref().is_some_and(|c| c.admin),
-                        may_request_input,
+                        input_capabilities: &declared_capabilities,
+                        retry: &retry,
                     },
                 )
                 .await;
