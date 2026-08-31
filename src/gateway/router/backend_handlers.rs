@@ -170,10 +170,28 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
         return;
     };
 
-    let Ok(mut tools) = serde_json::from_value::<Vec<Tool>>(tools_value.clone()) else {
-        warn!(backend = %backend_name, "Backend tools/list result could not be normalized");
+    let Some(items) = tools_value.as_array() else {
+        warn!(backend = %backend_name, "Backend tools/list result is not an array");
         return;
     };
+
+    // Parsed element by element on purpose. A single descriptor the `Tool`
+    // shape cannot accept used to abort the whole pass and forward the list
+    // verbatim — which handed a backend a one-element bypass for the exclusion
+    // applied to all of its siblings. An unparseable element is now carried
+    // through untouched (dropping it would hide a tool the client may already
+    // depend on) while every element we can read is still filtered.
+    let mut tools = Vec::with_capacity(items.len());
+    let mut unparsed = Vec::new();
+    for item in items {
+        match serde_json::from_value::<Tool>(item.clone()) {
+            Ok(tool) => tools.push(tool),
+            Err(e) => {
+                warn!(backend = %backend_name, error = %e, "Backend tools/list entry could not be normalized");
+                unparsed.push(item.clone());
+            }
+        }
+    }
 
     prepare_tool_metadata(backend_name, &mut tools);
 
@@ -181,6 +199,10 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
     let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
 
     match serde_json::to_value(tools) {
+        Ok(Value::Array(mut normalized)) => {
+            normalized.extend(unparsed);
+            *tools_value = Value::Array(normalized);
+        }
         Ok(normalized_tools) => *tools_value = normalized_tools,
         Err(e) => {
             warn!(backend = %backend_name, error = %e, "Failed to serialize normalized tools/list");
