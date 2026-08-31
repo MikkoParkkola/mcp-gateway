@@ -47,14 +47,14 @@ There is no COVERED row. F3 techniques describe fraud-actor goals in financial e
 
 ## Named-feature mapping (MIK-3031.F3.2)
 
-| Feature | Default | Code | F3 IDs it can touch | Honest limit |
+| Feature | Production wiring | Code | F3 IDs it can touch | Honest limit |
 |---|---|---|---|---|
-| Tool-poisoning detection | On for tool-list validation | `src/validator/rules/tool_poisoning.rs` (`ToolPoisoningRule` at line 152, `impl Rule` at line 155) | TA0001 / T1195 (poisoned tool definition as an access path); TA0042 / T1608 (staged malicious descriptions); FA0001 F1002 when a poisoned description steers the agent into API abuse | Scans **tool description text** before it reaches the client. Does not inspect payment payloads, 3DS, or account-holder social engineering. |
+| Tool-poisoning detection | Not a default `tools/list` reject. Live callers: CLI validator (`src/validator/cli_handler.rs:136`), ContextIntegrityKernel on invoke (`src/context_integrity/kernel.rs:166`), CatalogTrustLab (`src/trust/lab.rs:154`). OpenAPI import also scrubs descriptions (`src/capability/openapi/sanitize.rs:87`) | `src/validator/rules/tool_poisoning.rs` (`ToolPoisoningRule` at line 152, `impl Rule` at line 155) | TA0001 / T1195 (poisoned tool definition as an access path) **when one of those live callers runs**; TA0042 / T1608 (staged malicious descriptions) same caveat; FA0001 F1002 when a poisoned description that actually reaches the client steers the agent into API abuse | Scans **tool description text**. Does not inspect payment payloads, 3DS, or account-holder social engineering. Do not read the README "before it reaches the agent" sentence as a tools/list gate. |
 | Capability schema pinning | Only files that carry a `sha256:` pin; remote provenance is a separate opt-in | `src/capability/hash.rs` (`compute_capability_hash` at line 62); rug-pull unload in `src/capability/backend.rs` (`detect_rug_pulls`); remote backends in `src/security/remote_provenance.rs` | Local pin: TA0001 / T1195 (tampered capability YAML at load). Remote provenance: **not** T1195 tool-schema coverage. TA0042 / T1608 only for the local YAML bytes | Local pin hashes YAML bytes. Remote provenance (`RemoteServerProvenancePayload`) signs backend name, transport, URL, subject, issuer, and issued-at only (`src/security/remote_provenance.rs` lines 62–75). It authenticates declared publisher and endpoint metadata. It does not pin tool schemas and does not detect a live server changing behavior behind the same URL. |
-| HMAC inter-agent message signing | Off (`SecurityConfig::message_signing.enabled`) | `src/security/message_signing.rs` (`MessageSigner::sign_response` at line 116; `NonceStore::check_and_register` at line 167). `previous_secret` is reserved for a future `verify_response()` API (line 74) | Weak PARTIAL on TA0001 / T1557 and FA0001 / T1557 **only for a consumer that verifies the HMAC** | Signs the **response body** (`canonical_json` of the response without `_signature`). Requests are not MACed. The request nonce is optional (`Option<&str>`) and is echoed in the signature block; there is no in-repo response-replay verifier. Not hop-by-hop across a multi-gateway mesh. Classical HMAC, not a payment MAC. |
+| HMAC inter-agent message signing | **Unwired in production.** Config exists (`SecurityConfig::message_signing`). `MetaMcp` starts with `message_signer: None` (`src/gateway/meta_mcp/mod.rs:397`). `enable_message_signing` is called from tests only (`src/gateway/meta_mcp/authz_tests.rs:705`) | `src/security/message_signing.rs` (`MessageSigner::sign_response` at line 116). `previous_secret` is reserved for a future `verify_response()` API (line 74) | No live F3 PARTIAL until the server builder installs a signer. T1557 stays GAP at this layer in a default process | Code can HMAC a **response body**. Requests are not MACed. No in-repo response-replay verifier. This mapping does not treat the module as a deployed control. |
 | BPD-bounded execution | **Not shipped.** Design only: `docs/design/BPD_DSL_DESIGN.md`. Runtime stand-ins (session/cost/kill) are separate | Runtime stand-ins: `src/session_sandbox.rs` (`SandboxEnforcer::check` at line 303), `src/cost_accounting/enforcer.rs` (`BudgetEnforcer::check` at line 180), `src/kill_switch/mod.rs` | TA0002 Execution (bound how much an agent can run); weak PARTIAL on FA0001 F1002 volume. Not F1012 / F1046 (those are payment-threshold tests, GAP) | Session call-count, duration, payload size, backend allow, tool deny. Cost enforcer is daily USD of **tool invocations**, not fraud loss. Kill switch disables a backend. None of these is a BPD document or `bpd validate` CLI. |
 | mTLS | Off until `mtls` rules are configured; then fail-closed | `src/mtls/cert_manager.rs`, `src/mtls/identity.rs`, `src/mtls/access_control/mod.rs` (fail-closed `PolicyDecision::Deny` when rules exist but no verified identity, lines 87–110) | TA0001 Initial Access **to the gateway** | Authenticates the MCP/HTTP client certificate. Does not authenticate a cardholder, mule, or compromised end-user of a downstream bank. |
-| Idempotency | On for `gateway_invoke` duplicate suppression | `src/idempotency.rs` (`IdempotencyCache::check` at line 149; auto-key from tool name + canonical JSON, lines 9–16) | **No F3 technique ID.** F1015 is card churning and F1043 is transaction reversal; both remain GAP under TA0002 | Operational safeguard: stops duplicate **tool side effects** on LLM timeout retry. Not a fraud mapping. |
+| Idempotency | **Unwired in production.** `enable_idempotency` (`src/gateway/meta_mcp/mod.rs:545`) has no production caller; `IdempotencyCache::new` is used in `src/idempotency.rs` tests only | `src/idempotency.rs` (`IdempotencyCache::check` at line 149) | **No F3 technique ID.** F1015 is card churning and F1043 is transaction reversal; both remain GAP under TA0002 | Code can suppress duplicate `gateway_invoke` side effects. That is not a live control and not a fraud mapping. |
 
 Related controls that the ticket did not name, but that sit on the same boundary:
 
@@ -91,7 +91,7 @@ F3-native tactic. 35 techniques in v1.1.
 | T1453 | Abuse Accessibility Features | GAP | |
 | T1531 | Account Access Removal | GAP | |
 | T1539 | Steal Web Session Cookie | GAP | |
-| T1557 | Adversary-in-the-Middle | PARTIAL (verifying consumer only) | A consumer that checks the HMAC can detect **response-body** tampering. Requests are not MACed. Not a network MITM detector. |
+| T1557 | Adversary-in-the-Middle | GAP at default process | HMAC signer is unwired in production. Even if enabled, it would cover response-body authentication only. |
 
 ## FA0002 Monetization — technique table
 
@@ -115,7 +115,7 @@ If an operator connects a payments or banking MCP backend, these techniques beco
 
 **TA0042 Resource Development** — GAP: F1019, F1020, F1021, F1027, F1038, T1583, T1585, T1586, T1650. PARTIAL: T1608 via **local** capability pin of staged YAML. T1195 is Initial Access only in F3 v1.1 (not listed here).
 
-**TA0001 Initial Access** — PARTIAL: F1002 (gateway HTTP); T1195 for **local YAML pin** (tamper at load), not remote tool-schema drift; gateway-client identity (mTLS, grants, attestation, OAuth fail-closed); T1557 only if a consumer verifies the response HMAC. GAP: F1004, F1006, F1007, F1016, F1031, F1032, F1033, F1040, F1041, F1042, T1110, T1111, T1185, T1189, T1451, T1539, T1550, T1557 (network MITM), T1621, T1660.
+**TA0001 Initial Access** — PARTIAL: F1002 (gateway HTTP); T1195 for **local YAML pin** (tamper at load), not remote tool-schema drift; gateway-client identity (mTLS, grants, attestation, OAuth fail-closed). GAP: F1004, F1006, F1007, F1016, F1031, F1032, F1033, F1040, F1041, F1042, T1110, T1111, T1185, T1189, T1451, T1539, T1550, T1557 (HMAC signer unwired; network MITM also GAP), T1621, T1660.
 
 **TA0005 Stealth** — GAP: F1001, F1022, F1023, F1030, F1031, F1032, F1036, F1039, F1040, F1045, F1048, T1070, T1672.
 
@@ -133,8 +133,10 @@ These are the gaps that would still be true after every named feature is enabled
 4. **Account-holder fraud controls are not modeled.** Changing beneficiaries, notification settings, payroll, or vendor records is GAP unless a backend tool exists **and** policy denies it. Denial is not detection.
 5. **BPD is design, not enforcement.** Mapping "BPD-bounded execution" to F3 without this sentence would be false.
 6. **Destructive elicitation is a courtesy.** `src/gateway/destructive_confirmation.rs` says so in its header. It is not a Defense Impairment control.
-7. **Message signing is opt-in.** Unsigned deployments get no T1557 PARTIAL at this layer.
-8. **Downstream tools remain the fraud surface.** A payments capability imported from OpenAPI inherits none of F3. The gateway will route it if policy allows.
+7. **HMAC message signing is unwired.** `enable_message_signing` is test-only. T1557 is GAP in a default process, not PARTIAL.
+8. **Idempotency is unwired.** `enable_idempotency` has no production caller.
+9. **ToolPoisoningRule is not a tools/list gate.** CLI + invoke-time context-integrity + import sanitizer. A poisoned description can still reach the agent via `tools/list` unless another path runs the rule.
+10. **Downstream tools remain the fraud surface.** A payments capability imported from OpenAPI inherits none of F3. The gateway will route it if policy allows.
 
 Kill-gate from the ticket ("F3 is fraud-specific and mcp-gateway is too broad to claim meaningful coverage"): **not taken.** The mapping exists so a reader can see PARTIAL vs GAP. Claiming 8/8 tactic coverage would have been the overclaim the kill-gate warned about.
 
