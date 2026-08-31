@@ -110,8 +110,55 @@ Five pieces, in dependency order.
    `notifications/tasks/status`; `handlers.rs` gains the four arms;
    `mcp_name_body_field` gains three entries mirroring `taskId`.
 
-5. **Declaration.** `gateway_declares()` is called from `server/discover`, which is EXT.1's job.
-   TASK.1 supplies the entry; EXT.1 owns the call site. Neither closes alone.
+5. **Declaration.** *Corrected after designB2's EXT.1 note
+   (`docs/design/2026-08-31-cluster-b-capability-and-trace-metadata.md`, anchored `5c7e64f4`).* An
+   earlier revision of this note said `gateway_declares()` "is called from `server/discover`".
+   That named a call site narrower than the real one and skipped a prior problem: **there is
+   nowhere to put the declaration.** `ServerCapabilities` (`src/protocol/types.rs:231-254`) has
+   seven fields and `extensions` is not among them — `rg -n 'extensions' src/protocol/types.rs`
+   returns nothing. So EXT.1 is not a wiring job with a missing caller; the wire struct needs the
+   field before any caller can matter.
+
+   EXT.1 owns that decision and has made it: add `extensions` to `ServerCapabilities`, populate
+   from `gateway_declares()` in `build_initialize_result`. That note gives the builder's path as
+   `src/gateway/meta_mcp/meta_mcp_helpers.rs:144`; the file is at
+   `src/gateway/meta_mcp_helpers.rs:144`, a sibling of the `meta_mcp/` directory rather than a
+   member of it. The claim it carries survives the correction, and was checked here rather than
+   taken: `rg -n 'build_initialize_result\(' src/` finds two production callers,
+   `handle_initialize` (`src/gateway/meta_mcp/mod.rs:1084`) and `discover_document`
+   (`:1003`), and discovery emits `"capabilities": handshake.capabilities` (`:1037`) — the whole
+   struct, serialised as it stands. So one populate does reach both surfaces, and the second
+   surface needs no code of its own.
+
+   One detail the seam has to carry: the builder sets four capabilities explicitly and closes with
+   `..Default::default()`. A new `extensions` field therefore arrives as its default on every
+   response until EXT.1 assigns it there. **TASK.1 consumes that seam and does not restate it.**
+   One seam, two consumers: EXT.1 owns the field and the call site, TASK.1 supplies the entry
+   `io.modelcontextprotocol/tasks`. Neither closes alone, and TASK.1 does not need a second site.
+
+### The two non-spec tasks capability structs
+
+`src/protocol/types.rs` defines `ServerTasksCapability` (`:262`, reached from
+`ServerCapabilities.tasks` at `:250`) and `ClientTasksCapability` (`:373`, from
+`ClientCapabilities.tasks` at `:346`). Neither appears in the 2026-07-28 core schema, whose
+`ServerCapabilities` has seven properties and `ClientCapabilities` five, with no `tasks` in
+either.
+
+**TASK.1 does not read, write or depend on either type**, and this note is correct whether they
+are retired or kept. `rg -n 'ServerTasksCapability|ClientTasksCapability' -g '!target' .` returns
+four matches, all four inside `types.rs` itself: the two definitions and the two struct fields.
+No production code, no test, no serialisation path outside the derive. They are unreachable
+today, so nothing TASK.1 builds can collide with them.
+
+Their provenance is worth recording before the retire-or-keep call is made, because "locally
+invented" would be the wrong reason to delete them. Both carry a `list` field — and the pinned
+2026-07-28 extension text says there is deliberately no `tasks/list`, calling its absence "an
+improvement over the `2025-11-25` tasks specification, in which a poorly-scoped list could expose
+unrelated task IDs". A `tasks` capability advertising `cancel`, `list` and augmentable request
+types is the **2025-11-25** shape. So the decision is not "delete a mistake" but "drop a
+superseded revision's declaration surface", which is a different question with a different
+answer if anything still speaks 2025-11-25 — and nothing here does, since the types have no
+readers at all. Recorded for whoever answers it; not answered here.
 
 6. **Every task-related request is authorised against the task's owner.** The pinned text makes
    this a MUST in its own right, *beside* the entropy requirement and not satisfied by it: a
@@ -273,7 +320,7 @@ go green against any stub — that is stated, not papered over.
 | `MIK-7272.TASK.1.8` | a retried identical task-augmented call returns the **same** `taskId` and runs the backend **once**; the `CreateTaskResult` is never written to the response cache and never marked idempotency-completed | integration with `config.cache.enabled = false` and a mutation counter on the mock tool; assert the counter is 1 and both responses carry the same `taskId` | integration | **Yes for the guards, no for the dedupe.** The two guard halves are falsifiable against the existing `is_final` gates today. The same-`taskId` half needs the store. Fixture rule is binding: the response cache is written at `invoke.rs:1291`, after the backend result and before the client stream, so a fixture that leaves it enabled passes vacuously — assert the counter, never the body. |
 | `MIK-7272.TASK.1.9` | a `subscriptions/listen` carrying `taskIds` emits `notifications/tasks/status` and no `notifications/progress` or `notifications/message` | integration: drive a task that would emit progress, read the stream | integration | **No — vacuous until both TASK.1 and SUB.2 land.** Nothing emits task notifications, so an empty stream passes. Recorded as a constraint on SUB.2 (§5) so it is not discovered late. |
 | `MIK-7272.TASK.1.11` | a retrieval call naming a task created by a different principal is answered as not-found, identically to a `taskId` that never existed | integration: create as principal A, retrieve as principal B, assert the response is byte-identical to retrieving an unknown id as B | integration | **No — vacuous until the dispatcher exists**, and it is the row most likely to be dropped as a nicety. Recorded here so the authorisation check lands with the dispatcher rather than after a review round. The byte-identical half is what makes it a test rather than a sentiment. |
-| `MIK-7272.TASK.1.10` | `server/discover` advertises `extensions["io.modelcontextprotocol/tasks"] = {}` | unit on `gateway_declares()` output, plus EXT.1's discovery integration case | unit | **No, and it is not TASK.1's to close.** `gateway_declares()` already returns the entry (`extensions.rs:52-56`); the unit case is green today. It goes red only when EXT.1 wires the call site, which is EXT.1's criterion. Listed so the split is visible, not to claim it. |
+| `MIK-7272.TASK.1.10` | the capabilities EXT.1 builds advertise `extensions["io.modelcontextprotocol/tasks"] = {}`, on both `initialize` and `server/discover` | unit on `gateway_declares()` output, plus EXT.1's discovery integration case | unit | **No, and it is not TASK.1's to close.** `gateway_declares()` already returns the entry (`extensions.rs:52-56`); the unit case is green today. It cannot go red until EXT.1 adds `extensions` to `ServerCapabilities` and populates it in `build_initialize_result` — the field does not exist yet, so this is blocked on a struct change, not on a caller. Listed so the split is visible, not to claim it. |
 
 Five rows out of eleven cannot fail for a behavioural reason today. That is the finding: TASK.1 is
 mostly new surface, and the tests that constrain it are the five that assert against *existing*
@@ -281,6 +328,46 @@ code — `ADDED_IN_2026_07_28`, `mcp_name_body_field`, the `Task` shape, the `is
 the per-request capability read. Those five are where the failing-tests step (§P2) has real work
 on day one; the rest wait on the dispatcher and must be written against the spec text, not
 against whatever the dispatcher turns out to do.
+
+## 8a. The existing `ac_task_1_*` cases do not cover the criterion
+
+Asked by the team lead after designB2 found two MIK-7272 AC cases that cannot go red. The five
+`ac_task_1_*` cases in `tests/mik_7272_exploit_acs.rs:157-211` are a different failure from those
+two, and the difference matters.
+
+They are **not** tautologies. Each asserts real behaviour of `Task`: that a fresh task is
+`Working` with a non-empty id, that `result()` is `None` before completion rather than a default,
+that `fail()` records an error distinguishable from "not finished", that a second `complete()`
+does not overwrite the first. Break any of those in `tasks.rs` and the case goes red. As unit
+tests of that struct they are honest.
+
+What they do not do is cover the criterion. `rg -n 'protocol::tasks' -g '!target' src/ tests/`
+returns exactly one match — the `use` at `:153` of that test file. **`protocol::tasks` has no
+production consumer at all**, so nothing these cases assert is reachable from a request. Read
+against the criterion's own words:
+
+| criterion clause | what the five cases exercise |
+|---|---|
+| "supported for long-running **backend** calls" | no backend, no gateway, no request in any body |
+| "`tasks/get` polling" | `ac_task_1_a_task_is_polled_not_awaited` and `..._polling_a_working_task_yields_no_result` call `complete()` and read a field in-process; no method, no dispatch, no poll |
+| "`tasks/update`" | not mentioned in any of the five, and `Task` has no update method to mention |
+
+So the answer to "what would have to break in production for this to go red" is: **nothing can,
+because none of it runs in production.** Only an edit to `tasks.rs` turns them red. TASK.1's
+evidence is smaller than the status doc's coverage implies — the criterion is uncovered, and the
+gap is not one an extra assertion closes.
+
+One of the five is worse than uncovered. `ac_task_1_a_failed_task_reports_its_failure_rather_than_an_absence`
+asserts `task.error() == Some("upstream refused")` — a string. §2 records that the spec requires
+the failure payload to be a JSON-RPC error **object**, and §3.1 changes the field accordingly.
+That case therefore goes red when TASK.1 is implemented *correctly*: it pins the defect. It is
+not a test to preserve through the change; it is a test to rewrite against the object shape, and
+a reviewer who sees it fail should read it as the change working.
+
+Disposition (§P0): recorded here, not filed. The §8 table already specifies what replaces these
+five, and the replacement is part of TASK.1's own work rather than a separate ticket. Whether the
+same inertness runs wider than these seven cases is the lead's call to scope; this note answers
+only for `ac_task_1_*`.
 
 ## 9. Documents this change makes untrue
 
@@ -293,3 +380,9 @@ against whatever the dispatcher turns out to do.
   session.
 - `RELEASE-4.0.0-plan.md:48-50` — already correct; it says a decision to build TASK.1 changes
   SUB.4's scope, and §4 is that change.
+- `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata.md` — not made untrue; consumed.
+  It owns the `extensions` field, the `build_initialize_result` call site and the retire-or-keep
+  question on the two non-spec capability structs. §3.5 cites those decisions rather than
+  restating them, and this note holds under either answer to the retire question. TASK.1 touches
+  no correlation or trace surface, so that note's three-trace-surfaces finding does not reach
+  this design.
