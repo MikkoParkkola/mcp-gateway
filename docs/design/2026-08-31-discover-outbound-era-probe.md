@@ -101,8 +101,8 @@ OAuth token exists, and the probe reaches the peer. The defect "the probe is spe
 transport that has not connected" then cannot be stated, rather than being narrowed.
 
 DISCOVER.4 is not weakened by this. It forbids trusting a **version string**; it says nothing about
-ordering. The evidence is unchanged — the peer's own `server/discover` document, or one of the
-reserved 2026 error codes — and the handshake's `protocolVersion` is never read for era, before or
+ordering. The evidence is unchanged — the peer's own `server/discover` document, or one of the three
+2026 error codes — and the handshake's `protocolVersion` is never read for era, before or
 after. Stated as an invariant the implementation must hold: **no code path derives `Era` from the
 `initialize` result.**
 
@@ -168,11 +168,26 @@ before it is published to the pool entry — the same point on both arms
 transport, never through `Backend::request*` (constraint 3).
 
 **What counts as evidence.** Only what `src/protocol/era.rs:60-100` already accepts: a
-`server/discover` result, or one of the reserved 2026 error codes. Positive evidence only — a
+`server/discover` result, or one of the three 2026 error codes. Positive evidence only — a
 transport error, a timeout or a non-2xx is `ProbeOutcome::NoAnswer`, and `NoAnswer` classifies
 **Legacy**, which is the era the gateway already behaves as. A failed probe therefore costs nothing
 but the probe. The `initialize` result's `protocolVersion` is never consulted, before or after
 (DISCOVER.4's actual requirement).
+
+**How strong the error-code evidence actually is.** `-32022`, `-32020` and `-32021`
+(`src/protocol/era.rs:34,:37,:40`) sit inside JSON-RPC 2.0's `-32000..=-32099` band, which the
+specification hands to *implementation-defined* server errors. They are therefore not reserved to
+this revision, and `src/protocol/era.rs:77-79` overstates when it says "only a server that
+implements this revision knows these codes". The bound that does hold is narrower and still
+sufficient: a conforming peer answers an unimplemented method with `-32601`, which the classifier
+already calls "the honest legacy answer" (`src/protocol/era.rs:91-93`), so a false Modern
+requires a peer that both lacks `server/discover` and answers it with one of exactly three codes in
+the implementation-defined band. That is a nonconforming peer, not an unlucky one. It is worth
+stating because false Modern is the expensive direction — the gateway would frame modern requests at
+a peer that cannot read them, where false Legacy costs only the status quo. The overstated comment
+at `src/protocol/era.rs:77-79` is production code, which this design-only increment may not touch;
+it is disposed by riding the implementation increment that wires the probe, since that increment
+edits this file anyway. No ticket: the correction is smaller than a ticket describing it.
 
 **What it costs.** The probe runs inside the warm-start attempt, which DISCOVER.6 pins at
 `attempt_timeout` 120s (`warmstart.rs:751-759`). The probe carries its own 10s timeout so a peer
@@ -182,7 +197,7 @@ is under a tenth of the attempt, and above the `initial_gap`, so a probe that is
 not turn a healthy backend into a retry.
 
 **Re-probing (DISCOVER.5's second half).** The cached era is invalidated when a request fails with
-one of the reserved codes that contradict it — the same `-32022 / -32020 / -32021` set the classifier
+one of the three codes that contradict it — the same `-32022 / -32020 / -32021` set the classifier
 already treats as era evidence. Nothing else invalidates: not a transport error, not a timeout, not
 a restart of the process. This is the "re-probed when a cached assumption fails" clause read
 literally — an assumption *fails* when the peer says the assumption is wrong, not when the network
@@ -249,7 +264,7 @@ outright — per backend, in the type, with the herd collapse the detector was w
 also claimed both only for HTTP; that restriction is gone, not weakened.
 
 The re-probe half is **specified and tested here, and unexercised in production until a peer emits
-one of the reserved codes**. The invalidation path and its negative case are in the test plan, so the
+one of the three 2026 codes**. The invalidation path and its negative case are in the test plan, so the
 mechanism is proven by construction rather than by traffic. Revision 1 stated this as a dependency on
 HEADER.9; the accurate statement is narrower — it depends on a peer, and HEADER.9 is merely when we
 expect to meet one. The criteria file should record it that way.
@@ -265,8 +280,9 @@ expect to meet one. The criteria file should record it that way.
 | F5 | scope should be reduced to HTTP for this increment | **eliminated** — full scope, per the operator's directive, and now free: the repair makes stdio cost nothing extra |
 | F6 | transport-kind snapshot has no reader | **eliminated** — field removed rather than documented |
 | F7 | probe timeout asserted without arithmetic | **repaired** — 10s stated against `warmstart.rs:751-759`'s 120s attempt and 2s/30s gaps |
+| F8 | "only a 2026 implementer knows those numbers" overstates what JSON-RPC allows: `-32000..=-32099` is the *implementation-defined* server-error band, so the three codes are not reserved to this revision | **repaired** — "reserved" dropped at all four occurrences; the classifier's evidence is now argued from the narrower bound that does hold (a conforming peer answers an unknown method `-32601`, so a false Modern needs a nonconforming peer). A patch is right because the classifier itself is sound and unchanged — what was wrong was the strength of the claim about it, and false Modern stays the expensive direction. The overstated comment lives at `src/protocol/era.rs:77-79`; it is production code, disposed by riding the implementation increment that already edits that file |
 
-Four eliminated, two repaired, one closed on inspection. The four eliminations removed the thing the
-finding was about, so those findings can no longer be stated. The two repairs each say above why a
+Four eliminated, three repaired, one closed on inspection. The four eliminations removed the thing the
+finding was about, so those findings can no longer be stated. The three repairs each say above why a
 patch is right rather than an elimination. F4 removed nothing: half of it was false at source, and
 what survived was kept with a corrected rationale.
