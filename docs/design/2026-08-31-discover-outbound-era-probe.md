@@ -30,6 +30,11 @@ Revision 2 **narrowed nothing and widened one thing**: stdio moved from OUT to F
 because §P0 freezes scope at first dual review and a move needs a stated reason — the reason is in
 constraint 2, and it is a consequence of the revision-2 repair rather than a new appetite.
 
+Revision 4 moved neither FOR nor OUT, but it did move the **implementation surface**: the A3 repair
+(shared in-flight resolution, revision-4 finding H7) means this increment modifies the resolution
+path in `src/protocol/era.rs`, which revision 3 said it would not touch. Recorded for the same
+reason — a surface move is visible or it is not a decision.
+
 ## Problem
 
 Seven criteria carry the `MIK-7217.DISCOVER` prefix. Four are MET, one MET with a residual, and
@@ -570,7 +575,7 @@ source before any repair; one died on inspection and cost no round.
 | G3 | invalidation cannot correct a false Modern, and nothing re-resolves from the request path | both, and found here as F9 | **eliminated** — one owner (`classify`) decides contradiction in both directions, fed only by era-conditional answers, with a resolver reachable from a connected backend. Found in this session at `src/protocol/era.rs:91-93`; the reviewers supplied the half this session had missed — that `resolve_with` has no caller outside `start_entry` (`src/backend/lifecycle.rs:202-207`). Bounded in time and pinned to Legacy after a second contradiction, so the fix cannot open a probe loop |
 | G4 | the F8 bound is too strong: a legacy peer may own a same-named extension without violating JSON-RPC | both | **repaired** — "nonconforming" narrowed to "unlikely, not forbidden", and the bound now states its dependency on G3's correction path. A patch rather than an elimination because the classifier is sound; what was wrong was the strength of a claim about it |
 | G5 | the test plan cannot fail: `start_entry` accepts no injected transport, one row is vacuous, one asserts a value the cache never stores | both | **eliminated** — the table is withdrawn, not amended, and rebuilt on the config-level fixture seam the repo already uses (`src/backend/pool_tests.rs:1564`, `src/transport/http/tests.rs:708`). Every row now names its assertion and why it fails on HEAD; the two rows vacuous on HEAD are marked as regression rows rather than counted as evidence |
-| G6 | `NoAnswer` resolutions do not collapse; waiters serialise for 10s each | gpt | **accepted and ranked (A3)** — confirmed at `src/protocol/era.rs:143-170,:164-167`. Not repaired: the repairs are to cache a non-answer, which pins a healthy peer to Legacy for being briefly slow, or to split in-flight sharing from durable caching, which is a change to `era.rs` that this increment does not touch |
+| G6 | `NoAnswer` resolutions do not collapse; waiters serialise for 10s each | gpt | **accepted and ranked (A3)** — confirmed at `src/protocol/era.rs:143-170,:164-167`. Not repaired: the repairs are to cache a non-answer, which pins a healthy peer to Legacy for being briefly slow, or to split in-flight sharing from durable caching, which is a change to `era.rs` that this increment does not touch. **Superseded in revision 4 (H7)**: the in-flight sharing is adopted, and the increment does modify the resolution path in `era.rs` |
 | G7 | the 120s attempt figure is a floor, not a ceiling, and the retry-gap clause is unrelated | gpt, and grok on the gap clause | **repaired** — confirmed at `src/gateway/server/warmstart.rs:219-221`. The arithmetic is restated against the smallest ceiling the system can produce, and the `initial_gap` comparison is withdrawn |
 | G8 | two citations do not resolve: `src/backend/cache.rs`, and `src/backend/mod.rs:200-207` | grok | **repaired** — verified: that file does not exist and those lines are `CleanupState`. Replaced with `src/backend/mod.rs:34,:54` and `src/backend/lifecycle.rs:134` |
 | G9 | the `JsonRpcResponse` → `ProbeOutcome` adapter is unspecified, and the obvious implementation disables the error-code arm | grok | **repaired** — specified in §3a, with test row 3 written to fail on exactly that mistake. Confirmed at `src/protocol/messages.rs:45-55` and `src/transport/http/mod.rs:174-176` |
@@ -585,9 +590,9 @@ restated, which is the test applied here rather than whether the objection was a
 
 ## Revision 4 — findings and dispositions
 
-Both revision-3 reviewers returned SHIP-WITH-FIXES. Seven findings from GPT, three from Grok, two
-improvements from each, plus four found in this session before the reviews returned. Four of the ten
-reviewer findings are defects in revision 3's *own repairs* — that is the stuckness signal, and per
+Both revision-3 reviewers returned SHIP-WITH-FIXES. Seven findings and two improvements from GPT,
+three findings and three improvements from Grok, plus four found in this session before the reviews
+returned. Four of the ten reviewer findings are defects in revision 3's *own repairs* — that is the stuckness signal, and per
 repair-protocol step 0 the answer taken here is elimination, not another patch: the classifier's
 input rule and the Legacy pin are deleted, and the two facts revision 3 got wrong are corrected.
 
@@ -610,7 +615,7 @@ recorded below. The revision-4 brief drops the fence.
 | H2 | the HTTP probe still constructs both forbidden headers, because `send_request` builds them | gpt | **repaired, and it was self-contradiction** — `build_headers` inserts both unconditionally (`src/transport/http/mod.rs:570,:605`); revision 3's own test row 6 cited those lines while §3a claimed a subtraction. §3a now names the decision — the builder takes a mode, the probe passes the probe mode — without designing the spelling |
 | H3 | "era-conditional" is not an operational definition; an ordinary answer can classify | gpt + grok, independently | **eliminated** — `classify` is fed only `ProbeOutcome`. An ordinary answer can *trigger* a probe and nothing else, so the term is deleted rather than sharpened. After this the finding cannot be restated: there is no definition left to misapply, and a wrong trigger costs one rate-limited probe, never a misclassification |
 | H4 | the Legacy pin strands a peer that triggers twice for unrelated reasons | gpt + grok, independently | **eliminated** — the pin is deleted. With H3's cut the loop it was bounding cannot form; the ≤1 probe/30s rate limit is the whole bound |
-| H5 | one backend-wide era spans per-user slots whose peers may differ | gpt | **deferred, with four fields, as a requirements question** — DISCOVER.5 says "cached per backend" and only the requester can say whether that means per name or per slot. Explicitly *not* resolved by adopting GPT's generation-tagged compare-and-swap cache: inventing a concurrency protocol in a late review round is the move that produced this round. Nothing in this increment depends on the answer |
+| H5 | one backend-wide era spans per-user slots whose peers may differ | gpt | **deferred, with four fields, as a requirements question** — DISCOVER.5 says "cached per backend" and only the requester can say whether that means per name or per slot. Explicitly *not* resolved by adopting GPT's generation-tagged compare-and-swap cache: inventing a concurrency protocol in a late review round is the move that produced this round. No correctness property depends on the answer; A3's repair — sharing the in-flight resolution — is load-bearing only under the per-name reading, because per-slot entries cannot contend in the first place |
 | H6 | treating a closed pipe as `NoAnswer` and still returning Ok publishes a dead transport | gpt | **repaired** — split into test rows 4 and 4b: an *answered* negative probe does not fail a start; a transport that died before answering fails the start on its own terms |
 | H7 | uncached `NoAnswer` serialises N waiters at 10s each | gpt | **repaired, not accepted** — concurrent waiters share the in-flight resolution; `NoAnswer` stays durably uncached. Revision 3 conflated sharing a future with caching a result and accepted a cost it had invented. A3 changes from an assumption to a decision |
 | H8 | test row 5 cannot go green: the fixture dies at `initialize`, never reaching the probe | grok | **repaired** — the fixture now completes the handshake and hangs on `server/discover`. The assertion is termination plus `Legacy`, not latency; a broken bound fails by exhausting the harness timeout |
@@ -619,13 +624,15 @@ recorded below. The revision-4 brief drops the fence.
 | H11 | add a DISCOVER.4 negative row | grok (improvement) | **already covered** — row 4 as rewritten *is* that case: the peer completes `initialize` and answers the probe `-32601`, and the era must read `Legacy`. No row added |
 | H12 | apply row 6's header assertion to the re-probe frame, not only the start-path probe | grok (improvement) | **accepted** — one clause in row 6. The re-probe reuses the same primitive, and an assertion that only covers the start path would not notice if it stopped |
 | H13 | record the `force_restart`/`PerUser` interaction | grok (improvement) | **folded into H5** — it is the same question about the cache key, and answering it twice in two places is how two answers drift apart |
+| H14 | add deterministic generation-race and cooldown tests on a controllable clock | gpt (improvement) | **superseded by H3 and H4** — the generation race was GPT's own compare-and-swap cache, which is not adopted, and the cooldown it would exercise is the deleted pin. What survives is the ≤1 probe/30s rate limit, and test row 11 asserts it by probe count |
 | S1 | a re-checker finds `MODERN_VERSIONS` and concludes the modern-only limit is wrong | self | **repaired** — the limit paragraph now names `src/protocol/meta.rs:219` as inbound-only, read by the router at `src/gateway/router/handlers.rs:178,:222,:575,:702` and by nothing outbound |
 | S2 | a fenced item's SHIP read as reviewer confirmation | self | **disclosed above, and the fence is dropped for revision 4** |
 | S3 | the §P2 test-plan review verdict was not recorded | self | **repaired** — Q1 and Q2 are answered in a note under the test table, with the criterion citation |
 | S4 | row 5 asserted latency where A3 refuses latency assertions | self | **superseded by H8** — Grok found the deeper defect (the fixture never reaches the probe); row 5 is rewritten around termination, and the inconsistency goes with it |
 
-Revision 4: three eliminated, six repaired, one died at source, one deferred with owner, one
-rejected with its reason, three folded or superseded. The eliminations are again the ones that
+Revision 4, counted from the table above: two eliminated, seven repaired, one died at source, one
+deferred with an owner, one rejected with its reason, one improvement accepted and applied, one
+disclosed, four folded or superseded — eighteen rows. The eliminations are again the ones that
 matter: after H3 and H4 the classifier has one input type and one bound, and neither finding can be
 restated. No revision-5 dual review is run in this session — revision 3's repairs generated four of
 revision 4's findings, and the exit from that pattern is a receipt plus recorded residuals with
