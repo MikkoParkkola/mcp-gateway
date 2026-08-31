@@ -22,7 +22,7 @@ answer per backend — so DISCOVER.4 and DISCOVER.5 stop being UNWIRED.
   revision is absent "until the modern request path exists… It is added in the increment that
   makes it true." This is not that increment.
 - **stdio backends.** A deferred unknown below, with the four fields. A decision, not an omission.
-- A2A backends — `src/backend/lifecycle.rs:381` routes them off the MCP start path entirely.
+- A2A backends — `src/backend/lifecycle.rs:372-383` refuses them on this path outright ("must be started via A2aProvider, not the legacy Backend::start() path").
 - the `src/lib.rs:23` `2024-10-07` doc residual noted under DISCOVER.7. One-line doc fix,
   unrelated mechanism, does not travel with this change.
 
@@ -66,8 +66,8 @@ The blocking constraint is `start_lock`, and it is worth stating precisely becau
 reading blames the wrong thing.
 
 A client request enters `Backend::call_tool` (`src/backend/ops.rs:198`), acquires a semaphore
-permit, and then at `:212` calls `ensure_entry_started`, which takes the pool entry's
-`start_lock` (`src/backend/lifecycle.rs:210`) and runs `start_entry` beneath it. So the existing
+permit, and then at `:210` calls `ensure_entry_started` (`lifecycle.rs:187`), which takes the pool entry's
+`start_lock` (`src/backend/lifecycle.rs:209`, a `tokio::sync::Mutex` per `pool.rs:12,:62`) and runs `start_entry` beneath it. So the existing
 legacy handshake **already** runs while a permit is held. The probe does not introduce that
 position; it inherits it.
 
@@ -92,7 +92,7 @@ one probe rather than stampeding a peer that is by hypothesis already struggling
 
 ### 2. Ordering: HTTP separates spawn from handshake, stdio does not
 
-For HTTP, `lifecycle.rs:369` constructs the transport and then calls `transport.initialize()` as
+For HTTP, `lifecycle.rs:353-368` constructs the transport and `:369` then calls `transport.initialize()` as
 a separate statement. A probe can be issued in between — which is where it belongs, because the
 whole point is to learn the era *without* trusting the handshake.
 
@@ -141,7 +141,7 @@ Two alternatives, both rejected:
 ### How the era is learned
 
 Inside `start_entry`, on the HTTP arm only, between transport construction and
-`transport.initialize()` (`lifecycle.rs:369`): resolve the backend's era through
+`transport.initialize()` (the seam is between `lifecycle.rs:368` and `:369`): resolve the backend's era through
 `EraCache::resolve_with`, whose probe closure sends a `server/discover` request **directly on the
 constructed transport**, and maps the reply into `ProbeOutcome` — a result document into
 `Result`, a JSON-RPC error into `Error(code)`, and a timeout or transport failure into `NoAnswer`.
@@ -220,7 +220,7 @@ This is a design decision made here, not by the criterion, and is named as one p
 | option | why rejected |
 |---|---|
 | probe lazily on first tool call | that is the path holding a semaphore permit and, through `ensure_entry_started`, the `start_lock`. Re-entry self-deadlocks; `ops.rs:104` already records the repo's answer to this shape. |
-| probe from the warm-start task instead of `start_entry` | warm start is not the only way a backend starts — a cold client request starts one too (`ops.rs:212`), so the era would be resolved on one path and absent on the other. |
+| probe from the warm-start task instead of `start_entry` | warm start is not the only way a backend starts — a cold client request starts one too (`ops.rs:210`, and again at `:343,:353` on the notify path), so the era would be resolved on one path and absent on the other. |
 | trust the `initialize` result's `protocolVersion` | this is exactly what DISCOVER.4 forbids: "by probing, not by trusting a version string". A legacy server does not answer a probe with "I am legacy" (`era.rs:5-19`); nor does its handshake prove modernity. |
 | split `stdio::start()` now, to cover both transports in one increment | touches teardown logic at `stdio.rs:246-261` that exists for a stated reason, in the same change that first wires a probe. Deferred below with its four fields. |
 | a background era-refresh task | invents a schedule nothing asks for and re-probes peers with no failure to justify it. YAGNI; the spec caches for the peer's process lifetime. |
@@ -229,11 +229,11 @@ This is a design decision made here, not by the criterion, and is named as one p
 
 Resolved — question, what was run, what came back, what it changed:
 
-1. **Does the 100-permit semaphore have a configuration path?** — `rg -n 'semaphore|concurrency|max_concurrent' src/config/mod.rs` — no matches; the limit at `lifecycle.rs:140` is hardcoded — **changed:** removed "raise the limit" from the options, and ranked permit exhaustion as a secondary degradation behind the `start_lock` re-entry, which is the real failure.
+1. **Does the 100-permit semaphore have a configuration path?** — `rg -n 'semaphore|concurrency|max_concurrent' src/config/` (whole directory) — no matches; the limit at `lifecycle.rs:140` is hardcoded — **changed:** removed "raise the limit" from the options, and ranked permit exhaustion as a secondary degradation behind the `start_lock` re-entry, which is the real failure.
 2. **Can anything at header-build time reach a `Backend`-owned era?** — `rg -n 'build_mcp_headers|self.protocol_version' src/transport/http/mod.rs` — `build_mcp_headers` is `&self` on the transport and reads only `self.protocol_version`; a transport holds no `Backend` reference — **changed:** added the transport snapshot as a reserved seam (constraint 3) with a stated single-owner rule, instead of leaving HEADER.9 to await a `Backend`-owned mutex per outbound request.
 3. **Does stdio's `start()` separate spawning from the handshake?** — read `src/transport/stdio.rs:246-261` — it does not; `start()` calls `initialize()` at `:256` inside the spawn-then-teardown block — **changed:** cut stdio from this increment and deferred it below.
 4. **Is there an existing outbound `server/discover` sender to attach the detector to?** — `rg 'discover'` over `src/backend/`, `src/provider/`, `src/transport/` — only the prose word "discoverable" (`metadata.rs:43`, `cached_metadata.rs:96,:245`, `lifecycle.rs:985`) — **changed:** the increment must build the request path, not merely call `classify`; "wire up the detector" underestimates the work.
-5. **Does `start_entry` already run under `start_lock` while a request permit is held?** — read `src/backend/ops.rs:198,:212` and `src/backend/lifecycle.rs:210` — it does — **changed:** the probe is issued directly on the constructed transport rather than through `Backend::request*`, and the lock-order invariant is stated explicitly.
+5. **Does `start_entry` already run under `start_lock` while a request permit is held?** — read `src/backend/ops.rs:198,:210` and `src/backend/lifecycle.rs:209` — it does; `start_lock` is a non-reentrant `tokio::sync::Mutex` (`pool.rs:12,:62`) — **changed:** the probe is issued directly on the constructed transport rather than through `Backend::request*`, and the lock-order invariant is stated explicitly.
 
 Deferred:
 
