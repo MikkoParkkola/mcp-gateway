@@ -22,7 +22,7 @@ use crate::context_integrity::{
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::suggestions;
 use crate::hashing::{canonical_json, sha256_hex};
-use crate::idempotency::{GuardOutcome, enforce};
+use crate::idempotency::{GuardOutcome, IdempotencyReservation, enforce};
 use crate::identity_grants::{GrantScope, GrantSubject, IdentityGrantRequest};
 use crate::playbook::PlaybookEngine;
 use crate::provider::Transform as _;
@@ -789,6 +789,10 @@ impl MetaMcp {
             .map(|k| format!("{k}{projection_key_suffix}{identity_suffix}"))
         };
 
+        // Owns the in-flight entry from admission until a terminal state. Its
+        // `Drop` releases the key, so an early return after dispatch cannot
+        // strand the entry as in-flight until the guard times out.
+        let mut idem_reservation: Option<IdempotencyReservation> = None;
         if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
             match enforce(idem_cache, key)? {
                 GuardOutcome::CachedResult(cached) => {
@@ -816,7 +820,8 @@ impl MetaMcp {
                         )
                     }));
                 }
-                GuardOutcome::Proceed => {
+                GuardOutcome::Proceed(reservation) => {
+                    idem_reservation = Some(reservation);
                     debug!(
                         server,
                         tool, key, trace_id, "Idempotency key registered as in-flight"
@@ -841,8 +846,10 @@ impl MetaMcp {
                     "kind" => "response"
                 )
                 .increment(1);
-                if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
-                    idem_cache.mark_completed(key, cached.clone());
+                // Terminal state on the response-cache-hit return: settle through
+                // the reservation, or its `Drop` would remove what was just stored.
+                if let Some(reservation) = idem_reservation.as_mut() {
+                    reservation.complete(&cached);
                 }
                 let predictions = self.record_and_predict(session_id, &tool_key);
                 return Ok(GuardedValue::from_cache(cached).augment(|v| {
@@ -1030,8 +1037,8 @@ impl MetaMcp {
                 }
             }
             Err(e) => {
-                if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
-                    idem_cache.remove(key);
+                if let Some(reservation) = idem_reservation.as_mut() {
+                    reservation.release();
                 }
                 // Classify the error and convert to a structured tool-level
                 // error response.  This keeps `isError + content + recovery`
@@ -1059,6 +1066,25 @@ impl MetaMcp {
                 )
             }
         };
+
+        // The backend has acted. Every early return below this point must settle
+        // the idempotency key as completed rather than release it: a released key
+        // readmits the retry that would execute the side effect a second time.
+        // `release()` on the dispatch-error path above has already settled, so
+        // this is a no-op there. The stored value withholds the response body on
+        // purpose — a gate below may be about to block it.
+        if let Some(reservation) = idem_reservation.as_mut() {
+            reservation.commit(&json!({
+                "resultType": "complete",
+                "isError": true,
+                "content": [{
+                    "type": "text",
+                    "text": "Side effect executed; the response was withheld by a \
+                             post-dispatch gate. Retrying with the same idempotency \
+                             key will not re-execute it."
+                }],
+            }));
+        }
 
         // === POST-INVOKE: Response contract gate (issue #133, D1) ===
         //
@@ -1267,12 +1293,15 @@ impl MetaMcp {
             }
         }
 
-        if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key)
-            && idem_cache.mark_completed(key, result.clone())
+        if let Some(reservation) = idem_reservation.as_mut()
+            && reservation.complete(&result)
         {
             debug!(
                 server,
-                tool, key, trace_id, "Idempotency entry marked completed"
+                tool,
+                key = reservation.key(),
+                trace_id,
+                "Idempotency entry marked completed"
             );
         }
 

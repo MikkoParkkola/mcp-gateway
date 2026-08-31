@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
 use serde_json::Value;
 use tracing::debug;
 
@@ -35,6 +36,14 @@ pub const COMPLETED_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// If a tool call does not complete within this window the in-flight marker
 /// is treated as stale and a new execution is allowed.
 pub const IN_FLIGHT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// Maximum number of tracked entries.
+///
+/// Mirrors the response cache bound (`src/config/features/cache.rs:12`). At the
+/// bound the guard fails **closed**: a new protected side effect is refused
+/// rather than an older entry evicted, because evicting readmits the duplicate
+/// that entry existed to suppress. Entries already tracked stay servable.
+pub const MAX_ENTRIES: usize = 10_000;
 
 // ── State machine ─────────────────────────────────────────────────────────────
 
@@ -133,6 +142,33 @@ pub(crate) fn decide_check_plan(status: CacheEntryStatus) -> (CheckPlan, bool) {
     }
 }
 
+/// Outcome of the atomic admission step performed by [`IdempotencyCache::admit`].
+#[derive(Debug)]
+pub(crate) enum AdmitOutcome {
+    /// The key is now registered in-flight for this caller alone.
+    Proceed,
+    /// Another caller holds a live in-flight entry.
+    InFlight,
+    /// A completed entry exists — return the cached result.
+    Completed(Value),
+    /// The cache is at [`MAX_ENTRIES`] and this key is not tracked yet.
+    AtCapacity,
+}
+
+#[must_use]
+fn classify(state: &IdempotencyState) -> CacheEntryStatus {
+    match state {
+        IdempotencyState::InFlight(started) if started.elapsed() <= IN_FLIGHT_TIMEOUT => {
+            CacheEntryStatus::LiveInFlight
+        }
+        IdempotencyState::InFlight(_) => CacheEntryStatus::StaleInFlight,
+        IdempotencyState::Completed(_, stored) if stored.elapsed() <= COMPLETED_TTL => {
+            CacheEntryStatus::LiveCompleted
+        }
+        IdempotencyState::Completed(_, _) => CacheEntryStatus::ExpiredCompleted,
+    }
+}
+
 impl IdempotencyCache {
     /// Create a new, empty cache.
     #[must_use]
@@ -157,16 +193,7 @@ impl IdempotencyCache {
             };
         };
 
-        let status = match entry.value() {
-            IdempotencyState::InFlight(started) if started.elapsed() <= IN_FLIGHT_TIMEOUT => {
-                CacheEntryStatus::LiveInFlight
-            }
-            IdempotencyState::InFlight(_) => CacheEntryStatus::StaleInFlight,
-            IdempotencyState::Completed(_, stored) if stored.elapsed() <= COMPLETED_TTL => {
-                CacheEntryStatus::LiveCompleted
-            }
-            IdempotencyState::Completed(_, _) => CacheEntryStatus::ExpiredCompleted,
-        };
+        let status = classify(entry.value());
 
         let (decision, evict) = decide_check_plan(status);
         if evict {
@@ -184,6 +211,51 @@ impl IdempotencyCache {
                     unreachable!("live completed status must hold a completed value");
                 };
                 CheckOutcome::Completed(value.clone())
+            }
+        }
+    }
+
+    /// Atomically inspect `key` and, when nothing else owns it, register it as
+    /// in-flight in the same operation.
+    ///
+    /// `check` followed by `mark_in_flight` is two independent `DashMap`
+    /// operations, so two concurrent retries of one key could both observe
+    /// `Proceed` and both execute. Holding a single entry guard across the
+    /// inspect and the write closes that window.
+    pub(crate) fn admit(&self, key: &str) -> AdmitOutcome {
+        // `DashMap::len` read-locks every shard, so it must be read *before*
+        // the entry guard below takes a shard write lock — reading it inside
+        // the guard's scope deadlocks. The count can therefore grow by at most
+        // the number of callers racing admission of distinct new keys.
+        let at_capacity = self.entries.len() >= MAX_ENTRIES;
+
+        match self.entries.entry(key.to_string()) {
+            Entry::Occupied(mut occupied) => {
+                let (plan, evict) = decide_check_plan(classify(occupied.get()));
+                match plan {
+                    CheckPlan::InFlight => AdmitOutcome::InFlight,
+                    CheckPlan::Completed => {
+                        let IdempotencyState::Completed(value, _) = occupied.get() else {
+                            unreachable!("live completed status must hold a completed value");
+                        };
+                        AdmitOutcome::Completed(value.clone())
+                    }
+                    CheckPlan::Proceed => {
+                        debug_assert!(evict, "an occupied entry only proceeds after eviction");
+                        // Replacing in place keeps the entry count flat, so a
+                        // stale entry never costs a caller its admission.
+                        occupied.insert(IdempotencyState::InFlight(Instant::now()));
+                        debug!(key, "Replaced stale idempotency entry");
+                        AdmitOutcome::Proceed
+                    }
+                }
+            }
+            Entry::Vacant(vacant) => {
+                if at_capacity {
+                    return AdmitOutcome::AtCapacity;
+                }
+                vacant.insert(IdempotencyState::InFlight(Instant::now()));
+                AdmitOutcome::Proceed
             }
         }
     }
@@ -318,11 +390,109 @@ pub fn derive_key(tool_name: &str, arguments: &Value) -> String {
 
 // ── Idempotency enforcement ───────────────────────────────────────────────────
 
+/// Owned reservation of an admitted idempotency key.
+///
+/// Holding one is the right to execute the protected side effect exactly once.
+/// Every exit path after admission reaches a terminal state, so no early return
+/// can strand an entry as in-flight until [`IN_FLIGHT_TIMEOUT`]. Which terminal
+/// state depends on whether the side effect has run: before
+/// [`commit`](Self::commit) a drop releases the key so the call can be retried;
+/// after it, a drop stores the committed result, because once the backend has
+/// acted a retry must not execute it again.
+#[derive(Debug)]
+pub struct IdempotencyReservation {
+    cache: Arc<IdempotencyCache>,
+    key: String,
+    settled: bool,
+    on_drop: OnDrop,
+}
+
+/// What an unsettled [`IdempotencyReservation`] does when it is dropped.
+#[derive(Debug)]
+enum OnDrop {
+    /// Nothing has been executed yet — free the key so the call can be retried.
+    Release,
+    /// The protected side effect has committed — settle with this result so a
+    /// retry is served the cached value instead of re-executing.
+    Complete(Value),
+}
+
+impl IdempotencyReservation {
+    fn new(cache: Arc<IdempotencyCache>, key: &str) -> Self {
+        Self {
+            cache,
+            key: key.to_string(),
+            settled: false,
+            on_drop: OnDrop::Release,
+        }
+    }
+
+    /// The key this reservation owns.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Settle by storing `result`. Returns whether it was cached — a non-final
+    /// result is refused by [`IdempotencyCache::mark_completed`] and the key is
+    /// released instead, so the call stays retryable.
+    ///
+    /// Callable after [`release`](Self::release): a failed dispatch releases the
+    /// key first and may still store a structured error result afterwards, which
+    /// is the behaviour the invoke path already relied on.
+    pub fn complete(&mut self, result: &Value) -> bool {
+        self.settled = true;
+        self.cache.mark_completed(&self.key, result.clone())
+    }
+
+    /// Record that the protected side effect has committed.
+    ///
+    /// After this, dropping the reservation unsettled stores `result` as the
+    /// terminal state instead of releasing the key. Once a backend has acted, a
+    /// post-dispatch early return must not readmit the retry that would execute
+    /// it a second time. No-op once the reservation is already settled.
+    pub fn commit(&mut self, result: &Value) {
+        if !self.settled {
+            self.on_drop = OnDrop::Complete(result.clone());
+        }
+    }
+
+    /// Settle by releasing the key so the call can be retried.
+    pub fn release(&mut self) {
+        self.settled = true;
+        self.cache.remove(&self.key);
+    }
+}
+
+impl Drop for IdempotencyReservation {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        match std::mem::replace(&mut self.on_drop, OnDrop::Release) {
+            OnDrop::Release => {
+                self.cache.remove(&self.key);
+                debug!(key = %self.key, "Released abandoned idempotency reservation");
+            }
+            OnDrop::Complete(result) => {
+                if self.cache.mark_completed(&self.key, result) {
+                    debug!(key = %self.key, "Settled abandoned idempotency reservation");
+                } else {
+                    // A non-final result is refused by `mark_completed`. Leaving
+                    // the entry in flight is the one outcome this guard exists to
+                    // prevent, so fall back to releasing the key.
+                    self.cache.remove(&self.key);
+                }
+            }
+        }
+    }
+}
+
 /// Outcome of the idempotency guard.
 #[derive(Debug)]
 pub enum GuardOutcome {
-    /// Proceed with execution; the key has been registered as in-flight.
-    Proceed,
+    /// Proceed with execution, holding the reservation for the key.
+    Proceed(IdempotencyReservation),
     /// Return the cached result — no execution needed.
     CachedResult(Value),
 }
@@ -332,19 +502,27 @@ pub enum GuardOutcome {
 ///
 /// # Errors
 ///
-/// Returns [`Error::DuplicateRequest`] (HTTP 409 equivalent) when an identical
-/// request is already in flight.
-pub fn enforce(cache: &IdempotencyCache, key: &str) -> Result<GuardOutcome> {
-    match cache.check(key) {
-        CheckOutcome::Proceed => {
-            cache.mark_in_flight(key);
-            Ok(GuardOutcome::Proceed)
-        }
-        CheckOutcome::InFlight => Err(Error::json_rpc(
+/// Returns a 409 error when an identical request is already in flight, and a
+/// 503 error when the cache is at [`MAX_ENTRIES`] and the key is not yet
+/// tracked — refusing rather than evicting, since eviction readmits a duplicate.
+pub fn enforce(cache: &Arc<IdempotencyCache>, key: &str) -> Result<GuardOutcome> {
+    match cache.admit(key) {
+        AdmitOutcome::Proceed => Ok(GuardOutcome::Proceed(IdempotencyReservation::new(
+            Arc::clone(cache),
+            key,
+        ))),
+        AdmitOutcome::InFlight => Err(Error::json_rpc(
             409,
             format!("Duplicate request in progress for key: {key}"),
         )),
-        CheckOutcome::Completed(value) => Ok(GuardOutcome::CachedResult(value)),
+        AdmitOutcome::Completed(value) => Ok(GuardOutcome::CachedResult(value)),
+        AdmitOutcome::AtCapacity => Err(Error::json_rpc(
+            503,
+            format!(
+                "Idempotency cache at capacity ({MAX_ENTRIES} entries); \
+                 refusing new protected request for key: {key}"
+            ),
+        )),
     }
 }
 
@@ -578,9 +756,9 @@ mod tests {
         // GIVEN: an empty cache
         // WHEN: enforcing on a new key
         // THEN: Proceed, and the key is now in-flight
-        let cache = IdempotencyCache::new();
+        let cache = Arc::new(IdempotencyCache::new());
         let outcome = enforce(&cache, "k1").expect("should not fail");
-        assert!(matches!(outcome, GuardOutcome::Proceed));
+        assert!(matches!(outcome, GuardOutcome::Proceed(_)));
         assert!(matches!(cache.check("k1"), CheckOutcome::InFlight));
     }
 
@@ -589,13 +767,13 @@ mod tests {
         // GIVEN: a completed key in cache
         // WHEN: enforcing on that key
         // THEN: CachedResult with the stored value
-        let cache = IdempotencyCache::new();
+        let cache = Arc::new(IdempotencyCache::new());
         let expected = json!({"done": true});
         cache.mark_in_flight("k2");
         cache.mark_completed("k2", expected.clone());
         match enforce(&cache, "k2").expect("should not fail") {
             GuardOutcome::CachedResult(v) => assert_eq!(v, expected),
-            GuardOutcome::Proceed => panic!("expected CachedResult"),
+            GuardOutcome::Proceed(_) => panic!("expected CachedResult"),
         }
     }
 
@@ -604,7 +782,7 @@ mod tests {
         // GIVEN: a live in-flight key
         // WHEN: enforcing on the same key from a concurrent caller
         // THEN: Err with code 409
-        let cache = IdempotencyCache::new();
+        let cache = Arc::new(IdempotencyCache::new());
         cache.mark_in_flight("k3");
         let err = enforce(&cache, "k3").expect_err("should return 409");
         match err {
