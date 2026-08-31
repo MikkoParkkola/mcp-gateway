@@ -817,7 +817,10 @@ impl MetaToolExposure {
     /// Every list path goes through here, so a builder added later is filtered
     /// by construction rather than by remembering to filter it.
     pub(crate) fn filter(&self, tools: Vec<Tool>) -> Vec<Tool> {
-        tools.into_iter().filter(|t| self.is_exposed(&t.name)).collect()
+        tools
+            .into_iter()
+            .filter(|t| self.is_exposed(&t.name))
+            .collect()
     }
 }
 

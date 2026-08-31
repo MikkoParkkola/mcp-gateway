@@ -206,7 +206,8 @@ pub(crate) fn build_discovery_preamble(
     // the existence of tools the allow-list hides - the same disclosure the
     // refusal path is worded to avoid - and would steer clients into calls the
     // gateway then refuses.
-    let mut out = format!("This server manages {tool_count} tools across {server_count} backends.\n");
+    let mut out =
+        format!("This server manages {tool_count} tools across {server_count} backends.\n");
     let search = exposure.is_exposed("gateway_search_tools");
     let invoke = exposure.is_exposed("gateway_invoke");
     let list_tools = exposure.is_exposed("gateway_list_tools");
@@ -236,7 +237,9 @@ pub(crate) fn build_discovery_preamble(
     if list_tools || list_servers {
         out.push_str("\nDirect listing (when you know the backend):\n");
         if list_tools {
-            out.push_str("- gateway_list_tools(server=\"brave\") -- list tools from a specific backend\n");
+            out.push_str(
+                "- gateway_list_tools(server=\"brave\") -- list tools from a specific backend\n",
+            );
         }
         if list_servers {
             out.push_str("- gateway_list_servers -- list all backends with status\n");

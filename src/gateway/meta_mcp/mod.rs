@@ -1145,7 +1145,8 @@ impl MetaMcp {
             server_count += 1;
         }
 
-        let mut instructions = build_discovery_preamble(tool_count, server_count, &self.meta_tool_exposure);
+        let mut instructions =
+            build_discovery_preamble(tool_count, server_count, &self.meta_tool_exposure);
 
         if let Some(cap) = self.get_capabilities() {
             let caps = cap.list_capabilities();
@@ -1343,11 +1344,7 @@ impl MetaMcp {
         // an operator hiding a tool must not get a reply confirming it exists and
         // was deliberately withheld.
         if !self.meta_tool_exposure.is_exposed(tool_name) {
-            return JsonRpcResponse::error(
-                Some(id),
-                -32601,
-                format!("Unknown tool: {tool_name}"),
-            );
+            return JsonRpcResponse::error(Some(id), -32601, format!("Unknown tool: {tool_name}"));
         }
 
         // T2.4: Check surfaced tools BEFORE the meta-tool match.
