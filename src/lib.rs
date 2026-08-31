@@ -20,7 +20,6 @@
 //! - 2025-06-18
 //! - 2025-03-26 (Streamable HTTP)
 //! - 2024-11-05
-//! - 2024-10-07
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]

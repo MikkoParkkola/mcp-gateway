@@ -1,11 +1,11 @@
 <!-- SPDX-FileCopyrightText: 2026 Mikko Parkkola -->
 <!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
 
-# 4.0.0 release: acceptance criteria verified against source, 56 of 73
+# 4.0.0 release: acceptance criteria verified against source, 63 of 73
 
 Criterion groups recorded here — MRTR, cache and header (incl. HEADER.7-9), control on the
-stateless path, identity, a 7-criterion slice of MIK-7272 (RESULT/ERROR/ORDER), and the MIK-7246
-destructive-confirmation gate. The remaining groups in the requirements document have not been
+stateless path, identity, a 7-criterion slice of MIK-7272 (RESULT/ERROR/ORDER), the MIK-7246
+destructive-confirmation gate, and the MIK-7217 discovery/era group. The remaining groups in the requirements document have not been
 swept, so the blocking count below is a floor. Each group's disagreements with earlier documents
 are logged under `audit-notes/`.
 
@@ -141,9 +141,31 @@ Note: OAUTH.1-3 are the strongest-evidenced rows in this group — no caveats, d
 
 Note: CONFIRM.1 and CONFIRM.3 read as solidly wired — this is the one MIK-7246/MIK-7215-adjacent group in this audit where the code changed *after* an earlier module header ("An earlier version proceeded on a warning...") rather than the header describing aspirational behaviour never built. CONFIRM.2 is the opposite case: the requirement assumes MRTR delivers a working confirmation channel to a modern (session-less) client, but MRTR is itself unwired, so CONFIRM.2 cannot be met until MIK-7212's MRTR work lands — today a modern client's destructive calls are refused unconditionally, not confirmed.
 
+## MIK-7217 (DISCOVER) — `server/discover` and backend era detection, 7 of 7
+
+| criterion ID | requirement (short) | status | evidence (file:line) | blocking |
+|---|---|---|---|---|
+| MIK-7217.DISCOVER.1 | the server MUST answer `server/discover` with a complete document: supported versions, capabilities, server info | MET (caveat) | Built by `MetaMcpServer::discover_document(&self, modern_enabled: bool)` (`src/gateway/meta_mcp/mod.rs:1002`), which emits `resultType:"complete"`, `supportedVersions`, `capabilities` and `_meta["io.modelcontextprotocol/serverInfo"]`. Wired on both dispatch paths: stdio at `src/gateway/server/mod.rs:1686` inside `Gateway::dispatch_single` (fn at `:1655`, production callers at `:1603` and `:1791` from `run_stdio`), Streamable HTTP at `src/gateway/router/handlers.rs:826`. Tested at `tests/mik_7217_acs.rs:395` and `:428`, plus an inline dispatcher test at `src/gateway/server/mod.rs:2362`. CAVEAT: the stdio arm passes `modern_enabled: false` unconditionally, so a stdio client's document advertises the legacy tool list only. This is self-documented as a known limitation at `src/gateway/server/mod.rs:1687-1693`, not an oversight. | no |
+| MIK-7217.DISCOVER.2 | `server/discover` MUST be answerable before `initialize` and without a session | MET | The `server/discover` match arm precedes the `initialize` arm in both dispatchers (`src/gateway/server/mod.rs:1686`, `src/gateway/router/handlers.rs:826`), so no handshake state is consulted. `tests/mik_7217_acs.rs:160` and `:175` assert the serialised document contains neither `sessionId` nor `session_id`; `:450` drives the production `create_router` with no Origin header and no prior `initialize` and asserts `StatusCode::OK` (auth deliberately disabled in the fixture so the assertion observes the discovery path, not the auth path). | no |
+| MIK-7217.DISCOVER.3 | adding discovery MUST NOT change the existing `initialize` result for a 2025 client | MET | `ac_discover_3_initialize_result_is_unchanged` (`tests/mik_7217_acs.rs:213`) loops `["2025-11-25","2025-06-18"]` through the production `handle_initialize` and compares byte-for-byte against captured goldens, normalising only `serverInfo.version` (asserted separately against `CARGO_PKG_VERSION`) and then re-asserting `golden["protocolVersion"] == client_version` so a regression that renegotiated every client onto one revision could not match. Falsifiability checked: all four goldens exist on disk (`tests/fixtures/mik_7217/initialize_3_5_0_{2025_06_18,2025_11_25}_{default,spec_preview}.json`); a missing golden panics with an explicit message (`tests/mik_7217_acs.rs:257-264`) rather than skipping, and the auto-capture branch runs only under `UPDATE_GOLDEN=1` (`:244`). The test can fail. | no |
+| MIK-7217.DISCOVER.4 | the gateway MUST detect a backend's protocol era by probing, not by trusting a version string | **UNWIRED** | The detector is fully built: `classify`, `ProbeOutcome` and `Era` at `src/protocol/era.rs:20-100`, module declared `pub mod era` at `src/protocol/mod.rs:8`, header comment at `src/protocol/era.rs:5-19` describing shipped client behaviour ("It probes `server/discover` instead and reads the *shape* of the answer"). Nothing calls it. `rg 'protocol::era\|era::\|EraCache\|ProbeOutcome\|classify\('` over `src/` returns zero non-test callers outside `era.rs` itself (the only other hit is an unrelated `ToolCategory::classify` at `src/security/data_flow.rs:65`). Stronger than "uncalled": **no outbound `server/discover` request is constructed anywhere in `src/`** — `rg 'discover'` over `src/backend/`, `src/provider/` and `src/transport/` returns only the prose word "discoverable" (`metadata.rs:43`, `cached_metadata.rs:96,:245`, `lifecycle.rs:985`). There is no sender to wire. Exercised only from tests: `tests/mik_7217_acs.rs:478-600`, `tests/mik_7212_acs.rs:1333-1355`. | yes |
+| MIK-7217.DISCOVER.5 | the detected era MUST be cached per backend and re-probed when a cached assumption fails | **UNWIRED** | `EraCache` at `src/protocol/era.rs:114-170` provides `new`/`cached`/`invalidate`/`resolve_with` over a tokio `Mutex`, and deliberately does not cache `NoAnswer` (`:164-167`, comment citing "Found by adversarial review, 2026-08-29"). Same zero-non-test-caller result as DISCOVER.4. Both halves of the criterion are unimplemented rather than merely uncalled: the cache holds a **single `Option<Era>` with no backend keying** (`:114-170`), so "per backend" has no representation in the type; and `invalidate()` has no production trigger, so "re-probed when a cached assumption fails" has no caller to fail. Exercised only from tests: `tests/mik_7217_acs.rs:611-700` (`mod era_cache`), `tests/mik_7212_acs.rs:1365-1390`. | yes |
+| MIK-7217.DISCOVER.6 | a backend that is slow to start MUST be retried on a pinned schedule rather than declared dead | MET | `WarmStartPolicy` at `src/gateway/server/warmstart.rs:23-58`; the schedule function `gap_before_attempt` at `:60-78`. Production path traced end to end: `spawn_warm_start_task` is called from `src/gateway/server/mod.rs:1342` (HTTP) and `:1538` (stdio), builds `Arc::new(WarmStartPolicy::default())` at `warmstart.rs:414`, hands it to `warm_start_until_cached` at `:432`, which calls `gap_before_attempt(policy, n, started.elapsed())` at `:263` — so the values the test pins are the values production runs. Pinned by `ac_discover_6_the_retry_schedule_is_pinned_in_seconds` (`warmstart.rs:751`): `fast_deadline` 180s, `initial_gap` 2s, `max_gap` 30s, `slow_gap` 60s, `attempt_timeout` 120s, with the relationship tests at `:729-793`. NOTE: the requirement cites `src/backend/lifecycle.rs`; the schedule is not there — it is in `src/gateway/server/warmstart.rs`. | no |
+| MIK-7217.DISCOVER.7 | `2024-10-07` MUST NOT appear in any advertised version list | MET (residual) | `src/protocol/mod.rs:43`: `pub const SUPPORTED_VERSIONS: &[&str] = &["2025-11-25","2025-06-18","2025-03-26","2024-11-05"];` — the revision is gone, with the rationale recorded in the comment at `:32`. Tested: `tests/integration.rs:26` asserts `!SUPPORTED_VERSIONS.contains(&"2024-10-07")`, `:37` asserts `negotiate_version("2024-10-07") == "2025-11-25"`, and `tests/mik_7217_acs.rs:113-127` asserts no spec-undefined revision appears at all. `docs/ARCHITECTURE.md:65` is clean ("2024-11-05 through 2026-07-28"). RESIDUAL: `src/lib.rs:23` still carries `//! - 2024-10-07` in the crate-level docs. That is a doc-comment, not an advertised version list — outside the surface this criterion names — so it does not change the verdict, but it contradicts the removal and should be deleted. | no |
+
+Note: two of seven are the repository's signature failure mode, and they are the two that matter
+most for this group. `src/protocol/era.rs` is a complete, adversarially reviewed, heavily
+unit-tested subsystem whose own header describes a caller that does not exist — the gateway never
+probes any backend's era, because nothing in `src/` ever sends a `server/discover` request. That is
+the same shape already logged in this file for EXT.1, OTEL.1 and TASK.1: built, tested, unreachable.
+The inbound half of MIK-7217 (DISCOVER.1-3, .7) is genuinely shipped and genuinely tested; the
+outbound half (DISCOVER.4-5) is not started, notwithstanding the code that exists for it.
+DISCOVER.6 is met but is documented against the wrong file, which is worth fixing in the
+requirement rather than in the code.
+
 ## What this audit does not cover
 
-This file audits 56 criteria. The requirements list 73. The 17 it never reached are not passing and
+This file audits 63 criteria. The requirements list 73. The 10 it never reached are not passing and
 not failing — they are unexamined, and a reader totalling the rows above will read a release as
 further along than it is.
 
@@ -151,7 +173,7 @@ further along than it is.
 |---|---|---|
 | MIK-7272 (RESULT.1-2, ERROR.1-2, ORDER.1-3) | 7 of 17 | yes — see MIK-7272 section above |
 | MIK-7272 (EXT, OAUTH, OTEL, SUB, TASK) | 10 of 17 | none |
-| MIK-7217.DISCOVER | 7 | none |
+| MIK-7217.DISCOVER | 7 | yes, 2026-08-31 — see MIK-7217 section above (5 MET, 2 UNWIRED/blocking) |
 | MIK-7246.CONFIRM | 3 | yes, 2026-08-31 — see MIK-7246 section above (2 MET, 1 ABSENT/blocking) |
 | MIK-7214.HEADER.7-9 | 3 | yes, 2026-08-31 — see MIK-7213/7214 section above (HEADER.7 and .8 MET without caveat as of 2026-08-31; HEADER.9 ABSENT/blocking) |
 | MIK-7214.HEADER.5 | 1 | corrected twice on 2026-08-31: recorded ABSENT, revised to UNWIRED when `param_headers.rs` landed, back to ABSENT once its unwired outbound helpers were deleted rather than kept as dead API |

@@ -184,8 +184,8 @@ and one feature flag.
 
 `RELEASE-4.0.0-criteria-status.md` verified acceptance criteria against `src/` and `tests/`
 directly, never against another document's claim. Result: 33 MET, 14 ABSENT, 12 UNWIRED, 4 MET
-with a caveat, 1 UNTESTED. Thirty-one criteria are blocking, and the queue above owns fourteen of
-them. The other seventeen have no owner anywhere.
+with a caveat, 1 UNTESTED. Thirty-three criteria are blocking, and the queue above owns fourteen of
+them. The other nineteen have no owner anywhere.
 
 Read as a plan the queue is not wrong, it is short. That is the finding.
 
@@ -197,7 +197,7 @@ Read as a plan the queue is not wrong, it is short. That is the finding.
 | 6 | Outbound request envelope | HEADER.5, HEADER.9 | Both are the outbound half of the request builder: mirroring an argument onto `Mcp-Param-{name}`, and carrying the modern `_meta` envelope. One mechanism, one design, one review. HEADER.5's validation half already exists (`param_headers.rs::mirrored_params`) and is waiting for a sender |
 | 7 | Principal-keyed control plane | TENANT.1, CONTROL.2, CONTROL.3, CONTROL.4 | Every one says the same thing: key on the authenticated principal or the trace id, never on the session. Splitting them means designing that substitution four times. Work on the first two is already in flight in another session (`src/security/firewall/tenant_guard.rs`, `principal_window.rs`, both untracked) — this increment must start by reconciling with it, not by rebuilding it |
 | 8 | Modern-path conformance | RESULT.2, ERROR.2, ORDER.2, SUB.3, SUB.4 | Five corrections to what the 2026 path returns and advertises: a default when a backend reply omits a field, `-32602` for resource-not-found, a tool set that cannot vary per connection, removal of SSE resumability, and the retry-after-broken-stream case that has code but no test |
-| 9 | Declare-or-delete the unwired surface | EXT.1, OTEL.1 | `ExtensionSet::gateway_declares` and `TraceContext` are built, unit-tested, and have zero production call sites — each carries a doc comment admitting it. Full scope means wiring them, not deleting them; the deletion arm is recorded here only because HEADER.5 took it three days ago and the precedent should be visible when this is decided |
+| 9 | Declare-or-delete the unwired surface | EXT.1, OTEL.1, DISCOVER.4, DISCOVER.5 | `ExtensionSet::gateway_declares` and `TraceContext` are built, unit-tested, and have zero production call sites — each carries a doc comment admitting it. Full scope means wiring them, not deleting them; the deletion arm is recorded here only because HEADER.5 took it three days ago and the precedent should be visible when this is decided |
 
 CONFIRM.2 is not in the table: the destructive-confirmation gate must be reachable through the MRTR
 path, so it closes when item 1 wires that path or it does not close at all. It rides on item 1 as an
@@ -212,9 +212,9 @@ increment. Nothing else in this plan has that ratio, which is why it stays first
 
 ### Two things this plan still does not know
 
-- **MIK-7217.DISCOVER, 7 criteria, unswept.** The blocking count of 31 is a floor. Sweeping
-  DISCOVER can only raise it, and it should happen before anyone commits to a release date rather
-  than after.
+- ~~MIK-7217.DISCOVER, unswept~~ — **swept 2026-08-31, 5 MET and 2 blocking**, raising the count
+  from 31 to 33 exactly as predicted. Both blockers (DISCOVER.4, DISCOVER.5) are the era detector,
+  and they join increment 9.
 - **Four criteria are MET with a caveat and two are MET on inference** (SCHEMA.1, SURFACE.1,
   SUB.1, SUB.2; ORDER.3, CONTROL.5). Each is either a criterion that passes or evidence that has
   not been produced yet, and today nobody can tell which from the record. Resolving six caveats is
@@ -230,3 +230,43 @@ colliding grows daily.
 The reordering trigger: if the DISCOVER sweep returns a blocking criterion in a module any of these
 increments touches, that increment absorbs it rather than queueing behind it. Discovering a
 neighbour's gap while already holding the file is the cheapest moment there will ever be to fix it.
+
+### The fourteen unwired criteria are one defect, not fourteen
+
+Increment 9 was written as a tidy-up. The DISCOVER sweep showed it is the release's actual shape.
+
+`src/protocol/era.rs` is complete, adversarially reviewed — its own comments cite "Found by
+adversarial review, 2026-08-29" — and heavily unit-tested. Nothing in `src/` imports it. A search
+for an outbound `server/discover` request finds only the *inbound* dispatcher arms
+(`server/mod.rs:1686`, `handlers.rs:826`), doc comments, and tests. The gateway can answer a
+discovery probe and cannot issue one.
+
+That is the same shape as every other unwired criterion, and once seen it does not unsee:
+
+| criterion | half that exists | half that does not |
+|---|---|---|
+| HEADER.5 | `mirrored_params` validates a mirrored header | nothing mirrors an argument onto one |
+| DISCOVER.4, .5 | the era detector reads a probe result | nothing sends a probe |
+| EXT.1 | `ExtensionSet::gateway_declares` builds a declaration | nothing declares it |
+| OTEL.1 | `TraceContext` parses and carries trace headers | nothing propagates them outbound |
+| MRTR.1-.8 | the continuation is minted, sealed and verified | no production path mints one |
+
+The receiving half is always the one that exists. It is also always the half that is easy to
+unit-test in isolation, which is why all of it is green and none of it runs. A test that constructs
+an `Era` and asserts the detector classifies it correctly passes whether or not a probe is ever
+sent — the fixture supplies what production never produces.
+
+Two consequences for this plan, both concrete:
+
+- Increment 9 is not five wirings, it is **one question asked five times**: which component owns the
+  outbound side of a protocol feature. Answering it once and applying it beats five designs, and
+  splitting it across five increments guarantees five different answers.
+- `EraCache` (`era.rs:111`) holds a single `Option<Era>` under one mutex, with no backend keying at
+  all. DISCOVER.5 says *per backend*. The type cannot represent the requirement, so this is not a
+  wiring job with a caching detail attached — the cache is redesigned or the criterion is not met.
+  `invalidate()` likewise has no production trigger.
+
+The test-plan rule that would have caught this class is already written down (`§P2`: can this case
+actually fail?). It was applied to test *assertions* and not to the question of whether the
+production path under test is ever entered. A unit test over an unimported module is a case that
+cannot fail, for the most complete reason available.
