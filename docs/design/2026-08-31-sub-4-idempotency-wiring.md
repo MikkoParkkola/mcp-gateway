@@ -151,11 +151,11 @@ advertised and validated. Nothing in the tree advertises one. This axis is upstr
 two: deleting the automatic derivation with no carrier leaves the criterion unsatisfiable, and
 keeping it leaves the silent-dedup defect P2.
 
-PROPOSED, NOT DECIDED. An earlier revision recorded this axis as settled "by the operator's
-instruction". No such instruction appears in the session record, and this document's own
-open-questions table states the question was asked and drew no answer. The attribution is
-withdrawn: what follows is the design's own recommendation, and it carries the weight of a
-recommendation until a person confirms it.
+DECIDED 2026-08-31. Asked of the operator, four options put with their costs, answered:
+the key travels in `_meta` on both routes. An earlier revision recorded this axis as already
+settled by an operator instruction the session record does not contain; that attribution was
+withdrawn and the question re-put. The reasoning below is the design's, the choice is the
+operator's.
 
 The specification is not silent. `_meta` is the protocol's own field for out-of-band data on a
 request, so the meta route carries the key at `params._meta["io.mcp-gateway/idempotency-key"]`.
@@ -175,7 +175,7 @@ otherwise.
 
 | question | how it is settled | state |
 |---|---|---|
-| What carries a retry key, on both routes? | ASKED 2026-08-31, four options put, no answer within the turn. Rejected in the ask: an HTTP header alone (a stdio client has no HTTP layer, so protection stays unreachable for local setups), `_meta` alone (spec-native and stdio-safe, but the direct route is raw JSON-RPC passthrough needing new plumbing, and no client sends it today), and keeping automatic derivation (ships fastest, keeps P2's silent 24-hour collapse of deliberate repeats). | ASKED, UNANSWERED — a working assumption is recorded above; blocks all code |
+| What carries a retry key, on both routes? | ASKED 2026-08-31, four options put, ANSWERED: `_meta` on both routes. Rejected in the ask: an HTTP header alone (a stdio client has no HTTP layer, so protection stays unreachable for local setups), `_meta` alone (spec-native and stdio-safe, but the direct route is raw JSON-RPC passthrough needing new plumbing, and no client sends it today), and keeping automatic derivation (ships fastest, keeps P2's silent 24-hour collapse of deliberate repeats). | RESOLVED — `_meta` on both routes; code unblocked |
 | May an operator disable protection a criterion states as MUST? | DECIDED on the requirement rather than asked: no. A switch makes the criterion unverifiable wherever the running configuration differs from the shipped default. Recorded so it can be overruled, not so it can be confirmed. | RESOLVED — overrulable |
 | Does ADR-008 bear on the direct route's bypass? | CHECKED end to end. It does not; rung 2 is client-native OAuth passthrough. What it does bind is INV-3. CHANGED: the bypass loses its justification and axis 2 gains a placement constraint. | RESOLVED |
 | What capacity bound, and what happens at the bound? | CHECKED `src/config/features/cache.rs:12` and `src/cache.rs:185-204`: bound 10_000, policy evict-oldest. CHANGED: take the number, reject the policy, fail closed. | RESOLVED |
