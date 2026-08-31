@@ -479,7 +479,13 @@ change than the criterion requires, and (a) or (b) closes the criterion without
 it. Worth answering anyway because the same question is open in other clusters
 where session identity is used as a key.
 
-**§4.3 — `SUB.2`'s second clause requires emitting. Does v4.0.0 meet it, or is the
+**§4.3 — RESOLVED 2026-08-31, by the operator, asked and answered: option (i),
+v4.0.0 meets `SUB.2` as written.** The criterion is not amended. The §II.2
+transport work and the §II.5 shared identity are in scope for this release and
+land together with the MRTR increment, as the table below anticipated. The
+question as originally posed follows.
+
+**`SUB.2`'s second clause requires emitting. Does v4.0.0 meet it, or is the
 criterion being amended?**
 Reframed after review, which was right that the earlier wording let a
 nonconformant release look like a design option. It is not one: `SUB.2` as written
