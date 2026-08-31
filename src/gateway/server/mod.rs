@@ -1160,6 +1160,18 @@ impl Gateway {
             Some(fw)
         };
 
+        // Firewall session reaper (MIK-7215.CONTROL.4). Only meaningful in HTTP
+        // mode: `run_stdio` dispatches through `MetaMcp` directly and never
+        // calls `Firewall::check_request`, so nothing ever arms a TTL there.
+        // This `firewall_arc` (not `MetaMcp`'s own firewall instance, built
+        // separately in `build_meta_mcp` for tool-list scanning) is the one
+        // `check_request` runs against, and the clone below is cheap — an
+        // `Arc` bump, not a second detector.
+        #[cfg(feature = "firewall")]
+        if let Some(ref fw) = firewall_arc {
+            spawn_firewall_session_reaper(Arc::clone(fw), shutdown_tx.subscribe());
+        }
+
         // Keep a clone of meta_mcp for post-shutdown operations (periodic
         // persistence and graceful shutdown cost saves use this handle).
         let meta_mcp_for_shutdown = Arc::clone(&meta_mcp);
@@ -1361,6 +1373,7 @@ impl Gateway {
         // mode and silently does nothing in the other is the same class of defect
         // this feature exists to correct.
         spawn_idle_reaper(Arc::clone(&self.backends), Some(shutdown_tx.subscribe()));
+
 
         // Spawn periodic cost-governance persistence (every 5 minutes)
         #[cfg(feature = "cost-governance")]
@@ -1954,6 +1967,34 @@ fn spawn_health_loop(
                     break;
                 }
             }
+        }
+    })
+}
+
+/// Periodically reclaims expired anomaly-detector baselines (MIK-7215.CONTROL.4).
+///
+/// A disconnect-driven reclaim (`Firewall::on_session_end`) exists too, but
+/// MCP 2026-07-28 removed protocol sessions, so a stateless or
+/// credential-keyed caller never disconnects in a way this gateway observes —
+/// the TTL swept here is the only thing that ever reclaims that caller's
+/// entry. Sweep interval is independent of the configured TTL (default one
+/// hour): a short interval bounds how far reclaim can lag the deadline, and
+/// scanning a small or empty map is cheap relative to that bound.
+#[cfg(feature = "firewall")]
+fn spawn_firewall_session_reaper(
+    firewall: Arc<Firewall>,
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
+) -> tokio::task::JoinHandle<()> {
+    const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(SWEEP_INTERVAL);
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {}
+                _ = shutdown.recv() => break,
+            }
+            firewall.reap_sessions();
         }
     })
 }

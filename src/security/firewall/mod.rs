@@ -20,10 +20,12 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::gateway::session_lifecycle::SessionLifecycle;
 use crate::security::ResponseScanner;
 use crate::transition::TransitionTracker;
 
@@ -107,10 +109,29 @@ pub struct FirewallConfig {
     /// [`budget_guard`] for why the key is the principal, not the session.
     #[serde(default)]
     pub budget: budget_guard::BudgetGuardConfig,
+    /// TTL for one identity's anomaly-detector baseline (MIK-7215.CONTROL.4).
+    ///
+    /// Keyed on the same `control_identity` `check_request` scores on — never
+    /// the raw session id, for the same reason [`budget`](Self::budget) is
+    /// principal-keyed. Only meaningful when `anomaly_detection = true`;
+    /// [`Firewall::track_session`] is a no-op otherwise, so an idle default
+    /// costs nothing when the detector itself is off.
+    #[serde(default = "default_anomaly_session_ttl_secs")]
+    pub anomaly_session_ttl_secs: u64,
 }
 
 fn default_anomaly_threshold() -> f64 {
     0.7
+}
+
+/// Default TTL for one identity's anomaly-detector baseline: one hour.
+///
+/// Matches the idle-reaper's per-user slot TTL order of magnitude
+/// (`PER_USER_IDLE_TTL` in `gateway::server`) — long enough that an active
+/// caller's baseline survives normal gaps between calls, short enough that a
+/// caller who never comes back is reclaimed the same day, not never.
+fn default_anomaly_session_ttl_secs() -> u64 {
+    3600
 }
 
 impl Default for FirewallConfig {
@@ -128,6 +149,7 @@ impl Default for FirewallConfig {
             anomaly_threshold: default_anomaly_threshold(),
             anomaly_block_threshold: None, // opt-in: None = log-only (backward compat)
             budget: budget_guard::BudgetGuardConfig::default(),
+            anomaly_session_ttl_secs: default_anomaly_session_ttl_secs(),
         }
     }
 }
@@ -206,11 +228,23 @@ pub struct Firewall {
     /// Credential/PII redactor for response content.
     redactor: redactor::Redactor,
     /// Anomaly detector using transition data.
-    anomaly: Option<anomaly::AnomalyDetector>,
+    ///
+    /// `Arc`-wrapped so the disconnect/TTL cleanup callback registered on
+    /// [`Self::session_lifecycle`] shares the exact instance `check_request`
+    /// writes to, instead of cleaning up a detector nothing ever populated.
+    anomaly: Option<Arc<anomaly::AnomalyDetector>>,
     /// Principal-keyed call budget (MIK-7215.CONTROL.2).
     budget: Option<budget_guard::BudgetGuard>,
     /// Structured audit logger.
     audit: Option<audit::AuditLogger>,
+    /// TTL-based reclaim for the anomaly detector's per-identity baseline
+    /// (MIK-7215.CONTROL.4).
+    ///
+    /// Armed by [`Self::track_session`] on every scored `check_request` call
+    /// and drained by [`Self::reap_sessions`], which the caller is
+    /// responsible for polling — this type does not spawn its own task. Empty
+    /// and inert when `anomaly_detection = false`.
+    session_lifecycle: SessionLifecycle,
 }
 
 /// A compiled firewall rule with a pre-processed glob pattern.
@@ -301,7 +335,8 @@ impl Firewall {
         let memory_scanner = memory_scanner::MemoryScanner::new(config.memory_poisoning.clone());
         let redactor = redactor::Redactor::new();
         let anomaly = if config.anomaly_detection {
-            transition_tracker.map(|tt| anomaly::AnomalyDetector::new(tt, config.anomaly_threshold))
+            transition_tracker
+                .map(|tt| Arc::new(anomaly::AnomalyDetector::new(tt, config.anomaly_threshold)))
         } else {
             None
         };
@@ -316,6 +351,18 @@ impl Firewall {
             .enabled
             .then(|| budget_guard::BudgetGuard::new(config.budget.clone()));
 
+        // MIK-7215.CONTROL.4 — arm the reclaim path for whichever detector
+        // instance was just built. A no-op `register` when `anomaly` is
+        // `None`: nothing tracks a key without a detector to score it, so
+        // there is nothing for a callback to ever clean up.
+        let session_lifecycle = SessionLifecycle::new();
+        if let Some(detector) = anomaly.as_ref() {
+            let detector = Arc::clone(detector);
+            session_lifecycle.register("firewall-anomaly-baseline", move |identity| {
+                detector.remove_session(identity);
+            });
+        }
+
         Self {
             config,
             rules,
@@ -326,6 +373,7 @@ impl Firewall {
             anomaly,
             budget,
             audit,
+            session_lifecycle,
         }
     }
 
@@ -377,6 +425,15 @@ impl Firewall {
         // credential. Empty means there is no identity — never a display name,
         // which is operator-configured and shared by every anonymous caller.
         let anomaly_identity = (!control_identity.is_empty()).then_some(control_identity);
+
+        // MIK-7215.CONTROL.4 — (re)arm this identity's reclaim deadline on
+        // every scored call, before `observe` below writes its baseline.
+        // A stateless caller never disconnects, so the TTL is the only thing
+        // that ever reclaims it; a sessioned caller's own disconnect handler
+        // still reclaims it sooner, via `on_session_end`.
+        if let Some(identity) = anomaly_identity {
+            self.track_session(identity);
+        }
 
         let mut anomaly_blind = false;
         let anomaly_score = self.anomaly.as_ref().and_then(|a| {
@@ -611,8 +668,41 @@ impl Firewall {
         if let Some(ref a) = self.anomaly {
             a.remove_session(session_id);
         }
+        // Drop the TTL deadline along with the disconnect-driven cleanup: an
+        // explicit disconnect already reclaimed the baseline, so leaving the
+        // deadline behind would only let a later reap fire the callback a
+        // second time for a key already gone.
+        self.session_lifecycle.untrack(session_id);
+    }
+
+    /// Arm (or re-arm) this identity's anomaly-baseline reclaim deadline
+    /// (MIK-7215.CONTROL.4).
+    ///
+    /// A no-op when anomaly detection is off: [`Self::session_lifecycle`] has
+    /// no cleanup callback registered in that case (see [`Self::from_config`]),
+    /// so tracking a key nothing will ever clean up would just be a wasted
+    /// write on every call.
+    fn track_session(&self, identity: &str) {
+        if self.anomaly.is_none() {
+            return;
+        }
+        self.session_lifecycle.track_for(
+            identity.to_string(),
+            Duration::from_secs(self.config.anomaly_session_ttl_secs),
+        );
+    }
+
+    /// Reclaim every anomaly baseline whose TTL has passed.
+    ///
+    /// The caller owns the schedule — see `spawn_firewall_session_reaper` in
+    /// `gateway::server`, which polls this on an interval for the long-lived
+    /// HTTP-mode firewall. Cheap to call when nothing is tracked: an empty
+    /// [`SessionLifecycle`] scans an empty map.
+    pub fn reap_sessions(&self) {
+        self.session_lifecycle.reap_now();
     }
 }
+
 
 impl FirewallVerdict {
     /// Construct an unconditional allow verdict (used when scanning is disabled).

@@ -1,13 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Session lifecycle callbacks for per-session state cleanup.
+//! Session lifecycle callbacks for per-identity state cleanup.
 //!
 //! Features like cost governance, firewall anomaly detection, tool profiles,
-//! and semantic search feedback maintain per-session state in `DashMap`s.
-//! This module provides a central registry so all such state is cleaned up
-//! when a session disconnects.
+//! and semantic search feedback maintain per-caller state in `DashMap`s that
+//! nothing reclaims on its own. This type is the reusable registry for that:
+//! register a cleanup callback, track a key with a deadline, and either an
+//! explicit disconnect or a periodic reap fires the callback once.
+//!
+//! It is **not** a single app-wide instance — each owner that needs cleanup
+//! holds and arms its own `SessionLifecycle`, the way [`Firewall`] does for
+//! its anomaly detector (MIK-7215.CONTROL.4). Cost governance, tool
+//! profiles, and semantic search do not have one wired yet; the type is
+//! ready for them, the wiring is not done.
+//!
+//! [`Firewall`]: crate::security::firewall::Firewall
 
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::RwLock;
 use tracing::debug;
@@ -76,9 +86,13 @@ impl SessionLifecycle {
     ///
     /// **Residual, stated rather than implied**: a key re-tracked between
     /// reaping's removal and this call still has its handlers fired, because
-    /// nothing holds the two together. Closing that needs the ownership model
-    /// this module does not yet have — it is not reached from production at all
-    /// (MIK-7291), and the fix belongs with the decision to wire it.
+    /// nothing holds the two together. Now that `Firewall` wires this
+    /// (MIK-7215.CONTROL.4) the race IS reachable — a request that lands
+    /// between `reap`'s removal and this fire re-tracks the key and then has
+    /// its callback run anyway, wiping a live caller's anomaly baseline one
+    /// call early. Accepted for now: the effect is one unscored call, not a
+    /// correctness or security failure, and closing it needs the ownership
+    /// model this module does not yet have.
     fn fire_cleanup(&self, session_id: &str) {
         let cbs = self.callbacks.read();
         if cbs.is_empty() {
@@ -150,6 +164,35 @@ impl SessionLifecycle {
     pub fn handler_count(&self) -> usize {
         self.callbacks.read().len()
     }
+
+    /// Track `key`, reclaimable `ttl` after now.
+    ///
+    /// Epoch math lives here, next to [`Self::reap`], rather than duplicated
+    /// at each caller — the repo's convention of inlining
+    /// `SystemTime::now().duration_since(UNIX_EPOCH)` per call site is fine
+    /// when there is one call site; a lifecycle registry is exactly the
+    /// place that should not be one of several.
+    pub fn track_for(&self, key: impl Into<String>, ttl: Duration) {
+        self.track(key, now_secs().saturating_add(ttl.as_secs()));
+    }
+
+    /// Reclaim every tracked key whose deadline has passed, as of now.
+    ///
+    /// Convenience over [`Self::reap`] for callers that always mean
+    /// wall-clock now — a periodic reaper task, not a test proving a
+    /// specific deadline.
+    pub fn reap_now(&self) {
+        self.reap(now_secs());
+    }
+}
+
+/// Seconds since the Unix epoch, saturating rather than panicking on a clock
+/// set before 1970 — a reclaim deadline that reads as "already due" is the
+/// safe failure, an unwrap panic taking the process down is not.
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 #[cfg(test)]
@@ -266,5 +309,40 @@ mod tests {
         let lifecycle = SessionLifecycle::new();
         lifecycle.on_disconnect("no-handlers"); // should not panic
         assert_eq!(lifecycle.handler_count(), 0);
+    }
+
+    #[test]
+    fn track_for_expires_relative_to_now_not_to_zero() {
+        // A ttl is a duration from now, not an absolute deadline — track_for
+        // must add now_secs(), not just forward the ttl as the deadline.
+        let lifecycle = SessionLifecycle::new();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&fired);
+        lifecycle.register("test", move |_key| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        lifecycle.track_for("caller", Duration::from_secs(3600));
+        lifecycle.reap_now();
+        assert_eq!(
+            fired.load(Ordering::SeqCst),
+            0,
+            "an hour-long ttl tracked seconds ago must not be reclaimed by reap_now"
+        );
+        assert_eq!(lifecycle.tracked_count(), 1);
+    }
+
+    #[test]
+    fn reap_now_reclaims_a_zero_ttl_key() {
+        let lifecycle = SessionLifecycle::new();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&fired);
+        lifecycle.register("test", move |_key| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+
+        lifecycle.track("caller", 0); // deadline in the deep past
+        lifecycle.reap_now();
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
     }
 }
