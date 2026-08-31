@@ -1527,7 +1527,7 @@ impl MetaMcp {
         }
 
         let delivered = if evaluation.policy.enforcement_applied {
-            Self::context_integrity_delivered_result(&evaluation)
+            Self::context_integrity_delivered_result(&evaluation, &result)
         } else {
             result
         };
@@ -1547,7 +1547,14 @@ impl MetaMcp {
         (false, false)
     }
 
-    fn context_integrity_delivered_result(evaluation: &ContextIntegrityEvaluation) -> Value {
+    fn context_integrity_delivered_result(
+        evaluation: &ContextIntegrityEvaluation,
+        original: &Value,
+    ) -> Value {
+        /// Envelope fields carried across an enforced transform. Protocol
+        /// state, not content: everything else is rebuilt.
+        const PRESERVED_PROTOCOL_FIELDS: [&str; 1] = ["requestState"];
+
         let Some(delivered) = evaluation.transformed.delivered.clone() else {
             return json!({
                 "isError": true,
@@ -1561,18 +1568,39 @@ impl MetaMcp {
             });
         };
 
-        if delivered.is_object() {
-            return delivered;
-        }
-
         let text = delivered
             .as_str()
             .map_or_else(|| delivered.to_string(), str::to_string);
-        json!({
-            "isError": false,
-            "content": [{"type": "text", "text": text}],
-            "structuredContent": delivered
-        })
+        let content = json!([{"type": "text", "text": text}]);
+
+        // Rebuild from a named set of fields rather than cloning the backend's
+        // result. The kernel has just judged this payload untrusted, so any
+        // field carried across is one enforcement never inspected -- `_meta` is
+        // free-form and a compromised backend can hang anything off it.
+        // `requestState` is the opaque handle a multi-round exchange needs to
+        // continue, and building a fresh envelope silently ended the exchange
+        // on every enforced path.
+        let fields = original.as_object();
+        let mut envelope = serde_json::Map::new();
+        if let Some(fields) = fields {
+            for key in PRESERVED_PROTOCOL_FIELDS {
+                if let Some(value) = fields.get(key) {
+                    envelope.insert(key.to_string(), value.clone());
+                }
+            }
+        }
+        envelope.insert("content".to_string(), content);
+        envelope.insert("structuredContent".to_string(), delivered);
+        // Carried as the backend set it: stripping content does not turn a
+        // failed call into a successful one.
+        envelope.insert(
+            "isError".to_string(),
+            fields
+                .and_then(|f| f.get("isError"))
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
+        );
+        Value::Object(envelope)
     }
 
     fn attach_context_integrity_metadata(
