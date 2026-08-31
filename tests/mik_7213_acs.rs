@@ -9,7 +9,7 @@
 //! any intermediary may serve this response across authorization contexts — a
 //! statement about every future caller, made by a server that has seen one.
 
-use mcp_gateway::protocol::cacheable::{CacheScope, result_type_of};
+use mcp_gateway::protocol::cacheable::{CACHEABLE_METHODS, CacheScope, result_type_of};
 use mcp_gateway::protocol::era::{
     HEADER_MISMATCH, MISSING_REQUIRED_CLIENT_CAPABILITY, UNSUPPORTED_PROTOCOL_VERSION,
 };
@@ -111,6 +111,47 @@ fn ac_cache_3_public_requires_proof_not_a_default() {
     assert_eq!(CacheScope::Public.as_str(), "public");
 }
 
+#[test]
+fn ac_cache_3_every_cacheable_method_has_a_decision_table_row() {
+    // The criterion the ticket stops the line over: a decision table naming
+    // which endpoints may ever be public, referenced from the code that emits
+    // the field. This is what makes the reference load-bearing — a sixth
+    // cacheable method added without a recorded scope decision fails here
+    // rather than inheriting one silently.
+    for method in CACHEABLE_METHODS {
+        assert!(
+            CacheScope::table_row(method).is_some(),
+            "{method} is declared cacheable but has no row in the CACHE.3 \
+             decision table"
+        );
+    }
+}
+
+#[test]
+fn ac_cache_3_the_table_decides_every_cacheable_method_privately() {
+    // No row is public today, and `resources/read` is in this set: its scope
+    // is decided by its own row rather than by a function named for
+    // `tools/list`.
+    for method in CACHEABLE_METHODS {
+        assert_eq!(
+            CacheScope::for_endpoint(method),
+            CacheScope::Private,
+            "{method}"
+        );
+    }
+}
+
+#[test]
+fn ac_cache_3_an_endpoint_absent_from_the_table_is_private() {
+    // Fails closed. An endpoint nobody has reasoned about has not proved
+    // invariance, so it cannot claim it.
+    assert_eq!(
+        CacheScope::for_endpoint("resources/subscribe"),
+        CacheScope::Private
+    );
+    assert_eq!(CacheScope::for_endpoint(""), CacheScope::Private);
+}
+
 // ===========================================================================
 // Through the transport. The rows above prove the rules; these prove the
 // gateway applies them to what it actually sends.
@@ -129,6 +170,7 @@ mod http {
     use mcp_gateway::gateway::streaming::NotificationMultiplexer;
     use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
+    use mcp_gateway::protocol::cacheable::CACHEABLE_METHODS;
     use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
     use serde_json::{Value, json};
     use tower::ServiceExt;
@@ -261,18 +303,10 @@ mod http {
 
     #[tokio::test]
     async fn ac_cache_3_no_response_from_this_gateway_claims_public() {
-        // The stop-the-line, asserted across every cacheable method rather than
-        // the one that was convenient to write.
-        for (i, method) in [
-            "tools/list",
-            "prompts/list",
-            "resources/list",
-            "resources/templates/list",
-        ]
-        .iter()
-        .enumerate()
-        {
-            let id = 100 + i64::try_from(i).expect("a four-element index fits");
+        // The stop-the-line, asserted across every method the emit site
+        // declares cacheable rather than the ones convenient to list here.
+        for (i, method) in CACHEABLE_METHODS.iter().enumerate() {
+            let id = 100 + i64::try_from(i).expect("a five-element index fits");
             let (_, body) = post_modern(method, id).await;
             let scope = &body["result"]["cacheScope"];
             assert_ne!(
