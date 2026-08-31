@@ -443,8 +443,8 @@ Two consequences travel with the answer. Revision 4's shared in-flight resolutio
 stays and the design is coherent as written. And if the operator later says per slot, the change is
 the cache key alone plus dropping that repair: one field, one lookup, one section. Not a redesign.
 The plan carries the same provisional status beside its other unconfirmed full-scope reading
-(`docs/requirements/RELEASE-4.0.0-plan.md:115`); that file is the team-lead's to write, and it holds
-another session's uncommitted work, so this design does not edit it.
+(`docs/requirements/RELEASE-4.0.0-plan.md:115`, landed by the team-lead at `fb994c43`). That file is
+team-lead-owned; this design does not edit it.
 
 - *Does a pre-`initialize` probe reach an SSE peer?* — read `src/transport/http/mod.rs:200,:327,:434-435,:815-821` and `src/config/mod.rs:1532,:1546` — no: `message_url` is unset until the handshake, and `streamable_http` defaults false — killed the revision-1 placement, which is the whole of revision 2.
 - *Does it reach an OAuth peer?* — read `src/transport/http/mod.rs:378-421,:640-645` — no: the token is acquired inside `initialize()` — second, independent kill of the same placement.
