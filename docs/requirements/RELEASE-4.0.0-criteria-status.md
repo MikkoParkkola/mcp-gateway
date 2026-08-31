@@ -1,13 +1,15 @@
 <!-- SPDX-FileCopyrightText: 2026 Mikko Parkkola -->
 <!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
 
-# 4.0.0 release: acceptance criteria verified against source, 63 of 73
+# 4.0.0 release: acceptance criteria verified against source, 73 of 73
 
 Criterion groups recorded here — MRTR, cache and header (incl. HEADER.7-9), control on the
-stateless path, identity, a 7-criterion slice of MIK-7272 (RESULT/ERROR/ORDER), the MIK-7246
-destructive-confirmation gate, and the MIK-7217 discovery/era group. The remaining groups in the requirements document have not been
-swept, so the blocking count below is a floor. Each group's disagreements with earlier documents
-are logged under `audit-notes/`.
+stateless path, identity, all 17 MIK-7272 criteria (RESULT/ERROR/ORDER, then SUB/OAUTH/EXT/OTEL/TASK),
+the MIK-7246 destructive-confirmation gate, and the MIK-7217 discovery/era group. Every requirement ID
+in `RELEASE-4.0.0-requirements.md` now has a row: 73 of 73 (75 rows — see the clause note below), 31 blocking. The count is no longer a floor
+for coverage; it remains a floor for severity, because a row records what its evidence reached, not
+everything that could be wrong. Each group's disagreements with earlier documents are logged under
+`audit-notes/`.
 
 Method: every criterion below carries a stable ID (`MIK-NNNN.COMPONENT.N`) pulled from
 `docs/requirements/RELEASE-4.0.0-requirements.md`. Status was determined by reading `src/` and
@@ -21,6 +23,11 @@ Status vocabulary:
 - **N/A** — with reason.
 
 A criterion is BLOCKING unless it is MET or N/A.
+
+There is deliberately no partial-credit status. A criterion whose MUST clauses do not all hold is recorded as two
+or more rows sharing its ID, each tagged `(clause: …)` and each carrying one of the values above — so the criterion
+count stays one-per-requirement while no row can claim a criterion is met on the strength of the half that works.
+Row count therefore exceeds criterion count: 75 rows, 73 criteria.
 
 Sections below are appended incrementally as each requirement group is verified.
 
@@ -118,8 +125,10 @@ Note: this partial section covers RESULT.1-2 and ERROR.1-2 (4 criteria) plus ORD
 
 | criterion ID | requirement (short) | status | evidence (file:line) | blocking |
 |---|---|---|---|---|
-| MIK-7272.SUB.1 | `subscriptions/listen` MUST replace the GET endpoint and `resources/subscribe`/`unsubscribe` on the modern path, opt-in by notification type, tagged `io.modelcontextprotocol/subscriptionId` | MET* | Two of three MUST clauses are solid: `subscriptions/listen` (`handlers.rs:760-820`) implements the opt-in filter (`protocol/subscriptions.rs`) and mints the subscription id from the request's own JSON-RPC id, tagged under `_meta`; `resources/subscribe`/`unsubscribe` are refused on the modern path via `REMOVED_IN_2026_07_28` (`meta.rs:230-231`, gate at `handlers.rs:717-725`, inside the `RequestShape::Modern` arm only) — tested `tests/mik_7272_subscriptions_acs.rs` (`ac_sub_1_*`, 8 unit + 6 http tests incl. `..._resources_subscribe_is_refused_on_the_modern_path`). The third clause is not implemented: `GET /mcp` (`mcp_sse_handler`, `router/handlers.rs:167-253`) has **no era or protocol-version gate at all** — it accepts `Last-Event-ID` and streams to any client regardless of declared `MCP-Protocol-Version`, so the GET endpoint is never replaced for a modern client, only supplemented. No test exercises `GET /mcp` under a modern-declared client. | yes |
-| MIK-7272.SUB.2 | request-scoped notifications (`notifications/progress`, `notifications/message`) MUST flow on the response stream of their own request, not the subscription stream | MET* | The negative half is implemented and tested twice: `NotificationKind::from_method` returns `None` for both methods (`protocol/subscriptions.rs`, test `tests/mik_7272_subscriptions_acs.rs:171-185`), and `subscription_registry.rs::delivers()` refuses them even under a filter set to "everything" (`subscription_registry.rs:199-220`). The positive half — that they actually flow on the request's own response stream — has no implementing code to cite: `rg -n '"notifications/progress"\|"notifications/message"' src` outside `subscription_registry.rs`'s exclusion list and a stdio test returns nothing; the gateway does not emit or forward either notification type anywhere in production. Untestable because unimplemented, not merely untested. | yes |
+| MIK-7272.SUB.1 (clause: listen + subscribe removal) | `subscriptions/listen` MUST implement opt-in by notification type and tag notifications `io.modelcontextprotocol/subscriptionId`; `resources/subscribe`/`unsubscribe` MUST be refused on the modern path | MET | `subscriptions/listen` (`handlers.rs:760-820`) applies the opt-in filter (`protocol/subscriptions.rs`) and mints the subscription id from the request's own JSON-RPC id, tagged under `_meta`; `resources/subscribe`/`unsubscribe` refused via `REMOVED_IN_2026_07_28` (`meta.rs:230-231`, gate at `handlers.rs:717-725`, inside the `RequestShape::Modern` arm only) — tested `tests/mik_7272_subscriptions_acs.rs` (`ac_sub_1_*`, 8 unit + 6 http tests incl. `..._resources_subscribe_is_refused_on_the_modern_path`) | no |
+| MIK-7272.SUB.1 (clause: GET endpoint replaced) | `subscriptions/listen` MUST replace the HTTP GET endpoint on the modern path | ABSENT | `GET /mcp` (`mcp_sse_handler`, `router/handlers.rs:167-260`) has **no era or protocol-version gate at all** — re-read end to end 2026-08-31: it accepts `Last-Event-ID` (`handlers.rs:206`) and streams to any client regardless of declared `MCP-Protocol-Version`, so the GET endpoint is supplemented, never replaced. No test exercises `GET /mcp` under a modern-declared client | yes |
+| MIK-7272.SUB.2 (clause: not on the subscription stream) | `notifications/progress` and `notifications/message` MUST NOT be delivered on the subscription stream | MET | `NotificationKind::from_method` returns `None` for both (`protocol/subscriptions.rs`, test `tests/mik_7272_subscriptions_acs.rs:171-185`), and `subscription_registry.rs::delivers()` refuses them even under a filter set to "everything" (`subscription_registry.rs:199-220`) | no |
+| MIK-7272.SUB.2 (clause: on the request's own response stream) | request-scoped notifications MUST flow on the response stream of their own request | ABSENT | no implementing code to cite: outside `subscription_registry.rs`'s exclusion list and a stdio test, neither method name appears in `src`; the gateway neither emits nor forwards either notification type in production. Untestable because unimplemented, not merely untested | yes |
 | MIK-7272.SUB.3 | SSE resumability MUST be removed from the modern path: no `Last-Event-ID`, no event ids, no redelivery | ABSENT | Production code implements the opposite, unconditionally. `mcp_sse_handler` (`router/handlers.rs:167-253`) reads the `Last-Event-ID` header and passes it to `create_sse_response` (`streaming.rs:326-339`), which stores it as `session.last_event_id` for resumability — `rg -n "is_modern\|RequestShape::Modern" ` against both functions returns nothing, so no protocol-era branch exists anywhere on this path. Zero tests: `rg -rn "ac_sub_3" tests src` is empty. `tests/mik_7272_subscriptions_acs.rs:188` carries a comment asserting "resumability is gone" as the premise for the SUB.4 tests below it — that premise is false against current source. | yes |
 | MIK-7272.SUB.4 | a side-effecting call, re-issued after a broken stream with a new request id, MUST be protected by an idempotency key or the tasks extension | UNTESTED | Wired: the idempotency cache is reachable from generic `tools/call` dispatch — both the meta-dispatch path and the literal `"gateway_invoke"` arm converge on `invoke_tool`→`invoke_tool_traced`→`resolve_idempotency_key` (`meta_mcp/support.rs:31-46`)→`derive_key` (`idempotency.rs`). But no test exercises reissue-collision through that path: `tests/mik_7212_acs.rs:601-665` (`mod idempotency`) and `tests/mik_7272_subscriptions_acs.rs:197-260` (`mod reissue`) both call `derive_key`/`RetryFields` as pure functions; `rg -n "invoke_tool_traced\|IdempotencyCache" tests/*.rs` returns zero matches — no test crosses into the production dispatch path at all. Second, undocumented gap: `POST /mcp/{name}` (the "direct backend route", `backend_handlers.rs:236-251,724-735`) is a second HTTP ingress that bypasses `invoke_tool_traced` by design (ADR-008 rung 2, its own comment: "the direct backend route bypasses `invoke_tool_traced`") — a side-effecting call reissued through that route gets no idempotency protection at all, and TASK.1's alternative (route through the tasks extension) is ABSENT (below), so that route has no protection under either half of SUB.4's "or". | yes |
 | MIK-7272.OAUTH.1 | as an OAuth client, validate a present `iss` on the authorization response against the recorded issuer before redeeming the code | MET | `oauth/client/mod.rs:87` `validate_issuer`, wired `mod.rs:836-841` between `wait_for_callback()` and `exchange_code()` (RFC 9207). Tests `tests/mik_7272_oauth_acs.rs:99-147`, 4 cases (match/mismatch/absent-permitted/exact-comparison). | no |
@@ -129,7 +138,7 @@ Note: this partial section covers RESULT.1-2 and ERROR.1-2 (4 criteria) plus ORD
 | MIK-7272.OTEL.1 | `traceparent`, `tracestate` and `baggage` MUST be propagated through `_meta` across the gateway hop | UNWIRED | `TraceContext::from_meta`/`to_meta` (`protocol/trace.rs`, 80 lines) parse/re-emit W3C traceparent+tracestate with zero production callers (`rg -n "protocol::trace::\|use.*protocol::trace" src` outside the file itself = 0). `baggage` — required by this criterion's own text — is unimplemented: absent from the struct and from every parse path (`rg -n "baggage" src -i` = 0 matches anywhere in `src`). Test coverage (`tests/mik_7272_exploit_acs.rs:67-138`) is unit-level, calling `from_meta`/`to_meta` directly, consistent with zero production wiring. Two independent gaps: unwired, and one of three required fields never built. | yes |
 | MIK-7272.TASK.1 | the tasks extension (`io.modelcontextprotocol/tasks`) MUST be supported for long-running backend calls, with `tasks/get` polling and `tasks/update` | ABSENT | `ADDED_IN_2026_07_28` (`meta.rs:234-247`) lists `tasks/get`/`tasks/update` with its own comment: "listed because the revision adds them, not because this gateway serves them: neither is implemented." No RPC match arm for either method exists anywhere in `src/gateway/router/handlers.rs`. The only related code, `protocol::tasks::Task`, is an isolated state-machine struct (`create`/`complete`/`fail`/`status`/`result`/`error`) with unit tests (`tests/mik_7272_exploit_acs.rs:143-211`) exercising it directly — zero connection to any wire-level dispatch, RPC handler, or backend call. | yes |
 
-Note: OAUTH.1-3 are the strongest-evidenced rows in this group — no caveats, direct production wiring, focused tests. EXT.1/OTEL.1/TASK.1 share one pattern: a working, unit-tested mechanism (`ExtensionSet`, `TraceContext`, `Task`) with a self-documenting comment admitting it has no production caller — three separate features built and shelved rather than three gaps nobody noticed. SUB.1-4 form one coherent story: the sanctioned replacement path (`subscriptions/listen`) is solid, but neither of the two things that make removing the old path safe — actually removing GET-endpoint resumability (SUB.3) and closing the idempotency/tasks path for a reissue (SUB.4's second alternative, since TASK.1 is ABSENT) — is done. `tests/mik_7272_subscriptions_acs.rs:188`'s own comment ("resumability is gone") states a premise that source code contradicts.
+Note: OAUTH.1-3 are the strongest-evidenced rows in this group — no caveats, direct production wiring, focused tests. EXT.1/OTEL.1/TASK.1 share one pattern: a working, unit-tested mechanism (`ExtensionSet`, `TraceContext`, `Task`) with a self-documenting comment admitting it has no production caller — three separate features built and shelved rather than three gaps nobody noticed. SUB.1-4 form one coherent story: the sanctioned replacement path (`subscriptions/listen`) is solid, but neither of the two things that make removing the old path safe — actually removing GET-endpoint resumability (SUB.3) and closing the idempotency/tasks path for a reissue (SUB.4's second alternative, since TASK.1 is ABSENT) — is done. `tests/mik_7272_subscriptions_acs.rs:188`'s own comment ("resumability is gone") states a premise that source code contradicts. All 10 criteria in this group were re-verified against `src/` on 2026-08-31 by a second reader; every verdict held. SUB.1 and SUB.2 were split into clause rows in the same pass, retiring the `MET*` status they had carried — each had one MUST clause with no implementing code, and a single row could not say so in the vocabulary this file defines.
 
 ## MIK-7246 (CONFIRM) — destructive-operation confirmation gate, 3 of 3
 
@@ -165,14 +174,15 @@ requirement rather than in the code.
 
 ## What this audit does not cover
 
-This file audits 63 criteria. The requirements list 73. The 10 it never reached are not passing and
-not failing — they are unexamined, and a reader totalling the rows above will read a release as
-further along than it is.
+This file audits 73 criteria and the requirements list 73, so every requirement ID now has a row.
+The coverage gap this section was written to record — 10 unexamined MIK-7272 criteria — was closed on
+2026-08-31 and each of the 10 was re-verified against source on the same date. What remains uncovered
+is not criteria but reconciliation: the identifier-scheme conflict described at the end of this section.
 
 | Group | Criteria | Audited here |
 |---|---|---|
 | MIK-7272 (RESULT.1-2, ERROR.1-2, ORDER.1-3) | 7 of 17 | yes — see MIK-7272 section above |
-| MIK-7272 (EXT, OAUTH, OTEL, SUB, TASK) | 10 of 17 | none |
+| MIK-7272 (EXT, OAUTH, OTEL, SUB, TASK) | 10 of 17 | yes, 2026-08-31 — see MIK-7272 section above (12 rows: SUB.1 and SUB.2 are recorded as two clause rows each; 5 MET, 1 UNTESTED, 2 UNWIRED, 4 ABSENT; 7 of the 10 criteria blocking) |
 | MIK-7217.DISCOVER | 7 | yes, 2026-08-31 — see MIK-7217 section above (5 MET, 2 UNWIRED/blocking) |
 | MIK-7246.CONFIRM | 3 | yes, 2026-08-31 — see MIK-7246 section above (2 MET, 1 ABSENT/blocking) |
 | MIK-7214.HEADER.7-9 | 3 | yes, 2026-08-31 — see MIK-7213/7214 section above (HEADER.7 and .8 MET without caveat as of 2026-08-31; HEADER.9 ABSENT/blocking) |
