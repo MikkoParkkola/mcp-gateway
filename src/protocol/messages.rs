@@ -41,7 +41,11 @@ pub struct JsonRpcNotification {
 }
 
 /// JSON-RPC response
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Deserialize` is implemented by hand rather than derived: a frame carrying
+/// `method` is a request or a notification, and accepting one here is what let
+/// an inbound `sampling/createMessage` reach a waiting caller as its answer.
+#[derive(Debug, Clone, Serialize)]
 pub struct JsonRpcResponse {
     /// JSON-RPC version (always "2.0")
     pub jsonrpc: String,
@@ -53,6 +57,37 @@ pub struct JsonRpcResponse {
     /// Error (on failure)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
+}
+
+impl<'de> Deserialize<'de> for JsonRpcResponse {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        /// Mirrors [`JsonRpcResponse`] and additionally observes `method`, the
+        /// field that marks a frame as a request or a notification.
+        #[derive(Deserialize)]
+        struct Shadow {
+            jsonrpc: String,
+            id: Option<RequestId>,
+            result: Option<Value>,
+            error: Option<JsonRpcError>,
+            method: Option<serde::de::IgnoredAny>,
+        }
+
+        let shadow = Shadow::deserialize(deserializer)?;
+        if shadow.method.is_some() {
+            return Err(serde::de::Error::custom(
+                "frame carries `method`: a request or notification, not a response",
+            ));
+        }
+        Ok(Self {
+            jsonrpc: shadow.jsonrpc,
+            id: shadow.id,
+            result: shadow.result,
+            error: shadow.error,
+        })
+    }
 }
 
 impl JsonRpcResponse {

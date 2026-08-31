@@ -24,8 +24,9 @@ use tracing::{debug, error, info, warn};
 
 use super::Transport;
 use crate::protocol::{
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
-    is_version_mismatch_error, negotiate_best_version, parse_supported_versions_from_error,
+    JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
+    RequestId, is_version_mismatch_error, negotiate_best_version,
+    parse_supported_versions_from_error,
 };
 use crate::{Error, Result};
 
@@ -413,9 +414,26 @@ impl StdioTransport {
     }
 
     /// Handle a response line from stdout
+    ///
+    /// The line is classified before it is routed. A peer notification is
+    /// accepted and ignored; a peer *request* is refused, because routing one to
+    /// a pending caller would answer that caller with a frame carrying neither
+    /// `result` nor `error`.
     fn handle_response(&self, line: &str) -> Result<()> {
         debug!(line = %line, "Parsing response");
-        let response: JsonRpcResponse = serde_json::from_str(line)?;
+        let response = match serde_json::from_str::<JsonRpcMessage>(line)? {
+            JsonRpcMessage::Response(response) => response,
+            JsonRpcMessage::Notification(notification) => {
+                debug!(method = %notification.method, "Ignoring peer notification");
+                return Ok(());
+            }
+            JsonRpcMessage::Request(request) => {
+                return Err(Error::Protocol(format!(
+                    "Peer sent request '{}' on the response stream",
+                    request.method
+                )));
+            }
+        };
 
         if let Some(ref id) = response.id {
             let key = id.to_string();

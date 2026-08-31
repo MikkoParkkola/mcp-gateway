@@ -1629,3 +1629,24 @@ fn parse_sse_response_accepts_response_frame() {
     assert!(parsed.result.is_some());
     assert!(parsed.error.is_none());
 }
+
+/// A server may send notifications on a request's own stream before the final
+/// response. Neither frame may end the scan: the notification is not the answer,
+/// and refusing the body outright would fail a conforming server's call.
+#[test]
+fn parse_sse_response_skips_notification_preceding_the_response() {
+    // GIVEN: a progress notification ahead of the answer on one stream
+    let body = concat!(
+        "event: message\n",
+        "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":1}}\n",
+        "\n",
+        "event: message\n",
+        "data: {\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"tools\":[]}}\n",
+    );
+
+    // WHEN: the transport parses it
+    let parsed = parse_sse_response(body).expect("the response after a notification must parse");
+
+    // THEN: the caller receives the response, not the notification
+    assert!(parsed.result.is_some(), "must return the response frame");
+}
