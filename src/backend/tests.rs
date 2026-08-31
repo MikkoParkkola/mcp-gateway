@@ -555,7 +555,7 @@ fn sample_tool(name: &str) -> Tool {
 fn normalize_tool_annotations_fills_missing_hints() {
     let mut tools = vec![sample_tool("search_messages"), sample_tool("send_message")];
 
-    normalize_tool_annotations("beeper", &mut tools);
+    prepare_tool_metadata("beeper", &mut tools);
 
     let search = tools[0].annotations.as_ref().unwrap();
     assert_eq!(search.read_only_hint, Some(true));
@@ -582,7 +582,7 @@ fn normalize_tool_annotations_preserves_existing_true_hints_and_adds_false_hints
     });
     let mut tools = vec![tool];
 
-    normalize_tool_annotations("hebb", &mut tools);
+    prepare_tool_metadata("hebb", &mut tools);
 
     let annotations = tools[0].annotations.as_ref().unwrap();
     assert_eq!(annotations.read_only_hint, Some(true));
@@ -603,7 +603,7 @@ fn normalize_tool_annotations_preserves_downstream_annotation_title_and_hints() 
     });
     let mut tools = vec![tool];
 
-    normalize_tool_annotations("remote-api", &mut tools);
+    prepare_tool_metadata("remote-api", &mut tools);
 
     let annotations = tools[0].annotations.as_ref().unwrap();
     assert_eq!(annotations.title.as_deref(), Some("Remote Write"));
@@ -754,7 +754,7 @@ fn tool_with_schema(name: &str, input_schema: serde_json::Value) -> Tool {
 }
 
 #[test]
-fn exclude_invalid_header_tools_keeps_a_well_formed_annotation() {
+fn prepare_tool_metadata_keeps_a_well_formed_annotation() {
     // GIVEN one tool whose `x-mcp-header` meets every constraint
     let mut tools = vec![tool_with_schema(
         "search",
@@ -764,7 +764,7 @@ fn exclude_invalid_header_tools_keeps_a_well_formed_annotation() {
     )];
 
     // WHEN the tool-metadata path filters the list
-    exclude_invalid_header_tools("beeper", &mut tools);
+    prepare_tool_metadata("beeper", &mut tools);
 
     // THEN it survives
     assert_eq!(tools.len(), 1);
@@ -772,7 +772,7 @@ fn exclude_invalid_header_tools_keeps_a_well_formed_annotation() {
 }
 
 #[test]
-fn exclude_invalid_header_tools_drops_only_the_violating_tool() {
+fn prepare_tool_metadata_drops_only_the_violating_tool() {
     // GIVEN a valid tool beside one annotating a `number` property
     let mut tools = vec![
         tool_with_schema("keep", json!({"type": "object", "properties": {}})),
@@ -784,7 +784,7 @@ fn exclude_invalid_header_tools_drops_only_the_violating_tool() {
         ),
     ];
 
-    exclude_invalid_header_tools("beeper", &mut tools);
+    prepare_tool_metadata("beeper", &mut tools);
 
     // THEN exclusion is per-tool, never per-backend
     assert_eq!(tools.len(), 1);
@@ -792,7 +792,7 @@ fn exclude_invalid_header_tools_drops_only_the_violating_tool() {
 }
 
 #[test]
-fn exclude_invalid_header_tools_drops_a_crlf_injection_attempt() {
+fn prepare_tool_metadata_drops_a_crlf_injection_attempt() {
     let mut tools = vec![tool_with_schema(
         "inject",
         json!({"type": "object", "properties": {
@@ -800,7 +800,7 @@ fn exclude_invalid_header_tools_drops_a_crlf_injection_attempt() {
         }}),
     )];
 
-    exclude_invalid_header_tools("beeper", &mut tools);
+    prepare_tool_metadata("beeper", &mut tools);
 
     assert!(
         tools.is_empty(),
@@ -809,10 +809,35 @@ fn exclude_invalid_header_tools_drops_a_crlf_injection_attempt() {
 }
 
 #[test]
-fn exclude_invalid_header_tools_leaves_unannotated_tools_untouched() {
+fn prepare_tool_metadata_leaves_unannotated_tools_untouched() {
     let mut tools = vec![sample_tool("plain"), sample_tool("also_plain")];
 
-    exclude_invalid_header_tools("beeper", &mut tools);
+    prepare_tool_metadata("beeper", &mut tools);
 
     assert_eq!(tools.len(), 2);
+}
+
+#[test]
+fn prepare_tool_metadata_excludes_and_annotates_in_one_pass() {
+    // GIVEN a violating tool beside one that needs its hints inferred
+    let mut tools = vec![
+        tool_with_schema(
+            "bad",
+            json!({"type": "object", "properties": {
+                "tenant": {"type": "string", "x-mcp-header": "Tenant Id"}
+            }}),
+        ),
+        tool_with_schema("get_thing", json!({"type": "object"})),
+    ];
+
+    // WHEN the single tool-metadata entry point runs
+    prepare_tool_metadata("beeper", &mut tools);
+
+    // THEN both steps happened: neither caller can get one without the other
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name, "get_thing");
+    assert_eq!(
+        tools[0].annotations.as_ref().and_then(|a| a.read_only_hint),
+        Some(true)
+    );
 }
