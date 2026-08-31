@@ -90,6 +90,15 @@ Five pieces, in dependency order.
    becomes a JSON-RPC error object, not a `String`. `Task::create` keeps a v4 UUID — the spec
    makes task IDs bearer-token-grade, so entropy is a requirement, not an aesthetic.
 
+   **Changing `error` to an object turns a currently green test red, and that red is this change
+   working.** `ac_task_1_a_failed_task_reports_its_failure_rather_than_an_absence`
+   (`tests/mik_7272_exploit_acs.rs:189`) asserts `task.error() == Some("upstream refused")` — a
+   `String`, the shape the pinned spec forbids. It passes today because the defect is present, so
+   it fails at the moment the defect is removed. Rewrite it against the error object. Do not
+   preserve the `String` to keep it green: that reads as repairing a regression and cements the
+   wrong wire shape, which is the one thing this piece exists to change. Section 8a says why the
+   other four cases in that file are not this problem.
+
 2. **A task store.** Insert-if-absent, TTL-reaped, holding the record plus a secondary index
    (see §4). It is the *same defect class* as the consumed-continuation ledger recorded open in
    `dod-check.md` finding #1: process-local today, needs a shared atomic insert-if-absent store
@@ -158,7 +167,12 @@ unrelated task IDs". A `tasks` capability advertising `cancel`, `list` and augme
 types is the **2025-11-25** shape. So the decision is not "delete a mistake" but "drop a
 superseded revision's declaration surface", which is a different question with a different
 answer if anything still speaks 2025-11-25 — and nothing here does, since the types have no
-readers at all. Recorded for whoever answers it; not answered here.
+readers at all.
+
+**Kept, on that reading.** Unread types cost nothing to leave in place, and deleting a public wire
+type is an API break this release has no reason to take. The retire question survives as a
+scheduled unknown in §6 rather than an open one here; it is owned, and nothing in TASK.1 waits on
+its answer.
 
 6. **Every task-related request is authorised against the task's owner.** The pinned text makes
    this a MUST in its own right, *beside* the entropy requirement and not satisfied by it: a
@@ -282,12 +296,15 @@ makes it reachable.
   nobody to ask.
 
 Two questions this section previously deferred are answered above. Both were deferred on the
-reading that no versioned text existed, so pinning one artifact closed both. One row remains.
+reading that no versioned text existed, so pinning one artifact closed both. Two rows remain, and
+the second is new: the two non-spec capability structs were recorded above as somebody's decision
+without being scheduled, which is an assumption with better manners. Scheduled here.
 
 **Deferred.**
 
 | open question | owner | what would resolve it | when | if it resolves badly |
 |---|---|---|---|---|
+| Whether `ServerTasksCapability` and `ClientTasksCapability` are retired. Kept for now: no readers, so they cost nothing, and deleting a public wire type is an API break this release has no reason to take | team lead | an operator answer on whether clients speaking the 2025-11-25 `tasks` shape are still served | when NFR.COMPAT.1 is audited. `docs/requirements/RELEASE-4.0.0-requirements.md:210` already requires that 2025-11-25 be served, which settles that such clients exist but not that these two structs serve them, since nothing reads either | deletion becomes a separate API-break change carrying its own migration note, not a line in this one. Nothing here waits on it: TASK.1 reads neither type, so this design is correct under either answer |
 | Where the task store lives when the gateway runs multi-replica. | cluster A (MIK-7212), via the shared insert-if-absent store `dod-check.md` finding #1 already gates BEFORE-PRODUCTION | cluster A landing a shared ledger this can reuse | before production, not before merge | single-replica-only tasks: a `tasks/get` routed to another replica reports the task as missing while it is running. Same failure the continuation ledger has, same gate, deliberately not a second design |
 
 ## 7. MIK-7311 — reconciled, not routed around
@@ -365,9 +382,18 @@ not a test to preserve through the change; it is a test to rewrite against the o
 a reviewer who sees it fail should read it as the change working.
 
 Disposition (§P0): recorded here, not filed. The §8 table already specifies what replaces these
-five, and the replacement is part of TASK.1's own work rather than a separate ticket. Whether the
-same inertness runs wider than these seven cases is the lead's call to scope; this note answers
-only for `ac_task_1_*`.
+five, and the replacement is part of TASK.1's own work rather than a separate ticket. The wider
+question — whether the same inertness runs beyond these cases — is already being swept by the
+audit running against every test file in the tree, so this note points at that rather than opening
+a second one.
+
+That sweep separates two shapes, and the distinction decides the repair. A case asserting an
+invariant that cannot vary is a bad test and is deleted. A case asserting real behaviour in a
+module production never reaches is a *good* test waiting for its production caller, and deleting
+it would destroy the specification it carries. Four of these five are the second kind: they hold
+the shape `Task` is supposed to have, written down, and TASK.1's job is to build the caller that
+makes them reachable — not to remove them. The fifth is the `error()` case above, which is neither:
+it records the shape the spec forbids, so it is rewritten rather than kept or deleted.
 
 ## 9. Documents this change makes untrue
 
