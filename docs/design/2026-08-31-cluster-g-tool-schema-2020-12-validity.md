@@ -44,7 +44,7 @@ meta-schema, at the point where an invalid document can still be rejected cheapl
 
 | out of scope | why |
 |---|---|
-| schemas supplied by upstream MCP **backends** and proxied through | not authored here; what to *do* with an invalid backend schema is a routing policy decision, not a validity one. Team-lead call, accepted — but this is an exclusion against a MUST, so it is carried as the deferred unknown below, not as a clean boundary. |
+| ~~schemas supplied by upstream MCP **backends** and proxied through~~ | **withdrawn 2026-08-31 — moved into scope.** The owner settled the routing policy: a backend tool whose schema fails 2020-12 validation is dropped from the catalogue and the rest of the backend stays. See the receipt below and the Dispositions row. |
 | validating tool *arguments* against a schema | already exists — `src/capability/schema_validator/mod.rs`. Opposite direction, see Problem. |
 | semantic quality of a schema, i.e. is it a *good* schema | 2020-12 admits keywords it does not define; the criterion is "valid", not "well-designed". |
 | A2A and trust-descriptor payload shape beyond the embedded `inputSchema` | descriptor structure is its own contract. |
@@ -240,10 +240,25 @@ behaviour the operator wants, and a check that cannot come back "no" is not a ch
 U4 and U5 block nothing else in the design; U2 blocks only the choice between A and B. None of
 these is a residual-risk paragraph, and none is closed by naming a command instead of running it.
 
+### Scope receipt — 2026-08-31, the backend-schema exclusion is withdrawn
+
+The scope froze at the first dual review with backend-supplied schemas listed OUT, on the reasoning
+that what to do with an invalid backend schema is a routing-policy question rather than a validity
+one. That reasoning was sound and it did not survive its own consequence: the exclusion stood against
+a MUST, and the population SCHEMA.1's MET clause was measured over includes backend tools, so the
+criterion could not close while the exclusion held. It was carried as a deferred unknown for exactly
+this reason.
+
+The owner has now answered the policy question, so the thing that made it un-scopable is gone. The
+surface moves by one item: this design gains a validity check on each backend tool's `inputSchema` at
+registration, and a rejected tool is neither listed nor routable. Nothing else in FOR or OUT moves,
+and the acceptance criteria gain one case — a backend registering a mix of valid and invalid tools
+exposes the valid ones and only those.
+
 ## Dispositions
 
 | finding | disposal |
 |---|---|
-| Backend-supplied schemas are never meta-validated | **deferred unknown, four fields recorded** (was: observation). SCHEMA.1's text does not scope to gateway-authored schemas and the MET clause was measured over a population that includes backend tools, so this is a remainder against a MUST rather than a neighbouring concern. Out of scope by §P0 for the *policy*, not disposed. Recorded here so the next reader does not rediscover it as a gap. |
+| Backend-supplied schemas are never meta-validated | **resolved by the owner, 2026-08-31; now in scope.** Question: what does the gateway do when a backend publishes a tool whose `inputSchema` is not valid under 2020-12? Asked of the repository owner. Answer: drop that tool from the catalogue and keep the rest of the backend — validate each backend tool's schema at registration, do not list and do not route a tool that fails, log the rejection and surface it in diagnostics. What it changed: SCHEMA.1 no longer carries a remainder against its MUST, the §P0 exclusion below is withdrawn, and this design gains a per-tool registration check whose blast radius is one tool rather than one backend. Rejected: publishing with a flag (leaves the MUST unmet and hands the client exactly the shapes the criterion exists to keep away from it), repairing the subschema (the gateway would assert a contract the backend never offered), and refusing the whole backend (forty-nine working tools removed for one broken one). |
 | `src/capability/schema_validator/mod.rs` validates a bounded subset and will silently accept constructs 2020-12 defines | **observation.** Independent of SCHEMA.1: it is instance validation. If it becomes a defect it is its own change. |
 | The 19 meta-tool schemas declare no `$schema` | **no change needed.** Pinning the dialect at the check makes the declaration unnecessary; adding it to 19 literals would be the larger diff and would give the check something to disagree with. |
