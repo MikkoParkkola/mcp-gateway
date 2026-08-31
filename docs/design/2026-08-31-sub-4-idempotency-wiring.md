@@ -1,7 +1,8 @@
 # MIK-7272.SUB.4 — idempotency protection for reissued side-effecting calls
 
-Status: proposed, revision 3. No code written. Revisions 1 and 2 were reviewed by GPT-5.x and
-Grok; both returned `SHIP-WITH-FIXES` on revision 2. This revision is the repair.
+Status: proposed, revision 4. No code written. Revisions 1 and 2 were reviewed by GPT-5.x and
+Grok; both returned `SHIP-WITH-FIXES` on revision 2. Revision 3 was the repair. Revision 4 settles
+the last question a check could settle, and records what happens to the two that need a person.
 
 ## Scope
 
@@ -89,10 +90,15 @@ every exit after dispatch.
 
 **P7 — the in-flight window is a fixed five minutes.** `IN_FLIGHT_TIMEOUT`
 (`src/idempotency.rs:37`) expires a reservation after 5 minutes regardless of whether the original
-call is still running, so a long backend call can be duplicated mid-flight. The constant is
-verified; whether a configured backend timeout exceeds it is NOT — no such default was found in
-`src/config/features/`. Scheduled: find the effective backend call timeout before choosing between
-tying validity to the invocation lifecycle and simply raising the constant.
+call is still running. RESOLVED: the premise was that a backend call could outlive the window, and
+it cannot at any default. The per-backend request timeout defaults to 30 seconds
+(`src/config/mod.rs:1383`) and is enforced on the HTTP client (`src/transport/http/mod.rs:305`);
+the server's own `request_timeout` is also 30 seconds (`src/config/mod.rs:1178`). The window is
+therefore ten times the longest call a default deployment can make. It is configurable, so the
+defect is reachable by configuration alone: an operator who sets a backend `timeout` above five
+minutes gets a reservation that expires mid-call. Fix is a config-load validation that rejects a
+backend timeout at or above `IN_FLIGHT_TIMEOUT`, not a reservation tied to the invocation
+lifecycle — the expensive mechanism buys nothing the cheap check does not.
 
 ## Constraints, measured
 
@@ -119,32 +125,46 @@ tying validity to the invocation lifecycle and simply raising the constant.
 
 ## Two decisions, plus one the review created
 
-**Axis 1 — activation.** Off by default and opt-in | on by default and opt-out | mandatory. Off
-by default cannot satisfy a criterion that says a reissue MUST be protected, so it is rejected on
-the requirement, not on cost. The remaining choice turns on whether an operator may switch off a
-MUST.
+**Axis 1 — activation. DECIDED: mandatory, no kill switch.** Off by default cannot satisfy a
+criterion that says a reissue MUST be protected, so it is rejected on the requirement, not on
+cost. Between on-by-default-with-an-opt-out and mandatory, the criterion decides: an operator
+switch makes the criterion unverifiable in the deployments that matter, because the shipped
+default and the running configuration can disagree and only the running one executes side effects.
+This is an engineering reading of a MUST, not an operator preference, and it is recorded here so
+the operator can overrule it in one line rather than discover it in code.
 
 **Axis 2 — coverage.** Meta route alone | both routes. Meta-only leaves a documented ingress
 unprotected, which the criterion does not permit. Both routes is the requirement's answer, and
 placement is settled above: the binding goes in the derivation.
 
-**Axis 3 — the key carrier, new in this revision.** Protection needs a key a client can actually
-send, on both routes, advertised and validated. Nothing in the tree advertises one. Until this is
-decided, P2's fix cannot be chosen: deleting the automatic derivation with no carrier leaves the
-criterion unsatisfiable, and keeping it leaves the silent-dedup defect. This axis is upstream of
-the other two.
+**Axis 3 — the key carrier.** Protection needs a key a client can actually send, on both routes,
+advertised and validated. Nothing in the tree advertises one. This axis is upstream of the other
+two: deleting the automatic derivation with no carrier leaves the criterion unsatisfiable, and
+keeping it leaves the silent-dedup defect P2.
+
+ASKED of the operator on 2026-08-31 with four options; no answer within the turn. WORKING
+ASSUMPTION, not an answer — an optional `idempotency_key` argument on the `gateway_invoke` schema
+for the meta route, and an `Idempotency-Key` HTTP header on `POST /mcp/{name}`. Reasons: it covers
+both ingresses, it adds no meta-tool so the compact-surface decision in `CLAUDE.md` is untouched,
+and the header spelling is the industry convention. The rejected alternatives and their costs are
+in the questions table. This assumption is what the rest of the design is written against; it is
+NOT settled, and no code lands on it until the operator confirms, because it changes the
+advertised tool surface, which this repo treats as a locked decision.
 
 ## Open questions — each scheduled, none assumed
 
 | question | how it is settled | state |
 |---|---|---|
-| What carries a retry key, on both routes? | DESIGN decision, then ASK: it changes the advertised tool surface, which this repo treats as a locked decision. Must be advertised, validated, and tested before axis 1 or P2 can be answered. | OPEN — blocks P2, axis 1, all code |
-| May an operator disable protection a criterion states as MUST? | ASK the operator. Only they can weigh a MUST against an escape hatch. | OPEN — blocks axis 1 |
+| What carries a retry key, on both routes? | ASKED 2026-08-31, four options put, no answer within the turn. Rejected in the ask: an HTTP header alone (a stdio client has no HTTP layer, so protection stays unreachable for local setups), `_meta` alone (spec-native and stdio-safe, but the direct route is raw JSON-RPC passthrough needing new plumbing, and no client sends it today), and keeping automatic derivation (ships fastest, keeps P2's silent 24-hour collapse of deliberate repeats). | ASKED, UNANSWERED — a working assumption is recorded above; blocks all code |
+| May an operator disable protection a criterion states as MUST? | DECIDED on the requirement rather than asked: no. A switch makes the criterion unverifiable wherever the running configuration differs from the shipped default. Recorded so it can be overruled, not so it can be confirmed. | RESOLVED — overrulable |
 | Does ADR-008 bear on the direct route's bypass? | CHECKED end to end. It does not; rung 2 is client-native OAuth passthrough. What it does bind is INV-3. CHANGED: the bypass loses its justification and axis 2 gains a placement constraint. | RESOLVED |
 | What capacity bound, and what happens at the bound? | CHECKED `src/config/features/cache.rs:12` and `src/cache.rs:185-204`: bound 10_000, policy evict-oldest. CHANGED: take the number, reject the policy, fail closed. | RESOLVED |
-| Does a configured backend timeout exceed `IN_FLIGHT_TIMEOUT`? | CHECK the effective backend call timeout; none found in `src/config/features/`. | OPEN — blocks P7 |
+| Does a configured backend timeout exceed `IN_FLIGHT_TIMEOUT`? | CHECKED. Per-backend `timeout` defaults to 30s (`src/config/mod.rs:1383`), enforced at `src/transport/http/mod.rs:305`; the server's `request_timeout` is also 30s (`src/config/mod.rs:1178`). CHANGED: P7 is out of reach at defaults and reachable only by configuration, so its fix shrinks to a config-load validation. | RESOLVED |
 
-Nothing is deferred; nothing is implemented while any of the open ones is open.
+Nothing is deferred. One question is asked and unanswered; the assumption standing in for it is
+labelled as an assumption everywhere it is used, and no code lands until it is confirmed. That row
+is blocked, not deferred - deferral would need the four fields the process demands, and the honest
+position is that it is simply waiting on a person.
 
 ## Test plan
 

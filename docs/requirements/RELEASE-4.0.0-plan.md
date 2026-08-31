@@ -35,10 +35,11 @@ Not one job. It splits by size:
 - **Small, self-contained**: ERROR.2 (resource-not-found returns `-32602`, not `-32002`),
   RESULT.2 (a missing `resultType` defaults to complete when the gateway reads a backend
   reply). Each is a narrow change with a test that is red today.
-- **Design-first**: SUB.4 (idempotency wiring — design at revision 3, see
+- **Design-first**: SUB.4 (idempotency wiring — design at revision 4, see
   `docs/design/2026-08-31-sub-4-idempotency-wiring.md`. Larger than it looked: seven verified
   implementation defects are prerequisites, and no advertised way exists for a client to send a
-  retry key at all, which is a tool-surface decision. Three open questions block code),
+  retry key at all. One question still blocks all code, and it is a tool-surface decision the
+  operator has been asked and has not yet answered),
   ORDER.2 (tool set must not vary per connection), SUB.2 (request-scoped notifications on the
   request's own response stream), EXT.1 (declare extensions through server capabilities),
   OTEL.1 (`traceparent`/`tracestate`/`baggage` through `_meta`).
