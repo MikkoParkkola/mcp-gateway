@@ -356,3 +356,25 @@ source before disposition — a reviewer claim is a lead, not evidence.
 - MIK-7312 appears twice and contradictorily: deferred to 4.1.0 as a shared insert-if-absent store
   and queued in 4.0.0 as per-process keys. The operator's 2026-08-30 hold settles it — keep
   per-process, delete the deferred row.
+
+## Where this stands, 2026-08-31
+
+The plan above is reviewed and correct. Nothing in it has been executed yet: no 4.0.0 blocking
+criterion has moved as a result of it. The first thing to build is increment **1a**.
+
+**Uncommitted work belonging to other sessions is live in this worktree.** Nine modified files and
+four untracked ones, the significant one being `src/protocol/continuation.rs` with 46 inserted lines
+against `HEAD`. That is MIK-7212's work — the ticket is `In Progress` and this is what progress on it
+looks like before a commit. Do not stage, revert or clean any of it; it is not this document's to
+clean, and a `git checkout` over it destroys the only copy. The four untracked files are
+`src/security/firewall/principal_window.rs`, `src/security/firewall/tenant_guard.rs`,
+`tests/mik_7116_tenant_acs.rs` and `tests/mik_7215_control_2_budget_acs.rs`, and they are why
+TENANT.1 and CONTROL.2 were wrongly recorded ABSENT before the sweep corrected them.
+
+**Seven agent sessions are alive in this worktree** and have written nothing to `src`, `tests` or
+`docs` in the last half hour. They hold the uncommitted work above. Whether to reap them is an
+operator decision that has not been taken; nothing here should assume they are dead.
+
+**Owners now attached:** item 1c is MIK-7216, item 1's retry side is MIK-7325, the continuation
+contract is MIK-7212, and MIK-7312 owns the 4.0.0 half of the replica question. The deferred 4.1.0
+half — a shared atomic insert-if-absent store — still has no ticket and needs one before the tag.
