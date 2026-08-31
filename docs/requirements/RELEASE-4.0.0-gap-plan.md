@@ -5,8 +5,8 @@
 
 Assessed 2026-08-30 by four independent audits (requirements-vs-code, unwired production paths,
 test-plan coverage, docs and release mechanics). Every gap below was verified by reading source,
-never inferred from a document. The requirements sweep has not run to completion;
-its remaining batches amend section 1 and add increments, they do not invalidate the sequence.
+never inferred from a document. The requirements sweep has since run to completion -- section 1
+carries its final counts, and they amended the totals without invalidating the sequence.
 
 A second audit died on an output ceiling partway through emitting its rows. What
 it had produced is recovered in `RELEASE-4.0.0-audit-partial.md` and is a floor
@@ -27,7 +27,7 @@ refused at the door.
 | Outbound era probing unwired | `EraCache::resolve_with`/`classify` implemented and tested, zero callers in `src/backend` or `src/transport` | outbound modern/legacy negotiation |
 | Tasks extension is dead code | `protocol::tasks::Task`/`TaskStatus` have no production call site; `tasks/get`/`tasks/update` fall through to method-not-found honestly | nothing — needs a keep/delete decision |
 | Header/result/error/cache/order criteria | six gaps found, six criteria confirmed clean | see requirements sweep |
-| Blocking criteria outside MRTR | at least eight, in tenancy, stateless confirmation, session expiry, log correlation, cache invalidation, error codes, tasks and extensions | increments 10-17; source rows in `RELEASE-4.0.0-audit-partial.md` |
+| Blocking criteria outside MRTR | 21, in tenancy, stateless confirmation, session expiry, log correlation, cache invalidation, error codes, tasks, extensions and discovery | increments 10-17; source rows in `RELEASE-4.0.0-audit-partial.md`, final counts in the sweep below |
 | Diff coverage under floor | 61 branch-touched files average 77.40% lines against an 80% Standard floor; mutation coverage unmeasured. Measured before increments 1 and 2a landed their tests, so it is a starting point, not the current number | DoD §4 |
 
 Test position, separately: six acceptance criteria have no case at any level, two cases cannot fail
@@ -41,6 +41,54 @@ exactly as the audit described. Only the continuation-state row had gone stale, 
 above. One in five of the section 1 rows re-read that day
 had moved, and it moved because the work was done, not because the reading was wrong. That is a rate
 over five rows, not over the audit.
+
+### The completed sweep: 31 blocking, and they do not cost the same
+
+Every criterion in `RELEASE-4.0.0-requirements.md` now has a row in
+`RELEASE-4.0.0-criteria-status.md`: 77 rows, 42 clean MET, **31 blocking**. The audit's "at least
+eight outside MRTR" was a floor; the answer is 21. SUB.1's GET clause and SUB.3 came off the list on
+2026-08-31 when the `GET /mcp` era gate landed, taking the count from 33 to 31.
+
+| status | count | what it means | the work |
+|---|---|---|---|
+| UNWIRED | 16 | the code exists and has zero non-test callers | find the production path, call it, test through it |
+| ABSENT | 12 | no implementing code at all | design, test plan, failing tests, implementation |
+| UNTESTED | 3 | wired, but no test crosses the production path | write the test -- and expect some to go red |
+
+Reading that as "16 easy, 12 hard" is the trap. A symbol is unwired because nobody could see where
+it belonged, so wiring it is a design question in plumbing costume. UNTESTED is the only class that
+can produce a *new* defect rather than a known one: three tests that have never run against
+production are three chances the row itself is wrong. **Take the three UNTESTED rows first** --
+SUB.4, CONFIRM.1, SCHEMA.1. A red one moves a row from "needs a test" to "needs a fix", and learning
+that after the ABSENT increments are scheduled is learning it too late.
+
+Blocking rows by ticket: MRTR 10, MIK-7272 9, DISCOVER 5, HEADER 4, CONTROL 4, CONFIRM 3, CACHE 2,
+SCHEMA 1, TENANT 1.
+
+Four further rows read MET with a qualifier -- `MET (I)`, `MET (caveat)`, `MET (residual)` -- and no
+blocking count includes them, which is exactly where work hides.
+
+| row | what the qualifier holds | disposal |
+|---|---|---|
+| `DISCOVER.7` | `src/lib.rs:23` still lists `2024-10-07` in a crate doc-comment | one-line deletion; do it with the DISCOVER wiring |
+| `DISCOVER.1` | the stdio arm passes `modern_enabled: false`, so a stdio client sees the legacy tool list | self-documented at `src/gateway/server/mod.rs:1687-1693`; decide before release whether stdio ships modern |
+| `ORDER.3` | the classification is on record, the remediation it prescribes is not | already counted as ORDER.2 |
+| `CONTROL.5` | every removed mechanism names a replacement; two replacements are not built | already counted as CONTROL.2 and .3 |
+
+Two of the four are already inside the 31. The other two are small. Neither is a reason to add a
+status to the vocabulary: fix them and the qualifier goes away.
+
+Shared checkout, 2026-08-31: other sessions hold uncommitted work on MRTR
+(`src/gateway/meta_mcp/`, `tests/mik_7212_acs.rs`), TENANT (`src/security/firewall/`) and
+CONTROL.2 (`tests/mik_7215_control_2_budget_acs.rs`). Those increments wait on the holding session;
+their files are not ours to stash or clean.
+
+Release ready means all 31 rows read MET with a file:line for production code and a file:line for a
+test reaching it through a production path. Not "implemented", not "tests pass". Two things that
+does not promise: the 42 clean MET rows are not guaranteed to hold, since wiring sixteen unwired
+symbols touches paths they cover, so the full suite gates every increment; and the count is not
+guaranteed to fall monotonically, because an UNTESTED row that goes red splits into a defect and a
+test.
 
 ## 2. The sequence
 

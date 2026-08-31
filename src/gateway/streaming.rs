@@ -233,11 +233,10 @@ impl NotificationMultiplexer {
     /// SUB.3 asserts: a refused modern GET must leave resumption state alone.
     /// Inferring that from "no session was created" tests a weaker claim.
     ///
-    /// Hidden from the published API surface: it exists for observation, not
-    /// for callers. Rust has no test-only public visibility and the criterion
-    /// it serves is end-to-end, so an integration test is the only place the
-    /// assertion can live.
-    #[doc(hidden)]
+    /// Supported public API, alongside `session_count`: both report multiplexer
+    /// state without changing it. Named as an addition rather than hidden --
+    /// `#[doc(hidden)]` withholds the documentation, never the symbol, and an
+    /// accessor a consumer can call is API whatever its doc attribute says.
     #[must_use]
     pub fn last_event_id(&self, session_id: &str) -> Option<String> {
         self.sessions

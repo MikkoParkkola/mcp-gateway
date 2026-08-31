@@ -146,10 +146,13 @@ moves a private function into `handlers.rs`'s file-level surface and changes the
 construction site; both paths now build one `-32022` body, which is the point -- two copies is how
 the two answers drift.
 
-`NotificationMultiplexer::last_event_id` stays `pub` but is `#[doc(hidden)]`. A reviewer asked for
-crate-private; Rust has no test-only public visibility, and SUB.3.1 is an end-to-end claim that only
-an integration test can observe. Hiding it from the published surface is the closest honest answer,
-and it is recorded here rather than left to be re-found.
+`NotificationMultiplexer::last_event_id` is added as supported public API. Two reviewers asked for
+crate-private, correctly: Rust has no test-only public visibility, and `#[doc(hidden)]` -- the first
+answer here -- withholds the documentation while shipping the symbol, which is the worse of both.
+`pub(crate)` plus an in-crate test is the other real option and costs a second copy of this file's
+`state()` and `get_mcp()` fixtures inside `src/`. So the accessor is owned rather than hidden: it
+sits beside `session_count`, reports state without changing it, and a major release is where an
+addition belongs.
 
 ### The duplicate-header refusal is gone, and SUB.1.4 now says something else
 
@@ -181,14 +184,20 @@ finding names a decision a human has to make.
   before this change: the legacy path has never validated its version header. SUB.1 is about the
   era, and narrowing the legacy path is a separate behavioural change with its own compatibility
   question. Disposal: observation.
-- **`NotificationMultiplexer::last_event_id` is public but read only by an integration test.**
-  Correct as stated. The alternative -- `pub(crate)` plus an in-crate unit test -- would duplicate
-  this file's `state()` and `get_mcp()` fixtures in a second location so the accessor could be
-  reached, and DoD §2 WIRED allows an unwired symbol to be flagged rather than moved. This is the
-  narrow case where a patch is right: the accessor carries `#[doc(hidden)]`, so it is absent from
-  published documentation while the AC keeps the reader it needs. Disposal: observation.
 - **The refusals emit no metric or log.** Worth having during a rollout, and it is an operability
   addition rather than a defect in the gate. Disposal: observation.
+
+## Review
+
+| round | vendor | verdict |
+|---|---|---|
+| 2 | Grok | `SHIP` -- F1, F2 and I1 closed |
+| 2 | GPT-5.x (`codex exec`) | `SHIP-WITH-FIXES` -- a non-ASCII combined version header could bypass the modern GET refusal |
+| closure | GPT-5.x | `SHIP` -- A and B CLOSED; C NOT CLOSED (`#[doc(hidden)]` is not visibility), LOW / BEFORE-DEPLOY |
+
+Finding C is closed by the paragraph above: the accessor is now declared API rather than hidden.
+That repair removes an attribute and rewrites a doc comment -- no behaviour, no test, no signature
+changed -- so it takes the DoD's trivial/mechanical exemption instead of a fourth review round.
 
 ## Acceptance criteria
 
