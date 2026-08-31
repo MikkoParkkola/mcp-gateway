@@ -23,6 +23,7 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::security::{diagnostic_url, safe_request_error};
 use crate::{Error, Result};
 
 use super::types::{
@@ -108,13 +109,13 @@ impl A2aClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| Error::Protocol(format!("Agent Card fetch failed: {e}")))?;
+            .map_err(|e| safe_request_error("Agent Card fetch failed", &e))?;
 
         if !resp.status().is_success() {
             return Err(Error::Protocol(format!(
                 "Agent Card returned HTTP {}: {}",
                 resp.status(),
-                url
+                diagnostic_url(&url)
             )));
         }
 
@@ -209,7 +210,7 @@ impl A2aClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| Error::Protocol(format!("A2A RPC '{method}' failed: {e}")))?;
+            .map_err(|e| safe_request_error(&format!("A2A RPC '{method}' failed"), &e))?;
 
         if !resp.status().is_success() {
             return Err(Error::Protocol(format!(

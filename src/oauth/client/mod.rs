@@ -20,6 +20,7 @@ use url::Url;
 use super::callback;
 use super::metadata::{self, AuthorizationServerMetadata, ProtectedResourceMetadata};
 use super::storage::{TokenInfo, TokenStorage};
+use crate::security::{request_error_category, safe_oauth_http_error};
 use crate::{Error, Result};
 
 /// Provenance of a `client_id` (MIK-6750 r7, Defect 2).
@@ -406,7 +407,12 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| Error::OAuth(format!("Client credentials request failed: {e}")))?;
+            .map_err(|e| {
+                Error::OAuth(format!(
+                    "Client credentials request failed: {}",
+                    request_error_category(&e)
+                ))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -416,8 +422,10 @@ impl OAuthClient {
             // re-registers. Fix 1's guard makes this a no-op for
             // configured-secret (static) clients.
             self.purge_client_id_if_invalid(&body);
-            return Err(Error::OAuth(format!(
-                "Client credentials failed: HTTP {status} - {body}"
+            return Err(Error::OAuth(safe_oauth_http_error(
+                "Client credentials failed",
+                status,
+                &body,
             )));
         }
 
@@ -738,7 +746,12 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| Error::OAuth(format!("Token request failed: {e}")))?;
+            .map_err(|e| {
+                Error::OAuth(format!(
+                    "Token request failed: {}",
+                    request_error_category(&e)
+                ))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -751,8 +764,10 @@ impl OAuthClient {
                 "OAuth token exchange failed"
             );
             self.purge_client_id_if_invalid(&body);
-            return Err(Error::OAuth(format!(
-                "Token exchange failed: HTTP {status} - {body}"
+            return Err(Error::OAuth(safe_oauth_http_error(
+                "Token exchange failed",
+                status,
+                &body,
             )));
         }
 
@@ -800,14 +815,21 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| Error::OAuth(format!("Token refresh failed: {e}")))?;
+            .map_err(|e| {
+                Error::OAuth(format!(
+                    "Token refresh failed: {}",
+                    request_error_category(&e)
+                ))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             self.purge_client_id_if_invalid(&body);
-            return Err(Error::OAuth(format!(
-                "Token refresh failed: HTTP {status} - {body}"
+            return Err(Error::OAuth(safe_oauth_http_error(
+                "Token refresh failed",
+                status,
+                &body,
             )));
         }
 
@@ -956,13 +978,20 @@ impl OAuthClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| Error::OAuth(format!("Client registration failed: {e}")))?;
+            .map_err(|e| {
+                Error::OAuth(format!(
+                    "Client registration failed: {}",
+                    request_error_category(&e)
+                ))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(Error::OAuth(format!(
-                "Client registration failed: HTTP {status} - {body}"
+            return Err(Error::OAuth(safe_oauth_http_error(
+                "Client registration failed",
+                status,
+                &body,
             )));
         }
 

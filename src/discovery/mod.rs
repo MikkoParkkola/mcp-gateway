@@ -88,6 +88,33 @@ impl DiscoveredServer {
             ..Default::default()
         }
     }
+
+    /// Operator-facing JSON: names and origins, never argv or credential-bearing URLs.
+    #[must_use]
+    pub fn diagnostic_value(&self) -> serde_json::Value {
+        use crate::security::{diagnostic_url, summarize_stdio_command};
+        let (transport, command, url) = match &self.transport {
+            TransportConfig::Stdio { command, .. } => {
+                ("stdio", Some(summarize_stdio_command(command)), None)
+            }
+            TransportConfig::Http { http_url, .. } => {
+                ("http", None, Some(diagnostic_url(http_url)))
+            }
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { a2a_url, .. } => ("a2a", None, Some(diagnostic_url(a2a_url))),
+        };
+        serde_json::json!({
+            "name": self.name,
+            "description": self.description,
+            "source": format!("{:?}", self.source),
+            "transport": transport,
+            "command": command,
+            "url": url,
+            "config_path": self.metadata.config_path.as_ref().map(|p| p.display().to_string()),
+            "pid": self.metadata.pid,
+            "port": self.metadata.port,
+        })
+    }
 }
 
 /// MCP Auto-Discovery orchestrator

@@ -18,6 +18,7 @@ pub mod agent_identity;
 pub mod data_flow;
 #[cfg(feature = "firewall")]
 pub mod firewall;
+pub mod http_diagnostics;
 pub mod message_signing;
 pub mod policy;
 pub mod remote_provenance;
@@ -38,6 +39,10 @@ pub use data_flow::{
     DataFlowRecord, DataFlowTracer, SanitizationRecord, ToolCategory, audit_sanitization,
     hash_argument,
 };
+pub use http_diagnostics::{
+    SESSION_EXPIRED_MARKER, diagnostic_url, request_error_category, safe_http_status_error,
+    safe_oauth_http_error, safe_request_error, summarize_stdio_command,
+};
 pub use policy::{ToolPolicy, ToolPolicyConfig};
 pub use remote_provenance::{
     RemoteServerProvenanceConfig, RemoteServerSignatureAlgorithm, RemoteServerSigningConfig,
@@ -45,7 +50,8 @@ pub use remote_provenance::{
 };
 pub use response_scanner::ResponseScanner;
 pub use sanitize::{
-    SanitizedResourceMeta, sanitize_json_value, sanitize_optional_json, sanitize_resource_metadata,
+    SanitizedResourceMeta, redact_url_for_diagnostics, sanitize_json_value, sanitize_optional_json,
+    sanitize_resource_metadata,
 };
 pub use scope_collision::{detect_collisions, validate_tool_name};
 pub use ssrf::{

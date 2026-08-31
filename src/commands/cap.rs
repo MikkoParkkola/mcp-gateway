@@ -480,10 +480,16 @@ fn print_discover_empty() {
 
 fn print_discovered_servers(servers: &[mcp_gateway::discovery::DiscoveredServer], format: &str) {
     match format {
-        "json" => println!(
-            "{}",
-            serde_json::to_string_pretty(servers).unwrap_or_default()
-        ),
+        "json" => {
+            let redacted: Vec<_> = servers
+                .iter()
+                .map(mcp_gateway::discovery::DiscoveredServer::diagnostic_value)
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&redacted).unwrap_or_default()
+            );
+        }
         "yaml" => println!("{}", serde_yaml::to_string(servers).unwrap_or_default()),
         _ => {
             println!("Discovered {} MCP server(s):\n", servers.len());
@@ -501,16 +507,22 @@ fn print_server_entry(server: &mcp_gateway::discovery::DiscoveredServer) {
     match &server.transport {
         mcp_gateway::config::TransportConfig::Stdio { command, .. } => {
             println!("   Transport: stdio");
-            println!("   Command: {command}");
+            println!(
+                "   Command: {}",
+                mcp_gateway::security::summarize_stdio_command(command)
+            );
         }
         mcp_gateway::config::TransportConfig::Http { http_url, .. } => {
             println!("   Transport: http");
-            println!("   URL: {http_url}");
+            println!(
+                "   URL: {}",
+                mcp_gateway::security::diagnostic_url(http_url)
+            );
         }
         #[cfg(feature = "a2a")]
         mcp_gateway::config::TransportConfig::A2a { a2a_url, .. } => {
             println!("   Transport: a2a");
-            println!("   URL: {a2a_url}");
+            println!("   URL: {}", mcp_gateway::security::diagnostic_url(a2a_url));
         }
     }
     if let Some(ref path) = server.metadata.config_path {
