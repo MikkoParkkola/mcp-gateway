@@ -1057,6 +1057,26 @@ impl MetaMcp {
             "Protocol version negotiation"
         );
 
+        // Extensions (MCP 2026-07-28): read what the peer declared and
+        // intersect with what this gateway actually serves. The gateway
+        // declares nothing in 4.0.0 (`ExtensionSet::gateway_declares`), so the
+        // intersection is always empty and every request proceeds on core
+        // behaviour — which is one of the specification's two sanctioned
+        // outcomes for an extension only one side supports, applied here
+        // because this gateway is never the side that does.
+        let client_extensions = crate::protocol::extensions::ExtensionSet::from_capabilities(
+            params.and_then(|p| p.get("capabilities")).unwrap_or(&Value::Null),
+        );
+        let negotiated_extensions =
+            crate::protocol::extensions::ExtensionSet::gateway_declares()
+                .negotiate(&client_extensions);
+        if !client_extensions.is_empty() && negotiated_extensions.is_empty() {
+            debug!(
+                client_extensions = ?client_extensions,
+                "Client declared an extension this gateway does not support; reverting to core behaviour"
+            );
+        }
+
         let profile_hint = header_profile.or_else(|| {
             params
                 .and_then(|p| p.get("profile"))

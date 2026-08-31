@@ -8,6 +8,7 @@
 use serde_json::{Value, json};
 
 use crate::failsafe::CircuitBreakerStats;
+use crate::protocol::extensions::ExtensionSet;
 use crate::protocol::{
     Content, Info, InitializeResult, JsonRpcResponse, PromptsCapability, RequestId,
     ResourcesCapability, ServerCapabilities, Tool, ToolsCallResult, ToolsCapability,
@@ -161,6 +162,7 @@ pub(crate) fn build_initialize_result(
             }),
             prompts: Some(PromptsCapability { list_changed: true }),
             logging: Some(std::collections::HashMap::new()),
+            extensions: Some(ExtensionSet::gateway_declares().to_capabilities_value()),
             ..Default::default()
         },
         server_info: Info {

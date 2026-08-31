@@ -236,6 +236,11 @@ pub struct ServerCapabilities {
     /// Experimental capabilities
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<HashMap<String, Value>>,
+    /// This gateway's own extensions (MCP 2026-07-28), `{id: {settings}, ...}`.
+    ///
+    /// See `crate::protocol::extensions` for what is declared and why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Value>,
     /// Logging capability
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logging: Option<HashMap<String, Value>>,
@@ -335,6 +340,11 @@ pub struct ClientCapabilities {
     /// Experimental capabilities
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<HashMap<String, Value>>,
+    /// This client's own extensions (MCP 2026-07-28), `{id: {settings}, ...}`.
+    ///
+    /// See `crate::protocol::extensions` for the negotiation this feeds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Value>,
     /// Roots capability
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roots: Option<RootsCapability>,

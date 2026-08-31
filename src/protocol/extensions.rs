@@ -48,19 +48,35 @@ pub struct ExtensionSet {
 }
 
 impl ExtensionSet {
-    /// What this gateway would declare once the tasks extension is implemented.
+    /// What this gateway actually declares in `initialize`'s server capabilities.
     ///
-    /// Nothing calls this in 4.0.0, so `io.modelcontextprotocol/tasks` is never
-    /// advertised and no client can negotiate it. That is deliberate: the task model
-    /// in `super::tasks` is short of the extension specification by two statuses, two
-    /// required fields and the shape of the failure payload, and advertising the
-    /// identifier before that is fixed would break a client that trusted it. Wire this
-    /// up as part of MIK-7311, not before.
+    /// Empty in 4.0.0: `io.modelcontextprotocol/tasks` is deliberately withheld
+    /// because the task model in `super::tasks` is short of the extension
+    /// specification by two statuses, two required fields and the shape of the
+    /// failure payload. Declaring it would let a client negotiate an extension
+    /// this gateway cannot actually serve, which is a worse failure than
+    /// declaring nothing. Add `Extension::Tasks` here as part of MIK-7311, once
+    /// that gap is closed — not before.
     #[must_use]
     pub fn gateway_declares() -> Self {
-        Self {
-            supported: vec![Extension::Tasks],
-        }
+        Self::default()
+    }
+
+    /// Render this set as the `extensions` field's value: `{id: {}, ...}`.
+    ///
+    /// Every declared extension serialises to an empty settings object — this
+    /// gateway has no per-extension configuration to advertise yet. An empty
+    /// set still renders to `{}` rather than being omitted, so the field is
+    /// always present and a peer can rely on its absence meaning "unsupported"
+    /// consistently, never "the sender forgot to say".
+    #[must_use]
+    pub fn to_capabilities_value(&self) -> Value {
+        let map: serde_json::Map<String, Value> = self
+            .supported
+            .iter()
+            .map(|extension| (extension.id().to_string(), Value::Object(serde_json::Map::new())))
+            .collect();
+        Value::Object(map)
     }
 
     /// Read a peer's declared extensions from its capabilities.
