@@ -125,13 +125,40 @@ Four decisions are the requester's, not the team lead's, and are recorded here r
 design that raised each one so they survive a session boundary. None blocks the work that does not
 turn on it. Each names what changes either way, so an answer costs a sentence.
 
-**1. SUB.2's second clause — amend it, or pull a transport rewrite into v4.0.0.** Request-scoped
-notifications cannot be routed by request key as designed: the notifications are destroyed in the
-transports, below any layer the router can key (`http/mod.rs:929-944` returns the first `data:` line
-of an SSE response and discards the rest; `stdio.rs:416-431` drops any message without an `id`).
-Meeting the criterion as written moves the capture site into both transports. The alternative
-narrows a release-blocking criterion, which is why it is not the team lead's call. Cluster B's
-design gives both sides and deliberately makes no recommendation.
+**1. SUB.2's second clause — RESOLVED against amending it; what remains is scheduling.** The
+question was put to the operator on 2026-08-31 and came back as a question: what does the standard
+require. It was checkable, and the check was a spec read. Answer, quoted from
+`https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http`: a
+server "**MAY** send JSON-RPC *notifications* — for example, `notifications/progress` or
+`notifications/message` — before the final response", those notifications "**MUST** relate to the
+originating client request", and "the final JSON-RPC *response* **SHOULD** terminate the stream".
+The stdio page carries the same provision and no revision of the spec, in any of the three we
+serve, permits a receiver to discard a message because it has no `id`.
+
+That makes our two transports non-conforming today, independently of SUB.2's wording. `http/mod.rs:929-944`
+returns the first `data:` line of an SSE response and discards the rest, so a conforming backend that
+emits a progress notification before its result has that **notification returned as the `tools/call`
+result**. `stdio.rs:416-431` drops every message without an `id`, which is every notification. Amending
+SUB.2 would not make either legal; it would only stop the criterion from mentioning it. A stated limit
+against a MUST is an unmet requirement, and here the MUST is the protocol's, not ours.
+
+The work is smaller than "rewrite the transports". Revision 2026-07-28 **removed** server-to-client
+requests from the stream entirely — "the server **MUST NOT** send independent JSON-RPC *requests* on
+this stream", with sampling, elicitation and list-roots now embedded in an `InputRequiredResult`
+(the MRTR pattern, cluster A). So no bidirectional request routing is needed on the response stream:
+read to the final response instead of stopping at the first event, and stop discarding id-less
+messages. Two reads and a routing rule, not a redesign.
+
+It also **eliminates** SUB.2's routing design rather than patching it. Correlation is by the stream,
+which is scoped one-to-one to the request that opened it — there is no request key to route by, and
+building one would invent a mechanism the protocol already provides. Cluster B's design must drop
+that clause, not shrink it.
+
+Two consequences to check before the work starts: 2026-07-28 also drops `Last-Event-ID` resumability
+("Resumable SSE streams via `Last-Event-ID` are not supported"), so any code implementing it is now
+serving a shape the pinned revision removed; and 2025-06-18 / 2025-11-25 both still allow servers to
+send *requests* on the stream, which we also serve, so the read loop must tolerate them even though
+the pinned revision forbids emitting them.
 
 **2. SCHEMA.1 — what happens to a backend that publishes an invalid schema.** The criterion says
 tool schemas MUST remain valid under JSON Schema 2020-12, unqualified, and the gateway republishes
