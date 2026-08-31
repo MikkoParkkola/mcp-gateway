@@ -272,6 +272,8 @@ turns out to be on a hot path.
 
 ## Test plan — one row per assertion, and whether it can fail today
 
+The §P2 test plan expands this table and is reviewed on its own terms: `docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity-test-plan.md`. It adds the rows this table does not carry — the diagnostics half of the ruling, two negative controls, and the criterion's `$ref`/composition clause, which is uncovered here.
+
 Selection rule that binds every fixture below: **an invalid fixture is chosen by running the
 validator on it, never by reading it.** JSON Schema 2020-12 admits keywords it does not define,
 so a document that looks malformed to a human frequently validates. A fixture is only usable once
