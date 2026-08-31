@@ -148,9 +148,21 @@ impl ResponseCache {
     /// # Arguments
     ///
     /// * `key` - Cache key (typically `server:tool:args_hash`)
-    /// * `value` - JSON value to cache
+    /// * `value` - JSON value to cache. A non-final MCP result (one whose
+    ///   `resultType` is anything other than `complete`) is refused, because
+    ///   serving it from cache would replay a request for input instead of an
+    ///   answer.
     /// * `ttl` - Time-to-live duration
     pub fn set(&self, key: &str, value: Value, ttl: Duration) {
+        // A result the backend has not finished producing is not stored:
+        // replaying an `input_required` from the cache returns the request for
+        // input rather than the answer, so the exchange could never complete.
+        // `is_final` defaults a missing `resultType` to complete, so every
+        // pre-2026 backend's result stays cacheable.
+        if !crate::protocol::cacheable::is_final(&value) {
+            return;
+        }
+
         // Enforce max_entries before inserting
         if self.max_entries > 0 && self.entries.len() >= self.max_entries {
             self.enforce_max_entries();
