@@ -29,6 +29,7 @@ use crate::transition::TransitionTracker;
 
 pub mod anomaly;
 pub mod audit;
+pub mod budget_guard;
 pub mod input_scanner;
 pub mod memory_scanner;
 pub mod principal_window;
@@ -107,6 +108,12 @@ pub struct FirewallConfig {
     /// configured limit inside the configured window.
     #[serde(default)]
     pub tenant_guard: tenant_guard::TenantGuardConfig,
+    /// Principal-keyed call budget (MIK-7215.CONTROL.2).
+    ///
+    /// A per-session budget under statelessness is an unlimited budget: see
+    /// [`budget_guard`] for why the key is the principal, not the session.
+    #[serde(default)]
+    pub budget: budget_guard::BudgetGuardConfig,
 }
 
 fn default_anomaly_threshold() -> f64 {
@@ -128,6 +135,7 @@ impl Default for FirewallConfig {
             anomaly_threshold: default_anomaly_threshold(),
             anomaly_block_threshold: None, // opt-in: None = log-only (backward compat)
             tenant_guard: tenant_guard::TenantGuardConfig::default(), // opt-in: enabled=false
+            budget: budget_guard::BudgetGuardConfig::default(),
         }
     }
 }
@@ -186,6 +194,8 @@ pub enum ScanType {
     /// A principal reached across more distinct tenants than the
     /// data-minimisation guard allows (MIK-7116.TENANT.1).
     CrossTenantReach,
+    /// Principal exceeded its call budget for the window (MIK-7215.CONTROL.2).
+    BudgetExceeded,
 }
 
 // ─── Runtime types ───────────────────────────────────────────────────────────
@@ -211,6 +221,8 @@ pub struct Firewall {
     /// Cross-tenant data-minimisation guard, keyed on the authenticated
     /// principal (MIK-7116.TENANT.1).
     tenant_guard: tenant_guard::TenantGuard,
+    /// Principal-keyed call budget (MIK-7215.CONTROL.2).
+    budget: Option<budget_guard::BudgetGuard>,
     /// Structured audit logger.
     audit: Option<audit::AuditLogger>,
 }
@@ -314,6 +326,10 @@ impl Firewall {
                 audit::AuditLogger::stderr()
             })
         });
+        let budget = config
+            .budget
+            .enabled
+            .then(|| budget_guard::BudgetGuard::new(config.budget.clone()));
 
         Self {
             config,
@@ -324,6 +340,7 @@ impl Firewall {
             redactor,
             anomaly,
             tenant_guard,
+            budget,
             audit,
         }
     }
@@ -459,7 +476,13 @@ impl Firewall {
         // downgrade this one: an unscoreable call was never examined, so there
         // is no judgement for a rule to soften. Forced after `resolve_action`
         // precisely so no rule can reach it.
-        let action = if anomaly_blind || tenant_blind {
+
+        // 2c. Budget check - a per-session budget under statelessness is an
+        // unlimited budget (MIK-7215.CONTROL.2), so this keys on the same
+        // principal as the anomaly detector, over an explicit window.
+        let budget_refuse = self.check_budget(anomaly_identity, server, tool, &mut findings);
+
+        let action = if anomaly_blind || tenant_blind || budget_refuse {
             FirewallAction::Block
         } else {
             self.resolve_action(tool, &findings)
@@ -524,6 +547,56 @@ impl Firewall {
                             .to_string(),
                     matched: format!("{server}:{tool}"),
                     location: FindingLocation::RequestArgs,
+                });
+                true
+            }
+        }
+    }
+
+    /// Judge one request against the principal-keyed call budget
+    /// (MIK-7215.CONTROL.2), pushing a [`Finding`] and returning `true` when
+    /// the call must be refused.
+    ///
+    /// Split out of [`Self::check_request`] to keep that function under the
+    /// line-count lint; the two `Refused`/`Unattributable` arms are the whole
+    /// control and have no reason to live inline.
+    fn check_budget(
+        &self,
+        identity: Option<&str>,
+        server: &str,
+        tool: &str,
+        findings: &mut Vec<Finding>,
+    ) -> bool {
+        let Some(budget) = self.budget.as_ref() else {
+            return false;
+        };
+        match budget.check(identity, server, tool) {
+            budget_guard::BudgetVerdict::Allowed => false,
+            budget_guard::BudgetVerdict::Refused { total, limit } => {
+                findings.push(Finding {
+                    scan_type: ScanType::BudgetExceeded,
+                    severity: Severity::High,
+                    description: format!(
+                        "Call budget exceeded: {total} calls in the window (limit {limit})"
+                    ),
+                    matched: format!("{server}:{tool}"),
+                    location: FindingLocation::SequenceAnomaly,
+                });
+                true
+            }
+            budget_guard::BudgetVerdict::Unattributable => {
+                // Same failure shape as an unobservable anomaly check: a
+                // budget with nothing to key on cannot protect, so it must
+                // say so rather than counting every anonymous caller into one
+                // shared bucket that reports success.
+                findings.push(Finding {
+                    scan_type: ScanType::BudgetExceeded,
+                    severity: Severity::High,
+                    description:
+                        "Call budget has no caller identity to key on; call refused unattributed"
+                            .to_string(),
+                    matched: format!("{server}:{tool}"),
+                    location: FindingLocation::SequenceAnomaly,
                 });
                 true
             }
@@ -1347,6 +1420,144 @@ mod tests {
                 .findings
                 .iter()
                 .any(|f| f.scan_type == ScanType::MemoryPoisoning),
+        );
+    }
+
+    // ── MIK-7215.CONTROL.2 — principal-keyed call budget ────────────────────
+    //
+    // Same failure shape as CONTROL.1: a per-session budget under
+    // statelessness never binds, because every request is a new session. Every
+    // case here asserts a refusal, never a count — a budget that keeps
+    // returning numbers while its key disappears is the shape of failure this
+    // control exists to prevent.
+
+    fn budget_firewall(limit: usize) -> Firewall {
+        let cfg = FirewallConfig {
+            budget: budget_guard::BudgetGuardConfig {
+                enabled: true,
+                max_calls_per_window: limit,
+                window_secs: 60,
+            },
+            ..FirewallConfig::default()
+        };
+        Firewall::from_config(cfg, None)
+    }
+
+    #[test]
+    fn ac_control_2_budget_disabled_by_default_never_blocks() {
+        // Off by default: an operator who never configured a limit must not
+        // discover one at runtime.
+        let fw = default_firewall();
+        let args = json!({});
+        for _ in 0..1000 {
+            let verdict = fw.check_request("s1", "srv", "tool", &args, "caller", "credential:a");
+            assert!(verdict.allowed);
+            assert!(
+                !verdict
+                    .findings
+                    .iter()
+                    .any(|f| f.scan_type == ScanType::BudgetExceeded)
+            );
+        }
+    }
+
+    #[test]
+    fn ac_control_2_a_principal_over_budget_is_blocked() {
+        let fw = budget_firewall(2);
+        let args = json!({});
+        for _ in 0..2 {
+            let verdict = fw.check_request("s1", "srv", "tool", &args, "caller", "credential:a");
+            assert!(verdict.allowed, "the first two calls are within budget");
+        }
+        let verdict = fw.check_request("s1", "srv", "tool", &args, "caller", "credential:a");
+        assert!(!verdict.allowed, "the third call exceeds the budget of 2");
+        assert_eq!(verdict.action, FirewallAction::Block);
+        assert!(
+            verdict
+                .findings
+                .iter()
+                .any(|f| f.scan_type == ScanType::BudgetExceeded),
+            "must report a BudgetExceeded finding"
+        );
+    }
+
+    #[test]
+    fn ac_control_2_a_session_keyed_budget_would_never_bind_but_this_one_does() {
+        // The regression this control exists to prevent: under statelessness
+        // every request has its own session id, so a budget keyed on
+        // `session_id` never sees the same key twice. Passing a fresh session
+        // id on every call, while the *principal* stays fixed, must still
+        // reach the limit.
+        let fw = budget_firewall(1);
+        let args = json!({});
+        let first = fw.check_request("session-1", "srv", "tool", &args, "caller", "credential:a");
+        assert!(first.allowed);
+        let second = fw.check_request("session-2", "srv", "tool", &args, "caller", "credential:a");
+        assert!(
+            !second.allowed,
+            "budget must key on the principal, not the session id, or a fresh \
+             session id on every call makes the budget unlimited"
+        );
+    }
+
+    #[test]
+    fn ac_control_2_two_principals_do_not_share_one_budget() {
+        let fw = budget_firewall(1);
+        let args = json!({});
+        let a = fw.check_request("s1", "srv", "tool", &args, "caller", "credential:a");
+        assert!(a.allowed);
+        let b = fw.check_request("s1", "srv", "tool", &args, "caller", "credential:b");
+        assert!(
+            b.allowed,
+            "a second principal's first call must not be refused for the \
+             first principal's usage"
+        );
+    }
+
+    #[test]
+    fn ac_control_2_an_unattributed_call_is_refused_not_allowed() {
+        // The dangerous near-miss: an empty caller pools every anonymous
+        // request into one shared bucket, worse than no budget because it
+        // reports success. `check_request` maps an empty `control_identity` to
+        // `None`, which the guard must refuse rather than allow.
+        let fw = budget_firewall(1000);
+        let args = json!({});
+        let verdict = fw.check_request("s1", "srv", "tool", &args, "anonymous", "");
+        assert!(
+            !verdict.allowed,
+            "a call with no principal to key on must be refused, not counted \
+             as headroom for every anonymous caller"
+        );
+        assert_eq!(verdict.action, FirewallAction::Block);
+        assert!(
+            verdict
+                .findings
+                .iter()
+                .any(|f| f.scan_type == ScanType::BudgetExceeded)
+        );
+    }
+
+    #[test]
+    fn ac_control_2_a_budget_refusal_cannot_be_downgraded_by_a_rule() {
+        let cfg = FirewallConfig {
+            budget: budget_guard::BudgetGuardConfig {
+                enabled: true,
+                max_calls_per_window: 0,
+                window_secs: 60,
+            },
+            rules: vec![FirewallRule {
+                tool_match: "*".to_string(),
+                action: FirewallAction::Allow,
+                reason: Some("allow everything".to_string()),
+                scan: Vec::new(),
+            }],
+            ..FirewallConfig::default()
+        };
+        let fw = Firewall::from_config(cfg, None);
+        let verdict = fw.check_request("s1", "srv", "tool", &json!({}), "caller", "credential:a");
+        assert!(
+            !verdict.allowed,
+            "an allow rule must not reach a call that exceeded its budget"
         );
     }
 }
