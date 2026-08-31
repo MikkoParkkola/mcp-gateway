@@ -151,6 +151,26 @@ crate-private; Rust has no test-only public visibility, and SUB.3.1 is an end-to
 an integration test can observe. Hiding it from the published surface is the closest honest answer,
 and it is recorded here rather than left to be re-found.
 
+### The duplicate-header refusal is gone, and SUB.1.4 now says something else
+
+The first draft of SUB.1.4 refused any `MCP-Protocol-Version` carrying more than one token with a
+400. Review found that shape breaks a caller this change froze: RFC 9110 lets an intermediary fold
+two field lines into one comma-separated value, so a legacy client sending `2025-06-18` twice, or a
+proxy combining it with `2025-03-26`, would stop streaming. The same function was deciding the era
+*and* policing header cardinality, and only the first job belongs to this change.
+
+Both were removed together rather than patched: `get_era_refusal` now scans every token and lets the
+first modern one decide, wherever it sits. Duplicate legacy tokens are simply not its business. The
+criterion changed with the mechanism -- this is the acceptance criterion moving, not an implementation
+detail, which is why it is written here.
+
+### The token scan reads raw bytes
+
+`HeaderValue::to_str` refuses the *whole* value when it carries `obs-text` (any byte above 0x7F), so
+decoding before splitting let one high byte hide a modern token and buy the legacy stream. The scan
+splits the raw bytes on commas and decodes each token separately, discarding only what is genuinely
+undecodable. Same criterion (SUB.1.1), different reachable input.
+
 ## Findings this change does not act on
 
 Both were raised against this diff, both are about `GET /mcp` behaviour SUB.1 does not claim, and
@@ -161,6 +181,12 @@ finding names a decision a human has to make.
   before this change: the legacy path has never validated its version header. SUB.1 is about the
   era, and narrowing the legacy path is a separate behavioural change with its own compatibility
   question. Disposal: observation.
+- **`NotificationMultiplexer::last_event_id` is public but read only by an integration test.**
+  Correct as stated. The alternative -- `pub(crate)` plus an in-crate unit test -- would duplicate
+  this file's `state()` and `get_mcp()` fixtures in a second location so the accessor could be
+  reached, and DoD §2 WIRED allows an unwired symbol to be flagged rather than moved. This is the
+  narrow case where a patch is right: the accessor carries `#[doc(hidden)]`, so it is absent from
+  published documentation while the AC keeps the reader it needs. Disposal: observation.
 - **The refusals emit no metric or log.** Worth having during a rollout, and it is an operability
   addition rather than a defect in the gate. Disposal: observation.
 
@@ -168,7 +194,9 @@ finding names a decision a human has to make.
 
 - `MIK-7272.SUB.1.1` -- Given a `GET /mcp` carrying `MCP-Protocol-Version: 2026-07-28`, When the
   gateway serves the modern era, Then the response is 405 with `Allow: POST` and `-32600`, its
-  message names `subscriptions/listen`, and its `Content-Type` is not `text/event-stream`.
+  message names `subscriptions/listen`, and its `Content-Type` is not `text/event-stream`. A token
+  that cannot be decoded discards only that token, so a modern token declared beside a high byte is
+  still refused.
 - `MIK-7272.SUB.1.2` -- Given the same request, When `server.modern_protocol` is off, Then the
   response is 400 with `-32022 unsupported protocol version` and `data.supportedVersions` is empty.
 - `MIK-7272.SUB.1.2b` -- Given a `GET /mcp` declaring a 2026 revision this build does not serve
@@ -182,9 +210,9 @@ finding names a decision a human has to make.
   is refused, that session's `last_event_id` is unchanged, and the multiplexer's session count is
   unchanged -- a refusal that ran after `get_or_create_session_for` would mint one entry per
   refused caller.
-- `MIK-7272.SUB.1.4` -- Given a `GET /mcp` whose `MCP-Protocol-Version` carries two tokens -- as two
-  field lines, or as one comma-combined line -- Then it is refused `-32020` rather than served on
-  the first token seen.
+- `MIK-7272.SUB.1.4` -- Given a `GET /mcp` whose `MCP-Protocol-Version` carries more than one token
+  -- as two field lines, or as one comma-combined line -- Then the modern era decides the refusal
+  wherever its token sits, and a header repeating only legacy versions still opens the stream.
 
 ## Test plan
 
@@ -199,12 +227,19 @@ route. Home: `tests/mik_7272_subscriptions_acs.rs::http`, reusing its `state(mod
 | SUB.1.2b | `ac_sub_1_2b_unserved_2026_revision_is_not_told_to_use_listen` | integration | negative | an unserved 2026 revision streams like a legacy caller |
 | SUB.1.3 | `ac_sub_1_3_legacy_get_still_opens_the_stream` | integration | regression | passes today; it is the row that goes red if the gate over-blocks |
 | SUB.3.1 | `ac_sub_3_1_refused_modern_get_leaves_resumption_state_alone` | integration | negative | the handler reaches `get_or_create_session_for` and `create_sse_response` overwrites the stored event id |
-| SUB.1.4 | `ac_sub_1_4_duplicate_protocol_version_is_refused` | integration | negative | `headers.get()` takes the first token and serves the stream |
+| SUB.1.1 | `ac_sub_1_1_a_high_byte_cannot_hide_a_modern_token` | integration | negative | `to_str()` discards the whole value, so the modern token never reaches the classifier |
+| SUB.1.1 | `ac_sub_1_1_the_refusal_precedes_the_accept_check` | integration | negative | a caller sending no `Accept` gets 406 before the era is looked at |
+| SUB.1.4 | `ac_sub_1_4_a_modern_token_decides_wherever_it_sits` | integration | negative | `headers.get()` takes the first token and serves the stream |
+| SUB.1.4 | `ac_sub_1_4_a_repeated_legacy_version_still_streams` | integration | regression | passes today; it is the row that goes red if the gate polices header cardinality |
 
 ### Can each case fail?
 
 - 1.1, 1.2, 1.2b, 3.1 and 1.4 are red against current source. That failure is free and real; no
   retrofit probe is needed.
+- The four cases added during review guard repairs, so their sensitivity was measured rather than
+  assumed: reverting the byte-wise scan to `to_str()` reddens the high-byte case, reinstating the
+  duplicate-header 400 reddens the repeated-legacy case, and moving the gate below
+  `get_or_create_session_for` reddens 3.1 on the session count. Each was restored and re-run green.
 - 1.3 is green today by construction, and that is its job: it goes red if the gate refuses a caller
   that declared nothing or declared a 2025 revision. Without it, "refuse every GET" passes every
   other row.

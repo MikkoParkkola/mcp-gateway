@@ -802,13 +802,42 @@ mod http {
             sessions_before,
             "a refused caller must not mint a session"
         );
+
+        // A session id the multiplexer has never seen. With the seeded id above,
+        // a gate moved below `get_or_create_session_for` would find that entry
+        // already present and mint nothing, so the count assertion would pass on
+        // a misplaced gate. This row is what makes it sensitive to that move.
+        let (status, _, _, _) = get_mcp(
+            &state,
+            &[
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-session-id", "sub3-never-seen"),
+                ("last-event-id", "seed-3"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "modern GET must be refused"
+        );
+        assert_eq!(
+            state.multiplexer.session_count(),
+            sessions_before,
+            "a refused caller must not mint a session for an unseen id"
+        );
+        assert_eq!(
+            state.multiplexer.last_event_id("sub3-never-seen"),
+            None,
+            "a refused caller must not create resumption state"
+        );
     }
 
-    /// MIK-7272.SUB.1.4 -- two field lines and one comma-combined line are the
-    /// same ambiguity, because an intermediary may fold the first into the
-    /// second. Reading only the first token serves a modern client its stream.
+    /// MIK-7272.SUB.1.4 -- an intermediary may fold two field lines into one
+    /// comma-separated value, so the modern token can arrive in either position.
+    /// Wherever it sits, it decides.
     #[tokio::test]
-    async fn ac_sub_1_4_duplicate_protocol_version_is_refused() {
+    async fn ac_sub_1_4_a_modern_token_decides_wherever_it_sits() {
         let state = state(true);
         for headers in [
             &[
@@ -816,22 +845,101 @@ mod http {
                 ("mcp-protocol-version", "2026-07-28"),
             ][..],
             &[("mcp-protocol-version", "2025-06-18, 2026-07-28")][..],
+            &[("mcp-protocol-version", "2026-07-28, 2025-06-18")][..],
         ] {
-            let (status, content_type, _, body) = get_mcp(&state, headers).await;
+            let (status, content_type, allow, body) = get_mcp(&state, headers).await;
             assert_eq!(
                 status,
-                StatusCode::BAD_REQUEST,
-                "ambiguous version {headers:?} must be refused"
+                StatusCode::METHOD_NOT_ALLOWED,
+                "a modern token in {headers:?} must be refused"
             );
             assert!(
                 !content_type
                     .as_deref()
                     .unwrap_or("")
                     .contains("text/event-stream"),
-                "ambiguous version {headers:?} must not stream"
+                "{headers:?} must not stream"
             );
+            assert_eq!(allow.as_deref(), Some("POST"), "headers: {headers:?}");
             let body = body.expect("a refusal carries a JSON-RPC body");
-            assert_eq!(body["error"]["code"], json!(-32020), "body: {body}");
+            assert_eq!(body["error"]["code"], json!(-32600), "body: {body}");
         }
+    }
+
+    /// A legacy caller that repeats its own version is still a legacy caller.
+    /// Refusing every repeat as ambiguous would take the stream away from a path
+    /// this change does not own.
+    #[tokio::test]
+    async fn ac_sub_1_4_a_repeated_legacy_version_still_streams() {
+        let state = state(true);
+        for headers in [
+            &[
+                ("mcp-protocol-version", "2025-06-18"),
+                ("mcp-protocol-version", "2025-06-18"),
+            ][..],
+            &[("mcp-protocol-version", "2025-06-18, 2025-03-26")][..],
+        ] {
+            let (status, content_type, _, _) = get_mcp(&state, headers).await;
+            assert_eq!(status, StatusCode::OK, "legacy {headers:?} must stream");
+            assert!(
+                content_type
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("text/event-stream"),
+                "legacy {headers:?} must stream: {content_type:?}"
+            );
+        }
+    }
+
+    /// A GET on /mcp built from raw parts, for the two cases the `&str` helper
+    /// cannot express: a header value carrying a byte above 0x7F, and no
+    /// `Accept` header at all.
+    async fn get_mcp_raw(state: &Arc<AppState>, request: Request<Body>) -> StatusCode {
+        create_router(Arc::clone(state))
+            .oneshot(request)
+            .await
+            .expect("router must answer")
+            .status()
+    }
+
+    /// MIK-7272.SUB.1.1 -- `HeaderValue::to_str` refuses a whole value that
+    /// carries `obs-text`, so decoding before tokenising would discard a modern
+    /// token along with the high byte hiding it, and serve the legacy stream.
+    #[tokio::test]
+    async fn ac_sub_1_1_a_high_byte_cannot_hide_a_modern_token() {
+        let request = Request::builder()
+            .method("GET")
+            .uri("/mcp")
+            .header("accept", "text/event-stream")
+            .header(
+                "mcp-protocol-version",
+                axum::http::HeaderValue::from_bytes(b"\xff, 2026-07-28")
+                    .expect("obs-text is a legal header value"),
+            )
+            .body(Body::empty())
+            .expect("request");
+        assert_eq!(
+            get_mcp_raw(&state(true), request).await,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "an undecodable neighbouring token must not save a modern caller"
+        );
+    }
+
+    /// MIK-7272.SUB.1.1 -- every other row sends `Accept: text/event-stream`, so
+    /// a gate slid below the `Accept` negotiation would keep them all green
+    /// while answering 406 here.
+    #[tokio::test]
+    async fn ac_sub_1_1_the_refusal_precedes_the_accept_check() {
+        let request = Request::builder()
+            .method("GET")
+            .uri("/mcp")
+            .header("mcp-protocol-version", "2026-07-28")
+            .body(Body::empty())
+            .expect("request");
+        assert_eq!(
+            get_mcp_raw(&state(true), request).await,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "the era refusal must not depend on what the caller accepts"
+        );
     }
 }

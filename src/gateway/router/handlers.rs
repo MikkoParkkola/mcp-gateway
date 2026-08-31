@@ -190,43 +190,33 @@ fn unsupported_version_error(
 /// The refusal a `GET /mcp` earns from the era it declares, if any.
 ///
 /// `None` means the caller did not declare the 2026 era, and keeps the stream
-/// it has always had. The header is tokenised rather than read: RFC 9110 lets
-/// any intermediary fold two field lines into one comma-separated value, so
-/// counting field lines alone would serve `2025-06-18, 2026-07-28` on its first
-/// token. A GET has no body, so this tokenisation is the whole check -- the
-/// POST path can lean on its header-against-body comparison, and this cannot.
+/// it has always had.
+///
+/// Every token of every field line is examined, and the first that declares the
+/// modern era decides. Two properties fall out of that, and both are the point:
+///
+/// RFC 9110 lets any intermediary fold two field lines into one comma-separated
+/// value, so a caller reaching the modern era through `2025-06-18, 2026-07-28`
+/// must be refused on its second token. Reading only the first, or refusing the
+/// whole request as a duplicate, would either serve it or break the legacy
+/// caller that sends its own version twice -- a path this change does not own.
+///
+/// Tokenising the raw bytes is what makes the scan honest. A `HeaderValue` may
+/// carry `obs-text` (bytes above 0x7F), and `HeaderValue::to_str` refuses the
+/// *whole* value when it does; a caller could then hide a modern token behind
+/// one high byte and be served the legacy stream. Splitting first and decoding
+/// each token separately discards only the token that is actually undecodable.
 fn get_era_refusal(state: &AppState, headers: &HeaderMap) -> Option<axum::response::Response> {
-    let tokens: Vec<&str> = headers
+    let version = headers
         .get_all("mcp-protocol-version")
         .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
+        .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
+        .filter_map(|token| std::str::from_utf8(token).ok())
         .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .collect();
-
-    let version = match tokens.as_slice() {
-        [] => return None,
-        [only] => *only,
-        _ => {
-            return Some(
-                build_http_error_response(
-                    None,
-                    crate::protocol::era::HEADER_MISMATCH,
-                    "mcp-protocol-version appears more than once",
-                    StatusCode::BAD_REQUEST,
-                )
-                .into_response(),
-            );
-        }
-    };
-
-    // Broader than the served list on purpose: a 2026 revision this build does
-    // not serve is still stateless, so it is not a legacy caller. Which refusal
-    // it gets is the served list's question, below.
-    if !crate::protocol::meta::declares_modern_era(version) {
-        return None;
-    }
+        // Broader than the served list on purpose: a 2026 revision this build
+        // does not serve is still stateless, so it is not a legacy caller.
+        // Which refusal it gets is the served list's question, below.
+        .find(|token| crate::protocol::meta::declares_modern_era(token))?;
 
     let modern_enabled = state.live_config.running().server.modern_protocol;
     if modern_enabled && crate::protocol::meta::MODERN_VERSIONS.contains(&version) {
@@ -236,7 +226,7 @@ fn get_era_refusal(state: &AppState, headers: &HeaderMap) -> Option<axum::respon
         // carries POST rather than leaving the caller to guess.
         let mut response = build_http_error_response(
             None,
-            -32600,
+            crate::error::rpc_codes::INVALID_REQUEST,
             "GET /mcp was removed in MCP 2026-07-28; use subscriptions/listen",
             StatusCode::METHOD_NOT_ALLOWED,
         )
