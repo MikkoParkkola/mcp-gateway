@@ -82,11 +82,18 @@ The outcome is total over where a retry lands:
 
 | the retry reaches | what happens | which requirement |
 |---|---|---|
-| the minting replica, first time | opens, consumed under the local mutex, resumes | MRTR.5 single-use |
+| the minting replica, first time | opens, consumed under the local mutex, and is **pinned to the held exchange or refused** — see below | MRTR.5 single-use |
 | the minting replica, again | refused as already spent, by the same mutex | MRTR.5 single-use |
 | the minting replica, after `expires_at` | refused as expired | MRTR.5 expiry |
 | any other replica | refused: the envelope does not authenticate under that process's key | MRTR.5 cross-replica |
 | the minting replica after a restart | refused: the key died with the process | MRTR.5 cross-replica |
+
+**The origin row resumes nothing until the correlation question below is answered.** Until then it
+is `consumed-and-pinned`: the envelope opens, the ledger consumes it, and the retry is refused unless
+it carries a verified mapping to the specific live exchange. Refusing is always available and always
+correct; resuming the *wrong* exchange is not, and an unverified mapping cannot tell the two apart.
+This is why **increment 1a closes MRTR.5 only**. MRTR.6 is closed by the increment that either builds
+the mapping or makes the explicit refusal permanent — not by this one.
 
 No row silently starts a second exchange, which is what MRTR.6 forbids. Every refusal is a refusal —
 the requirement asks the retry to reach the holder *or fail explicitly*, and rows 2 through 5 are
@@ -238,12 +245,14 @@ so the two are never separated. `CHANGELOG.md:110-114` states this.
   refusal in decision 2 is the outcome and the release notes say so.
 
 - *Once the retry lands on the origin, what correlates it with the **specific** held legacy
-  exchange?* — **deferred, and it blocks MRTR.6/.7, not this increment.** Authenticating the
+  exchange?* — **deferred, and it is why this increment closes MRTR.5 only.** Authenticating the
   envelope proves the retry reached the minting process; it does not identify *which* open RPC that
-  process is holding for this caller. `IdempotencyState::InFlight` (`src/idempotency.rs:45`) carries
-  an `Instant` and nothing else, so the state that marks an exchange in flight holds no handle to
-  the exchange itself. Nothing in this increment depends on the answer — every row of the outcome
-  matrix either refuses or reaches the origin, and MRTR.5 is satisfied at that point.
+  process is holding for this caller. **There is no table of held legacy exchanges to correlate
+  against.** `IdempotencyState::InFlight` (`src/idempotency.rs:45`) is not it — that is the
+  `gateway_invoke` request-idempotency cache and carries an `Instant` — and a search for any other
+  in-flight registry finds only unrelated backend-start counters (`src/backend/lifecycle.rs:147`).
+  The origin row is therefore `consumed-and-pinned`, not `resumes`: with no verified mapping the
+  retry is refused, which MRTR.6 permits, rather than resumed against a guess, which it forbids.
   - *owner*: the MRTR.6 forwarding increment.
   - *what would resolve it*: read whether the idempotency key alone identifies the held exchange at
     `src/idempotency.rs`, or whether the sealed envelope must additionally carry the in-flight

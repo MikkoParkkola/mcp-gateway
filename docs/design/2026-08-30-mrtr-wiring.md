@@ -513,3 +513,35 @@ The mint belongs at the call site (`invoke.rs:923`), not inside
 arrives and before the idempotency and cache writes below it, so an
 `input_required` result can suppress both. That ordering is design decision 3,
 and it is the reason for DE-1.
+
+### DE-5 — two of the three fingerprint schemes cannot be built from what the caller context holds
+
+The fingerprint table above names three schemes. Checked against the tree at the
+one site that builds `MetaMcpCallerContext` (`router/handlers.rs:1109`), only one
+of them is constructible there today:
+
+| scheme | what the tree holds |
+|---|---|
+| agent JWT | **constructible.** `VerifiedIdentity` (`key_server/oidc.rs:106`) is at the build site and carries the *verified* `issuer` and `subject`. It already exposes `stable_actor_id()`, a length-prefixed encoding that solves the same delimiter-collision the design's `\x00` was for (MIK-6702 CP.ID.1). Reuse it: a second spelling of an unambiguous encoding is how one caller acquires two fingerprints. |
+| API key | **not at full strength.** The presented credential is not retained anywhere. `AuthenticatedClient.principal` (`auth.rs:352`) *is* a digest of the validated secret rather than the display name — but truncated to 12 hex characters, 48 bits (`auth.rs:42-44`). Hashing a truncated digest again does not restore the entropy the truncation dropped. |
+| mTLS | **not constructible.** `CertIdentity` (`mtls/identity.rs:29`) keeps CN, OU, SANs and a display label. The DER is read and dropped where the chain is parsed, `server/support.rs:257-259`. |
+
+The anonymous row is unaffected: `AuthenticatedClient.authenticated`
+(`auth.rs:361`) already separates a presented credential from the anonymous
+identity, so the refusal is expressible today.
+
+**The decision this records is to refuse rather than to approximate.**
+`caller_fingerprint` returns an `Option`, and a caller whose scheme cannot be
+built gets no continuation — the same treatment as anonymous. The tempting
+alternative is the dangerous one: shipping the JWT row and letting API-key
+callers bind on the 48-bit value would give a weaker binding wearing a working
+one's clothes, correct for one class of caller and silently loose for another.
+An under-binding that nobody can see is worse than a refusal everybody can.
+
+The two missing schemes are a credential-plumbing increment of their own, and
+neither half is large: widen `principal_of` to the full digest (five call sites,
+all of them building a `credential:{}` string in `router/handlers.rs` and
+`router/authorization.rs`), and retain a SHA-256 of the leaf DER on
+`CertIdentity` at the point the chain is already being parsed. Both touch files
+this increment does not own, which is why they are named here rather than done
+here.

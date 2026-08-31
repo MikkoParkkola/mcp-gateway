@@ -132,13 +132,13 @@ replica can spend it a second time — but a retry that lands elsewhere is
 refused rather than served, and a restart invalidates every continuation
 outstanding against the process it replaced.
 
-This constraint binds only on the modern protocol path. `server.modern_protocol`
-is off by default, and with it off there is no such limit: scale horizontally as
-the rest of this document describes.
+This trade-off binds only on the modern protocol path. `server.modern_protocol`
+is off by default, and with it off there is no such consideration at all: scale
+horizontally as the rest of this document describes.
 
-The shipped Helm chart and Kubernetes manifests default to two replicas, which is
-correct for the default configuration. Turning the switch on is what makes that count
-wrong, so the change to one replica belongs with the change that enables it.
+The shipped Helm chart and Kubernetes manifests default to two replicas, and that
+default stays correct with the switch on. Set `replicaCount: 1` only if you need
+every retry to be served rather than origin-pinned; it is a trade, not a fix.
 
 If you need both horizontal scale and the 2026-07-28 revision: MIK-7312 settled
 the mechanism as per-process key material rather than the shared store this
