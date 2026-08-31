@@ -22,7 +22,7 @@ fn mik6977_bench_1_matrix_exists_and_can_lose() {
     assert_eq!(DEFAULT_EXTRA_TURNS, 2);
     let rows = default_matrix();
     assert_eq!(rows.len(), 4);
-    let lose = task_tokens(100, 10);
+    let lose = task_tokens(100, 20);
     assert!(
         !lose.meta_wins(),
         "the honest model must be able to lose when extra turns dominate"
