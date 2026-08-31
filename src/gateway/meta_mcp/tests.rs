@@ -2479,10 +2479,35 @@ fn allow_all_ctx_declaring(
         api_key_name: None,
         agent_id: None,
         grant_subject: None,
-        verified_identity: None,
+        verified_identity: Some(&NAMED_CALLER),
         is_admin: false,
         input_capabilities: declared,
         retry: &crate::protocol::mrtr::NO_RETRY,
+    }
+}
+
+/// A caller the gateway can name, and so can bind a continuation to.
+///
+/// Carried by the declaring fixture rather than left `None`, because an
+/// unnameable caller is refused before an interim result reaches it (MRTR.2):
+/// a fixture without one would test the refusal it does not mention instead of
+/// the capability gate it does.
+static NAMED_CALLER: std::sync::LazyLock<crate::key_server::oidc::VerifiedIdentity> =
+    std::sync::LazyLock::new(|| crate::key_server::oidc::VerifiedIdentity {
+        subject: "traveller-1".to_string(),
+        email: "traveller@example.test".to_string(),
+        name: None,
+        groups: vec![],
+        issuer: "https://idp.example.test".to_string(),
+    });
+
+/// The same caller, unnameable: no API key, no agent, no verified identity.
+fn anonymous_ctx_declaring(
+    declared: &[String],
+) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        verified_identity: None,
+        ..allow_all_ctx_declaring(declared)
     }
 }
 
@@ -2551,6 +2576,12 @@ async fn an_undeclared_input_request_is_refused_at_the_gateway() {
 
 // The other half of the same gate: it must not be a blanket refusal of every
 // interim result. A declared capability passes through.
+//
+// MRTR.2 rides on the same call, because the two are one observable event: the
+// question reaches the client, and what it carries as `requestState` is the
+// gateway's sealed envelope rather than the backend's own string. Asserting
+// only `resultType` here would have passed unchanged the day minting landed —
+// a case that cannot fail is worse than one that breaks.
 #[tokio::test]
 async fn a_declared_input_request_passes_the_gateway_gate() {
     let meta = MetaMcp::new(backend_asking_for_elicitation());
@@ -2566,6 +2597,57 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
     assert_eq!(
         result["resultType"], "input_required",
         "the interim result must reach the client intact: {result:#}"
+    );
+
+    let state = result["requestState"]
+        .as_str()
+        .expect("an interim result must carry a requestState for the client to echo");
+    assert_ne!(
+        state, "backend-opaque",
+        "the backend's own state must never reach the client: {result:#}"
+    );
+
+    let payload = meta
+        .continuation()
+        .keyring()
+        .open(state, crate::backend::pool::now_unix_secs())
+        .expect("the envelope must open on the replica that minted it");
+    assert_eq!(
+        payload.backend_request_state.as_deref(),
+        Some("backend-opaque"),
+        "the backend's state must be recoverable from the envelope, or the retry \
+         cannot carry it back"
+    );
+    payload
+        .redeemable_by(
+            &crate::protocol::mrtr::principal_fingerprint(Some(&NAMED_CALLER))
+                .expect("a named caller has a fingerprint"),
+            &crate::protocol::mrtr::original_request_digest("booking", "book_flight", &json!({})),
+        )
+        .expect("the envelope must be bound to this caller and this request");
+}
+
+// MRTR.2's refusal, which is the half a passing mint cannot demonstrate. A
+// caller the gateway cannot name would have to be bound to a fingerprint every
+// other unnameable caller also holds — which is not a binding — so the
+// exchange is refused instead. Without this case the refusal ships unexercised
+// and the choice between refusing and approximating is untested.
+#[tokio::test]
+async fn an_unnameable_caller_is_not_offered_an_interim_exchange() {
+    let meta = MetaMcp::new(backend_asking_for_elicitation());
+    let declared = vec!["elicitation".to_string()];
+    let err = meta
+        .invoke_tool(
+            &book_flight(),
+            Some("session-1"),
+            &anonymous_ctx_declaring(&declared),
+        )
+        .await
+        .expect_err("a caller that cannot be bound must not be handed a continuation");
+    assert_eq!(
+        err.to_rpc_code(),
+        -32003,
+        "the refusal must reuse the gateway's existing refusal code"
     );
 }
 

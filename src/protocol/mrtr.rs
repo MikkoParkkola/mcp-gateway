@@ -285,6 +285,57 @@ pub struct Undeclared<'a> {
     pub capability: Option<&'static str>,
 }
 
+/// The caller binding sealed into a continuation, or `None` when this caller
+/// cannot be bound at full strength.
+///
+/// `None` is a refusal, not a fallback. A continuation names who may redeem it,
+/// and the only honest answer for a caller the gateway cannot name is that it
+/// has none: an anonymous caller shares its non-identity with every other
+/// anonymous caller, so a fingerprint standing in for one would satisfy
+/// [`Payload::redeemable_by`](crate::protocol::continuation::Payload::redeemable_by)
+/// while binding nothing. An under-binding nobody can see is worse than a
+/// refusal everybody can.
+///
+/// Only the verified-agent scheme is constructible today, which is why this
+/// takes an identity rather than a whole caller. The other two schemes the
+/// design names are not yet reachable at the mint site: the presented API key
+/// is not retained past validation, and only a truncated 48-bit digest of it
+/// survives — hashing that again does not restore the entropy the truncation
+/// dropped — and the client certificate's DER is read and dropped before the
+/// caller context is built. Both arrive with the credential plumbing that
+/// retains them, and until then their callers are refused rather than bound
+/// weakly.
+///
+/// Scheme-tagged so two schemes can never collide on one value, and derived
+/// from `VerifiedIdentity::stable_actor_id` rather than a second
+/// length-prefixed encoding of the same pair: a second spelling of an
+/// unambiguous encoding is how one caller acquires two fingerprints.
+#[must_use]
+pub fn principal_fingerprint(
+    identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+) -> Option<String> {
+    let identity = identity?;
+    Some(crate::hashing::sha256_hex(
+        format!("agent:{}", identity.stable_actor_id()).as_bytes(),
+    ))
+}
+
+/// Which request a continuation continues.
+///
+/// Computed over the original call and nothing else. The retry's own
+/// `inputResponses` and `requestState` are excluded because they do not exist
+/// on the first call, so including them would produce a digest that could never
+/// match the one sealed at mint.
+///
+/// Delegates to the idempotency key derivation rather than repeating its shape:
+/// both hash a tool name and a canonical rendering of the same arguments, and
+/// two spellings of one canonical form is how a digest silently stops matching.
+/// Qualified by server because a bare tool name is ambiguous across backends.
+#[must_use]
+pub fn original_request_digest(server: &str, tool: &str, arguments: &Value) -> String {
+    crate::idempotency::derive_key(&format!("{server}:{tool}"), arguments)
+}
+
 /// One question, translated for a client that expects to be asked directly.
 #[derive(Debug, Clone)]
 pub struct OutboundRequest {

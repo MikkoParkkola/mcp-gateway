@@ -354,6 +354,69 @@ fn json_is_populated(value: &Value) -> bool {
     }
 }
 
+/// Seal one interim exchange into a continuation this caller can redeem, or
+/// `None` when it cannot be bound (MRTR.2).
+///
+/// `None` is a refusal, not a degraded mint. A continuation names who may
+/// redeem it, and there is no honest name for a caller the gateway cannot
+/// identify: a placeholder would be shared with every other such caller, so the
+/// envelope would satisfy its own binding check while binding nothing. See
+/// `mrtr::principal_fingerprint` for which credential schemes are constructible
+/// today and why the others are not.
+///
+/// A keyring refusal — budget exhausted, envelope too large — lands here too.
+/// The cause is logged and not returned, because the caller can act on neither:
+/// they are properties of this gateway's state, not of the request, and naming
+/// them tells a client how close the mint budget is to being spent.
+fn mint_continuation(
+    continuation: &crate::protocol::continuation::ContinuationState,
+    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    server: &str,
+    tool: &str,
+    arguments: &Value,
+    backend_request_state: Option<String>,
+) -> Option<String> {
+    let payload = crate::protocol::continuation::Payload::mint(
+        server.to_string(),
+        backend_request_state,
+        crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)?,
+        crate::protocol::mrtr::original_request_digest(server, tool, arguments),
+        continuation.replica().to_string(),
+        crate::backend::pool::now_unix_secs(),
+    );
+    match continuation.keyring().mint(&payload) {
+        Ok(envelope) => Some(envelope),
+        Err(error) => {
+            warn!(server, tool, %error, "Continuation mint refused");
+            None
+        }
+    }
+}
+
+/// The refusal for an interim exchange this gateway cannot bind to its caller
+/// (MRTR.2).
+///
+/// `-32003` is the gateway's existing "Forbidden", reused rather than minted:
+/// this is a refusal to proceed, and the client has done nothing it could undo.
+/// Deliberately *not* `-32021`: that code invites the client to declare a
+/// capability and retry, and no declaration makes an unnameable caller
+/// nameable, so pointing at one would be a lie the client would act on.
+///
+/// One message for every cause. A client that could tell "we cannot name you"
+/// from "our mint budget is spent" learns the gateway's internal state from a
+/// call it was refused; the distinction is in the log, where the operator who
+/// can act on it will look.
+fn unbindable_continuation(server: &str, tool: &str) -> Error {
+    Error::JsonRpc {
+        code: -32003,
+        message: format!(
+            "Tool '{tool}' on server '{server}' asked for input, but this exchange cannot be \
+             continued for this caller"
+        ),
+        data: None,
+    }
+}
+
 /// The refusal for an interim result naming a request type this client cannot
 /// be asked (MRTR.9).
 ///
@@ -1165,7 +1228,7 @@ impl MetaMcp {
         // survives the refusal. Relaying it instead leaves the client holding
         // an `inputRequests` entry it has no handler for and the backend
         // holding an exchange that can never be completed.
-        if let Some(interim) = interim
+        if let Some(interim) = &interim
             && let Some(refused) = interim.undeclared(caller.input_capabilities)
         {
             warn!(
@@ -1178,6 +1241,38 @@ impl MetaMcp {
             );
             return Err(undeclared_input_request(server, tool, &refused));
         }
+
+        // MRTR.2: the backend's own `requestState` never reaches the client.
+        // It is sealed into a continuation the gateway minted, bound to this
+        // caller and this request, and the envelope goes out in its place. The
+        // backend's string is opaque to us and unauthenticated to it — a client
+        // that could echo one it was not given could resume an exchange never
+        // offered to it, and the backend has no way to tell the difference.
+        //
+        // Minted here, where the capability gate has just decided the question
+        // may be asked at all: a continuation for a question the client will
+        // never be shown is a redeemable envelope for an exchange that cannot
+        // happen.
+        let interim = if let Some(interim) = interim {
+            let Some(envelope) = mint_continuation(
+                &self.continuation,
+                caller,
+                server,
+                tool,
+                &arguments,
+                interim.request_state,
+            ) else {
+                warn!(
+                    server,
+                    tool, trace_id, "Cannot mint a continuation for this caller; refusing"
+                );
+                return Err(unbindable_continuation(server, tool));
+            };
+            result["requestState"] = json!(envelope);
+            true
+        } else {
+            false
+        };
 
         // === POST-INVOKE: Response contract gate (issue #133, D1) ===
         //
@@ -1376,7 +1471,15 @@ impl MetaMcp {
             }
         }
 
-        if !want_full && let Some(ref cache) = self.cache {
+        // `!interim` for the reason the idempotency commit above is gated the
+        // same way: a question is not an answer. A cached one would be served
+        // to a later caller as though the backend had replied, and the
+        // continuation it carries is redeemable only by the caller it was
+        // minted for — so the reply they were handed could never be completed.
+        if !want_full
+            && !interim
+            && let Some(ref cache) = self.cache
+        {
             let cache_key = response_cache_key_for(
                 server,
                 tool,
