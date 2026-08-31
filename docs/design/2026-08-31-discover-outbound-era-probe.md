@@ -5,7 +5,7 @@ SPDX-License-Identifier: MIT
 
 # Design — wiring the outbound era probe (MIK-7217 DISCOVER.4, DISCOVER.5)
 
-Status: proposed · Revision: 2 · Date: 2026-08-31
+Status: proposed · Revision: 3 · Date: 2026-08-31
 Tracking: MIK-7217 · Criteria: `docs/requirements/RELEASE-4.0.0-criteria-status.md:178-193`
 
 ## §P0 Scope
@@ -60,8 +60,10 @@ What the MET rows constrain, and this design must not break:
   byte-for-byte against captured goldens. Nothing here changes the inbound result; if a golden
   moves, this design is wrong.
 - **DISCOVER.6's pinned budgets** — `warmstart.rs:751-759` pins `attempt_timeout` 120s,
-  `initial_gap` 2s, `max_gap` 30s. A probe inside the start path spends from that budget, so its
-  timeout is chosen against those numbers, not freely.
+  `initial_gap` 2s, `max_gap` 30s. Those are the *configured* values; the attempt timeout actually
+  applied is `configured.max(per-backend budget)` (`warmstart.rs:219-221`), so 120s is a floor. A
+  probe inside the start path spends from that budget, so its timeout is chosen against those
+  numbers, not freely.
 
 ## Measured constraints
 
@@ -105,6 +107,20 @@ ordering. The evidence is unchanged — the peer's own `server/discover` documen
 2026 error codes — and the handshake's `protocolVersion` is never read for era, before or
 after. Stated as an invariant the implementation must hold: **no code path derives `Era` from the
 `initialize` result.**
+
+**A modern-only peer, named as a limit rather than left to be discovered.** Both reviewers raised
+the same objection: probing after the handshake cannot discover a backend that refuses the
+handshake. That is true, and it is not a defect this design introduces — it is the state of the tree.
+The gateway's outbound `initialize` offers `PROTOCOL_VERSION` (`src/transport/http/mod.rs:440-452`,
+`src/transport/stdio.rs:266-269`), which is `2025-11-25`
+(`src/protocol/mod.rs:26`), and `SUPPORTED_VERSIONS` (`:43`) contains no 2026 revision. A peer that
+speaks only `2026-07-28` is therefore unreachable *today*, before any era work, and probing before
+the handshake would not have made it reachable either — constraint 1 showed a pre-handshake probe
+does not arrive on SSE or OAuth backends at all. Reaching such a peer means offering a version it
+accepts, which is HEADER.9's job, not this increment's. Recorded here as an accepted limit with its
+owner, so that "the era probe handles modern-only peers" is never claimed on this design's behalf.
+What this increment *does* owe, and pays in §3a below, is that the probe must not carry the
+handshake's version and session headers — that half was in scope and is repaired.
 
 Named consequence, so HEADER.9 inherits it rather than discovering it: today the legacy handshake
 must run regardless, because `SUPPORTED_VERSIONS` has no modern revision to negotiate. When HEADER.9
@@ -156,11 +172,66 @@ holds its own lock *across* the probe await by design (`src/protocol/era.rs:143-
 resolution collapses onto one probe rather than stampeding a peer that is by hypothesis already
 struggling (`src/protocol/era.rs:127-131`).
 
+### 3a. `Transport::request` is not a probe-safe call, and the safe one is already in the tree
+
+Revision 2 said the probe goes "directly against the connected transport" and stopped there, as if
+naming the object settled which *method*. It does not, and the two transports differ.
+
+On HTTP, `Transport::request` re-enters `initialize()` when the peer's answer carries the
+session-expiry signature (`src/transport/http/mod.rs:994-1026`, documented at `:343`), and every
+request it sends carries the headers the handshake negotiated — `MCP-Protocol-Version` and
+`MCP-Session-Id`, inserted unconditionally at `src/transport/http/mod.rs:570,:605`. A probe sent
+that way would announce the very version string DISCOVER.4 forbids the era from depending on, and
+could re-handshake mid-probe. On stdio there is no such path: `request`
+(`src/transport/stdio.rs:473`) does not call `initialize()`, which is reached only from `start()`
+(`:256`), and stdio carries no HTTP header channel at all
+(`src/transport/mod.rs:66` — `carries_identity_headers` defaults false, and only HTTP overrides it).
+So the seam is shared; the *call* cannot be, and revision 2's single sentence covered a real
+asymmetry.
+
+**Elimination, not a special case: the probe uses the same escape hatch `initialize()` itself uses.**
+`HttpTransport::initialize()` avoids recursing into its own retry logic by calling `send_request`
+directly (`src/transport/http/mod.rs:823`, and the reason is stated at `:1011`). That private method
+*is* the probe-safe primitive; it is simply not reachable from outside the transport. The design
+adds one trait method:
+
+```
+async fn probe(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse>;
+```
+
+with a default body of `self.request(method, params)`. HTTP overrides it to call `send_request`
+with the standard header set minus `MCP-Protocol-Version` and `MCP-Session-Id`, and with no
+session-expiry retry. stdio inherits the default, because for stdio the default is already correct
+— shown above, not assumed. Websocket and any future transport inherit it too and are no worse off
+than they are today.
+
+After this the finding cannot be restated: there is no "which method does the probe use" question
+left to get wrong, because there is exactly one method whose contract is *this is the probe*.
+
+**Adapter, stated rather than left to the implementer.** A JSON-RPC error is not a transport error:
+it arrives as `Ok(JsonRpcResponse)` with `error: Some(..)` (`src/protocol/messages.rs:45-55`, and
+the same fact is relied on at `src/transport/http/mod.rs:174-176`; `src/backend/metadata.rs:117-118`
+is the existing caller that gets this right). So the mapping into `ProbeOutcome` is:
+`Ok` with `result: Some(v)` → `Result(v)`; `Ok` with `error: Some(e)` → `Error(e.code)`; `Err(_)`,
+or a timeout → `NoAnswer`. Written down because the obvious implementation — matching on the
+`Result` — makes the `-32022` arm of `classify` unreachable and every 2026 peer read as `NoAnswer`,
+which fails silently in the Legacy direction and would pass every test in the plan below that did
+not name it.
+
 ## The design
 
-**Where the era lives.** On `Backend`, alongside the two caches already there
-(`src/backend/mod.rs:200-207`). One `EraCache` per backend, constructed with the backend name so
-its own log lines identify the peer.
+**Where the era lives.** On `Backend`, beside the `tools_cache` field it is modelled on
+(`src/backend/mod.rs:34` for the struct, `:54` for that field), constructed where that field is
+constructed (`src/backend/lifecycle.rs:134`). One `EraCache` per backend, built with the backend
+name so its own log lines identify the peer.
+
+**Per backend, and a pool slot is not a backend.** `PoolKey::PerUser` gives one backend several
+slots, and a stdio slot is a separate child process that could in principle answer differently.
+The era is keyed per backend anyway, because the alternative is worse: a per-slot era re-probes
+every user's first start, and the era is a property of the *server implementation*, which a
+per-user slot does not change. Two slots of one backend disagreeing means the operator pointed one
+name at two implementations, which breaks more than era. Recorded as a ranked assumption (A2) rather
+than hidden in the word "backend".
 
 **When it is learned.** Once, in `start_entry`, immediately after the transport is connected and
 before it is published to the pool entry — the same point on both arms
@@ -179,36 +250,104 @@ but the probe. The `initialize` result's `protocolVersion` is never consulted, b
 specification hands to *implementation-defined* server errors. They are therefore not reserved to
 this revision, and `src/protocol/era.rs:77-79` overstates when it says "only a server that
 implements this revision knows these codes". The bound that does hold is narrower and still
-sufficient: a conforming peer answers an unimplemented method with `-32601`, which the classifier
-already calls "the honest legacy answer" (`src/protocol/era.rs:91-93`), so a false Modern
-requires a peer that both lacks `server/discover` and answers it with one of exactly three codes in
-the implementation-defined band. That is a nonconforming peer, not an unlucky one. It is worth
-stating because false Modern is the expensive direction — the gateway would frame modern requests at
-a peer that cannot read them, where false Legacy costs only the status quo. The overstated comment
+sufficient: JSON-RPC 2.0 *requires* `-32601` for a method the peer does not implement, and the
+classifier already calls that "the honest legacy answer" (`src/protocol/era.rs:91-93`), so a false
+Modern requires a peer that both lacks `server/discover` and answers it with one of exactly three
+codes in the implementation-defined band. Revision 2 called such a peer "nonconforming"; both
+reviewers pushed back, and they are right — a peer may legitimately own a same-named extension and
+return an implementation-defined code for its own reasons without violating anything. The claim is
+therefore narrowed to what the specification actually supports: such a peer is **unlikely, not
+forbidden**. It is worth stating because false Modern is the expensive direction — the gateway would
+frame modern requests at a peer that cannot read them, where false Legacy costs only the status quo.
+
+**This bound depends on the correction path, and does not stand without it.** Revision 2 argued the
+classifier could be repaired rather than eliminated because a false Modern is rare. Rare was never
+the whole risk: revision 2 also had no way to heal one, so a false Modern was rare *and permanent*,
+which is worse than that paragraph admitted, and the narrowing above makes "rare" weaker still. With
+the re-probe rule below — where a cached Modern contradicted by `-32601` classifies Legacy and
+re-resolves — a false Modern is rare *and self-correcting*, and repair-not-elimination is
+defensible. A later reader must not lift this bound out on its own: without the correction path it
+does not carry its conclusion. The overstated comment
 at `src/protocol/era.rs:77-79` is production code, which this design-only increment may not touch;
 it is disposed by riding the implementation increment that wires the probe, since that increment
 edits this file anyway. No ticket: the correction is smaller than a ticket describing it.
 
-**What it costs.** The probe runs inside the warm-start attempt, which DISCOVER.6 pins at
-`attempt_timeout` 120s (`warmstart.rs:751-759`). The probe carries its own 10s timeout so a peer
-that accepts a connection and then stalls cannot eat the attempt budget; on expiry it is `NoAnswer`
-and start proceeds. 10s is chosen against the 120s attempt and the 2s/30s retry gaps, not freely: it
-is under a tenth of the attempt, and above the `initial_gap`, so a probe that is merely slow does
-not turn a healthy backend into a retry.
+**What it costs.** The probe runs inside the warm-start attempt. Revision 2 called 120s "the
+attempt timeout" and computed against it; that number is a **floor**, not a ceiling —
+`effective_attempt_timeout` returns `configured.max(per-backend budget)`
+(`src/gateway/server/warmstart.rs:219-221`), so the real ceiling is at least 120s and is larger for
+a backend with a bigger request budget. The arithmetic is restated in the direction that is
+actually safe: the probe's own 10s timeout is bounded *above* by the smallest attempt ceiling the
+system can produce (120s, the default floor, `warmstart.rs:46-49`), so it is at most a twelfth of
+the shortest attempt and a smaller fraction of every longer one. A peer that accepts a connection
+and then stalls cannot eat the attempt budget; on expiry the outcome is `NoAnswer`, and start
+proceeds as Legacy. The retry-gap clause revision 2 attached to this is withdrawn: the gaps
+(`warmstart.rs:46-49`) govern *whether a failed attempt is retried*, not whether a slow probe
+becomes one, so "above the `initial_gap`" was a comparison between unrelated quantities.
 
-**Re-probing (DISCOVER.5's second half).** The cached era is invalidated when a request fails with
-one of the three codes that contradict it — the same `-32022 / -32020 / -32021` set the classifier
-already treats as era evidence. Nothing else invalidates: not a transport error, not a timeout, not
-a restart of the process. This is the "re-probed when a cached assumption fails" clause read
-literally — an assumption *fails* when the peer says the assumption is wrong, not when the network
-does.
+**One probe per resolution, and waiters are not free.** `EraCache::resolve_with` holds its lock
+across the probe await (`src/protocol/era.rs:143-170`), so concurrent resolvers of the *same*
+backend collapse onto one probe — as long as the probe produces a cacheable outcome. `NoAnswer` is
+deliberately not cached (`src/protocol/era.rs:164-167`), so on a stalled peer each waiter takes the
+lock in turn and pays its own 10s. Revision 2 claimed the collapse unconditionally; it holds for
+`Modern` and `Legacy` and not for the case that hurts. With `PoolKey::PerUser`, N users starting a
+dead backend at once serialise into N × 10s of start latency. Accepted, not repaired, and ranked as
+A3: the alternative is caching a non-answer, which would pin a healthy peer to Legacy because it
+was briefly slow — a permanent wrong answer traded for a bounded slow one. If it bites, the repair
+is an in-flight-resolution share that is separate from the durable cache, and that is a change to
+`era.rs`, which this increment does not touch.
+
+**Re-probing (DISCOVER.5's second half).** Revision 2's rule was: invalidate when a request fails
+with one of `-32022 / -32020 / -32021`. Two defects, one found here and one by both reviewers, and
+they compose into a single repair.
+
+The first: that set *is* the Modern signal. The only evidence that could correct a wrongly-cached
+`Modern` was evidence that would have produced `Modern`. A legacy peer whose own extension happens
+to answer `-32020` is cached Modern, then answers the era-conditional request `-32601`, which
+`classify` itself calls "the honest legacy answer" (`src/protocol/era.rs:91-93`) — not in the
+invalidation set, so the entry never heals. Rare *and permanent*.
+
+The second: nothing would have re-probed anyway. `resolve_with` is called from exactly one place,
+`start_entry`, which a connected backend's requests do not go through
+(`src/backend/lifecycle.rs:202-207` early-outs before the lock). `invalidate` with no reachable
+resolver is a cache eviction, not a re-probe, and DISCOVER.5 asks for a re-probe.
+
+**The rule, in one owner.** `classify` (`src/protocol/era.rs:60-100`) decides what contradicts an
+era, in both directions; there is no second list to disagree with it. When an *era-conditional*
+answer — one the gateway shaped **because** of the cached era — classifies as an era other than the
+cached one, the entry is invalidated and re-resolved through a path reachable from a connected
+backend, using the §3a `probe` primitive against the transport already in the pool entry. Cached
+Legacy plus one of the three 2026 codes classifies Modern (revision 2's rule, kept). Cached Modern
+plus `-32601` classifies Legacy (the direction revision 2 could not express, and the one that
+matters). Nothing else invalidates: not a transport error, not a timeout, not a restart of the
+process. The input restriction is load-bearing — a `-32602` from a tool the peer simply dislikes is
+not an era-conditional answer and cannot demote a backend.
+
+After this the finding cannot be restated. There is no invalidation set to compare against a
+signal set, because there is one classifier and one input rule.
+
+**A restart is a new peer.** A `force_restart` on a shared slot tears down and re-creates the
+transport (`src/backend/lifecycle.rs:821-885`), and for stdio that is a *different child process* —
+possibly a different binary, after an upgrade. The era is invalidated there too. This is the one
+place a non-answer from the peer invalidates, and it is not an exception to the rule above: nothing
+contradicted the era, the thing the era described stopped existing.
+
+**What re-probing costs, over time.** A per-contradiction bound is not a bound: a peer that keeps
+contradicting buys a probe every time. Two limits, both per backend. A re-probe happens at most once
+per 30s, reusing the ceiling the retry path already uses (`max_gap`,
+`src/gateway/server/warmstart.rs:46-49`) rather than introducing a new number. And after a second
+contradiction inside one such window the era **pins Legacy** and stops re-probing until the entry is
+restarted. Pinning is free in the expensive direction: Legacy is what the gateway does today, so a
+flapping peer is served exactly as it is served now, while a peer that merely collided once still
+heals on its first correction.
 
 **No transport snapshot.** Revision 1 proposed recording the transport kind alongside the era so a
 later reader could tell which arm produced it. It is removed, not narrowed: with both arms probing
 at the same seam there is one production path, nothing reads the field, and a stored value nobody
 reads is a second thing to keep true. If HEADER.9 needs it, HEADER.9 adds it with a reader.
 
-**Interaction with the two existing caches.** The tool cache (`src/backend/cache.rs:223`) and the
+**Interaction with the two existing caches.** The tool cache (the `tools_cache` field on `Backend`,
+`src/backend/mod.rs:54`, constructed at `src/backend/lifecycle.rs:134`) and the
 metadata cache (`src/backend/cached_metadata.rs:96,:100,:245`) are unaffected: the era cache is
 consulted by nothing they call, and it is populated before either is warmed. The era's own lock is
 taken after `start_lock` and never before it (constraint 3).
@@ -225,9 +364,14 @@ taken after `start_lock` and never before it (constraint 3).
 
 ## Open questions
 
-Every question this design raised is answered here. **Nothing is deferred**; there is no four-field
-deferral block because there is nothing deferred. The HEADER.9 ordering consequence named in
-constraint 1 is out-of-scope future work, not an open question this change depends on.
+Every question this design raised is answered here, and revision 3 stops claiming more than that.
+**Nothing this design depends on is deferred** — narrower than revision 2's "nothing is deferred",
+and the version that is true. Two things are *accepted*, and an accepted limit is not an open
+question in disguise: a modern-only peer is unreachable until HEADER.9 offers a version it takes
+(constraint 1 — owner named, nothing here depends on it), and N-waiter serialisation on a stalled
+peer is a known cost, ranked A3 below, with its repair named should it bite. Both have an owner and
+a trigger; neither blocks anything in this increment. There is still no four-field deferral block,
+because there is still nothing deferred.
 
 - *Does a pre-`initialize` probe reach an SSE peer?* — read `src/transport/http/mod.rs:200,:327,:434-435,:815-821` and `src/config/mod.rs:1532,:1546` — no: `message_url` is unset until the handshake, and `streamable_http` defaults false — killed the revision-1 placement, which is the whole of revision 2.
 - *Does it reach an OAuth peer?* — read `src/transport/http/mod.rs:378-421,:640-645` — no: the token is acquired inside `initialize()` — second, independent kill of the same placement.
@@ -236,25 +380,89 @@ constraint 1 is out-of-scope future work, not an open question this change depen
 - *Is `Transport::request` re-entrant on session expiry?* — read `src/transport/http/mod.rs:1019-1026` — yes, it can call `self.initialize()` and retry — the probe goes directly to the connected transport, so the branch is never entered from the start path.
 - *What timeout can the probe afford?* — read `warmstart.rs:751-759` — 120s attempt, 2s/30s gaps — fixed the probe timeout at 10s, and stated the arithmetic instead of asserting the number.
 - *Does anything read the transport-kind snapshot?* — searched `src/` — nothing — removed the field.
+- *Is `Transport::request` a safe call for the probe?* — read `src/transport/http/mod.rs:343,:994-1026,:570,:605` and `src/transport/stdio.rs:256,:473` — **no on HTTP** (re-enters `initialize()` on session expiry, and carries the handshake's version and session headers), **yes on stdio** (no re-entry, no header channel) — produced the `probe` primitive in §3a. V (two transports read independently).
+- *Does a probe-safe send already exist?* — read `src/transport/http/mod.rs:823,:1011` — yes, `send_request`, which `initialize()` itself uses for exactly this reason; it is private — the primitive exposes what is already there rather than inventing one. V.
+- *Is a modern-only peer reachable today?* — read `src/protocol/mod.rs:26,:43`, `src/transport/http/mod.rs:440-452`, `src/transport/stdio.rs:266-269` — no: the outbound handshake offers `2025-11-25` and no 2026 revision is in `SUPPORTED_VERSIONS` — turned both reviewers' first finding into a named accepted limit owned by HEADER.9, not a repair in this increment. V.
+- *How does a JSON-RPC error reach the classifier?* — read `src/protocol/messages.rs:45-55`, `src/transport/http/mod.rs:174-176`, `src/backend/metadata.rs:117-118` — as `Ok(JsonRpcResponse)` with `error: Some(..)`, never as `Err` — specified the adapter in §3a, because the naive mapping silently disables the error-code arm. V.
+- *Is the 120s attempt figure a ceiling?* — read `src/gateway/server/warmstart.rs:219-221,:46-49` — no, a floor; `effective_attempt_timeout` maxes it against the per-backend budget — corrected the timeout arithmetic. V.
+- *Does holding the era lock collapse concurrent probes?* — read `src/protocol/era.rs:143-170,:164-167` — only for cacheable outcomes; `NoAnswer` is not cached, so waiters serialise — downgraded the claim and ranked the cost as A3. V.
+- *Can a fixture be injected into `start_entry`?* — read `src/backend/lifecycle.rs:302-370` and the existing fixtures at `src/backend/pool_tests.rs:1564`, `src/transport/stdio.rs:781,:849`, `src/transport/http/tests.rs:708` — not as a transport object, but yes through config, which is how the repo already tests start paths — the old test table was withdrawn and rebuilt on that seam. V.
+- *Is a pool slot a backend?* — read `src/backend/pool.rs` `PoolKey::PerUser` and `src/backend/lifecycle.rs:821-885` — no; one backend can hold several slots, and a restart replaces the process — keyed the era per backend as a stated assumption (A2) and made `force_restart` invalidate. I (one reading; the trade-off is a judgement, not a measurement).
+
+### Ranked assumptions (DoR G10-G12)
+
+Ranked by impact × uncertainty. Each names the cheapest thing that would falsify it.
+
+| # | assumption | if wrong | cheapest falsifier |
+|---|---|---|---|
+| A1 | A legacy peer answering `server/discover` with one of the three 2026 codes is unlikely enough to accept, given the correction path | a peer is framed modern for up to one contradiction window | test row 9 is exactly this scenario, run end-to-end; it also *is* the mitigation |
+| A2 | Era is a property of the backend, not of a per-user pool slot | two slots of one backend disagree and the first one probed wins | row 12 plus a `PerUser` variant of row 7; falsified the moment a config points one name at two implementations |
+| A3 | Serialised 10s waits on a stalled peer are acceptable versus caching a non-answer | N users starting a dead backend see N × 10s | measurable in the start-latency metric this increment already emits; no test, stated because a timing assertion in CI is a flake |
+
+Evidence marking used throughout: **V** = two or more independent sources, **I** = one, **A** = none.
+Every constraint and every answered question above carries a file:line reading; no claim in this
+design is marked A. The one judgement that is not a reading — A2's trade-off — is marked I and
+labelled as a judgement.
+
+### Breaking change (DoR C5, DoD D2)
+
+None. The era cache is a new field with a new consumer; no existing signature changes; the `probe`
+trait method carries a default body, so every current `Transport` implementation compiles unchanged
+and behaves exactly as today (§3a). No config key is added or renamed, no wire format moves, and no
+golden in `tests/mik_7217_acs.rs:213` can shift, because the inbound `initialize` result is not
+touched. Reversibility (G17): a two-way door — deleting the field and its call site returns the
+gateway to Legacy-for-everything, which is what it does today.
 
 ## Test plan delta
 
-Component tests, driving `start_entry` against a fixture transport — not unit tests of
-`src/protocol/era.rs`, which is already covered and is not what is broken.
+Revision 2's table is **withdrawn, not amended.** Both reviewers found the same thing and it is
+confirmed at source: it could not fail. `start_entry` constructs the transport from the backend's
+config (`src/backend/lifecycle.rs:302-370`) and accepts no injected transport, so "drive
+`start_entry` against a fixture transport" describes something the code cannot do; "the probe is not
+repeated per request" is true trivially when `start_entry` is the only probe site; and the timeout
+row asserted `Legacy` against a cache that deliberately never stores `NoAnswer`
+(`src/protocol/era.rs:164-167`). A plan whose rows pass for reasons unrelated to the behaviour is
+worse than no plan, because it retires the question.
 
-| case | proves |
-|---|---|
-| fixture answers `server/discover` → backend's cached era is Modern | DISCOVER.4 on the positive path |
-| fixture returns `-32022` → Modern | the error-code arm of the same classifier, reached through the real caller |
-| fixture errors on the probe → Legacy, and `start_entry` still succeeds | a failed probe does not fail a start |
-| fixture never answers → Legacy after the probe timeout, start succeeds | the 10s bound is real, not aspirational |
-| stdio fixture and HTTP fixture, same assertions | both arms are covered — the claim that replaces revision 1's deferral |
-| two backends, different eras, one probe each | DISCOVER.5's per-backend caching, and that the probe is not repeated per request |
-| cached Modern, then a request returns `-32020` → era re-probed | DISCOVER.5's invalidation clause |
-| a transport error after caching → era **not** invalidated | the negative half of the same clause; without it the previous row passes on a cache that invalidates on everything |
+**How a fixture is actually injected**, since that is what killed the old table: through *config*,
+which is how this repo already tests start paths. A stdio backend whose command is a shell script
+printing canned JSON-RPC frames — the existing pattern at `src/backend/pool_tests.rs:1564` and
+`src/transport/stdio.rs:781,:849` — and, for HTTP, a mock server as at
+`src/transport/http/tests.rs:708`. No new harness. The probe logic itself is additionally reachable
+as a function over `&dyn Transport`, so the classification rows do not need a process at all; only
+the wiring rows do.
 
-Each row can fail today: none of them has a production caller to exercise, which is the point —
-they are written first and fail because the wiring does not exist.
+One row per acceptance criterion, plus the negative rows each positive row needs to mean anything.
+Every row names the assertion and why it fails on HEAD.
+
+| # | case | asserts | why it fails today |
+|---|---|---|---|
+| 1 | stdio fixture answers `server/discover` → `Backend`'s era is `Modern` | DISCOVER.4 positive path, stdio | `Backend` has no era field; the read does not compile |
+| 2 | HTTP mock answers `server/discover` → era is `Modern` | DISCOVER.4 positive path, HTTP — the arm with the header and re-entry hazards | same |
+| 3 | fixture answers the probe `-32022` → era is `Modern` | the error-code arm, reached through the real caller, and the §3a adapter: a JSON-RPC error arrives as `Ok(_)` and must not be read as `NoAnswer` | no caller maps `JsonRpcResponse` to `ProbeOutcome`; with the naive mapping this row fails as `Legacy` |
+| 4 | fixture closes the pipe on the probe → era `Legacy` **and `start_entry` returns Ok** | a failed probe does not fail a start | nothing probes, so the row cannot distinguish itself from HEAD — it is written to fail on the era assertion, not on the start assertion |
+| 5 | fixture accepts the connection and never answers → `start_entry` returns Ok within the attempt, era reads `Legacy` | the 10s bound is real. **Note the assertion is on `Era`, not on the cache**: `NoAnswer` is not stored, so asserting a cached value here is the trap revision 2 fell into | no probe, no timeout, nothing to bound |
+| 6 | HTTP probe frame captured at the mock → carries neither `MCP-Protocol-Version` nor `MCP-Session-Id` | §3a: the probe must not carry the handshake's negotiated version | HEAD inserts both unconditionally (`src/transport/http/mod.rs:570,:605`), so this fails on HEAD *and* fails against a probe naively sent via `Transport::request` — the only row that catches that mistake |
+| 7 | two backends, one Modern fixture and one Legacy fixture, started together → each reads its own era | DISCOVER.5's per-backend caching | no era to read |
+| 8 | one backend, probe answered once, then N tool calls → the fixture records exactly one `server/discover` | the era is cached, not re-derived per request | vacuous on HEAD (zero probes); it becomes meaningful only once row 1 passes, and is listed as a *regression* row, not evidence of the increment |
+| 9 | cached `Modern`, an era-conditional request returns `-32601` → era re-resolves and reads `Legacy` | DISCOVER.5's invalidation clause, in the direction that matters. Without this row a probe-time collision is permanent | neither the invalidation nor a resolver reachable from the request path exists |
+| 10 | cached `Modern`, an ordinary tool call returns `-32602` → era **not** invalidated | the input restriction is real: only era-conditional answers reach `classify`. Without it row 9 passes on a cache that invalidates on everything | nothing invalidates, so this row passes vacuously on HEAD — recorded as a finding below, not hidden |
+| 11 | a peer that contradicts twice inside one 30s window → pinned `Legacy`, no third probe | the time bound, without which the row-9 fix opens a probe loop | no bound exists |
+| 12 | `force_restart` on a shared stdio slot → era invalidated before the new child is probed | a restart is a new process (`src/backend/lifecycle.rs:821-885`) | no era, no invalidation on restart |
+
+**Rows that cannot fail honestly, recorded rather than dropped.** Rows 8 and 10 are vacuous on HEAD:
+each asserts the *absence* of a behaviour that is absent because nothing exists yet. They are kept as
+regression rows and marked as such, and neither is offered as evidence for DISCOVER.4 or
+DISCOVER.5. Naming them is the point — an unmarked vacuous row is how a suite comes to certify
+nothing.
+
+**Empty cells, as findings.** DISCOVER.4 and DISCOVER.5 each have covering rows, so no criterion is
+uncovered. Two behaviours in this design have **no row and no way to get one at this tier**, and
+that is recorded here rather than left blank: a modern-only peer (unreachable today — see
+constraint 1, owned by HEADER.9, so there is nothing to assert), and the N-waiter serialisation on a
+stalled peer (a latency property of `PoolKey::PerUser`, observable only as a timing assertion, which
+this plan refuses to add because a timing assertion in CI is a flake with a ticket attached). Both
+are ranked assumptions below, not silent gaps.
 
 ## What this increment does and does not claim
 
@@ -282,7 +490,35 @@ expect to meet one. The criteria file should record it that way.
 | F7 | probe timeout asserted without arithmetic | **repaired** — 10s stated against `warmstart.rs:751-759`'s 120s attempt and 2s/30s gaps |
 | F8 | "only a 2026 implementer knows those numbers" overstates what JSON-RPC allows: `-32000..=-32099` is the *implementation-defined* server-error band, so the three codes are not reserved to this revision | **repaired** — "reserved" dropped at all four occurrences; the classifier's evidence is now argued from the narrower bound that does hold (a conforming peer answers an unknown method `-32601`, so a false Modern needs a nonconforming peer). A patch is right because the classifier itself is sound and unchanged — what was wrong was the strength of the claim about it, and false Modern stays the expensive direction. The overstated comment lives at `src/protocol/era.rs:77-79`; it is production code, disposed by riding the implementation increment that already edits that file |
 
-Four eliminated, three repaired, one closed on inspection. The four eliminations removed the thing the
+Revision 2's tally: four eliminated, three repaired, one closed on inspection. The four eliminations removed the thing the
 finding was about, so those findings can no longer be stated. The three repairs each say above why a
 patch is right rather than an elimination. F4 removed nothing: half of it was false at source, and
 what survived was kept with a corrected rationale.
+
+## Revision 3 — findings and dispositions
+
+Reviewed by GPT-5.x (`bin/gpt-review`) and by Grok (`bin/grok-review`), same material, revision 2 at
+commit `5c7e64f4`. Both returned SHIP-WITH-FIXES. Both raised the probe-after-handshake objection
+first, and they converged independently on four of the items below — recorded because agreement
+between isolated reviewers is the strongest signal available here. Every claim was verified at
+source before any repair; one died on inspection and cost no round.
+
+| # | finding | raised by | disposition |
+|---|---|---|---|
+| G1 | probing after the handshake cannot discover a modern-only peer | both | **accepted, with the in-scope half repaired** — verified at `src/protocol/mod.rs:26,:43`: the outbound handshake offers `2025-11-25`, so such a peer is unreachable today and this design does not make it so. The half that *is* this design's — the probe carrying the handshake's version and session headers — is eliminated in §3a. Not a ticket: constraint 1 already names HEADER.9 as owner, and a ticket restating an owned limit costs a human's attention for nothing |
+| G2 | no probe-safe transport primitive; `Transport::request` re-enters `initialize()` and carries handshake headers | both | **eliminated** — §3a adds one trait method whose contract *is* the probe, defaulting to `request` (correct for stdio, shown at `src/transport/stdio.rs:256,:473`) and overridden on HTTP to the same private `send_request` that `initialize()` uses to avoid its own recursion (`src/transport/http/mod.rs:823,:1011`). Afterwards there is no "which call does the probe use" question left to answer wrongly |
+| G3 | invalidation cannot correct a false Modern, and nothing re-resolves from the request path | both, and found here as F9 | **eliminated** — one owner (`classify`) decides contradiction in both directions, fed only by era-conditional answers, with a resolver reachable from a connected backend. Found in this session at `src/protocol/era.rs:91-93`; the reviewers supplied the half this session had missed — that `resolve_with` has no caller outside `start_entry` (`src/backend/lifecycle.rs:202-207`). Bounded in time and pinned to Legacy after a second contradiction, so the fix cannot open a probe loop |
+| G4 | the F8 bound is too strong: a legacy peer may own a same-named extension without violating JSON-RPC | both | **repaired** — "nonconforming" narrowed to "unlikely, not forbidden", and the bound now states its dependency on G3's correction path. A patch rather than an elimination because the classifier is sound; what was wrong was the strength of a claim about it |
+| G5 | the test plan cannot fail: `start_entry` accepts no injected transport, one row is vacuous, one asserts a value the cache never stores | both | **eliminated** — the table is withdrawn, not amended, and rebuilt on the config-level fixture seam the repo already uses (`src/backend/pool_tests.rs:1564`, `src/transport/http/tests.rs:708`). Every row now names its assertion and why it fails on HEAD; the two rows vacuous on HEAD are marked as regression rows rather than counted as evidence |
+| G6 | `NoAnswer` resolutions do not collapse; waiters serialise for 10s each | gpt | **accepted and ranked (A3)** — confirmed at `src/protocol/era.rs:143-170,:164-167`. Not repaired: the repairs are to cache a non-answer, which pins a healthy peer to Legacy for being briefly slow, or to split in-flight sharing from durable caching, which is a change to `era.rs` that this increment does not touch |
+| G7 | the 120s attempt figure is a floor, not a ceiling, and the retry-gap clause is unrelated | gpt, and grok on the gap clause | **repaired** — confirmed at `src/gateway/server/warmstart.rs:219-221`. The arithmetic is restated against the smallest ceiling the system can produce, and the `initial_gap` comparison is withdrawn |
+| G8 | two citations do not resolve: `src/backend/cache.rs`, and `src/backend/mod.rs:200-207` | grok | **repaired** — verified: that file does not exist and those lines are `CleanupState`. Replaced with `src/backend/mod.rs:34,:54` and `src/backend/lifecycle.rs:134` |
+| G9 | the `JsonRpcResponse` → `ProbeOutcome` adapter is unspecified, and the obvious implementation disables the error-code arm | grok | **repaired** — specified in §3a, with test row 3 written to fail on exactly that mistake. Confirmed at `src/protocol/messages.rs:45-55` and `src/transport/http/mod.rs:174-176` |
+| G10 | a restart replaces the peer, and a `PerUser` slot is not the backend | grok | **repaired** — `force_restart` invalidates (`src/backend/lifecycle.rs:821-885`), and per-backend keying is now a stated, ranked assumption (A2) instead of an unexamined use of the word "backend" |
+| G11 | no V/I/A marks, no ranked assumptions, no breaking-change assessment | gpt | **repaired** — evidence marks on every answered question, three ranked assumptions with falsifiers, and a breaking-change plus reversibility statement |
+| G12 | "exposes only `Transport::request`" | gpt, as G2's premise | **closed on inspection** — `src/transport/mod.rs:39` also exposes `request_with_headers` and `:66` `carries_identity_headers`. The premise is false; G2's conclusion is not, and is repaired on its own merits. No round spent |
+| G13 | record probe outcome, duration, cache hit and invalidation reason as telemetry | gpt (improvement) | **accepted into scope** — the counters ride the implementation increment; A3 depends on the start-latency metric existing, so this is not decoration |
+
+Revision 3: three eliminated, six repaired, three accepted with owners, one closed on inspection.
+The eliminations are the ones that matter — after G2, G3 and G5 the findings they answer cannot be
+restated, which is the test applied here rather than whether the objection was addressed.
