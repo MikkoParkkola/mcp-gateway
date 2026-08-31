@@ -105,14 +105,20 @@ fn build_search_tools_tool(tool_count: usize, server_count: usize) -> Tool {
         title: Some("Search Tools".to_string()),
         description: Some(format!(
             "Search {tool_count} tools across {server_count} servers by keyword. Returns ranked \
-         matches with full schemas while avoiding the prompt bloat of loading every tool \
-         definition upfront. Supports multi-word queries and synonym expansion."
+         matches (name, description, score) while avoiding the prompt bloat of loading every tool \
+         definition upfront. Ranking diagnostics are omitted unless explain is true. \
+         Supports multi-word queries and synonym expansion."
         )),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "query": { "type": "string", "description": "Search keyword" },
-                "limit": { "type": "integer", "description": "Maximum results (default 10)", "default": 10 }
+                "limit": { "type": "integer", "description": "Maximum results (default 10)", "default": 10 },
+                "explain": {
+                    "type": "boolean",
+                    "description": "Include ranking diagnostics (reasons and signals). Default false.",
+                    "default": false
+                }
             },
             "required": ["query"]
         }),
@@ -619,7 +625,10 @@ pub(crate) fn build_code_mode_search_tool() -> Tool {
         title: Some("Search Tools".to_string()),
         description: Some(
             "Search the gateway tool registry by name, description, or tag. \
-         Returns matching tools with their full schemas. \
+         Default detail is L0: tool name, one-line purpose, and score. \
+         Set detail to l1 for signature, when-to-use, and required params, \
+         or l2 for the full input schema. include_schema=true is deprecated and maps to l2. \
+         Ranking diagnostics are omitted unless explain is true. \
          Supports keyword queries, multi-word queries (any word matches), \
          and glob-style patterns (e.g. \"file_*\", \"*search*\")."
                 .to_string(),
@@ -636,10 +645,20 @@ pub(crate) fn build_code_mode_search_tool() -> Tool {
                     "description": "Maximum number of results to return (default 10, hard-capped at 25)",
                     "default": 10
                 },
+                "detail": {
+                    "type": "string",
+                    "enum": ["l0", "l1", "l2"],
+                    "description": "Response tier: l0 name+purpose+score (default); l1 signature+when-to-use+required params; l2 full input_schema",
+                    "default": "l0"
+                },
                 "include_schema": {
                     "type": "boolean",
-                    "description": "Include the full input schema for each matching tool (default true)",
-                    "default": true
+                    "description": "Deprecated. true maps to detail=l2 (full input schema). Prefer detail."
+                },
+                "explain": {
+                    "type": "boolean",
+                    "description": "Include ranking diagnostics (reasons and signals). Default false.",
+                    "default": false
                 }
             },
             "required": ["query"]

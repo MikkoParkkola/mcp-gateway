@@ -265,7 +265,7 @@ The gateway exposes 14 tools minimum, 16 in the README benchmark scenario, 17 wh
 
 ### Code Mode: two tools instead of the meta-tool set
 
-Setting `code_mode.enabled: true` makes `tools/list` return exactly two tools, `gateway_search` and `gateway_execute`, instead of the meta-tool set. Everything else is reached through those two. Tools named in `meta_mcp.surfaced_tools` are not appended in this mode, so the count stays at two however many backends are connected. Code Mode is off by default.
+Setting `code_mode.enabled: true` makes `tools/list` return exactly two tools, `gateway_search` and `gateway_execute`, instead of the meta-tool set. Everything else is reached through those two. Tools named in `meta_mcp.surfaced_tools` are not appended in this mode, so the count stays at two however many backends are connected. Code Mode is off by default. `gateway_search` returns L0 by default (tool name, one-line purpose, score). Pass `detail=l1` or `detail=l2` for more, or `explain=true` for ranking diagnostics. `include_schema=true` is deprecated and maps to L2.
 
 ```yaml
 code_mode:

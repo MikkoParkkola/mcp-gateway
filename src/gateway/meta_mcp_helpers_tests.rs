@@ -724,7 +724,7 @@ fn ranked_results_to_json_converts_correctly() {
             ..SearchResult::new("s2", "t2", "desc2")
         },
     ];
-    let json_results = ranked_results_to_json(results);
+    let json_results = ranked_results_to_json(results, true);
     assert_eq!(json_results.len(), 2);
     assert_eq!(json_results[0]["server"], "s1");
     assert_eq!(json_results[0]["score"], 0.95);
@@ -733,7 +733,23 @@ fn ranked_results_to_json_converts_correctly() {
 }
 
 #[test]
+fn ranked_results_to_json_omits_ranking_unless_explain() {
+    let results = vec![SearchResult {
+        server: "s1".to_string(),
+        tool: "t1".to_string(),
+        description: "desc1".to_string(),
+        score: 0.95,
+        ..SearchResult::new("s1", "t1", "desc1")
+    }];
+    let hidden = ranked_results_to_json(results.clone(), false);
+    assert!(hidden[0].get("ranking").is_none());
+    assert_eq!(hidden[0]["score"], 0.95);
+    let shown = ranked_results_to_json(results, true);
+    assert_eq!(shown[0]["ranking"]["included"], true);
+}
+
+#[test]
 fn ranked_results_to_json_empty_input() {
-    let json_results = ranked_results_to_json(vec![]);
+    let json_results = ranked_results_to_json(vec![], false);
     assert!(json_results.is_empty());
 }
