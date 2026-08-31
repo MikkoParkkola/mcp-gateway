@@ -204,9 +204,17 @@ sites — `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) already contains `2026-
 method availability on `POST /mcp`, while `SUPPORTED_VERSIONS` drives `initialize`. The modern path
 can therefore be fully working while `initialize` still denies it, which is exactly today's state.
 
-One thing the audit did *not* settle, recorded rather than assumed: whether the silent fallback on an
-unrecognised version conforms to the 2025-06-18 / 2025-11-25 `initialize` text, which was not
-re-fetched. It stops mattering once the constant is flipped, so it is a check for the interim only.
+The interim behaviour is conforming, checked rather than assumed. Both 2025-06-18 and 2025-11-25
+carry identical version-negotiation text: "If the server supports the requested protocol version, it
+MUST respond with the same version. Otherwise, the server MUST respond with another protocol version
+it supports. This SHOULD be the latest version supported by the server", and separately, "If the
+client does not support the version in the server's response, it SHOULD disconnect"
+(https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#version-negotiation).
+`negotiate_version` echoes on an exact match and otherwise returns `PROTOCOL_VERSION`, which is the
+newest entry of `SUPPORTED_VERSIONS` — both halves satisfied, and the mismatch burden sits with the
+client by design. So a 2026-07-28 client today is told `2025-11-25` and should disconnect: the
+gateway refuses the revision it cannot serve instead of silently mis-serving it, which is the
+outcome the constant's comment was protecting. Nothing to fix before the flip.
 
 Within the legacy tier the compatibility question is smaller than it looked. `build_initialize_result`
 (`meta_mcp_helpers.rs:144`) uses the negotiated version for the `protocol_version` string and nothing
