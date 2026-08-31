@@ -470,14 +470,24 @@ want:
 | **(i) v4.0.0 meets `SUB.2` as written** | (b) is in scope now: the transport rewrite in §II.2 plus the shared identity in §II.5. Larger than this note originally implied, and it overlaps the MRTR increment, so the two should land together |
 | **(ii) `SUB.2`'s second clause is amended for v4.0.0** | the criterion is edited in `docs/requirements/RELEASE-4.0.0-criteria-status.md` to require the *capability* (a stream that can carry them) and defer *emission*; (a) then conforms, and the release is honest about what it ships |
 
-*Recommendation:* **(ii)**, and say so in the criteria file rather than in a design
-note — because the transport fix in §II.2 is worth doing on its own correctness
-merits and should not be rushed to hit a release date. *What makes this yours and
-not ours:* (ii) narrows what a release-blocking criterion demands, which the repair
-protocol puts on the requester's side of the line, recorded before it happens.
-*Cost of (i):* SUB.2 stops being a small change and the release scope absorbs a
-transport rewrite. Until one is chosen, SUB.2's implementation is blocked on a
-deferred question, recorded with its four fields in §II.4.
+*No recommendation, deliberately.* Every other question in this note carries one;
+this one cannot. (ii) narrows what a release-blocking criterion demands, which the
+repair protocol puts on the requester's side of the line and requires recorded
+agreement for **before** it happens — so a design note that recommended it would
+be nudging the one decision it just said was not its own.
+
+What the design can say, as input rather than verdict: *for (ii)* — the §II.2
+transport fix is worth doing on its own correctness merits (an HTTP backend that
+emits a notification before its result currently corrupts the `tools/call`
+response) and rushing it to a release date is how that gets done badly; the
+capability, once shipped, makes emission an additive change later. *For (i)* —
+the criterion was written deliberately, an amended criterion is a permanent
+narrowing of what v4.0.0 promised, and SUB.2 then stops being a small change
+because the release scope absorbs a transport rewrite. If (ii) is chosen the edit
+belongs in `RELEASE-4.0.0-criteria-status.md`, not in this note.
+
+Until one is chosen, SUB.2's implementation is blocked on a deferred question,
+recorded with its four fields in §II.4.
 
 ---
 
