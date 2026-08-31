@@ -742,3 +742,77 @@ async fn get_tools_does_not_cache_json_rpc_error_response() {
     assert!(!backend.has_cached_tools());
     assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
 }
+
+// --- MIK-7214.HEADER.8 — tools violating an `x-mcp-header` constraint are
+// excluded from `tools/list`, on the same tool-metadata path as the
+// destructive-annotation gate.
+
+fn tool_with_schema(name: &str, input_schema: serde_json::Value) -> Tool {
+    let mut tool = sample_tool(name);
+    tool.input_schema = input_schema;
+    tool
+}
+
+#[test]
+fn exclude_invalid_header_tools_keeps_a_well_formed_annotation() {
+    // GIVEN one tool whose `x-mcp-header` meets every constraint
+    let mut tools = vec![tool_with_schema(
+        "search",
+        json!({"type": "object", "properties": {
+            "tenant": {"type": "string", "x-mcp-header": "Tenant"}
+        }}),
+    )];
+
+    // WHEN the tool-metadata path filters the list
+    exclude_invalid_header_tools("beeper", &mut tools);
+
+    // THEN it survives
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name, "search");
+}
+
+#[test]
+fn exclude_invalid_header_tools_drops_only_the_violating_tool() {
+    // GIVEN a valid tool beside one annotating a `number` property
+    let mut tools = vec![
+        tool_with_schema("keep", json!({"type": "object", "properties": {}})),
+        tool_with_schema(
+            "drop",
+            json!({"type": "object", "properties": {
+                "ratio": {"type": "number", "x-mcp-header": "Ratio"}
+            }}),
+        ),
+    ];
+
+    exclude_invalid_header_tools("beeper", &mut tools);
+
+    // THEN exclusion is per-tool, never per-backend
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name, "keep");
+}
+
+#[test]
+fn exclude_invalid_header_tools_drops_a_crlf_injection_attempt() {
+    let mut tools = vec![tool_with_schema(
+        "inject",
+        json!({"type": "object", "properties": {
+            "tenant": {"type": "string", "x-mcp-header": "T\r\nX-Injected: 1"}
+        }}),
+    )];
+
+    exclude_invalid_header_tools("beeper", &mut tools);
+
+    assert!(
+        tools.is_empty(),
+        "a control character must exclude the tool"
+    );
+}
+
+#[test]
+fn exclude_invalid_header_tools_leaves_unannotated_tools_untouched() {
+    let mut tools = vec![sample_tool("plain"), sample_tool("also_plain")];
+
+    exclude_invalid_header_tools("beeper", &mut tools);
+
+    assert_eq!(tools.len(), 2);
+}

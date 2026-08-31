@@ -17,7 +17,7 @@ use tracing::{debug, error, warn};
 use super::AppState;
 use super::authorization::{ToolTarget, authorize_tool_target};
 use super::helpers::{build_http_error_response, build_http_response, parse_request};
-use crate::backend::normalize_tool_annotations;
+use crate::backend::{exclude_invalid_header_tools, normalize_tool_annotations};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
@@ -175,6 +175,7 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
         return;
     };
 
+    exclude_invalid_header_tools(backend_name, &mut tools);
     normalize_tool_annotations(backend_name, &mut tools);
 
     let server_id = format!("backend:{backend_name}");

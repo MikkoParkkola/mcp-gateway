@@ -4,7 +4,9 @@
 //! (read-only / destructive / idempotent / open-world) that a backend did not
 //! declare itself, from naming conventions.
 
+use crate::protocol::param_headers::mirrored_params;
 use crate::protocol::{Tool, ToolAnnotations};
+use tracing::warn;
 
 pub(crate) fn normalize_tool_annotations(server: &str, tools: &mut [Tool]) {
     for tool in tools {
@@ -112,4 +114,26 @@ fn infer_open_world_tool(server: &str, name: &str) -> bool {
     }
 
     true
+}
+
+/// Drops every tool whose `inputSchema` breaches an `x-mcp-header` constraint
+/// (MIK-7214.HEADER.8).
+///
+/// Exclusion changes the surfaced tool set, so it runs on the same
+/// tool-metadata path as the destructive-annotation gate rather than in a
+/// second filter of its own. A violation is per-tool: the rest of the
+/// backend's list is unaffected.
+pub(crate) fn exclude_invalid_header_tools(server: &str, tools: &mut Vec<Tool>) {
+    tools.retain(|tool| match mirrored_params(&tool.input_schema) {
+        Ok(_) => true,
+        Err(violation) => {
+            warn!(
+                server = %server,
+                tool = %tool.name,
+                reason = %violation,
+                "Excluding tool from tools/list: invalid x-mcp-header annotation"
+            );
+            false
+        }
+    });
 }

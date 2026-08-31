@@ -24,7 +24,7 @@ mod registry;
 use cached_metadata::CachedMetadata;
 use pool::{PoolKey, PooledEntry};
 
-pub(crate) use annotations::normalize_tool_annotations;
+pub(crate) use annotations::{exclude_invalid_header_tools, normalize_tool_annotations};
 pub use lifecycle::runtime_plan_for_backend;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,
