@@ -230,9 +230,12 @@ Both methods, because the forwarding sites treat them separately and a plan that
 only ever stages `progress` leaves `message` free to be dropped, or routed
 session-globally, with the whole suite green.
 
-- assert: the caller's stream carries the notification, with `progressToken` and
-  `progress` equal to pinned literals from the script; then the result; in that
-  order; and the result is the tool result, not the notification.
+- assert: the caller's stream carries the notification, identified by pinned
+  literals from the script — the `progress` runs by `progressToken` and
+  `progress`, the `message` runs by `level`, `logger` and `data`. A message
+  notification carries no progress fields, so one assertion demanding both sets
+  is unsatisfiable on half the runs. Then the result; in that order; and the
+  result is the tool result, not the notification.
 - **premise:** the mock actually emitted before the result — asserted from the
   mock's own recorded script, so a mock that silently emitted nothing cannot
   make the case pass by delivering nothing.
