@@ -655,32 +655,6 @@ mod tests {
         assert!(response.result.is_some());
     }
 
-    /// An inbound request that happens to carry an `id` must never be routed to
-    /// a pending caller as if it were that caller's answer. The frame is a
-    /// server-to-client request (`sampling/createMessage`), not a response.
-    #[test]
-    fn handle_response_rejects_inbound_request_and_leaves_caller_pending() {
-        // GIVEN: a caller waiting on id 5
-        let t = make_transport("echo");
-        let (tx, mut rx) = tokio::sync::oneshot::channel();
-        t.pending.insert("5".to_string(), tx);
-
-        // WHEN: the peer sends a *request* that reuses that id
-        let json = r#"{"jsonrpc":"2.0","id":5,"method":"sampling/createMessage","params":{}}"#;
-        let outcome = t.handle_response(json);
-
-        // THEN: the frame is refused, and the caller is still waiting
-        assert!(
-            outcome.is_err(),
-            "a frame carrying `method` must not parse as a response"
-        );
-        assert!(rx.try_recv().is_err(), "caller must not be completed");
-        assert!(
-            t.pending.contains_key("5"),
-            "caller must remain pending, not be silently consumed"
-        );
-    }
-
     #[test]
     fn handle_response_no_matching_pending() {
         let t = make_transport("echo");

@@ -264,22 +264,6 @@ fn bearer_header_value(token: &str) -> Result<header::HeaderValue> {
         .map_err(|_| Error::OAuth("OAuth token is not a valid HTTP header value".into()))
 }
 
-/// Extract and deserialize the JSON-RPC response carried by an SSE body.
-///
-/// The first `data:` line wins: an MCP server answers one request per stream,
-/// so any later line belongs to a different frame. Returns a transport error
-/// when the body carries no `data:` line, or when the payload does not
-/// deserialize as a response.
-fn parse_sse_response(text: &str) -> Result<JsonRpcResponse> {
-    for line in text.lines() {
-        if let Some(data) = line.strip_prefix("data:") {
-            return serde_json::from_str(data.trim())
-                .map_err(|e| Error::Transport(format!("Failed to parse SSE data: {e}")));
-        }
-    }
-    Err(Error::Transport("No data in SSE response".to_string()))
-}
-
 impl HttpTransport {
     /// Create a new HTTP transport
     ///
@@ -949,7 +933,15 @@ impl HttpTransport {
                 .await
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e))?;
 
-            parse_sse_response(&text)
+            // Find the data line and extract JSON
+            for line in text.lines() {
+                if let Some(data) = line.strip_prefix("data:") {
+                    let json_str = data.trim();
+                    return serde_json::from_str(json_str)
+                        .map_err(|e| Error::Transport(format!("Failed to parse SSE data: {e}")));
+                }
+            }
+            Err(Error::Transport("No data in SSE response".to_string()))
         } else {
             // Parse JSON response
             response

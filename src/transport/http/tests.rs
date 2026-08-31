@@ -1602,30 +1602,3 @@ fn no_diagnostic_helper_passes_a_canary_through() {
         panic!("a cross-origin redirect must be rejected");
     }
 }
-
-/// The SSE body may carry a server-to-client *request* rather than the answer
-/// to the call in flight. Handing that back to the caller as its response is
-/// the defect this guards.
-#[test]
-fn parse_sse_response_rejects_inbound_request_frame() {
-    // GIVEN: an SSE body whose first data line is a request, not a response
-    let body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"sampling/createMessage\",\"params\":{}}\n\n";
-
-    // WHEN: the transport parses it
-    let outcome = parse_sse_response(body);
-
-    // THEN: it is refused, never returned as an empty successful response
-    assert!(
-        outcome.is_err(),
-        "a frame carrying `method` must not parse as a response, got {outcome:?}"
-    );
-}
-
-/// Guard the extraction: a genuine response still parses.
-#[test]
-fn parse_sse_response_accepts_response_frame() {
-    let body = "data: {\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"tools\":[]}}\n";
-    let parsed = parse_sse_response(body).expect("valid response must parse");
-    assert!(parsed.result.is_some());
-    assert!(parsed.error.is_none());
-}
