@@ -159,6 +159,7 @@ const BANNED_PUBLIC_PHRASES: &[&str] = &[
     "Meta-Tools (4)",
     "~95%",
     "~500ms",
+    "OWASP_Agentic_AI-10%2F10_covered",
 ];
 
 fn count_capability_yaml_files() -> usize {
@@ -306,8 +307,12 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
         "README should contain the canonical gateway token claim"
     );
     assert!(
-        readme.contains(&format!("**{}% savings**", savings_percent.round() as u64)),
-        "README should contain the canonical rounded savings percentage"
+        readme.contains("schema-only"),
+        "README must label the 89% figure as schema-only, not measured task-token savings"
+    );
+    assert!(
+        !readme.chars().take(900).collect::<String>().contains("89%"),
+        "README lede must not lead with the schema-only 89% figure"
     );
     assert!(
         readme.contains(&format!("**${} saved per 1K**", savings_usd.round() as u64)),
@@ -395,6 +400,14 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     assert!(
         benchmarks.contains(&format!("**{}% savings**", savings_percent.round() as u64)),
         "benchmark docs should include the canonical rounded savings percentage"
+    );
+    assert!(
+        benchmarks.contains("schema-only"),
+        "benchmark docs must label 89% as schema-only first-request math"
+    );
+    assert!(
+        benchmarks.contains("honest_task_tokens"),
+        "benchmark docs must name the extra-turn task-token model"
     );
     assert!(
         benchmarks.contains(&format!("**${} saved per 1K", savings_usd.round() as u64)),

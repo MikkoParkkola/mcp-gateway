@@ -17,7 +17,8 @@ Public quantitative claims are tracked in [benchmarks/public_claims.json](../ben
 | Meta-tools exposed to the AI | 14 minimum / 16 README benchmark / 17 with webhook status | `benchmarks/public_claims.json` |
 | Built-in capability YAMLs | 119 total (marketed as 110+) | `benchmarks/public_claims.json` + `find capabilities -name '*.yaml' -not -path '*/examples/*' \| wc -l` |
 | Startup time | ~8ms | `hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'` |
-| README token-savings scenario | 100 tools → ~1600 gateway tokens → **89% savings** | `python benchmarks/token_savings.py --scenario readme` |
+| README token-savings scenario | schema-only first-request: 100 tools → ~1600 gateway tokens → **89% savings** | `python benchmarks/token_savings.py --scenario readme` |
+| Honest task-token model | extra discovery turns counted; meta path can lose | `honest_task_tokens` in-tree; 50/100/200/500 tools |
 
 ## Startup Performance
 
@@ -47,7 +48,7 @@ Reference scenario assumptions:
 
 The base discovery quartet stays constant, and the README benchmark scenario adds stats, cost report, playbooks, profile controls, disabled-capability listing, and reload. Surfacing webhook status adds the 17th tool.
 
-This yields the README headline numbers: **~1600 gateway tokens**, **89% savings**, and **$201 saved per 1K requests**.
+This yields the schema-only first-request numbers: **~1600 gateway tokens**, **89% savings**, and **$201 saved per 1K requests**. Extra discovery turns (`gateway_search_tools` then `gateway_invoke`) reload that surface. The in-tree `honest_task_tokens` model counts them and is allowed to report a loss. Selection accuracy, latency, and task success are not measured here — those need a live agent run.
 
 ## Memory Usage
 
