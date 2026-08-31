@@ -21,7 +21,7 @@ fn mik_5843_willow_page_names_competitor_and_sovereign_wedge() {
         "withwillow.ai",
         "sovereign",
         "self-hosted",
-        "signed `.state`",
+        "not a signed `.state`",
         "attestation receipt",
         "audit log",
     ] {
@@ -50,6 +50,27 @@ fn mik_5843_willow_page_has_feature_bar_and_verdicts() {
             "feature-bar vocabulary missing: {needle}"
         );
     }
+    let shadow_row = page
+        .lines()
+        .find(|l| l.starts_with("| Shadow-AI / unmanaged MCP |"))
+        .expect("shadow row");
+    assert!(
+        shadow_row.contains("**LAG**"),
+        "enterprise shadow discovery must be LAG, not MATCH: {shadow_row}"
+    );
+    let audit_row = page
+        .lines()
+        .find(|l| l.starts_with("| Audit |"))
+        .expect("audit row");
+    assert!(
+        audit_row.contains("**LAG**"),
+        "audit completeness must be LAG: {audit_row}"
+    );
+    assert!(
+        page.contains("SaaS, self-hosted, and on-prem")
+            && page.contains("not a unique mcp-gateway property"),
+        "must not treat self-hosting as unique"
+    );
 }
 
 #[test]
