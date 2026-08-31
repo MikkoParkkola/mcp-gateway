@@ -159,6 +159,15 @@ reached from the meta path. The dialect is pinned by the module, not by an argum
 **`jsonschema::draft202012::meta::validator()`** (`src/lib.rs:3178` for the draft module, `:3281` for
 its `meta`), which yields a `MetaValidator<'static>`; `draft202012::meta::is_valid` is the boolean
 form. Source is now the vendored crate under `~/.cargo/registry`, read 2026-08-31 — V, not I.
+
+Signature existence is not the claim this section needs, so the body was read too. Two facts, both
+load-bearing. `validator()` is `crate::meta::validator_for_draft(super::Draft::Draft202012)`
+(`src/lib.rs:3288`): the dialect is a constant argument, not a dispatch on the document's `$schema`,
+which is exactly the property G4 tests and the reason `meta::is_valid` is the wrong call. And
+`MetaValidator` exposes both `is_valid -> bool` (`src/lib.rs:1948`) and
+`validate -> Result<(), ValidationError>` (`:1961`), so the half of the ruling that requires naming
+*which* keyword failed — the `CAP-` code at seam 2, the `warn!` at seam 3 — has a call that returns
+the error rather than a bare boolean.
 An implementer reaching for `meta::is_valid` would have shipped auto-detection, and G4 is the case
 that would have caught it. Worth recording that the doc flagged this call as single-sourced and
 unverified, and it was the one thing in the design that did not compile.
@@ -244,7 +253,15 @@ dropped tool callable on the route most likely to be used by a client that had a
 The check therefore belongs where **both** routes converge, not in either caller:
 `Backend::request_with_headers` (`src/backend/ops.rs:151-165`) is on the path for the direct route,
 the meta-MCP funnel and `McpProvider` (`src/provider/mcp_provider.rs:62`) alike. A `tools/call`
-whose tool name is in the backend rejected set is refused there. Choosing the shared chokepoint
+whose tool name is in the backend rejected set is refused there.
+
+One clause carries that claim and is worth stating rather than assuming, because getting it wrong
+would rebuild the same defect one layer down: the direct route picks between **two** methods —
+`backend.request(...)` when no headers are propagated and no identity key is set, and
+`request_with_headers(...)` otherwise. `request` is a two-line delegation to `request_with_headers`
+(`src/backend/ops.rs:46-48`), so both branches reach the gate. Had it been a parallel
+implementation, the refusal would have had to sit wherever the two converge instead, and a gate on
+`request_with_headers` alone would have left the header-free call path open. Choosing the shared chokepoint
 over the two call sites is the same reasoning the `prepare_tool_metadata` doc comment records for
 the listing half — the divergence it was created to end is exactly what a per-caller gate would
 recreate.
