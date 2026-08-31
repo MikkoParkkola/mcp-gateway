@@ -79,13 +79,27 @@ is the full enumeration, read off the call chain
 | `params.query` (`spec-preview`) | `mod.rs:1186` | this request's params | request input — legal |
 | backend/tool counts, stats, webhook registry, reload context | `mod.rs:1120-1128` | server state | server-global — legal |
 | `meta_route_isolation_refused` | `surfaced.rs:118` | backend OAuth mode + multi-user config | server-global — legal |
+| backend tool-cache readiness | `surfaced.rs:130-137` | async backend discovery | server-global — legal, time-varying |
 | **routing profile** | `surfaced.rs:106-108` | **session id** | **connection-derived — illegal** |
 | **session-promoted tools** | `mod.rs:1156` (`spec-preview`) | **session id** | **connection-derived — illegal** |
 
-Two of seven are illegal. `ORDER.3` names exactly those two, so its `MET` status
-survives this design — but its evidence cell should gain the other five, because
+Two of eight are illegal. `ORDER.3` names exactly those two, so its `MET` status
+survives this design — but its evidence cell should gain the other six, because
 an enumeration that lists only the failures cannot be checked for completeness.
 Recorded in Part III.
+
+The last row was added in review and is worth its own sentence, because it is the
+one input that is legal and still varies. A surfaced tool is omitted from the list
+when its backend cache has no entry yet (`surfaced.rs:130-137` returns `None` and
+logs *"Surfaced tool not in backend cache — omitting from tools/list"*), so two
+callers asking at different times get different lists. That is **not** an ORDER.2
+violation: the criterion is that the list does not depend on *which connection*
+asks, and this depends on *when*, identically for every connection. It is
+therefore classified, not designed for. The reviewer's proposed remedy — atomic
+server-global publication with a `tools/list_changed` broadcast after every
+published change — is a real improvement and is **out of scope here** (Part VI):
+it depends on the same never-fired announce path as Part III item 1, which is held
+pending §4.1. Both collapse or land together; neither should be designed twice.
 
 ## I.3 Measured constraints
 
@@ -125,7 +139,13 @@ first plumbing a caller context into a list path that has never had one.
 
 **(a) Ignore the session profile when `is_modern`.** Thread `is_modern` into
 `handle_tools_list_*` and skip both illegal inputs on the modern path; legacy
-clients keep today's behaviour unchanged.
+clients keep today's behaviour unchanged. The skip has to reach **four** sites,
+not two — the `spec-preview` path is a second entry to both illegal inputs and was
+missing from this note before review: `surfaced.rs:106-108` and `mod.rs:1156` on
+the plain path, plus `spec_preview.rs:46` (`active_profile`) and `:111`
+(`promoted_tools_for_session`), the latter merged into the returned results. A
+skip that misses either `spec_preview` site leaves the criterion open on a live
+path.
 *For:* smallest diff that closes the criterion; no mechanism removed, so the
 prior decision in `authorization.rs` stays true for the clients it was made
 about; matches the `GET /mcp` era-gate precedent.
@@ -134,6 +154,17 @@ tool that silently does nothing to a modern client's list while still changing
 dispatch — a split between what is listed and what is callable. That split needs
 its own answer (refuse the meta-tool in modern mode, most likely), or it is a new
 inconsistency traded for the old one.
+*And `gateway_set_profile` is not the only writer.* `handle_initialize` binds a
+profile from the `X-MCP-Profile` header with no credential check
+(`src/gateway/meta_mcp/mod.rs:1060-1068`, read at `invoke.rs:710`), so a modern
+`initialize` can bind a profile that dispatch honours while a profile-blind list
+ignores it. Skipping `active_profile` on the list path alone therefore does not
+close listed-versus-callable; it moves the writer. Option (a) is only complete if
+the modern path is profile-blind on **both** sides: the list ignores the session
+profile *and* modern dispatch does not read it. Which means (a)'s real content is
+"modern connections use the default profile, everywhere" — and it must then be
+true that the default profile denies nothing the list advertises, or the split
+reappears with the deny arriving at dispatch instead.
 
 **(b) Remove per-session routing profiles entirely, for every era.**
 *For:* eliminates the finding rather than patching it — after this, the finding
@@ -173,10 +204,13 @@ skip the era split entirely — (b) is strictly better engineering and the only
 reason it is not the recommendation is that this design lacks the authority to
 delete a shipped capability.
 
-Whichever is chosen, `gateway_set_profile` must be refused on the modern path
-under (a), or removed under (b). Leaving a meta-tool that changes dispatch but
-not the list is the inconsistency this criterion exists to prevent, in a new
-place.
+Whichever is chosen, **every writer of the session profile** must be closed on the
+modern path, not just the meta-tool: `gateway_set_profile` refused under (a) or
+removed under (b), *and* `initialize`'s `X-MCP-Profile` binding refused under (a)
+or removed under (b), *and* modern dispatch made not to read the session profile
+at all. Leaving any path that changes dispatch but not the list is the
+inconsistency this criterion exists to prevent, in a new place. This was found in
+review: the original recommendation named one writer and there are two.
 
 ---
 
@@ -227,15 +261,39 @@ rather than long-lived listeners, and a busy gateway would begin refusing
 subscriptions because it was busy. Any per-request stream needs its own
 accounting, not this one's.
 
-**A request-keyed channel does not exist and is the real cost.** Delivery today
-is keyed by session because a session is what the transport gives you. Routing a
-backend's notification back to one in-flight request means carrying a request key
-from the router, through `dispatch_to_backend`, to wherever the backend's
-notifications are read — the same plumbing problem the MRTR retry work hit when
-it needed request state at the dispatch boundary and found none
-(`src/gateway/router/handlers.rs:930-955`). These two should be built once, not
-twice — see §II.5, which states the seam so whichever cluster reaches it first
-builds it and the second finds it.
+**The backend's notifications are destroyed in the transport, below anything the
+router can key.** This was the design's worst error before review, and correcting
+it moves SUB.2's capture site down a layer — a design decision this note did not
+originally make, named here as one (§P3).
+
+The transports do not lose notifications by accident; they drop them by
+construction, before any router-level channel could see them:
+
+| transport | what happens | site |
+|---|---|---|
+| HTTP | on `text/event-stream`, the loop returns the **first** `data:` line parsed as the response and discards every other line | `src/transport/http/mod.rs:929-944` |
+| stdio | a message with no `id` is logged and dropped | `src/transport/stdio.rs:416-431` |
+
+and the interface above them returns exactly one value — `dispatch_to_backend`
+does `backend.request("tools/call", params).await?`
+(`src/gateway/meta_mcp/invoke.rs:1955-1961`), so there is no second thing for a
+request key to carry. A request-keyed sink installed at the router would be a
+**dead pipe**: correctly addressed, never written to.
+
+Worse than lossy. On HTTP the first-`data:`-line rule is a correctness bug in its
+own right, independent of SUB.2: a backend that emits a `notifications/progress`
+before its result returns *the notification* as the `tools/call` response. Today
+that costs nothing only because no backend we drive emits one — which is exactly
+what §0's absence evidence found, and is a property of our backends, not of our
+code.
+
+So SUB.2's real prerequisite is **not** "a request key at the dispatch boundary".
+It is: each backend transport must read its stream to completion, separate
+notifications from the response, and hand the notifications to a per-invocation
+sink whose lifetime is the upstream response. The key is necessary; it is not
+sufficient, and stating only the key is what made this design look cheaper than
+it is. The plumbing is still shared with the MRTR retry work — see §II.5, restated
+after review to say what is genuinely shared and what is not.
 
 ## II.3 Options
 
@@ -249,13 +307,17 @@ asks for a stream; no request-keyed routing needed yet.
 carries a notification satisfies the letter of "may stream" and none of the
 requirement. It is a prerequisite, not an answer.
 
-**(b) Mechanism plus backend forwarding.** (a), plus a request-keyed channel so a
-backend's `notifications/progress` and `notifications/message` are relayed to the
-caller of the provoking request, filtered by that request's `log_level`.
+**(b) Mechanism plus backend forwarding.** (a), plus transports that read a
+backend's stream to completion and a per-invocation sink, so a backend's
+`notifications/progress` and `notifications/message` are relayed to the caller of
+the provoking request, filtered by that request's `log_level`.
 *For:* meets the criterion for the case that actually arises — the gateway is a
 proxy, and the notifications a client wants are the backend's.
-*Against:* needs the request-key plumbing described above, and the per-request
-`log_level` currently parsed and dropped (Part III) has to start being honoured.
+*Against:* needs the shared identity **and** the transport work described in §II.2
+— every backend transport reading its stream to completion instead of discarding
+non-response messages — and the per-request `log_level` currently parsed and
+dropped (Part III) has to start being honoured. The transport half is the larger
+of the two and was under-priced in this note before review.
 
 **(c) Mechanism plus gateway-originated progress.** (a), plus the gateway
 emitting its own progress for long meta-tool operations.
@@ -265,42 +327,66 @@ at what granularity — that nobody has asked for. Speculative; not recommended.
 
 ## II.4 Recommendation
 
-**(b), sequenced as (a) then the forwarder**, with the request-key plumbing built
-jointly with the MRTR retry-forwarding work rather than twice. But whether
-v4.0.0 must ship (b) or may ship (a) is a scope decision with a large cost delta
-and it is not this design's to take — see §4.3. Until it is answered, SUB.2
-carries a **deferred open question that blocks implementation**: the design
-cannot specify what is emitted until someone says whether anything must be.
+**(b), sequenced as (a) then the forwarder**, with the shared plumbing built
+jointly with the MRTR retry-forwarding work rather than twice.
+
+Stated without softening, because review found this design implying otherwise:
+**option (a) does not satisfy `SUB.2`.** The criterion's second clause requires
+request-scoped notifications to reach the caller that provoked them; (a) forwards
+none, so shipping (a) leaves a release-blocking criterion ABSENT and the release
+nonconformant against its own requirements file. (a) is a *sequencing step toward*
+(b), not an alternative to it.
+
+That does not make it this design's call to shrink the release. Amending `SUB.2`
+is the operator's decision and it is put to them as one in §4.3 — the question is
+"must v4.0.0 emit, or is the criterion being amended", not "may we ship less".
+Until it is answered, SUB.2 carries a **deferred open question that blocks
+implementation**: the design cannot specify what is emitted until someone says
+whether anything must be.
 
 | field | value |
 |---|---|
 | owner | operator, via §4.3 |
 | what would resolve it | the answer to "must v4.0.0 emit, or only be able to stream" |
 | when | before any SUB.2 implementation increment starts |
-| what if it resolves badly | if v4.0.0 must emit, SUB.2 grows the request-key plumbing and stops being a small change; the release scope, not the design, absorbs it |
+| what if it resolves badly | if v4.0.0 must emit, SUB.2 grows the §II.2 transport rewrite as well as the shared identity, stops being a small change, and the release scope — not the design — absorbs it |
 
-## II.5 Shared prerequisite — the request key at the dispatch boundary
+## II.5 Shared prerequisite — one identity threaded to the transport, two payloads
 
 This is not a cluster-B item. It is one seam with two consumers in two clusters,
 in the same tree, being approached by two sessions, and the duplication is
 already paid for once this release. Stated here so it is built once.
 
+**Corrected after review.** This section previously claimed the two clusters need
+"one request key". They do not. What they share is the **identity and the seam**;
+what each hangs off it is different, with a different lifetime. The corrected
+claim is narrower and survives inspection:
+
 | | |
 |---|---|
-| the seam | a request key carried from the router through `dispatch_to_backend` to where a backend's messages are read, so a backend event can be attributed to the in-flight request that provoked it |
-| where it is missing | `src/gateway/router/handlers.rs:930-955` — the dispatch boundary has no request state to key on |
-| consumer 1 | cluster A, MRTR retry forwarding — needed request state here and did not find it |
-| consumer 2 | this note's SUB.2 forwarder — needs the same key to route `notifications/progress` and `notifications/message` back to one request's response stream |
-| build order | whichever consumer starts first builds the key; the second consumes it |
+| genuinely shared | a per-invocation identity threaded through `dispatch_to_backend` (`src/gateway/router/handlers.rs:930-955` has no request state to key on today), so that anything a backend produces can be attributed to the call that provoked it |
+| consumer 1 — cluster A | hangs `RetryFields` off it; lifetime spans the **retry decision**, and it is consumed at the router, above the transport |
+| consumer 2 — this note | hangs a notification **sink** off it; lifetime ends when the upstream response is written, and it must be consumed **inside the transport**, at the sites in §II.2 that discard notifications today |
+| **not** shared | the payload, the lifetime, and the layer at which each is read. A single object serving both is a worse design than two, threaded on one identity |
+| build order | whichever consumer starts first threads the identity; the second hangs its own payload on it and does not re-thread |
 
-Neither consumer should design it privately. The two need the same thing for
-different reasons, and a key shaped only for retry state or only for
-notification routing is the version that gets built twice. Cluster A is owned by
-another session; coordination sits with the team lead, not with this note.
+Why it still belongs in this note: the *threading* is the expensive part and it is
+one edit, in the same function, on the same release. Two sessions each inventing
+their own identity is the duplication worth preventing; forcing one shared payload
+is not.
 
-What this note does **not** decide: the key's representation, its lifetime, or
-where it is stored. Those belong to whichever increment builds it, with the
-other consumer's requirement in hand.
+Decided here, because SUB.2 cannot be specified without it: the sink is registered
+**before** dispatch and removed **before** the final response is written, so a
+notification arriving after completion has nowhere to go and is dropped and
+counted rather than delivered to whatever occupies the slot next. That closes the
+duplicate-JSON-RPC-id and late-arrival cases a reviewer raised — the sink is keyed
+by our per-invocation identity, never by the backend's `id`, which is the
+backend's to reuse.
+
+Still **not** decided here: the identity's representation and where it is stored.
+Those belong to whichever increment threads it, with both consumers' requirements
+in hand. Cluster A is owned by another session; coordination sits with the team
+lead, not with this note.
 
 ---
 
@@ -370,16 +456,28 @@ change than the criterion requires, and (a) or (b) closes the criterion without
 it. Worth answering anyway because the same question is open in other clusters
 where session identity is used as a key.
 
-**§4.3 — Must v4.0.0 actually emit request-scoped notifications, or only be able
-to carry them on a response stream?**
-This is the scope fork in Part II and the cost delta is large: option (a) is
-content negotiation plus a stream shape; option (b) adds request-keyed routing
-through the dispatch boundary. Until this is answered, SUB.2's implementation is
-blocked on a deferred question, recorded with its four fields in §II.4.
-*Recommendation:* ship (a) in v4.0.0 and (b) in the increment that also lands the
-MRTR retry plumbing, so the request key is built once. *Cost of the alternative:*
-if v4.0.0 must emit, SUB.2 stops being a small change and the release scope
-absorbs it.
+**§4.3 — `SUB.2`'s second clause requires emitting. Does v4.0.0 meet it, or is the
+criterion being amended?**
+Reframed after review, which was right that the earlier wording let a
+nonconformant release look like a design option. It is not one: `SUB.2` as written
+requires request-scoped notifications to reach the caller that provoked them, so
+shipping option (a) alone leaves a release-blocking criterion ABSENT. The
+honest question is therefore not "may we ship (a)" but which of two things you
+want:
+
+| | consequence |
+|---|---|
+| **(i) v4.0.0 meets `SUB.2` as written** | (b) is in scope now: the transport rewrite in §II.2 plus the shared identity in §II.5. Larger than this note originally implied, and it overlaps the MRTR increment, so the two should land together |
+| **(ii) `SUB.2`'s second clause is amended for v4.0.0** | the criterion is edited in `docs/requirements/RELEASE-4.0.0-criteria-status.md` to require the *capability* (a stream that can carry them) and defer *emission*; (a) then conforms, and the release is honest about what it ships |
+
+*Recommendation:* **(ii)**, and say so in the criteria file rather than in a design
+note — because the transport fix in §II.2 is worth doing on its own correctness
+merits and should not be rushed to hit a release date. *What makes this yours and
+not ours:* (ii) narrows what a release-blocking criterion demands, which the repair
+protocol puts on the requester's side of the line, recorded before it happens.
+*Cost of (i):* SUB.2 stops being a small change and the release scope absorbs a
+transport rewrite. Until one is chosen, SUB.2's implementation is blocked on a
+deferred question, recorded with its four fields in §II.4.
 
 ---
 
@@ -392,6 +490,13 @@ Each is recorded as: question — what was run — what came back — what it ch
   — only `subscription_registry.rs`'s exclusion list and a stdio test — changed
   the framing of SUB.2 from "wired to the wrong scope" to "absent", which is what
   broke the cluster's shared-root hypothesis (§0).
+  *Tightened after review: a name grep also matches comments, exclusion lists and
+  tests, so it is weak evidence for absence.* The claim now rests on the stronger
+  structural check, which is what §II.2's table records: the two backend
+  transports discard non-response messages at `http/mod.rs:929-944` and
+  `stdio.rs:416-431`, and `dispatch_to_backend` returns a single value
+  (`invoke.rs:1955-1961`). Absence is proved by there being no path, not by no
+  string matching.
 - **Can a routing profile widen a client's access?** — read
   `src/routing_profile/mod.rs:21-24` — no: it is an allow/deny filter over the
   already-surfaced set — killed the security framing of ORDER.2 and made it a
@@ -405,7 +510,8 @@ Each is recorded as: question — what was run — what came back — what it ch
   became a constraint on option (b) (Part III, item 2).
 - **Is `tools/list_changed` fired when a profile changes?** — `git grep -n announce_tools_changed`
   — only UI callers in `src/gateway/ui/backends.rs`; `router/mod.rs:161` is never
-  reached by `gateway_set_profile` — added the stale-list finding (Part III,
+  reached by `gateway_set_profile`, and equally never reached by backend discovery
+  completing, which is why §I.2's cache row has no notification either — added the stale-list finding (Part III,
   item 1) and rejected ORDER.2 option (d).
 - **Does the POST path negotiate `text/event-stream`?** — read
   `src/gateway/router/handlers.rs:265-290` and checked which handler owns it — no;
@@ -432,11 +538,23 @@ Part III and disposed of there; none of them blocks this design.
 - **`SUB.4`, `EXT.1`, `OTEL.1`, `TASK.1`** — adjacent criteria in the same
   ticket, each with its own design note.
 - **Clusters A (MRTR) and E (session identity as a key)** — this note names where
-  it touches them (the request key, §II.2 and §II.5; principal keying, §4.2) and
+  it touches them (the shared per-invocation identity, §II.2 and §II.5; principal
+  keying, §4.2) and
   designs nothing in either. §II.5 states a shared prerequisite and names its two
   consumers; it does not decide cluster A's approach to it.
 - **Any code or test edit.** This is a design increment. The test plan is the
-  next step and is not written here.
+  next step and is not written here. A reviewer asked for
+  `docs/requirements/RELEASE-4.0.0-test-plan.md:219` to be rewritten now, with
+  scenarios for two callers, lazy cache publication, duplicate JSON-RPC ids and a
+  post-completion notification. *Disposal: adopted as the content of the next
+  increment, not edited here.* The named scenarios are recorded so the test plan
+  step inherits them. That file also carries another session's uncommitted work,
+  and it is not this note's to touch.
+- **Atomic publication of the backend tool cache, and hot reload.** Classified in
+  §I.2 as legal-but-time-varying. *Disposal: deferred to Part III item 1's
+  answer.* Its remedy needs the `tools/list_changed` announce path that item 1
+  shows is never fired, so designing it before §4.1 returns would design against a
+  mechanism that may be removed.
 - **The `spec-preview` promotion feature itself.** Its session-keyed input is
   classified in §I.2 and must be closed by whichever ORDER.2 option is chosen,
   but whether the feature should exist is not this note's question.
