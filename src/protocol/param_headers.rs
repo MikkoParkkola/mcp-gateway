@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `x-mcp-header` argument mirroring (MIK-7214.HEADER.5/.7/.8).
+//! `x-mcp-header` schema validation (MIK-7214.HEADER.7/.8).
 //!
 //! A backend declares, inside a tool's `inputSchema`, that one property's value
 //! must be mirrored onto an `Mcp-Param-{name}` header of the outbound request.
@@ -103,25 +103,49 @@ fn type_is_mirrorable(schema: &Value) -> bool {
     )
 }
 
-/// Rejects an `integer` property whose declared bounds admit a value outside
-/// the IEEE-754 safe range.
+/// Rejects an `integer` property whose schema prescribes a value outside the
+/// IEEE-754 safe range, whether as a bound, a `const`, or an `enum` member.
 ///
 /// This is the schema-time half of the safe-range constraint, and the only half
-/// that can exclude a tool (HEADER.8). Where the schema declares no bound there
-/// is nothing to exclude on, and [`header_value_for`] omits the offending
-/// header per call instead.
+/// that exists today: the per-call half belongs to the outbound mirroring of
+/// HEADER.5, which is not yet built. A schema declaring nothing therefore
+/// stays listed, and an out-of-range *argument* is currently unconstrained.
 fn bounds_are_safe(schema: &Value) -> bool {
     if schema.get("type").and_then(Value::as_str) != Some("integer") {
         return true;
     }
-    ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"]
-        .iter()
-        .filter_map(|key| schema.get(*key))
-        .all(|bound| {
-            bound
-                .as_i64()
-                .is_some_and(|value| value.abs() <= SAFE_INTEGER_MAX)
-        })
+    let bounds = [
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "const",
+    ]
+    .iter()
+    .filter_map(|key| schema.get(*key));
+    let members = schema
+        .get("enum")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice)
+        .iter();
+    bounds.chain(members).all(is_safe_integer)
+}
+
+/// `true` where `value` is not a number, or is an integer an IEEE-754 double
+/// represents exactly. A number that is not an `i64` at all (a float, or a
+/// `u64` past `i64::MAX`) is out of range by definition.
+///
+/// The range is tested directly rather than through `abs()`, which panics on
+/// `i64::MIN` under overflow checks and wraps to a negative value without them
+/// — either way the wrong answer for the one input that most needs the right
+/// one.
+fn is_safe_integer(value: &Value) -> bool {
+    let Some(number) = value.as_number() else {
+        return true;
+    };
+    number
+        .as_i64()
+        .is_some_and(|v| (-SAFE_INTEGER_MAX..=SAFE_INTEGER_MAX).contains(&v))
 }
 
 /// Collects every `x-mcp-header` declaration in `input_schema`.
@@ -172,52 +196,4 @@ pub fn mirrored_params(input_schema: &Value) -> Result<Vec<MirroredParam>, Mirro
     }
 
     Ok(mirrored)
-}
-
-/// Renders one argument value as a header value, or `None` where it cannot be
-/// mirrored losslessly.
-///
-/// An integer outside the IEEE-754 safe range is a **per-call** omission, not a
-/// tool exclusion: the schema was valid, this one argument is not.
-pub fn header_value_for(argument: &Value) -> Option<String> {
-    match argument {
-        Value::String(s) if !s.chars().any(char::is_control) => Some(s.clone()),
-        Value::Bool(b) => Some(b.to_string()),
-        Value::Number(n) => {
-            let i = n.as_i64()?;
-            (i.abs() <= SAFE_INTEGER_MAX).then(|| i.to_string())
-        }
-        _ => None,
-    }
-}
-
-/// `true` where a mirrored header name must be dropped before it reaches the
-/// wire.
-///
-/// The mandatory `Mcp-Param-` prefix already makes a collision with a
-/// gateway-owned header unconstructible. This is defence in depth against a
-/// future edit that loses the prefix, so `Mcp-Param-*` is carved out
-/// explicitly — without the carve-out the `Mcp-*` rule would drop every
-/// mirrored header.
-pub fn is_reserved_header(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    if lower.starts_with("mcp-param-") {
-        return false;
-    }
-    lower.starts_with("mcp-")
-        || matches!(
-            lower.as_str(),
-            "authorization"
-                | "host"
-                | "cookie"
-                | "connection"
-                | "content-length"
-                | "keep-alive"
-                | "proxy-authenticate"
-                | "proxy-authorization"
-                | "te"
-                | "trailer"
-                | "transfer-encoding"
-                | "upgrade"
-        )
 }

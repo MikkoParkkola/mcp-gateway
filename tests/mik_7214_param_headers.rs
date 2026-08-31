@@ -1,11 +1,9 @@
-//! MIK-7214.HEADER.5/.7/.8 — `x-mcp-header` argument mirroring.
+//! MIK-7214.HEADER.7/.8 — `x-mcp-header` schema validation.
 //!
 //! HEADER.7 names six constraints; each has a case here. HEADER.8 requires a
 //! violating tool to be excluded from `tools/list`.
 
-use mcp_gateway::protocol::param_headers::{
-    MirrorViolation, SAFE_INTEGER_MAX, header_value_for, is_reserved_header, mirrored_params,
-};
+use mcp_gateway::protocol::param_headers::{MirrorViolation, SAFE_INTEGER_MAX, mirrored_params};
 use serde_json::json;
 
 fn schema_with(
@@ -99,55 +97,6 @@ fn integer_string_and_boolean_types_are_all_accepted() {
 }
 
 #[test]
-fn integer_within_safe_range_is_mirrored() {
-    assert_eq!(
-        header_value_for(&json!(SAFE_INTEGER_MAX)),
-        Some(SAFE_INTEGER_MAX.to_string())
-    );
-}
-
-#[test]
-fn integer_beyond_safe_range_is_omitted_not_truncated() {
-    // GIVEN a value outside the IEEE-754 safe range
-    // THEN the header is omitted for this call; the tool stays listed
-    assert_eq!(header_value_for(&json!(SAFE_INTEGER_MAX + 1)), None);
-    assert_eq!(header_value_for(&json!(-SAFE_INTEGER_MAX - 1)), None);
-}
-
-#[test]
-fn argument_value_with_control_character_is_omitted() {
-    assert_eq!(header_value_for(&json!("bad\r\nX-Injected: 1")), None);
-}
-
-#[test]
-fn boolean_argument_renders_as_literal() {
-    assert_eq!(header_value_for(&json!(true)), Some("true".to_string()));
-}
-
-#[test]
-fn reserved_predicate_drops_credentials_and_gateway_names() {
-    for name in [
-        "Authorization",
-        "host",
-        "Cookie",
-        "Connection",
-        "Content-Length",
-        "MCP-Protocol-Version",
-        "Mcp-Session-Id",
-    ] {
-        assert!(is_reserved_header(name), "{name} must be dropped");
-    }
-}
-
-#[test]
-fn reserved_predicate_carves_out_the_mirror_prefix() {
-    // GIVEN a mirrored name that would otherwise match the `Mcp-*` rule
-    // THEN it survives, or the rule would drop every mirrored header
-    assert!(!is_reserved_header("Mcp-Param-Tenant"));
-    assert!(!is_reserved_header("mcp-param-authorization"));
-}
-
-#[test]
 fn integer_property_declaring_an_unsafe_bound_is_rejected() {
     // GIVEN an integer property whose declared maximum exceeds 2^53-1
     let schema = json!({
@@ -189,4 +138,56 @@ fn integer_property_without_declared_bounds_stays_listed() {
     // omission in `header_value_for` carries the constraint instead
     let schema = schema_with("seq", "integer", "Seq");
     assert_eq!(mirrored_params(&schema).map(|m| m.len()), Ok(1));
+}
+
+#[test]
+fn non_string_annotation_value_is_rejected() {
+    // GIVEN an annotation that is a number rather than a header name
+    let schema = schema_with("tenant", "string", json!(123));
+    assert_eq!(mirrored_params(&schema), Err(MirrorViolation::NotAString));
+}
+
+#[test]
+fn integer_property_declaring_an_unsafe_const_is_rejected() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "seq": {"type": "integer", "const": SAFE_INTEGER_MAX + 1, "x-mcp-header": "Seq"}
+        }
+    });
+    assert_eq!(
+        mirrored_params(&schema),
+        Err(MirrorViolation::IntegerOutOfRange)
+    );
+}
+
+#[test]
+fn integer_property_enumerating_an_unsafe_member_is_rejected() {
+    // GIVEN an enum whose last member leaves the safe range
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "seq": {"type": "integer", "enum": [1, SAFE_INTEGER_MAX + 1], "x-mcp-header": "Seq"}
+        }
+    });
+    assert_eq!(
+        mirrored_params(&schema),
+        Err(MirrorViolation::IntegerOutOfRange)
+    );
+}
+
+#[test]
+fn integer_property_bounded_at_i64_min_is_rejected_without_overflow() {
+    // GIVEN the one value `abs()` cannot negate; the range test must still
+    // answer, and answer "unsafe"
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "seq": {"type": "integer", "minimum": i64::MIN, "x-mcp-header": "Seq"}
+        }
+    });
+    assert_eq!(
+        mirrored_params(&schema),
+        Err(MirrorViolation::IntegerOutOfRange)
+    );
 }
