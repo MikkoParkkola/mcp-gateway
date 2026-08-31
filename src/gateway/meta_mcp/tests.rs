@@ -2576,3 +2576,105 @@ fn ac_order_2_initialize_binds_no_profile_without_a_session() {
         );
     }
 }
+
+// ── exposed_meta_tools wiring ─────────────────────────────────────────
+
+/// `meta_mcp.exposed_meta_tools` names an allow-list, and the config doc
+/// promises an unlisted tool "is not callable either". The predicate was
+/// written and tested with no caller, so a gateway configured with an
+/// allow-list still listed and still ran everything. These cover the two
+/// call sites that make the promise true.
+///
+/// `gateway_list_tools` is the subject because it is not an admin meta-tool:
+/// a refusal here cannot be the admin gate answering instead.
+fn exposure_only_invoke() -> MetaMcp {
+    MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_exposed_meta_tools(&["gateway_invoke".to_string()])
+}
+
+#[tokio::test]
+async fn unexposed_meta_tool_is_refused_on_call() {
+    let response = exposure_only_invoke()
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_list_tools",
+            json!({}),
+            None,
+            allow_all_ctx(),
+        )
+        .await;
+
+    let error = response
+        .error
+        .expect("an unexposed meta-tool must be refused on call, not merely hidden from the list");
+    assert_eq!(
+        error.code, -32601,
+        "and refused as an unknown tool: {error:?}"
+    );
+}
+
+#[tokio::test]
+async fn exposed_meta_tool_still_runs() {
+    // Without this the refusal above passes for a gateway that refuses
+    // everything. Same subject as the refusal test, so the allow-list is the
+    // only difference between them.
+    let response = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_exposed_meta_tools(&["gateway_list_tools".to_string()])
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_list_tools",
+            json!({}),
+            None,
+            allow_all_ctx(),
+        )
+        .await;
+
+    assert!(
+        response.error.is_none(),
+        "an allow-listed meta-tool must reach its handler: {response:?}"
+    );
+}
+
+#[test]
+fn unexposed_meta_tool_is_not_listed() {
+    let response = exposure_only_invoke().handle_tools_list(RequestId::Number(1));
+
+    let listed: Vec<String> = serde_json::from_value::<serde_json::Value>(
+        response.result.expect("tools/list must succeed"),
+    )
+    .expect("a JSON result")["tools"]
+        .as_array()
+        .expect("a tools array")
+        .iter()
+        .map(|t| t["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+
+    assert!(
+        listed.contains(&"gateway_invoke".to_string()),
+        "the allow-listed tool is listed: {listed:?}"
+    );
+    assert!(
+        !listed.contains(&"gateway_list_tools".to_string()),
+        "a tool outside the allow-list is not listed: {listed:?}"
+    );
+}
+
+#[tokio::test]
+async fn no_allow_list_exposes_everything() {
+    // The default an existing deployment gets: configuring nothing must not
+    // start refusing meta-tools.
+    let response = make_meta_mcp()
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_list_tools",
+            json!({}),
+            None,
+            allow_all_ctx(),
+        )
+        .await;
+
+    assert!(
+        response.error.is_none(),
+        "an unconfigured gateway exposes every meta-tool: {response:?}"
+    );
+}

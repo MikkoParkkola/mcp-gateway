@@ -52,10 +52,11 @@ use crate::trust::{
 use crate::{Error, Result};
 
 use super::meta_mcp_helpers::{
-    build_code_mode_tools, build_discovery_preamble, build_initialize_result, build_meta_tools,
+    build_code_mode_tools, build_discovery_preamble, build_initialize_result,
     build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
     wrap_tool_success,
 };
+use super::meta_mcp_tool_defs::{MetaToolExposure, build_meta_tools_filtered};
 use super::webhooks::WebhookRegistry;
 
 mod invoke;
@@ -256,6 +257,12 @@ pub struct MetaMcp {
     /// Pre-built from `surfaced_tools` so `handle_tools_call` only pays one
     /// `HashMap` lookup instead of a linear scan on every call.
     pub(super) surfaced_tools_map: HashMap<String, String>,
+
+    /// Which meta-tools this gateway exposes, from `MetaMcpConfig::exposed_meta_tools`.
+    ///
+    /// Consulted on both `tools/list` and `tools/call`. The default exposes every
+    /// meta-tool, so an existing deployment is unaffected.
+    pub(super) meta_tool_exposure: MetaToolExposure,
     /// Session-scoped dynamically promoted tools (SEP-1862 / Phase 3).
     ///
     /// Keyed by session ID.  Each entry is a list of `"server:tool"` strings
@@ -417,6 +424,7 @@ impl MetaMcp {
             cost_registry: None,
             surfaced_tools: Vec::new(),
             surfaced_tools_map: HashMap::new(),
+            meta_tool_exposure: MetaToolExposure::expose_all(),
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
             session_state: SessionStateStore::new(),
@@ -508,6 +516,18 @@ impl MetaMcp {
     #[must_use]
     pub fn with_code_mode(mut self, enabled: bool) -> Self {
         self.code_mode_enabled = enabled;
+        self
+    }
+
+    /// Restrict which meta-tools this gateway exposes (consuming builder).
+    ///
+    /// An empty list exposes every meta-tool. A non-empty list is an allow-list:
+    /// a meta-tool that is not named is neither listed nor callable. Unrecognised
+    /// names are logged and dropped rather than aborting startup, matching
+    /// `with_surfaced_tools`.
+    #[must_use]
+    pub fn with_exposed_meta_tools(mut self, names: &[String]) -> Self {
+        self.meta_tool_exposure = MetaToolExposure::from_names(names);
         self
     }
 
@@ -1167,13 +1187,14 @@ impl MetaMcp {
             build_code_mode_tools()
         } else {
             let (tool_count, server_count) = self.backend_counts();
-            build_meta_tools(
+            build_meta_tools_filtered(
                 self.stats.is_some(),
                 self.get_webhook_registry().is_some(),
                 self.get_reload_context().is_some(),
                 true, // cost_report always enabled (tracker is always present)
                 tool_count,
                 server_count,
+                &self.meta_tool_exposure,
             )
         };
         let mut tool_descriptors =
@@ -1307,6 +1328,23 @@ impl MetaMcp {
                 Some(id),
                 -32600,
                 format!("Tool '{tool_name}' requires admin access"),
+            );
+        }
+
+        // Operator exposure allow-list. Enforced at the same point as the admin
+        // gate and for the same reason: a meta-tool hidden from `tools/list` but
+        // still executable is security theatre, and `exposed_meta_tools` promises
+        // that an unlisted tool "is not callable either". Names outside the
+        // governed meta-tool set - surfaced and backend tools - are unaffected.
+        //
+        // The refusal is worded exactly like the unrecognised-tool fallback below:
+        // an operator hiding a tool must not get a reply confirming it exists and
+        // was deliberately withheld.
+        if !self.meta_tool_exposure.is_exposed(tool_name) {
+            return JsonRpcResponse::error(
+                Some(id),
+                -32601,
+                format!("Unknown tool: {tool_name}"),
             );
         }
 
