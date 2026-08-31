@@ -34,6 +34,7 @@ use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
+use crate::protocol::cacheable::{CACHEABLE_METHODS, CacheScope};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
 use crate::security::{extract_agent_identity, sanitize_json_value, validate_agent_identity};
@@ -1379,19 +1380,6 @@ pub(super) async fn meta_mcp_handler(
 /// connection carries no state. There is no `Mcp-Session-Id`, because the
 /// revision deleted protocol sessions; and the result names the server, because
 /// there was no handshake in which to say so.
-/// The methods whose results carry `ttlMs` and `cacheScope`.
-///
-/// Five, from the `CacheableResult` interface. `server/discover` supports
-/// caching too, but is not in this list — its document is built elsewhere and
-/// the fields are added there when its own scope is decided.
-const CACHEABLE_METHODS: &[&str] = &[
-    "tools/list",
-    "prompts/list",
-    "resources/list",
-    "resources/read",
-    "resources/templates/list",
-];
-
 /// How long a client may consider a list fresh. A freshness hint, not a
 /// promise: `listChanged` notifications remain the authority on change, and
 /// this only stops a client re-listing on every turn.
@@ -1420,17 +1408,16 @@ fn build_modern_response(
 
         if CACHEABLE_METHODS.contains(&method) {
             object.insert("ttlMs".to_string(), serde_json::json!(LIST_TTL_MS));
-            // Private, and not provisionally. This gateway's list varies by the
-            // credential presented, which is what `private` describes. `public`
-            // would tell every shared intermediary it may serve one caller's
-            // filtered view to another.
+            // The scope is this method's row in the CACHE.3 decision table
+            // (`docs/design/2026-08-31-cluster-f-response-cache-keying.md`
+            // §CACHE.3), not a property of the emit site. Every row is private
+            // today: these responses vary by the credential presented, and
+            // `public` would tell every shared intermediary it may serve one
+            // caller's filtered view to another. An endpoint with no row is
+            // private, so adding one here cannot widen a scope by omission.
             object.insert(
                 "cacheScope".to_string(),
-                serde_json::Value::String(
-                    crate::protocol::cacheable::CacheScope::current_for_tools_list()
-                        .as_str()
-                        .to_string(),
-                ),
+                serde_json::Value::String(CacheScope::for_endpoint(method).as_str().to_string()),
             );
         }
         let meta = object
