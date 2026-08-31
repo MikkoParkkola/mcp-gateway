@@ -8,10 +8,9 @@
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::idempotency::{IdempotencyCache, derive_key};
+use crate::idempotency::IdempotencyCache;
 use crate::playbook::ToolInvoker;
 
-use super::super::meta_mcp_helpers::extract_optional_str;
 use super::MetaMcp;
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
 
@@ -19,30 +18,29 @@ use crate::gateway::meta_mcp::MetaMcpCallerContext;
 // Idempotency
 // ============================================================================
 
-/// Resolve the idempotency key for a `gateway_invoke` call.
+/// Build the idempotency key for a `gateway_invoke` call.
 ///
-/// Priority:
-/// 1. Explicit `"idempotency_key"` string in `args` — used verbatim.
-/// 2. Auto-derived from `(server, tool, arguments)` when an `IdempotencyCache`
-///    is active.  This protects against exact-duplicate LLM retries even when
-///    the client supplies no key.
+/// `client_key` is the key the client sent in `params._meta`; there is no other
+/// source. A call without one is not protected, and that is the correct
+/// outcome: a key the client never chose cannot express which repeats are
+/// deliberate, so deriving one from `(server, tool, arguments)` made an
+/// identical second call — a retry the user asked for — silently return the
+/// first result instead of running.
 ///
-/// Returns `None` when no idempotency cache is configured.
-pub(super) fn resolve_idempotency_key(
-    args: &Value,
-    server: &str,
-    tool: &str,
-    arguments: &Value,
+/// The suffixes are the ADR-008 INV-3 binding. They stay part of the key so one
+/// caller's stored result is never served to another under the same client key.
+///
+/// Returns `None` when no idempotency cache is configured, or when the client
+/// sent no key.
+pub(super) fn idempotency_key_for(
+    client_key: Option<&str>,
+    projection_key_suffix: &str,
+    identity_suffix: &str,
     idem_cache: Option<&std::sync::Arc<IdempotencyCache>>,
 ) -> Option<String> {
     idem_cache?;
-    // Explicit key takes precedence.
-    if let Some(key) = extract_optional_str(args, "idempotency_key") {
-        return Some(key.to_string());
-    }
-    // Auto-derive from (server, tool, arguments) — stable, deterministic.
-    let combined = format!("{server}:{tool}");
-    Some(derive_key(&combined, arguments))
+    let key = client_key?;
+    Some(format!("{key}{projection_key_suffix}{identity_suffix}"))
 }
 
 // ============================================================================

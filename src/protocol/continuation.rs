@@ -64,8 +64,13 @@ const MAX_ENVELOPE_LEN: usize = 8 * 1024;
 pub struct Payload {
     /// Which backend holds the exchange.
     pub backend_id: String,
-    /// The backend's own opaque state, verbatim.
-    pub backend_request_state: String,
+    /// The backend's own opaque state, verbatim — `None` when it issued none.
+    ///
+    /// Optional because the specification lets a server ask for input without
+    /// carrying state of its own. Forcing an empty string in its place would
+    /// hand the backend a `requestState` it never issued, and a backend is
+    /// entitled to treat the presence of that field as meaning something.
+    pub backend_request_state: Option<String>,
     /// Who may redeem this. Without it, one caller replays another's.
     pub principal_fingerprint: String,
     /// Which request it continues. The spec confines these fields to the retry
@@ -99,7 +104,46 @@ impl std::fmt::Debug for Payload {
     }
 }
 
+/// How long a minted continuation stays redeemable.
+///
+/// Not a parameter. Every call site would pass the same number, and one that
+/// passed a larger one would widen the replay window for every other — the
+/// spent-ledger that makes redemption single-use is a fixed-capacity table in
+/// this process, so a continuation that outlives its entry stops being
+/// single-use. Five minutes is a person answering a prompt, not a session.
+///
+/// Keys do not outlive the process, and neither does the ledger. Persistent
+/// keys arrive with the durable ledger (MIK-7312) and not before.
+const CONTINUATION_LIFETIME_SECS: u64 = 300;
+
 impl Payload {
+    /// Seal the facts of one interim exchange, valid from `now`.
+    ///
+    /// The identifier and the expiry are derived here rather than accepted:
+    /// a caller that could choose its own `jti` could mint two continuations
+    /// the ledger cannot tell apart, and one that could choose `expires_at`
+    /// could mint one that outlives the ledger entry retiring it.
+    #[must_use]
+    pub fn mint(
+        backend_id: String,
+        backend_request_state: Option<String>,
+        principal_fingerprint: String,
+        original_request_digest: String,
+        origin_replica: String,
+        now: u64,
+    ) -> Self {
+        Self {
+            backend_id,
+            backend_request_state,
+            principal_fingerprint,
+            original_request_digest,
+            origin_replica,
+            issued_at: now,
+            expires_at: now.saturating_add(CONTINUATION_LIFETIME_SECS),
+            jti: uuid::Uuid::new_v4().to_string(),
+        }
+    }
+
     /// Whether this continuation belongs to this caller and this request.
     ///
     /// Separate from opening it, and deliberately so. An envelope the gateway

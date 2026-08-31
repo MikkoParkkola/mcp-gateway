@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use dashmap::mapref::entry::Entry;
+use dashmap::mapref::entry::Entry as MapEntry;
 use serde_json::Value;
 use tracing::debug;
 
@@ -100,7 +100,36 @@ impl IdempotencyState {
 /// ```
 #[derive(Debug, Default)]
 pub struct IdempotencyCache {
-    entries: DashMap<String, IdempotencyState>,
+    entries: DashMap<String, Entry>,
+}
+
+/// One tracked key: its state, and the request it was minted for.
+///
+/// The fingerprint is stored beside the state rather than mixed into the key,
+/// because a mismatch has to be *refused*. Folding it into the key would make
+/// the second call a different key, and a different key executes — which is the
+/// duplicate the client's key was meant to prevent.
+#[derive(Debug)]
+struct Entry {
+    state: IdempotencyState,
+    /// The request this key was admitted for, or empty when the entry came from
+    /// [`IdempotencyCache::mark_in_flight`], which has no request to bind to.
+    /// An empty fingerprint binds nothing and matches anything.
+    fingerprint: String,
+}
+
+impl Entry {
+    fn new(state: IdempotencyState, fingerprint: &str) -> Self {
+        Self {
+            state,
+            fingerprint: fingerprint.to_string(),
+        }
+    }
+
+    /// Whether `fingerprint` is the request this entry was admitted for.
+    fn matches(&self, fingerprint: &str) -> bool {
+        self.fingerprint.is_empty() || self.fingerprint == fingerprint
+    }
 }
 
 /// Outcome of checking the idempotency cache before executing a tool call.
@@ -153,6 +182,8 @@ pub(crate) enum AdmitOutcome {
     Completed(Value),
     /// The cache is at [`MAX_ENTRIES`] and this key is not tracked yet.
     AtCapacity,
+    /// The key is tracked, but for a different request.
+    Mismatch,
 }
 
 #[must_use]
@@ -193,7 +224,7 @@ impl IdempotencyCache {
             };
         };
 
-        let status = classify(entry.value());
+        let status = classify(&entry.value().state);
 
         let (decision, evict) = decide_check_plan(status);
         if evict {
@@ -207,7 +238,7 @@ impl IdempotencyCache {
             CheckPlan::Proceed => CheckOutcome::Proceed,
             CheckPlan::InFlight => CheckOutcome::InFlight,
             CheckPlan::Completed => {
-                let IdempotencyState::Completed(value, _) = entry.value() else {
+                let IdempotencyState::Completed(value, _) = &entry.value().state else {
                     unreachable!("live completed status must hold a completed value");
                 };
                 CheckOutcome::Completed(value.clone())
@@ -222,7 +253,7 @@ impl IdempotencyCache {
     /// operations, so two concurrent retries of one key could both observe
     /// `Proceed` and both execute. Holding a single entry guard across the
     /// inspect and the write closes that window.
-    pub(crate) fn admit(&self, key: &str) -> AdmitOutcome {
+    pub(crate) fn admit(&self, key: &str, fingerprint: &str) -> AdmitOutcome {
         // `DashMap::len` read-locks every shard, so it must be read *before*
         // the entry guard below takes a shard write lock — reading it inside
         // the guard's scope deadlocks. The count can therefore grow by at most
@@ -230,12 +261,18 @@ impl IdempotencyCache {
         let at_capacity = self.entries.len() >= MAX_ENTRIES;
 
         match self.entries.entry(key.to_string()) {
-            Entry::Occupied(mut occupied) => {
-                let (plan, evict) = decide_check_plan(classify(occupied.get()));
+            MapEntry::Occupied(mut occupied) => {
+                // Before the state: a live entry for another request must be
+                // refused whether it is in flight or already completed, and a
+                // stale one is replaced by this request anyway.
+                let (plan, evict) = decide_check_plan(classify(&occupied.get().state));
+                if !matches!(plan, CheckPlan::Proceed) && !occupied.get().matches(fingerprint) {
+                    return AdmitOutcome::Mismatch;
+                }
                 match plan {
                     CheckPlan::InFlight => AdmitOutcome::InFlight,
                     CheckPlan::Completed => {
-                        let IdempotencyState::Completed(value, _) = occupied.get() else {
+                        let IdempotencyState::Completed(value, _) = &occupied.get().state else {
                             unreachable!("live completed status must hold a completed value");
                         };
                         AdmitOutcome::Completed(value.clone())
@@ -244,17 +281,23 @@ impl IdempotencyCache {
                         debug_assert!(evict, "an occupied entry only proceeds after eviction");
                         // Replacing in place keeps the entry count flat, so a
                         // stale entry never costs a caller its admission.
-                        occupied.insert(IdempotencyState::InFlight(Instant::now()));
+                        occupied.insert(Entry::new(
+                            IdempotencyState::InFlight(Instant::now()),
+                            fingerprint,
+                        ));
                         debug!(key, "Replaced stale idempotency entry");
                         AdmitOutcome::Proceed
                     }
                 }
             }
-            Entry::Vacant(vacant) => {
+            MapEntry::Vacant(vacant) => {
                 if at_capacity {
                     return AdmitOutcome::AtCapacity;
                 }
-                vacant.insert(IdempotencyState::InFlight(Instant::now()));
+                vacant.insert(Entry::new(
+                    IdempotencyState::InFlight(Instant::now()),
+                    fingerprint,
+                ));
                 AdmitOutcome::Proceed
             }
         }
@@ -263,7 +306,10 @@ impl IdempotencyCache {
     /// Register `key` as in-flight.  Overwrites any stale entry.
     pub fn mark_in_flight(&self, key: &str) {
         self.entries
-            .insert(key.to_string(), IdempotencyState::InFlight(Instant::now()));
+            .insert(
+                key.to_string(),
+                Entry::new(IdempotencyState::InFlight(Instant::now()), ""),
+            );
     }
 
     /// Transition `key` from in-flight to completed with `result`.
@@ -285,9 +331,18 @@ impl IdempotencyCache {
             debug!(key, "Refused to cache a non-final result");
             return false;
         }
+        // The fingerprint survives the state transition: the completed result
+        // belongs to the request that was admitted, not to whatever asks next.
+        let fingerprint = self
+            .entries
+            .get(key)
+            .map_or_else(String::new, |e| e.fingerprint.clone());
         self.entries.insert(
             key.to_string(),
-            IdempotencyState::Completed(result, Instant::now()),
+            Entry::new(
+                IdempotencyState::Completed(result, Instant::now()),
+                &fingerprint,
+            ),
         );
         true
     }
@@ -302,7 +357,7 @@ impl IdempotencyCache {
         let stale: Vec<String> = self
             .entries
             .iter()
-            .filter_map(|e| e.value().is_expired().then(|| e.key().clone()))
+            .filter_map(|e| e.value().state.is_expired().then(|| e.key().clone()))
             .collect();
 
         let count = stale.len();
@@ -502,11 +557,17 @@ pub enum GuardOutcome {
 ///
 /// # Errors
 ///
-/// Returns a 409 error when an identical request is already in flight, and a
-/// 503 error when the cache is at [`MAX_ENTRIES`] and the key is not yet
-/// tracked — refusing rather than evicting, since eviction readmits a duplicate.
-pub fn enforce(cache: &Arc<IdempotencyCache>, key: &str) -> Result<GuardOutcome> {
-    match cache.admit(key) {
+/// Returns a 409 error when an identical request is already in flight, a 409
+/// error when `key` is already bound to a *different* request, and a 503 error
+/// when the cache is at [`MAX_ENTRIES`] and the key is not yet tracked —
+/// refusing rather than evicting, since eviction readmits a duplicate.
+///
+/// `fingerprint` identifies the request the key is being used for. A client key
+/// is an opaque string it chose; nothing about the string says which call it
+/// was minted for, so without binding, one key reused for a second, different
+/// call is served the first call's result as though it were its own.
+pub fn enforce(cache: &Arc<IdempotencyCache>, key: &str, fingerprint: &str) -> Result<GuardOutcome> {
+    match cache.admit(key, fingerprint) {
         AdmitOutcome::Proceed => Ok(GuardOutcome::Proceed(IdempotencyReservation::new(
             Arc::clone(cache),
             key,
@@ -516,6 +577,13 @@ pub fn enforce(cache: &Arc<IdempotencyCache>, key: &str) -> Result<GuardOutcome>
             format!("Duplicate request in progress for key: {key}"),
         )),
         AdmitOutcome::Completed(value) => Ok(GuardOutcome::CachedResult(value)),
+        AdmitOutcome::Mismatch => Err(Error::json_rpc(
+            409,
+            format!(
+                "Idempotency key is already in use for a different request: {key}. \
+                 A key identifies one call; reuse it only to repeat that same call."
+            ),
+        )),
         AdmitOutcome::AtCapacity => Err(Error::json_rpc(
             503,
             format!(

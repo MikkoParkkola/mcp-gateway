@@ -957,7 +957,7 @@ pub(super) async fn meta_mcp_handler(
                 return build_error_response(
                     Some(id),
                     -32602,
-                    format!("malformed retry fields: {}", retry.malformed.join(", ")),
+                    format!("malformed request fields: {}", retry.malformed.join(", ")),
                     &session_id,
                     StatusCode::BAD_REQUEST,
                 );

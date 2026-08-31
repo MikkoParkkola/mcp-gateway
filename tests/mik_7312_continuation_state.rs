@@ -75,7 +75,7 @@ fn app_state() -> Arc<AppState> {
 fn payload(jti: &str, origin: &str, expires_at: u64) -> Payload {
     Payload {
         backend_id: "backend".to_string(),
-        backend_request_state: "backend-state".to_string(),
+        backend_request_state: Some("backend-state".to_string()),
         principal_fingerprint: "principal".to_string(),
         original_request_digest: "digest".to_string(),
         origin_replica: origin.to_string(),

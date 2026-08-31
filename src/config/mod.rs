@@ -1260,6 +1260,18 @@ pub struct MetaMcpConfig {
     /// split between projected (treatment) and raw (control).
     #[serde(default)]
     pub projection_mode: crate::projection::ProjectionMode,
+    /// Meta-tools to expose in `tools/list` (GH issue 449).
+    ///
+    /// Empty — the default — exposes every meta-tool, so an existing
+    /// deployment is unaffected. A non-empty list is an allow-list: only the
+    /// named tools are listed, and a tool that is not listed is not callable
+    /// either. Failing closed is deliberate; a meta-tool added in a later
+    /// release stays hidden from operators who pin a list until they opt in.
+    ///
+    /// Unrecognised names are logged and dropped rather than aborting startup
+    /// (same policy as `surfaced_tools`).
+    #[serde(default)]
+    pub exposed_meta_tools: Vec<String>,
 }
 
 impl Default for MetaMcpConfig {
@@ -1271,6 +1283,7 @@ impl Default for MetaMcpConfig {
             warm_start: Vec::new(),
             surfaced_tools: Vec::new(),
             projection_mode: crate::projection::ProjectionMode::default(),
+            exposed_meta_tools: Vec::new(),
         }
     }
 }

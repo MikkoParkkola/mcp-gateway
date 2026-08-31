@@ -1168,7 +1168,10 @@ impl Gateway {
             build_control_plane_store(&self.config, self.config_path.as_deref());
 
         let state = Arc::new(AppState {
-            continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
+            // Shared, not minted: the invoke path mints continuations against
+            // `meta_mcp`'s keyring, so a second one here would be a keyring
+            // that opens nothing this gateway ever sealed.
+            continuation: meta_mcp.continuation(),
             env: Some(Arc::clone(&self.env)),
             backends: Arc::clone(&self.backends),
             meta_mcp,

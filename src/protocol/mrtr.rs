@@ -24,12 +24,26 @@
 
 use serde_json::Value;
 
-/// The multi-round-trip fields of a `tools/call`.
+/// The `params._meta` key carrying a client's idempotency key.
+///
+/// Reverse-DNS-ish and gateway-scoped, as the specification requires of any
+/// `_meta` key an implementation invents: an unprefixed `idempotency-key` would
+/// be claimed by the next implementation to want one.
+pub const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
+
+/// The out-of-band fields of a `tools/call` — the retry pair, and the
+/// idempotency key.
 ///
 /// Separate from `(name, arguments)` rather than folded into it: the existing
 /// extraction is called from four places, and widening its return type would
 /// have every caller silently ignore the new half. A caller that wants the
 /// retry fields asks for them, and one that does not is unchanged.
+///
+/// Widened beyond the retry pair deliberately (SUB.4): this type is the only
+/// value derived from the whole params object that reaches the invoke funnel,
+/// so a sibling of `arguments` — which `_meta` is — has no other way in. The
+/// alternative was a new field on the caller context, which is a wider change
+/// to a type every call site constructs.
 #[derive(Debug, Default, Clone)]
 pub struct RetryFields {
     /// The client's answers to what the server asked for, keyed by the
@@ -41,13 +55,20 @@ pub struct RetryFields {
     /// assume anything about it. For this gateway it is its own sealed
     /// envelope, which is why nothing here tries to read it.
     pub request_state: Option<String>,
+    /// The client's idempotency key, from `params._meta`.
+    ///
+    /// `_meta` and not an argument: an argument of that name would collide with
+    /// a backend parameter and would be forwarded upstream. Spec-native, and it
+    /// reaches a stdio client, which an HTTP header cannot.
+    pub idempotency_key: Option<String>,
     /// Fields that were present and unusable, named so a caller can refuse.
     ///
     /// Without this the two fields failed differently for the same mistake: a
     /// malformed `inputResponses` was carried through as a retry, while a
     /// malformed `requestState` vanished and the call became a fresh one. A
     /// retry that silently becomes a fresh call is how one side effect becomes
-    /// two.
+    /// two. An unusable idempotency key is named here for the same reason: run
+    /// unprotected, it is the duplicate the client asked to be spared.
     pub malformed: Vec<&'static str>,
 }
 
@@ -60,6 +81,7 @@ pub struct RetryFields {
 pub static NO_RETRY: RetryFields = RetryFields {
     input_responses: None,
     request_state: None,
+    idempotency_key: None,
     malformed: Vec::new(),
 };
 
@@ -89,6 +111,17 @@ impl RetryFields {
             malformed.push("requestState");
         }
 
+        // A non-string key is refused rather than ignored: ignoring it runs the
+        // call unprotected, which is the outcome the client asked to prevent.
+        let idempotency_key = match params.get("_meta").and_then(|m| m.get(IDEMPOTENCY_KEY_META)) {
+            None => None,
+            Some(Value::String(key)) if !key.is_empty() => Some(key.clone()),
+            Some(_) => {
+                malformed.push(IDEMPOTENCY_KEY_META);
+                None
+            }
+        };
+
         Self {
             input_responses,
             // Only a string. A client sending an object has not echoed the
@@ -98,6 +131,7 @@ impl RetryFields {
                 .get("requestState")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            idempotency_key,
             malformed,
         }
     }

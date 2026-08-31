@@ -7,7 +7,9 @@ not from the working tree — four other sessions hold uncommitted edits in this
 line read live may be someone's unmerged change. Spec citations are the MCP core schema for
 protocol revision `2026-07-28`, fetched 2026-08-31 from
 `raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/schema/2026-07-28/schema.json`
-(181,835 bytes) and queried by parsing `$defs`.
+(181,835 bytes) and queried by parsing `$defs`. `main` is mutable; the bytes reviewed are pinned by
+that size and by the `$defs` extracts quoted in 2.1. SEP-414 is cited at its immutable permalink
+(4.1), not at a branch tip.
 
 ## 1. Problem
 
@@ -34,7 +36,8 @@ The blocking gap is one field. `ServerCapabilities` (`src/protocol/types.rs:232`
 closed by calling `gateway_declares()` from anywhere; the wire struct has nowhere to put it.
 
 **OTEL.1 today.** `src/protocol/trace.rs` (80 lines) reads `traceparent` from an inbound `_meta`
-(:32), strictly validating the four hex parts, copies `tracestate` verbatim with no validation
+(:32), checking the four hex parts against a predicate that is looser than the W3C grammar in
+three places and stricter in one (3.4b), copies `tracestate` verbatim with no validation
 and no length bound, and re-emits both unchanged in `to_meta()` (:71). Its module comment states
 the invariant: propagated, never re-minted, because a gateway that started a fresh trace would
 make its own hop the root and hide the caller. `baggage` appears nowhere in `src` at the commit.
@@ -78,23 +81,41 @@ general (`Prefix: Optional — if specified, MUST be a series of labels…`); th
 rule quoted in 2.1 is specific to `extensions` keys. So the bare `traceparent` key that
 `trace.rs:32` reads is a legal `_meta` key. It is inconsistent with this gateway's own convention
 — every other `_meta` key in the tree is reverse-DNS (`src/protocol/meta.rs:41-50`) — but that is
-a convention choice, not a spec violation. Which spelling the wire actually carries is §4.1.
+a convention choice, not a spec violation. SEP-414 settles which spelling the wire carries: bare.
+See 4.1.
 
 ### 2.3 One capabilities builder feeds two entry points
 
 `build_initialize_result(negotiated_version, instructions)`
 (`src/gateway/meta_mcp_helpers.rs:144-176`) is the single place `ServerCapabilities` is
 constructed. Its result is returned by `initialize` and is also embedded verbatim as the
-`capabilities` member of the `server/discover` response (`src/gateway/meta_mcp/mod.rs:989`,
-emitted at :1014-1021). Declaring in one and not the other is not reachable from here: both read
+`capabilities` member of the `server/discover` response (assigned `src/gateway/meta_mcp/mod.rs:1018`,
+emitted at :1015-1022; :989 is a comment, not the assignment). Declaring in one and not the other is not reachable from here: both read
 the same builder.
 
 ### 2.4 Per-request client capabilities are already read
 
 `src/protocol/meta.rs:44` defines `KEY_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities"`,
 and `classify_request` (:117, reading it at :137) already extracts it from an inbound request
-body. The gateway therefore already performs the read that per-request extension gating needs;
-it discards the extensions half.
+body. The read exists; **its product does not carry what negotiation needs.** At `:186-190`
+`classify_request` reduces the capabilities object to `declared_capabilities`, a list of
+top-level *names* — `.filter(|(_, value)| !value.is_null()).map(|(name, _)| name.clone())` —
+discarding every value. An `ExtensionSet` lives inside a capability's object value, so it cannot
+be reconstructed from `declared_capabilities` at any later point: the data is gone before it
+reaches the classifier's caller.
+
+Consequence for 3.2: negotiation must run `from_capabilities()` against the **raw**
+`_meta[KEY_CLIENT_CAPABILITIES]` object on the request body, not against
+`declared_capabilities`. Treating presence of the name `extensions` in that list as agreement is
+precisely the presence-is-not-agreement bug `from_capabilities()` was written to prevent (2.1,
+consequence 3).
+
+Connection-scoped negotiation is separately unavailable today: `ClientCapabilities`
+(`types.rs:331-347`) has no `extensions` field, and `handle_initialize`
+(`meta_mcp/mod.rs:1026-1067`) reads only the client version (:1033) and an optional profile
+string (:1041-1045) — it never inspects a capabilities member of `params` at all. Wiring that
+would mean a new struct field plus a new per-connection store; the per-request path needs
+neither.
 
 ### 2.5 Two further trace implementations exist, with conflicting invariants
 
@@ -127,10 +148,53 @@ and not the direct route.
 
 | option | verdict |
 |---|---|
-| **A. Add `extensions` to `ServerCapabilities`; populate from `gateway_declares()` in `build_initialize_result`; retire the non-spec `tasks` capability structs.** | **Chosen.** One builder (2.3) means one edit covers both `initialize` and `server/discover`. The spec has exactly one declaration surface (2.1), so a second one cannot be right. |
+| **A. Add `extensions` to `ServerCapabilities`; populate it from the extensions this gateway can actually honour today — which is none — so the wire carries `"extensions": {}`. `gateway_declares()` stays TASK.1's payload.** | **Chosen.** One builder (2.3) means one edit covers both `initialize` and `server/discover`. The spec has exactly one declaration surface (2.1), so a second one cannot be right. An empty object is a declaration: it says *this gateway speaks the extensions mechanism and currently supports none*, which is different from omitting the field. See 3.1a for why `gateway_declares()` is not the source. |
 | B. Add `extensions`, keep `ServerCapabilities.tasks` as well. | Rejected. Two surfaces declaring one capability is the defect §P0's repair protocol says to eliminate, not to patch: a client reading `tasks` and a client reading `extensions` can be told different things, and nothing keeps them equal. `tasks` is also not in the schema, so it is unreadable by a conforming client. |
 | C. Declare only in `server/discover`, per TASK.1 §3.5. | Rejected as under-specified rather than wrong. Both entry points share `build_initialize_result` (2.3), so "declare in discover" and "declare in initialize" are the same edit. Declaring only in discover would require *removing* the field for the `initialize` path, leaving a legacy client blind to an extension the gateway supports. |
 | D. `experimental` instead of `extensions`. | Rejected. `extensions` is the field the criterion names and the field the schema defines for this purpose. |
+
+#### 3.1a Why not call `gateway_declares()` — the declaration must be honourable
+
+`gateway_declares()` (`extensions.rs:60-63`) returns `supported: vec![Extension::Tasks]`
+unconditionally, and its own doc comment (:51-58) says to wire it *as part of MIK-7311, not
+before*. Populating `ServerCapabilities.extensions` from it would advertise
+`io.modelcontextprotocol/tasks` to every client while `tasks/*` behaviour does not exist: a
+client that trusts the declaration sends task-augmented calls and receives ordinary
+`tools/call` results. That is a worse failure than the unwired field this criterion is about,
+because it is a lie the client cannot detect.
+
+**The invariant EXT.1 establishes, and TASK.1 inherits:** the `extensions` map is populated from
+*implemented and enabled* extension handlers, never from a static list of known identifiers.
+Today that set is empty. TASK.1 adds `Tasks` to it in the same change that makes the behaviour
+real, and `gateway_declares()` becomes the natural source at that point — its current content is
+correct for a future in which the extension is honoured, and wrong for today. EXT.1 therefore
+ships the field and the rule; TASK.1 ships the first entry.
+
+Both reviewers raised this independently, from different anchors — the module's own "not before
+MIK-7311" comment and the client-facing consequence. Two vendors converging on one defect is the
+signal that the mechanism was wrong, not that the citation needed tightening.
+
+#### 3.1b The wire shape, and the one case that is red today
+
+Only the parse side of `ExtensionSet` exists (`extensions.rs:71-90`), so the emit shape is pinned
+here rather than invented by the builder: a JSON object keyed by extension identifier, each value
+an object. With Tasks honoured that is `{"io.modelcontextprotocol/tasks": {}}`; today it is `{}`.
+
+The four states this criterion has to keep apart, and what each selects:
+
+| gateway declares | client declares | selected behaviour |
+|---|---|---|
+| absent (today, before this change) | anything | core; client cannot tell the mechanism is understood |
+| `{}` | anything | core, and the client knows it asked a gateway that speaks the mechanism |
+| identifier present | identifier absent or no `_meta` capabilities | core fallback — 3.2 |
+| identifier present | identifier present | extension behaviour, after `negotiate()` |
+
+Row two is what this change ships and row one is what it replaces, which is why the honest
+red-on-HEAD case is a serialisation check: `build_initialize_result`
+(`meta_mcp_helpers.rs:144`) and `discover_document` (`mod.rs:983`) emit no `extensions` key at
+all, because `ServerCapabilities` (`types.rs:232-254`) has no such field. The existing
+`ac_ext_1_*` tests stay green either way, so they cannot prove EXT.1 — a test plan that only
+extends them proves nothing new.
 
 ### 3.2 EXT.1 — honouring a client that does not support an extension
 
@@ -140,9 +204,9 @@ would refuse a conforming client. The design adopts that recorded intent unchang
 
 | option | verdict |
 |---|---|
-| **A. Intersect the gateway's declaration with the peer's, per connection at `initialize` and per request from `KEY_CLIENT_CAPABILITIES`; absent extension ⇒ core behaviour.** | **Chosen.** `negotiate()` (:107) is exactly this intersection and already exists; the per-request read already exists (2.4). Absent key ⇒ empty set ⇒ core path, which is the revert branch. |
+| **A. Intersect the gateway's declaration with the peer's, per request, by running `from_capabilities()` on the raw `_meta[KEY_CLIENT_CAPABILITIES]` object; absent extension ⇒ core behaviour.** | **Chosen.** `negotiate()` (:107) is exactly this intersection and already exists. Per-request only: `classify_request`'s `declared_capabilities` cannot carry the set (2.4), and connection-scoped negotiation has neither a struct field nor a reader today. Absent key ⇒ empty set ⇒ core path, which is the revert branch. |
 | B. Reject a request that uses an extension the client did not declare. | Rejected. Contradicts the recorded stance in `extensions.rs:9-13` and refuses conforming clients. |
-| C. Connection-scoped negotiation only. | Rejected. The gateway's modern path is per-request (`classify_request`); a stateless HTTP client never performs `initialize`, so connection-only negotiation is unreachable for it. |
+| C. Connection-scoped negotiation at `initialize`. | Rejected, and now on stronger grounds than the original "modern path is per-request": a stateless HTTP client never performs `initialize`, *and* the code to support it does not exist — `ClientCapabilities` has no `extensions` member and `handle_initialize` never reads client capabilities (2.4). Adding both is a larger change than EXT.1 needs, and TASK.1 can add it if per-connection caching turns out to matter. |
 
 ### 3.3 OTEL.1 — carrier
 
@@ -162,26 +226,86 @@ inbound request. They are attacker-influenced input, from any client that can re
 Everything below follows from that:
 
 - **Forwarded:** the three W3C fields, byte-for-byte as received, into the outbound request's
-  `_meta`, alongside the existing cache key (2.6 names the one write site).
+  `_meta`, alongside the existing cache key. **The write must be unconditional** — see 3.4a.
 - **Never interpreted:** no value from any of the three may reach routing, backend selection,
   tool selection, authorisation, policy evaluation, cache keys, budget accounting, or any log
   field used as an identifier for those decisions. They are transport-visible only.
-- **Never minted:** absent or malformed inbound context yields *no* outbound trace `_meta` — not
-  a fresh root. This is `trace.rs`'s stated invariant and it is also a security property: a
-  gateway that minted a root would launder unauthenticated input into a trusted-looking identity.
-- **Validated on the way in:** `traceparent` is already strictly parsed (:32-63). `tracestate`
-  is currently copied verbatim with no validation and **no length bound** — the same defect the
-  new `baggage` field would otherwise introduce. Both get a bounded, charset-checked read; a
+- **Never minted:** absent or malformed inbound context yields *no* outbound trace `_meta` for
+  the affected field — not a fresh root. This is `trace.rs`'s stated invariant and it is also a
+  security property: a gateway that minted a root would launder unauthenticated input into a
+  trusted-looking identity.
+- **Per-field, not all-or-nothing.** `tracestate` is defined by W3C as an annotation *on* a
+  `traceparent` and is dropped with it. `baggage` is a **separate W3C specification** with no
+  dependency on trace context, so a request carrying valid `baggage` and no `traceparent` must
+  still propagate its `baggage`. Suppressing all three on a missing or malformed `traceparent`
+  would drop valid data from baggage-only clients — an unmet MUST reached by over-strictness
+  rather than by omission.
+- **One deliberate exception to "never interpreted", for the next ticket:** CONTROL.3's
+  transparency-log correlation may read `TraceContext::trace_id()` as a *correlation key*
+  (`docs/requirements/RELEASE-4.0.0-criteria-status.md:115` currently falls back to a hardcoded
+  placeholder string when `session_id` is absent). Correlating a log line is not a trust
+  decision: the id names a request, it does not authorise one. The prohibition above stands for
+  routing, authorisation, policy, cache keys and budget — that list is exhaustive on purpose, and
+  this carve-out is written here so CONTROL.3 does not have to argue with this design to use it.
+- **Validated on the way in:** `traceparent`'s existing parse (:38-51) is *structural*, not W3C
+  conformant, and this design must not describe it as strict — see 3.4b. `tracestate` is
+  currently copied verbatim with no validation and **no length bound** — the same defect the new
+  `baggage` field would otherwise introduce. All three get a bounded, charset-checked read; a
   field that fails the check is **dropped**, not repaired, and its absence does not fail the
-  request. Concrete bounds are §4.2.
+  request. Numeric bounds are 4.2.
 - **Not forwarded:** any other inbound `_meta` key. The gateway already strips peer-supplied
   `_meta.provenance` from backend responses (`src/gateway/meta_mcp/invoke.rs:472`), which is the
   in-tree precedent for refusing to relay what a peer put in `_meta`.
 
+#### 3.4a The write site is conditional today — a design decision, named
+
+`dispatch_to_backend` writes `_meta` in exactly one place, and only when a prompt cache key
+exists (`invoke.rs:1934-1938`): the `None` arm passes `base_params` through with no `_meta` key
+at all. Specifying OTEL.1 as "write at the site that already writes `_meta`" would therefore
+propagate traces only on requests that happen to carry a cache key — a minority path — and OTEL.1
+would read as met while most hops carried nothing.
+
+The decision: inject trace `_meta` unconditionally at `dispatch_to_backend`, merging the cache
+key into the same `_meta` object when one is present. Concretely, one sibling function beside
+`inject_cache_key`, called on both arms.
+
+Honest sizing: this follows the module's existing shape rather than forcing a new one —
+`inject_cache_key` already takes `Option<Value>` and returns params with `_meta` populated, and
+it already has four unit tests at `invoke.rs:474-503` that a sibling can be tested the same way.
+It is a named decision because it changes when the gateway writes `_meta` on the backend hop, not
+because it needs new machinery.
+
+Also corrected here: an earlier draft pointed at §2.6 for the write site. §2.6 is the direct
+route, which carries no `_meta` at all. The write site is `dispatch_to_backend` on the meta-MCP
+route (§1).
+
+#### 3.4b The existing `traceparent` parse is structural, not W3C-compliant
+
+Verified against `trace.rs:38-51` at the commit. The parser splits on `-`, requires exactly four
+parts, checks each part's length and `is_ascii_hexdigit()`, and rejects an all-zero `trace_id`.
+Four consequences, each read from the code:
+
+| input | W3C says | this parser does |
+|---|---|---|
+| uppercase hex | invalid — lowercase only | accepts (`is_ascii_hexdigit` matches both cases) |
+| version `ff` | invalid — reserved | accepts (only length and hex are checked) |
+| all-zero `parent-id` (span id) | invalid | accepts (only `trace_id` is zero-checked, :49-51) |
+| future version with more than four fields | valid — read the first four, ignore the rest | rejects (`if parts.len() != 4`) |
+
+So it forwards two classes of invalid context and drops a class of valid future context. This is
+not a defect OTEL.1 introduces, but OTEL.1's drop-not-repair rule depends on the check being
+right: a parser that accepts garbage propagates garbage, and one that rejects valid input
+silently deletes real traces. It is therefore mine, not separable.
+
+Disposal: fixed inside this change, not deferred. Lowercase-only; reject `ff`; reject an all-zero
+`parent-id`; accept four-or-more fields, reading the first four and ignoring the rest. Four
+predicate changes in one function, one test row each.
+
 | option | verdict |
 |---|---|
-| **A. Propagate all three, opaque and bounded, never interpreted.** | **Chosen.** Meets the MUST; the bound and the no-interpretation rule are what make relaying attacker input safe. |
+| **A. Propagate all three, opaque and bounded, never interpreted; `baggage` independent of trace context.** | **Chosen.** Meets the MUST; the bound and the no-interpretation rule are what make relaying attacker input safe. |
 | B. Propagate `traceparent`/`tracestate`, drop `baggage`. | Rejected. Unmet MUST. Dropping a criterion needs the requester's recorded agreement in advance, which does not exist. |
+| E. Propagate all three, but suppress every field when `traceparent` is absent or rejected. | Rejected. Simpler to state and wrong: `baggage` is its own W3C spec with no trace-context dependency, so this drops valid data from baggage-only clients — an unmet MUST reached by over-strictness. |
 | C. Parse `baggage` into typed pairs and expose them to policy. | Rejected. Turns attacker-controlled key/value pairs into inputs to gateway decisions — the injection surface this section exists to close. |
 | D. Re-mint a span per hop for a clean parent/child tree. | Rejected. Contradicts `trace.rs:12-13`, hides the caller, and is the launder-the-input failure above. |
 
@@ -210,21 +334,23 @@ trigger and a bad-resolution consequence. Nothing is left as a risk paragraph.
 | Does `2026-07-28` `ServerCapabilities` define `extensions`? | Fetched the schema, parsed `$defs.ServerCapabilities.properties` | Yes — `extensions`, object-valued, keys are prefixed extension ids | Made option 3.1.A the only spec-conforming answer and fixed the field's exact shape |
 | Does it define `ServerCapabilities.tasks`? | Same query | **No.** `completions, experimental, extensions, logging, prompts, resources, tools` | Turned `types.rs:250/262` from "existing capability" into a non-spec second surface, and made its retirement part of EXT.1 rather than a separate cleanup |
 | Does `ClientCapabilities` carry `extensions`? | Same query | Yes; and it has no `tasks` member either | Confirmed 3.2.A reads the peer's declaration from the field `from_capabilities()` already parses |
-| Does the core schema name `traceparent`/`tracestate`/`baggage`? | Substring count over the fetched schema | Zero occurrences of all three | Established that key spelling comes from SEP-414, not the core schema → 4.2 |
+| Does the core schema name `traceparent`/`tracestate`/`baggage`? | Substring count over the fetched schema | Zero occurrences of all three | Established that key spelling comes from SEP-414, not the core schema; settled by the SEP-414 row above |
 | Is a bare (unprefixed) `_meta` key legal? | Read `$defs.MetaObject.description` | Prefix is **optional** in general; mandatory only for `extensions` keys | `trace.rs:32`'s bare `traceparent` is spec-legal, so the spelling question is a convention/SEP question, not a violation |
+| What key spelling does SEP-414 mandate for the three trace fields, and is `baggage` named there? | Read SEP-414 itself, at its merged permalink `github.com/modelcontextprotocol/modelcontextprotocol/blob/622a9b4aa58113abcac1782c31c72af3f2819f7c/seps/414-request-meta.md` (PR #414, labelled `SEP, final`, closed) | Status **Final**. All three keys are named, and the text makes them "an exception to the DNS prefixing convention for keys in `_meta`" — **bare** `traceparent`, `tracestate`, `baggage`, following W3C value formats | Resolved the spelling this design had deferred: emit bare keys, matching what `trace.rs:32` already reads. The accept-both-spellings fallback is deleted — there is no second spelling to accept |
+| Is `trace.rs`'s `traceparent` parse actually W3C-strict, as an earlier draft claimed? | Read `trace.rs:38-51` at the commit and compared each predicate against the W3C rules | No. Accepts uppercase hex, accepts version `ff`, accepts an all-zero span id; rejects valid future versions carrying more than four fields | Turned "already strictly parsed" into 3.4b, and moved the fix inside this change rather than leaving a check OTEL.1's drop rule depends on |
 | Are `gateway_declares` / `ServerTasksCapability` / `tracing_context` genuinely unwired, or does the dirty tree hide a caller? | `git grep` for each at `5c7e64f4`, not in the working tree | Matches only in their own defining files, their tests, and `lib.rs:84` | Confirmed the three "no production caller" claims against the commit rather than against four sessions' uncommitted edits |
 
-### 4.2 Deferred — exact wire spelling and bounds for the trace fields
+### 4.2 Deferred — numeric bounds for `tracestate` and `baggage`
+
+The key spelling is no longer open: 4.1 records SEP-414 as Final and the keys as bare. What
+remains is the size limit each bounded read enforces.
 
 | field | value |
 |---|---|
-| owner | this ticket's implementer, before any emit-side constant is written |
-| what would resolve it | read SEP-414 itself for the `_meta` key spelling (bare vs `io.modelcontextprotocol/`-prefixed) and for whether `baggage` is named there; take the W3C `tracestate`/`baggage` limits (member count and total length) as the bound |
-| when | at the start of §P2, before the test plan fixes expected keys — a test that pins the wrong key passes and proves nothing |
-| what if it resolves badly | if SEP-414 mandates prefixed keys, `trace.rs:32`'s bare read is wrong on the wire and the read side changes with it; the design's fail-safe is to **accept both spellings on read and pin exactly one on emit**, so a mis-resolved spelling costs a constant, not a redesign |
-
-Nothing in this design depends on that answer beyond the value of two string constants and the
-numeric bounds; the trust boundary in 3.4 holds under either spelling.
+| owner | this ticket's implementer, before the first bounded-read constant is written |
+| what would resolve it | take the limits from the W3C specs SEP-414 defers to — `tracestate` member count and total length, `baggage` total length — and pin each as a named constant carrying its provenance |
+| when | with the test plan, so the boundary rows assert a real number rather than a placeholder |
+| what if it resolves badly | a bound set too low drops valid context from a conforming client; too high, it relays more attacker-influenced bytes than needed. Both are one constant, and the drop-not-repair rule means neither can fail a request |
 
 ### 4.3 Deferred — disposal of `src/tracing_context/`
 
@@ -278,23 +404,41 @@ Recorded here so they survive between revisions of this document.
 
 | # | finding | disposal |
 |---|---|---|
-| F1 | `ServerCapabilities.tasks` / `ClientCapabilities.tasks` (`types.rs:250`, `:262`, `:346`, `:374`) are **not in the `2026-07-28` schema** and are a second declaration surface competing with `extensions`. TASK.1's design is silent on them. | Fix inside this change if the operator agrees (4.4.1); otherwise write into TASK.1's design as an accepted duplicate with a named owner. Not silently kept. |
+| F1 | `ServerCapabilities.tasks` / `ClientCapabilities.tasks` (`types.rs:250`, `:262`, `:346`, `:374`) are **not in the `2026-07-28` schema** and are a second declaration surface competing with `extensions`. TASK.1's design is silent on them. | Not a condition of closing EXT.1 (see 7). Fix inside this change only if the operator answers 4.4.1 yes; otherwise write into TASK.1's design as an accepted duplicate with a named owner. Not silently kept. |
 | F2 | TASK.1 §3.5 says `gateway_declares()` is called from `server/discover`, "which is EXT.1's job". Both `initialize` and `server/discover` are fed by one builder (2.3), so the stated call site is narrower than the real one. | Under-specification, not a contradiction. Fixed in this design by declaring in `build_initialize_result`, which satisfies TASK.1's dependency for both entry points. TASK.1 needs a one-line correction. |
-| F3 | Three surfaces use "trace" with different meanings: `src/protocol/trace.rs` (forwards, never mints, `_meta`), `src/tracing_context/` (mints roots, HTTP headers, unwired), and `augment_with_trace` (`support.rs:266`, mints a client-facing correlation `trace_id`, live). | 4.3 — eliminate `tracing_context`, or make ownership explicit in code. `augment_with_trace` stays but is named as correlation-only, not W3C propagation. Operator decision at 4.4.2. |
+| F3 | Three surfaces use "trace" with different meanings: `src/protocol/trace.rs` (forwards, never mints, `_meta`), `src/tracing_context/` (mints roots, HTTP headers, unwired), and `augment_with_trace` (`support.rs:266`, mints a client-facing correlation `trace_id`, live). | 4.3 — make ownership explicit in code; deleting `tracing_context` stays operator-gated and is not a condition of closing OTEL.1 (see 7). `augment_with_trace` stays but is named as correlation-only, not W3C propagation. Operator decision at 4.4.2. |
 | F4 | `tracestate` is copied verbatim with no validation and no length bound (`trace.rs:56`+), today, before `baggage` exists. | Fixed inside this change: 3.4 bounds both fields, not just the new one. |
-| F5 | The bare `traceparent` / `tracestate` `_meta` keys are inconsistent with every other `_meta` key in the tree, which is reverse-DNS (`meta.rs:41-50`). Legal per `MetaObject`, but a convention split. | 4.2 resolves the emit spelling from SEP-414; the read side accepts both. Repo-wide harmonisation is out of scope (§5). |
+| F5 | The bare `traceparent` / `tracestate` `_meta` keys are inconsistent with every other `_meta` key in the tree, which is reverse-DNS (`meta.rs:41-50`). Legal per `MetaObject`, but a convention split. | 4.1 resolves it: SEP-414 is Final and makes these keys an explicit exception to the reverse-DNS convention. One spelling on both sides, bare. Repo-wide alignment of the other keys is out of scope (§5). |
+| F7 | `trace.rs:38-51` accepts uppercase hex, version `ff`, and an all-zero `parent-id`, and rejects any future-version `traceparent` carrying more than four fields. An earlier draft of this design called that parse strict. | Fixed inside this change (3.4b). OTEL.1's drop-not-forward rule is only as good as the predicate that decides what is invalid, so this is not separable from the criterion. |
+| F8 | The one site that writes outbound `_meta` (`invoke.rs:1934-1938`) writes it only when a prompt-cache key is present; the other arm sends no `_meta` at all. | Fixed inside this change (3.4a): the trace write is unconditional and merges with the cache key rather than depending on it. |
 | F6 | `POST /mcp/{name}` carries no `_meta` and bypasses `invoke_tool_traced`, with no ADR sanctioning it — inherited from SUB.4, whose carrier question is still unanswered. | Inherited dependency, not re-asked. Recorded at 4.4.3. |
 
 ## 7. What closing these criteria requires
 
-EXT.1: `ServerCapabilities` gains `extensions`; `build_initialize_result` populates it from
-`gateway_declares()`; the per-request path intersects it with the client's declaration via
-`negotiate()` and falls back to core behaviour when an extension is absent; F1 is disposed of.
+EXT.1 closes when `ServerCapabilities` gains an `extensions` field, the shared builder (2.3)
+populates it from the extensions the gateway can honour today, and the per-request path recovers
+the client's `ExtensionSet` from the raw `_meta` capabilities object via `from_capabilities()`,
+intersects it with `negotiate()`, and falls back to core behaviour when an extension is absent.
+That is the whole criterion. Retiring `ServerCapabilities.tasks` / `ClientCapabilities.tasks` is
+NOT part of it: 4.4.1 is an open operator question, and deleting a public wire type without that
+answer is an API break this ticket does not need. Answered yes, F1 is fixed here; answered no or
+unanswered, F1 goes to TASK.1 as an accepted duplicate with a named owner.
 
-OTEL.1: the three W3C fields are read from the inbound `_meta`, bounded and validated, and
-written unchanged into the outbound `_meta` at the one site that already writes it, never minted,
-never interpreted; F3 and F4 are disposed of.
+Today the field is populated from an empty set, because the only extension the module names is
+Tasks and TASK.1 has not landed (3.1a). An empty `extensions` object is the honest declaration,
+and it is not the same wire value as omitting the field.
 
-Both are wiring plus one struct field plus one deletion. Neither is new machinery — which is the
-same observation `docs/requirements/RELEASE-4.0.0-criteria-status.md:162` makes about this whole
-cluster, and the reason the estimate should not grow beyond it.
+OTEL.1 closes when the three W3C fields are read from the inbound `_meta`, bounded, validated by
+a predicate that matches the W3C grammar (3.4b), and written unchanged into the outbound `_meta`
+at `dispatch_to_backend` unconditionally (3.4a) — never minted, never interpreted, subject to the
+CONTROL.3 carve-out in 3.4. Deleting `src/tracing_context/` is NOT part of it: 4.3 already says a
+comment recording ownership is enough if the module stays, and 4.4.2 is the operator's call. F4,
+F7 and F8 are fixed inside this change; F3 is disposed of by the comment or the deletion,
+whichever the operator picks.
+
+On effort: the estimate moves for one reason only, and it is Q3 — whether the second route
+(`POST /mcp/{name}`, 4.4.3) must also carry trace `_meta`. It does not move for 3.4a. Making the
+write unconditional is a sibling function beside `inject_cache_key`, which already takes an
+optional params object and already has unit tests at `invoke.rs:474-503`; the seam exists. Nor
+does it move for F7 — four predicates and one test row each. Otherwise this stays what
+`docs/requirements/RELEASE-4.0.0-criteria-status.md:162` says it is: wiring plus one struct field.

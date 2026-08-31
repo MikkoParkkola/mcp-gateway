@@ -19,7 +19,7 @@ use mcp_gateway::protocol::continuation::{ContinuationError, Keyring, Payload};
 fn payload() -> Payload {
     Payload {
         backend_id: "weather".to_string(),
-        backend_request_state: "AEAD-protected blob from the backend".to_string(),
+        backend_request_state: Some("AEAD-protected blob from the backend".to_string()),
         principal_fingerprint: "sha256:caller-a".to_string(),
         original_request_digest: "sha256:req-1".to_string(),
         origin_replica: "gw-1".to_string(),
@@ -681,7 +681,7 @@ mod hardening {
     fn payload() -> Payload {
         Payload {
             backend_id: "weather".into(),
-            backend_request_state: "Bearer super-secret-backend-token".into(),
+            backend_request_state: Some("Bearer super-secret-backend-token".into()),
             principal_fingerprint: "sha256:caller-a".into(),
             original_request_digest: "sha256:req-1".into(),
             origin_replica: "gw-1".into(),
@@ -893,7 +893,7 @@ mod mint_budget {
     fn payload() -> Payload {
         Payload {
             backend_id: "weather".into(),
-            backend_request_state: "state".into(),
+            backend_request_state: Some("state".into()),
             principal_fingerprint: "sha256:caller-a".into(),
             original_request_digest: "sha256:req-1".into(),
             origin_replica: "gw-1".into(),
@@ -975,7 +975,7 @@ mod envelope_size {
     fn payload_with_state(state: String) -> Payload {
         Payload {
             backend_id: "weather".into(),
-            backend_request_state: state,
+            backend_request_state: Some(state),
             principal_fingerprint: "sha256:caller-a".into(),
             original_request_digest: "sha256:req-1".into(),
             origin_replica: "gw-1".into(),
@@ -1074,6 +1074,7 @@ mod envelope_size {
                 .open(&token, 1_500)
                 .expect("opens")
                 .backend_request_state
+                .expect("the state that was minted must come back")
                 .len(),
             2_048
         );

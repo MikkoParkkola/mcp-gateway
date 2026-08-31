@@ -40,8 +40,10 @@ Not one job. It splits by size:
 - **Design-first**: SUB.4 (idempotency wiring — design at revision 4, see
   `docs/design/2026-08-31-sub-4-idempotency-wiring.md`. Larger than it looked: seven verified
   implementation defects are prerequisites, and no advertised way exists for a client to send a
-  retry key at all. One question still blocks all code, and it is a tool-surface decision the
-  operator has been asked and has not yet answered),
+  retry key at all. The tool-surface question that blocked all code is decided PROVISIONALLY:
+  both the meta-MCP surface and the direct `POST /mcp/{name}` route are in scope. The operator
+  was asked on 2026-08-31 and was away; the call is the team lead's, made on the full-scope
+  direction recorded at the foot of this file, and it is not operator-confirmed),
   ORDER.2 (tool set must not vary per connection), SUB.2 (request-scoped notifications on the
   request's own response stream), EXT.1 (declare extensions through server capabilities),
   OTEL.1 (`traceparent`/`tracestate`/`baggage` through `_meta`).
@@ -110,5 +112,9 @@ Clusters A and E are owned by other sessions. Coordinate before touching
 - ~~If TASK.1 is dropped from v4.0.0, SUB.4 loses its alternative branch.~~ CLOSED: the operator
   directed the full scope on 2026-08-31, so TASK.1 ships in v4.0.0 and SUB.4 keeps both routes.
   The design says how the two coexist, not which one wins.
+- If the two-route assumption is wrong, OTEL.1 and SUB.4 both shrink. They were scoped to cover
+  the direct `POST /mcp/{name}` route as well as the meta-MCP surface on an unconfirmed reading of
+  the full-scope direction. An operator answer of "meta-MCP only" removes one separable clause from
+  each design and changes nothing else.
 - If cluster A slips, H slips with it and MRTR.10a's key contents stay open, which leaves
   SUB.4 implementable but not fully specified.

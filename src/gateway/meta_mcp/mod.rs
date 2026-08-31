@@ -185,6 +185,15 @@ pub struct MetaMcp {
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
     pub(super) idempotency_cache: Option<Arc<IdempotencyCache>>,
+    /// Continuation keys, spent-ledger and held legacy exchanges.
+    ///
+    /// Here rather than on `AppState` because of lifetime: this struct is built
+    /// once per gateway run, while the caller context is built per call, and a
+    /// keyring rebuilt per call would refuse every retry that arrived on a
+    /// later request. `AppState` shares this same `Arc` rather than minting its
+    /// own — two keyrings would mint on one and redeem on the other, and every
+    /// refusal would say only "continuation rejected".
+    pub(super) continuation: Arc<crate::protocol::continuation::ContinuationState>,
     pub(super) stats: Option<Arc<UsageStats>>,
     pub(super) ranker: Option<Arc<SearchRanker>>,
     pub(super) transition_tracker: RwLock<Option<Arc<TransitionTracker>>>,
@@ -382,6 +391,7 @@ impl MetaMcp {
             cache,
             default_cache_ttl,
             idempotency_cache: None,
+            continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
             stats,
             ranker,
             transition_tracker: RwLock::new(None),
@@ -442,6 +452,15 @@ impl MetaMcp {
         default_ttl: Duration,
     ) -> Self {
         Self::build(backends, cache, stats, ranker, default_ttl)
+    }
+
+    /// The continuation state this run mints and redeems with.
+    ///
+    /// Handed to `AppState` so the legacy bridge redeems against the same
+    /// keyring and the same spent-ledger this path mints into.
+    #[must_use]
+    pub fn continuation(&self) -> Arc<crate::protocol::continuation::ContinuationState> {
+        Arc::clone(&self.continuation)
     }
 
     /// Expose the cost tracker for external use (budget configuration, REST handler).

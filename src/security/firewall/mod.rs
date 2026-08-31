@@ -31,7 +31,9 @@ pub mod anomaly;
 pub mod audit;
 pub mod input_scanner;
 pub mod memory_scanner;
+pub mod principal_window;
 pub mod redactor;
+pub mod tenant_guard;
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 

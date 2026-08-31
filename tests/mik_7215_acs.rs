@@ -670,7 +670,11 @@ mod http {
         )
         .await;
 
-        assert_eq!(status, StatusCode::OK, "JSON-RPC reports errors in the body: {body}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "JSON-RPC reports errors in the body: {body}"
+        );
         assert_eq!(
             body.pointer("/error/code").and_then(Value::as_i64),
             Some(-32001),

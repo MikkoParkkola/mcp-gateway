@@ -22,7 +22,7 @@ use crate::context_integrity::{
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::suggestions;
 use crate::hashing::{canonical_json, sha256_hex};
-use crate::idempotency::{GuardOutcome, IdempotencyReservation, enforce};
+use crate::idempotency::{GuardOutcome, IdempotencyReservation, derive_key, enforce};
 use crate::identity_grants::{GrantScope, GrantSubject, IdentityGrantRequest};
 use crate::playbook::PlaybookEngine;
 use crate::provider::Transform as _;
@@ -121,7 +121,7 @@ use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, extract_cached_tokens, inject_cache_key};
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
-    resolve_idempotency_key, strip_backend_provenance,
+    idempotency_key_for, strip_backend_provenance,
 };
 
 async fn call_capability_tool_with_identity(
@@ -776,25 +776,32 @@ impl MetaMcp {
             .map(|b| format!("|idp:{b}"))
             .unwrap_or_default();
 
-        let idem_key = if want_full {
-            None
-        } else {
-            resolve_idempotency_key(
-                args,
-                server,
-                tool,
-                &arguments,
-                self.idempotency_cache.as_ref(),
-            )
-            .map(|k| format!("{k}{projection_key_suffix}{identity_suffix}"))
-        };
+        // `want_full` no longer suppresses the key. It selects the shape of the
+        // *reply*, not whether the backend acts, and a directive that switches
+        // off duplicate protection is a bypass any client can set — which is
+        // exactly what the `_full` stripping above says must not be possible.
+        let idem_key = idempotency_key_for(
+            caller.retry.idempotency_key.as_deref(),
+            &projection_key_suffix,
+            &identity_suffix,
+            self.idempotency_cache.as_ref(),
+        );
+        // What the key is a key *for*. A client key is an opaque string it
+        // chose, so nothing about it says which request it was minted for;
+        // without this a key reused for a different call replays the first
+        // call's result as though it were this one's.
+        let idem_fingerprint = idem_key
+            .as_ref()
+            .map(|_| derive_key(&format!("{server}:{tool}"), &arguments));
 
         // Owns the in-flight entry from admission until a terminal state. Its
         // `Drop` releases the key, so an early return after dispatch cannot
         // strand the entry as in-flight until the guard times out.
         let mut idem_reservation: Option<IdempotencyReservation> = None;
-        if let (Some(idem_cache), Some(key)) = (&self.idempotency_cache, &idem_key) {
-            match enforce(idem_cache, key)? {
+        if let (Some(idem_cache), Some(key), Some(fingerprint)) =
+            (&self.idempotency_cache, &idem_key, &idem_fingerprint)
+        {
+            match enforce(idem_cache, key, fingerprint)? {
                 GuardOutcome::CachedResult(cached) => {
                     debug!(server, tool, key, trace_id, "Idempotency cache hit");
                     if let Some(ref stats) = self.stats {
