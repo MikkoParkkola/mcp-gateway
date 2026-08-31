@@ -183,12 +183,36 @@ proxied backend schemas. Three postures: refuse the backend, publish and flag, o
 schema. Cluster G scoped backend-supplied schemas OUT, which leaves a stated limit against a MUST —
 an unmet requirement, not a design choice, until this is answered.
 
-**3. Whether 2025-11-25 clients are still served.** `ServerTasksCapability` and
-`ClientTasksCapability` (`src/protocol/types.rs`) have zero readers and both carry a `list` field
-that the pinned 2026-07-28 text calls the shape it deliberately dropped. They are a superseded
-declaration surface. Deleting them is an API break this release does not need; keeping them
-advertises a shape we do not honour. NFR.COMPAT.1 requires 2025-11-25 be served, so the audit of
-the non-functional block may answer this without the operator.
+**3. ~~Whether 2025-11-25 clients are still served.~~ RESOLVED against the code, and it moved the
+release gate.** The `tasks` capability types are dead, not a hazard: `ServerCapabilities.tasks` is
+`None` in every response the gateway builds, so a 2025-11-25 client is told "no task support", which
+is what capability negotiation is for. Nothing mis-serves anyone and deleting them buys nothing this
+release needs.
+
+The audit found the real gap one level up. `SUPPORTED_VERSIONS` (`src/protocol/mod.rs:43`) lists four
+legacy revisions and **deliberately omits `2026-07-28`** — the constant's own comment says why:
+listing it "would make `initialize` negotiate a revision the gateway cannot serve, and the client
+would be told yes and then served 2025 semantics — a worse failure than refusing, because it is
+silent. It is added in the increment that makes it true." That increment is this release. Until the
+constant gains the string, `negotiate_version` (`mod.rs:48-57`) falls back to `PROTOCOL_VERSION`, so
+a client declaring the pinned revision is answered `2025-11-25` at `initialize` and NFR.COMPAT.1's
+first clause is unmet.
+
+So the flip is a release gate with an order: it is the LAST commit, not an early one, and it is only
+truthful once the modern request path is complete. Note the two constants are read by different
+sites — `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) already contains `2026-07-28` and drives
+method availability on `POST /mcp`, while `SUPPORTED_VERSIONS` drives `initialize`. The modern path
+can therefore be fully working while `initialize` still denies it, which is exactly today's state.
+
+One thing the audit did *not* settle, recorded rather than assumed: whether the silent fallback on an
+unrecognised version conforms to the 2025-06-18 / 2025-11-25 `initialize` text, which was not
+re-fetched. It stops mattering once the constant is flipped, so it is a check for the interim only.
+
+Within the legacy tier the compatibility question is smaller than it looked. `build_initialize_result`
+(`meta_mcp_helpers.rs:144`) uses the negotiated version for the `protocol_version` string and nothing
+else; `handle_tools_list_with_url_override` and `handle_tools_call` (`meta_mcp/mod.rs:1222`, `:1252`)
+take no version parameter at all. One behaviour is served to all four legacy revisions. The hard fork
+is legacy-versus-modern in `classify_request` (`handlers.rs:660-920`), not per-revision.
 
 **4. What the direct route needs, now that reachability is settled.** The two-route question was
 half a code fact and nobody had read the code. `backend_handlers.rs:724` says the direct
