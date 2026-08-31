@@ -59,12 +59,12 @@ not silently fixed, because two of them changed what a case must do.
 
 | clause | case | level | type | red on HEAD? |
 |---|---|---|---|---|
-| EXT.1.a | **E1** `build_initialize_result` is called and its result serialised to `serde_json::Value`; assert the object's key set contains `extensions` and that the value is a JSON **object** (not null, not a string). Repeated against `discover_document`'s `capabilities` member so both entry points are named, not inferred from the shared builder. | unit | contract / serialisation | **Yes.** `ServerCapabilities` (`types.rs:232-254`) has no such field, so the key cannot appear. |
+| EXT.1.a | **E1** `build_initialize_result` is called and its result serialised to `serde_json::Value`; assert its **`capabilities`** member's key set contains `extensions` and that the value is a JSON **object** (not null, not a string). Repeated against `discover_document`'s `capabilities` member so both entry points are named, not inferred from the shared builder. | unit | contract / serialisation | **Yes.** `ServerCapabilities` (`types.rs:232-254`) has no such field, so the key cannot appear. |
 | EXT.1.b | **E2** with the gateway's implemented-extension source empty, assert the serialised value is exactly `{}` — key present, zero members — and separately assert the key is **not** omitted (i.e. the field carries no `skip_serializing_if` that would collapse empty to absent). | unit | contract / serialisation | Yes, for the same reason as E1. **But see §4 — on its own this case cannot distinguish a wired populate from a defaulted field.** |
-| EXT.1.b | **E3 (the discriminator)** call the builder with an implemented-extension source containing one synthetic identifier `example.test/probe`, and assert the wire carries `{"example.test/probe": {}}` — key identity asserted as a literal (A4, A8). Then the empty-source case E2 is meaningful, because the same code path demonstrably varies with its input. | unit | contract, A7 constant-perturbation | Yes. Requires the builder to take the set as an **argument or injectable source**, not to read a module-level constant — see §5.1, a testability requirement this plan places on the implementation. |
-| EXT.1.c | **E4** construct a request body whose `_meta["io.modelcontextprotocol/clientCapabilities"]` is `{"extensions": {"example.test/probe": {}}}`; assert the negotiation input parsed by `from_capabilities()` contains that identifier. Assert against the literal identifier, never against `from_capabilities()`'s own output on the same input (A8). | unit | parsing | Yes — nothing calls `from_capabilities()` from the request path (`rg gateway_declares/ExtensionSet:: src` matches only the module). |
-| EXT.1.c | **E5 (the anti-`declared_capabilities` case)** same body, but assert the recovered set is empty when the capabilities object is `{"extensions": {}}` **and** non-empty for E4's body. `declared_capabilities` reduces both to the same one-element name list `["extensions"]` (`meta.rs:186-190`), so an implementation that reads the name list passes E4 and **fails E5**. This is the case that distinguishes the two implementations; E4 alone does not. | unit | negative / discrimination | Yes. |
-| EXT.1.d | **E6** a request that uses an extension-gated behaviour while the client declared no extensions: assert the response is a **successful core-behaviour response**, and assert on its identity (the ordinary `tools/call` result shape), not merely on "not an error" (A3). | integration | behavioural | Yes — no negotiation exists on the request path today, so there is no branch to take. |
+| EXT.1.b | **E3 (the discriminator)** call the builder with an implemented-extension source containing one synthetic identifier `example.test/probe`, and assert the wire carries `{"example.test/probe": {}}` — key identity asserted as a literal (A4, A8). Then the empty-source case E2 is meaningful, because the same code path demonstrably varies with its input. | unit | contract, A7 constant-perturbation | Yes. Requires the builder to take the set as an **argument or injectable source**, not to read a module-level constant — see §5.1. The source must be a **map of identifier strings**, not an `ExtensionSet`: `ExtensionSet` can only hold `Extension` variants, so a probe identifier is unrepresentable in it and the perturbation collapses. Substituting `Extension::Tasks` here is forbidden — it makes the case pass against an implementation that simply wired `gateway_declares()`, which is the wiring §0 puts out of scope. |
+| EXT.1.c | **E4** construct a request body whose `_meta["io.modelcontextprotocol/clientCapabilities"]` is `{"extensions": {"io.modelcontextprotocol/tasks": {}}}`; assert the negotiation input parsed by `from_capabilities()` contains `Extension::Tasks`. The identifier must be a **recognised** one: `from_capabilities()` filters through `Extension::from_id` (`extensions.rs:71-90`), so a synthetic identifier is discarded **by a correct implementation** and a case asserting its recovery could never go green. Assert against the literal identifier, never against `from_capabilities()`'s own output on the same input (A8). | unit | parsing | Yes — nothing calls `from_capabilities()` from the request path (`rg gateway_declares/ExtensionSet:: src` matches only the module). |
+| EXT.1.c | **E5 (the anti-`declared_capabilities` case)** same identifier, **non-object settings**: `{"extensions": {"io.modelcontextprotocol/tasks": 3}}`. Assert the recovered set is **empty**. A correct implementation drops it on the `settings.is_object()` filter (`extensions.rs:78`); an implementation that reached the same answer through `declared_capabilities` keeps it, because that path discards values and filters only nulls (`meta.rs:186-190`) — `3` is not null. Paired with E4, which must stay non-empty. This is the pair that distinguishes the two implementations; E4 alone does not, and the value must be non-null or both paths drop it and the discriminator collapses. | unit | negative / discrimination | Yes. |
+| EXT.1.d | ~~**E6** behavioural revert~~ — **withdrawn at review.** With no extension-gated behaviour shipped, "reverted to core" and "never consulted the client" are output-identical: ordinary `tools/call` already succeeds. The case was marked red on HEAD and is not. **No case. See §6.5.** | — | — | **No.** |
 | EXT.1.d | **E7** the refusal-shape negative: same request, assert the response is **not** a JSON-RPC error and no error code is emitted. Paired with E6 because "revert" and "reject" are the two spec-permitted answers and the design chose revert; a case asserting only success would also pass a build that never consulted the client at all. E7's value is bounded — see §4.2. | integration | negative | No, on its own. Recorded as such rather than counted. |
 
 ## 4. Where a case cannot distinguish two implementations — said plainly
@@ -96,11 +96,14 @@ plan records it as inherited rather than claiming coverage it does not have.
 ### 4.2 E7 is a weak case and is labelled one
 
 E7 asserts an absence (no error). An implementation that never reads client capabilities and
-always runs core behaviour satisfies it. It earns its row only as the paired half of E6 —
-together they say "core behaviour, and specifically not a refusal" — and it is recorded here as
-non-discriminating so a later reader does not mistake it for evidence of negotiation. The
-discrimination for EXT.1.d lives in E5 (the set is recovered correctly) plus E6 (core behaviour
-runs). E7 covers the one thing those two do not: that the chosen branch is revert, not reject.
+always runs core behaviour satisfies it. It was drafted as the paired half of E6, and **E6 has
+since been withdrawn** (§6.5), so E7 now stands alone and its weakness is worse, not better: on
+its own it says only "not a refusal", and it cannot say "reverted", because there is nothing to
+revert from. It is kept because the revert-versus-reject choice is a real one the design made and
+the spec permits both — but it is recorded as non-discriminating so a later reader does not
+mistake it for evidence of negotiation. What is left of EXT.1.d's discrimination lives in E5 (the
+set is recovered correctly). The behavioural half has no case at all until TASK.1 gates something
+on an extension.
 
 ## 5. OTEL.1 — the coverage map
 
@@ -110,17 +113,31 @@ verified serde, not the hop. In every case here the trace values are placed **on
 inbound request body, and the assertion is made on the **outbound** params object that
 `dispatch_to_backend` produces.
 
+The red/green column below rests on one verified statement of HEAD, checked at review rather than
+assumed. `src/protocol/trace.rs` already carries both halves of the mechanism —
+`TraceContext::from_meta` (`:32`) reads a `traceparent` and an optional `tracestate`, `to_meta`
+(`:71`) writes them back out — and **neither is called anywhere**: `rg` finds no `TraceContext`
+outside that module. `rg baggage src/` returns nothing at all. So the shape of the gap is not
+"nothing exists" but "a correct, unwired, two-thirds-complete extractor exists": the
+`traceparent`/`tracestate` parse is already right, `baggage` is absent from the struct, and no
+request path reaches either function. Rows that assert `baggage`, that assert propagation, or
+that assert a grammar predicate HEAD gets wrong are red. A row asserting only that a valid
+`traceparent` parses would be **green today**, and none is written as if it were not.
+
 | clause | case | level | type | red on HEAD? |
 |---|---|---|---|---|
-| OTEL.1.a + .b | **T1 (the hop case)** inbound `_meta` carries `traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"`, `tracestate = "vendor=abc"`, `baggage = "k=v"`, and **no prompt-cache key**. Call `dispatch_to_backend`; assert the outbound params' `_meta` contains all three keys with those exact literal strings. Expected side is a literal, never `TraceContext::from_meta(inbound).to_meta()` (A8). | unit | propagation, positive | **Yes.** The `None` cache-key arm passes `base_params` through with no `_meta` at all (`invoke.rs:1934-1938`). |
+| OTEL.1.a | **T0 (the read case)** feed a whole JSON-RPC request body whose `params._meta` carries the three fields to the **production extractor** the request path uses (`TraceContext::from_meta`, `trace.rs:32`), reached the way the dispatch path reaches it — not by handing the fields in as a separate argument. Assert all three recovered values against the literals. Without this row, .a can be satisfied by an implementation that never reads the request body at all. **Route-level ingestion (HTTP, stdio) is still uncovered — see §6.6.** | unit | parsing | Yes, on the `baggage` half — verified at source: `TraceContext` (`trace.rs:19`) has fields for `traceparent`, `trace_id` and `tracestate` and **none for `baggage`**, so a three-field assertion cannot compile against HEAD, let alone pass. The `traceparent`/`tracestate` half is already green: the extractor exists and is correct. It is also **uncalled** — `rg` finds no `TraceContext` reference outside its own module — which is why .a needs §6.6's route coverage and not just this row. |
+| OTEL.1.b | **T1 (the hop case)** inbound `_meta` carries `traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"`, `tracestate = "vendor=abc"`, `baggage = "k=v"`, and **no prompt-cache key**. Inbound `_meta` **also** carries an unrelated sentinel key `example.test/poison`. Assert the outbound `_meta` by **exact key set** — the three trace keys with those exact literal strings, and **no** `example.test/poison`. A contains-check passes an implementation that clones inbound `_meta` wholesale, which would relay attacker-controlled metadata to the backend; the exact key set refuses it (A2, and the provenance-strip rule at `invoke.rs:472`). Expected side is a literal, never `TraceContext::from_meta(inbound).to_meta()` (A8). | unit | propagation, positive | **Yes.** The `None` cache-key arm passes `base_params` through with no `_meta` at all (`invoke.rs:1934-1938`). |
 | OTEL.1.b | **T2 (the merge case)** same inbound, **with** a prompt-cache key. Assert the outbound `_meta` contains the three trace keys **and** the cache key, by exact key set (A2) — not by "contains traceparent". A merge that overwrites `_meta` wholesale passes a contains-check and fails this. | unit | propagation, regression | Yes. |
 | OTEL.1.c | **T3 (not-minted)** inbound `_meta` with **no** trace keys; assert the outbound `_meta` has **no** `traceparent`, `tracestate` or `baggage` key. Asserted as key-absence, not as "value is empty" — a minted root is a non-empty value and would be caught; an empty-string value would not be, so the absence form is the one that discriminates. | unit | negative | Partially. Today no `_meta` is written on the no-cache-key arm, so T3 passes vacuously against HEAD. **See §6.2** — this case is honest only when run beside T1, and the plan records that dependency rather than claiming an independent red. |
-| OTEL.1.c | **T4 (rejected ⇒ dropped, not minted)** inbound `traceparent` malformed in exactly one way (A9: `"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7"` — three parts, everything else valid); assert no `traceparent` on the outbound, **and** assert the request still succeeds. Distinguishes drop from both mint and reject. | unit | negative | Yes. |
+| OTEL.1.c | **T4 (rejected ⇒ dropped, not minted)** inbound `traceparent` malformed in exactly one way (A9: `"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7"` — three parts, everything else valid); assert no `traceparent` on the outbound, **and** assert the request still succeeds. Distinguishes drop from both mint and reject. | unit | negative | **Partially — same vacuity as T3.** HEAD writes no `traceparent` on this arm, so both halves are already true. Evidence only beside a green T1. §6.2 governs. |
 | OTEL.1.d | **T5 (baggage independence)** inbound carries a valid `baggage` and **no** `traceparent` at all; assert the outbound `_meta` carries the `baggage` literal. This is the case option 3.4.E would fail. | unit | negative-space, discrimination | Yes — `baggage` appears nowhere in `src` (`rg -i baggage src` = 0). |
 | OTEL.1.d | **T6** inbound carries a **malformed** `traceparent` and a valid `baggage`; assert `baggage` survives and `traceparent` does not. Separates "baggage independent of *absent* traceparent" (T5) from "independent of *rejected* traceparent", which is a different code path. | unit | negative | Yes. |
-| OTEL.1.f | **T7 (the grammar rows)** one row per predicate §3.4b names, each breaking exactly one thing (A9): uppercase hex ⇒ rejected; version `ff` ⇒ rejected; all-zero `parent-id` ⇒ rejected; a five-field `traceparent` with a valid first four ⇒ **accepted**, and the outbound carries the first four fields as a literal. Each row asserts both sides — the input refused and a neighbouring input permitted (A1). | unit | parameterised, boundary | Yes, all four — the current predicate has the opposite behaviour in each. |
-| OTEL.1.e | **T8 (bounds)** one row per bounded field: at the limit ⇒ propagated; one byte over ⇒ dropped, request still succeeds. Plus a charset row per field. Both sides pinned (A1). | unit | boundary | Yes — no bound exists today (F4). **Blocked on a number: see §6.1.** |
-| OTEL.1.e | **T9 (constant perturbation)** change the bound constant and assert the same input changes outcome, so a hardcoded length beside the constant cannot pass (A7). | unit | A7 | Same block as T8. |
+| OTEL.1.d | **T5b / T6b (tracestate is *not* independent)** the inverse pair, and the design makes it load-bearing: inbound carries a valid `tracestate` with **no** `traceparent` (T5b), then with a **malformed** `traceparent` (T6b). Assert `tracestate` is **absent** outbound in both, and the request still succeeds. `tracestate` is meaningless without the parent it annotates, so relaying it orphaned would send vendor trace state to a backend with nothing to correlate it to. Without these rows the plan asserts independence for `baggage` and says nothing about the field that must *not* be independent. | unit | negative, discrimination | Yes — nothing is propagated today, so a correct implementation and HEAD agree; **vacuous on HEAD in the same way as T3/T4, honest only beside T1**. |
+| OTEL.1.f | **T7 (the grammar rows)** one row per predicate §3.4b names, each breaking exactly one thing (A9): uppercase hex ⇒ rejected; version `ff` ⇒ rejected; all-zero `parent-id` ⇒ rejected; a five-field `traceparent` with a valid first four ⇒ **accepted**, and the outbound carries the **whole five-field input** as a literal. Reading the first four is a *parse* rule (design §3.4b); the emit rule is byte-for-byte as received (design L238, L464). Asserting a four-field outbound would fail a correct hop and, if "fixed", would silently truncate valid future context. Each row asserts both sides — the input refused and a neighbouring input permitted (A1). | unit | parameterised, boundary | Yes, all four. Verified against `TraceContext::from_meta` (`trace.rs:32`): it accepts uppercase hex (`is_ascii_hexdigit` is case-insensitive), accepts version `ff`, checks the all-zero rule on `trace_id` only and not on the span id, and rejects any `traceparent` with other than exactly four parts. Each of the four rows asserts the opposite of what HEAD does. |
+| OTEL.1.e | **T8a (charset)** one row per field, each breaking exactly one character class against the W3C grammar (A9), with the permitted neighbour asserted alongside (A1). Literal valid and invalid values pinned per field at writing time. | unit | boundary | Yes — no charset check exists today. **Not blocked**: charset is independent of the length numbers. |
+| OTEL.1.e | **T8b (length bounds)** per bounded field: at the limit ⇒ propagated; one byte over ⇒ dropped, request still succeeds. Both sides pinned (A1). | unit | boundary | Yes — no bound exists today (F4). **Blocked on a number: see §6.1.** |
+| OTEL.1.e | **T9 (constant perturbation)** a stated **mutation procedure**, not a unit case: patch the named bound constant in source, re-run T8b unchanged, require the verdict on the same input to flip. A runtime-injected bound would not prove the same thing — the point is that no hardcoded length sits beside the constant (A7). | procedure | A7 mutation | Same block as T8b. |
 | OTEL.1.g | **T10 (non-interpretation)** two requests identical except for their trace values; assert the **cache key is byte-identical** across both, and that the resolved backend and tool name are identical. The cache key is the one interpretation channel that is mechanically checkable in-process. | integration | negative, security | No — nothing reads trace values today, so this passes on HEAD. Recorded as a **regression guard**, not as evidence the clause was newly met. |
 | OTEL.1.g | routing, authorisation, policy and budget non-interpretation | — | — | **No case.** See §6.3. |
 | OTEL.1.h | end-to-end across a real backend hop | — | — | **No case.** See §6.4. |
@@ -144,12 +161,14 @@ test-visible consequences of decisions already taken.
 An empty evidence cell is the finding. Four exist. None is tidied away, and none is downgraded
 into a weaker case that would look green.
 
-### 6.1 T8/T9 are blocked on a number, not on a design question
+### 6.1 T8b/T9 are blocked on a number, not on a design question
 
 Design §4.2 defers the `tracestate` and `baggage` size limits to the implementer, "with the test
 plan, so the boundary rows assert a real number rather than a placeholder". That trigger has now
-fired: **this is the test plan, and the number is not yet pinned.** T8 and T9 are specified in
-shape and blocked in value.
+fired: **this is the test plan, and the number is not yet pinned.** T8b and T9 are specified in
+shape and blocked in value. T8a is **not** blocked: the charset half of OTEL.1.e is decided by the
+W3C character classes, which are already pinned by a published specification, so it is written now
+and only the length half waits.
 
 - owner: this ticket's implementer, before the first bounded-read constant is written
 - resolving action: take the limits from the W3C specs SEP-414 defers to and pin each as a named
@@ -216,8 +235,55 @@ is not zero, and a plan that called T1 an end-to-end case would be overstating i
 - owner: unassigned — needs the operator, because it is shared with cluster B1
 - resolving action: one backend-capture harness (a local HTTP backend recording received bodies)
 - trigger: whichever of B1 or this cluster reaches implementation first
-- if it resolves badly (no harness): OTEL.1 closes on emission evidence, and that limit is
-  recorded against the criterion rather than left implicit
+- if it resolves badly (no harness): OTEL.1 closes on emission evidence, **and closure is
+  conditional on that limit being written into the closing evidence comment** — a criterion whose
+  wording says "across the gateway hop" may not be signed off against emission-only cases while
+  the shortfall lives in a design document nobody reads at closing time
+
+### 6.5 EXT.1.d has no behavioural case, and E6 was withdrawn to say so
+
+EXT.1.d is the honour clause: an extension the client did not declare must not change behaviour,
+and a request depending on one must be answered as if the extension were absent.
+
+E6 was drafted as the red behavioural case — send an extension-dependent request without declaring
+the extension, assert the core answer. Review killed it, correctly. **There is no extension to
+revert from.** `Extension::from_id` recognises exactly one identifier, `io.modelcontextprotocol/tasks`,
+and nothing in 4.0.0 is gated on it, so a core `tools/call` already succeeds. "Reverted to core
+behaviour" and "never consulted an extension at all" produce byte-identical outputs, and no
+assertion can separate them. A case that cannot fail the wrong implementation is A5, and the
+earlier "red on HEAD" label on E6 is **retracted**, not softened.
+
+E7 stays, labelled weak as it already was: it separates revert from *reject*, which is a real
+distinction the honour clause makes, but it does so on the reject side only.
+
+**EXT.1.d must not be counted as evidenced by this plan.** It gets a case when TASK.1 ships
+behaviour actually gated on `Extension::Tasks` — at that point the undeclared-extension request has
+something to be reverted from, and the same row becomes writable and red.
+
+- owner: the TASK.1 implementer
+- resolving action: once one behaviour is extension-gated, write E6 against it
+- trigger: the first `if extensions.contains(Extension::Tasks)` on a request path
+- if it resolves badly (TASK.1 ships no gated behaviour in this release): EXT.1.d closes on
+  construction and review, recorded as such, never on E7 alone
+
+### 6.6 OTEL.1.a is covered at the extractor, not at the route
+
+T0 feeds a request body to the production extractor and asserts the recovered context. That proves
+the *parse* is real. It does not prove either transport hands the extractor a body to parse:
+neither the HTTP nor the stdio route is exercised by any row here.
+
+The split is deliberate — the transports are being edited concurrently under other tickets in this
+cluster, and a row asserting their internals would be written against a moving target. The
+consequence is stated instead of hidden: **if a route never calls the extractor, every row in §5
+still passes.** T0 and T1 together bound the defect to "the fields are parsed and emitted
+correctly once something on the request path reads them"; wiring that read is checked by the same
+backend-capture harness §6.4 waits on, which observes the whole route rather than a seam inside it.
+
+- owner: shared with §6.4 — the same harness answers both
+- resolving action: one route-level case per transport, or the capture harness
+- trigger: whichever lands first
+- if it resolves badly: OTEL.1.a closes on extractor evidence with the route gap named in the
+  closing comment, exactly as §6.4 requires for .h
 
 ## 7. The A1-A9 sweep, and what it changed
 
@@ -233,7 +299,7 @@ findings changed what a case does.
 | A9 | An earlier T4 broke two things at once (short `traceparent` **and** uppercase hex), so whichever check ran first decided. | One defect per fixture; T7 splits the grammar into four single-defect rows. |
 | A4 / A2 | T2 asserted "contains traceparent". | Exact key set, so a wholesale `_meta` overwrite is caught. |
 | A3 | E4 asserted the recovered set contained no forbidden identifier. True of an empty set. | Asserts the identifier that **did** arrive, and E5 supplies the negative. |
-| A1 | T7's future-version row asserted only that a five-field input is accepted. | Also asserts the propagated value is the first four fields, as a literal. |
+| A1 | T7's future-version row asserted only that a five-field input is accepted. | Also asserts the propagated value — as the whole five-field literal, after review corrected the first draft's truncation to four (§11 item 5). |
 | A6 | No relative rule in this cluster — no time, freshness or ordering predicate. | N/A, stated. |
 
 ## 8. Execution order, before this suite is trusted
@@ -261,25 +327,83 @@ Against `rules-source/workflows/quality-gates-dor.md`. "Not applicable" carries 
 | C3 test strategy | This document. |
 | C11 contract tests | E1, E2, E3, T2 are contract/serialisation cases on the wire shape. |
 | G6 alternatives | Held at design §3; a test plan does not re-open them. |
-| G8 risks, G10-G12 fail-fast | Met in the form this step can meet them: §6 names four gaps, and the two cheapest discriminators (E3, T5) are the first cases to write — E3 decides whether EXT.1.b is provable at all, T5 whether `baggage` was built. |
+| G0 biggest ROI, G4 requirements clear, G5 minimum scope | Met upstream. The criteria are release-blocking and already worded; §1 decomposes them without widening them, and §0 states what is out. |
+| O1-O3 structure, clutter, naming | Met. One document, in `docs/design/`, named for its cluster and dated like its sibling design. |
+| G8 risks | Met: §6 names four gaps and §10 hands them forward with owners. |
+| G10-G12 fail-fast | **Partially — planned, not executed.** A test plan cannot produce execution evidence; nothing has been run. What this step can do is order the work so the riskiest assumption is tested first, and it does: §6 names four gaps, and the two cheapest discriminators (E3, T5) are the first cases to write — E3 decides whether EXT.1.b is provable at all, T5 whether `baggage` was built. The gates close at §P3, not here. |
 | T0 contribution class | infrastructure/compliance — closing two spec MUSTs. |
-| L1-L7 legal | N/A. No new dependency, no personal data, no crypto primitive, no cross-border flow. `baggage` may carry caller-supplied key/value pairs, which is why it is propagated opaque and never interpreted (design §3.4); operator question §4.4.4 owns whether relaying it is acceptable at all, and that is not a plan decision. |
+| L2 data protection | **Applicable and UNRESOLVED — corrected at review.** `baggage` is arbitrary caller-supplied key/value text and may carry personal data; propagating it moves that data across a backend boundary. The W3C baggage specification's own privacy considerations say as much. This plan does not decide it: design §4.4.4 is the operator question, and until it is answered OTEL.1.d ships a data flow nobody has reviewed. Recorded as an open item (§10), not as N/A. |
+| L1, L3-L7 legal | N/A. No new dependency, no crypto primitive, no AI classification, no device contribution, no export-controlled distribution. |
 | T1c PQC | N/A. No key agreement, no signature. |
 | T6 numerical discipline | N/A. No quantisation, parallelism or collective. |
 | G20 profiling-first | N/A. Not a performance change. |
 | G13-G14 moat, T1b beyond-SOTA | N/A per the DoR's own auto-skip for infrastructure/compliance work. |
-| B1-B5 backlog health | Inherited from MIK-7272; not re-litigated here. |
+| B1-B5 backlog health | Inherited from MIK-7272, which carries the ticket, the criteria and their stable identifiers. Not re-litigated here, and not claimed as evidence produced by this document. |
+
+Applicability class: this document is **DOCS** work that plans **CODE** work. The DOCS gate set is checked above and is met. The CODE gate set (C1-C17, D-gates, §1-§13) is **not** evaluated here and is not claimed — it closes against the implementation, not against its plan. |
 
 ## 10. Open items this plan hands forward
 
 | # | item | to whom |
 |---|---|---|
-| 1 | The `tracestate` and `baggage` bounds (§6.1). T8/T9 cannot be written until the numbers are pinned. | this ticket's implementer |
+| 1 | The `tracestate` and `baggage` bounds (§6.1). T8b/T9 cannot be written until the numbers are pinned; T8a is not blocked. | this ticket's implementer |
 | 2 | The backend-capture harness (§6.4). Shared with cluster B1. | operator — it is a cross-cluster cost, not a per-cluster one |
 | 3 | The injectable extension source and named bound constants (§5.1). | this ticket's implementer, at implementation time |
 | 4 | Non-interpretation over authorisation, policy and budget (§6.3) is enforced by construction and review, with no case. | recorded as a limit against OTEL.1 |
+| 5 | EXT.1.d has no behavioural case until an extension gates behaviour (§6.5). | the TASK.1 implementer |
+| 6 | Route-level ingestion of trace `_meta` on HTTP and stdio (§6.6). | shared with item 2 |
+| 7 | **Data protection on `baggage` (§9, gate L2).** Caller-supplied `baggage` may carry personal data, and propagating it moves that data to a backend. The W3C baggage specification says so in its own privacy considerations (https://www.w3.org/TR/baggage/#privacy-considerations). Design §4.4.4 is the question; it is unanswered, and OTEL.1.d cannot honestly be called reviewed until it is. | operator — it is a policy decision, not an engineering one |
 
 The design's operator questions (§4.4) are unchanged by this plan and are not restated. One of
 them bears on coverage: if §4.4.3 is answered "both routes", OTEL.1 gains the direct route
 `POST /mcp/{name}`, which carries no `_meta` at all — and this plan gains a row it does not
 currently have.
+
+## 11. Review round 1 — findings and their disposal
+
+Two vendors, identical material (this document at `41ef8347`, 27,888 bytes, submitted as the plan
+alone rather than a tree diff). Both returned **SHIP-WITH-FIXES**. A third leg, `kimi-review`,
+returned COULD NOT REVIEW (exit 65) and produced no verdict; it is recorded as absent, not as
+agreement.
+
+A banner declared the round VOID because the tree moved between submission and reading
+(`41ef8347` → `832ef3d9`). It moved because **another agent committed on this shared branch**; the
+material was pinned by object id at submission, so both verdicts describe the document as reviewed.
+The banner is noted and rebutted rather than deleted.
+
+Disposal follows development-process §P0: fix it here, write it into the design, record it as an
+observation, or file a ticket — first one that holds. Nine findings were repairs to this plan,
+which is what a plan review is for. Nothing was filed: no finding needed a human to decide
+something that this document could not answer, and filing is the most expensive disposal.
+
+| # | finding | raised by | disposal |
+|---|---|---|---|
+| 1 | E1 asserts `extensions` in the initialize result's own key set, but the field lives on `capabilities` — never green against a correct payload. | grok (HIGH) | **Fixed here.** E1 now asserts on the serialised `capabilities` member, matching the discover half of the same row. |
+| 2 | E4/E5 use the synthetic id `example.test/probe`, which `from_capabilities()` correctly discards — the case fails a correct implementation. | grok (HIGH), gpt (MEDIUM) | **Fixed here**, and it was the sharpest catch of the round. E4 uses `io.modelcontextprotocol/tasks` and asserts `Extension::Tasks`; E5 keeps a real identifier with a non-object value `3`, which survives `declared_capabilities`' null filter and dies on `is_object()` — that is the honest discriminator against a name-list implementation. The row states why a synthetic id can never go green. |
+| 3 | E3's discriminator needs an injectable probe id, but §5.1 permitted an `ExtensionSet` source that cannot hold one. | grok (HIGH) | **Fixed here.** §5.1 now requires a map of identifier strings, and substituting `Extension::Tasks` in E3 is forbidden in the row itself. |
+| 4 | E6 is not red on HEAD: with no extension-gated behaviour, revert and never-consult are output-identical, so EXT.1.d is counted evidenced on a vacuous case. | grok (HIGH), gpt (MEDIUM) | **Fixed by removal**, per the repair protocol's elimination default. E6 is withdrawn, the red-on-HEAD label is retracted, and §6.5 records EXT.1.d as an empty cell with the trigger that fills it. Patching E6 would have left the defect describable; deleting it does not. |
+| 5 | T7's accept-row demands the outbound `traceparent` be truncated to four fields, contradicting byte-for-byte emission. | grok (HIGH), gpt (MEDIUM) | **Fixed here.** The row asserts the whole five-field literal outbound; "read the first four" stays a parse predicate. Verified at source: design L238 and L464 say forwarded unchanged, L321 governs parsing only. |
+| 6 | Legal gate L2 marked N/A although caller-supplied `baggage` may carry personal data. | gpt (HIGH) | **Fixed here and handed forward.** §9 now marks L2 applicable and unresolved, citing the W3C baggage privacy considerations; §10 item 7 hands the decision to the operator, where design §4.4.4 already put it. Correct catch — this plan had no standing to call it N/A. |
+| 7 | T1 carries no sentinel, so a copy-all-inbound implementation passes. | gpt (HIGH), grok (IMPROVEMENT) | **Fixed here.** T1 injects `example.test/poison` inbound and T2 asserts the outbound by exact key set excluding it, which is what A2 and the provenance strip at `invoke.rs:472` actually require. |
+| 8 | OTEL.1.a folded into T1 at `dispatch_to_backend`, which never receives request `_meta` — no discriminating seam for the read clause. | grok (MEDIUM), gpt (MEDIUM) | **Split here, with the residue named.** New T0 exercises the production extractor over a request body for .a; T1 keeps the dispatch write for .b. The route-level gap this does not close is §6.6, not a silent omission. |
+| 9 | No case proves `tracestate` is dropped when `traceparent` is absent or malformed. | gpt (MEDIUM), grok (IMPROVEMENT) | **Fixed here.** T5b/T6b mirror T5/T6 on the inverse coupling design §3.4 makes load-bearing, and carry the same T1-dependency honesty as T3/T4. |
+| 10 | T8 blocks charset rows on an unpinned length bound, though charset is independent. | gpt (MEDIUM), grok (IMPROVEMENT) | **Fixed here.** T8a (charset, against the W3C character classes, not blocked) is separated from T8b (length bounds, blocked on §6.1). |
+| 11 | T4 marked red on HEAD although HEAD already satisfies both its assertions. | grok (MEDIUM), gpt (LOW) | **Fixed here.** T4 now carries the same T1-dependent form as T3, and §6.2 governs both. The plan had already caught this vacuity for T3 and missed the identical case one row down. |
+| 12 | §9 evaluates neither the CODE gates nor the minimal DOCS set, and claims G10-G12 met without execution evidence. | gpt (MEDIUM), grok (IMPROVEMENT) | **Fixed here.** §9 declares its applicability class, adds G0/G4/G5/O1-O3, states that the CODE set closes against the implementation and is not claimed here, and downgrades G10-G12 to planned-not-executed. |
+| 13 | Recast T9 as an explicit mutation procedure. | gpt (IMPROVEMENT) | **Fixed here.** T9 is a stated source-mutation procedure with level `procedure`, not a unit case. |
+| 14 | Give the backend-capture harness a named owner and make it an explicit OTEL.1 closure gate. | gpt (IMPROVEMENT) | **Half fixed, half declined.** The closure gate is now explicit in §6.4: emission-only closure must carry the recorded limit into the closing comment. The owner is *not* invented — it is shared with cluster B1 and stays an operator item (§10 item 2). Naming a fake owner would satisfy the reviewer and not the problem. |
+| 15 | T1/T2 should target an extractable seam rather than `dispatch_to_backend`, so a red suite fails on the assertion rather than on harness setup. | grok (IMPROVEMENT) | **Fixed here.** §5.1 adds the `build_outbound_meta(inbound_meta, cache_key_opt)` seam as a testability requirement, which is what §8's ERROR-is-not-FAILURE warning needs to hold. |
+
+One correction came from the verification rather than from either reviewer. Checking finding 8 at
+source turned up `src/protocol/trace.rs`: a correct `from_meta`/`to_meta` pair that **nothing
+calls**, with no `baggage` field. The first draft's blanket "nothing is propagated today" was
+therefore true of the request path and false of the module, and several red-on-HEAD claims rested
+on it. §5's preamble now states the verified position, and T0 and T7 carry the specific source
+facts that make them red. This is what the repair protocol's source-verification step is for:
+the reviewers were right about the seam and, in chasing their finding, the plan's own background
+claim turned out to need narrowing.
+
+Nothing was accepted as residual risk and nothing was disputed at source: every finding survived
+verification against the implementation. Four of them — 2, 4, 5 and 11 — were cases this plan
+claimed could fail an incorrect implementation and could not, which is precisely the class §P2's
+plan review exists to catch and which no later code review would have recovered.
