@@ -161,7 +161,7 @@ option is attractive and because looking at it surfaced a real defect — the
 gateway advertises `tools.list_changed: true` (`meta_mcp_helpers.rs:152`) and the
 only announce path (`router/mod.rs:161`) is never fired by a profile change, so
 today's clients already see a stale list after `gateway_set_profile`. That is a
-separate bug, filed as Part III item 1, and it exists whichever option is chosen.
+separate bug, recorded as Part III item 1, where its disposal waits on §4.1.
 
 ## I.5 Recommendation
 
@@ -290,9 +290,15 @@ above, and each is disposed of explicitly rather than dropped.
    (`src/gateway/meta_mcp_helpers.rs:152`); the only announce path
    (`src/gateway/router/mod.rs:161`) has UI callers only and is not fired by
    `gateway_set_profile`. A client that changes profile today is left holding a
-   stale list with no notification. Independent of which ORDER.2 option is
-   chosen. *Disposal: file a ticket* — it is a live defect against a capability
-   the gateway advertises, and it survives every option here.
+   stale list with no notification. *Disposal: pending §4.1, and expected to
+   collapse rather than be filed.* If profiles are removed there is no
+   per-session profile change left to announce and the defect stops existing —
+   a ticket filed today would describe a bug nobody can reproduce. If profiles
+   stay, the announce belongs to the ORDER.2 increment that is already editing
+   that path, and a repair smaller than the ticket describing it does not get a
+   ticket. Either answer disposes of it; neither leaves a ticket. Recorded here
+   so the answer collapses something visible rather than closing a gap nobody
+   wrote down.
 2. **The per-request `log_level` is parsed and dropped.**
    `RequestFields::log_level` (`src/protocol/meta.rs:79`, parsed `:196`) has no
    reader; the session-global `MetaMcp::log_level` (`src/gateway/meta_mcp/mod.rs:192`,
