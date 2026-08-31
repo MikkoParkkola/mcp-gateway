@@ -36,7 +36,15 @@ That is a specific, decidable list, not a vibe:
    spelled differently: tuple validation is `prefixItems` (draft-07 used an array
    form of `items`), `$defs` replaces `definitions`, `exclusiveMinimum`/`exclusiveMaximum`
    are numbers not booleans, `$recursiveRef` is gone in favour of `$dynamicRef`.
-   A schema using the draft-07 spelling is *valid draft-07* and *not valid 2020-12*.
+
+   These do **not** all behave alike under a 2020-12 check, and the difference is
+   exactly what a guard would and would not reject. Array-form `items` and boolean
+   `exclusiveMinimum` are **hard metaschema failures**: 2020-12 constrains those
+   keywords to a schema and to a number respectively. `definitions` and
+   `$recursiveRef` are merely **unknown keywords** — metaschema-valid, silently
+   inert, carrying no constraint. So "a draft-07 schema is not valid 2020-12" is
+   true only for the first group; the second group passes the check while quietly
+   meaning nothing. Both matter, for opposite reasons.
 3. **Reference resolution.** Every `$ref` resolves — against `$id`/`$anchor`
    within the document, or to an external resource. An unresolvable `$ref` is a
    compile failure, not a validation failure, and it is the failure mode that
@@ -47,18 +55,24 @@ That is a specific, decidable list, not a vibe:
 The check is "does this document compile as a 2020-12 schema", not "does some
 instance validate against it". No instance data is involved.
 
-## 2. Two schema populations, not one
+## 2. Three schema populations, not one
 
-The criterion reads as one property. The code has two disjoint populations with
+The criterion reads as one property. The code has three disjoint populations with
 different trust levels, different failure modes and different costs. Costing them
-as one is the mistake this section exists to prevent.
+as one is the mistake this section exists to prevent. Revision 1 of this design
+named two and missed the third; the correction is F2 in §11.
 
 ### G-A — the gateway's own surface (trusted, static)
 
-Hand-authored in `src/gateway/meta_mcp_tool_defs.rs`: 38 `Tool { .. }` literals
-built by `build_list_servers_tool`, `build_list_tools_tool`, `build_search_tools_tool`,
-`build_invoke_tool` and their annotation helpers, with exactly one
-`output_schema: Some(search_tools_output_schema())`. Served through
+Hand-authored in `src/gateway/meta_mcp_tool_defs.rs`: **19** `Tool { .. }`
+constructors — 38 lines match `Tool {`, of which 23 are `-> Tool` return types and
+19 are the literals themselves — with exactly one
+`output_schema: Some(search_tools_output_schema())`. So **19 input schemas plus 1
+output schema = 20 schema documents**, and that is the *union across every
+configuration*: `build_meta_tools` pushes `stats`, `cost_report` and `webhook`
+conditionally onto `build_base_tools`, and `build_code_mode_tools` returns a
+disjoint pair. Any single running configuration advertises 14–17 (the figure in
+`CLAUDE.md`). Revision 1 read 38 as a tool count; the correction is F5 in §11. Served through
 `MetaMcp::handle_tools_list` (`src/gateway/meta_mcp/mod.rs`) and its
 `_for_session` / `_filtered` / `_with_url_override` variants, reached from
 `src/gateway/router/handlers.rs` and `src/gateway/server/mod.rs`.
@@ -84,12 +98,38 @@ So the gateway's advertised surface includes schemas it did not author and does
 not check. Whatever the criterion means for G-A, for G-B it is also a question
 about **untrusted input on the trust path**.
 
-Both populations enter through one chokepoint: `Backend::get_tools_shared`
-(`src/backend/metadata.rs:136`) deserialises `ToolsListResult` and calls
-`prepare_tool_metadata(&self.name, &mut tools)` before anything is cached. That
-function (`src/backend/annotations.rs:152`) already runs
-`exclude_invalid_header_tools` and `normalize_tool_annotations`. A schema check
-belongs there or nowhere.
+### G-C — capability-YAML tools, built by the gateway from operator data (semi-trusted)
+
+`CapabilityBackend::get_tools` (`src/capability/backend.rs`) returns
+`self.capabilities.read().tools.clone()` — a **pre-built cache**, filled by
+`IndexedCapabilities::upsert` and `replace_all` calling
+`CapabilityDefinition::to_mcp_tool()`. The cache exists to amortise that call, and
+its own doc comment says so. These tools are neither hand-authored Rust nor
+backend-supplied JSON: they are derived from operator-supplied YAML, hot-reloadable
+at runtime, SHA-256-pinned on load. They are advertised like any other tool.
+
+### The ingest map, corrected
+
+Revision 1 claimed "both populations enter through one chokepoint:
+`Backend::get_tools_shared`". That is wrong three ways, and the third is the one
+that matters:
+
+1. `prepare_tool_metadata` has **two** call sites, not one — `Backend::get_tools_shared`
+   in `src/backend/metadata.rs`, and `src/gateway/router/backend_handlers.rs`,
+   which deserialises each `Tool` itself and then calls `prepare_tool_metadata`
+   before `project_tool_descriptors_trust_cards`.
+2. G-C **never reaches `prepare_tool_metadata` at all**. `to_mcp_tool()` output goes
+   straight into the capability cache.
+3. `to_mcp_tool()` has further un-chokepointed callers:
+   `src/gateway/meta_mcp/search.rs` (twice), `src/trust/mod.rs`,
+   `src/validator/cli_handler.rs`.
+
+`prepare_tool_metadata` is still the right home for the **G-B** guard — it is where
+`exclude_invalid_header_tools` and `normalize_tool_annotations` already live, and
+both its call sites are on the backend-ingest path. But it is a *two-site* home for
+*one* population, not a single door for all of them, and G-C needs its own check at
+`to_mcp_tool()` or at the two cache-fill sites. Increment 2 covers G-B; G-C is
+sequenced in §10 and is why §10's status line is qualified.
 
 ## 3. Candidate validators
 
@@ -141,21 +181,27 @@ performs the metaschema check automatically, so the check is the API rather than
 an extra call. It loses on one asymmetry: **which risk has a wired consequence in
 this repository.**
 
-- An unmaintained validator on the untrusted-input path attracts a RUSTSEC
-  `unmaintained` advisory. The CI `audit` job (`ci.yml:212`) runs `cargo audit`,
-  and the release path depends on it. A RUSTSEC advisory against `boon` becomes a
-  blocked release, on someone else's schedule. No such advisory exists today:
-  U3's `cargo audit` run covered every candidate and returned nothing. The risk
-  is prospective, so the tiebreak is really which failure mode is preferable to
-  own — a larger build, or a release blocked on a third party's advisory timing.
+- **Correction (F3).** Revision 1 argued that a RUSTSEC `unmaintained` advisory
+  against `boon` would block the release, because the CI `audit` job runs
+  `cargo audit`. That job runs `cargo audit` **bare** — no `--deny unmaintained`,
+  no `--deny warnings` — and the repository has no `audit.toml` or `deny.toml`
+  (`fd -H -t f 'audit\.toml|deny\.toml' .` returns nothing). Informational and
+  `unmaintained` advisories warn; only a *vulnerability* makes that job non-zero.
+  The blocked-release consequence does not exist. The claim is withdrawn, not
+  repaired: a gate that is not wired cannot carry a decision.
+- What survives is **release recency**, argued on its own terms and nothing else.
+  `jsonschema` 0.52.1 was released 2026-08-30 — the day before this design.
+  `boon` 0.6.1 was released 2025-01-07, twenty months earlier, last commit
+  2026-02-23. Both are maintained; one is demonstrably tracking the specification
+  now. On the untrusted-input path, that is worth 19 extra build-only packages.
 - `jsonschema`'s bulk has no wired consequence: 26 additional packages on an
   existing 386, and a one-off compile cost behind `Swatinem/rust-cache`, which
   that same job already uses.
 
 `boon`'s last *commit* is 2026-02-23 — six months, not the nineteen its release
-date suggests, so it is not abandoned. But six months of commit silence and
-twenty months of release silence sit on the edge of the advisory window, and the
-tiebreak goes to the crate whose failure mode is "slightly larger build".
+date suggests, so it is not abandoned, and nothing here says it is. The decision
+rests on recency alone, and it is a close one: were `boon` to cut a release
+tracking current 2020-12 errata, this tiebreak would flip.
 
 ### `default-features = false` is mandatory, not tuning
 
@@ -230,8 +276,17 @@ Probe workspace, `jsonschema` 0.52 with `default-features = false`, release buil
 against a schema shaped like `gateway_invoke`'s (`type`/`properties`/`required`,
 four properties, one nested array-of-object):
 
-- metaschema validation, 38 schemas (the whole G-A surface): **90 µs**
-- full `compile()` of the same 38: **429 µs**
+- `jsonschema::meta::validate` over 38 documents: **90 µs**
+- `jsonschema::validator_for` (full compile) over the same 38: **429 µs**
+
+Measurement contract, stated because revision 1 gave the numbers without one: n = 38
+synthetic documents, single run, no warm-up, release build, `default-features = false`,
+in the throwaway probe workspace. Host and exact command were **not recorded**, and
+these figures are not repeated — they are an order-of-magnitude check, not a benchmark.
+Two things follow. The 38 was a miscount of the surface (F5); the real G-A surface is
+20 documents, so the true cost is *lower* than quoted, and the figures are deliberately
+**not rescaled** — a number that was measured stays as measured. And the increment-1
+implementer records n, host and command properly (U6a).
 
 Sub-millisecond for the entire advertised surface. Startup cost is not a
 consideration at this scale; the reason to keep validation off the per-request
@@ -246,9 +301,52 @@ is required for the check itself.
 
 The gateway's own schemas are static. A `#[test]` that drives the real
 `MetaMcp::handle_tools_list` — the same entry point `tests/mik_7272_exploit_acs.rs`
-already uses for the sibling clause — and metaschema-validates every returned
-`inputSchema` and `outputSchema` closes `MIK-6865.SCHEMA.1` outright. A regression
-introduced by a future hand-edit then fails the build.
+already uses for the sibling clause — and validates every returned `inputSchema` and
+`outputSchema` closes `MIK-6865.SCHEMA.1` **for G-A**. A regression introduced by a
+future hand-edit then fails the build.
+
+#### The absence check needs a positive control (F1)
+
+Revision 1 specified only "metaschema-validates every returned schema". That
+acceptance criterion **cannot fail**: a helper that returns `Ok(())` unconditionally,
+or wiring that never reaches the schemas, satisfies it exactly as well as a working
+check does. The repair is not a stronger sentence — it is criteria the same helper
+must *reject*. The sibling clause already has this shape:
+`ac_schema_1_the_detector_finds_the_shape_it_is_looking_for` in
+`tests/mik_7272_exploit_acs.rs` asserts the detector fires on a crafted offender,
+with the comment that an absence-check which cannot see the thing "would pass on an
+empty tool list just as happily".
+
+Increment 1 therefore carries five criteria, all against **one** helper:
+
+| id | fixture | must |
+|---|---|---|
+| `SCHEMA.1.A1` | the live `tools/list` surface | pass |
+| `SCHEMA.1.A2` | `"type": "strig"` | **reject** — `type` is constrained to the simple-type enum |
+| `SCHEMA.1.A3` | `"required": "name"` (string, not array) | **reject** — `required` must be an array |
+| `SCHEMA.1.A4` | `"oneOf": ["a"]` (string arm) | **reject** — an arm must be a schema |
+| `SCHEMA.1.A5` | `"$ref": "#/$defs/nope"` (local, unresolvable) | **reject** |
+
+A2-A4 are metaschema failures, caught by `jsonschema::meta::validate`. A5 is **not** —
+any string is a metaschema-valid `$ref` — so it is caught at compile, by
+`validator_for`. The helper must therefore call **both**, in that order. That is also
+what binds the two timed APIs of §5 to their call sites, which revision 1 left
+implicit. A5 uses a **local** ref deliberately: an external `$ref` would make the
+criterion depend on `resolve-http`/`resolve-file` being off, which no unknown measured
+(see U11).
+
+#### A1 must reach the union, not one variant (improvement 2)
+
+`MetaMcp::new(Arc::new(BackendRegistry::new()))` over an empty registry takes the
+default branch of `handle_tools_list` and reaches neither code-mode nor surfaced
+tools: `code_mode_enabled` defaults to `false`, and the code-mode branch returns
+`build_code_mode_tools()` — a disjoint pair of two. A1 therefore drives, at minimum,
+the default branch, a `with_code_mode(true)` instance, and one `with_surfaced_tools`
+fixture (the pattern already used in `src/gateway/router/tests.rs`). Without all
+three, "every returned schema" means "every schema in whichever variant the test
+happened to construct" — which is how a 20-document surface gets certified by a
+14-document test. `handle_tools_list_filtered` (`spec-preview`) is a fourth variant
+and is deliberately **out of scope for increment 1**: it pulls in G-B and G-C.
 
 Consequences of dev-dependency-only placement, all of them wanted:
 
@@ -258,11 +356,14 @@ Consequences of dev-dependency-only placement, all of them wanted:
 - it still lands in `Cargo.lock`, so `cargo audit` covers it — the supply-chain
   gate applies without the runtime exposure.
 
-### G-B: a runtime check at the single ingest chokepoint
+### G-B: a runtime check at the ingest chokepoint for MCP backends
 
-`prepare_tool_metadata` is the one place every backend tool list passes through
-before it is cached, and it already drops malformed tools. Validation belongs
-there, in the same pass, and nowhere else — validating at `tools/list` time would
+`prepare_tool_metadata` is the one place every *MCP backend* tool list passes
+through before it is cached, and it already drops malformed tools. Validation
+belongs there, in the same pass. It is the chokepoint for G-B and only for G-B:
+capability-YAML tools (G-C) never reach it, which is what increment 3 exists to
+cover. Within G-B it is the only sensible site — validating at `tools/list` time
+would
 re-check identical cached data on every request and would not stop an invalid
 schema from entering the cache in the first place.
 
@@ -281,20 +382,41 @@ pinned the 2020-12 dialect explicitly. A backend emitting a schema that declares
 `exclusiveMinimum`, the array form of `items`, or `definitions` is **valid
 draft-07** and would fail a forced-2020-12 check.
 
-Rule for the implementing increment:
+Revision 1 made auto-detection the rule for everything, which quietly means the
+gateway keeps advertising documents the criterion says must be valid 2020-12. That is
+a real conflict and it is not the implementer's to settle silently. **Decision, taken
+here and owed upward:**
 
-1. If the document carries an explicit `$schema`, validate against **that**
-   dialect. `jsonschema` auto-detects; draft-07, 2019-09 and 2020-12 are all
-   supported.
-2. If `$schema` is absent, default to **2020-12**, matching the MCP specification.
+**G-A — forced 2020-12, no auto-detection, no exception.** We author these. A gateway
+schema that declared draft-07 would be a bug, not a compatibility case. Increment 1
+validates against 2020-12 unconditionally, so the dialect question does not exist for
+the population that closes the criterion.
 
-Both steps are the crate's own default behaviour: `jsonschema::meta::validate`
-honours an explicit `$schema` and falls back to 2020-12 when none is present,
-measured in U7. The implementer calls that function and writes no dialect
-branch of their own.
+**G-B and G-C — declared-dialect validation, under a named SCHEMA.1 exception.** The
+criterion binds what the gateway *authors*; dropping a third party's correct draft-07
+tool is an availability incident caused by our own guard. So an explicit non-2020-12
+`$schema` is validated against its declared dialect and **counted**, separately, in
+the warn-mode metric of §6. The exception is recorded in the criterion, not hidden in
+the code: SCHEMA.1 is met unqualified for G-A, and met-with-a-named-exception for
+re-served third-party schemas.
 
-Without rule 1 the security guard becomes an availability incident: correct
-draft-07 tools would silently disappear from the surface.
+**The common case is neither, and revision 1 missed it.** MCP `inputSchema` documents
+*usually carry no `$schema` at all* — this document says so two paragraphs above. A
+no-`$schema` document using array-form `items` or boolean `exclusiveMinimum` gets no
+exception under the rule above: it is defaulted to 2020-12 and it fails. **That** is
+the availability case, and it is the frequent one. It gets its own counter in the
+warn-mode metric, distinct from the declared-dialect counter, so the operator sees
+which of the two they actually have before any policy flips to rejection.
+
+The distinction drawn in §1 does the rest of the work here: array-form `items` and
+boolean `exclusiveMinimum` are hard failures; `definitions` and `$recursiveRef` pass
+as unknown keywords. A guard rejects the first pair and silently tolerates the second,
+and the metric should not conflate them.
+
+Cost to existing backends: **none today.** Increment 2 ships warn-only (§6), so
+nothing disappears from the surface in either case. What the decision buys is that the
+numbers arrive before the policy does. Escalation: the exception narrows a release
+criterion, so it is the operator's to accept — see U12.
 
 ## 6. Policy for an invalid backend schema
 
@@ -378,8 +500,8 @@ findings block. What that means here, step by step:
 | feature surface reviewed | `default-features = false` asserted, not assumed | §4: `resolve-http` / `resolve-file` are an SSRF primitive on the G-B path |
 | HIGH finding blocks | `cargo audit` non-zero fails the job, and the release path depends on that job | existing behaviour |
 
-Two things D30 does **not** currently cover here, stated so they are not mistaken
-for covered:
+Three things D30 does **not** currently cover here, stated so they are not
+mistaken for covered:
 
 - **No `cargo deny`.** There is no licence-policy or duplicate-version gate in CI;
   the licence review in §4 is a one-off human check, not automation. Adding
@@ -388,6 +510,14 @@ for covered:
   becomes unmaintained shows up when someone files the advisory, not when the
   maintainer stops. That latency is precisely the risk §4 weighs, and it is
   managed by picking the actively released crate, not by the gate.
+- **The audit job does not fail on an unmaintained advisory.** Revision 1 claimed
+  the CI audit gate would flag `boon` if RustSec ever marked it unmaintained. That
+  claim is withdrawn: `ci.yml:223` runs a bare `cargo audit` with no
+  `--deny warnings`, and there is no `audit.toml` or `deny.toml` anywhere in the
+  tree, so informational and `unmaintained` advisories are printed as warnings and
+  the job still exits 0. Only a vulnerability advisory fails the build. The choice
+  of `jsonschema` in §4 therefore rests on release recency alone — the gate does
+  not back it up (F3).
 
 ## 8. Options rejected, and what is out of scope
 
@@ -436,15 +566,21 @@ their answers are recorded inline.
 | U3 | Do the candidates or their new transitives carry advisories? | `cargo audit` on the probe lockfile | **RESOLVED** — 2026-08-31: 1,233 advisories loaded, 238 dependencies scanned, exit 0, no findings. |
 | U4 | Are the new transitive licences compatible with the MIT-core / PolyForm split? | `cargo metadata --format-version 1`, licence per new package | **RESOLVED** — all permissive; `jsonschema` 26 new packages (MIT 13, dual-licence 11, `MIT-0` 1, Apache-2.0 1), `boon` 7 (dual 4, MIT 2, `MIT-0` 1). No copyleft, none unlicensed. |
 | U5 | Is `boon` abandoned, or merely quiet on releases? | GitHub commits API on `santhosh-tekuri/boon` | **RESOLVED** — last commit 2026-02-23 (six months), last release 2025-01-07 (twenty months). Not abandoned; on the edge of the advisory window. That gap is what §4 turns on. |
-| U6 | What does validation cost at startup? | timed metaschema validation and `compile()` over a representative schema, release build | **RESOLVED** — 38 schemas: 90 µs metaschema, 429 µs full compile. Sub-millisecond; not a constraint. |
+| U6 | What does validation cost at startup? | timed `jsonschema::meta::validate` and `jsonschema::validator_for` over representative documents, release build | **RESOLVED, with a correction** — 38 *synthetic* documents: 90 µs metaschema, 429 µs full compile. The 38 was a miscount of the G-A surface (F5, §2); the real surface is 20 documents, so the true cost is lower than quoted. Sub-millisecond either way; not a constraint. Measurement contract in §5. |
+| U6a | What are n, host and command for a figure this design quotes as cost? | record them alongside any timing the increment produces | **DEFERRED.** Owner: increment-1 implementer. Trigger: increment 1. The U6 numbers were taken in a throwaway probe workspace with host and command unrecorded, which is why they are an order-of-magnitude check and not a benchmark. Fallback if the real figures are worse: they are still compared against a per-`tools/list` budget, and §5 already shows two orders of magnitude of headroom. |
 | U7 | Does the crate honour an explicit `$schema`, and what does it default to? | probe: draft-07 document using array-form `items` and `definitions`, validated three ways | **RESOLVED** — with `$schema: draft-07` present, `jsonschema::meta::validate` returns `Ok`; the same document forced to 2020-12 fails; with `$schema` removed it fails, i.e. the default is 2020-12. Rule 1 and rule 2 of §5 are the crate's own behaviour — no custom dialect dispatch is needed. |
 | U8 | Does the metaschema check need network access? | probe built with `default-features = false` | **RESOLVED** — succeeds with `resolve-http` and `resolve-file` off; the 2020-12 metaschema is embedded. |
-| U9 | Do the 38 gateway-authored schemas actually pass? | the CI test of §5, once the dev-dependency exists | **DEFERRED.** Owner: increment-1 implementer. Trigger: increment 1. Fallback if it fails: the schemas are `type`/`properties`/`required` only — a keyword census over `src/gateway/meta_mcp_tool_defs.rs` returns 3 hits in 836 lines — so any failure will be a local typo, fixed in the same increment; it does not reopen this design. |
+| U9 | Do the 20 gateway-authored schemas actually pass? | the CI test of §5, once the dev-dependency exists | **DEFERRED.** Owner: increment-1 implementer. Trigger: increment 1. Fallback if it fails: the schemas are `type`/`properties`/`required` only — a keyword census over `src/gateway/meta_mcp_tool_defs.rs` returns 3 hits in 836 lines — so any failure will be a local typo, fixed in the same increment; it does not reopen this design. |
 | U10 | How many *live* backend schemas would the G-B guard reject? | the warn-mode metric of §6, over one release cycle | **DEFERRED.** Owner: operator. Trigger: increment 2 ships in warn mode. Fallback if the count is high: stay in warn mode and publish the failing keyword paths to backend authors before flipping the default. Nothing in increment 1 depends on this answer. |
+| U11 | Does `jsonschema::validator_for` reject a *local* unresolvable `$ref` (`#/$defs/nope`) when `resolve-http` and `resolve-file` are off? | build the AC A5 fixture in the probe workspace and assert the compile errors | **DEFERRED.** Owner: increment-1 implementer. Trigger: writing AC `SCHEMA.1.A5`. U8 showed the 2020-12 metaschema is embedded and needs no network, but that is a different question from whether an unresolvable *local* pointer is an error at compile time. Fallback if it does not reject: A5 moves to an assertion over the compile result's own diagnostics, or is replaced by a second metaschema-level rejection case — either way it stays a criterion that can fail, which is the point of F1. |
+| U12 | Does the operator accept a SCHEMA.1 exception for re-served third-party schemas? | put the §5 dialect decision to the operator | **DEFERRED.** Owner: operator. Trigger: before increment 2 changes any default. G-A is unconditional 2020-12 and needs no exception, so `MIK-6865.SCHEMA.1` closes for the population the gateway authors without this answer. What needs accepting is the narrower claim for G-B and G-C. Fallback if it is refused: the guard rejects declared draft-07 documents outright, which is an availability decision with a measured cost — the warn-mode counters of §6 exist to price it first. |
 
-U9 and U10 are deferred rather than assumed, and nothing this design decides
-turns on either: increment 1 is scoped so U9 can only produce a local fix, and the
-drop-versus-warn default in §6 is explicitly held open until U10 has a number.
+Five unknowns are deferred rather than assumed, and each names an owner, a
+trigger and what happens if it resolves badly. Nothing increment 1 delivers turns
+on any of them: U9 can only produce a local fix, U6a improves a figure whose
+headroom is already two orders of magnitude, U11 changes the shape of one
+acceptance criterion but not whether it exists, and U10 and U12 are both operator
+decisions gating increment 2, not increment 1.
 
 ## 10. Sequencing
 
@@ -452,7 +588,8 @@ drop-versus-warn default in §6 is explicitly held open until U10 has a number.
    `default-features = false` to `[dev-dependencies]`. Add a test that drives the
    real `handle_tools_list` and metaschema-validates every `inputSchema` and
    `outputSchema` it returns. Nothing ships in the binary. Release-blocking
-   criterion moves `UNTESTED` → `MET` with a test path as its evidence.
+   criterion moves `UNTESTED` → `MET` **for G-A**, with a test path as its
+   evidence and the G-B/G-C dialect exception named in the criterion (U12).
    This design does not touch that status row; increment 1 owns the edit, and
    `docs/requirements/RELEASE-4.0.0-criteria-status.md` line 102 deliberately
    still reads `UNTESTED`.
@@ -461,6 +598,29 @@ drop-versus-warn default in §6 is explicitly held open until U10 has a number.
    record the drop-versus-warn default as a decision the operator makes on the
    evidence from U10.
 
+3. **Increment 3 — the capability path.** `CapabilityBackend::get_tools` returns
+   the `IndexedCapabilities` cache directly and never reaches
+   `prepare_tool_metadata`, so increment 2 does not cover it (§2, F2). The check
+   belongs at `to_mcp_tool()` or at the cache write in `upsert`/`replace_all`;
+   that placement is increment 3's decision, not this design's, because it also
+   has to account for the four other `to_mcp_tool()` callers.
+
 Splitting this way keeps increment 1 to one hop, keeps the release binary
 unchanged, and leaves the policy question of §6 to be answered by measurement
 rather than by assumption.
+
+## 11. Revision 2 — dispositions
+
+Revision 1 was reviewed by two vendors. Every finding and improvement below is
+answered; nothing is left to be inferred from a diff.
+
+| # | finding | disposition |
+|---|---|---|
+| F1 | the acceptance criterion cannot fail | **repaired** — §5 now carries five criteria against one helper, four of which must be *rejected*. The absence check gets the positive control the sibling clause already has. |
+| F2 | the single-chokepoint claim is wrong | **eliminated** — the claim is not patched, it is replaced. §2 now describes three populations (G-A authored, G-B re-served, G-C capability-YAML) and the corrected ingest map showing G-C bypassing `prepare_tool_metadata` entirely. §10 adds increment 3 to cover it. |
+| F3 | the CI audit gate does not back the crate choice | **closed on inspection, claim withdrawn** — killing source: `ci.yml:223` is a bare `cargo audit` with no `--deny warnings`, and `fd` finds zero `audit.toml` or `deny.toml` in the tree, so an `unmaintained` advisory warns and exits 0. §4 now rests on release recency alone and §7 states the gap. |
+| F4 | draft-07 auto-detection contradicts the criterion | **decided and escalated** — G-A forced 2020-12, no exception; G-B and G-C validated at their declared dialect under a named exception; and the case revision 1 missed, a document with no `$schema` at all, gets its own counter because it is the common one. Cost today is zero (increment 2 is warn-only). The exception narrows a release criterion, so U12 puts it to the operator. |
+| F5 | the 38-schema count is not the surface | **repaired** — 38 was a line-match count. §2 now gives 19 `Tool { .. }` constructors plus one `output_schema` = 20 documents, and notes that a single configuration advertises 14-17 of them. The §5 timings keep their measured `n = 38` deliberately and say why. |
+| I1 | bind the two timed APIs to call sites | **accepted** — the F1 helper calls `meta::validate` then `validator_for`, which is exactly the pair §5 times. |
+| I2 | one `MetaMcp` variant is not the surface | **accepted** — AC A1 drives at least three variants (default, `with_code_mode(true)`, one `with_surfaced_tools`); the `spec-preview` filtered path is named as a fourth and put out of scope for increment 1. |
+| I3 | the timings have no measurement contract | **accepted** — §5 states n, build profile, feature flags and single-run-no-warm-up, and admits host and command were not recorded. The figures are not rescaled to 20; U6a makes the increment-1 implementer record them properly. |
