@@ -45,12 +45,20 @@ impl TaskTokenRow {
 }
 
 /// Compare eager load against a meta-surface that pays `extra_discovery_turns`.
+///
+/// A completed direct tool call is two requests (prompt + follow-up), each
+/// still carrying every tool definition. The meta path is `1 + extra` requests
+/// (prompt + search + invoke when extra is 2). Same completed-task length is
+/// required on both sides so the comparison can lose.
 pub fn task_tokens(n_tools: u64, extra_discovery_turns: u64) -> TaskTokenRow {
-    let eager_tokens = n_tools.saturating_mul(DIRECT_TOKENS_PER_TOOL);
-    let turns = extra_discovery_turns.saturating_add(1);
+    let eager_turns = 2;
+    let meta_turns = extra_discovery_turns.saturating_add(1);
+    let eager_tokens = n_tools
+        .saturating_mul(DIRECT_TOKENS_PER_TOOL)
+        .saturating_mul(eager_turns);
     let meta_tokens = README_META_TOOLS
         .saturating_mul(META_TOKENS_PER_TOOL)
-        .saturating_mul(turns);
+        .saturating_mul(meta_turns);
     let savings_percent = if eager_tokens == 0 {
         0.0
     } else {
@@ -65,9 +73,22 @@ pub fn task_tokens(n_tools: u64, extra_discovery_turns: u64) -> TaskTokenRow {
     }
 }
 
-/// Schema-only first-request row (extra turns = 0). This is the README 89% model.
+/// Schema-only first-request row: one request each side, no extra turns.
 pub fn schema_only_first_request(n_tools: u64) -> TaskTokenRow {
-    task_tokens(n_tools, 0)
+    let eager_tokens = n_tools.saturating_mul(DIRECT_TOKENS_PER_TOOL);
+    let meta_tokens = README_META_TOOLS.saturating_mul(META_TOKENS_PER_TOOL);
+    let savings_percent = if eager_tokens == 0 {
+        0.0
+    } else {
+        (1.0 - (meta_tokens as f64 / eager_tokens as f64)) * 100.0
+    };
+    TaskTokenRow {
+        n_tools,
+        extra_discovery_turns: 0,
+        eager_tokens,
+        meta_tokens,
+        savings_percent,
+    }
 }
 
 /// Ticket matrix: 50/100/200/500 tools at the default extra-turn count.
@@ -91,7 +112,7 @@ mod tests {
     #[test]
     fn extra_turns_can_make_meta_lose() {
         let win = task_tokens(100, 0);
-        let lose = task_tokens(100, 10);
+        let lose = task_tokens(100, 20);
         assert!(win.meta_wins());
         assert!(!lose.meta_wins());
         assert!(lose.savings_percent < 0.0);

@@ -442,13 +442,70 @@ def print_readme_results(results: dict) -> None:
     print()
 
 
+def honest_results() -> dict:
+    """Completed-task token math. Must stay aligned with honest_task_tokens.rs.
+
+    Direct path: 2 requests, every tool definition on each.
+    Meta path: 1 + extra_discovery_turns requests, meta-surface only.
+    extra=2 is search then invoke. extra=20 is a documented loss case.
+    """
+    extra = 2
+    eager_turns = 2
+    meta_turns = 1 + extra
+    rows = []
+    for n in (50, 100, 200, 500):
+        eager = n * 150 * eager_turns
+        meta = 16 * 100 * meta_turns
+        savings = (1 - meta / eager) * 100
+        rows.append(
+            {
+                "n_tools": n,
+                "eager_turns": eager_turns,
+                "meta_turns": meta_turns,
+                "eager_tokens": eager,
+                "meta_tokens": meta,
+                "savings_percent": savings,
+                "meta_wins": meta < eager,
+            }
+        )
+    lose = {
+        "n_tools": 100,
+        "eager_turns": 2,
+        "meta_turns": 21,
+        "eager_tokens": 100 * 150 * 2,
+        "meta_tokens": 16 * 100 * 21,
+        "savings_percent": (1 - (16 * 100 * 21) / (100 * 150 * 2)) * 100,
+        "meta_wins": False,
+    }
+    return {"scenario": "honest", "rows": rows, "loss_case": lose}
+
+
+def print_honest_results(results: dict) -> None:
+    print("Honest task-token model (can lose)")
+    print("==================================")
+    print("n_tools  eager_turns  meta_turns  eager  meta  savings  wins")
+    for row in results["rows"]:
+        print(
+            f"{row['n_tools']:7}  {row['eager_turns']:11}  {row['meta_turns']:10}  "
+            f"{row['eager_tokens']:5}  {row['meta_tokens']:4}  "
+            f"{row['savings_percent']:7.1f}%  {row['meta_wins']}"
+        )
+    lose = results["loss_case"]
+    print(
+        f"loss     extra=20  meta_turns={lose['meta_turns']}  "
+        f"eager={lose['eager_tokens']} meta={lose['meta_tokens']} "
+        f"savings={lose['savings_percent']:.1f}% wins={lose['meta_wins']}"
+    )
+    print()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Benchmark context token savings of the MCP Gateway meta-MCP pattern."
     )
     parser.add_argument(
         "--scenario",
-        choices=("synthetic", "readme"),
+        choices=("synthetic", "readme", "honest"),
         default="synthetic",
         help="Benchmark scenario to run (default: synthetic)",
     )
@@ -466,16 +523,19 @@ def main() -> None:
         help="Emit machine-readable JSON instead of the human-readable report.",
     )
     args = parser.parse_args()
-    results = (
-        readme_results()
-        if args.scenario == "readme"
-        else synthetic_results(args.backends, args.tools_per_backend)
-    )
+    if args.scenario == "readme":
+        results = readme_results()
+    elif args.scenario == "honest":
+        results = honest_results()
+    else:
+        results = synthetic_results(args.backends, args.tools_per_backend)
 
     if args.json:
         print(json.dumps(results, indent=2))
     elif args.scenario == "readme":
         print_readme_results(results)
+    elif args.scenario == "honest":
+        print_honest_results(results)
     else:
         print_synthetic_results(results)
 

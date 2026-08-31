@@ -144,6 +144,8 @@ const PUBLIC_CLAIM_SURFACES: &[&str] = &[
     "src/lib.rs",
     "src/main.rs",
     "src/cli/mod.rs",
+    "Cargo.toml",
+    "homebrew/mcp-gateway.rb",
     "src/commands/mod.rs",
     "src/gateway/meta_mcp_helpers.rs",
     "src/gateway/server/support.rs",
@@ -160,6 +162,7 @@ const BANNED_PUBLIC_PHRASES: &[&str] = &[
     "~95%",
     "~500ms",
     "OWASP_Agentic_AI-10%2F10_covered",
+    "~95% context token savings",
 ];
 
 fn count_capability_yaml_files() -> usize {
@@ -269,7 +272,7 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
     let claims = load_claims();
     let readme = read_repo_file("README.md");
     let rounded_startup_ms = claims.startup_benchmark.mean_ms.round() as u64;
-    let (_direct_tokens, gateway_tokens, savings_percent, savings_usd) =
+    let (_direct_tokens, gateway_tokens, _savings_percent, savings_usd) =
         readme_savings_metrics(&claims);
 
     assert!(
@@ -392,6 +395,10 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     assert!(
         benchmarks.contains("python benchmarks/token_savings.py --scenario readme"),
         "benchmark docs should describe how to reproduce the README token-savings scenario"
+    );
+    assert!(
+        benchmarks.contains("python benchmarks/token_savings.py --scenario honest"),
+        "benchmark docs should describe how to reproduce the honest extra-turn model"
     );
     assert!(
         benchmarks.contains(&format!("~{gateway_tokens} gateway tokens")),

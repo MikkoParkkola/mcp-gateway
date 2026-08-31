@@ -1,11 +1,11 @@
-# OWASP Agentic AI Compliance Matrix
+# OWASP Agentic AI self-assessment matrix
 
 **Date**: 2026-06-27
 **Standard**: OWASP Agentic Security Initiative Top 10 / Agentic AI Threats and Mitigations
 **Sources**: [OWASP Agentic Security Initiative](https://genai.owasp.org/initiatives/agentic-security-initiative/), [OWASP Agentic AI Threats and Mitigations](https://genai.owasp.org/resource/agentic-ai-threats-and-mitigations/)
 **Scope**: mcp-gateway repo-local controls at the gateway boundary.
 
-This matrix tracks mcp-gateway only. Older versions mixed in external controls and treated several implemented gateway controls as pending. Current coverage is **10/10 COVERED** for the gateway boundary, with hardening follow-ups listed separately where a downstream tool, multi-gateway mesh, or deployment profile must add its own controls.
+This matrix is a **self-assessment**, not a certification. It tracks mcp-gateway only. Older versions mixed in external controls and treated several implemented gateway controls as pending. Current in-tree mapping is **10/10 COVERED** for the gateway boundary, with hardening follow-ups listed separately where a downstream tool, multi-gateway mesh, or deployment profile must add its own controls.
 
 Companion (different question, same boundary): [MITRE Fight Fraud Framework mapping](compliance/MITRE-F3-MAPPING.md). OWASP ASI is agent-tool risk. F3 is financial-fraud actor behavior. The F3 document is a PARTIAL/GAP mapping, not a coverage badge.
 
