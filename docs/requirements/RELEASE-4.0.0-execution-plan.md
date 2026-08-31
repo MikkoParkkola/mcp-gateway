@@ -183,14 +183,14 @@ and one feature flag.
 ## The queue does not cover the release, and the sweep says by how much
 
 `RELEASE-4.0.0-criteria-status.md` verified acceptance criteria against `src/` and `tests/`
-directly, never against another document's claim. Coverage is complete: **73 criteria, 32 blocking**, counted from
+directly, never against another document's claim. Coverage is complete: **73 criteria, 33 blocking**, counted from
 the table rows rather than from any summary line above them — this document twice carried a total
-its own source contradicted. The queue above owns fourteen. The other eighteen had no owner
+its own source contradicted. The queue above owns fourteen. The other nineteen had no owner
 anywhere, which is what the increments below exist to fix.
 
 Read as a plan the queue is not wrong, it is short. That is the finding.
 
-### The eighteen collapse into five causes, not eighteen tasks
+### The nineteen collapse into five causes, not nineteen tasks
 
 | # | increment | criteria closed | why these belong together |
 |---|---|---|---|
@@ -207,7 +207,7 @@ acceptance criterion, not as an increment.
 
 ### The largest single lever is already queued
 
-Fourteen of the thirty-two blocking criteria are UNWIRED, and eight of those fourteen are MRTR
+Sixteen of the thirty-three blocking criteria are UNWIRED, and eight of those sixteen are MRTR
 (MRTR.1-.8). That is one subsystem, fully built, fully unit-tested, with no production caller —
 `§2 WIRED` and `D7` in the DoD, and `§11` stop-the-line. Item 1 closes eight criteria in one
 increment. Nothing else in this plan has that ratio, which is why it stays first.
@@ -302,3 +302,44 @@ The test-plan rule that would have caught this class is already written down (`�
 actually fail?). It was applied to test *assertions* and not to the question of whether the
 production path under test is ever entered. A unit test over an unimported module is a case that
 cannot fail, for the most complete reason available.
+
+
+## Review findings, 2026-08-31 — dual-vendor (§P4)
+
+Both vendors returned SHIP-WITH-FIXES; ledger rows are the authority (`gpt-review-ledger.jsonl`
+02:53:28Z, `grok-review-ledger.jsonl` 02:56:08Z, both `process_status=ok`). Findings verified at
+source before disposition — a reviewer claim is a lead, not evidence.
+
+**Applied to the ledger (the blocking total moved twice):**
+
+- `SCHEMA.1` clause row was `blocking: no` against a status that is not MET. Raised independently by
+  both vendors. Corrected; total 31 -> 32.
+- `CONFIRM.1` was MET on production code that no test reaches. This file defines MET as production
+  code *plus a test through a production path*; `tests/mik_7215_controls_acs.rs:203-225` calls
+  `ConfirmationPolicy::for_modern()` as a pure function and never enters the handler branch at
+  `router/handlers.rs:1024-1079`. Restatused UNTESTED; total 32 -> 33. Same shape as `SUB.4`.
+- `TENANT.1` and `CONTROL.2` were ABSENT. The code exists — `security/firewall/tenant_guard.rs`,
+  `principal_window.rs`, and two AC test files — module-declared at `security/firewall/mod.rs:34,36`
+  with no other consumers. All four files are UNTRACKED: a concurrent session's uncommitted work,
+  which is why a search over tracked source found nothing. Corrected to UNWIRED. Blocking either
+  way, so the total is unchanged, but increment 7 must reconcile that tree before writing new code.
+
+**Scheduling defects, to be fixed in the increment table:**
+
+- `MRTR.9` and `MRTR.10` are blocking and have no owner. Item 1 is scoped to MRTR.1-.8. Verified:
+  `idempotency::derive_key` (`idempotency.rs:296-299`) hashes only tool name and arguments;
+  `resolve_idempotency_key` (`meta_mcp/support.rs:31-46`) never passes continuation fields;
+  `cacheable::result_type_of` (`protocol/cacheable.rs:78`) has zero production callers; and
+  `IdempotencyCache::mark_completed` (`idempotency.rs:198-203`) caches unconditionally at
+  `meta_mcp/invoke.rs:852,1277`. Extend item 1 to MRTR.1-.10.
+- `CONFIRM.2` cannot close by riding item 1. Confirmation remains session-bound elicitation; it needs
+  its own wiring, not a continuation side effect.
+- Item 1 is scheduled before items 1a and 1a', which it depends on. Ordering is wrong as written.
+- Increment 6 claims `HEADER.9`, which needs a per-backend era, while `DISCOVER.4/.5` — the era
+  detector — sit in increment 9. Either move the detector earlier or move HEADER.9 later.
+- Increment 2 is undersized for `TASK.1`: it omits `tasks/get`, `tasks/update`, lifecycle, and the
+  long-running wiring.
+- `OTEL.1` also requires baggage propagation, which `TraceContext` does not carry.
+- MIK-7312 appears twice and contradictorily: deferred to 4.1.0 as a shared insert-if-absent store
+  and queued in 4.0.0 as per-process keys. The operator's 2026-08-30 hold settles it — keep
+  per-process, delete the deferred row.
