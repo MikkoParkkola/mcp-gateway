@@ -24,6 +24,25 @@ Status vocabulary:
 
 A criterion is BLOCKING unless it is MET or N/A.
 
+**Line anchors in this file are not stable, and six rows are already affected.** This worktree is
+shared with concurrent sessions, so evidence cells cite a working tree, not a commit.
+`src/protocol/continuation.rs` currently carries 46 uncommitted inserted lines, all of them above
+line 130 — which means the anchors in MRTR.2, .3, .4, .5, .6 and .8 (`:122-144`, `:440-518`, and the
+rest) resolve correctly only while that session's uncommitted state is on disk. On `HEAD` every one
+of them points roughly 44 lines late. Read the SYMBOL in each citation, which is stable
+(`Payload::redeemable_by`, `ConsumedLedger::consume`, `InFlight::reap`), and treat the line number as
+a hint. Re-derive anchors after that work lands.
+
+**An ABSENT verdict is the only status whose correctness depends on the search tool.** Every other
+status is reached by reading a file that is known to exist; ABSENT is a claim that nothing exists.
+`git grep` and anything over `git ls-files` read the index and will report an untracked file as
+absent while it sits on disk — that is what produced the wrong ABSENT on TENANT.1 and CONTROL.2,
+whose four files were a concurrent session's untracked work. `rg` reads the working tree and sees
+untracked files, but skips ignored ones, so only `rg -uu` closes the class. Verified for this tree
+on 2026-08-31: four untracked files under `src/` and `tests/` (the two firewall modules and their
+two AC test files) and **zero ignored files**, so no other ABSENT row in this document can be wrong
+for this reason.
+
 There is deliberately no partial-credit status. A criterion whose MUST clauses do not all hold is recorded as two
 or more rows sharing its ID, each tagged `(clause: …)` and each carrying one of the values above — so the criterion
 count stays one-per-requirement while no row can claim a criterion is met on the strength of the half that works.
