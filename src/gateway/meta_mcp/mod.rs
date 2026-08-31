@@ -1057,12 +1057,26 @@ impl MetaMcp {
         self.handle_tools_list_for_session(id, None)
     }
 
+    fn shadow_tools_list_assembly(&self, session_id: Option<&str>, spec_preview_query: bool) {
+        let default = self.profile_registry.default_name();
+        let profile = session_id
+            .is_some_and(|sid| self.session_profiles.get_profile_name(sid, default) != default);
+        crate::protocol_revision_telemetry::observe_tools_list(
+            crate::protocol_revision_telemetry::ListFilters {
+                principal: false,
+                profile,
+                session: session_id.is_some() || self.code_mode_enabled || spec_preview_query,
+            },
+        );
+    }
+
     /// Session-aware variant of `handle_tools_list` used by the router.
     pub fn handle_tools_list_for_session(
         &self,
         id: RequestId,
         session_id: Option<&str>,
     ) -> JsonRpcResponse {
+        self.shadow_tools_list_assembly(session_id, false);
         let tools = if self.code_mode_enabled {
             build_code_mode_tools()
         } else {
@@ -1159,6 +1173,7 @@ impl MetaMcp {
         let effective_code_mode = self.code_mode_enabled || url_override;
         if effective_code_mode && !self.code_mode_enabled {
             // URL-activated Code Mode: return the two fixed tools directly.
+            self.shadow_tools_list_assembly(session_id, true);
             let tools = build_code_mode_tools();
             let tool_descriptors =
                 project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
