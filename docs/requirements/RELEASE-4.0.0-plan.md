@@ -154,11 +154,28 @@ which is scoped one-to-one to the request that opened it — there is no request
 building one would invent a mechanism the protocol already provides. Cluster B's design must drop
 that clause, not shrink it.
 
-Two consequences to check before the work starts: 2026-07-28 also drops `Last-Event-ID` resumability
-("Resumable SSE streams via `Last-Event-ID` are not supported"), so any code implementing it is now
-serving a shape the pinned revision removed; and 2025-06-18 / 2025-11-25 both still allow servers to
-send *requests* on the stream, which we also serve, so the read loop must tolerate them even though
-the pinned revision forbids emitting them.
+Both follow-on questions were checked on 2026-08-31 and only one of them was a worry.
+`Last-Event-ID` resumability is implemented and already gated correctly: `get_era_refusal` runs first
+in `mcp_sse_handler` (`handlers.rs:262-264`) and returns `405` to any caller declaring the modern era,
+so the replay code at `streaming.rs:241-386` is unreachable from a 2026-07-28 peer, and the modern
+`subscriptions/listen` stream carries no event ids at all (`streaming.rs:416-459`). Nothing to do.
+
+The compatibility question is the real one, and it is larger than "read past the first line". A
+server-to-client *request* — which 2025-06-18 and 2025-11-25 both permit and we serve both — does not
+fail to parse. It parses **successfully into an empty response**. `JsonRpcResponse`
+(`src/protocol/messages.rs:44-56`) carries no `deny_unknown_fields` and holds `result` and `error` as
+bare `Option<Value>`, so `{"jsonrpc":"2.0","id":5,"method":"sampling/createMessage","params":{...}}`
+deserializes into `JsonRpcResponse{id:Some(5), result:None, error:None}` with `method` and `params`
+silently discarded. On HTTP the mis-parsed request is returned to the caller as the answer to their
+call. On stdio it is worse: `handle_response` looks the id up in `self.pending`
+(`stdio.rs:210-219`, `:416-434`), so an unrelated in-flight caller that happens to hold that id is
+**completed with an empty result**. No test on either transport exercises a line carrying both a
+`method` and an `id` (`stdio.rs:628-700`).
+
+That relocates the fix. The defect is not two independent transport bugs but one permissive type
+used as a parse target on every read path, so a guard added in each transport would leave every
+other caller of `JsonRpcResponse` still able to swallow a request. Dispatch by message shape before
+parsing as a response, once, where all readers pass through.
 
 **2. SCHEMA.1 — what happens to a backend that publishes an invalid schema.** The criterion says
 tool schemas MUST remain valid under JSON Schema 2020-12, unqualified, and the gateway republishes
