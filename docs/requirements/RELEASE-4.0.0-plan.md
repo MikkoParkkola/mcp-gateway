@@ -265,7 +265,23 @@ current deserializer — `response_deser_rejects_frame_carrying_method`,
 `message_enum_still_classifies_both_frame_shapes` and
 `handle_response_rejects_inbound_request_and_leaves_caller_pending`. They were swept in by a
 whole-tree stage from a session that did not own them. Nothing was lost and the fix is not in that
-commit, so the branch is red between `b55116d1` and the repair commit that follows it.
+commit, so the branch was red from `b55116d1` onward.
+
+That red window is closed, and not by the repair. `88532501 revert(cluster-f): cut the sampling-frame
+hunks that rode the test-plan commit` restored all four files to their content at `b55116d1^`, so the
+tests are out of the tree and the build is green again. Two of the three review vendors caught the
+breakage independently, which is what a review is for. The cost landed on a third party: the restore
+also discarded the uncommitted repair another session had in those same files, because a checkout of
+a path does not distinguish work that arrived by a bad stage from work being written on top of it.
+Explicit-path staging was supposed to be the answer to the first incident and it is no defence
+against this one — the two failures run in opposite directions through the same shared checkout.
+
+What the pair of them actually says: a test that fails on a shared branch is not evidence of
+discipline, it is a broken build every other session has to work around, and it invites exactly the
+restore that then eats somebody's afternoon. Tests are written before the fix and run red **locally**;
+the commit that reaches the branch carries both halves and is green on arrival. SUB.2 now lands that
+way — five tests and the shape check in one commit. The tests survive verbatim in history at
+`b55116d1` and are recoverable with `git show b55116d1:<path>`.
 
 The history is not being rewritten. Several sessions hold this branch checked out, and rebasing
 underneath them costs more than a wrong commit message does. What the rewrite would have bought is
