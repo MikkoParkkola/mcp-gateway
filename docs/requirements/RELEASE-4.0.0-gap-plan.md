@@ -90,6 +90,20 @@ symbols touches paths they cover, so the full suite gates every increment; and t
 guaranteed to fall monotonically, because an UNTESTED row that goes red splits into a defect and a
 test.
 
+### Observed while closing the first UNTESTED row
+
+Eight integration-test files each hand-build the same ~45-line `AppState` fixture
+(`mik_7213_acs.rs`, `mik_7214_acs.rs`, `mik_7215_acs.rs`, `mik_7217_acs.rs`,
+`mik_7272_subscriptions_acs.rs`, `mik_7312_continuation_state.rs`, `stdio_tests.rs`,
+`webui_management_tests.rs`). Every new field on `AppState` is therefore an eight-file
+edit, and the CONFIRM.1 test below was written into `mik_7215_acs.rs` rather than beside
+its sibling unit tests purely because that is where a usable harness already existed.
+
+Recorded here rather than filed: no criterion depends on it, and the remaining 30 rows
+will each land in one of these files, so the right moment to extract a shared fixture is
+after the sweep, when the field set has stopped moving. Extracting it now would conflict
+with every in-flight increment.
+
 ## 2. The sequence
 
 Each increment is independently reviewable and mergeable. Delivery order within every increment is

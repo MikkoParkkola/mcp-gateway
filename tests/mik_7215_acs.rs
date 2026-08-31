@@ -213,8 +213,17 @@ mod http {
     }
 
     fn state_with_modern(modern: bool) -> Arc<AppState> {
+        state_with(modern, Config::default().auth)
+    }
+
+    /// The destructive-confirmation gate sits behind the admin check, so the
+    /// only caller who can reach it is an authenticated admin. That needs a
+    /// real auth config, which is why this is parameterised rather than a
+    /// second copy of the state below.
+    fn state_with(modern: bool, auth: mcp_gateway::config::AuthConfig) -> Arc<AppState> {
         let mut config = Config::default();
         config.server.modern_protocol = modern;
+        config.auth = auth;
         let backends = Arc::new(BackendRegistry::new());
         let multiplexer = Arc::new(NotificationMultiplexer::new(
             Arc::clone(&backends),
@@ -266,6 +275,14 @@ mod http {
         state: Arc<AppState>,
         body: Value,
     ) -> (StatusCode, Option<String>, Value) {
+        post_mcp_authed(state, body, None).await
+    }
+
+    async fn post_mcp_authed(
+        state: Arc<AppState>,
+        body: Value,
+        bearer: Option<&str>,
+    ) -> (StatusCode, Option<String>, Value) {
         let router = create_router(state);
         let mut builder = Request::builder()
             .method("POST")
@@ -292,6 +309,10 @@ mod http {
                     builder = builder.header("mcp-name", name);
                 }
             }
+        }
+
+        if let Some(token) = bearer {
+            builder = builder.header("authorization", format!("Bearer {token}"));
         }
 
         let request = builder
@@ -590,6 +611,85 @@ mod http {
                 .as_array()
                 .is_some_and(|c| c.iter().any(|v| v == "sampling")),
             "the refusal must name the capability that was missing: {body}"
+        );
+    }
+
+    /// MIK-7246.CONFIRM.1 — the gate must REFUSE when confirmation cannot be
+    /// obtained, and must not proceed on a warning.
+    ///
+    /// The policy itself is already covered as a pure function in
+    /// `mik_7215_controls_acs.rs`. That is a weaker claim than the criterion
+    /// makes: a policy nothing consults refuses nothing. This crosses the
+    /// handler branch that consults it (`router/handlers.rs:1139-1170`), by the
+    /// only route a modern caller has.
+    ///
+    /// A modern request cannot carry a session -- this revision deleted them --
+    /// so there is nobody to elicit over and `Unsupported` is the outcome every
+    /// time. That is precisely the case the legacy path answers with a warning.
+    #[tokio::test]
+    async fn ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused() {
+        // Admin, because `gateway_kill_server` -- the only tool this build
+        // annotates `destructiveHint: true` -- is refused for everyone else by
+        // the admin check, which runs *before* the confirmation gate. A
+        // non-admin caller never reaches the code this criterion is about.
+        let auth = mcp_gateway::config::AuthConfig {
+            enabled: true,
+            bearer_token: None,
+            api_keys: vec![mcp_gateway::config::ApiKeyConfig {
+                key: "admin-key".to_string(),
+                name: "admin-client".to_string(),
+                rate_limit: 0,
+                backends: Vec::new(),
+                allowed_tools: None,
+                denied_tools: None,
+                admin: true,
+            }],
+            public_paths: Vec::new(),
+            client_circuit_breaker: None,
+            single_user: false,
+        };
+        let (status, _session, body) = post_mcp_authed(
+            state_with(true, auth),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_kill_server",
+                    "arguments": { "name": "any-backend" },
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                        "io.modelcontextprotocol/clientInfo": {
+                            "name": "ExampleClient", "version": "1.0.0"
+                        }
+                    }
+                }
+            }),
+            Some("admin-key"),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK, "JSON-RPC reports errors in the body: {body}");
+        assert_eq!(
+            body.pointer("/error/code").and_then(Value::as_i64),
+            Some(-32001),
+            "an unconfirmable destructive call must be refused, not run: {body}"
+        );
+        // Distinguishes the two -32001 exits: a DECLINED operator says
+        // "Operator declined", an absent one says confirmation could not be
+        // obtained. Asserting only the code would pass on the wrong branch.
+        let message = body
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            message.contains("none could be obtained"),
+            "the refusal must be the unconfirmable branch, not a decline: {message}"
+        );
+        assert!(
+            body.get("result").is_none(),
+            "a refused destructive call must not also return a result: {body}"
         );
     }
 }
