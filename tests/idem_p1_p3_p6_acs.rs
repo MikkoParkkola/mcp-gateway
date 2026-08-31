@@ -6,11 +6,10 @@
 
 use std::sync::{Arc, Barrier};
 
-use mcp_gateway::idempotency::{CheckOutcome, GuardOutcome, IdempotencyCache, enforce};
+use mcp_gateway::idempotency::{
+    CheckOutcome, GuardOutcome, IdempotencyCache, MAX_ENTRIES, enforce,
+};
 use serde_json::json;
-
-/// The entry bound, mirrored from `idempotency::MAX_ENTRIES` (see `bound_matches_constant`).
-const BOUND: usize = 10_000;
 
 /// P1 — only one of N concurrent racers for the same fresh key may proceed.
 #[test]
@@ -52,10 +51,14 @@ fn concurrent_enforce_on_one_key_admits_exactly_one_caller() {
 #[test]
 fn enforce_fails_closed_at_the_entry_bound_without_evicting() {
     let cache = Arc::new(IdempotencyCache::new());
-    for i in 0..BOUND {
+    for i in 0..MAX_ENTRIES {
         cache.mark_in_flight(&format!("filler-{i}"));
     }
-    assert_eq!(cache.len(), BOUND, "precondition: cache is at the bound");
+    assert_eq!(
+        cache.len(),
+        MAX_ENTRIES,
+        "precondition: cache is at the bound"
+    );
 
     let refused = enforce(&cache, "a-brand-new-key");
     assert!(
@@ -69,7 +72,11 @@ fn enforce_fails_closed_at_the_entry_bound_without_evicting() {
     );
 
     // Fail closed means refuse, never evict: evicting readmits a duplicate.
-    assert_eq!(cache.len(), BOUND, "no entry may be evicted to make room");
+    assert_eq!(
+        cache.len(),
+        MAX_ENTRIES,
+        "no entry may be evicted to make room"
+    );
     assert!(
         matches!(cache.check("filler-0"), CheckOutcome::InFlight),
         "the oldest tracked entry must survive the refusal"
@@ -80,14 +87,14 @@ fn enforce_fails_closed_at_the_entry_bound_without_evicting() {
 #[test]
 fn completed_entries_are_still_served_at_the_entry_bound() {
     let cache = Arc::new(IdempotencyCache::new());
-    for i in 0..BOUND {
+    for i in 0..MAX_ENTRIES {
         cache.mark_in_flight(&format!("filler-{i}"));
     }
     assert!(cache.mark_completed(
         "filler-7",
         json!({"resultType": "complete", "status": "ok"})
     ));
-    assert_eq!(cache.len(), BOUND);
+    assert_eq!(cache.len(), MAX_ENTRIES);
 
     let outcome = enforce(&cache, "filler-7").expect("a completed entry must still be servable");
     assert!(
