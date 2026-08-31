@@ -3153,17 +3153,43 @@ async fn a_modern_request_is_given_no_session_even_when_it_offers_one() {
         .uri("/mcp")
         .header("content-type", "application/json")
         .header("mcp-protocol-version", "2026-07-28")
+        // The modern path requires the method in a header as well as the body.
+        .header("mcp-method", "tools/list")
         // Offered deliberately: the modern path must decline it, not adopt it.
         .header("mcp-session-id", "sess-offered-by-client")
         .body(axum::body::Body::from(
-            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": {
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {}
+                    }
+                }
+            })
+            .to_string(),
         ))
         .unwrap();
 
     let response = router.oneshot(request).await.unwrap();
+    let session_header = response.headers().get("mcp-session-id").cloned();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
 
+    // The request must actually REACH modern dispatch. An earlier draft of this
+    // test omitted the mcp-method header and params._meta; the router rejected
+    // it before dispatch, and a rejection carries no session header either — so
+    // the assertion below passed while proving nothing. Pin the success first.
     assert!(
-        response.headers().get("mcp-session-id").is_none(),
+        json["result"]["tools"].is_array(),
+        "the request must reach modern dispatch and list tools, or the header \
+         assertion below is satisfied by a rejection instead of by the \
+         behaviour under test: {json}"
+    );
+    assert!(
+        session_header.is_none(),
         "a 2026-07-28 caller has no session; answering with one would give it \
          per-connection state its own revision removed"
     );
