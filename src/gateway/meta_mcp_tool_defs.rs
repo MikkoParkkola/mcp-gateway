@@ -574,6 +574,7 @@ impl CallerRole {
 /// absent because the feature behind it is unconfigured or the caller may not
 /// invoke it — never because a name list was edited (GH issue 449).
 #[derive(Debug, Clone, Copy, Default)]
+#[allow(clippy::struct_excessive_bools)] // One independent deployment fact per field; a substruct would only regroup them.
 pub(crate) struct MetaToolSurface {
     /// Statistics collection is enabled.
     pub stats: bool,
