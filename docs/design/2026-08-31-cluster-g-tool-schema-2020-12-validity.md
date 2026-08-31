@@ -283,8 +283,11 @@ identities, and the rejected set shadowing it inherits exactly that scope. The p
 key rejection by the identity pool key — would key a derived set finer than the data it is derived
 from, which cannot be built: there is no per-identity list to reject from. The honest statement is
 that identity-scoped rejection becomes meaningful only if `tools_cache` itself becomes
-identity-partitioned, and that is a change to the cache, not to this gate. Recorded as a residual
-against the cache, not repaired here.
+identity-partitioned, and that is a change to the cache, not to this gate. **Owner ruling: out of
+scope, and filed.** The finding is right about the property and wrong about whose change it is —
+the shared tool catalogue is a pre-existing decision with its own blast radius (pool interaction,
+invalidation, memory), which is human-sized rather than a review round. Inherited residual, carried
+with the three citations above; the decision itself is [MIK-7334](https://linear.app/parm/issue/MIK-7334).
 
 *The gate is a deny-list, not an allow-list, and before a backend's first successful list every tool
 is unchecked.* A `tools/call` arriving in that window routes. That is not an oversight introduced by
@@ -293,8 +296,12 @@ deliberately, to tolerate a stale cache, and this design's stated rule is that a
 that behaviour untouched. Converting to an allow-list — refuse until a validated list exists — would
 change stale-cache tolerance for every deployment, which is a second owner decision of the same
 shape as the one that produced this ruling, not a repair the design can make on its own authority.
-It is called out to the team lead alongside the two other places the ruling's wording outruns what
-the code can do.
+**Owner ruling: keep the deny-list, and do not touch stale-cache tolerance.** SCHEMA.1 binds on
+*exposure*; a tool the gateway has never listed has never been exposed, so the pre-first-list window
+sits outside the criterion's population rather than being a hole in it. An allow-list would change
+dispatch for every deployment in order to close a window in which the gateway holds no knowledge to
+refuse on. Recorded plainly, like the unparsed-element residual: **the refusal is authoritative for
+every tool the gateway has listed, and silent for one it has not.**
 
 **One interaction to get right:** `invalidate_tools_cache` (`src/backend/metadata.rs:39-46`)
 discards an *empty* tool list so warm-start re-asks a backend that answered with nothing. A backend
@@ -303,15 +310,21 @@ attempt and get the same answer each time. The guard is one condition: discard t
 when the rejected set is *also* empty. Empty-because-rejected is a fact the gateway has already
 established, not a fetch worth repeating.
 
-### outputSchema — a decision this design makes past the letter of the ruling
+### outputSchema — inside the criterion, not a widening of it
 
-The ruling names `inputSchema`. `Tool` carries `outputSchema: Option<Value>` on the same struct
-(`src/protocol/types.rs:10-40`) and the gateway publishes it on the same surface, so validating one
-and not the other would leave a published schema document unchecked while the closure comment
-claimed SCHEMA.1 met in full. Seam 3 therefore validates both, `outputSchema` only when present.
-This widens the owner's literal wording, which makes it a design decision rather than an
-implementation detail, and it is recorded as U7 for confirmation. If the owner narrows it back to
-input-only, the change is one clause in one predicate.
+This design read the criterion's naming of `inputSchema` as a boundary and recorded the decision to
+validate `outputSchema` too as a widening, for the owner to confirm or narrow. **Owner ruling: it
+was never a widening.** The criterion's population is *"tool schemas exposed by the gateway"*, and a
+published `Tool` carries both fields (`src/protocol/types.rs:10-40`) on one surface, so both are
+bound by it. `inputSchema` is named because that is where the key-invention failure was found, not
+to draw a line around it.
+
+Seam 3 validating both — `outputSchema` only when present — is therefore correct as specified, and
+there is no narrowing fallback to hold open. U7 stops being a pre-merge decision and becomes a
+**confirmation**: check that the predicate reads both fields, and that a backend publishing a valid
+`inputSchema` beside an invalid `outputSchema` is dropped rather than published. That second half is
+test case G11; the first is a read of the predicate. No scope receipt is owed, because nothing
+moved.
 
 ### Log and diagnostics
 
@@ -391,6 +404,7 @@ the chosen validator has reported it invalid, on the keyword the case names.
 | **G8** — a backend whose tools are *all* rejected, then a warm-start attempt | the empty tool list is **not** discarded by `invalidate_tools_cache`, so the backend is not re-fetched on every attempt, and the rejected set survives with it | **Yes**, against the design's own naive form. The interaction is named in the design as the one thing to get right, and until this row existed nothing in the plan would have noticed getting it wrong — the design described a guard that no case exercised. |
 | **G9** — the tool G5 rejected, invoked over the **direct** per-backend MCP route rather than through `gateway_invoke` | refused, and the mock backend's call log stays empty | **Yes**, and this is the row that would have caught the design's own defect. The first version gated `gateway_invoke` only; `backend_handlers.rs:747-809` forwards `tools/call` without consulting anything the meta-MCP layer knows. A `gateway_invoke`-only test suite would have gone green over a tool that was still callable. |
 | **G10** — a backend `tools/list` element that fails `Tool` deserialization entirely | documents the residual: the element is re-appended unvalidated (`backend_handlers.rs:184-193`) and seam 3 never sees it | **No, deliberately.** This case asserts the *current* behaviour so the residual is pinned rather than assumed, and so a later change that starts dropping unparsed elements has to change a test and say why. It is a characterization test, labelled as one; it proves nothing about SCHEMA.1 and is not counted as coverage of it. |
+| **G11** — a backend tool with a **valid `inputSchema`** beside an **invalid `outputSchema`** | the tool is dropped: absent from the published `tools/list`, and its name is in the rejected set | **Yes.** On HEAD nothing meta-validates either field. This is the executable half of the owner's ruling that both fields are inside the criterion — a predicate reading `inputSchema` only passes every other case in this table and fails this one alone. |
 
 
 **G4 must name its construct, and the obvious candidates do not work.** Most draft-07-isms stay
@@ -439,7 +453,7 @@ Deferred, each with owner, resolving check, trigger and fallback:
 | **U3** | Does `boon` expose a meta-validation entry point in its own docs? | implementer | docs.rs page for `boon` 0.6.1 | only if U2 forces the fallback | express meta-validation as compiling the document against the 2020-12 meta-schema as an instance |
 | **U4** | Startup cost of meta-validating 110+ capabilities at load | implementer | median of five timed `load_from_directory` runs over the capability directory, before and after | before merge | validate on first publish rather than at load; the seam does not move, only when it runs |
 | **U5** | Which construct actually splits draft-07 from 2020-12, for G4 | implementer | run the selected validator over the `items`-as-array candidate under both dialects | before writing the G4 fixture | try further candidates; if none splits them, drop G4 and record that the dialect pin has no disproof — a finding, not a formality |
-| **U7** | Does the backend-schema ruling cover `outputSchema` as well as `inputSchema`? Seam 3 validates both; the ruling named only input | team lead | *askable, not checkable*: whether the owner intends the drop policy to extend to a published `outputSchema` a backend declares | **before merge**, not before the closure comment — the trigger was written late and a reviewer was right to say so: by closure time the widened predicate has already shipped, and an owner narrowing it back would be reverting code rather than choosing a design | narrow seam 3 to `inputSchema` — one clause in one predicate — and record in the closure comment that backend `outputSchema` documents are published unvalidated, which reopens a remainder against `:102` |
+| **U7** — *answered; now a confirmation* | Does the criterion cover `outputSchema` as well as `inputSchema`? | team lead — **answered 2026-08-31: both, and it was never a widening.** The population is "tool schemas exposed by the gateway"; a published `Tool` carries both fields, so both are bound. `inputSchema` was named because that is where the failure was found | what remains is *checkable*: read the seam-3 predicate for both fields, and run **G11** — valid `inputSchema`, invalid `outputSchema`, tool dropped | before merge, as a confirmation rather than a gate | none needed. There is no narrowing to fall back to; a predicate reading one field fails G11 |
 | **U8** | Whether the added rejected-set slot and its invoke-time lookup cost anything measurable on the hot invoke path | implementer | time `gateway_invoke` against a mock backend, 1,000 calls, before and after, median of five | before merge, alongside U4 | keep the set but consult it only when the cached list is populated, which is the same condition the "did you mean?" hint already uses |
 | **U8b** | The direct-route cost, which U8 as written cannot see | implementer | time the **direct** per-backend `tools/list` route against a mock backend publishing 50 tools, 1,000 requests, before and after, median of five — a separate measurement, not a wider reading of U8 | before merge, alongside U8 | hoist the direct route onto the cached list so seam 3 runs per fill there too; weakening the check is not on the table |
 
@@ -455,10 +469,10 @@ deferral that blocked something — not this design's implementation, but SCHEMA
 was an **askable** unknown, because no command settles which behaviour the operator wants and a
 check that cannot come back "no" is not a check.
 
-U7 inherits exactly that character and exactly that blocking position: it is askable, it does not
-block seam 3 being built, and it does block the closure comment claiming "every tool schema" without
-qualification. It is deliberately not folded into U6's answer, because the owner answered the
-question they were asked and this is a second question.
+**U7 was asked as a second question of the same owner and came back answered**, so it no longer
+blocks the closure comment. What it leaves behind is a confirmation with a test attached, which is
+the cheaper end state: the design's reading (both fields) turned out to match the criterion's
+population, and G11 is what makes that reading falsifiable rather than asserted.
 
 U4, U5 and U8 block nothing else in the design; U2 blocks only the choice between A and B. None of
 these is a residual-risk paragraph, and none is closed by naming a command instead of running it.
@@ -475,12 +489,14 @@ this reason.
 The owner has now answered the policy question, so the thing that made it un-scopable is gone. The
 surface moves by one item: this design gains a validity check on each backend tool's schema at the
 point the tool list is cached, and a rejected tool is neither listed nor routable. Nothing else in FOR
-or OUT moves. The acceptance criteria gain **five** cases, not the one the ruling's wording
+or OUT moves. The acceptance criteria gain **six** cases, not the one the ruling's wording
 suggests: G5 for the listing half; G6 for the routing half through the funnel — which needs state the
 gateway does not have today, see the Dispositions row; G7 for recovery when a backend fixes its
 schema; G8 for the all-rejected warm-start interaction; and G9 for the routing half on the direct
-per-backend route, which the first version of this design missed entirely. The count going from one
-to five is itself the argument for reviewing a ruling's *implementation* rather than its wording.
+per-backend route, which the first version of this design missed entirely; and G11 for a valid
+`inputSchema` beside an invalid `outputSchema`, which is where the owner's both-fields ruling becomes
+executable. The count going from one to six is itself the argument for reviewing a ruling's
+*implementation* rather than its wording.
 
 ## Dispositions
 
@@ -499,10 +515,11 @@ to five is itself the argument for reviewing a ruling's *implementation* rather 
 | **Review, Grok, 2026-08-31: no case for the all-rejected warm start** | **fixed — new case G8.** The design named that interaction as the one thing to get right and no row exercised it, which is precisely the empty-cell finding a test-plan review exists to produce. |
 | Review, GPT, 2026-08-31: disable `jsonschema` default features; pre-production gate for `McpProvider`/A2A | **folded into existing unknowns rather than filed.** Default-feature trimming is an input to U2's transitive count, not a separate decision; the provider path is now covered by moving the gate to the shared chokepoint. Filing either as a ticket would cost a human's attention for something already owned. |
 | **Review, kimi, 2026-08-31: no verdict** | **cannot verify — recorded, not counted.** The third reviewer emitted raw tool-call syntax instead of a review and exited 65 ("COULD NOT REVIEW"). No finding, and no evidence either way about this document. Named so the two-vendor result is not silently reported as three. |
-| **Confirmation pass, GPT, 2026-08-31: the rejected set is not identity-scoped** | **residual, named in the routing section — not repaired.** Verified at source: `tools_cache` is one `CachedMetadata<Vec<Tool>>` per backend (`src/backend/mod.rs:54`), `metadata.rs` has zero identity references, and identity selects a connection pool key (`ops.rs:178`) rather than a cache. The finding is a true property of the existing tool cache and the gate inherits it; the proposed fix would key a derived set finer than its source, which cannot be built. The claim died at source as an attribution, not as an observation — so it is recorded, not repaired. |
-| **Confirmation pass, GPT, 2026-08-31: a `tools/call` before discovery bypasses the refusal** | **residual, named in the routing section, and escalated to the team lead.** True: the gate is a deny-list. Making it an allow-list contradicts `invoke.rs:1934-1938`, whose stale-cache tolerance is deliberate, so this is an owner decision of the same shape as the ruling itself rather than a repair. Escalated rather than filed, because a human has to choose. |
+| **Confirmation pass, GPT, 2026-08-31: the rejected set is not identity-scoped** | **residual, named in the routing section — not repaired.** Verified at source: `tools_cache` is one `CachedMetadata<Vec<Tool>>` per backend (`src/backend/mod.rs:54`), `metadata.rs` has zero identity references, and identity selects a connection pool key (`ops.rs:178`) rather than a cache. The finding is a true property of the existing tool cache and the gate inherits it; the proposed fix would key a derived set finer than its source, which cannot be built. The claim died at source as an attribution, not as an observation — so it is recorded, not repaired. **Owner ruling 2026-08-31: out of scope, and filed as [MIK-7334](https://linear.app/parm/issue/MIK-7334)** — right about the property, wrong about whose change it is; the shared catalogue is a pre-existing decision with a human-sized blast radius. |
+| **Confirmation pass, GPT, 2026-08-31: a `tools/call` before discovery bypasses the refusal** | **escalated, then ruled: keep the deny-list.** True as an observation: the gate is a deny-list, and `invoke.rs:1934-1938` dispatches uncached names deliberately. **Owner ruling 2026-08-31:** SCHEMA.1 binds on *exposure*, so a tool the gateway has never listed is outside the criterion's population rather than a hole in it, and an allow-list would change dispatch for every deployment to close a window in which the gateway has no knowledge to refuse on. Recorded as an inherited residual with the `invoke.rs` citation: the refusal is authoritative for every tool the gateway has listed, silent for one it has not. |
 | **Confirmation pass, GPT, 2026-08-31: unparseable elements re-raised** | **disposal unchanged — still a residual with G10.** The proposed fix (meta-validate raw elements, drop those that fail) would reverse `backend_handlers.rs:184-193`, whose stated reason is not to hide a tool clients depend on. Re-raising a finding does not by itself move it; what would move it is the owner reversing that behaviour, which is the same question as the deny-list one above. |
 | **Confirmation pass, GPT, 2026-08-31: U8 cannot measure the direct route** | **fixed — new U8b.** CERTAIN and correct: the Cost section was widened in prose and the instrument was not. U8 times `gateway_invoke`, which never enters the direct route. A separate direct-`tools/list` benchmark now exists rather than a wider reading of the old one. |
 | **Confirmation pass, GPT, 2026-08-31: diagnostics still promise one warning per cache fill** | **fixed.** The repair had reached the Cost section and not the diagnostics one. The `warn!` now fires on entry into the rejected set or a change of error, not on every evaluation — otherwise one polling client on the direct route floods the operator log, which is how a useful warning gets muted. |
 | **Confirmation pass, GPT, 2026-08-31: the settled-decisions table still asserts both disproved facts** | **fixed, by correcting the rows in place rather than rewriting them clean.** Both rows now show what was believed, what disproved it and why the first answer looked settled. A settled-decisions table that quietly acquires the right answer is the exact artefact this document argues against elsewhere; leaving the correction visible is the point. |
+| **Team lead, 2026-08-31: `outputSchema` was recorded as a widening** | **corrected — it never was one.** The criterion's population is "tool schemas exposed by the gateway", and a published `Tool` carries both fields on one surface. Seam 3 validating both is correct as specified; the narrowing fallback is gone, and U7 becomes a confirmation with G11 as its executable half. Nothing moved, so no scope receipt is owed. |
 | The 19 meta-tool schemas declare no `$schema` | **no change needed.** Pinning the dialect at the check makes the declaration unnecessary; adding it to 19 literals would be the larger diff and would give the check something to disagree with. |

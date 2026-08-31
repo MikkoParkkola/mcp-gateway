@@ -51,17 +51,22 @@ until both are green.
 **A8 — never assert a key against the expression that builds it.** No case may
 compare a composed key to `build_key(...)`-shaped code. Pin literals separately;
 let the behavioural hit/miss pair carry the "this input is in the key" claim.
-The two key-level cases (1.a, 2.a) are `assert_ne!` between two *keys produced
-for two principals*, which is a difference assertion, not a self-comparison —
-they are the named exception and they are the only one.
+The exception is a *class*, not a list: an `assert_ne!` between two keys built
+from two different component tuples is a **difference** assertion, not a
+self-comparison, because no side restates the composition under test. Every
+key-level row here (1.a, 2.a, 4.d, 4.e, 4.l.1, 4.l.2) is of that class, and each
+carries a determinism control so a per-call salt cannot satisfy the difference
+vacuously. Stated as a class because an enumerated list is falsified by the next
+row added — as this one was.
 
 ## Coverage table
 
 Columns follow the house format used by `authorize-at-dispatch-test-plan.md`.
 Level: **U** unit · **I** integration · **S** system. Status: **evidenced** (a
 case can fail and proves the rule) · **guard** (green on `HEAD`; exists to go
-red on regression) · **carried-by-review** (declared surviving mutant) ·
-**deferred** (four fields below the table).
+red on regression) · **designed (blocked)** (specified, never run, waiting on a
+named seam that does not exist on `HEAD`) · **carried-by-review** (declared
+surviving mutant) · **deferred** (four fields below the table).
 
 ### MIK-7213.CACHE.1 — `ttlMs` and `cacheScope` on five surfaces
 
@@ -90,15 +95,19 @@ red on regression) · **carried-by-review** (declared surviving mutant) ·
 
 Decomposed against the design's eight-row verdict table
 (`2026-08-31-cluster-f-response-cache-keying.md` §L256-265). A single CACHE.4
-row is the trap the fixture doctrine above exists to refuse.
+row is the trap the fixture doctrine above exists to refuse. The mapping is not
+1:1 and does not claim to be: each of the eight inputs has at least one row, the
+policy epoch has three (one per bump site), and two rows correspond to no input
+at all — **4.k** asserts a *bypass* rather than a key component, and **4.l.1 /
+4.l.2** test the framing that makes any component separable in the first place.
 
 | AC | Case | Level | Type | Can it fail? | Status |
 |---|---|---|---|---|---|
 | CACHE.4 · backend | **4.a** **Pair.** Same `{tool, arguments}`, two different `server` values. Hit control: same server twice → backend invoked once. Miss half: the second server's body is asserted to be **that server's own** by a value only it returns (A4) | I | functional | Yes — dropping `server` from `build_key` (`cache.rs:223-225`) serves server A's body for server B, and the identity assertion names it. Green on `HEAD` | guard |
 | CACHE.4 · auth binding | **4.b** Two callers with **different authorization identities** and **no** `cache_binding` — identity propagation off, the shipped default — build a key for the same `{server, tool, arguments}`. `assert_ne!(key(alice), key(bob))`, through a named seam taking both principals as arguments, never an inlined copy of the key expression | U | security | **Yes, on `HEAD`.** `unwrap_or_default()` (`invoke.rs:773-777`) empties the suffix for **both**, every other input is equal by construction, and the keys are byte-identical. Fails on the `assert_ne!` itself — read the assertion, not the exit code (ERROR ≠ FAILURE) | evidenced |
 | CACHE.4 · auth binding | **4.c** **Pair, behavioural.** The same two principals invoke through the live cache. Hit control: one principal twice → backend called once. Miss half: backend called **twice**, and each caller's body carries **its own** principal marker (A4). Both principals must POPULATE, never one populate and one read — a fixture filling one entry proves nothing (A3/A5) | I | security | Yes — 4.b proves the keys differ; 4.c proves the differing key is the one the cache actually consults. Red on `HEAD` for the same reason as 4.b | evidenced |
-| CACHE.4 · routing profile | **4.d** **Key-level.** `assert_ne!(build_key(profile_a), build_key(profile_b))` for the same principal and the same `{server, tool, arguments}`, plus a determinism control asserting `build_key` is stable across two calls with identical inputs (so a per-call salt cannot pass the difference vacuously). **A behavioural pair is impossible here and that is a source fact, not a preference:** `profile.check` denies at `invoke.rs:711`, before any cache interaction, so a wrongly-shared entry is never observable through a response body. Verified at source 2026-08-31 | U | security | **Yes, on `HEAD`.** The profile name is absent from `build_key`, so the two keys are equal and `assert_ne!` fails | evidenced |
-| CACHE.4 · protocol revision | **4.e** **Key-level.** `assert_ne!(build_key(rev_a), build_key(rev_b))` for the same principal and arguments, differing only in the negotiated `declared_version`, plus the same determinism control as 4.d. **A behavioural pair is impossible here:** revision shaping happens in `build_modern_response` (`router/handlers.rs:1400`, called at `:1371`), downstream of the meta-MCP cache, so both eras cache and read the same inner body. Verified at source 2026-08-31 | U | security | **Yes, on `HEAD`.** No cache-key occurrence of the revision; the two keys are equal | evidenced |
+| CACHE.4 · routing profile | **4.d** **Key-level, on a seam that does not yet exist.** `assert_ne!(finished_key(profile_a), finished_key(profile_b))` for the same principal and the same `{server, tool, arguments}`, plus a determinism control asserting the same inputs yield the same key twice (so a per-call salt cannot pass the difference vacuously). **Blocked, and the block is a source fact:** `ResponseCache::build_key` (`cache.rs:223`) takes only `(server, tool, arguments)`, and the finished key is assembled by an inline `format!` duplicated at `invoke.rs:843` (read) and `invoke.rs:1296` (write). There is no function this case can call, so writing it today yields a compile `ERROR`, not the `FAILURE` this plan requires. **Seam needed:** one shared `finished_key(...)` taking the components, replacing both inline sites — which the implementation must build anyway to mix the profile in. **A behavioural pair is also impossible here:** `profile.check` denies at `invoke.rs:711`, before any cache interaction, so a wrongly-shared entry is never observable through a response body. Verified at source 2026-08-31 | U | security | Not yet — no callable seam returns the finished key. Once the seam exists it is red on the profile-less key | designed (blocked) |
+| CACHE.4 · protocol revision | **4.e** **Key-level, on the same missing seam as 4.d.** `assert_ne!(finished_key(rev_a), finished_key(rev_b))` for the same principal and arguments, differing only in the negotiated `declared_version`, plus the same determinism control. Blocked for the identical reason: `build_key` has no revision parameter and the finished key has no callable form. **A behavioural pair is also impossible here:** revision shaping happens in `build_modern_response` (`router/handlers.rs:1400`, called at `:1371`), downstream of the meta-MCP cache, so both eras cache and read the same inner body. Verified at source 2026-08-31 | U | security | Not yet — same seam as 4.d. Once it exists it is red on the revision-less key | designed (blocked) |
 | CACHE.4 · policy epoch | **4.f.1** **Grant store.** Same principal, same arguments. Warm the cache, bump the epoch through `MetaMcp::set_identity_grants` (`meta_mcp/mod.rs:814-816`) — the only writer of the grant store — invoke again; the post-bump response MUST NOT be the pre-bump body, asserted by a value the new grant set changes (identity-pinned, A4) | I | security | Yes — an epoch absent from the key serves the pre-bump body | designed (blocked) |
 | CACHE.4 · policy epoch | **4.f.2** **`LiveConfig` reload.** The same pair, driven through the `LiveConfig` reload seam instead of the grant store. A distinct site with a distinct trigger: an epoch bumped on grants alone leaves this one unbumped | I | security | Yes — a reload that does not bump the epoch serves the pre-reload body | designed (blocked) |
 | CACHE.4 · policy epoch | **4.f.3** **`CapabilityWatcher` reload.** The same pair, driven through a capability-registry reload. Named separately because a capability set change alters what a caller may reach without touching either grants or `LiveConfig` | I | security | Yes — a capability reload that does not bump the epoch serves a body from the superseded registry | designed (blocked) |
@@ -120,7 +129,8 @@ row is the trap the fixture doctrine above exists to refuse.
 | CACHE.4 · fail-closed | **5.f** *"A response varying on an unkeyed input MUST NOT be cached."* Fixture pins **no principal at all** — not an anonymous principal, not an empty binding, but an unresolvable one, distinguishing this row from 4.b (which varies *between* two resolvable principals). Invoke twice and assert the backend is called **both** times, and that **no entry appears in the store** | I | security | **Yes, on `HEAD`.** Today `unwrap_or_default()` supplies an empty suffix and the response is cached under it, so the second invocation hits | evidenced |
 | CACHE.4 · direct route | **5.g** **Regression guard on the second door.** `POST /mcp/{name}` is driven twice with identical arguments under **two different principals**; assert the backend is invoked **twice** and each response is identity-pinned to its own caller (A4). **Inverted control:** assert directly that the direct route wrote **no entry** to any shared store — without it the row stays green under a *correctly keyed* cache and so cannot distinguish "no cache" from "a cache that happens to be keyed", which is the property CACHE.4 asks about for this door | I | security | Yes — adding an unkeyed cache to the direct route turns it red on the store assertion. Green on `HEAD` (`backend_handlers.rs:594`) | guard |
 | CACHE.4 · fail-closed | **5.h** **`TrustLab` local-sandbox context.** The design gives `allow_loopback_egress` **no key segment** and instead requires that a context carrying it **must not cache — neither read nor write** (`2026-08-31-cluster-f-response-cache-keying.md:243-247`, `execution_context.rs:35,41-48`). Drive the same `{server, tool, arguments}` twice under such a context: assert the backend is invoked **twice** and **no entry appears in the store**; then, as the inverted control, seed an entry from a production context and assert the sandbox context does **not** read it | I | security | Yes — a sandbox context that caches, or reads a production entry, turns it red on the store assertion. Cannot run before the split lands | designed (blocked) |
-| CACHE.4 · key framing | **4.l** **Injectivity, and the schema version.** Property test: for distinct component tuples — including tuples whose members contain the key delimiter, and Unicode members that normalize alike — `build_key` yields distinct keys. Plus one assertion pinning the **schema-version segment**, so a key-shape change without a version bump cannot silently reuse entries written under the old shape. Without this row the C14 verdict rests on calling the policy epoch a schema version, and nothing tests either | U | security | Yes — concatenation without length-prefixed (or otherwise injective) framing lets `{"a:b", "c"}` and `{"a", "b:c"}` collide; a dropped version segment turns the second assertion red | designed (blocked) |
+| CACHE.4 · key framing | **4.l.1** **Delimiter injectivity, writable today.** Property test over `ResponseCache::build_key` as it stands: for distinct `(server, tool)` pairs — including members containing the `:` delimiter, and Unicode members that normalize alike — the keys are distinct. Concrete red case verified at source: `build_key("a:b", "c", &args)` and `build_key("a", "b:c", &args)` both render `a:b:c:<hash>` (`cache.rs:225`, `format!("{server}:{tool}:{args_hash}")`) | U | security | **Yes, on `HEAD`.** The two calls above return equal keys and the property fails | evidenced |
+| CACHE.4 · key framing | **4.l.2** **The schema-version segment.** One assertion pinning a version segment in the finished key, so a key-shape change without a version bump cannot silently reuse entries written under the old shape. Blocked on the same `finished_key(...)` seam as 4.d and 4.e — there is nothing to assert a segment of | U | security | Not yet — same seam as 4.d | designed (blocked) |
 
 ### Deferred — one row, with its four fields
 
@@ -159,7 +169,7 @@ a round. Every row above was swept. What the sweep changed:
 | **A5** | the cross-principal rows had no hit control, so a cache that never populates would have passed all of them; and 5.e originally asserted only the returned body, which passes on `HEAD` whenever A and B share an api-key name | the fixture doctrine (hit control + miss half, both principals populate) was made a precondition of every pair row; 5.e's **first** assertion — the stored value is unstamped — is now the one that must go red |
 | **A7** | `ttlMs` was asserted against `LIST_TTL_MS` | 1.c pins the literal `60000` on the wire and asserts the constant separately |
 | **A8** | 2.a was drafted as `scope == CacheScope::current_for_tools_list().as_str()`, which matches after every branch in `for_list` is deleted | pins the literal `"private"`. The `assert_ne!` rows (4.b, 5.a) are the named exception: a difference between two principals' keys is not a self-comparison |
-| **A9** | 4.f bundled both epoch bump sites into one case, so a fix wiring only config reload would have passed; 4.i and 4.j were one row | split into one row per site and one row per surface |
+| **A9** | 4.f bundled all three epoch bump sites into one case, so a fix wiring only config reload would have passed; 4.i and 4.j were one row | split into one row per site and one row per surface |
 | **A6** | no relative rule in this plan (no freshness or TTL-expiry case is claimed) | nothing to fix — stated so the sweep is complete rather than silently short |
 
 ## DoR check — applicable gates only
@@ -190,17 +200,18 @@ Two things this plan does **not** evidence, stated rather than smoothed over:
    The per-row `Status` column is the coverage statement: **evidenced** rows
    prove a rule, **guard** rows only keep one.
 
-Thirty rows: **13 guards** (green on `HEAD` by design), **9 evidenced**, **7 designed (blocked)** and **1 carried by review**. A blocked row is *designed*, never *evidenced* — it has never been run and cannot yet fail honestly, so it is not evidence of anything. The guards are not padding and not evidence either: each names the mutation that turns it red.
-they are not evidence — each names the mutation that turns it red.
+Thirty-one rows: **13 guards** (green on `HEAD` by design), **8 evidenced**, **9 designed (blocked)** and **1 carried by review**. A blocked row is *designed*, never *evidenced* — it has never been run and cannot yet fail honestly, so it is not evidence of anything. The guards are not padding and not evidence either: each names the mutation that turns it red.
 
 ## What passing means
 
 Every **evidenced** row must fail against `HEAD` before the implementation
 lands, and must fail **on the assertion it names** — not on a missing import, a
 panic, or a setup error. Run the red suite and read the failure *reason* of
-every case, never the count: `ERROR` and `FAILURE` are different facts. The two
-blocked rows are exempt from that run and are held until the seam they need
-exists.
+every case, never the count: `ERROR` and `FAILURE` are different facts. The nine
+**designed (blocked)** rows are exempt from that run and are held until the seam
+each names exists. Three of them — 4.d, 4.e and 4.l.2 — wait on the same one:
+a `finished_key(...)` function replacing the inline composition duplicated at
+`invoke.rs:843` and `:1296`.
 
 Every failure reason read during the red run is appended to `docs/design/evidence/2026-08-31-cluster-f-red-run.md` — one line per case: case ID, `ERROR` or `FAILURE`, and the assertion text. A reason that was read but not written down is an unrecorded act, not evidence.
 
@@ -231,7 +242,7 @@ the reason is on the row.
 | 5.d never proves its warmed entry is reachable | gpt (and grok's hit-control doctrine) | **Repaired**: reachability control retrieves the seeded entry through the same idempotency key first |
 | 5.f fixture does not distinguish itself from 4.b | grok | **Repaired**: fixture pinned to *no principal at all*, not an anonymous or empty one |
 | 5.g stays green under a correctly keyed cache, so it cannot answer CACHE.4 for that door | grok | **Repaired** with an inverted control: assert the direct route wrote no entry to any shared store |
-| C14 passes by calling the policy epoch a schema version; no case for framing injectivity | gpt | **New row 4.l**: property test over delimiter-containing and Unicode tuples, plus a pinned schema-version segment |
+| C14 passes by calling the policy epoch a schema version; no case for framing injectivity | gpt | **New rows 4.l.1 / 4.l.2**: property test over delimiter-containing and Unicode tuples, plus a pinned schema-version segment |
 | CACHE.4 omits the declared fail-closed `TrustLab` / `allow_loopback_egress` context | gpt | **New row 5.h.** Verified in the design at `…cache-keying.md:243-247` |
 | CACHE.4 omits fail-closed cases for *retry continuations* and *input capabilities* | gpt | **Dropped, unverified.** Neither term appears in the design or the criteria; `rg` over both returns nothing. Per the repair protocol a speculative finding is dropped until source-verified, rather than spending a round on it. Recorded here so it is not silently ignored |
 | Blocked and premise-guard rows labelled *evidenced*; guard count wrong | gpt, grok, kimi | **Repaired**: blocked rows are now *designed (blocked)*, 4.h is a *guard*, and the totals are recounted mechanically (30 rows: 13 guard, 9 evidenced, 7 designed (blocked), 1 carried by review) |
@@ -241,6 +252,24 @@ the reason is on the row.
 | Red-run failure reasons are read but never archived | kimi (improvement) | **Adopted**: reasons are appended to a named evidence file |
 | The commit carries four unrelated source hunks (`messages.rs`, `http/mod.rs`, `http/tests.rs`, `stdio.rs`) whose tests are red without an implementation this change does not contain | kimi, gpt | **Eliminated — and both halves were true.** The hunks were swept into `b55116d1` from a dirty shared checkout; my first reading of them as "another session's uncommitted work, not mine to touch" was wrong, and `git show --stat b55116d1` settled it. The red claim is also correct: `JsonRpcResponse` is a plain `#[derive(Deserialize)]` (`messages.rs:44`) with no `deny_unknown_fields`, so a frame carrying `method` parses cleanly and `assert!(outcome.is_err())` fails — a CI-breaking commit. All four files are reverted to `b55116d1^`; the sampling-frame work keeps them in history and can land in the change that owns it |
 
-**Round 1 closed 12 findings by repair, 3 by elimination, 1 by re-naming, 3 by
-new rows and 1 dropped unverified.** Re-check per the
-repair protocol returns to the vendor that raised each finding.
+**Round 1, mechanically tallied over the nineteen rows above: 9 repaired, 3
+eliminated, 1 re-named, 1 split into three, 2 answered by new rows, 2
+improvements adopted, 1 dropped unverified.** Re-check per the repair protocol
+returns to the vendor that raised each finding.
+
+### Corrections found on the whole-document re-read
+
+The repair protocol requires re-reading the entire document after any response,
+not the edited paragraph. That pass caught four defects the row edits had
+introduced — three of them the same class the vendors had just flagged.
+
+| Correction | Disposition |
+|---|---|
+| 4.d and 4.e were marked *evidenced* with "**Yes, on `HEAD`**", but `ResponseCache::build_key` (`cache.rs:223`) takes only `(server, tool, arguments)` and the finished key is an inline `format!` duplicated at `invoke.rs:843` and `:1296`. The named assertion would not compile — an `ERROR`, which this plan's own "What passing means" section forbids as evidence | **Repaired**: both are *designed (blocked)* on one named seam, a shared `finished_key(...)`. This was the vendors' own finding — status claiming evidence for something unrunnable — reappearing inside its repair |
+| 4.l was blocked whole, but half of it is writable today: `build_key("a:b", "c", &args)` and `build_key("a", "b:c", &args)` both render `a:b:c:<hash>`, a genuine collision on `HEAD` | **Split**: 4.l.1 *evidenced* (red today), 4.l.2 *designed (blocked)* on the same seam |
+| "The two blocked rows are exempt from that run" — blocked rows had gone from 2 to 9 while the sentences above and below it were edited and this one was not | **Repaired**: the count is stated, and the three rows sharing one seam are named |
+| Rule **A8** named 1.a and 2.a as the only permitted key-level cases; the repairs added four more, falsifying the rule inside the document that states it | **Eliminated, not patched**: A8 now states the permitted *class* (a difference assertion between two component tuples, with a determinism control). An enumerated exception list is falsified by the next row added |
+
+The status legend gained a fourth term, **designed (blocked)**, which the row
+edits had been using without defining. Totals recounted mechanically:
+**31 rows — 13 guards, 8 evidenced, 9 designed (blocked), 1 carried by review.**
