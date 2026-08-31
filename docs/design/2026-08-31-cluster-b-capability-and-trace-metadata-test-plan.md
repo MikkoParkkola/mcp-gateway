@@ -101,9 +101,10 @@ since been withdrawn** (§6.5), so E7 now stands alone and its weakness is worse
 its own it says only "not a refusal", and it cannot say "reverted", because there is nothing to
 revert from. It is kept because the revert-versus-reject choice is a real one the design made and
 the spec permits both — but it is recorded as non-discriminating so a later reader does not
-mistake it for evidence of negotiation. What is left of EXT.1.d's discrimination lives in E5 (the
-set is recovered correctly). The behavioural half has no case at all until TASK.1 gates something
-on an extension.
+mistake it for evidence of negotiation. Nothing else in this suite discriminates EXT.1.d: E5 is
+EXT.1.c's case (the set is recovered from the raw object) and must not be counted here as well,
+which is exactly what §6.5 refuses. The behavioural half has **no case at all** until TASK.1 gates
+something on an extension.
 
 ## 5. OTEL.1 — the coverage map
 
@@ -133,7 +134,7 @@ that assert a grammar predicate HEAD gets wrong are red. A row asserting only th
 | OTEL.1.c | **T4 (rejected ⇒ dropped, not minted)** inbound `traceparent` malformed in exactly one way (A9: `"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7"` — three parts, everything else valid); assert no `traceparent` on the outbound, **and** assert the request still succeeds. Distinguishes drop from both mint and reject. | unit | negative | **Partially — same vacuity as T3.** HEAD writes no `traceparent` on this arm, so both halves are already true. Evidence only beside a green T1. §6.2 governs. |
 | OTEL.1.d | **T5 (baggage independence)** inbound carries a valid `baggage` and **no** `traceparent` at all; assert the outbound `_meta` carries the `baggage` literal. This is the case option 3.4.E would fail. | unit | negative-space, discrimination | Yes — `baggage` appears nowhere in `src` (`rg -i baggage src` = 0). |
 | OTEL.1.d | **T6** inbound carries a **malformed** `traceparent` and a valid `baggage`; assert `baggage` survives and `traceparent` does not. Separates "baggage independent of *absent* traceparent" (T5) from "independent of *rejected* traceparent", which is a different code path. | unit | negative | Yes. |
-| OTEL.1.d | **T5b / T6b (tracestate is *not* independent)** the inverse pair, and the design makes it load-bearing: inbound carries a valid `tracestate` with **no** `traceparent` (T5b), then with a **malformed** `traceparent` (T6b). Assert `tracestate` is **absent** outbound in both, and the request still succeeds. `tracestate` is meaningless without the parent it annotates, so relaying it orphaned would send vendor trace state to a backend with nothing to correlate it to. Without these rows the plan asserts independence for `baggage` and says nothing about the field that must *not* be independent. | unit | negative, discrimination | Yes — nothing is propagated today, so a correct implementation and HEAD agree; **vacuous on HEAD in the same way as T3/T4, honest only beside T1**. |
+| OTEL.1.c | **T5b / T6b (tracestate is *not* independent)** the inverse pair, and the design makes it load-bearing: inbound carries a valid `tracestate` with **no** `traceparent` (T5b), then with a **malformed** `traceparent` (T6b). Assert `tracestate` is **absent** outbound in both, and the request still succeeds. `tracestate` is meaningless without the parent it annotates, so relaying it orphaned would send vendor trace state to a backend with nothing to correlate it to. Without these rows the plan asserts independence for `baggage` and says nothing about the field that must *not* be independent. Filed under **.c, not .d** — .c is the never-minted/nothing-survives-a-rejected-context clause, and these rows are that clause read on `tracestate`; .d is specifically `baggage`'s independence, which these rows do not exercise. | unit | negative, discrimination | **Partially — same vacuity as T3/T4.** HEAD writes no `_meta` on this arm, so "no outbound `tracestate`, request succeeds" is already true. Not an independent red; evidence only in a suite where T1 is green. §6.2 governs. |
 | OTEL.1.f | **T7 (the grammar rows)** one row per predicate §3.4b names, each breaking exactly one thing (A9): uppercase hex ⇒ rejected; version `ff` ⇒ rejected; all-zero `parent-id` ⇒ rejected; a five-field `traceparent` with a valid first four ⇒ **accepted**, and the outbound carries the **whole five-field input** as a literal. Reading the first four is a *parse* rule (design §3.4b); the emit rule is byte-for-byte as received (design L238, L464). Asserting a four-field outbound would fail a correct hop and, if "fixed", would silently truncate valid future context. Each row asserts both sides — the input refused and a neighbouring input permitted (A1). | unit | parameterised, boundary | Yes, all four. Verified against `TraceContext::from_meta` (`trace.rs:32`): it accepts uppercase hex (`is_ascii_hexdigit` is case-insensitive), accepts version `ff`, checks the all-zero rule on `trace_id` only and not on the span id, and rejects any `traceparent` with other than exactly four parts. Each of the four rows asserts the opposite of what HEAD does. |
 | OTEL.1.e | **T8a (charset)** one row per field, each breaking exactly one character class against the W3C grammar (A9), with the permitted neighbour asserted alongside (A1). Literal valid and invalid values pinned per field at writing time. | unit | boundary | Yes — no charset check exists today. **Not blocked**: charset is independent of the length numbers. |
 | OTEL.1.e | **T8b (length bounds)** per bounded field: at the limit ⇒ propagated; one byte over ⇒ dropped, request still succeeds. Both sides pinned (A1). | unit | boundary | Yes — no bound exists today (F4). **Blocked on a number: see §6.1.** |
@@ -290,6 +291,11 @@ backend-capture harness §6.4 waits on, which observes the whole route rather th
 Run before this document's first review. Recorded rather than silently fixed, because two
 findings changed what a case does.
 
+**Limit, stated:** this table is the *pre-review* sweep. The rows added or re-keyed during
+disposal — T0, T5b/T6b, the T8a/T8b split, and the E1/E3/E4/E5 repairs — were written against
+A1-A9 but are **not** swept as a set here; §8 step 2's post-write sweep is where they get the
+same treatment as the rest, and it has not been run.
+
 | rule | what the sweep found | what changed |
 |---|---|---|
 | A8 | An earlier draft of T1 asserted the outbound `_meta` equalled `TraceContext::from_meta(inbound).to_meta()`. That is the module under test on the expected side: it stays true after every predicate in `trace.rs` is deleted. | T1 now asserts literal strings. The round-trip identity, if wanted, becomes a separate assertion. |
@@ -313,8 +319,9 @@ The two steps that get skipped, per the honesty protocol, are the two that colla
    failure is the free proof that a case can fail. An `ERROR` — a panic, a missing fixture, a
    compile failure in the test module — means the harness is broken and the case would have
    failed against a *correct* implementation too. For this suite the distinction matters most in
-   T1/T2, which call `dispatch_to_backend` and will `ERROR` rather than `FAILURE` if the backend
-   stub is incomplete.
+   T1/T2: run them against the `build_outbound_meta(inbound_meta, cache_key_opt)` seam §5.1
+   requires, **not** through `dispatch_to_backend`, whose backend stub will `ERROR` rather than
+   `FAILURE` when incomplete — an ERROR is not the free proof, it is a broken harness.
 4. Then implement.
 
 ## 9. Readiness gates — applicable ones, checked
@@ -386,7 +393,7 @@ something that this document could not answer, and filing is the most expensive 
 | 6 | Legal gate L2 marked N/A although caller-supplied `baggage` may carry personal data. | gpt (HIGH) | **Fixed here and handed forward.** §9 now marks L2 applicable and unresolved, citing the W3C baggage privacy considerations; §10 item 7 hands the decision to the operator, where design §4.4.4 already put it. Correct catch — this plan had no standing to call it N/A. |
 | 7 | T1 carries no sentinel, so a copy-all-inbound implementation passes. | gpt (HIGH), grok (IMPROVEMENT) | **Fixed here.** T1 injects `example.test/poison` inbound and T2 asserts the outbound by exact key set excluding it, which is what A2 and the provenance strip at `invoke.rs:472` actually require. |
 | 8 | OTEL.1.a folded into T1 at `dispatch_to_backend`, which never receives request `_meta` — no discriminating seam for the read clause. | grok (MEDIUM), gpt (MEDIUM) | **Split here, with the residue named.** New T0 exercises the production extractor over a request body for .a; T1 keeps the dispatch write for .b. The route-level gap this does not close is §6.6, not a silent omission. |
-| 9 | No case proves `tracestate` is dropped when `traceparent` is absent or malformed. | gpt (MEDIUM), grok (IMPROVEMENT) | **Fixed here.** T5b/T6b mirror T5/T6 on the inverse coupling design §3.4 makes load-bearing, and carry the same T1-dependency honesty as T3/T4. |
+| 9 | No case proves `tracestate` is dropped when `traceparent` is absent or malformed. | gpt (MEDIUM), grok (IMPROVEMENT) | **Fixed here.** T5b/T6b mirror T5/T6 on the inverse coupling design §3.4 makes load-bearing, filed under **OTEL.1.c** (the never-minted clause read on `tracestate`) rather than .d (`baggage`'s independence), and carrying the same T1-dependency honesty as T3/T4 — they are vacuous on HEAD and say so. |
 | 10 | T8 blocks charset rows on an unpinned length bound, though charset is independent. | gpt (MEDIUM), grok (IMPROVEMENT) | **Fixed here.** T8a (charset, against the W3C character classes, not blocked) is separated from T8b (length bounds, blocked on §6.1). |
 | 11 | T4 marked red on HEAD although HEAD already satisfies both its assertions. | grok (MEDIUM), gpt (LOW) | **Fixed here.** T4 now carries the same T1-dependent form as T3, and §6.2 governs both. The plan had already caught this vacuity for T3 and missed the identical case one row down. |
 | 12 | §9 evaluates neither the CODE gates nor the minimal DOCS set, and claims G10-G12 met without execution evidence. | gpt (MEDIUM), grok (IMPROVEMENT) | **Fixed here.** §9 declares its applicability class, adds G0/G4/G5/O1-O3, states that the CODE set closes against the implementation and is not claimed here, and downgrades G10-G12 to planned-not-executed. |
