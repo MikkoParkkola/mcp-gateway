@@ -192,9 +192,13 @@ extracted when the forwarder exists and has a shape to fit.
 1. **Continuation key material is generated per process and never shared**, and sharing it without
    sharing the ledger is forbidden in the same breath. This is what makes MRTR.5 hold across
    replicas.
-2. **A continuation presented to a non-origin replica is refused, not evaluated.** The origin check
-   precedes any key lookup, so redeemability is never decided by a replica that cannot hold the
-   exchange.
+2. **A continuation presented to a non-origin replica is refused because it cannot be
+   authenticated here.** There is no separate origin check and there cannot be one: `origin_replica`
+   is sealed *inside* the envelope, so nothing can read it before the key opens it. The refusal is
+   an AEAD authentication failure under this process's keyring — a replica that did not mint the
+   envelope holds no key that opens it, so redeemability is never decided by a replica that cannot
+   hold the exchange. The sealed `origin_replica` is therefore read only *after* a successful open,
+   by the one process that could have minted it, and serves diagnosis rather than admission.
 3. **The refusal is explicit and typed**, distinct from "expired" and "already spent", so an
    operator can tell a continuation that cannot be authenticated here from a replay attempt. It
    deliberately does **not** name the replica that could have served it: nothing outside the sealed
@@ -232,3 +236,19 @@ so the two are never separated. `CHANGELOG.md:110-114` states this.
   specification's client requirements and the gateway's stdio dispatcher, which has no session
   concept at all. Stdio is single-process by construction. If an HTTP client may omit it, the
   refusal in decision 2 is the outcome and the release notes say so.
+
+- *Once the retry lands on the origin, what correlates it with the **specific** held legacy
+  exchange?* — **deferred, and it blocks MRTR.6/.7, not this increment.** Authenticating the
+  envelope proves the retry reached the minting process; it does not identify *which* open RPC that
+  process is holding for this caller. `IdempotencyState::InFlight` (`src/idempotency.rs:45`) carries
+  an `Instant` and nothing else, so the state that marks an exchange in flight holds no handle to
+  the exchange itself. Nothing in this increment depends on the answer — every row of the outcome
+  matrix either refuses or reaches the origin, and MRTR.5 is satisfied at that point.
+  - *owner*: the MRTR.6 forwarding increment.
+  - *what would resolve it*: read whether the idempotency key alone identifies the held exchange at
+    `src/idempotency.rs`, or whether the sealed envelope must additionally carry the in-flight
+    identifier the holder can look up.
+  - *when*: before any code that resumes rather than refuses — the first line of the forwarder.
+  - *if it resolves badly*: if the idempotency key is not sufficient and the envelope cannot carry
+    the identifier without widening the sealed payload, MRTR.6 is met by the *fail-explicitly* arm
+    only, and forwarding is dropped from the release rather than half-built.
