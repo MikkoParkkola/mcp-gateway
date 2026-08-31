@@ -12,6 +12,7 @@ use super::registry::{BackendLifecycle, BackendRuntimeState, BackendRuntimeStatu
 use crate::config::TransportConfig;
 use crate::failsafe::with_retry;
 use crate::protocol::JsonRpcResponse;
+use crate::protocol::param_headers::{is_param_header, mirror_headers};
 use crate::{Error, Result};
 
 impl Backend {
@@ -88,6 +89,51 @@ impl Backend {
             .is_some_and(|o| o.enabled && !o.shared_account)
     }
 
+    /// Builds the outbound header set for one call: the caller's own headers
+    /// minus anything in the gateway-owned `Mcp-Param-` namespace, plus the
+    /// mirrors this `tools/call` declares (MIK-7214.HEADER.5).
+    ///
+    /// The strip runs on every method, so a caller-supplied `Mcp-Param-*`
+    /// header can never reach a backend as though a schema had declared it —
+    /// the annotation is a server-side declaration, not a caller-supplied
+    /// parameter.
+    ///
+    /// The schema is read from the tool cache without blocking: a `tools/call`
+    /// is always preceded by discovery, which populates it. A cold or expired
+    /// cache mirrors nothing rather than issuing a `tools/list` while this
+    /// request holds its semaphore permit, which a concurrency-limited backend
+    /// could not satisfy.
+    fn param_header_set(
+        &self,
+        method: &str,
+        params: Option<&Value>,
+        extra_headers: &[(String, String)],
+    ) -> Vec<(String, String)> {
+        let mut headers: Vec<(String, String)> = extra_headers
+            .iter()
+            .filter(|(name, _)| !is_param_header(name))
+            .cloned()
+            .collect();
+
+        if method != "tools/call" {
+            return headers;
+        }
+        let Some(params) = params else {
+            return headers;
+        };
+        let (Some(name), Some(arguments)) = (
+            params.get("name").and_then(Value::as_str),
+            params.get("arguments"),
+        ) else {
+            return headers;
+        };
+        let Some(tool) = self.get_cached_tool(name) else {
+            return headers;
+        };
+        headers.extend(mirror_headers(&tool.input_schema, arguments));
+        headers
+    }
+
     /// Send a request, adding per-request outbound headers (e.g. a propagated
     /// end-user identity credential -- MIK-6704). The headers are forwarded by
     /// value to the transport's `request_with_headers`, never stored on the
@@ -110,6 +156,13 @@ impl Backend {
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
+
+        // SEP-2243 (MIK-7214.HEADER.5): mirror the arguments a tool's schema
+        // declares onto `Mcp-Param-*` headers. This sits here, not in each
+        // dispatcher, because every tools/call — the MCP provider, meta-MCP
+        // invoke, the router's direct backend route — funnels through this one
+        // function, so a per-caller mirror would leave the siblings unmirrored.
+        let extra_headers = self.param_header_set(method, params.as_ref(), extra_headers);
 
         // Derive the per-identity pool slot FIRST (MIK-6735 fix 1, adversarial
         // review of commit bfd62b91). Each slot owns its own circuit breaker +
@@ -166,7 +219,7 @@ impl Backend {
             let transport = std::sync::Arc::clone(&transport);
             let method = method.to_string();
             let params = params.clone();
-            let extra_headers = extra_headers.to_vec();
+            let extra_headers = extra_headers.clone();
             let identity_key = identity_key.clone();
             async move {
                 transport

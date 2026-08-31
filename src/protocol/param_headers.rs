@@ -106,10 +106,10 @@ fn type_is_mirrorable(schema: &Value) -> bool {
 /// Rejects an `integer` property whose schema prescribes a value outside the
 /// IEEE-754 safe range, whether as a bound, a `const`, or an `enum` member.
 ///
-/// This is the schema-time half of the safe-range constraint, and the only half
-/// that exists today: the per-call half belongs to the outbound mirroring of
-/// HEADER.5, which is not yet built. A schema declaring nothing therefore
-/// stays listed, and an out-of-range *argument* is currently unconstrained.
+/// This is the schema-time half of the safe-range constraint; the per-call half
+/// is [`header_value_for`], which drops an out-of-range argument at mirroring
+/// time. A schema declaring no bound therefore stays listed, and its arguments
+/// are checked one call at a time.
 fn bounds_are_safe(schema: &Value) -> bool {
     if schema.get("type").and_then(Value::as_str) != Some("integer") {
         return true;
@@ -196,4 +196,58 @@ pub fn mirrored_params(input_schema: &Value) -> Result<Vec<MirroredParam>, Mirro
     }
 
     Ok(mirrored)
+}
+
+/// Renders one argument as a header value, or `None` where it cannot be
+/// mirrored losslessly (HEADER.5).
+///
+/// This is the per-call half of the safe-range constraint whose schema-time
+/// half is [`bounds_are_safe`]: an argument outside the IEEE-754 exact range is
+/// dropped rather than mirrored as a number the peer would read back
+/// differently. A control character in a string is rejected because the
+/// argument is caller-supplied and a bare CR or LF in a field value is request
+/// splitting.
+fn header_value_for(argument: &Value) -> Option<String> {
+    match argument {
+        Value::String(text) if !text.chars().any(char::is_control) => Some(text.clone()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        Value::Number(number) => {
+            let value = number.as_i64()?;
+            (-SAFE_INTEGER_MAX..=SAFE_INTEGER_MAX)
+                .contains(&value)
+                .then(|| value.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// `true` where `name` sits in the gateway-owned `Mcp-Param-` namespace,
+/// compared case-insensitively as HTTP field names are.
+#[must_use]
+pub fn is_param_header(name: &str) -> bool {
+    let prefix = PARAM_HEADER_PREFIX.as_bytes();
+    let name = name.as_bytes();
+    name.len() >= prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(prefix)
+}
+
+/// The `Mcp-Param-*` headers one `tools/call` must carry, derived from the
+/// tool's own `inputSchema` and that call's arguments (HEADER.5).
+///
+/// Traversal is top-level `properties` only, identical to [`mirrored_params`]:
+/// whatever the sender traverses the validator must traverse too, or the two
+/// disagree about which declarations are real. A schema that violates a
+/// constraint mirrors nothing — such a tool is already excluded from
+/// `tools/list`, so no call should reach here naming one.
+#[must_use]
+pub fn mirror_headers(input_schema: &Value, arguments: &Value) -> Vec<(String, String)> {
+    let Ok(declared) = mirrored_params(input_schema) else {
+        return Vec::new();
+    };
+    declared
+        .into_iter()
+        .filter_map(|param| {
+            let value = arguments.get(&param.property)?;
+            Some((param.header_name, header_value_for(value)?))
+        })
+        .collect()
 }
