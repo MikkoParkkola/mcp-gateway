@@ -657,7 +657,7 @@ recorded as an observation for the CACHE.2 owner, not filed.
 | what bumps the epoch on a tool-policy change? | searched `config_reload/mod.rs` and `invoke.rs` for `tool_policy` | nothing — no live-swap seam exists on either path; the type is consulted by the authorizer at the chokepoint | deleted the row. Revision 2's "the policy write path" named no location, and a bump site that cannot be found never fires |
 | does the epoch race survive the ordering move? | traced the key's lifetime across the read at `:838` and the write at `:1294` | no, but not because of the move — because the key is built once and carried, so a mid-flight bump makes the insert land under the old epoch and be unreachable | stated "build once, carry" explicitly; revision 2 implied it and never said it |
 
-**Deferred:** none. Nothing in this design waits on an unanswered question.
+**Deferred:** one — the stdio `proto` question. It was none when this design froze; building the test plan turned the `proto` disjunction (§L48-53) into an unanswered operator question. The four fields live in the test plan's Deferred section, which governs.
 
 ## Test plan
 
