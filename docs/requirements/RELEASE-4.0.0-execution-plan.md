@@ -183,14 +183,14 @@ and one feature flag.
 ## The queue does not cover the release, and the sweep says by how much
 
 `RELEASE-4.0.0-criteria-status.md` verified acceptance criteria against `src/` and `tests/`
-directly, never against another document's claim. Coverage is complete: **73 criteria, 31 blocking**, counted from
+directly, never against another document's claim. Coverage is complete: **73 criteria, 32 blocking**, counted from
 the table rows rather than from any summary line above them — this document twice carried a total
-its own source contradicted. The queue above owns fourteen. The other seventeen had no owner
+its own source contradicted. The queue above owns fourteen. The other eighteen had no owner
 anywhere, which is what the increments below exist to fix.
 
 Read as a plan the queue is not wrong, it is short. That is the finding.
 
-### The seventeen collapse into five causes, not seventeen tasks
+### The eighteen collapse into five causes, not eighteen tasks
 
 | # | increment | criteria closed | why these belong together |
 |---|---|---|---|
@@ -207,7 +207,7 @@ acceptance criterion, not as an increment.
 
 ### The largest single lever is already queued
 
-Twelve of the thirty-one blocking criteria are UNWIRED, and eight of those twelve are MRTR
+Fourteen of the thirty-two blocking criteria are UNWIRED, and eight of those fourteen are MRTR
 (MRTR.1-.8). That is one subsystem, fully built, fully unit-tested, with no production caller —
 `§2 WIRED` and `D7` in the DoD, and `§11` stop-the-line. Item 1 closes eight criteria in one
 increment. Nothing else in this plan has that ratio, which is why it stays first.
@@ -215,8 +215,9 @@ increment. Nothing else in this plan has that ratio, which is why it stays first
 ### Three things this plan still does not know
 
 - ~~MIK-7217.DISCOVER, unswept~~ — **swept 2026-08-31, 5 MET and 2 blocking**, raising the count
-  from 31 to 33 as predicted — since revised back to 31 by the full sweep, because HEADER.7 and .8
-  cleared in the same window. Both blockers (DISCOVER.4, DISCOVER.5) are the era detector, and they
+  from 31 to 33 as predicted — since revised to 31 by the full sweep, because HEADER.7 and .8
+  cleared in the same window, and then to 32 when the blocking rule was applied to the SCHEMA.1
+  clause row (see the correction note below). Both blockers (DISCOVER.4, DISCOVER.5) are the era detector, and they
   join increment 9.
 - ~~Ten of the seventy-three criteria have never been read against source~~ — **false when written,
   and the way it was false is the finding.** The rows existed. They landed in `3b0ced13`, a commit
@@ -228,10 +229,22 @@ increment. Nothing else in this plan has that ratio, which is why it stays first
   the only reason this is a paragraph and not a wasted increment: **7 of the 10 are blocking**, and
   the three OAUTH criteria are genuinely MET on production paths (`oauth/client/mod.rs:87` called at
   `:840`, `:58` at `:1100`, `:381-386` reaching disk through `storage.rs:178`). Coverage is 73 of 73.
-- **Four criteria are MET with a caveat and two are MET on inference** (SCHEMA.1, SURFACE.1,
-  SUB.1, SUB.2; ORDER.3, CONTROL.5). Each is either a criterion that passes or evidence that has
-  not been produced yet, and today nobody can tell which from the record. Resolving six caveats is
-  cheap; discovering at tag time that one of them was a seventh gap is not.
+- **Two criteria are MET with a caveat and two are MET on inference** (SCHEMA.1, SURFACE.1;
+  ORDER.3, CONTROL.5). Each is either a criterion that passes or evidence that has not been
+  produced yet, and today nobody can tell which from the record. Resolving four caveats is cheap;
+  discovering at tag time that one of them was a fifth gap is not. The bucket started at six and
+  lost two the moment they were re-read, which is the argument for reading the rest: SUB.1 and
+  SUB.2 sat here on the strength of a `MET*` that the status file's own vocabulary does not define,
+  and both turned out to be ABSENT and blocking.
+
+**Correction, 2026-08-31 — the blocking total is 32, not 31.** The operator was told 31 twice
+before this was caught. `MIK-6865.SCHEMA.1 (clause: valid under JSON Schema 2020-12)` was recorded
+UNTESTED with `blocking = no`, the sole row in the file violating its own stated rule ("A criterion
+is BLOCKING unless it is MET or N/A"). The row is new — it was created by splitting SCHEMA.1 when
+the caveat turned out to hide an unimplemented clause — and a split can create a non-MET row where
+the criterion previously had none, so a split can move the blocking total even though editing a
+status on an existing row cannot. Corrected in place; the totals above are derived from the table
+rows, not carried forward.
 
 ### Order, and the one thing that reorders it
 
