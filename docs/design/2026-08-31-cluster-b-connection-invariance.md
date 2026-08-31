@@ -274,6 +274,14 @@ construction, before any router-level channel could see them:
 | HTTP | on `text/event-stream`, the loop returns the **first** `data:` line parsed as the response and discards every other line | `src/transport/http/mod.rs:929-944` |
 | stdio | a message with no `id` is logged and dropped | `src/transport/stdio.rs:416-431` |
 
+WebSocket is **not** a third site, though it deserializes `JsonRpcResponse` too.
+`classify_frame` tests `has_id && has_method` first and routes such a frame to
+`McpFrame::Request` (`src/transport/websocket.rs:128-130`); the response branch
+is reached only when `has_id && has_result_or_error` (`:131-132`). Two
+independent guards, so a stricter response type cannot change its behaviour and
+it needs no test of its own. Verified at source 2026-08-31 while implementing
+the fix — the earlier recon that named three sites was wrong.
+
 and the interface above them returns exactly one value — `dispatch_to_backend`
 does `backend.request("tools/call", params).await?`
 (`src/gateway/meta_mcp/invoke.rs:1955-1961`), so there is no second thing for a
