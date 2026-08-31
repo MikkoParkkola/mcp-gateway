@@ -234,7 +234,8 @@ from the router, through `dispatch_to_backend`, to wherever the backend's
 notifications are read — the same plumbing problem the MRTR retry work hit when
 it needed request state at the dispatch boundary and found none
 (`src/gateway/router/handlers.rs:930-955`). These two should be built once, not
-twice.
+twice — see §II.5, which states the seam so whichever cluster reaches it first
+builds it and the second finds it.
 
 ## II.3 Options
 
@@ -277,6 +278,29 @@ cannot specify what is emitted until someone says whether anything must be.
 | what would resolve it | the answer to "must v4.0.0 emit, or only be able to stream" |
 | when | before any SUB.2 implementation increment starts |
 | what if it resolves badly | if v4.0.0 must emit, SUB.2 grows the request-key plumbing and stops being a small change; the release scope, not the design, absorbs it |
+
+## II.5 Shared prerequisite — the request key at the dispatch boundary
+
+This is not a cluster-B item. It is one seam with two consumers in two clusters,
+in the same tree, being approached by two sessions, and the duplication is
+already paid for once this release. Stated here so it is built once.
+
+| | |
+|---|---|
+| the seam | a request key carried from the router through `dispatch_to_backend` to where a backend's messages are read, so a backend event can be attributed to the in-flight request that provoked it |
+| where it is missing | `src/gateway/router/handlers.rs:930-955` — the dispatch boundary has no request state to key on |
+| consumer 1 | cluster A, MRTR retry forwarding — needed request state here and did not find it |
+| consumer 2 | this note's SUB.2 forwarder — needs the same key to route `notifications/progress` and `notifications/message` back to one request's response stream |
+| build order | whichever consumer starts first builds the key; the second consumes it |
+
+Neither consumer should design it privately. The two need the same thing for
+different reasons, and a key shaped only for retry state or only for
+notification routing is the version that gets built twice. Cluster A is owned by
+another session; coordination sits with the team lead, not with this note.
+
+What this note does **not** decide: the key's representation, its lifetime, or
+where it is stored. Those belong to whichever increment builds it, with the
+other consumer's requirement in hand.
 
 ---
 
@@ -408,8 +432,9 @@ Part III and disposed of there; none of them blocks this design.
 - **`SUB.4`, `EXT.1`, `OTEL.1`, `TASK.1`** — adjacent criteria in the same
   ticket, each with its own design note.
 - **Clusters A (MRTR) and E (session identity as a key)** — this note names where
-  it touches them (the request key in §II.2, principal keying in §4.2) and
-  changes nothing in either.
+  it touches them (the request key, §II.2 and §II.5; principal keying, §4.2) and
+  designs nothing in either. §II.5 states a shared prerequisite and names its two
+  consumers; it does not decide cluster A's approach to it.
 - **Any code or test edit.** This is a design increment. The test plan is the
   next step and is not written here.
 - **The `spec-preview` promotion feature itself.** Its session-keyed input is
