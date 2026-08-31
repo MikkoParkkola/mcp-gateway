@@ -10,6 +10,7 @@
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
 [![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-10%2F10_covered-brightgreen.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
+[![MITRE F3](https://img.shields.io/badge/MITRE_F3-gateway_boundary_mapped-lightgrey.svg)](docs/compliance/MITRE-F3-MAPPING.md)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 [![Quality Score](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badges/score.svg)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_MCP-0078d4?logo=visualstudiocode)](https://insiders.vscode.dev/redirect/mcp/install?name=mcp-gateway&config=%7B%22command%22%3A%22mcp-gateway%22%2C%22args%22%3A%5B%22serve%22%2C%22--stdio%22%5D%7D)
@@ -286,6 +287,7 @@ mcp-gateway puts every backend tool description behind one audit surface and def
 Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gateway.md](docs/blog/security-aware-mcp-gateway.md).
 
 - **OWASP Agentic AI Top 10.** Controls are covered across all 10 ASI risks at the gateway boundary, with hardening follow-ups tracked separately for SBOMs, release signing, live remote attestation discovery, multi-gateway signing, SQL-sink defaults, and collusion detection. See [docs/OWASP_AGENTIC_AI_COMPLIANCE.md](docs/OWASP_AGENTIC_AI_COMPLIANCE.md).
+- **MITRE Fight Fraud Framework (F3).** A tactic-by-tactic mapping of the same gateway-boundary controls to F3 v1.1, including the two F3-native tactics (FA0001 Positioning, FA0002 Monetization). Most cash-out and card-scheme techniques are explicit gaps. See [docs/compliance/MITRE-F3-MAPPING.md](docs/compliance/MITRE-F3-MAPPING.md).
 
 ### Recent additions
 
@@ -331,6 +333,7 @@ Embedded web UI at `/ui`: live status, searchable tools, server health, a read-o
 | **Cost governance** | Per-tool, per-key, daily budgets with alert thresholds (log/notify/block) | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
 | **Session sandboxing** | Per-session call limits, duration caps, backend restrictions | [CHANGELOG](CHANGELOG.md#250---2026-03-12) |
 | **mTLS** | Certificate-based auth for tool execution | [CHANGELOG](CHANGELOG.md#240---2026-02-25) |
+| **MITRE F3 mapping** | Tactic-by-tactic map of gateway-boundary controls to Fight Fraud Framework v1.1. Monetization and card-scheme techniques are listed as gaps | [docs/compliance/MITRE-F3-MAPPING.md](docs/compliance/MITRE-F3-MAPPING.md) |
 
 ### Integration and discovery
 
@@ -382,7 +385,7 @@ This table compares public, user-facing behavior, not internal roadmap scoring. 
 | Primary job | MCP and REST capability router with a compact meta-surface | Docker-managed catalog, profiles, containerized MCP servers, and gateway | Self-hosted gateway that runs many MCP servers behind one endpoint | Protocol bridges: MCP to OpenAPI for mcpo; stdio to SSE/WS for Supergateway |
 | Install | Standalone Rust binary via cargo, Homebrew, VS Code, Cursor, and local build | Docker Desktop / Docker CLI plugin flow | Self-hosted gateway install and server registration | Python/uvx/Docker for mcpo; npm/CLI bridge for Supergateway |
 | Configuration | Wizard, local starter profile, service templates, client export, doctor JSON, backup and rollback | Docker profiles and catalog selection | Centralized server and client configuration | Per-bridge command/config for each exposed server or transport |
-| Security | OWASP Agentic AI matrix, firewall, response inspection, hash-pinned capabilities, mTLS/signing options | Verified container images with versioning, provenance, and security updates in Docker catalog | Centralized access control and observability | Transport/API exposure layer; security depends on bridge auth and deployment boundary |
+| Security | OWASP Agentic AI matrix, MITRE F3 gateway-boundary mapping (gaps stated), firewall, response inspection, hash-pinned capabilities, mTLS/signing options | Verified container images with versioning, provenance, and security updates in Docker catalog | Centralized access control and observability | Transport/API exposure layer; security depends on bridge auth and deployment boundary |
 | Identity and grants | Local identity-grant contract and CLI; multi-user OAuth isolation is credential-agnostic by default (ADR-008), and a backend configured `required` fails closed rather than serve a shared credential; per-user identity propagation to backends via signed assertion, caller-token passthrough, or RFC 8693 token exchange; the OIDC key server is disabled by default, delegated-bearer acceptance is a separate opt-in, and control-plane role mappings are issuer-scoped | Docker/team controls depend on Docker organization setup | Authenticated clients and server access control | Not a grant engine; delegates identity policy to the surrounding deployment |
 | Runtime isolation | RuntimeProvider policy planning plus Docker/Podman/Kubernetes deployment paths | Container-first isolation is the core runtime model | Runs and manages MCP servers behind the gateway | Bridges existing server processes/transports rather than isolating arbitrary tools |
 | Trust metadata | TrustCard/CBOM generation, validation, TrustLab evidence, provenance stubs | Catalog packages carry image provenance and security update flow | Gateway inventory and observability focus | Protocol metadata bridge; trust metadata is not the primary product surface |
@@ -484,6 +487,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Benchmarks](docs/BENCHMARKS.md) | Performance measurements |
 | [Changelog](CHANGELOG.md) | Release history |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
+| [MITRE F3 mapping](docs/compliance/MITRE-F3-MAPPING.md) | Fight Fraud Framework tactic map (PARTIAL/GAP, not a coverage claim) |
 | [vs Anthropic MCP tunnels](#vs-anthropic-mcp-tunnels) | Where mcp-gateway and Anthropic's MCP tunnel compose |
 
 ## Troubleshooting
