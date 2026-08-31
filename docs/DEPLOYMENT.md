@@ -123,7 +123,8 @@ Applied exports print any backup file and a rollback command. Use that rollback 
 
 ## Replica Count and `server.modern_protocol`
 
-**Run a single replica while `server.modern_protocol` is on.** The
+**A single replica is no longer required while `server.modern_protocol` is on —
+but a retry only succeeds on the replica that minted the continuation.** The
 consumed-continuation ledger and the mint counter are process-local. Each
 process now generates its own continuation key at startup and shares it with
 nobody, so a continuation opens only on the replica that minted it and no other
