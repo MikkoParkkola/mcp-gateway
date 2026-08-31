@@ -2464,3 +2464,121 @@ async fn global_meta_tool_reaches_an_admin_caller() {
          tool's business: {message}"
     );
 }
+
+// ── ORDER.2: routing profiles do not exist on the modern path ─────────
+//
+// MCP 2026-07-28 removed protocol-level sessions, so the router hands
+// `meta_mcp` an empty session id for every modern request
+// (`router::handlers`, the `declares_modern_by_header` branch). An empty id
+// is already read as "this caller has no session" elsewhere in the router —
+// `router::helpers::attach_session_header` omits the header rather than
+// emitting an empty one, and `handlers` reads it the same way when deciding
+// control identity. These tests extend that one reading to the routing
+// profile, which is the last piece of per-connection state a modern caller
+// could still reach.
+//
+// Why it must be closed rather than left alone: the empty key is shared by
+// *every* modern connection, so a profile written under it is not merely
+// per-session, it leaks across connections. `RELEASE-4.0.0-requirements.md`
+// ORDER.2 forbids the tool set varying per connection or as a side effect of
+// other requests on it.
+
+/// A profile bound to the sessionless key is not read back.
+///
+/// The write is staged directly rather than through `gateway_set_profile`,
+/// because the read must be closed on its own: `active_profile` is the single
+/// site `surfaced`, `invoke` and `spec_preview` all route through.
+#[test]
+fn active_profile_ignores_a_profile_bound_to_the_sessionless_key() {
+    // GIVEN: a narrow profile written under the empty session id
+    let mm = make_meta_mcp_with_profiles();
+    mm.session_profiles().set_profile("", "coding");
+
+    // WHEN: the modern path resolves its profile
+    let profile = mm.active_profile(Some(""));
+
+    // THEN: it is the default, not the one that was written
+    assert_eq!(
+        profile.name,
+        "research",
+        "an empty session id means no session, so there is no session profile \
+         to read; reading one lets any modern caller narrow every other \
+         modern caller's tool set"
+    );
+}
+
+/// `gateway_set_profile` is refused, not silently applied under the shared key.
+#[test]
+fn set_profile_is_refused_without_a_session() {
+    // GIVEN: a sessionless (modern) caller
+    let mm = make_meta_mcp_with_profiles();
+    let args = json!({ "profile": "coding" });
+
+    // WHEN: it tries to switch profile
+    let result = mm.set_profile(&args, Some(""));
+
+    // THEN: the call is refused and nothing is written
+    assert!(
+        result.is_err(),
+        "a refusal is the assertion: a tool set that did not change because \
+         the write went to a shared key is not the same outcome as one that \
+         did not change because the tool is gone"
+    );
+    assert_eq!(
+        mm.session_profiles().get_profile_name("", "research"),
+        "research",
+        "the refused call must not have written anything"
+    );
+}
+
+/// `gateway_get_profile` is refused too, rather than answering with the default.
+///
+/// Answering would describe a selection the caller cannot make and cannot
+/// rely on — the design note removes both halves of the pair, not just the
+/// writer.
+#[test]
+fn get_profile_is_refused_without_a_session() {
+    // GIVEN: a sessionless (modern) caller
+    let mm = make_meta_mcp_with_profiles();
+
+    // WHEN: it asks which profile is active
+    let result = mm.get_profile(Some(""));
+
+    // THEN: the call is refused
+    assert!(
+        result.is_err(),
+        "there is no per-connection profile to report on the modern path"
+    );
+}
+
+/// `initialize` is the second writer, and it is closed on the same terms.
+///
+/// Both of its inputs are exercised: the `X-MCP-Profile` header and the
+/// `params.profile` body field. Closing only the meta-tool would leave the
+/// handshake able to pin a profile under the shared key.
+#[test]
+fn initialize_binds_no_profile_without_a_session() {
+    for (label, params, header) in [
+        ("header", None, Some("coding")),
+        ("body", Some(json!({ "profile": "coding" })), None),
+    ] {
+        // GIVEN: a sessionless (modern) initialize naming a profile
+        let mm = make_meta_mcp_with_profiles();
+
+        // WHEN: the handshake runs
+        let _ = mm.handle_initialize(
+            RequestId::Number(1),
+            params.as_ref(),
+            Some(""),
+            header,
+        );
+
+        // THEN: no profile was bound to the shared key
+        assert_eq!(
+            mm.session_profiles().get_profile_name("", "research"),
+            "research",
+            "initialize ({label}) must not bind a profile a modern caller has \
+             no session to hold"
+        );
+    }
+}
