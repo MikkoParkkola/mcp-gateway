@@ -270,6 +270,32 @@ Set semantics fall out of the cache it shadows: replaced on every fill, so a bac
 its schema is served again at the next TTL expiry with no operator action, and no separate
 invalidation path is invented.
 
+**Two properties the gate inherits, both named rather than assumed away.** The confirmation review
+raised each as a defect; both are real and neither is created here.
+
+*The rejected set is as identity-scoped as the list it derives from, which is not at all.* The
+reviewer's reading is that one caller's `tools/list` response would then control routing for every
+identity-partitioned session on that backend. Checked at source: `tools_cache` is a single
+`CachedMetadata<Vec<Tool>>` per `Backend` (`src/backend/mod.rs:54`) and `src/backend/metadata.rs`
+contains zero references to identity — the identity key selects a connection `PoolKey`
+(`src/backend/ops.rs:178`), never a cache. So the tool catalogue is *already* shared across
+identities, and the rejected set shadowing it inherits exactly that scope. The proposed repair —
+key rejection by the identity pool key — would key a derived set finer than the data it is derived
+from, which cannot be built: there is no per-identity list to reject from. The honest statement is
+that identity-scoped rejection becomes meaningful only if `tools_cache` itself becomes
+identity-partitioned, and that is a change to the cache, not to this gate. Recorded as a residual
+against the cache, not repaired here.
+
+*The gate is a deny-list, not an allow-list, and before a backend's first successful list every tool
+is unchecked.* A `tools/call` arriving in that window routes. That is not an oversight introduced by
+this design: `src/gateway/meta_mcp/invoke.rs:1934-1938` dispatches names missing from the cache
+deliberately, to tolerate a stale cache, and this design's stated rule is that an unknown name keeps
+that behaviour untouched. Converting to an allow-list — refuse until a validated list exists — would
+change stale-cache tolerance for every deployment, which is a second owner decision of the same
+shape as the one that produced this ruling, not a repair the design can make on its own authority.
+It is called out to the team lead alongside the two other places the ruling's wording outruns what
+the code can do.
+
 **One interaction to get right:** `invalidate_tools_cache` (`src/backend/metadata.rs:39-46`)
 discards an *empty* tool list so warm-start re-asks a backend that answered with nothing. A backend
 whose every tool is rejected now also caches an empty list, so warm-start would re-fetch it on every
@@ -290,8 +316,14 @@ input-only, the change is one clause in one predicate.
 ### Log and diagnostics
 
 Per rejected tool, one `warn!` at the drop, carrying backend name, tool name and the meta-validation
-error — beside the existing header-exclusion warning, at the same severity, once per cache fill
-rather than once per request. For the operator-visible half, `BackendStatus`
+error — beside the existing header-exclusion warning, at the same severity. **Once per cache fill on
+the shared path only.** This paragraph said "rather than once per request" flatly and the
+confirmation review was right that the repair had not reached it: the direct `tools/list` route runs
+`prepare_tool_metadata` per request (`backend_handlers.rs:196`), so on that route a polling client
+re-emits every rejection warning on every poll. The `warn!` therefore fires when a tool **enters**
+the rejected set or its error changes, not on every evaluation — the set is already the state needed
+to tell those apart, so this costs a comparison, not a mechanism. Without it a single misbehaving
+backend plus one polling client is an operator-log flood, which is how a useful warning gets muted. For the operator-visible half, `BackendStatus`
 (`src/backend/registry.rs:63`, built at `src/backend/ops.rs:474-489`) gains a rejected count
 alongside `tools_cached`. **Adding the field does not surface it** — a claim the first version of
 this section made and a reviewer disproved. Only the admin health JSON serde-serializes
@@ -319,8 +351,9 @@ there it sits inside `get_or_fetch_shared`. It is **not** per-cache-fill everywh
 `tools/list` route calls `prepare_tool_metadata` inline per request
 (`src/gateway/router/backend_handlers.rs:196`), so a client polling that route pays one
 meta-validation per tool per poll. The first version of this section claimed "not per request" flatly
-and was wrong. Two consequences, both real: U8 must measure the direct route, not only the cache
-fill; and if that measurement breaches the §10 budget, the answer is to hoist the direct route onto
+and was wrong. Two consequences, both real: the direct route needs its own measurement, which is U8b — U8
+times `gateway_invoke` and never enters this route, so widening U8's wording would have left the
+regression unmeasured; and if that measurement breaches the §10 budget, the answer is to hoist the direct route onto
 the cached list rather than to weaken the check.
 
 The per-request cost the design does add everywhere is the rejected-set lookup on the call path
@@ -391,10 +424,10 @@ Settled in this session, with the answer recorded:
 | Where should validation fire, and what happens on failure? | read `src/capability/loader.rs:111` through `src/capability/loader.rs:155` and `src/capability/validator/mod.rs:137` | Per-capability, fail-closed, gateway still starts | Removed an operator question the repo already answers, and removed the temptation to invent a startup abort |
 | Does the OpenAPI generator bypass the loader? | `src/gateway/ui/import.rs:172` | No — it writes YAML into the load directory | Kept the generator in scope without a second seam |
 | Does the repo already meta-validate anywhere? | searched src/ and capabilities/ for `2020-12`, `draft-07`, `$schema` | No, and no schema declares a dialect | Turned dialect pinning into an explicit design decision |
-| Does the `meta` module pin 2020-12, or infer it? | read the `meta` module and `fn.validate_for` pages on docs.rs for `jsonschema` 0.52.1 | Every `meta` free function auto-detects the draft; `_for` means foreign representation, not draft. The pin is `meta::options().with_draft(…)` | Named the exact call in the design instead of leaving the wrong one to be discovered in review; retired U1 |
+| Does the `meta` module pin 2020-12, or infer it? | first from the docs.rs pages for `jsonschema` 0.52.1; **then, after review, from the vendored crate under `~/.cargo/registry`** | Every `meta` free function auto-detects the draft, and `_for` means foreign representation rather than draft — both still true. The pin is **not** `meta::options().with_draft(…)`: that does not compile, `with_draft` being a `ValidationOptions` method. It is `jsonschema::draft202012::meta::validator()`, which delegates to `validator_for_draft(Draft::Draft202012)` (`src/lib.rs:3288`) — a constant, not a dispatch on `$schema` | Named the exact call in the design; retired U1. **This row is left showing its own correction rather than rewritten clean**: the first answer was single-sourced to docs.rs, the design flagged it as unverified, and the flag alone did not stop it being written into a settled-decisions table. A settled row that quietly acquires the right answer teaches nobody why it was wrong. |
 | Can a malformed schema reach the validator, or does serde reject it first? | `git show 112a392c:src/capability/definition/mod.rs` | `input`/`output` are untyped `serde_json::Value` | Made G1 executable — the fixture reaches the check rather than dying at parse |
 | What does the gateway do with a **backend-supplied** schema that fails 2020-12 — reject, publish and flag, or degrade? | *askable, not checkable*: put to the repository owner as its own question, because it is a behaviour change for every deployment proxying a backend with a draft-07 schema | Drop that tool from the catalogue and keep the rest of the backend: validate at registration, do not list and do not route a tool that fails, log it and surface it in diagnostics | Withdrew the §P0 exclusion, retired U6, gave SCHEMA.1 a path to closing without a remainder, and added seam 3 with G5-G7 |
-| Where can a backend tool be dropped without the two callers disagreeing? | read `src/backend/annotations.rs:126-155` and `src/backend/metadata.rs:136-143` | `prepare_tool_metadata` already exists as the single entry point, with a `retain`-based per-tool exclusion and a `warn!` shape to match; its doc comment records the divergence that made it the only entry point | Turned seam 3 from a new module into a second predicate in an existing filter, and fixed its position: once per cache fill, not once per request |
+| Where can a backend tool be dropped without the two callers disagreeing? | read `src/backend/annotations.rs:126-155` and `src/backend/metadata.rs:136-143` | `prepare_tool_metadata` already exists as the single entry point, with a `retain`-based per-tool exclusion and a `warn!` shape to match; its doc comment records the divergence that made it the only entry point | Turned seam 3 from a new module into a second predicate in an existing filter. **The second half of this answer was wrong and is corrected here rather than deleted**: "once per cache fill, not once per request" holds on the shared path and not on the direct one, where `backend_handlers.rs:196` calls the same function inline per request. Reading `metadata.rs` alone was what made the wrong half look settled. |
 | Does filtering the cached list make a rejected tool unroutable? | read `src/gateway/meta_mcp/invoke.rs:1934-1938` | No — the invoke path dispatches names missing from the cache on purpose, to tolerate a stale cache | Added the per-backend rejected-set and the invoke-time refusal; without it the owner's "do not route" half is unimplementable, and G6 is the case that proves it |
 | Does an all-rejected backend interact with warm-start? | read `src/backend/metadata.rs:39-46` | Yes — `invalidate_tools_cache` discards an empty list so warm-start re-asks, and every-tool-rejected produces an empty list | Added the one-condition guard: discard the empty list only when the rejected set is empty too |
 
@@ -408,6 +441,14 @@ Deferred, each with owner, resolving check, trigger and fallback:
 | **U5** | Which construct actually splits draft-07 from 2020-12, for G4 | implementer | run the selected validator over the `items`-as-array candidate under both dialects | before writing the G4 fixture | try further candidates; if none splits them, drop G4 and record that the dialect pin has no disproof — a finding, not a formality |
 | **U7** | Does the backend-schema ruling cover `outputSchema` as well as `inputSchema`? Seam 3 validates both; the ruling named only input | team lead | *askable, not checkable*: whether the owner intends the drop policy to extend to a published `outputSchema` a backend declares | **before merge**, not before the closure comment — the trigger was written late and a reviewer was right to say so: by closure time the widened predicate has already shipped, and an owner narrowing it back would be reverting code rather than choosing a design | narrow seam 3 to `inputSchema` — one clause in one predicate — and record in the closure comment that backend `outputSchema` documents are published unvalidated, which reopens a remainder against `:102` |
 | **U8** | Whether the added rejected-set slot and its invoke-time lookup cost anything measurable on the hot invoke path | implementer | time `gateway_invoke` against a mock backend, 1,000 calls, before and after, median of five | before merge, alongside U4 | keep the set but consult it only when the cached list is populated, which is the same condition the "did you mean?" hint already uses |
+| **U8b** | The direct-route cost, which U8 as written cannot see | implementer | time the **direct** per-backend `tools/list` route against a mock backend publishing 50 tools, 1,000 requests, before and after, median of five — a separate measurement, not a wider reading of U8 | before merge, alongside U8 | hoist the direct route onto the cached list so seam 3 runs per fill there too; weakening the check is not on the table |
+
+U8b is a separate row rather than a wider reading of U8, and the distinction is the whole point. The
+Cost section was corrected to say seam 3 runs per request on the direct route, and U8 was then
+described as covering that. It cannot: U8 times `gateway_invoke`, which never enters the direct
+route, so a regression there would pass the gate unseen. Widening the prose around an instrument
+does not widen the instrument — the confirmation review caught the repair stopping one line short of
+it.
 
 **U6 is retired**, answered in this session and recorded in the settled table above. It was the one
 deferral that blocked something — not this design's implementation, but SCHEMA.1's closure — and it
@@ -458,4 +499,10 @@ to five is itself the argument for reviewing a ruling's *implementation* rather 
 | **Review, Grok, 2026-08-31: no case for the all-rejected warm start** | **fixed — new case G8.** The design named that interaction as the one thing to get right and no row exercised it, which is precisely the empty-cell finding a test-plan review exists to produce. |
 | Review, GPT, 2026-08-31: disable `jsonschema` default features; pre-production gate for `McpProvider`/A2A | **folded into existing unknowns rather than filed.** Default-feature trimming is an input to U2's transitive count, not a separate decision; the provider path is now covered by moving the gate to the shared chokepoint. Filing either as a ticket would cost a human's attention for something already owned. |
 | **Review, kimi, 2026-08-31: no verdict** | **cannot verify — recorded, not counted.** The third reviewer emitted raw tool-call syntax instead of a review and exited 65 ("COULD NOT REVIEW"). No finding, and no evidence either way about this document. Named so the two-vendor result is not silently reported as three. |
+| **Confirmation pass, GPT, 2026-08-31: the rejected set is not identity-scoped** | **residual, named in the routing section — not repaired.** Verified at source: `tools_cache` is one `CachedMetadata<Vec<Tool>>` per backend (`src/backend/mod.rs:54`), `metadata.rs` has zero identity references, and identity selects a connection pool key (`ops.rs:178`) rather than a cache. The finding is a true property of the existing tool cache and the gate inherits it; the proposed fix would key a derived set finer than its source, which cannot be built. The claim died at source as an attribution, not as an observation — so it is recorded, not repaired. |
+| **Confirmation pass, GPT, 2026-08-31: a `tools/call` before discovery bypasses the refusal** | **residual, named in the routing section, and escalated to the team lead.** True: the gate is a deny-list. Making it an allow-list contradicts `invoke.rs:1934-1938`, whose stale-cache tolerance is deliberate, so this is an owner decision of the same shape as the ruling itself rather than a repair. Escalated rather than filed, because a human has to choose. |
+| **Confirmation pass, GPT, 2026-08-31: unparseable elements re-raised** | **disposal unchanged — still a residual with G10.** The proposed fix (meta-validate raw elements, drop those that fail) would reverse `backend_handlers.rs:184-193`, whose stated reason is not to hide a tool clients depend on. Re-raising a finding does not by itself move it; what would move it is the owner reversing that behaviour, which is the same question as the deny-list one above. |
+| **Confirmation pass, GPT, 2026-08-31: U8 cannot measure the direct route** | **fixed — new U8b.** CERTAIN and correct: the Cost section was widened in prose and the instrument was not. U8 times `gateway_invoke`, which never enters the direct route. A separate direct-`tools/list` benchmark now exists rather than a wider reading of the old one. |
+| **Confirmation pass, GPT, 2026-08-31: diagnostics still promise one warning per cache fill** | **fixed.** The repair had reached the Cost section and not the diagnostics one. The `warn!` now fires on entry into the rejected set or a change of error, not on every evaluation — otherwise one polling client on the direct route floods the operator log, which is how a useful warning gets muted. |
+| **Confirmation pass, GPT, 2026-08-31: the settled-decisions table still asserts both disproved facts** | **fixed, by correcting the rows in place rather than rewriting them clean.** Both rows now show what was believed, what disproved it and why the first answer looked settled. A settled-decisions table that quietly acquires the right answer is the exact artefact this document argues against elsewhere; leaving the correction visible is the point. |
 | The 19 meta-tool schemas declare no `$schema` | **no change needed.** Pinning the dialect at the check makes the declaration unnecessary; adding it to 19 literals would be the larger diff and would give the check something to disagree with. |
