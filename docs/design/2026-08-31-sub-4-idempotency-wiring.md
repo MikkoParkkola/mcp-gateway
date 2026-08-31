@@ -88,6 +88,15 @@ then sits `InFlight` until it times out, locking the caller out and afterwards a
 duplicate of work that already ran. Fix: an owned reservation that reaches a terminal state on
 every exit after dispatch.
 
+**Landed status of P1, P3 and P6.** All three are fixed in `src/idempotency.rs` and guarded by
+`tests/idem_p1_p3_p6_acs.rs` (commits `b92205ad`, `76ef3ac8`). Four of that file's five tests have a
+recorded honest red against the pre-fix code: P1 admitted 2 of 8 concurrent callers where 1 is
+allowed, P3 admitted a new key at the bound, P6a left an abandoned reservation in-flight, and P6b
+re-admitted a committed side effect. The fifth,
+`completed_entries_are_still_served_at_the_entry_bound`, has no honest red — the assertion it makes
+was already true before the fix, so it is a regression guard on P3's fail-closed path and an
+insensitive control for anything else. Four falsifiers, not five.
+
 **P7 — the in-flight window is a fixed five minutes.** `IN_FLIGHT_TIMEOUT`
 (`src/idempotency.rs:37`) expires a reservation after 5 minutes regardless of whether the original
 call is still running. RESOLVED: the premise was that a backend call could outlive the window, and
