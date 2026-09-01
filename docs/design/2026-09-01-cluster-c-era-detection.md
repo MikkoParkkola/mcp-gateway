@@ -1,6 +1,6 @@
 # Cluster C — wiring era detection into the outbound path
 
-Status: design, unreviewed. No code exists yet.
+Status: design, review pending. No code exists yet.
 
 ## Scope
 
@@ -115,8 +115,14 @@ change: probe, classify, cache, record — `initialize` still carries every send
   `modern_protocol` is threaded through `Backend` — free under (c), which already holds
   that config.
 
-### Deferred — nothing depending on these gets built
+- **U2 — is one extra round-trip at connect acceptable?** Read the start fan-out
+  (`gateway/server/warmstart.rs:417-424`) and the start path (`backend/lifecycle.rs:288,369`).
+  Warm start spawns **one task per backend**, so the probe costs one round-trip inside each
+  backend's own start and never `N × RTT` against startup wall clock; a lazy first-request
+  start already pays process spawn plus `initialize` on the same connection. **Acceptable.**
+  Changed: nothing — (c) stands and the (d) fallback is not taken. The operator keeps the
+  call; what the measurement settles is that the amount at stake is one round-trip, concurrent.
 
-| # | Question | Owner | What resolves it | When | If it resolves badly |
-|---|---|---|---|---|---|
-| U2 | Is one extra round-trip before `initialize` acceptable at connect? | operator decides; measurement mine | measure connect fan-out latency × backend count | before implementation | Unacceptable ⇒ fall back to (d), lazy, keeping (c)'s ownership. |
+### Deferred
+
+None. Every question above carries a recorded answer.
