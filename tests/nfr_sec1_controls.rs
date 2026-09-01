@@ -41,6 +41,7 @@ struct Fixture {
     auth: AuthConfig,
     meta_mcp_enabled: bool,
     agent_identity: mcp_gateway::config::AgentIdentityConfig,
+    sanitize_input: bool,
 }
 
 impl Default for Fixture {
@@ -49,6 +50,9 @@ impl Default for Fixture {
             auth: Config::default().auth,
             meta_mcp_enabled: true,
             agent_identity: mcp_gateway::config::AgentIdentityConfig::default(),
+            // `SecurityConfig::default()` has this ON. The fixture default is
+            // off so the other rows exercise their own gate and not this one.
+            sanitize_input: false,
         }
     }
 }
@@ -76,7 +80,7 @@ fn state(f: Fixture) -> Arc<AppState> {
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
-        sanitize_input: false,
+        sanitize_input: f.sanitize_input,
         ssrf_protection: false,
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(100)),
@@ -120,6 +124,35 @@ async fn post(state: &Arc<AppState>, body: Value, extra: &[(&str, &str)]) -> (St
     }
     let request = builder
         .body(Body::from(serde_json::to_vec(&body).expect("body")))
+        .expect("request");
+    let response = create_router(Arc::clone(state))
+        .oneshot(request)
+        .await
+        .expect("router must answer");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body must read");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+
+/// POST a body that is not necessarily JSON.
+///
+/// Rows 7 and 8 refuse *before* the body is parsed, so there is nothing to
+/// mirror into `mcp-name`; the headers a modern frame always carries are sent
+/// so no earlier gate can be the one that answers.
+async fn post_raw(state: &Arc<AppState>, body: Vec<u8>) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/list")
+        .body(Body::from(body))
         .expect("request");
     let response = create_router(Arc::clone(state))
         .oneshot(request)
@@ -296,5 +329,90 @@ async fn control_13_a_modern_caller_outside_its_tool_scope_is_refused() {
         served,
         StatusCode::FORBIDDEN,
         "an in-scope key must clear the scope gate; body: {body}"
+    );
+}
+
+
+// ============================================================================
+// NFR.SEC.1 control 8 — JSON well-formedness
+// `-32700` from `serde_json::from_slice` at `handlers.rs:526`. The inventory
+// recorded this as "covered by 10" and it was not: a body that fails here
+// never reaches `parse_request`, and the `-32700` assertions that existed
+// call `build_http_error_response`, the constructor, rather than the gate.
+// ============================================================================
+#[tokio::test]
+async fn control_8_a_modern_request_with_unparseable_json_is_refused() {
+    let app = state(Fixture::default());
+    let (status, body) = post_raw(&app, b"{\"jsonrpc\": \"2.0\", ".to_vec()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+    assert_eq!(
+        body["error"]["code"], -32700,
+        "the refusal must be this gate's parse error, not a later envelope \
+         check or an earlier header check; body: {body}"
+    );
+    // Falsifier: the same route, same headers, parseable body — served. A test
+    // that refused both halves would be measuring some gate ahead of this one.
+    let (served, _) = post_raw(
+        &app,
+        serde_json::to_vec(&modern("tools/list", json!({}))).expect("body"),
+    )
+    .await;
+    assert_eq!(served, StatusCode::OK);
+}
+
+// ============================================================================
+// NFR.SEC.1 control 7 — request body ceiling (10 MiB)
+// `axum::body::to_bytes` at `handlers.rs:513`. Built in memory rather than
+// shipped as a fixture, which is what the inventory priced as too expensive.
+// ============================================================================
+#[tokio::test]
+async fn control_7_a_modern_request_over_the_body_ceiling_is_refused() {
+    let app = state(Fixture::default());
+    let over = modern("tools/list", json!({ "padding": "x".repeat(11 * 1024 * 1024) }));
+    let (status, _) = post(&app, over, &[]).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "the 10 MiB ceiling must still bind a caller who never handshook"
+    );
+    // Falsifier: the SAME shape under the ceiling is served, so the refusal is
+    // the size and not the padded frame being rejected on its own account.
+    let under = modern("tools/list", json!({ "padding": "x".repeat(1024 * 1024) }));
+    let (served, body) = post(&app, under, &[]).await;
+    assert_eq!(served, StatusCode::OK, "body: {body}");
+}
+
+// ============================================================================
+// NFR.SEC.1 control 11 — input sanitization
+// The inventory excused this row as "off by default". It is not: the field
+// carries `#[serde(default)]` and `SecurityConfig::default()` sets it ON, so
+// an operator config that omits it gets sanitization. What the row needed was
+// a rejection shape that is not a moving target — a null byte, which
+// `sanitize_string` refuses by contract.
+// ============================================================================
+#[tokio::test]
+async fn control_11_a_modern_request_carrying_a_null_byte_is_refused() {
+    let app = state(Fixture {
+        sanitize_input: true,
+        ..Default::default()
+    });
+    let (status, body) = post(&app, modern("tools/list", json!({ "q": "a\u{0}b" })), &[]).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+    assert_eq!(
+        body["error"]["code"], -32600,
+        "the refusal must be the sanitizer's, not the JSON parser's; body: {body}"
+    );
+    // Falsifier one: the same frame without the null byte is served.
+    let (served, body) = post(&app, modern("tools/list", json!({ "q": "ab" })), &[]).await;
+    assert_eq!(served, StatusCode::OK, "body: {body}");
+    // Falsifier two: with the control off, the null byte itself is served — so
+    // the refusal above is this control and not the shape being rejected
+    // somewhere else on the path.
+    let off = state(Fixture::default());
+    let (unguarded, _) = post(&off, modern("tools/list", json!({ "q": "a\u{0}b" })), &[]).await;
+    assert_eq!(
+        unguarded,
+        StatusCode::OK,
+        "with sanitization off nothing else on the path rejects a null byte"
     );
 }

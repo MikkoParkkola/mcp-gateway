@@ -3,8 +3,9 @@
 
 # 4.0.0 release readiness — what the blocking criteria actually are
 
-The ledger (`RELEASE-4.0.0-criteria-status.md`) reports 95 criteria, 99 rows, 62 met or
-non-blocking. That count is not that many decisions. The ledger's own
+The ledger (`RELEASE-4.0.0-criteria-status.md`) carries the counts; run
+`scripts/release/count-release-criteria.py --check` for them rather than reading a figure here.
+Whatever the blocking count is on the day, it is not that many decisions. The ledger's own
 evidence cells say so — `NFR.SEC.2`, `.3`, `.4`, `NFR.OBS.4` and `NFR.PERF.3` all read
 "same envelope", and `NFR.OBS.3` reads "verifies MIK-7217.DISCOVER.4-5". Grouping on those
 clauses collapses them into **six clusters and one residue**, of which four are unbuilt
