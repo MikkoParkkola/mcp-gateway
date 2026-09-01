@@ -629,3 +629,70 @@ that goes green while the property it guards is absent.
 - Stale npm version in `npm/package.json:3` — CI syncs it at publish; the guard is hygiene.
 - Homebrew formula staleness — `release.yml` regenerates it in the tap repo.
 - Clippy invocation drift — cosmetic until a gate disagreement actually lets something through.
+
+## 4. State on 2026-09-02 — what moved, what still blocks, and the order to finish in
+
+Sections 1-3 were written on 2026-08-30 against a tree where cluster A had neither designs nor
+code. Two clusters have moved since. This section records the delta and the sequence; it amends no
+count in the ledger, which stays the source of truth for status.
+
+### Cluster A — designs are done and reviewed; no implementation exists
+
+Three documents now settle what the earlier audits found undefined, and each has a recorded verdict:
+
+| document | settles | verdict |
+|---|---|---|
+| `docs/design/2026-09-01-mrtr7-legacy-client-bridge.md` | prompting a pre-round client on a backend's behalf | Grok `SHIP`, on a head the document has since moved past |
+| `docs/design/2026-09-01-nfr-perf3-reclamation.md` | reclaiming abandoned in-flight exchanges, and how a soak observes it | GPT `SHIP-WITH-FIXES` (blocking finding repaired), Grok `SHIP` |
+| `docs/design/2026-09-01-continuation-telemetry.md` | what each continuation counter means and what bounds each series | Kimi `SHIP-WITH-FIXES`, both findings repaired |
+
+**Zero lines of MRTR implementation exist.** `handlers.rs` still refuses every retry, exactly as
+section 1 records. The clusterwide claim "nothing mints or opens a continuation on the live path"
+is unchanged — what changed is that the questions blocking that code are now answered in writing
+rather than in one session's context.
+
+Two review gaps are open and are stated rather than assumed closed. The bridge design's `SHIP` was
+stamped against a head that predates the commit widening its refusal clause from "the variant being
+asked" to "what is being asked", so the verdict does not cover the contract as it now reads; it
+also has one vendor, not two. The telemetry design has one vendor. Both need a second leg at the
+current head before any of this merges, and the pair is Grok plus Kimi until 2026-09-07, because
+the GPT reviewer is usage-limited until then.
+
+### Cluster B — the era prober is built and mounted, and still decides nothing
+
+`src/backend/era.rs` exists and `Backend` carries an `Arc<EraCache>` that lifecycle resolves once
+per start. That closes the "called from nothing" half of the cluster-B row in the rollup. It does
+not close the cluster: **no request path reads the cached era to choose a request shape**, so
+`DISCOVER.4` and `DISCOVER.5` remain blocking on the consuming side, and `NFR.OBS.3` still has no
+counter.
+
+Two lifetime limits of the cache are recorded here rather than filed, because they bound what the
+consuming side may assume. The cache is per-`Backend` and shared across every `PoolKey` slot, so
+under `session_mode = per_user` only the first slot probes and the rest inherit that answer; and
+`force_restart` does not clear it, so a peer that restarts into a different era keeps its old
+classification until the backend is rebuilt. Neither is a defect in the prober. Both are reasons a
+consumer must not treat the cached era as a live fact about the current process.
+
+### The order the remaining work runs in
+
+Cluster A is fifteen of the blocking rows and every other cluster is smaller, so it goes first —
+but the first step is not code. Per the delivery process the sequence inside A is a test plan with
+one row per acceptance criterion, reviewed as a plan; then failing tests, reviewed as tests; then
+implementation, which is done when they pass. Skipping to implementation is the path that produced
+thirty-five review rounds elsewhere in this repo's history.
+
+Three things can run alongside it without waiting:
+
+- **Cluster E is measurement, not code, and it is Spark-only.** No run against 3.5.0 exists. It
+  needs no design and blocks nothing else, so it can start immediately; a Mac number would be worse
+  than no number.
+- **Cluster B's consuming side** is a small change once someone decides what reads the era, and it
+  is independent of the continuation envelope.
+- **Cluster F is four operator decisions, not four pieces of work.** Whether the modern revision
+  joins `SUPPORTED_VERSIONS`, whether `exposed_meta_tools` enforcement ships as a breaking change,
+  whether a dual-role matrix is required, and whether the 17-tool scenario or the documented 14-16
+  ceiling is the one that moves. Each is a stated fact awaiting a call. They are the cheapest rows
+  on the board and they are blocked on nobody writing code.
+
+Clusters C and D follow A, because both need a served modern request path to test against — the
+dependency section above already establishes that, and nothing since has changed it.
