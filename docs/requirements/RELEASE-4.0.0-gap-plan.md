@@ -576,6 +576,52 @@ and the rejection is logged and surfaced in diagnostics. The cluster G design ha
 exclusion and carries the check, its scope receipt and the mixed-backend acceptance case. SCHEMA.1 no
 longer has an open decision in front of it — what remains is implementation.
 
+### The era design is reviewed, and both vendors found the same wall
+
+`docs/design/2026-08-31-discover-outbound-era-probe.md` (revision 5) now carries a `SHIP-WITH-FIXES`
+from each vendor, and the two findings are one finding seen from two sides. GPT: the unchanged
+`EraCache` API cannot re-probe a cached era while preserving it on `NoAnswer` and atomically
+rejecting a stale transport result. Grok: start-path fatal errors and the identity write-gate cannot
+pass through `resolve_with` as it stands. Both name the same cause — the design froze the
+`src/protocol/era.rs` surface and then specified safety properties that surface cannot express.
+
+Under the repair protocol the response is elimination, not a patch: either the API gains a
+conditional commit operation, or the safety claims come out of the design. Patching around a frozen
+surface leaves the finding still statable, which is the test. Two consequences are already settled.
+The 30s re-probe limiter belongs on `Backend` beside the cache, not inside `EraCache`, so the
+surface has one owner. And the italic discriminator "would the next request on this transport fail
+for the same reason?" is replaced by `Transport::is_connected()`, which exists — under the gloss a
+live peer's HTTP 404 reads as a permanent failure, which would fail every legacy start the era table
+was written to save.
+
+Test row 9 moves to `HEADER.9`. It requires a request shaped for the modern revision, and modern
+outbound shaping is explicitly out of this increment, so the row could certify a trigger no
+production request can reach. Row 10 has the same shape and the design says so in its own last
+column — "nothing probes, so this row passes vacuously on `HEAD`". A discriminating test that is
+reachable both before and after implementation replaces it: two backends in one run, one answering
+`-32602` and one `-32022`, asserted as a pair against a single fixture.
+
+### `NFR.COMPAT.1` has no owner, and it is a dependency rather than a neighbour
+
+`SUPPORTED_VERSIONS` (`src/protocol/mod.rs:43`) names four revisions and `2026-07-28` is not among
+them; `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) names it alone. `COMPAT.1` requires the modern
+revision be *served*. Two designs mention `SUPPORTED_VERSIONS` and both exclude it deliberately, so
+no increment owns the row — the omission is recorded in three places and closed in none. GPT's era
+finding reaches the same wall from the other direction: a test cannot exercise a modern-shaped
+request while no modern request path exists. Work that assumes a served modern revision is blocked
+behind this, which makes it a dependency of the era and header increments, not a parallel item.
+
+### One clusterF finding is not yet disposed
+
+The cluster F design's findings table runs R1-R9 and disposes both vendors' rounds. One later finding
+is not in it: the design does not state reversibility, which the Definition of Ready requires as an
+element. There are zero occurrences of `reversib`, `rollback` or `cache.enabled` in the design
+(V, `rg` at `HEAD`). The rollback path exists and is cheap to state — `cache.enabled = false` for the
+gateway cache plus zero capability-cache TTLs — together with the conditions for re-enabling it.
+A second lead needs the design owner rather than a claim here: whether test row `4.f.1` can pass
+without the epoch in the key when the grant insert happens before the warm. If it can, it is a test
+that goes green while the property it guards is absent.
+
 ## 3. Not blocking the release
 
 - Stale npm version in `npm/package.json:3` — CI syncs it at publish; the guard is hygiene.
