@@ -2898,10 +2898,15 @@ async fn an_enforced_transform_does_not_invent_a_continuation_handle() {
         result.get("requestState").is_none(),
         "a handle must not cross without the protocol type that makes it one: {result:#}"
     );
+    // The backend sent a string where the protocol wants a boolean. It crosses
+    // as the string. Normalizing it to `false` would let a malformed failure
+    // arrive as a well-formed success, which is this defect class again with a
+    // different field: a caller reading `isError` gets a value it must reject,
+    // not a verdict the gateway invented for it.
     assert_eq!(
         result["isError"],
-        json!(false),
-        "a non-boolean isError is not a truth to pass on: {result:#}"
+        json!("not-a-boolean"),
+        "a malformed isError must not be rewritten into a success: {result:#}"
     );
 }
 
@@ -2975,5 +2980,12 @@ async fn an_enforced_transform_carries_an_unrecognized_result_type() {
     assert!(
         result.get("requestState").is_none(),
         "the handle is gated on the round type this gateway can parse: {result:#}"
+    );
+    // The backend sent no `isError`. Inserting one would be the gateway
+    // answering a question the backend declined to answer, and `false` is the
+    // answer that reads as success.
+    assert!(
+        result.get("isError").is_none(),
+        "an absent isError must stay absent, not become a manufactured success: {result:#}"
     );
 }

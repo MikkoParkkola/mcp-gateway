@@ -1577,10 +1577,15 @@ impl MetaMcp {
         //
         // The one thing that must survive is the fact that this is an interim
         // round, not a finished call. `resultType` is the discriminator and
-        // `requestState` the handle; carrying either without the other produces
-        // a result that lies about which of the two it is. `InputRequired`
-        // already owns that parse, so ask it rather than copying field names:
-        // a handle only crosses when the protocol type says it is one.
+        // `requestState` the handle. A handle without its discriminator is a
+        // result that lies -- a live continuation token on a payload claiming
+        // to be finished -- so the handle never crosses alone. The reverse is
+        // not a lie but a narrowing: a round this gateway cannot parse keeps
+        // its discriminator and loses its handle, so the caller learns the
+        // exchange is unfinished without being handed a token nothing here
+        // understood. `InputRequired` owns that parse, so ask it rather than
+        // copying field names: a handle only crosses when the protocol type
+        // says it is one.
         //
         // The questions themselves (`inputRequests`) do NOT cross as structure.
         // Note what that does and does not buy: `Strip` renders the whole
@@ -1597,20 +1602,20 @@ impl MetaMcp {
         // reading applies: the exchange is known to continue, and nothing the
         // kernel judged untrusted crosses as structure.
         let mut envelope = serde_json::Map::new();
-        // Any non-empty `resultType` crosses verbatim, not just the one value
-        // this gateway recognizes. Emitting it selectively would make every
-        // other discriminator -- a future round type, a backend extension --
-        // read to the caller as a completed call, which is the exact defect
-        // this block exists to prevent.
-        if let Some(result_type) = original
-            .get("resultType")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        {
-            envelope.insert(
-                "resultType".to_string(),
-                Value::String(result_type.to_string()),
-            );
+        // `resultType` and `isError` describe the round; `requestState` is a
+        // handle the caller can act on. A description crosses verbatim -- any
+        // JSON value, present exactly when the backend sent one -- because
+        // every rule that decides which descriptions are worth emitting is a
+        // rule that rewrites the rest into a completed call. Value, type and
+        // emptiness are all such rules: an unrecognized round type, a
+        // non-string discriminator and `"isError": "true"` each arrive as a
+        // finished success once something filters them. Echoing a description
+        // faithfully is honesty; echoing a capability faithfully would be
+        // authorization, which is why the handle below is gated instead.
+        for field in ["resultType", "isError"] {
+            if let Some(value) = original.get(field) {
+                envelope.insert((*field).to_string(), value.clone());
+            }
         }
         // The handle is gated on the protocol type rather than on the field
         // name: `InputRequired` owns that parse, so a `requestState` crosses
@@ -1622,18 +1627,6 @@ impl MetaMcp {
         }
         envelope.insert("content".to_string(), content);
         envelope.insert("structuredContent".to_string(), delivered);
-        // Carried as the backend set it, normalized to a boolean: stripping
-        // content does not turn a failed call into a successful one, and a
-        // non-boolean `isError` from a backend is not a truth we pass on.
-        envelope.insert(
-            "isError".to_string(),
-            Value::Bool(
-                original
-                    .get("isError")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-            ),
-        );
         Value::Object(envelope)
     }
 
