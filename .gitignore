@@ -54,3 +54,6 @@ docs/distribution/
 # Mutation-testing output (cargo-mutants): a report, not a source artifact.
 mutants.out/
 mutants.out.old/
+
+# Python bytecode from the release-criteria counter.
+__pycache__/
