@@ -70,6 +70,20 @@ The split happens once that session's work lands, against the tree as it then st
 here rather than dropped, because a deferral nobody wrote down is indistinguishable from an
 oversight.
 
+### Two threads that look in flight and are not
+
+A subagent briefed to assess the eleven unassessed non-functional rows returned nothing, and
+the task ID it was given no longer resolves. A second, briefed to write the cluster-C
+era-detection design, left no file at `docs/design/2026-09-01-cluster-c-era-detection.md`. Both
+are recorded here as dead rather than pending, so the next session briefs the work instead of
+waiting on it.
+
+The dual review of the two ledger commits that added the verification-method column is likewise
+recorded as MISSING, not as passed: the Codex run produced no verdict line and the second
+reviewer stopped inside its own preamble. A verdict scraped from the body of a review whose
+subject is verdict-keeping is exactly the failure the verdict-authority rule exists to prevent,
+so nothing is claimed for it here.
+
 ## The shape of the problem
 
 Two thirds of the blocking set is not missing code. It is code that exists and is not
