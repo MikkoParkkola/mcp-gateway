@@ -125,6 +125,10 @@ impl StdioTransport {
         })
     }
 
+    fn diagnostic_command(&self) -> String {
+        crate::security::summarize_stdio_command(&self.command)
+    }
+
     /// Start the subprocess
     ///
     /// # Errors
@@ -132,7 +136,10 @@ impl StdioTransport {
     /// Returns an error if the command cannot be spawned or MCP initialization fails.
     pub async fn start(self: &Arc<Self>) -> Result<()> {
         let parts = shlex::split(&self.command).ok_or_else(|| {
-            Error::Config(format!("Invalid stdio command quoting: {}", self.command))
+            Error::Config(format!(
+                "Invalid stdio command quoting: {}",
+                crate::security::summarize_stdio_command(&self.command)
+            ))
         })?;
         if parts.is_empty() {
             return Err(Error::Config("Empty command".to_string()));
@@ -235,7 +242,7 @@ impl StdioTransport {
             debug!("Stdio reader task ended");
         });
 
-        let command = self.command.clone();
+        let command = self.diagnostic_command();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
@@ -290,7 +297,7 @@ impl StdioTransport {
             .unwrap_or_else(|| PROTOCOL_VERSION.to_string());
 
         debug!(
-            command = %self.command,
+            command = %self.diagnostic_command(),
             version = %version,
             "Sending MCP initialize"
         );
@@ -309,7 +316,7 @@ impl StdioTransport {
 
             return Err(Error::Protocol(format!(
                 "Initialize failed for '{}': {error_msg}",
-                self.command
+                self.diagnostic_command()
             )));
         }
 
@@ -319,13 +326,13 @@ impl StdioTransport {
         {
             if server_version == version {
                 debug!(
-                    command = %self.command,
+                    command = %self.diagnostic_command(),
                     version = %server_version,
                     "Protocol version accepted"
                 );
             } else {
                 info!(
-                    command = %self.command,
+                    command = %self.diagnostic_command(),
                     requested = %version,
                     negotiated = %server_version,
                     "Server negotiated different protocol version"
@@ -349,12 +356,12 @@ impl StdioTransport {
             return Err(Error::Protocol(format!(
                 "Protocol version negotiation failed for '{}': server rejected {rejected_version}, \
                  no compatible version found (server said: {error_msg})",
-                self.command
+                self.diagnostic_command()
             )));
         };
 
         warn!(
-            command = %self.command,
+            command = %self.diagnostic_command(),
             rejected = %rejected_version,
             negotiated = %negotiated,
             "Retrying initialize with negotiated protocol version"
@@ -368,14 +375,15 @@ impl StdioTransport {
         if let Some(ref error) = retry_response.error {
             return Err(Error::Protocol(format!(
                 "Initialize failed for '{}' even with negotiated version {negotiated}: {}",
-                self.command, error.message
+                self.diagnostic_command(),
+                error.message
             )));
         }
 
         *self.protocol_version.write() = Some(negotiated.to_string());
 
         info!(
-            command = %self.command,
+            command = %self.diagnostic_command(),
             version = %negotiated,
             "Successfully negotiated protocol version"
         );
@@ -404,7 +412,7 @@ impl StdioTransport {
 
         let negotiated = self.protocol_version.read().clone();
         info!(
-            command = %self.command,
+            command = %self.diagnostic_command(),
             version = negotiated.as_deref().unwrap_or(PROTOCOL_VERSION),
             "Stdio transport initialized"
         );

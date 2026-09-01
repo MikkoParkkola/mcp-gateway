@@ -434,9 +434,18 @@ async fn check_http_backend(name: &str, transport: &TransportConfig) -> Option<C
             }
         }
         Err(e) => Some(
-            CheckResult::fail(label, format!("connection failed: {e}"))
-                .with_category("backend_http")
-                .with_hint(format!("Check that the server at {http_url} is running")),
+            CheckResult::fail(
+                label,
+                format!(
+                    "connection failed: {}",
+                    mcp_gateway::security::request_error_category(&e)
+                ),
+            )
+            .with_category("backend_http")
+            .with_hint(format!(
+                "Check that the server at {} is running",
+                mcp_gateway::security::diagnostic_url(http_url)
+            )),
         ),
     }
 }
