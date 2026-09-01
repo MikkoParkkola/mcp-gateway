@@ -50,8 +50,9 @@ impl Default for Fixture {
             auth: Config::default().auth,
             meta_mcp_enabled: true,
             agent_identity: mcp_gateway::config::AgentIdentityConfig::default(),
-            // `SecurityConfig::default()` has this ON. The fixture default is
-            // off so the other rows exercise their own gate and not this one.
+            // `SecurityConfig::default()` has this ON (`security.rs:472`).
+            // The fixture default is off so the other rows reach their own
+            // gate rather than being refused by this one.
             sanitize_input: false,
         }
     }
@@ -384,10 +385,11 @@ async fn control_7_a_modern_request_over_the_body_ceiling_is_refused() {
 
 // ============================================================================
 // NFR.SEC.1 control 11 — input sanitization
-// The inventory excused this row as "off by default". It is not: the field
-// carries `#[serde(default)]` and `SecurityConfig::default()` sets it ON, so
-// an operator config that omits it gets sanitization. What the row needed was
-// a rejection shape that is not a moving target — a null byte, which
+// The inventory excused this row as "off by default". It is not:
+// `SecurityConfig::default()` sets it ON (`src/config/features/security.rs:472`)
+// and the gateway reads that field into `AppState`
+// (`src/gateway/server/mod.rs:1187`). What the row actually needed was a
+// rejection shape that is not a moving target — a null byte, which
 // `sanitize_string` refuses by contract.
 // ============================================================================
 #[tokio::test]
