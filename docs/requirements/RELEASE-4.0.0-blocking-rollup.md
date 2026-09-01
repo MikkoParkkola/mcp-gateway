@@ -4,10 +4,10 @@
 # 4.0.0 release readiness — what the 38 blocking criteria actually are
 
 The ledger (`RELEASE-4.0.0-criteria-status.md`) reports 95 criteria, 99 rows, 61 met or
-non-blocking, 38 blocking. Thirty-eight is not thirty-eight decisions. The ledger's own
+non-blocking, 38 blocking. That count is not that many decisions. The ledger's own
 evidence cells say so — `NFR.SEC.2`, `.3`, `.4`, `NFR.OBS.4` and `NFR.PERF.3` all read
 "same envelope", and `NFR.OBS.3` reads "verifies MIK-7217.DISCOVER.4-5". Grouping on those
-clauses collapses the 38 into **six clusters and one residue**, of which four are unbuilt
+clauses collapses them into **six clusters and one residue**, of which four are unbuilt
 mechanisms and two are measurements nobody has run.
 
 This document exists so the shape of the remaining work survives outside one session's
@@ -24,10 +24,10 @@ stays the source of truth for status.
 | D | MIK-7213 response-cache keying | `CACHE.3`, `CACHE.4` | 2 | designed in `docs/design/2026-08-31-cluster-f-response-cache-keying.md`, zero tests, decision table not referenced from `cacheable.rs` |
 | E | performance measurements | `NFR.PERF.1`, `NFR.PERF.2` | 2 | no run against 3.5.0 exists. A code read cannot substitute. **Spark only** — a Mac number is worse than no number |
 | F | compatibility and surface facts | `NFR.COMPAT.1`, `NFR.COMPAT.3`, `NFR.COMPAT.4`, `NFR.PERF.4` | 4 | each is a stated fact awaiting an operator decision, not code: the modern revision is not in `SUPPORTED_VERSIONS`; `exposed_meta_tools` enforcement is breaking; no dual-role matrix; the 17-tool scenario exceeds the documented 14-16 ceiling |
-| — | residue | `HEADER.9`, `CONTROL.4`, `CONFIRM.2`, `NFR.SEC.1`, `NFR.SEC.6`, `NFR.OBS.5` | 6 | genuinely independent; see below |
+| — | residue | `HEADER.9`, `CONTROL.4`, `CONFIRM.2`, `NFR.SEC.1`, `NFR.SEC.6` | 5 | genuinely independent; see below |
 
-Fifteen of the thirty-eight are cluster A. Wire the continuation envelope and the blocking
-count drops to twenty-three without a single new decision being made — though each of the
+Fifteen of the thirty-seven are cluster A. Wire the continuation envelope and the blocking
+count drops to twenty-two without a single new decision being made — though each of the
 fifteen still needs its own evidence afterwards, exactly as the ledger says.
 
 ## The residue, one line each
@@ -41,8 +41,6 @@ fifteen still needs its own evidence afterwards, exactly as the ledger says.
 - `NFR.SEC.1` — 14 controls enumerated in `docs/requirements/nfr-sec1-control-inventory.md`;
   nine carry a refusal test, five are recorded gaps. `each` is unmet until those five do.
 - `NFR.SEC.6` — the sweep exists; the row is a traceability question across MIK-7222/7246/7256.
-- `NFR.OBS.5` — the flag exists, defaults off and is read on the live path; the revertibility
-  half is what is unproven.
 
 ## The four decisions this reduces to
 
