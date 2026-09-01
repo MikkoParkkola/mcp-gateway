@@ -4,7 +4,7 @@
 # 4.0.0 release readiness — what the blocking criteria actually are
 
 The ledger (`RELEASE-4.0.0-criteria-status.md`) reports 95 criteria, 99 rows, 62 met or
-non-blocking, 37 blocking. That count is not that many decisions. The ledger's own
+non-blocking. That count is not that many decisions. The ledger's own
 evidence cells say so — `NFR.SEC.2`, `.3`, `.4`, `NFR.OBS.4` and `NFR.PERF.3` all read
 "same envelope", and `NFR.OBS.3` reads "verifies MIK-7217.DISCOVER.4-5". Grouping on those
 clauses collapses them into **six clusters and one residue**, of which four are unbuilt
@@ -26,7 +26,7 @@ stays the source of truth for status.
 | F | compatibility and surface facts | `NFR.COMPAT.1`, `NFR.COMPAT.3`, `NFR.COMPAT.4`, `NFR.PERF.4` | 4 | each is a stated fact awaiting an operator decision, not code: the modern revision is not in `SUPPORTED_VERSIONS`; `exposed_meta_tools` enforcement is breaking; no dual-role matrix; the 17-tool scenario exceeds the documented 14-16 ceiling |
 | — | residue | `HEADER.9`, `CONTROL.4`, `CONFIRM.2`, `NFR.SEC.1`, `NFR.SEC.6` | 5 | genuinely independent; see below |
 
-Fifteen of the thirty-seven are cluster A. Wire the continuation envelope and the blocking
+Cluster A is by far the largest of them. Wire the continuation envelope and the blocking
 count drops to twenty-two without a single new decision being made — though each of the
 fifteen still needs its own evidence afterwards, exactly as the ledger says.
 
@@ -77,7 +77,7 @@ push, and its material is the diff, not the design documents.
 ## Who owns what, 2026-09-01
 
 The clusters above describe the work. This section says who is doing it, because the gap that
-kept reopening was not analysis — it was that twelve of the thirty-seven blocking rows had no
+kept reopening was not analysis — it was that twelve of the blocking rows had no
 owner, and unowned work does not fail loudly. It simply never starts.
 
 | cluster | rows | owner |
@@ -127,7 +127,7 @@ production diff before a push is attempted.
 
 ### The two gates that are not rows, and the file two owners share
 
-The table above assigns an owner to all thirty-seven blocking rows, which reads as full
+The table above assigns an owner to every blocking row, which reads as full
 coverage and is not. Two things gate the release and appear in no row, so nothing goes green
 when they are skipped:
 
