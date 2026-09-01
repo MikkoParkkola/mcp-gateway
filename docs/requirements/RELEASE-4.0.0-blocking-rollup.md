@@ -156,3 +156,17 @@ frozen scope declares adding it explicitly out. So the gateway can wire the cont
 envelope and the revision surface in full and never negotiate the revision that reaches them —
 unwiredness moved one level up, where no criterion in cluster A or C would report it. Whoever
 adds the version is a decision, not an analysis; it is not currently anyone's.
+
+### One commit must not be handed to a reviewer whole
+
+`ce72a5ba` contains 51 lines of this file that its author did not write: a `git add -A` on a
+shared branch swept in another session's work while that session was mid-edit. The content is
+intact and was superseded two commits later, so nothing was lost and the branch was correctly
+not rewritten — rewriting shared history to repair an attribution line damages more than it
+fixes. But the commit is now unsafe as review material: a reviewer handed `git show ce72a5ba`
+spends findings on a document its author cannot defend, and that round does not come back.
+
+When the cluster-D review is called, scope its material to `src/cache.rs`,
+`src/gateway/meta_mcp/invoke.rs`, `tests/mik_7213_acs.rs` and the cluster's own doc sites.
+The general rule this is an instance of: on a branch with concurrent sessions, stage explicit
+paths. `git add -A` is a claim about the whole tree, and on a shared tree that claim is false.
