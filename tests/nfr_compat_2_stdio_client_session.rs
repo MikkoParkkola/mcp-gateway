@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! NFR.COMPAT.2 — demonstration half.
 //!
 //! Criterion: "A client that worked against 3.5.0 MUST work against 4.0.0 with

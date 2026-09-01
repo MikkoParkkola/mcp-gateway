@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! NFR.OBS.1 and NFR.OBS.2 — the gateway's own record of what it observed.
 //!
 //! Both criteria are about a record existing, so both tests capture the real
