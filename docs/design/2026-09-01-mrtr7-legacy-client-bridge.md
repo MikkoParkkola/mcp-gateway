@@ -100,6 +100,14 @@ per variant, never the envelope and never the whole result:
 | a JSON-RPC `error` member | `DeliveryError::ClientRefused { code, message }` |
 | neither `result` nor `error` | `DeliveryError::Malformed` |
 
+**The bridge does not validate `content` against the `requestedSchema` it sent.** It checks that
+`content` is present and is a JSON object, and forwards it. The schema belongs to the backend, and
+the backend is reachable by paths that never went through this bridge, so it must handle a
+non-conforming answer regardless — a second validator here would be a second opinion about the
+backend's own contract, diverging the moment either side changes. A mismatched accept is a bad
+answer, not a non-answer: `Declined` exists to keep the "user said no" case out of the answer path,
+and an accept, however poorly filled in, is the user having answered.
+
 `Declined` is a distinct arm rather than a `ClientRefused` alias because it is the one outcome that
 is neither a fault nor an answer: the user was asked and said no. §4's rule applies to it unchanged
 — the call fails and the backend is not retried — but the reason reported is the user's, which is
@@ -224,6 +232,12 @@ Three limits, each on the original call rather than on a round:
 | retry rounds | 3 | before re-invoking the backend |
 | prompts in total | 8 | before sending any prompt of a batch that would exceed it |
 | aggregate wall time | 120s | checked before each send, and as a deadline on the whole call |
+| per-prompt wait | `min(remaining, 30s)` | on each send; a send with no remaining budget is not attempted |
+| dispatch within a batch | sequential | one prompt in flight at a time, budget re-checked between |
+
+Five rows, not three: the last two were prose beneath this table and are what an implementer
+transcribes into constants alongside the first three. The paragraphs below say *why* each value is
+what it is; the table is the contract.
 
 The values are stated here rather than deferred to a named constant so that the boundary tests and
 the implementation converge on one contract; they are named constants in code, and changing one is
@@ -298,6 +312,19 @@ slice = no narrowing, not an empty set: an empty `input_capabilities` (`server/m
 `&[]`) means the request said nothing, not that the client can do nothing. That distinction is the
 whole reason this paragraph exists — reading `&[]` as a denial refuses every client, silently, on
 the path that looks correct.
+
+**So the field becomes `Option<&[String]>` when its first reader lands.** The paragraph above exists
+only because `&[]` has to carry two meanings — "said nothing" and, one careless refactor later,
+"can do nothing". `None` versus `Some(&[])` says both without prose, makes "narrow to nothing on
+this call" expressible rather than unreachable, and retires the trap instead of documenting it.
+Named here because the change belongs with `MRTR.9`'s gate, which is the first code that reads the
+field; the bridge reads the store and is unaffected either way.
+
+**This supersedes `mrtr-wiring` DE-4 for the stdio path.** DE-4 refused stdio on the grounds that a
+stdio client's `initialize` capabilities were not readable anywhere. The session store is where they
+become readable, and §2 puts the transport in scope, so the premise DE-4 rested on no longer holds.
+Recorded by name because both documents are in the tree and a reader who finds DE-4 first would
+otherwise have no way to tell which one won.
 
 ## Refusals, before any of the above runs
 
