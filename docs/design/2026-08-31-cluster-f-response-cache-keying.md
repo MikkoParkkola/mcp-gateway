@@ -658,8 +658,38 @@ recorded as an observation for the CACHE.2 owner, not filed.
 | can grant enforcement move above the cache read, and what does the move cost? | read `invoke.rs:524-593` (chokepoint), `:1437` (`enforce_identity_grants`), `:1842` (its call site inside `dispatch_to_backend`) | yes, and it is free — the function is synchronous, awaits nothing, takes no permit, holds one read lock, and all five arguments are in scope at `:534-542`; its `cap_def` comes from the same `get_capabilities()`/`get(tool)` lookup the chokepoint already does at `:588-591` | made ordering the elimination, split the safety argument in two, and dropped `agent_id` from the principal as a gate input rather than a keying one |
 | what bumps the epoch on a tool-policy change? | searched `config_reload/mod.rs` and `invoke.rs` for `tool_policy` | nothing — no live-swap seam exists on either path; the type is consulted by the authorizer at the chokepoint | deleted the row. Revision 2's "the policy write path" named no location, and a bump site that cannot be found never fires |
 | does the epoch race survive the ordering move? | traced the key's lifetime across the read at `:838` and the write at `:1294` | no, but not because of the move — because the key is built once and carried, so a mid-flight bump makes the insert land under the old epoch and be unreachable | stated "build once, carry" explicitly; revision 2 implied it and never said it |
+| can an old-shape key be read after the change? | `rg` for every `ResponseCache` mention outside `cache.rs`, then read the store's declaration and `CachedResponse`'s derives | no — `entries` is a private `DashMap` (`cache.rs:21`), `CachedResponse` (`:29`) is private and derives no `Serialize`, no constructor accepts prior contents, and nothing outside `cache.rs` reaches the map; the only handle other modules hold is `Arc<ResponseCache>` inside one process | turned the rollback cost below from an estimate into a fact, and set the condition that would void it |
 
 **Deferred:** one — the stdio `proto` question. It was none when this design froze; building the test plan turned the `proto` disjunction (§L48-53) into an unanswered operator question. The four fields live in the test plan's Deferred section, which governs.
+
+## Reversibility
+
+The reversal is **deploy the previous binary**. There is no migration to undo, no
+schema to downgrade and no data to rewrite, because the only thing this change
+altered is the *shape of a key* in a store that does not outlive the process
+holding it.
+
+The cost is **one cold cache**, once, on the restart that swaps the binary. Every
+entry written under the new shape is unreachable to the old code and every entry
+written under the old shape is unreachable to the new — and that asymmetry costs
+nothing, because neither set exists at the moment the other starts. A restart
+empties the store regardless of which binary comes back.
+
+That is cheap for one reason and it is worth naming, because the reason is what
+would have to change for this paragraph to stop being true: **the store does not
+outlive the process.** `entries` is a private `DashMap` (`cache.rs:21`),
+`CachedResponse` is private and derives no `Serialize` (`:29`), no constructor
+takes prior contents, and no module outside `cache.rs` holds anything but an
+`Arc<ResponseCache>` within a single process. No old-shape key survives a process
+boundary to be read back, so the failure mode a key-shape change normally carries
+— a stale entry read under a key that now means something else — has no path here.
+
+**What voids this.** Any path that lets an old-shape key be read after the swap:
+a warm handoff between processes, a persisted snapshot of `entries`, an external
+or shared backing store, or a second process attached to the same map. Adding any
+of those makes the key shape a migration concern and this paragraph must be
+rewritten before that lands — which is what row `4.l.2` of the test plan asks for
+with its version segment, still unbuilt.
 
 ## Test plan
 
