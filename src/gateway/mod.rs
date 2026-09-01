@@ -15,6 +15,7 @@ pub mod oauth;
 pub mod proxy;
 pub mod recovery;
 mod router;
+pub(crate) mod search_disclosure;
 mod server;
 pub mod session_lifecycle;
 pub mod state;

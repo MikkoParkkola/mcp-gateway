@@ -31,58 +31,15 @@ use crate::protocol::{
     RequestId, is_version_mismatch_error, negotiate_best_version,
     parse_supported_versions_from_error,
 };
+use crate::security::http_diagnostics::{
+    SESSION_EXPIRED_MARKER, safe_http_status_error, safe_request_error,
+};
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
 /// Reduce a URL to its origin before it reaches a log line or an error string.
-///
-/// One line, because the rule and its reasoning live in
-/// [`crate::security::sanitize::redact_url_for_diagnostics`]. A second copy of a
-/// security predicate is how one gets fixed and the other does not.
 fn sanitize_url_for_diagnostics(raw: &str) -> String {
     crate::security::sanitize::redact_url_for_diagnostics(raw)
-}
-
-/// Categorise a reqwest failure without keeping its Display text.
-///
-/// `reqwest::Error`'s Display embeds the full request URL, so `format!("{e}")`
-/// reintroduces every credential this module is careful to strip. The category
-/// is what a reader needs; the URL is what an attacker needs.
-fn safe_request_error(context: &str, error: &reqwest::Error) -> Error {
-    let category = if error.is_timeout() {
-        "timeout"
-    } else if error.is_connect() {
-        "connection failed"
-    } else if error.is_redirect() {
-        "redirect rejected"
-    } else {
-        "request failed"
-    };
-    Error::Transport(format!("{context}: {category}"))
-}
-
-/// Report an HTTP failure status while discarding the response body.
-///
-/// The body comes from the backend, which is not trusted to keep our secrets out
-/// of its error text, and it can be arbitrarily large. Session expiry is the one
-/// signal callers act on, so it is detected and everything else dropped.
-/// The one spelling of the expiry signal, shared by the writer below and the
-/// reader in [`is_session_expired_error`].
-///
-/// It was a bare string literal in both. They are a pair — the writer turns an
-/// untrusted body into this marker, the reader acts on it — and landing a change
-/// to one without the other silently disabled session recovery while every other
-/// test stayed green. A shared constant does not make them provably consistent,
-/// but it makes them impossible to diverge by typo, which is how they diverged.
-const SESSION_EXPIRED_MARKER: &str = "session expired";
-
-fn safe_http_status_error(status: reqwest::StatusCode, body: &str) -> Error {
-    let lower = body.to_ascii_lowercase();
-    if body.contains("-32015") || lower.contains("session not found") {
-        Error::Transport(format!("HTTP {status}: {SESSION_EXPIRED_MARKER}"))
-    } else {
-        Error::Transport(format!("HTTP {status}"))
-    }
 }
 
 /// Origin equality per WHATWG (scheme + host + effective port). Used to enforce
@@ -528,10 +485,10 @@ impl HttpTransport {
 
                     let retry_response = self.send_request(&retry_request).await?;
 
-                    if retry_response.error.is_some() {
+                    if let Some(err) = &retry_response.error {
                         return Err(Error::Protocol(format!(
-                            "Initialize failed with negotiated version {}: {:?}",
-                            negotiated_version, retry_response.error
+                            "Initialize failed with negotiated version {}: backend error code {}",
+                            negotiated_version, err.code
                         )));
                     }
 
@@ -768,7 +725,10 @@ impl HttpTransport {
                     let data = data.trim();
 
                     if event_type.as_deref() == Some("endpoint") {
-                        debug!(endpoint = %data, "Received message endpoint from SSE");
+                        debug!(
+                            endpoint = %sanitize_url_for_diagnostics(data),
+                            "Received message endpoint from SSE"
+                        );
 
                         // Extract session_id from the endpoint URL if present.
                         // The SSE handshake is connection-level (not per-caller),

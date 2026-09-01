@@ -7,6 +7,8 @@
 
 This matrix tracks mcp-gateway only. Older versions mixed in external controls and treated several implemented gateway controls as pending. Current coverage is **10/10 COVERED** for the gateway boundary, with hardening follow-ups listed separately where a downstream tool, multi-gateway mesh, or deployment profile must add its own controls.
 
+Companion (different question, same boundary): [MITRE Fight Fraud Framework mapping](compliance/MITRE-F3-MAPPING.md). OWASP ASI is agent-tool risk. F3 is financial-fraud actor behavior. The F3 document is a PARTIAL/GAP mapping, not a coverage badge.
+
 ## Compliance Matrix
 
 | # | OWASP ASI Risk | Status | mcp-gateway controls | Boundary / hardening |

@@ -516,21 +516,26 @@ pub(crate) fn build_code_mode_match_json(server: &str, tool: &Tool, include_sche
 }
 
 /// Convert ranked `SearchResult` items to JSON.
-pub(crate) fn ranked_results_to_json(ranked: Vec<SearchResult>) -> Vec<Value> {
+///
+/// Ranking diagnostics are included only when `explain` is true (MIK-7084).
+pub(crate) fn ranked_results_to_json(ranked: Vec<SearchResult>, explain: bool) -> Vec<Value> {
     ranked
         .into_iter()
         .map(|r| {
-            json!({
+            let ranking =
+                explain.then(|| crate::gateway::search_disclosure::ranking_debug_object(&r));
+            let mut value = json!({
                 "server": r.server,
                 "tool": r.tool,
                 "description": r.description,
                 "score": r.score,
-                "ranking": {
-                    "included": r.explanation.included,
-                    "reasons": r.explanation.reasons,
-                    "signals": r.signals
-                }
-            })
+            });
+            if let Some(ranking) = ranking
+                && let Value::Object(ref mut map) = value
+            {
+                map.insert("ranking".to_string(), ranking);
+            }
+            value
         })
         .collect()
 }

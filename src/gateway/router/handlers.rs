@@ -635,7 +635,7 @@ pub(super) async fn meta_mcp_handler(
         debug!(id = %resp_id, body = %request, "Received sampling/elicitation response POST-back");
         let resolved = state
             .proxy_manager
-            .resolve_pending(resp_id, request.clone());
+            .resolve_pending(resp_id, &session_id, request.clone());
         if resolved {
             debug!(id = %resp_id, "Routed proxy response to caller");
         } else {
