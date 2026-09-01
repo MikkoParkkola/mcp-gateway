@@ -124,3 +124,34 @@ still being read at 99 rows.
 The branch is unpushed, by the count above. Every criterion in the table could go green
 without changing that, and the dual-vendor review still owes its pass on the accumulated
 production diff before a push is attempted.
+
+### The two gates that are not rows, and the file two owners share
+
+The table above assigns an owner to all thirty-seven blocking rows, which reads as full
+coverage and is not. Two things gate the release and appear in no row, so nothing goes green
+when they are skipped:
+
+| gate | owner | why it is not a row |
+|---|---|---|
+| dual-vendor review of the accumulated production diff | this session, by default | its material is the diff, not any design document; every cluster could pass its own review and this would still be owed |
+| `ratify`, then the push | **the operator, at a terminal** | a ratification stamp is minted by a human running `ratify`; no agent can produce one |
+
+The second is the shortest item on the whole list and the only one nobody else can do. Thirty-one
+commits are unbacked work until it happens: they exist on one disk, no reviewer can fetch them,
+and a disk failure loses them without trace.
+
+One file has two owners, and the ownership rule above did not catch it. The direct route
+`POST /mcp/{name}` bypasses `invoke_tool_traced` (`src/gateway/backend_handlers.rs:724`) and
+keeps no per-user cache (`:594`). `CACHE.4` binds "any shared cache the gateway keeps" and
+`OTEL.1` binds tracing "across the gateway hop" — the same call site, split across cluster C and
+cluster D. Both owners have been told. The seam goes to one of them and the other consumes it;
+a call site owned half by tracing and half by caching is the coupling that produces the next
+defect.
+
+`NFR.COMPAT.1` is listed under cluster F as an operator fact, and it is also a dependency the
+other two wirings run on. `SUPPORTED_VERSIONS` (`src/protocol/mod.rs:43`) does not name
+`2026-07-28`; `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) names it alone, and era-r4-repair's
+frozen scope declares adding it explicitly out. So the gateway can wire the continuation
+envelope and the revision surface in full and never negotiate the revision that reaches them —
+unwiredness moved one level up, where no criterion in cluster A or C would report it. Whoever
+adds the version is a decision, not an analysis; it is not currently anyone's.
