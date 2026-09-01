@@ -668,6 +668,43 @@ pub(super) async fn meta_mcp_handler(
     // below refuses it. The value is read once, above the session decision, so
     // the two readings cannot disagree.
     let shape = crate::protocol::meta::classify_request(params.as_ref(), declared_version);
+
+    // NFR.OBS.1. The revision this request is written against, and which of the
+    // two places carried it. A record naming only the revision cannot tell a
+    // stateless `_meta` declaration from a session's handshake, and the two are
+    // served by different code paths — which is the whole reason to record it.
+    // Emitted above the malformed early return, so every request that reaches
+    // the handler is recorded and not only the well-formed ones.
+    let (protocol_revision, revision_source) = match shape {
+        crate::protocol::meta::RequestShape::Modern(ref fields) => {
+            (fields.protocol_version.as_str(), "_meta")
+        }
+        // Declared itself modern and then omitted a required field: the
+        // declaration was still `_meta`'s, even where the revision is
+        // unreadable.
+        crate::protocol::meta::RequestShape::Malformed { .. } => {
+            (declared_version.unwrap_or("absent"), "_meta")
+        }
+        // A legacy revision is settled once at `initialize` and echoed on every
+        // later request in the header, so both readings below report the same
+        // handshake rather than a second source.
+        crate::protocol::meta::RequestShape::Legacy => match declared_version.or_else(|| {
+            params
+                .as_ref()
+                .and_then(|p| p.get("protocolVersion"))
+                .and_then(serde_json::Value::as_str)
+        }) {
+            Some(version) => (version, "handshake"),
+            None => ("absent", "none"),
+        },
+    };
+    info!(
+        target: "mcp_gateway::observed",
+        method = %method,
+        protocol_revision,
+        revision_source,
+        "protocol revision observed"
+    );
     if let crate::protocol::meta::RequestShape::Malformed { ref missing } = shape {
         // Declared itself modern and then omitted a required field. The
         // specification is specific about both halves of the answer: -32602,
@@ -917,12 +954,48 @@ pub(super) async fn meta_mcp_handler(
             Some(session_id.as_str()),
             header_profile.as_deref(),
         ),
-        "tools/list" => state.meta_mcp.handle_tools_list_with_url_override(
-            id,
-            params.as_ref(),
-            Some(session_id.as_str()),
-            code_mode_url_active,
-        ),
+        "tools/list" => {
+            // NFR.OBS.2. Which filters decide this surface, and the cacheScope
+            // the response will carry — recorded before the list is built, so
+            // the record cannot be written from the answer it exists to check.
+            //
+            // The conditions are re-derived from the same inputs `meta_mcp`
+            // branches on rather than reported back by it: the branching lives
+            // behind a file boundary this change does not cross. The scope is
+            // read from `CacheScope`, the one source the emitter also reads, so
+            // record and field cannot drift apart while both compile.
+            let mut filters = vec!["meta_tool_exposure", "session_profile"];
+            if state.meta_mcp.code_mode_enabled || code_mode_url_active {
+                filters.push("code_mode");
+            }
+            #[cfg(feature = "spec-preview")]
+            if params
+                .as_ref()
+                .and_then(|p| p.get("query"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|query| !query.is_empty())
+            {
+                filters.push("query");
+            }
+            let filters = filters.join(",");
+            info!(
+                target: "mcp_gateway::observed",
+                filters = filters.as_str(),
+                cache_scope =
+                    crate::protocol::cacheable::CacheScope::current_for_tools_list().as_str(),
+                // A legacy result carries no `cacheScope`, so a record naming
+                // one without saying whether it reaches the client would be
+                // reporting a field that was never sent.
+                cache_scope_advertised = is_modern,
+                "tools/list filters and cache scope"
+            );
+            state.meta_mcp.handle_tools_list_with_url_override(
+                id,
+                params.as_ref(),
+                Some(session_id.as_str()),
+                code_mode_url_active,
+            )
+        }
         "tools/call" => {
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
 
