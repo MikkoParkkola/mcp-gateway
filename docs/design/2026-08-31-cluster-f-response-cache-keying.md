@@ -565,9 +565,11 @@ that it says so explicitly instead of leaving the reader to infer it.
 
 The criterion has two clauses and the second is the one that gets skipped:
 the table must be **referenced from the code that emits the field**. A
-doc-comment on `CacheScope::for_list` (`cacheable.rs:45`) and
-`current_for_tools_list` (`cacheable.rs:64`) pointing at this section
-discharges it. Those edits are named here, not made here.
+doc-comment on `CacheScope::for_list` (`cacheable.rs:41-45`) pointing at the
+table discharges it. Made 2026-09-01: `SCOPE_TABLE` (`cacheable.rs:62-75`) is
+read by `handlers.rs:998,1535` through `scope_for_method`. The second anchor
+this section originally named, `current_for_tools_list`, was deleted rather
+than documented — it had no production caller once the table existed.
 
 ## Options considered
 

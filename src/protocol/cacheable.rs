@@ -50,21 +50,6 @@ impl CacheScope {
             Self::Public
         }
     }
-
-    /// The scope this gateway's `tools/list` currently warrants.
-    ///
-    /// Private, and not provisionally: the list varies by the credential
-    /// presented — an API key's scope decides which backends a caller sees.
-    /// That variation is legal (credentials are per-request input, not
-    /// connection state) and it is exactly what `private` describes.
-    ///
-    /// A future `public` needs a row in [`scope_for_method`]'s table naming a
-    /// response that provably does not vary. It is not reached by relaxing this
-    /// function.
-    #[must_use]
-    pub const fn current_for_tools_list() -> Self {
-        Self::for_list(true)
-    }
 }
 
 /// The methods this gateway has assessed, and what each one warrants.
@@ -77,14 +62,27 @@ impl CacheScope {
 const SCOPE_TABLE: &[(&str, CacheScope)] = &[
     // Filtered by the presented credential's scope — an API key decides which
     // backends, prompts and resources a caller is shown.
-    ("tools/list", CacheScope::Private),
-    ("prompts/list", CacheScope::Private),
-    ("resources/list", CacheScope::Private),
-    ("resources/templates/list", CacheScope::Private),
-    // Not a list, and assessed separately: reachability of a URI is decided
-    // per caller, so the body is too.
+    ("tools/list", CacheScope::for_list(true)),
+    ("prompts/list", CacheScope::for_list(true)),
+    ("resources/list", CacheScope::for_list(true)),
+    ("resources/templates/list", CacheScope::for_list(true)),
+    // Not a list, so not `for_list`: reachability of a URI is decided per
+    // caller, so the body is too. The bare value is the honest form here — a
+    // row that named the list rule would be citing a rule it was not decided by.
     ("resources/read", CacheScope::Private),
 ];
+
+/// The methods this gateway has assessed, and what each one warrants.
+///
+/// Exposed because *assessed* is not observable through [`scope_for_method`]:
+/// every row is private and so is the fallback, so a row that was deleted and a
+/// row nobody ever wrote return the same answer. The set is the artifact the
+/// criterion asks for, and reading it is the only way to ask whether a method
+/// is in it.
+#[must_use]
+pub fn assessed_methods() -> &'static [(&'static str, CacheScope)] {
+    SCOPE_TABLE
+}
 
 /// What `method`'s result may claim on the wire.
 ///
@@ -93,7 +91,7 @@ const SCOPE_TABLE: &[(&str, CacheScope)] = &[
 /// seen, and a method nobody assessed has nobody's proof behind it.
 #[must_use]
 pub fn scope_for_method(method: &str) -> CacheScope {
-    SCOPE_TABLE
+    assessed_methods()
         .iter()
         .find(|(name, _)| *name == method)
         .map_or(CacheScope::Private, |(_, scope)| *scope)

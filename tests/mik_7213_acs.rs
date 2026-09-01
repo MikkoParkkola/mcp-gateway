@@ -97,8 +97,12 @@ fn ac_cache_3_a_filtered_list_is_never_public() {
 fn ac_cache_2_this_gateways_list_is_private() {
     // This gateway's `tools/list` varies by the credential presented — legally,
     // since credentials are per-request input rather than connection state. A
-    // response that varies by caller is private by construction.
-    assert_eq!(CacheScope::current_for_tools_list(), CacheScope::Private);
+    // response that varies by caller is private by construction. Asked of the
+    // table, because the table is what the emitting code asks.
+    assert_eq!(
+        mcp_gateway::protocol::cacheable::scope_for_method("tools/list"),
+        CacheScope::Private
+    );
 }
 
 #[test]
@@ -331,7 +335,11 @@ mod http {
 #[test]
 fn ac_cache_3_every_cacheable_method_has_an_assessed_row() {
     // Five methods carry `cacheScope` on the wire. A table missing one of them
-    // is a method whose scope was defaulted rather than decided.
+    // is a method whose scope was defaulted rather than decided — and asking
+    // `scope_for_method` cannot tell the two apart, since the fallback returns
+    // what every row returns. So ask the table for its membership, not the
+    // lookup for its answer.
+    let assessed = mcp_gateway::protocol::cacheable::assessed_methods();
     for method in [
         "tools/list",
         "prompts/list",
@@ -339,6 +347,11 @@ fn ac_cache_3_every_cacheable_method_has_an_assessed_row() {
         "resources/templates/list",
         "resources/read",
     ] {
+        assert!(
+            assessed.iter().any(|(name, _)| *name == method),
+            "{method} is emitted with a `cacheScope` but has no assessed row, \
+             so its scope is a default wearing a decision's clothes"
+        );
         assert_eq!(
             mcp_gateway::protocol::cacheable::scope_for_method(method),
             CacheScope::Private,
@@ -373,28 +386,24 @@ fn source(relative: &str) -> String {
 }
 
 #[test]
-fn ac_cache_3_the_deciding_functions_name_the_table() {
+fn ac_cache_3_the_deciding_function_names_the_table() {
     let text = source("src/protocol/cacheable.rs");
-    for signature in [
-        "pub const fn for_list(",
-        "pub const fn current_for_tools_list(",
-    ] {
-        let doc = text
-            .split(signature)
-            .next()
-            .expect("a split always yields a first part");
-        // The contiguous run, not a line count: a neighbour's doc satisfying
-        // this assertion is the failure mode it exists to catch.
-        let block = doc
-            .rsplit("\n\n")
-            .next()
-            .expect("a split always yields a first part");
-        assert!(
-            block.contains("scope_for_method"),
-            "the doc above `{signature}` must send a reader to the table that \
-             decides per method, or the table is a document beside the code"
-        );
-    }
+    let signature = "pub const fn for_list(";
+    let doc = text
+        .split(signature)
+        .next()
+        .expect("a split always yields a first part");
+    // The contiguous run, not a line count: a neighbour's doc satisfying this
+    // assertion is the failure mode it exists to catch.
+    let block = doc
+        .rsplit("\n\n")
+        .next()
+        .expect("a split always yields a first part");
+    assert!(
+        block.contains("scope_for_method"),
+        "the doc above `{signature}` must send a reader to the table that \
+         decides per method, or the table is a document beside the code"
+    );
 }
 
 #[test]
