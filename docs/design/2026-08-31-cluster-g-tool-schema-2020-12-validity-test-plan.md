@@ -47,7 +47,7 @@ source-verified proof that its existing coverage is incomplete, which is the
 Two design documents target this one criterion:
 
 - `docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity.md` — **the one this plan tests.** Cited by `docs/requirements/RELEASE-4.0.0-gap-plan.md:566` (at `:47,247`). Carries the 2026-08-31 scope receipt withdrawing the backend-schema exclusion (`:353`), which is the owner ruling P5–P7 depend on.
-- `docs/design/2026-08-31-cluster-g-schema-validity.md` — same criterion (`:7`), own G-table (`SCHEMA.1.A1` at `:324`), **zero inbound references repo-wide**.
+- `docs/design/2026-08-31-cluster-g-schema-validity.md` — a second design for the same criterion, with its own G-table and zero inbound references repo-wide. **Deleted 2026-09-01**, its load-bearing content merged into the design above; see that document's closing section, `One design for SCHEMA.1, not two`.
 
 `git log --follow` shows two separate histories; neither is a rename of the other,
 and nothing in the tree records a retirement. So this is **two parallel design
@@ -413,9 +413,9 @@ does "the revision's `$ref` and composition bounds" name (a) a numeric limit the
 (c) nothing beyond 2020-12 validity plus resolution, in which case P12a is the whole
 of clause C and the rest of the phrase is decorative?
 
-Put as confirm-or-reject, not as a blank three-way: the sibling design
-(`docs/design/2026-08-31-cluster-g-schema-validity.md`, `SCHEMA.1.A5`) already reads
-it as (c) plus resolution, which is P12a. The owner is being asked to confirm a
+Put as confirm-or-reject, not as a blank three-way: the surviving design's U11 row
+(`docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity.md`, carried over from the deleted
+sibling's `SCHEMA.1.A5`) already reads it as (c) plus resolution, which is P12a. The owner is being asked to confirm a
 written reading or name the bound — cheaper than inventing one.
 
 Renumbered from U8 during review. **U8 is live in the design under test**
