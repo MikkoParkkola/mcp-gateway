@@ -98,15 +98,19 @@ pub fn classify(outcome: &ProbeOutcome) -> Era {
 /// One peer's era, determined once and reused.
 ///
 /// The specification says a client **SHOULD** cache the era for the lifetime of
-/// the server process, and re-probe if the cached assumption later fails. Two
-/// properties matter beyond "remember the answer":
+/// the server process, and re-probe if the cached assumption later fails. One
+/// property matters beyond "remember the answer":
 ///
-/// * **Concurrent resolution collapses onto one probe.** Warm-start touches a
-///   backend from several tasks at once, and a cache that only writes *after*
-///   probing turns one cold backend into a thundering herd against a peer that
-///   is, by hypothesis, already struggling.
 /// * **Invalidation is explicit.** The era is a belief about another process;
 ///   when acting on it fails, the belief is discarded rather than re-asserted.
+///
+/// Collapsing concurrent resolution onto a single probe is **not** one of them.
+/// `resolve_with` happens to do it, by probing under the lock, and this comment
+/// used to present that as a requirement the cache was meeting — which read as
+/// licence to hold the lock across an await and cost three review rounds. It is
+/// an implementation property of one method, worth at most the duplicate
+/// idempotent requests it saves, and callers are free to probe outside the lock
+/// and commit afterwards.
 #[derive(Debug, Default)]
 pub struct EraCache {
     /// `None` until determined. Held across an await, so a `tokio` lock rather
