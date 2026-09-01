@@ -679,11 +679,26 @@ pub(super) async fn meta_mcp_handler(
         crate::protocol::meta::RequestShape::Modern(ref fields) => {
             (fields.protocol_version.as_str(), "_meta")
         }
-        // Declared itself modern and then omitted a required field: the
-        // declaration was still `_meta`'s, even where the revision is
-        // unreadable.
+        // Declared itself modern and then omitted a required field. The
+        // revision may still be readable, and it may be readable from either
+        // place, so both are consulted and the record names the one that
+        // carried it. Reading only the header attributed a body-declared
+        // caller to `absent`, and labelled a header-only declaration `_meta`;
+        // each is a wrong answer about a request that was refused, which is
+        // exactly the population this record exists to explain.
         crate::protocol::meta::RequestShape::Malformed { .. } => {
-            (declared_version.unwrap_or("absent"), "_meta")
+            match params
+                .as_ref()
+                .and_then(|p| p.get("_meta"))
+                .and_then(|m| m.get(crate::protocol::meta::KEY_PROTOCOL_VERSION))
+                .and_then(serde_json::Value::as_str)
+            {
+                Some(version) => (version, "_meta"),
+                None => match declared_version {
+                    Some(version) => (version, "header"),
+                    None => ("absent", "none"),
+                },
+            }
         }
         // A legacy revision is settled once at `initialize` and echoed on every
         // later request in the header, so both readings below report the same
@@ -697,6 +712,16 @@ pub(super) async fn meta_mcp_handler(
             Some(version) => (version, "handshake"),
             None => ("absent", "none"),
         },
+    };
+    // Bounded before it is written. The revision arrives from the request and
+    // a body may carry megabytes of it, so logging the value verbatim lets a
+    // caller choose how much operator disk one request consumes. A revision is
+    // a short dated token; anything longer is not one, and the record says so
+    // rather than repeating it.
+    let protocol_revision = if protocol_revision.len() > MAX_LOGGED_REVISION_LEN {
+        "oversized"
+    } else {
+        protocol_revision
     };
     info!(
         target: "mcp_gateway::observed",
@@ -955,39 +980,35 @@ pub(super) async fn meta_mcp_handler(
             header_profile.as_deref(),
         ),
         "tools/list" => {
-            // NFR.OBS.2. Which filters decide this surface, and the cacheScope
-            // the response will carry — recorded before the list is built, so
-            // the record cannot be written from the answer it exists to check.
+            // NFR.OBS.2. The inputs that decide this surface, and the
+            // cacheScope the response will carry — recorded before the list is
+            // built, so the record cannot be written from the answer it exists
+            // to check.
             //
-            // The conditions are re-derived from the same inputs `meta_mcp`
-            // branches on rather than reported back by it: the branching lives
-            // behind a file boundary this change does not cross. The scope is
-            // read from `CacheScope`, the one source the emitter also reads, so
-            // record and field cannot drift apart while both compile.
-            let mut filters = vec!["meta_tool_exposure", "session_profile"];
-            if state.meta_mcp.code_mode_enabled || code_mode_url_active {
-                filters.push("code_mode");
-            }
-            #[cfg(feature = "spec-preview")]
-            if params
+            // Inputs, not applied filters. The branching lives behind a file
+            // boundary this change does not cross, so a record naming filters
+            // that "ran" would be this site's guess about another module's
+            // control flow — and it guessed wrong: it named a session profile
+            // on every request, including those carrying none. Each field below
+            // is read from the value it names, so a reader can check the record
+            // against the request rather than against an assumption.
+            let query_present = params
                 .as_ref()
                 .and_then(|p| p.get("query"))
                 .and_then(serde_json::Value::as_str)
-                .is_some_and(|query| !query.is_empty())
-            {
-                filters.push("query");
-            }
-            let filters = filters.join(",");
+                .is_some_and(|query| !query.is_empty());
             info!(
                 target: "mcp_gateway::observed",
-                filters = filters.as_str(),
+                profile = header_profile.as_deref().unwrap_or("none"),
+                code_mode = state.meta_mcp.code_mode_enabled || code_mode_url_active,
+                query_present,
                 cache_scope =
                     crate::protocol::cacheable::CacheScope::current_for_tools_list().as_str(),
                 // A legacy result carries no `cacheScope`, so a record naming
                 // one without saying whether it reaches the client would be
                 // reporting a field that was never sent.
                 cache_scope_advertised = is_modern,
-                "tools/list filters and cache scope"
+                "tools/list surface inputs and cache scope"
             );
             state.meta_mcp.handle_tools_list_with_url_override(
                 id,
@@ -1464,6 +1485,11 @@ const CACHEABLE_METHODS: &[&str] = &[
     "resources/read",
     "resources/templates/list",
 ];
+
+/// The longest protocol revision this gateway will repeat into its own log.
+/// `2026-07-28` is ten characters; the bound is generous enough that no real
+/// revision reaches it and small enough that a hostile one cannot fill a disk.
+const MAX_LOGGED_REVISION_LEN: usize = 64;
 
 /// How long a client may consider a list fresh. A freshness hint, not a
 /// promise: `listChanged` notifications remain the authority on change, and

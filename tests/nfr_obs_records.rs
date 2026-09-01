@@ -289,15 +289,115 @@ mod http {
             "the recorded scope must be the scope the client is handed"
         );
         assert_eq!(record.field("cache_scope_advertised"), "true");
-        let filters = record.field("filters");
-        assert!(
-            filters.contains("meta_tool_exposure"),
-            "exposure filtering runs on every tools/list path: {filters:?}"
+        // Inputs, checkable against the request that was sent. This request
+        // carried no profile header, so a record naming a profile would be
+        // describing a filter that had nothing to select with — which is what
+        // the earlier synthesized `filters` list did on every request.
+        assert_eq!(
+            record.field("profile"),
+            "none",
+            "no profile header was sent"
         );
-        assert!(
-            filters.contains("session_profile"),
-            "the session profile selects the surface: {filters:?}"
-        );
+        assert_eq!(record.field("query_present"), "false");
+    }
+
+    /// NFR.OBS.1 — a refused modern request is attributed to the place that
+    /// actually carried its revision. Both halves are asserted because reading
+    /// one place and labelling it the other passes either half alone: a
+    /// body-declared caller was recorded `absent`, and a header-only one was
+    /// recorded as having declared in `_meta`.
+    #[tokio::test]
+    async fn a_malformed_modern_request_names_the_place_its_revision_came_from() {
+        let _capture = capture_lock().await;
+
+        // Declares the revision in `_meta` and omits the capabilities that
+        // make the declaration well-formed. No header at all.
+        let (status, _) = post_with_headers(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": { "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+                }}
+            }),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let record = only(|r| r.fields.contains_key("revision_source"));
+        assert_eq!(record.field("protocol_revision"), "2026-07-28");
+        assert_eq!(record.field("revision_source"), "_meta");
+    }
+
+    /// NFR.OBS.1 — the header-only half of the pair above.
+    #[tokio::test]
+    async fn a_malformed_request_declaring_only_in_the_header_says_so() {
+        let _capture = capture_lock().await;
+
+        let (status, _) = post_with_headers(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": { "_meta": { "unrelated": true } }
+            }),
+            &[
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "tools/list"),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let record = only(|r| r.fields.contains_key("revision_source"));
+        assert_eq!(record.field("protocol_revision"), "2026-07-28");
+        assert_eq!(record.field("revision_source"), "header");
+    }
+
+    /// NFR.OBS.1 — a revision too long to be one is not repeated into the log.
+    #[tokio::test]
+    async fn an_oversized_revision_is_recorded_as_a_sentinel_not_echoed() {
+        let _capture = capture_lock().await;
+
+        let huge = "2026-07-28".repeat(64);
+        let (status, _) = post_with_headers(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": { "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": huge
+                }}
+            }),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let record = only(|r| r.fields.contains_key("revision_source"));
+        assert_eq!(record.field("protocol_revision"), "oversized");
+    }
+
+    /// NFR.OBS.2 — the profile field reports the profile the request carried.
+    /// Paired with the case above: one asserts the field is `none` when no
+    /// header is sent, this one that it is the header's value when one is, so
+    /// neither answer can be produced by a constant.
+    #[tokio::test]
+    async fn a_tools_list_records_the_profile_the_request_carried() {
+        let _capture = capture_lock().await;
+
+        let (status, body) = post_with_headers(
+            modern_body("tools/list"),
+            &[
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "tools/list"),
+                ("x-mcp-profile", "reader"),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        let record = only(|r| r.fields.contains_key("cache_scope"));
+        assert_eq!(record.field("profile"), "reader");
     }
 
     /// NFR.OBS.2 — a legacy `tools/list` is handed no `cacheScope`, so a record
