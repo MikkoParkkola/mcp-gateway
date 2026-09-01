@@ -4,9 +4,9 @@ Companion to `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is the 
 This file is the ORDER OF WORK, not a second status table. When the two disagree, the status
 doc wins.
 
-Standing as of 2026-09-01: **99 rows, 54 met, 45 blocking.**
+Standing as of 2026-09-01: **99 rows, 53 met or non-blocking, 46 blocking.**
 
-The functional half is 77 rows, 53 met — 49 `MET`, 2 `MET (I)`, 1 `MET (caveat)`, 1
+The functional half is 77 rows, 53 met or non-blocking — 49 `MET`, 2 `MET (I)`, 1 `MET (caveat)`, 1
 `MET (residual)` — and 24 blocking: 14 UNWIRED (code exists, nothing on the production path
 calls it), 9 ABSENT (nothing implements it), 1 UNTESTED (implemented and wired, no test
 proving the clause). Those numbers are counted from the blocking column of the status doc's
@@ -141,8 +141,9 @@ be built before cluster A lands.
 **Wave 0 — the NFR sweep.** The 22 rows now exist; eleven of them read `not assessed`.
 Assess those eleven against source and running behaviour, using the verification method the
 requirements table already names for each, and finish the two that are partly done
-(NFR.SEC.5's clippy, audit and secret-scan gates; NFR.SEC.6's MIK-7249 and MIK-7262). Two
-of the eleven (NFR.PERF.1-2) need a measurement run against 3.5.0, not a read. The six that
+(NFR.SEC.5's clippy, audit and secret-scan gates; NFR.SEC.6's MIK-7249 and MIK-7262).
+Alongside them, NFR.PERF.1-2 are recorded ABSENT rather than unassessed: they need a
+latency measurement against 3.5.0, and no read of the source can close either. The six that
 verify the continuation envelope and era detection are NOT in this wave — they follow their
 clusters. This wave changes the size of every wave after it, which is why it runs first
 rather than last.
