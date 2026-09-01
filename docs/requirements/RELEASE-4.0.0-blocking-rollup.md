@@ -62,7 +62,9 @@ test-writing settles them.
 
 ## The release blocker that is not a criterion
 
-Ten commits on `mcp-2026-protocol` are unpushed. `hooks/PreToolUse/ratification-gate.py`
+`mcp-2026-protocol` carries unpushed commits — `git rev-list --count HEAD --not --remotes`
+is the count, and it is not written down here because it only ever grows and this document
+said `Ten` until it had reached thirty-one. `hooks/PreToolUse/ratification-gate.py`
 hard-blocks `git push` without a ratification stamp, and only a human running `ratify` in a
 terminal mints one. Until then this branch is unbacked work on one disk: a disk failure loses
 it, and nobody can review what they cannot fetch. Closing criteria does not move this.
@@ -119,6 +121,6 @@ still being read at 99 rows.
 
 ### Still true, and not moved by any of the above
 
-The branch is unpushed — 31 commits as of this line. Every criterion in the table could go
-green without changing that, and the dual-vendor review still owes its pass on the accumulated
+The branch is unpushed, by the count above. Every criterion in the table could go green
+without changing that, and the dual-vendor review still owes its pass on the accumulated
 production diff before a push is attempted.
