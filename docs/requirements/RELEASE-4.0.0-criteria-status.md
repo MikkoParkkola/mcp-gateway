@@ -8,7 +8,7 @@ stateless path, identity, all 17 MIK-7272 criteria (RESULT/ERROR/ORDER, then SUB
 the MIK-7246 destructive-confirmation gate, and the MIK-7217 discovery/era group. Every requirement ID
 in `RELEASE-4.0.0-requirements.md` now has a row, functional and non-functional alike.
 
-Coverage: 95 criteria, 99 rows, 55 met or non-blocking, 44 blocking.
+Coverage: 95 criteria, 99 rows, 59 met or non-blocking, 40 blocking.
 
 That line is the only place in this file that states totals, and it is not maintained by hand.
 `scripts/release/count-release-criteria.py --check` recounts the blocking column of every table
@@ -227,8 +227,14 @@ that would have reported them.
 ## NFR (section 4 of the requirements) — 22 criteria, opened 2026-09-01
 
 These rows exist so the ledger stops silently omitting a fifth of its own requirement set. A row
-marked `not assessed` is an admission, not a verdict: it counts against the release exactly as an
-unmet criterion does, because a criterion nobody has checked cannot be claimed.
+marked `not assessed` was an admission, not a verdict: it counted against the release exactly as an
+unmet criterion does, because a criterion nobody has checked cannot be claimed. As of 2026-09-01
+none remain — every row below carries a verdict and the evidence it rests on.
+
+Four of the eleven turned out to be met and stop blocking. One is worth naming because the
+assessment inverted its own evidence: `docs/ARCHITECTURE.md:65` was offered as proof that the
+documentation sweep had run, and it is one of the documents this release makes untrue — it
+advertises a protocol revision `SUPPORTED_VERSIONS` does not serve.
 
 Several of these are not independent work. `NFR.SEC.2`, `.3`, `.4`, `NFR.OBS.4` and `NFR.PERF.3` all
 verify the continuation envelope, which is the MIK-7212 cluster and is unwired; `NFR.OBS.3` verifies
@@ -238,10 +244,10 @@ criteria they observe, and closing those does not close these — each still nee
 | criterion ID | requirement (short) | verify | status | evidence (file:line) | blocking |
 |---|---|---|---|---|---|
 | NFR.COMPAT.1 | 2026-07-28, 2025-11-25, 2025-06-18 served; 2025-03-26 and 2024-11-05 not dropped | T | ABSENT (clause: 2026-07-28 served) | `SUPPORTED_VERSIONS` at `src/protocol/mod.rs:43` lists `2025-11-25`, `2025-06-18`, `2025-03-26` and `2024-11-05` — the modern revision is not there, so `negotiate_version` (`:48`) answers a client declaring it with `PROTOCOL_VERSION` instead. The second clause holds: neither older revision has been dropped. The release plan already reached this conclusion; this row previously read `not assessed` and contradicted it | yes |
-| NFR.COMPAT.2 | a client working against 3.5.0 works against 4.0.0 with no config change | T, D | not assessed | no row existed before 2026-09-01; no verification run | yes |
-| NFR.COMPAT.3 | upgrading operator not required to edit config for existing behaviour | D | not assessed | no row existed before 2026-09-01; no verification run | yes |
-| NFR.COMPAT.4 | every requirement verified in both roles and on every transport implementing it | T | not assessed | no row existed before 2026-09-01; no verification run. Note this is a meta-criterion over every other row in this file, and no row above records a role/transport matrix | yes |
-| NFR.SEC.1 | no 3.5.0 control becomes inoperative for a modern caller; each has a refusal test | T | not assessed | no row existed before 2026-09-01; no verification run | yes |
+| NFR.COMPAT.2 | a client working against 3.5.0 works against 4.0.0 with no config change | T, D | MET | `ac_discover_3_initialize_result_is_unchanged` at `tests/mik_7217_acs.rs:213` asserts a 2025 client's `initialize` result is byte-identical to a golden captured from 3.5.0, and names why `params: None` is the wrong staging for it. No client or config edit is involved | no |
+| NFR.COMPAT.3 | upgrading operator not required to edit config for existing behaviour | D | MET | the same test covers unchanged behaviour with no config edit, and the new behaviour is opt-in: `ServerConfig::modern_protocol` defaults `false` at `src/config/mod.rs:1174`, so an upgrading operator who edits nothing keeps 3.5.0 behaviour | no |
+| NFR.COMPAT.4 | every requirement verified in both roles and on every transport implementing it | T | ABSENT | no role/transport verification matrix exists. Searching for a dual-role harness (`gateway-as-client`, `dual.role`, `both roles`) returns nothing outside the requirements file, and the client-role half of the continuation envelope (MIK-7212.MRTR.3) is itself unwired. This is a meta-criterion over every other row and no row above records both roles | yes |
+| NFR.SEC.1 | no 3.5.0 control becomes inoperative for a modern caller; each has a refusal test | T | MET | each 3.5.0 control a modern caller can reach has a refusal test: `tests/mik_7215_acs.rs:472` (unsupported version), `:598` (undeclared capability named in the refusal), `:630` (destructive call with nobody to ask), `tests/mik_7214_acs.rs:787` (missing version header over HTTP) | no |
 | NFR.SEC.2 | continuation state confidential to the gateway; a client cannot read backend state from its echo | T | ABSENT | verifies the MIK-7212 continuation envelope, which is unwired: nothing mints or opens a continuation on the live path | yes |
 | NFR.SEC.3 | continuation envelope versioned, key rotatable, verification keys retained for the max lifetime | T | ABSENT | same envelope; no rotation or retention exists to test | yes |
 | NFR.SEC.4 | deterministic fixtures for tamper, expiry, replay, wrong principal, wrong request, rotation, oversize, wrong replica | T | ABSENT | same envelope; eight named fixtures, none of which can be written against an unwired path | yes |
@@ -250,15 +256,15 @@ criteria they observe, and closing those does not close these — each still nee
 | NFR.PERF.1 | tool-call latency not regressed >5% P50 / >10% P99 against 3.5.0 | M | ABSENT | no measurement against 3.5.0 has been run; a code read cannot substitute for one | yes |
 | NFR.PERF.2 | header-first routing justified by measurement against the full-parse path, or it does not ship | M | ABSENT | no measurement recorded. The requirement states its own consequence: without a number the change does not ship | yes |
 | NFR.PERF.3 | memory does not grow unboundedly with abandoned continuations; a soak shows reclamation | M | ABSENT | verifies bounded in-flight continuation state (MIK-7212.MRTR.8), which is unwired; no soak exists | yes |
-| NFR.PERF.4 | Meta-MCP surface remains 14-16 tools; `server/discover` does not count against it | I | not assessed | no row existed before 2026-09-01; the count was not enumerated for this row | yes |
-| NFR.OBS.1 | per request, record the protocol revision observed and whether it arrived by `_meta` or handshake | T | not assessed | no row existed before 2026-09-01; no verification run | yes |
-| NFR.OBS.2 | per `tools/list`, record which filters ran and the `cacheScope` that would be emitted | T | not assessed | no row existed before 2026-09-01; related to the MIK-7213 cache-keying cluster | yes |
+| NFR.PERF.4 | Meta-MCP surface remains 14-16 tools; `server/discover` does not count against it | I | ABSENT | `benchmarks/public_claims.json:4-6` records `minimum: 14`, `readme_benchmark: 16` and `with_webhook_status: 17`. The 17-tool scenario is this repo's own documented surface and exceeds the 14-16 ceiling the requirement states; nothing clamps the count, so the criterion is violated by the shipped configuration rather than merely untested | yes |
+| NFR.OBS.1 | per request, record the protocol revision observed and whether it arrived by `_meta` or handshake | T | ABSENT | no per-request record of the protocol revision or how it arrived exists. Searching `src/` for `protocol_revision`, `arrived_via`, `via_meta`, `via_handshake` and `negotiated_via` returns zero hits | yes |
+| NFR.OBS.2 | per `tools/list`, record which filters ran and the `cacheScope` that would be emitted | T | ABSENT | `src/gateway/router/handlers.rs:1421-1434` computes and emits `cacheScope` with no logging or tracing call beside it, and no filter-ran record exists anywhere: `FilterRecord`, `filters_applied` and `applied_filters` return zero hits across `src/` | yes |
 | NFR.OBS.3 | era detection observable: which era, by what evidence, when re-probed | T | ABSENT | verifies MIK-7217.DISCOVER.4-5, both unwired; there is no detection to observe | yes |
 | NFR.OBS.4 | continuation mint, redeem, expiry and rejection counted, with reason | T | ABSENT | same unwired envelope; no counters exist | yes |
 | NFR.OBS.5 | modern-protocol serving behind a flag, default off, revertible without a downgrade | T, D | UNTESTED | The flag exists and is read on the live path: `ServerConfig::modern_protocol` at `src/config/mod.rs:1127`, defaulted `false` at `:1174`, read at `src/gateway/router/handlers.rs:221`, `:700` and `:912`, toggled in `src/gateway/router/tests.rs`. That reaches the flag and the default, not the criterion: verification method is `T, D` and no test or demonstration shows a peer served the modern protocol and then reverted without a downgrade | yes |
-| NFR.DOC.1 | every document this release makes untrue updated within the release | I | not assessed | no row existed before 2026-09-01; no document sweep run | yes |
-| NFR.DOC.2 | upgrade note states what changes for an operator, for a client author, and what does not | I | not assessed | no row existed before 2026-09-01; no verification run | yes |
-| NFR.DOC.3 | any deliberate divergence from the specification recorded with its reason | I | not assessed | no row existed before 2026-09-01; no verification run | yes |
+| NFR.DOC.1 | every document this release makes untrue updated within the release | I | ABSENT | the sweep this criterion requires has not been run, and one document is untrue right now: `docs/ARCHITECTURE.md:65` states the protocol row covers `2024-11-05 through 2026-07-28`, while `SUPPORTED_VERSIONS` at `src/protocol/mod.rs:43` omits `2026-07-28`. `CHANGELOG.md:14` and `docs/DEPLOYMENT.md:124-143` were updated, which shows the sweep was partial, not that it was complete | yes |
+| NFR.DOC.2 | upgrade note states what changes for an operator, for a client author, and what does not | I | MET | `docs/release/v4.0.0-release-notes-DRAFT.md:104` carries the what-does-not-change section, and `:160-207` addresses the operator (re-auth, replica count) and the client author (JSON shape change, the 2024-10-07 upgrade note) separately. The file is still named DRAFT; the criterion asks what the note states, not that it is final | no |
+| NFR.DOC.3 | any deliberate divergence from the specification recorded with its reason | I | UNTESTED | two deliberate divergences are recorded with their reasons — `src/protocol/mod.rs:38` (`2026-07-28` deliberately absent until the modern request path exists) and `src/gateway/destructive_confirmation.rs:151` (backend and capability tools deliberately out of scope). Nothing enumerates the set of divergences, so `any` cannot be checked from two instances | yes |
 
 
 ## What this audit does not cover

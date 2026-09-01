@@ -4,7 +4,7 @@ Companion to `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is the 
 This file is the ORDER OF WORK, not a second status table. When the two disagree, the status
 doc wins.
 
-Standing as of 2026-09-01: **99 rows, 55 met or non-blocking, 44 blocking.**
+Standing as of 2026-09-01: **99 rows, 59 met or non-blocking, 40 blocking.**
 
 The functional half is 77 rows, 54 met or non-blocking — 49 `MET`, 2 `MET (I)`, 1 `MET (caveat)`, 1
 `MET (residual)` — and 23 blocking: 14 UNWIRED (code exists, nothing on the production path
@@ -13,10 +13,9 @@ last functional UNTESTED row and closed on 2026-09-01. Those numbers are counted
 tables by script, never carried forward by hand.
 
 The non-functional half is the 22 requirements of section 4, given rows in the status doc on
-2026-09-01 and previously absent from it entirely. One is met (NFR.OBS.5); 21 are blocking, of
-which eleven have never been assessed by anyone and say so in their evidence column. An
-unassessed criterion counts against the release exactly as an unmet one does — the release
-cannot be claimed against a check nobody ran.
+2026-09-01 and previously absent from it entirely. The eleven rows that had never been assessed
+were assessed the same day: four are met and no longer block (NFR.COMPAT.2, NFR.COMPAT.3,
+NFR.SEC.1, NFR.DOC.2), and seven are not. No row in this half now reads `not assessed`.
 
 The previous revision of this file counted 27. The drop to 24 is exactly three rows and
 nothing else: `TENANT.1`, `CONTROL.2`, `CONTROL.3`. The table has not grown or shrunk between
@@ -31,8 +30,8 @@ counting them again here would have double-counted them.
 The gap this section previously recorded — no row anywhere for any of the 22 non-functional
 requirements in section 4 of `docs/requirements/RELEASE-4.0.0-requirements.md` (lines 204-253)
 — is closed. Every NFR ID now has a row in the status doc. What is NOT closed is the
-assessment behind eleven of those rows, each of which reads `not assessed` with the reason
-that no verification has been run.
+assessment behind eleven of those rows, and that closed on 2026-09-01: every NFR row now
+carries a verdict and the evidence it rests on.
 
 Of the 21 blocking NFRs, six are not independent work: NFR.SEC.2-4, NFR.OBS.4 and NFR.PERF.3
 all verify the MIK-7212 continuation envelope, and NFR.OBS.3 verifies MIK-7217 era detection.
@@ -56,9 +55,11 @@ requirements file. The point is not the letter but the mismatch it exposes: a ro
 read against a requirement that says M is not weak evidence, it is the wrong kind of evidence,
 and that was invisible while the method lived only in the requirements document.
 
-Assessing the eleven unassessed rows is therefore item zero of this plan, ahead of every
-cluster below. It is cheap next to what it protects: the alternative is shipping and
-discovering the count was never the count.
+Assessing the eleven unassessed rows was therefore item zero of this plan, and it is done. It
+paid for itself immediately: the sweep found that `docs/ARCHITECTURE.md:65` advertises a
+protocol revision the gateway does not serve, and it found that the Meta-MCP surface's own
+published 17-tool scenario (`benchmarks/public_claims.json:4-6`) exceeds the 14-16 ceiling
+NFR.PERF.4 states — a criterion violated by the shipped configuration, not merely untested.
 
 ### Deferred: re-auditing the MRTR cluster's implemented-but-unwired split
 
@@ -72,11 +73,12 @@ oversight.
 
 ### Two threads that look in flight and are not
 
-A subagent briefed to assess the eleven unassessed non-functional rows returned nothing, and
-the task ID it was given no longer resolves. A second, briefed to write the cluster-C
-era-detection design, left no file at `docs/design/2026-09-01-cluster-c-era-detection.md`. Both
-are recorded here as dead rather than pending, so the next session briefs the work instead of
-waiting on it.
+The subagent briefed to write the cluster-C era-detection design left no file at
+`docs/design/2026-09-01-cluster-c-era-detection.md`: it died on the 32,000-token output
+ceiling. That work is unstarted, not in progress, and the design still gates every line of
+era-detection code. The NFR sweep briefed alongside it did return — its results are in the
+ledger above — after an earlier report here said it had not; a task ID that stops resolving is
+not evidence the work stopped.
 
 The dual review of the two ledger commits that added the verification-method column is likewise
 recorded as MISSING, not as passed: the Codex run produced no verdict line and the second
@@ -170,10 +172,10 @@ be built before cluster A lands.
 
 ## Order of work
 
-**Wave 0 — the NFR sweep.** The 22 rows now exist; eleven of them read `not assessed`.
-Assess those eleven against source and running behaviour, using the verification method the
-requirements table already names for each, and finish the two that are partly done
-(NFR.SEC.5's clippy, audit and secret-scan gates; NFR.SEC.6's MIK-7249 and MIK-7262).
+**Wave 0 — the NFR sweep.** Done on 2026-09-01: all 22 rows exist and all 22 are assessed
+against the verification method the requirements table names for each. NFR.SEC.5's four
+command gates were run and it is met; NFR.SEC.6 remains open on MIK-7249 and MIK-7262, which
+have no reference anywhere in `src/` or `tests/`.
 Alongside them, NFR.PERF.1-2 are recorded ABSENT rather than unassessed: they need a
 latency measurement against 3.5.0, and no read of the source can close either. The six that
 verify the continuation envelope and era detection are NOT in this wave — they follow their
