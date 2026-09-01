@@ -57,3 +57,32 @@ def test_allows_the_shapes_a_heading_may_state():
 def test_the_live_documents_pass():
     for doc in (counter.STATUS, counter.PLAN):
         assert counter.heading_counts(doc.read_text()) == [], doc
+
+
+REQ = "| NFR.PERF.1 | routing latency stays within budget | T, M |"
+
+
+def test_refuses_a_method_the_vocabulary_does_not_contain():
+    methods, unreadable = counter.required_methods("| NFR.PERF.1 | latency | owner |")
+    assert methods == {}
+    assert unreadable == ["NFR.PERF.1 ('owner')"]
+
+
+def test_reads_a_method_the_vocabulary_contains():
+    methods, unreadable = counter.required_methods(REQ)
+    assert methods == {"NFR.PERF.1": "T, M"}
+    assert unreadable == []
+
+
+def test_flags_a_status_row_whose_method_disagrees_with_the_requirement():
+    methods, _ = counter.required_methods(REQ)
+    row = "| NFR.PERF.1 | latency | I | MET | some evidence | no |"
+    assert counter.method_mismatches(row, methods) == [
+        "NFR.PERF.1 (requirement says 'T, M', row says 'I')"
+    ]
+
+
+def test_accepts_a_status_row_whose_method_agrees():
+    methods, _ = counter.required_methods(REQ)
+    row = "| NFR.PERF.1 | latency | T, M | MET | some evidence | no |"
+    assert counter.method_mismatches(row, methods) == []

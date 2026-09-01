@@ -8,7 +8,7 @@ stateless path, identity, all 17 MIK-7272 criteria (RESULT/ERROR/ORDER, then SUB
 the MIK-7246 destructive-confirmation gate, and the MIK-7217 discovery/era group. Every requirement ID
 in `RELEASE-4.0.0-requirements.md` now has a row, functional and non-functional alike.
 
-Coverage: 95 criteria, 99 rows, 59 met or non-blocking, 40 blocking.
+Coverage: 95 criteria, 99 rows, 56 met or non-blocking, 43 blocking.
 
 That line is the only place in this file that states totals, and it is not maintained by hand.
 `scripts/release/count-release-criteria.py --check` recounts the blocking column of every table
@@ -231,10 +231,17 @@ marked `not assessed` was an admission, not a verdict: it counted against the re
 unmet criterion does, because a criterion nobody has checked cannot be claimed. As of 2026-09-01
 none remain — every row below carries a verdict and the evidence it rests on.
 
-Four of the eleven turned out to be met and stop blocking. One is worth naming because the
-assessment inverted its own evidence: `docs/ARCHITECTURE.md:65` was offered as proof that the
-documentation sweep had run, and it is one of the documents this release makes untrue — it
-advertises a protocol revision `SUPPORTED_VERSIONS` does not serve.
+One of the eleven turned out to be met. Four were claimed met on the first pass and three of
+those did not survive review, which is worth recording because all three failed the same way:
+evidence that supports a NEARBY claim was accepted for the criterion actually written down.
+`NFR.COMPAT.2` showed the `T` its method asks for and never the `D`. `NFR.COMPAT.3` was answered
+about the protocol flag while the criterion is about any config an operator must edit, and our own
+release notes call the `exposed_meta_tools` change breaking for operators who set it.
+`NFR.SEC.1` cited four refusal tests against a criterion that says EACH, with nothing enumerating
+the controls — the same defect `NFR.DOC.3` is blocked for. A fourth had already inverted its own
+evidence on the first pass: `docs/ARCHITECTURE.md:65` was offered as proof the documentation sweep
+had run, and it is one of the documents this release makes untrue — it advertises a protocol
+revision `SUPPORTED_VERSIONS` does not serve.
 
 Several of these are not independent work. `NFR.SEC.2`, `.3`, `.4`, `NFR.OBS.4` and `NFR.PERF.3` all
 verify the continuation envelope, which is the MIK-7212 cluster and is unwired; `NFR.OBS.3` verifies
@@ -244,10 +251,10 @@ criteria they observe, and closing those does not close these — each still nee
 | criterion ID | requirement (short) | verify | status | evidence (file:line) | blocking |
 |---|---|---|---|---|---|
 | NFR.COMPAT.1 | 2026-07-28, 2025-11-25, 2025-06-18 served; 2025-03-26 and 2024-11-05 not dropped | T | ABSENT (clause: 2026-07-28 served) | `SUPPORTED_VERSIONS` at `src/protocol/mod.rs:43` lists `2025-11-25`, `2025-06-18`, `2025-03-26` and `2024-11-05` — the modern revision is not there, so `negotiate_version` (`:48`) answers a client declaring it with `PROTOCOL_VERSION` instead. The second clause holds: neither older revision has been dropped. The release plan already reached this conclusion; this row previously read `not assessed` and contradicted it | yes |
-| NFR.COMPAT.2 | a client working against 3.5.0 works against 4.0.0 with no config change | T, D | MET | `ac_discover_3_initialize_result_is_unchanged` at `tests/mik_7217_acs.rs:213` asserts a 2025 client's `initialize` result is byte-identical to a golden captured from 3.5.0, and names why `params: None` is the wrong staging for it. No client or config edit is involved | no |
-| NFR.COMPAT.3 | upgrading operator not required to edit config for existing behaviour | D | MET | the same test covers unchanged behaviour with no config edit, and the new behaviour is opt-in: `ServerConfig::modern_protocol` defaults `false` at `src/config/mod.rs:1174`, so an upgrading operator who edits nothing keeps 3.5.0 behaviour | no |
+| NFR.COMPAT.2 | a client working against 3.5.0 works against 4.0.0 with no config change | T, D | UNTESTED | the `T` half holds: `ac_discover_3_initialize_result_is_unchanged` at `tests/mik_7217_acs.rs:213` asserts a 2025 client's `initialize` result is byte-identical to a golden captured from 3.5.0. The `D` half was never performed -- one golden on the direct handler is not a client working end to end, and this criterion's method names a demonstration precisely because a handler-level assertion cannot stand in for one | yes |
+| NFR.COMPAT.3 | upgrading operator not required to edit config for existing behaviour | D | ABSENT | the protocol half is opt-in -- `ServerConfig::modern_protocol` defaults `false` at `src/config/mod.rs:1174` -- but the criterion is not about the protocol flag. `docs/release/v4.0.0-release-notes-DRAFT.md:38` records `exposed_meta_tools` enforcement as **breaking for operators who set the field**: a field that was documented and unenforced now restricts `tools/list` and `tools/call`, so an operator who edits nothing loses tools that used to answer. That is the case this criterion forbids, stated in our own release notes | yes |
 | NFR.COMPAT.4 | every requirement verified in both roles and on every transport implementing it | T | ABSENT | no role/transport verification matrix exists. Searching for a dual-role harness (`gateway-as-client`, `dual.role`, `both roles`) returns nothing outside the requirements file, and the client-role half of the continuation envelope (MIK-7212.MRTR.3) is itself unwired. This is a meta-criterion over every other row and no row above records both roles | yes |
-| NFR.SEC.1 | no 3.5.0 control becomes inoperative for a modern caller; each has a refusal test | T | MET | each 3.5.0 control a modern caller can reach has a refusal test: `tests/mik_7215_acs.rs:472` (unsupported version), `:598` (undeclared capability named in the refusal), `:630` (destructive call with nobody to ask), `tests/mik_7214_acs.rs:787` (missing version header over HTTP) | no |
+| NFR.SEC.1 | no 3.5.0 control becomes inoperative for a modern caller; each has a refusal test | T | UNTESTED | four controls have a refusal test -- `tests/mik_7215_acs.rs:472` (unsupported version), `:598` (undeclared capability named in the refusal), `:630` (destructive call with nobody to ask), `tests/mik_7214_acs.rs:787` (missing version header over HTTP) -- and the criterion says EACH. Nothing enumerates the controls 3.5.0 constrained a caller with, so `each` cannot be checked and four is a sample, not a set. Same defect as NFR.DOC.3, which is blocked for it | yes |
 | NFR.SEC.2 | continuation state confidential to the gateway; a client cannot read backend state from its echo | T | ABSENT | verifies the MIK-7212 continuation envelope, which is unwired: nothing mints or opens a continuation on the live path | yes |
 | NFR.SEC.3 | continuation envelope versioned, key rotatable, verification keys retained for the max lifetime | T | ABSENT | same envelope; no rotation or retention exists to test | yes |
 | NFR.SEC.4 | deterministic fixtures for tamper, expiry, replay, wrong principal, wrong request, rotation, oversize, wrong replica | T | ABSENT | same envelope; eight named fixtures, none of which can be written against an unwired path | yes |
