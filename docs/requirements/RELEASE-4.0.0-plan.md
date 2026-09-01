@@ -4,26 +4,12 @@ Companion to `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is the 
 This file is the ORDER OF WORK, not a second status table. When the two disagree, the status
 doc wins.
 
-Standing as of 2026-09-01: **99 rows, 56 met or non-blocking, 43 blocking.**
-
-The functional half is 77 rows, 54 met or non-blocking — 49 `MET`, 2 `MET (I)`, 1 `MET (caveat)`, 1
-`MET (residual)` — and 23 blocking: 14 UNWIRED (code exists, nothing on the production path
-calls it), 9 ABSENT (nothing implements it). MIK-6865.SCHEMA.1's 2020-12 clause was the
-last functional UNTESTED row and closed on 2026-09-01. Those numbers are counted from the blocking column of the status doc's
-tables by script, never carried forward by hand.
-
-The non-functional half is the 22 requirements of section 4, given rows in the status doc on
-2026-09-01 and previously absent from it entirely. The eleven rows that had never been assessed
-were assessed the same day: four are met and no longer block (NFR.COMPAT.2, NFR.COMPAT.3,
-NFR.SEC.1, NFR.DOC.2), and seven are not. No row in this half now reads `not assessed`.
-
-The previous revision of this file counted 27. The drop to 24 is exactly three rows and
-nothing else: `TENANT.1`, `CONTROL.2`, `CONTROL.3`. The table has not grown or shrunk between
-the two revisions. That set is not reconstructed from prose — it is the set difference of the
-blocking column at commit `6f911f7c` and at HEAD, computed by the same script that produces
-the counts above. Earlier closures named in the previous revision (`ERROR.2`, `RESULT.2`,
-`HEADER.5`, `HEADER.7`, `HEADER.8`) had already landed before that count was taken, and
-counting them again here would have double-counted them.
+The standing counts are not repeated here. `docs/requirements/RELEASE-4.0.0-criteria-status.md`
+carries them, `scripts/release/count-release-criteria.py --check` verifies its headline against
+its own tables, and nothing checks a copy. Every earlier revision of this file carried a count
+that drifted from the ledger within days, which is the argument against carrying one at all.
+`docs/requirements/RELEASE-4.0.0-blocking-rollup.md` groups the blocking rows by the work they
+share, and derives that grouping from the ledger too.
 
 ## The blocking count is a floor, and what remains unverified is named
 
@@ -71,14 +57,12 @@ The split happens once that session's work lands, against the tree as it then st
 here rather than dropped, because a deferral nobody wrote down is indistinguishable from an
 oversight.
 
-### Two threads that look in flight and are not
+### One thread that looked in flight and was not
 
-The subagent briefed to write the cluster-C era-detection design left no file at
-`docs/design/2026-09-01-cluster-c-era-detection.md`: it died on the 32,000-token output
-ceiling. That work is unstarted, not in progress, and the design still gates every line of
-era-detection code. The NFR sweep briefed alongside it did return — its results are in the
-ledger above — after an earlier report here said it had not; a task ID that stops resolving is
-not evidence the work stopped.
+The cluster-C era-detection design is written: `docs/design/2026-09-01-cluster-c-era-detection.md`.
+An earlier revision of this file recorded it as never started, because the subagent briefed to
+write it died on an output ceiling and a task ID that stops resolving was read as evidence the
+work stopped. The NFR sweep briefed alongside it had also returned. Neither absence was real.
 
 The dual review of the two ledger commits that added the verification-method column is likewise
 recorded as MISSING, not as passed: the Codex run produced no verdict line and the second

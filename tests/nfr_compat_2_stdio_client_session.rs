@@ -44,18 +44,22 @@ struct StdioSession {
 impl StdioSession {
     /// Spawns the shipped binary with no configuration reachable from anywhere.
     fn spawn(home: &std::path::Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
+        command
             .arg("serve")
             .arg("--stdio")
             .current_dir(home)
-            .env("HOME", home)
-            .env_remove("MCP_GATEWAY_CONFIG")
-            .env_remove("MCP_GATEWAY_CONFIG_DIR")
-            .env_remove("MCP_GATEWAY_CAPABILITIES")
-            .env_remove("MCP_GATEWAY_PORT")
-            .env_remove("MCP_GATEWAY_HOST")
-            .env_remove("MCP_GATEWAY_LOG_LEVEL")
-            .env_remove("MCP_GATEWAY_LOG_FORMAT")
+            .env("HOME", home);
+        // Every overlay, not a list of the ones that were thought of. The names
+        // this binary reads share a prefix, so naming seven of them left the
+        // demonstration as clean as whatever CI happened to export — and a
+        // configured child proves nothing about booting on defaults.
+        for (name, _) in std::env::vars() {
+            if name.starts_with("MCP_GATEWAY_") {
+                command.env_remove(name);
+            }
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Inherited, not piped: an undrained pipe deadlocks the child at
