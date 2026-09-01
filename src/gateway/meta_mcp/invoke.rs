@@ -1601,20 +1601,34 @@ impl MetaMcp {
         // release notes as an open decision; until it is made, the conservative
         // reading applies: the exchange is known to continue, and nothing the
         // kernel judged untrusted crosses as structure.
+        // `resultType` and `isError` describe the round. Their VALUES cross
+        // untouched -- an unrecognized round type is still a round type, and
+        // filtering by value is what turns a future protocol revision into a
+        // completed call. Their TYPES do not: the protocol says one is a
+        // string and the other a boolean, and anything else is not a
+        // description this gateway can pass on. It cannot be dropped, because
+        // a dropped discriminator reads as a finished success; it cannot be
+        // cloned, because an object in a scalar field is uninspected backend
+        // structure crossing the very boundary this transform exists to hold.
+        // So a malformed round is refused outright: the caller learns the
+        // backend replied badly and gets nothing it could act on.
+        let result_type = original.get("resultType");
+        let is_error = original.get("isError");
+        let malformed = result_type.is_some_and(|value| !value.is_string())
+            || is_error.is_some_and(|value| !value.is_boolean());
+        if malformed {
+            return json!({
+                "content": [{
+                    "type": "text",
+                    "text": "The backend returned a malformed result: `resultType`                              must be a string and `isError` a boolean. The response                              was refused rather than delivered."
+                }],
+                "isError": true,
+            });
+        }
         let mut envelope = serde_json::Map::new();
-        // `resultType` and `isError` describe the round; `requestState` is a
-        // handle the caller can act on. A description crosses verbatim -- any
-        // JSON value, present exactly when the backend sent one -- because
-        // every rule that decides which descriptions are worth emitting is a
-        // rule that rewrites the rest into a completed call. Value, type and
-        // emptiness are all such rules: an unrecognized round type, a
-        // non-string discriminator and `"isError": "true"` each arrive as a
-        // finished success once something filters them. Echoing a description
-        // faithfully is honesty; echoing a capability faithfully would be
-        // authorization, which is why the handle below is gated instead.
-        for field in ["resultType", "isError"] {
-            if let Some(value) = original.get(field) {
-                envelope.insert((*field).to_string(), value.clone());
+        for (field, value) in [("resultType", result_type), ("isError", is_error)] {
+            if let Some(value) = value {
+                envelope.insert(field.to_string(), value.clone());
             }
         }
         // The handle is gated on the protocol type rather than on the field
