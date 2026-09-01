@@ -45,28 +45,35 @@ Instead the bridge carries a closed type:
 enum ServerRequest {
     Sampling(SamplingCreateMessageParams),
     Elicitation(ElicitationCreateParams),
+    Roots,
 }
 ```
 
-A `Roots` variant was drafted and **removed**. `roots/list` returns a roots list, not an answer
-filed under the backend's key, so it does not fit `retry_params`'s `(key, answer)` contract at all;
-carrying it would have bought a third id prefix and an ingress-gate widening to deliver a value the
-retry cannot use. `MRTR.9`'s per-method refusal stays meaningful with two variants — everything
-outside the pair is still refused by name.
+A `Roots` variant was drafted, removed, and is **restored here**. The removal rested on the claim
+that `roots/list` returns a roots list rather than an answer filed under the backend's key, so it
+did not fit `retry_params`'s `(key, answer)` contract. That claim does not survive the source.
+`retry_params` (`src/protocol/mrtr.rs:265`) files a `serde_json::Value` under the backend's key and
+looks no further into it, so a `RootsListResult` is filed exactly as an elicitation answer is. The
+requirement points the same way: `MRTR.9` (`RELEASE-4.0.0-requirements.md:145`) quotes the
+specification as *"Servers MUST NOT send an inputRequests that the client has not declared support
+for"*, and what a client declares is `elicitation`, `sampling` or `roots` (`ClientCapabilities`,
+`src/protocol/types.rs:331-347`). Refusing the third by name would leave a backend that asks for
+roots unable to finish through the bridge even where the client declared the capability.
+`roots/list` takes no params, so the variant carries none.
 
 `to_legacy_client` maps each `inputRequest` onto a variant or refuses. Three properties follow
 from the type rather than from a check somewhere:
 
 - **The method string is ours.** Each variant names its own wire method. A backend cannot
   introduce a method the gateway did not compile.
-- **The id prefix is ours, and the ingress gate already knows both.** `handlers.rs:633` admits a
-  POST-back only when its id starts with `sampling-` or `elicitation-`. With `Roots` gone the enum
-  and the prefix set are the same two members, and no ingress edit is needed. What makes that a
-  compile-time property rather than an aspiration is a `const fn prefix(&self) -> &'static str` on
-  the enum, matched exhaustively, with the ingress gate's set built from it: adding a variant then
-  fails to compile until the prefix exists, instead of failing at runtime as a caller timeout.
+- **The id prefix is ours, and the ingress gate learns one more.** `handlers.rs:633` admits a
+  POST-back only when its id starts with `sampling-` or `elicitation-`; this increment adds
+  `roots-` beside them. What keeps the two sets from drifting is a
+  `const fn prefix(&self) -> &'static str` on the enum, matched exhaustively, with the ingress
+  gate's set built from it rather than spelled out a second time: adding a variant then fails to
+  compile until the prefix exists, instead of failing at runtime as a caller timeout.
 - **`MRTR.9` stays reachable.** Narrowing the bridge to elicitation alone would make its
-  per-`inputRequest`-method refusal unreachable rather than unnecessary; a closed set of two
+  per-`inputRequest`-method refusal unreachable rather than unnecessary; a closed set of three
   keeps the refusal meaningful for everything outside it.
 
 ### The helper returns an answer, not an envelope
@@ -97,6 +104,7 @@ per variant, never the envelope and never the whole result:
 | `Elicitation`, `action = "decline"` or `"cancel"` | `DeliveryError::Declined { action }` |
 | `Elicitation`, any other `action` | `DeliveryError::Malformed` |
 | `Sampling`, a `SamplingCreateMessageResult` | the result, which *is* the answer for this variant |
+| `Roots`, a `RootsListResult` | the result, which *is* the answer for this variant |
 | a JSON-RPC `error` member | `DeliveryError::ClientRefused { code, message }` |
 | neither `result` nor `error` | `DeliveryError::Malformed` |
 
@@ -117,13 +125,37 @@ what an operator reading `NFR.OBS.4`'s counter needs to tell a declining human f
 
 The other direction needs the same specificity. An `inputRequest`'s params arrive as a
 `serde_json::Value` (`src/protocol/mrtr.rs:194-202`) and must become a typed
-`ElicitationCreateParams` (`messages.rs:478`) or `SamplingCreateMessageParams` (`:502`) — the mapping is the
-document's central mechanism and was previously asserted rather than stated:
+`ElicitationCreateParams` (`messages.rs:478`) or `SamplingCreateMessageParams` (`:502`), or nothing at
+all for `Roots` — the mapping is the document's central mechanism and was previously asserted rather
+than stated:
 
 | variant | from the `inputRequest` | refusal |
 |---|---|---|
-| `Elicitation` | `message` (required, string), `requestedSchema` (optional, object) | absent or non-string `message` |
+| `Elicitation` | the params object deserialized whole: `mode`, `message`, `requestedSchema`, `url` | any field `serde` rejects; `mode: "url"` the client has not declared |
 | `Sampling` | the params object deserialized as `SamplingCreateMessageParams` whole | any field `serde` rejects |
+| `Roots` | nothing; `roots/list` takes no params | a params member that is present and not empty |
+
+Both request-carrying rows deserialize the backend's object **whole**. An earlier draft named two
+elicitation fields, `message` and `requestedSchema`, and built the outgoing params from those alone.
+That is not a narrowing but a change of question. The revision's elicitation request carries a
+`mode`, and a `mode` of `url` sends the user to a URL the request names instead of rendering a form
+(`docs/issue-73-impl-plan.md:11`, `:77`). Copying `message` and `requestedSchema` out of such a
+request and dropping `mode` and `url` produces a well-formed *form* prompt asking a person to type,
+into a form, whatever the backend meant them to do at a URL. The type in the tree makes that the
+default outcome rather than a mistake someone has to make: `ElicitationCreateParams`
+(`src/protocol/messages.rs:478-484`) has exactly those two fields today. Widening it to the
+revision's shape is part of this increment, and nothing is dropped on the way out.
+
+`mode: "url"` carries one further refusal, and it is a capability check rather than a schema one.
+`ElicitationCapability` (`src/protocol/types.rs:349-358`) has separate `form` and `url` members, so
+a client that declared elicitation has not thereby declared URL elicitation. The bridge sends a
+URL-mode request only where the session store (§6) holds `elicitation.url` for that session, and
+refuses it by name otherwise. Sending it regardless would put a URL in front of a client with no
+rule for what to do with one, which is the `MRTR.9` violation the store exists to prevent.
+
+This says nothing about the *answer*. §1's rule that the bridge does not validate returned `content`
+against the `requestedSchema` it sent stands unchanged; that rule is about what comes back, and this
+table is about what goes out.
 
 A payload that fails its row is refused **before anything is sent to the client**, as a bridge
 refusal with the backend's key named, counted through `NFR.OBS.4`. It is never repaired, defaulted
@@ -187,22 +219,42 @@ bridged prompt has a race the sequential loop made impossible; the boundary test
 served. Owner is this increment — the change that introduces the concurrency owns the guarantee it
 removes.
 
-If concurrent dispatch proves to have consequences *beyond* that one — further ordering the loop
-was silently providing — that is a finding about the serve loop and is resolved there, before
-MRTR.7 claims stdio. It is not resolved by narrowing the requirement.
+One consequence is not beyond it and is stated here: **concurrent dispatch means responses may
+leave in a different order than requests arrived.** Nothing in JSON-RPC requires otherwise, and
+correlation is by `id` on both transports — the same `id` the pending map is keyed on
+(`proxy.rs:466-533`) and the same one the routing branch above reads. A client that assumes replies
+come back in order is relying on a property the sequential loop happened to provide.
 
-## 3. The session id at the call site names a backend, not a client
+This is a different axis from §5's `dispatch sequential`, and the two do not conflict. Concurrency
+here is the serve loop handling separate inbound requests from the *client*; sequencing there is the
+bridge's own outbound prompts within one batch, one in flight at a time. A gateway that serves two
+client calls at once while each of them asks its user one question at a time is doing both.
 
-`src/gateway/router/backend_handlers.rs:98` (and `:926`, `:973`) builds
-`format!("direct:{backend_name}")` and passes it as `session_id` to the firewall. That string is a
-firewall correlation key. Handing it to `send_to_session` finds nothing and returns
-`SamplingError::NoSession` — a bridge that silently never asks anybody.
+If concurrent dispatch proves to have consequences *beyond* those — further ordering the loop was
+silently providing — that is a finding about the serve loop and is resolved there, before MRTR.7
+claims stdio. It is not resolved by narrowing the requirement.
 
-The client's real session id must reach the bridge site. `MetaMcpCallerContext` already carries
-shape-derived facts the ~500 lines from `handlers.rs:597` to the construction site (DE-4 in
-`docs/design/2026-08-30-mrtr-wiring.md:418`), which is the established carrier, and the same
-context is where `input_capabilities` lives (`src/gateway/meta_mcp/mod.rs:139`). Threading it
-there is the same edit twice, not two.
+## 3. The bridge site already has the client's session id
+
+The bridge runs where an `input_required` result comes back from a backend tool call:
+`invoke_tool_traced` (`src/gateway/meta_mcp/invoke.rs:525`), reached from `handle_tools_call`
+(`src/gateway/meta_mcp/mod.rs:1306`). Both take `session_id: Option<&str>`, and the router passes
+the client's own id into it (`src/gateway/router/handlers.rs:1272`, `Some(session_id.as_str())`).
+The value `send_to_session` needs is therefore in scope at the site already, and no new threading
+is required for it.
+
+What the site does still need is the client's declared capabilities, so §6's store can be consulted
+before a prompt is sent. `MetaMcpCallerContext` is the established carrier for shape-derived facts
+across the ~500 lines from `handlers.rs:597` to the construction site (DE-4 in
+`docs/design/2026-08-30-mrtr-wiring.md:418`), and it is already where `input_capabilities` lives
+(`src/gateway/meta_mcp/mod.rs:139`), populated from `&declared_capabilities` at `handlers.rs:1272`.
+
+One string nearby must not be mistaken for a session. `src/gateway/router/backend_handlers.rs:98`
+(and `:926`, `:973`) builds `format!("direct:{backend_name}")` and passes it as `session_id` to the
+firewall. That is a firewall correlation key on the direct-backend route, which does not reach
+`handle_tools_call` at all. Handing such a string to `send_to_session` would find nothing and return
+`SamplingError::NoSession` — a bridge that silently never asks anybody — so the rule is that the
+bridge reads the session id it was called with and never synthesises one.
 
 ## 4. The neighbour's error handling is exactly wrong here, and copying it is the likely bug
 
@@ -229,8 +281,8 @@ Three limits, each on the original call rather than on a round:
 
 | bound | value | enforced |
 |---|---|---|
-| retry rounds | 3 | before re-invoking the backend |
-| prompts in total | 8 | before sending any prompt of a batch that would exceed it |
+| retry rounds | 3 retries after the first call, so at most 4 backend invocations | before re-invoking the backend |
+| requests in total | 8, counting every `inputRequest` entry | before sending any request of a batch that would exceed it |
 | aggregate wall time | 120s | checked before each send, and as a deadline on the whole call |
 | per-prompt wait | `min(remaining, 30s)` | on each send; a send with no remaining budget is not attempted |
 | dispatch within a batch | sequential | one prompt in flight at a time, budget re-checked between |
@@ -238,6 +290,13 @@ Three limits, each on the original call rather than on a round:
 Five rows, not three: the last two were prose beneath this table and are what an implementer
 transcribes into constants alongside the first three. The paragraphs below say *why* each value is
 what it is; the table is the contract.
+
+A `Roots` request asks no human anything, and it is counted all the same. The bound is on requests
+the gateway sends the client on a backend's authority, not on questions a person sees: a roots
+listing still costs a round trip, still occupies the in-flight slot, and still runs against the
+aggregate deadline. Exempting it would hand a backend one unbounded channel, which is the abuse the
+section exists to close — so the counted unit is the `inputRequest` entry, whatever variant it
+projects into.
 
 The values are stated here rather than deferred to a named constant so that the boundary tests and
 the implementation converge on one contract; they are named constants in code, and changing one is
@@ -366,10 +425,10 @@ purpose is to relay a backend's question to a person cannot also guarantee the q
 
 | unknown | state |
 |---|---|
-| Does the bridge site have the client's session id? | **Resolved.** Read `backend_handlers.rs:98`: it has `direct:{backend_name}`, a firewall key, not a session. Changed the design: §3 exists because of it. |
+| Does the bridge site have the client's session id? | **Resolved: yes.** Read `invoke.rs:525` and `mod.rs:1306`: both take `session_id: Option<&str>`, and `handlers.rs:1272` passes the client's own id. An earlier answer read `backend_handlers.rs:98` instead and concluded the site held `direct:{backend_name}`; that string belongs to the direct-backend route, which does not reach this site. Changed the design: §3 no longer proposes threading a session id, and says what does have to be threaded. |
 | Can `MetaMcpCallerContext` carry the session id to the site? | **Deferred.** Owner: the MRTR.7 implementation increment. Resolved by reading the construction sites at `handlers.rs:597` and `server/mod.rs:1733`. When: first line of the implementation. If it resolves badly: the id is threaded as a separate parameter, which is uglier and equally correct — so nothing downstream is blocked on the answer. |
 | Is the per-request capability slice sufficient to gate this? | **Resolved: no.** The question was first written against `may_request_input`, which appears nowhere in `src/` — it was read from a sibling document rather than from the tree. What shipped is `input_capabilities: &'a [String]` (`meta_mcp/mod.rs:139`), a per-request slice with no session store behind it. Changed the design: §6 builds the store and states that the slice may only narrow it. |
-| Does the response ingress admit a reply for a third request kind? | **Resolved: no, and the question is now moot.** `handlers.rs:633` gates on `sampling-` and `elicitation-`. Rather than widen it, §1 dropped the `Roots` variant that needed the widening — it never fitted `retry_params`'s `(key, answer)` contract. Enum and prefix set are now the same two members, tied by an exhaustive `const fn prefix()`. |
+| Does the response ingress admit a reply for a third request kind? | **Resolved: no, and this increment widens it.** `handlers.rs:633` gates on `sampling-` and `elicitation-`. An earlier answer avoided the widening by dropping the `Roots` variant, on the reading that a roots list is not an answer filed under the backend's key; `retry_params` (`mrtr.rs:265`) files any `Value` under that key, so the reading was wrong. §1 keeps `Roots`, the ingress set gains `roots-`, and that set is built from the enum's exhaustive `const fn prefix()` so the two cannot drift. |
 | Does the helper hand back the client's answer? | **Resolved: no.** `handlers.rs:637` passes the whole message to `resolve_pending` and `proxy.rs:278` returns it verbatim, so a JSON-RPC `error` reply resolves through the success arm. Changed the design: §1 returns the `result` member or a typed `DeliveryError`. |
 | Can a stdio client be asked at all? | **Resolved: not as the tree stands — the increment must change the serve loop.** The first answer here was "yes, the gateway already writes to a child's stdin (`transport/stdio.rs:856`)", which was wrong twice: that line is inside `#[cfg(test)]` (from `:577`), and its production form (`:462-468`) writes to a *backend*, not to a client. Reading the actual client path, `server/mod.rs:1564` is a single sequential reader, so a bridge blocking inside dispatch deadlocks the only task that could deliver the reply. Changed the design: §2 now specifies concurrent dispatch and a reply-routing branch as part of this increment, instead of inheriting a capability the tree does not have. |
 

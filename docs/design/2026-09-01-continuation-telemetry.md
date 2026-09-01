@@ -112,6 +112,30 @@ one boundary every refusal passes through, with `ContinuationError` mapping into
 defining it. A refusal site that cannot name its reason in that enum is a site the enum is missing,
 which is a compile error and not a silent `other`.
 
+Naming the criterion's "with reason" and leaving the values to the implementer would put the
+cardinality question back where this document found it, so the initial members are listed:
+
+| `reason` | raised by | phase |
+|---|---|---|
+| `malformed` | `ContinuationError::Malformed` | `redeem` |
+| `unknown_version` | `ContinuationError::UnknownVersion` | `redeem` |
+| `unknown_key` | `ContinuationError::UnknownKey` | `redeem` |
+| `not_authentic` | `ContinuationError::NotAuthentic` | `redeem` |
+| `mint_budget_exhausted` | `ContinuationError::MintBudgetExhausted` | `mint` |
+| `too_large` | `ContinuationError::TooLarge` | `mint`, `redeem` |
+| `no_principal_fingerprint` | a mint refused for want of a principal fingerprint | `mint` |
+| `round_budget` | the bridge's retry-round, prompt-count or aggregate bound | `bridge` |
+| `capability_undeclared` | the client declared no such capability or sub-capability (`elicitation.url` among them), or the session store holds none | `bridge` |
+| `delivery_failed` | the prompt could not be delivered to the client | `bridge` |
+| `declined` | the client answered, declining the prompt | `bridge` |
+
+`ContinuationError::Expired` is absent deliberately: a deadline is `expired_total`, never a
+`reason`, which is what keeps an expiry from being counted on both counters.
+
+This is the initial closed set, not the final one. Growth is additive and each addition adds a row
+here, which is the discipline that makes an enum a documented surface rather than a growing label
+with a changelog somewhere else.
+
 ## The payload stays out of the label
 
 **The `u8` payloads of `UnknownVersion` and `UnknownKey` must not reach the label.** They are
