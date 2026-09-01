@@ -39,6 +39,7 @@ fn modern(method: &str, params: Value) -> Value {
 
 struct Fixture {
     auth: AuthConfig,
+    agent_auth_enabled: bool,
     meta_mcp_enabled: bool,
     agent_identity: mcp_gateway::config::AgentIdentityConfig,
     sanitize_input: bool,
@@ -48,6 +49,9 @@ impl Default for Fixture {
     fn default() -> Self {
         Self {
             auth: Config::default().auth,
+            // Off, like the shipped default: rows other than 2 must reach
+            // their own gate rather than being refused by this one.
+            agent_auth_enabled: false,
             meta_mcp_enabled: true,
             agent_identity: mcp_gateway::config::AgentIdentityConfig::default(),
             // `SecurityConfig::default()` has this ON (`security.rs:472`).
@@ -85,7 +89,7 @@ fn state(f: Fixture) -> Arc<AppState> {
         ssrf_protection: false,
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(100)),
-        agent_auth: AgentAuthState::new(false, Arc::new(AgentRegistry::new())),
+        agent_auth: AgentAuthState::new(f.agent_auth_enabled, Arc::new(AgentRegistry::new())),
         gateway_key_pair: Arc::new(GatewayKeyPair::generate().expect("RSA key gen")),
         capability_dirs: Vec::new(),
         config_path: None,
@@ -139,7 +143,6 @@ async fn post(state: &Arc<AppState>, body: Value, extra: &[(&str, &str)]) -> (St
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     )
 }
-
 
 /// POST a body that is not necessarily JSON.
 ///
@@ -333,7 +336,6 @@ async fn control_13_a_modern_caller_outside_its_tool_scope_is_refused() {
     );
 }
 
-
 // ============================================================================
 // NFR.SEC.1 control 8 — JSON well-formedness
 // `-32700` from `serde_json::from_slice` at `handlers.rs:526`. The inventory
@@ -369,7 +371,10 @@ async fn control_8_a_modern_request_with_unparseable_json_is_refused() {
 #[tokio::test]
 async fn control_7_a_modern_request_over_the_body_ceiling_is_refused() {
     let app = state(Fixture::default());
-    let over = modern("tools/list", json!({ "padding": "x".repeat(11 * 1024 * 1024) }));
+    let over = modern(
+        "tools/list",
+        json!({ "padding": "x".repeat(11 * 1024 * 1024) }),
+    );
     let (status, _) = post(&app, over, &[]).await;
     assert_eq!(
         status,
@@ -417,4 +422,63 @@ async fn control_11_a_modern_request_carrying_a_null_byte_is_refused() {
         StatusCode::OK,
         "with sanitization off nothing else on the path rejects a null byte"
     );
+}
+
+// Row 2 — agent JWT validity. The inventory recorded this as open because
+// driving it "needs an agent registry and a signed token". Only the second
+// half is true: the absent input is *a JWT that validates*, and removing it
+// needs no valid token to exist. Both refusal arms are reachable with an
+// empty registry, which is what these two assert.
+
+#[tokio::test]
+async fn control_2_a_modern_request_with_an_unverifiable_agent_token_is_refused() {
+    let state = state(Fixture {
+        agent_auth_enabled: true,
+        ..Fixture::default()
+    });
+    let (status, body) = post(
+        &state,
+        modern("tools/list", json!({})),
+        &[("authorization", "Bearer not-a-jwt")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "body: {body}");
+    assert_eq!(body["error"]["code"], json!(-32000), "body: {body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("Invalid or expired token"),
+        "body: {body}"
+    );
+}
+
+#[tokio::test]
+async fn control_2_a_modern_request_with_no_agent_token_is_refused() {
+    let app = state(Fixture {
+        agent_auth_enabled: true,
+        ..Fixture::default()
+    });
+    let (status, body) = post(&app, modern("tools/list", json!({})), &[]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "body: {body}");
+    assert_eq!(body["error"]["code"], json!(-32000), "body: {body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("Missing Authorization header"),
+        "body: {body}"
+    );
+    // Falsifier, and this one is load-bearing: the client-credential gate
+    // refuses through the same helper, with the same status and the same
+    // -32000, so a headerless request refused by *that* gate would satisfy
+    // every assertion above while this control never ran. With the control
+    // off the identical request is served, which leaves the agent gate as
+    // the only party that can have refused it.
+    let off = state(Fixture {
+        agent_auth_enabled: false,
+        ..Fixture::default()
+    });
+    let (served, body) = post(&off, modern("tools/list", json!({})), &[]).await;
+    assert_eq!(served, StatusCode::OK, "body: {body}");
 }
