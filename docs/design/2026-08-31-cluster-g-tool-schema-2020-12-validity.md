@@ -189,13 +189,15 @@ burns startup cost on values that cannot vary between builds. The test iterates 
 `gateway_*` def and asserts its `inputSchema` — and `outputSchema` where present — meta-validates
 against 2020-12.
 
-**"19" counts constructors; the test's population is 20 documents.** `src/gateway/meta_mcp_tool_defs.rs` holds 19 `Tool { .. }` constructors and one `output_schema: Some(search_tools_output_schema())`, so the union across every configuration is **20 schema documents**. No single running gateway advertises all 19 tools — `build_meta_tools` pushes `stats`, `cost_report` and `webhook` onto `build_base_tools` conditionally, and `build_code_mode_tools` returns a disjoint pair — so a live surface carries 14–17. Iterating the source literals rather than `handle_tools_list` is what makes that split irrelevant here: every document is reached exactly once, whatever any one build would publish.
+**"19" counts constructors; the test's population is 20 documents.** `src/gateway/meta_mcp_tool_defs.rs` holds 19 `Tool { .. }` constructors and one `output_schema: Some(search_tools_output_schema())`, so the union across every configuration is **20 schema documents**. No single running gateway advertises all 19 tools — `build_meta_tools` pushes `stats`, `cost_report`, `webhook` and `reload_config` onto `build_base_tools` conditionally, and `build_code_mode_tools` returns a disjoint pair (`gateway_search`, `gateway_execute`) — so a live surface carries 13–17, pinned by `build_meta_tools_base_count_without_optional_features` and `build_meta_tools_all_enabled_has_17_tools` (`src/gateway/meta_mcp_tool_defs_tests.rs:17`, `:65`). Iterating the source literals rather than `handle_tools_list` is what makes that split irrelevant here: every document is reached exactly once, whatever any one build would publish.
 
 **Seam 2: the 110+ capability schemas — a new Error-severity issue in the existing validator.**
 Add a `CAP-` prefixed code to `validate_capability_definition`
 (`src/capability/validator/mod.rs:137`) reporting a schema document that fails meta-validation, at
 severity Error. Nothing else changes: `src/capability/loader.rs:111` already turns any Error into
 a skip, and `src/gateway/ui/capabilities.rs:558` already surfaces issues in the UI.
+
+Putting it in the validator rather than at the conversion is what makes the coverage total. `CapabilityDefinition::to_mcp_tool()` (`src/capability/definition/mod.rs:1010`) has six production call sites — `src/capability/backend.rs:65` and `:85`, `src/gateway/meta_mcp/search.rs:204` and `:293`, `src/trust/mod.rs:122`, `src/validator/cli_handler.rs:153` — and the first five all consume loader output, so a capability that fails the new code never reaches them and none needs a guard of its own. The sixth is the `validate` CLI, which parses files directly and runs the tool validator rather than `validate_capability_definition`; it is outside seam 2's reach by construction, and it reports rather than serves, so nothing is published on the strength of it.
 
 Stated plainly, because it is the operational consequence a reviewer should weigh: **on a
 previously running deployment, a capability whose schema is invalid stops being served.** It is
