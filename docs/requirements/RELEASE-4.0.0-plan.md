@@ -10,11 +10,13 @@ calls it), 9 ABSENT (nothing implements it), 1 UNTESTED (implemented and wired, 
 proving the clause). Every number is counted from the blocking column of the status doc's
 tables by script, never carried forward by hand.
 
-The previous revision counted 27 against 75 rows. Five blocking criteria closed and two rows
-appeared as clauses were split out of criteria that had been assessed as one, so the drop from
-27 to 24 understates what was finished. Closed since: `ERROR.2`, `RESULT.2`, `HEADER.5`,
-`HEADER.7`, `HEADER.8`, `TENANT.1`, `CONTROL.2`, `CONTROL.3` — which emptied the whole of the
-wave-2 queue and all but one row each of clusters D and E.
+The previous revision of this file counted 27. The drop to 24 is exactly three rows and
+nothing else: `TENANT.1`, `CONTROL.2`, `CONTROL.3`. The table has not grown or shrunk between
+the two revisions. That set is not reconstructed from prose — it is the set difference of the
+blocking column at commit `6f911f7c` and at HEAD, computed by the same script that produces
+the counts above. Earlier closures named in the previous revision (`ERROR.2`, `RESULT.2`,
+`HEADER.5`, `HEADER.7`, `HEADER.8`) had already landed before that count was taken, and
+counting them again here would have double-counted them.
 
 ## 24 is a floor, and the gap is named
 
