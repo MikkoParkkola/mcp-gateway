@@ -71,3 +71,54 @@ The accumulated diff also carries new production emission code
 (`src/gateway/router/handlers.rs`, commit `da18b0d3`) that has not been through the
 dual-vendor gate. Commit is not merge, so nothing is violated yet — the review is due before
 push, and its material is the diff, not the design documents.
+
+## Who owns what, 2026-09-01
+
+The clusters above describe the work. This section says who is doing it, because the gap that
+kept reopening was not analysis — it was that twelve of the thirty-seven blocking rows had no
+owner, and unowned work does not fail loudly. It simply never starts.
+
+| cluster | rows | owner |
+|---|---|---|
+| A continuation envelope | 15 | a concurrent session; increments recorded in `RELEASE-4.0.0-gap-plan.md` |
+| B era detection | 3 | `era-r4-repair` owns `src/protocol/era.rs`; `era-probe` owns `tests/mik_7217_era_probe_acs.rs`, held |
+| C MIK-7272 revision surface | 6 | `surface-c`, design first |
+| D response-cache keying | 2 | `cache-34` |
+| E performance vs 3.5.0 | 2 | `perf-e`, Spark only |
+| F compat and surface facts | 4 | the operator; three of the four are settled by "full scope", `NFR.COMPAT.3` is not |
+| — residue | 5 | `residue-r` takes four; `HEADER.9` belongs to the header increment |
+
+One ownership rule makes the rest work: **one owner per file**. `src/protocol/era.rs`,
+`src/protocol/cacheable.rs` and `src/protocol/continuation.rs` each have exactly one, and a
+design that needs something from another owner's file is routed rather than edited. This is not
+politeness. A shared checkout with concurrent sessions has already produced one near-miss where
+a full-file write would have replaced 583 lines of a live document with 209.
+
+### What the operator still has to decide
+
+Three of the four decisions this document listed are settled by the instruction to close the
+full scope: wire the continuation envelope, wire era detection, run the performance numbers.
+The fourth is not, because both of its answers are "fix the gap":
+
+`NFR.COMPAT.3` forbids requiring an operator to edit configuration for existing behaviour to
+continue. `meta_mcp.exposed_meta_tools` was documented as an allow-list and had no effect
+outside tests; GH issue 449 made it real, and `gateway_search`/`gateway_execute` — previously
+reaching every backend tool regardless of the list — are now restricted by it. Either the
+enforcement ships and the criterion is amended in the open, or the enforcement is reverted and
+the gateway keeps shipping a field that claims a restriction it does not apply. **Amending a
+criterion needs the operator's recorded agreement and has not been given**, so the row stays
+blocking and is not to be closed by reinterpretation.
+
+### The count is checked, not asserted
+
+`scripts/release/count-release-criteria.py --check` recounts the blocking column of every table
+in `RELEASE-4.0.0-criteria-status.md` and exits non-zero on disagreement. Quote it from there or
+run it; do not restate it. A hand-copied figure beside a machine-checked one has already drifted
+four times, most recently as a `31 blocking` that was written against a 77-row ledger and was
+still being read at 99 rows.
+
+### Still true, and not moved by any of the above
+
+The branch is unpushed — 31 commits as of this line. Every criterion in the table could go
+green without changing that, and the dual-vendor review still owes its pass on the accumulated
+production diff before a push is attempted.

@@ -225,6 +225,35 @@ impl ResponseCache {
         format!("{server}:{tool}:{args_hash}")
     }
 
+    /// The key an entry is stored under and read back by.
+    ///
+    /// [`build_key`](Self::build_key) covers the three inputs a call names for
+    /// itself. This adds the two it does not name and the response still varies
+    /// by: the projection the reply was shaped for, and the principal it was
+    /// assembled for. Both call sites go through here, because a key built in
+    /// two places is two keys the day one of them is edited.
+    ///
+    /// The principal is hashed rather than appended: a subject is caller-
+    /// supplied text, and appending it raw lets one spell another's suffix.
+    ///
+    /// `None` is a caller the gateway could not identify. Two of those are the
+    /// same caller as far as the cache can tell, and they share an entry.
+    #[must_use]
+    pub fn response_key(
+        server: &str,
+        tool: &str,
+        arguments: &Value,
+        projection_suffix: &str,
+        principal: Option<&str>,
+    ) -> String {
+        let base = Self::build_key(server, tool, arguments);
+        let principal = principal.map_or_else(String::new, |subject| {
+            let digest = canonical_json_sha256(&Value::String(subject.to_string()));
+            format!("|sub:{digest}")
+        });
+        format!("{base}{projection_suffix}{principal}")
+    }
+
     /// Compute SHA-256 hash of arguments in canonical JSON form
     fn hash_arguments(arguments: &Value) -> String {
         canonical_json_sha256(arguments)

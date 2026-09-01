@@ -360,6 +360,43 @@ fn ac_cache_3_every_cacheable_method_has_an_assessed_row() {
     }
 }
 
+// ===========================================================================
+// MIK-7213.CACHE.4 — one row per response-varying input.
+// Test plan row 4.b. The rest of CACHE.4 (backend pair 4.a, behavioural
+// identity pair 4.c, routing profile 4.d, protocol revision 4.e, policy epoch
+// 4.f.1-4.f.3) is not covered here and is not claimed to be.
+// ===========================================================================
+
+#[test]
+fn ac_cache_4_two_principals_do_not_share_an_entry() {
+    use mcp_gateway::cache::ResponseCache;
+    let arguments = serde_json::json!({ "query": "quarterly numbers" });
+    let key =
+        |principal| ResponseCache::response_key("memory", "search", &arguments, "", principal);
+
+    // Every other input is equal by construction, so a difference can only come
+    // from the principal. Identity propagation is off in this case — the
+    // shipped default — which is exactly when the two used to collide.
+    assert_ne!(
+        key(Some("oidc:11:https://idp:1:alice")),
+        key(Some("oidc:11:https://idp:1:bob")),
+        "two authorization identities sharing one key means one caller is \
+         served the other's body"
+    );
+
+    // Determinism control: without it the assertion above passes for a key
+    // that is merely different every time, which would be a broken cache
+    // rather than an isolated one.
+    assert_eq!(
+        key(Some("oidc:11:https://idp:1:alice")),
+        key(Some("oidc:11:https://idp:1:alice"))
+    );
+
+    // Two callers the gateway could not identify are one caller as far as the
+    // cache can tell. Splitting them would be a key that cannot ever hit.
+    assert_eq!(key(None), key(None));
+}
+
 #[test]
 fn ac_cache_3_an_unlisted_method_is_private() {
     // Fail closed. A method nobody has assessed is exactly the case where

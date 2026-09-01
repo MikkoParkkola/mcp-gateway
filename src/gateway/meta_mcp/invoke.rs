@@ -776,6 +776,16 @@ impl MetaMcp {
             .as_deref()
             .map(|b| format!("|idp:{b}"))
             .unwrap_or_default();
+        // Who the response cache keys on. The binding when identity propagation
+        // is minting per-user credentials, otherwise the verified subject —
+        // which is still what the backend's answer depended on. Keying on the
+        // binding alone let two authenticated callers share one entry whenever
+        // propagation was off, which is the shipped default. Kept separate from
+        // `identity_suffix` above: that one keys retry de-duplication, a
+        // different contract with a different lifetime.
+        let caller_principal = caller_credential.cache_binding.clone().or_else(|| {
+            verified_identity.map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
+        });
 
         // `want_full` no longer suppresses the key. It selects the shape of the
         // *reply*, not whether the backend acts, and a directive that switches
@@ -839,10 +849,13 @@ impl MetaMcp {
         }
 
         if !want_full && let Some(ref cache) = self.cache {
-            let cache_key = {
-                let base = ResponseCache::build_key(server, tool, &arguments);
-                format!("{base}{projection_key_suffix}{identity_suffix}")
-            };
+            let cache_key = ResponseCache::response_key(
+                server,
+                tool,
+                &arguments,
+                &projection_key_suffix,
+                caller_principal.as_deref(),
+            );
             if let Some(cached) = cache.get(&cache_key) {
                 debug!(server, tool, trace_id, "Cache hit");
                 if let Some(ref stats) = self.stats {
@@ -1292,10 +1305,13 @@ impl MetaMcp {
         }
 
         if !want_full && let Some(ref cache) = self.cache {
-            let cache_key = {
-                let base = ResponseCache::build_key(server, tool, &arguments);
-                format!("{base}{projection_key_suffix}{identity_suffix}")
-            };
+            let cache_key = ResponseCache::response_key(
+                server,
+                tool,
+                &arguments,
+                &projection_key_suffix,
+                caller_principal.as_deref(),
+            );
             if cache.set(&cache_key, result.clone(), self.default_cache_ttl) {
                 debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
             }
