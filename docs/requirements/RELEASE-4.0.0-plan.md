@@ -68,7 +68,13 @@ The small self-contained half of this cluster has landed. What remains splits tw
   both the meta-MCP surface and the direct `POST /mcp/{name}` route are in scope. The operator
   was asked on 2026-08-31 and was away; the call is the team lead's, made on the full-scope
   direction recorded at the foot of this file, and it is not operator-confirmed),
-  ORDER.2 (tool set must not vary per connection nor as a side effect of another request),
+  ORDER.2 (tool set must not vary per connection nor as a side effect of another request —
+  the variation has one chokepoint, `MetaMcp::active_profile` at
+  `src/gateway/meta_mcp/mod.rs:996-1005`, which its own doc comment names as "the one site
+  `surfaced`, `invoke` and `spec_preview` read the profile through". A second axis, the
+  `codemode` query parameter in `src/gateway/router/handlers.rs`, is reported and not yet
+  read. The design choice is to stop varying or to move the variation under authorization,
+  and one chokepoint means either is an edit rather than a sweep),
   SUB.2's surviving clause (request-scoped notifications on the request's own response stream),
   EXT.1 (declare the gateway's own extensions through server capabilities),
   OTEL.1 (`traceparent`/`tracestate`/`baggage` through `_meta`).
