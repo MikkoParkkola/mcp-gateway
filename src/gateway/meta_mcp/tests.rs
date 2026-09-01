@@ -3183,6 +3183,22 @@ async fn an_enforced_transform_refuses_a_malformed_control_field() {
             "{label}: a refused round carries no backend structure: {result:#}"
         );
     }
+}
+
+/// A caller the gateway can name, and so can bind a continuation to.
+///
+/// Carried by the declaring fixture rather than left `None`, because an
+/// unnameable caller is refused before an interim result reaches it (MRTR.2):
+/// a fixture without one would test the refusal it does not mention instead of
+/// the capability gate it does.
+static NAMED_CALLER: std::sync::LazyLock<crate::key_server::oidc::VerifiedIdentity> =
+    std::sync::LazyLock::new(|| crate::key_server::oidc::VerifiedIdentity {
+        subject: "traveller-1".to_string(),
+        email: "traveller@example.test".to_string(),
+        name: None,
+        groups: vec![],
+        issuer: "https://idp.example.test".to_string(),
+    });
 
 /// A caller context that permits everything and declares the given input
 /// capabilities.
@@ -3392,5 +3408,4 @@ async fn an_unnameable_caller_is_not_offered_an_interim_exchange() {
         -32003,
         "the refusal must reuse the gateway's existing refusal code"
     );
-}
 }
