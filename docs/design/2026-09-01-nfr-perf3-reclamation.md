@@ -26,9 +26,11 @@ holds. That is why this is a design and not an incident.
 
 And `NFR.PERF.3` cannot be closed by this soak alone. A component soak proves the table reclaims;
 it does not prove the production path reaches the table. Closure needs both — this soak, *and*
-evidence that `MRTR.6`/`MRTR.7` wiring calls `hold` on a live request. Certifying reclamation on a
+evidence that `MRTR.6` wiring calls `hold` on a live request. Certifying reclamation on a
 dormant component is exactly the "green metric, dead path" failure this document is otherwise
-about, one level up.
+about, one level up. `MRTR.7` is not part of that closure: `InFlight` holds exchanges open on behalf
+of a legacy backend (`continuation.rs:578`), which is the `MRTR.6` direction, and the modern-backend
+side of `MRTR.7` never reaches this table.
 
 | surface | bound | reclaims on the live path? |
 |---|---|---|
@@ -88,13 +90,22 @@ So: **two mechanisms, one for each clause of the MUST.**
 | clause | mechanism | when it runs |
 |---|---|---|
 | bounded **count** | inline retain in `hold`, guarded by the earliest deadline | at capacity, in the caller about to be refused |
-| bounded **lifetime** | `reap` called from lifecycle-owned periodic maintenance | on an interval, independent of traffic |
+| bounded **lifetime** | `reap` called from `spawn_continuation_maintenance`, a lifecycle-owned interval task | every 60 s, independent of traffic |
 
-The original objections to a reaper survive as *constraints on it*, not as reasons to omit it: it is
-owned by the same lifecycle that owns the router (not a free-floating `tokio::spawn`), it shuts down
-with it, and the earliest-deadline guard makes a tick over a table with nothing expired an O(1)
-comparison rather than a sweep. The interval is a bound on staleness, not on correctness — a longer
-one delays a counter increment and holds a slot longer; it cannot wedge anything, because the inline
+The original objections to a reaper survive as *constraints on it*, not as reasons to omit it, and
+they are met by spawning it the way `spawn_idle_reaper` is already spawned (`server/mod.rs:1962`).
+`spawn_continuation_maintenance` takes the `ContinuationState` the router holds and ticks a
+`tokio::time::interval` at 60 s, the same `SWEEP_INTERVAL` the idle reaper uses
+(`server/mod.rs:1971`). Both serve modes start it beside the idle reaper: the HTTP path hands it a
+subscription to the shutdown broadcast (`server/mod.rs:1364`), and `run_stdio`, which has no
+broadcast channel, wraps it in an `AbortOnDrop` guard so every exit path aborts it
+(`server/mod.rs:1546`). The tick is the one place that reads a clock — it passes `now` into `reap`,
+keeping the module's rule that no reclamation path reads its own clock (`continuation.rs:518-521`) —
+and it takes that clock as a constructor argument, so a test that advances the clock advances the
+tick with it. The earliest-deadline guard makes a tick over a table with nothing expired an O(1)
+comparison rather than a sweep. Sixty seconds is a bound on staleness, not on correctness: an
+expired entry can hold its slot for up to one interval past its deadline, and a longer interval
+delays a counter increment and holds a slot longer without wedging anything, because the inline
 retain still owns the pressure case. Each removal increments `expired_total{detected="reaped"}`,
 which is what gives that series a producer.
 
@@ -210,25 +221,43 @@ admission — reclamation proved by luck. Filling an epoch, then stepping the cl
 shared deadline, means the admission at the start of the next epoch *can only* succeed if the retain
 ran. Deterministic, and it names which line of the fix it is testing.
 
-### Two cases the uniform-deadline epochs cannot reach
+### Three cases the uniform-deadline epochs cannot reach
 
 The epoch shape proves the *pressure* clause and is blind to the other two things this design now
 claims.
 
 **A lifetime case, because the epochs never idle.** Hold a handful of exchanges, abandon them,
-advance the clock past their deadlines, and run *no further traffic at all*. Passes when the entries
-are gone and `expired_total{detected="reaped"}` has advanced by exactly that many. Fails if the map
-still holds them — which is what the pre-repair design would do, and is the `MRTR.8` `lifetime`
+advance the clock past their deadlines, and run *no further traffic at all*. The case constructs
+`spawn_continuation_maintenance` over the table, hands it the clock it advances, and asserts through
+that task: its body contains no call to `reap`. That is what separates it from
+`tests/mik_7212_acs.rs:461`, which calls `reap` from the test and therefore proves the function
+works rather than that anything in production runs it. Passes when the entries are gone and
+`expired_total{detected="reaped"}` has advanced by exactly that many, with the tick as the only
+thing that removed them. Fails if the map still holds them — which is what the pre-repair design would do, and is the `MRTR.8` `lifetime`
 clause stated as an assertion instead of a paragraph. It is the only case in the plan that can fail
 for the reason this revision exists.
 
 **A staggered-deadline case, because uniform deadlines make the cache trivially correct.** With
 every entry sharing one deadline, a cached earliest is right by construction and the invariant is
 untested. Hold entries with deadlines spread across a range, expire them out of insertion order, and
-interleave `complete` on live entries between admissions. Passes when a `hold` is admitted at
-capacity exactly when at least one entry has genuinely expired — no admission with nothing expired
-(stale-low would allow one), no refusal with something expired (stale-high, the wedge). This is the
-case that reads the invariant table above; without it that table is prose.
+interleave `complete` on live entries between admissions — each `complete` frees a slot, so the
+case refills to capacity before the next admission and every assertion is made against a full table.
+Passes when a `hold` is admitted at capacity exactly when at least one entry has genuinely expired,
+and is refused otherwise. Stale-high is what this catches: a cached deadline later than the true
+earliest suppresses the retain and the table refuses with reclaimable entries in it. Stale-low is
+invisible to it by construction — the invariant permits stale-low, and it costs a scan that frees
+nothing followed by the same refusal, so no admission decision changes.
+
+**An idle-at-capacity case, because stale-low is invisible to every admission assertion.** Fill the
+table to capacity with nothing expired and attempt a `hold`. Passes when the attempt is refused
+*and* the retain did not run, counted rather than timed: the case holds a counter incremented on
+entry to the retain and asserts it is still zero. That counter is test observability — no
+reclamation path reads it — so it is not the independent `AtomicU64` the earliest-deadline cache is
+forbidden to be. Without this case the amplifier guard has no observation that fails when every
+refused attempt still walks the map.
+
+Between them the two cases read both directions of the invariant table above; without them that
+table is prose.
 
 The last row is what makes this a real test rather than a ritual: **it fails on the current tree**,
 at a predictable point, for the stated reason. Written before the fix, it is the §P2 failing test;
@@ -276,11 +305,11 @@ The **D** row is the criterion restated as a threat, which is the honest reading
 | unknown | state |
 |---|---|
 | Is `ContinuationState` on the production path at all, or tests-only? | **Resolved: production.** `rg 'continuation:' src/ --glob '!*tests*'` gives `meta_mcp/mod.rs:401` (construction) and `server/mod.rs:1175` (handed to the router). Changed the design: the document is about a missing reclaimer, not about wiring a dead type. |
-| Does either reclaimer run outside tests? | **Resolved: no.** `rg 'reap\(|evict_expired\('` matches only `tests/`. Changed the design: the ledger turned out not to need one and `InFlight` does, which is why the fix is one function and not a scheduler. |
+| Does either reclaimer run outside tests? | **Resolved: no.** `rg 'reap\(|evict_expired\('` matches only `tests/`. Changed the design: the ledger turned out not to need one and `InFlight` needs two — an inline retain in `hold` for the count clause, and a lifecycle-owned interval task calling `reap` for the lifetime clause. |
 | Does anything in production call `InFlight::hold`? | **Resolved: no.** `rg '\.in_flight|\.hold\(|\.route\('` outside tests returns only the accessor's definition. Changed the design: the defect is stated as latent, and `NFR.PERF.3` closure now requires wiring evidence alongside the soak rather than the soak alone. |
-| Does the at-capacity scan give an unauthenticated caller an amplifier? | **Resolved: yes, without a guard.** A bare retain is O(4 096) per refused attempt and the attempts need no privilege. Changed the design: the fix carries an earliest-deadline check the ledger does not have, named above as a deliberate divergence. |
-| Does `hold` already have a clock to retain against? | **Resolved: no.** `hold(&self, backend_id: &str, expires_at: u64)` (`:619`) carries only the new entry's deadline. Changed the design: the fix is a signature change, named above with its eight call sites, rather than a body-only edit. |
-| Does the ledger have the same defect? | **Resolved: no.** `consume` (`:527-533`) retains before refusing. Changed the design: the fix is stated as *copy the ledger's shape*, so the two tables end up with one reclamation rule between them rather than two. |
+| Does the at-capacity scan give an unauthenticated caller an amplifier? | **Resolved: yes, without a guard.** A bare retain is O(4 096) per refused attempt and the attempts need no privilege. Changed the design: the fix carries an earliest-deadline check the ledger does not have, and that guard is the first of the two divergences that stop the two tables sharing one rule. |
+| Does `hold` already have a clock to retain against? | **Resolved: no.** `hold(&self, backend_id: &str, expires_at: u64)` (`:619`) carries only the new entry's deadline. Changed the design: the fix is a signature change, named above with its thirteen call sites, rather than a body-only edit. |
+| Does the ledger have the same defect? | **Resolved: no.** `consume` (`:527-533`) retains before refusing. Changed the design: `hold` copies the ledger's retain-before-refusing shape for the count clause, and diverges from it for the rest — the ledger has no lifetime clause to bound and no unauthenticated amplifier to guard, so `InFlight` alone carries the periodic tick and the earliest-deadline check. |
 
 ## Out of scope
 
