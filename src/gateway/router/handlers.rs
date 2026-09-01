@@ -1527,14 +1527,13 @@ fn build_modern_response(
 
         if CACHEABLE_METHODS.contains(&method) {
             object.insert("ttlMs".to_string(), serde_json::json!(LIST_TTL_MS));
-            // Private, and not provisionally. This gateway's list varies by the
-            // credential presented, which is what `private` describes. `public`
-            // would tell every shared intermediary it may serve one caller's
-            // filtered view to another.
+            // Per method, from the table that records which ones were
+            // assessed. Answering with one method's decision for all five
+            // would make `resources/read` inherit `tools/list`'s reasoning.
             object.insert(
                 "cacheScope".to_string(),
                 serde_json::Value::String(
-                    crate::protocol::cacheable::CacheScope::current_for_tools_list()
+                    crate::protocol::cacheable::scope_for_method(method)
                         .as_str()
                         .to_string(),
                 ),

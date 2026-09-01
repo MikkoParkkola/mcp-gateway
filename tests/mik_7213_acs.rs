@@ -318,3 +318,87 @@ mod http {
         );
     }
 }
+
+// ===========================================================================
+// MIK-7213.CACHE.3 — the decision table itself.
+//
+// The rules above prove `for_list` decides correctly once someone has answered
+// "did this depend on the caller?". The criterion asks for the artifact that
+// answers it per method, and for that artifact to be what the emitting code
+// consults — not a document beside code that decides on its own.
+// ===========================================================================
+
+#[test]
+fn ac_cache_3_every_cacheable_method_has_an_assessed_row() {
+    // Five methods carry `cacheScope` on the wire. A table missing one of them
+    // is a method whose scope was defaulted rather than decided.
+    for method in [
+        "tools/list",
+        "prompts/list",
+        "resources/list",
+        "resources/templates/list",
+        "resources/read",
+    ] {
+        assert_eq!(
+            mcp_gateway::protocol::cacheable::scope_for_method(method),
+            CacheScope::Private,
+            "{method} is served from a caller-scoped assembly"
+        );
+    }
+}
+
+#[test]
+fn ac_cache_3_an_unlisted_method_is_private() {
+    // Fail closed. A method nobody has assessed is exactly the case where
+    // `public` would be a claim about callers the gateway has never seen.
+    assert_eq!(
+        mcp_gateway::protocol::cacheable::scope_for_method("tools/call"),
+        CacheScope::Private
+    );
+    assert_eq!(
+        mcp_gateway::protocol::cacheable::scope_for_method(""),
+        CacheScope::Private
+    );
+}
+
+// ===========================================================================
+// The second clause: the table is referenced from the emitting code. Source
+// lints, and named as such — prose of the same shape keeps them green, so
+// these bound the drift rather than proving the reference is meaningful.
+// ===========================================================================
+
+fn source(relative: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+#[test]
+fn ac_cache_3_the_deciding_functions_name_the_table() {
+    let text = source("src/protocol/cacheable.rs");
+    for signature in [
+        "pub const fn for_list(",
+        "pub const fn current_for_tools_list(",
+    ] {
+        let doc = text
+            .split(signature)
+            .next()
+            .expect("a split always yields a first part");
+        assert!(
+            doc.rsplit("///")
+                .take(12)
+                .any(|line| line.contains("scope_for_method")),
+            "the doc above `{signature}` must send a reader to the table that \
+             decides per method, or the table is a document beside the code"
+        );
+    }
+}
+
+#[test]
+fn ac_cache_3_the_wire_field_is_filled_from_the_table() {
+    let text = source("src/gateway/router/handlers.rs");
+    assert!(
+        text.contains("scope_for_method(method)"),
+        "the `cacheScope` a client receives must come from the table, not from \
+         one method's answer applied to five"
+    );
+}

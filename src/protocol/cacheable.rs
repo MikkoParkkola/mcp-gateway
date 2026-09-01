@@ -40,7 +40,8 @@ impl CacheScope {
     /// The scope for a list whose content did or did not depend on the caller.
     ///
     /// One argument, and it is the whole decision: if the assembly consulted
-    /// anything about who asked, the answer is private.
+    /// anything about who asked, the answer is private. Which methods this
+    /// gateway has answered that question for is [`scope_for_method`].
     #[must_use]
     pub const fn for_list(caller_dependent: bool) -> Self {
         if caller_dependent {
@@ -57,13 +58,45 @@ impl CacheScope {
     /// That variation is legal (credentials are per-request input, not
     /// connection state) and it is exactly what `private` describes.
     ///
-    /// A future `public` needs the decision table MIK-7213 asks for, naming a
+    /// A future `public` needs a row in [`scope_for_method`]'s table naming a
     /// response that provably does not vary. It is not reached by relaxing this
     /// function.
     #[must_use]
     pub const fn current_for_tools_list() -> Self {
         Self::for_list(true)
     }
+}
+
+/// The methods this gateway has assessed, and what each one warrants.
+///
+/// Every row is private and the default below is private too, so the table
+/// changes no answer today. What it carries is which methods were *assessed*:
+/// without it, a method nobody considered and a method considered and found
+/// caller-dependent are the same silence, and a later `public` is a default
+/// nobody had to argue for rather than an edit someone has to make.
+const SCOPE_TABLE: &[(&str, CacheScope)] = &[
+    // Filtered by the presented credential's scope — an API key decides which
+    // backends, prompts and resources a caller is shown.
+    ("tools/list", CacheScope::Private),
+    ("prompts/list", CacheScope::Private),
+    ("resources/list", CacheScope::Private),
+    ("resources/templates/list", CacheScope::Private),
+    // Not a list, and assessed separately: reachability of a URI is decided
+    // per caller, so the body is too.
+    ("resources/read", CacheScope::Private),
+];
+
+/// What `method`'s result may claim on the wire.
+///
+/// An unlisted method is private. That is the direction the burden runs in
+/// [`CacheScope`]: `public` is a claim about callers this gateway has never
+/// seen, and a method nobody assessed has nobody's proof behind it.
+#[must_use]
+pub fn scope_for_method(method: &str) -> CacheScope {
+    SCOPE_TABLE
+        .iter()
+        .find(|(name, _)| *name == method)
+        .map_or(CacheScope::Private, |(_, scope)| *scope)
 }
 
 /// The `resultType` of a result, defaulting as the specification requires.
