@@ -59,7 +59,7 @@ oversight.
 
 ### One thread that looked in flight and was not
 
-The cluster-C era-detection design is written: `docs/design/2026-09-01-cluster-c-era-detection.md`.
+The cluster-C era-detection design is written: `docs/design/2026-08-31-discover-outbound-era-probe.md`.
 An earlier revision of this file recorded it as never started, because the subagent briefed to
 write it died on an output ceiling and a task ID that stops resolving was read as evidence the
 work stopped. The NFR sweep briefed alongside it had also returned. Neither absence was real.
