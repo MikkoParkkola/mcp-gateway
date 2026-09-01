@@ -696,3 +696,21 @@ Three things can run alongside it without waiting:
 
 Clusters C and D follow A, because both need a served modern request path to test against — the
 dependency section above already establishes that, and nothing since has changed it.
+
+### One of cluster F's four decisions is now made
+
+`NFR.COMPAT.1` — whether the 2026 revision joins `SUPPORTED_VERSIONS` for 4.0.0 — asked of the
+operator on 2026-09-02, answered **serve it in this release**, not advertise-only and not drop the
+advertisement.
+
+What it changes: cluster A moves onto the critical path for the whole release rather than being the
+largest of several parallel tracks. A served revision is one the continuation envelope has to
+actually carry, so nothing in C or D can be finished ahead of it, and the release cannot go out on
+the work already done. It also settles the audits' central complaint — a revision announced by
+`discover_document` and refused at the door — by closing the gap from the serving side instead of
+retracting the announcement.
+
+The other three remain open and remain operator calls, not engineering: whether
+`exposed_meta_tools` enforcement ships as a breaking change, whether a dual-role compatibility
+matrix is required for 4.0.0, and whether the 17-tool scenario or the documented 14-16 ceiling is
+the number that moves.
