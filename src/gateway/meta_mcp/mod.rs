@@ -1311,6 +1311,22 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
+        // Operator exposure allow-list. Enforced ahead of the admin gate, not
+        // beside it: a meta-tool hidden from `tools/list` but still executable is
+        // security theatre, and the admin gate answering first would disclose the
+        // tool's existence to the caller the allow-list is hiding it from. Reaching
+        // this check before the admin gate is what makes the refusal wording below
+        // load-bearing rather than decorative. `exposed_meta_tools` promises
+        // that an unlisted tool "is not callable either". Names outside the
+        // governed meta-tool set - surfaced and backend tools - are unaffected.
+        //
+        // The refusal is worded exactly like the unrecognised-tool fallback below:
+        // an operator hiding a tool must not get a reply confirming it exists and
+        // was deliberately withheld.
+        if !self.meta_tool_exposure.is_exposed(tool_name) {
+            return JsonRpcResponse::error(Some(id), -32601, format!("Unknown tool: {tool_name}"));
+        }
+
         // Admin gate for the meta-tools that change the gateway for every
         // session. Enforced HERE, at the dispatcher, and not only at the HTTP
         // router that also checks it.
@@ -1332,19 +1348,6 @@ impl MetaMcp {
                 -32600,
                 format!("Tool '{tool_name}' requires admin access"),
             );
-        }
-
-        // Operator exposure allow-list. Enforced at the same point as the admin
-        // gate and for the same reason: a meta-tool hidden from `tools/list` but
-        // still executable is security theatre, and `exposed_meta_tools` promises
-        // that an unlisted tool "is not callable either". Names outside the
-        // governed meta-tool set - surfaced and backend tools - are unaffected.
-        //
-        // The refusal is worded exactly like the unrecognised-tool fallback below:
-        // an operator hiding a tool must not get a reply confirming it exists and
-        // was deliberately withheld.
-        if !self.meta_tool_exposure.is_exposed(tool_name) {
-            return JsonRpcResponse::error(Some(id), -32601, format!("Unknown tool: {tool_name}"));
         }
 
         // T2.4: Check surfaced tools BEFORE the meta-tool match.

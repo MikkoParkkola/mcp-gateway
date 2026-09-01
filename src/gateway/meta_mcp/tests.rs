@@ -2614,6 +2614,38 @@ async fn unexposed_meta_tool_is_refused_on_call() {
 }
 
 #[tokio::test]
+async fn unexposed_admin_meta_tool_is_refused_as_unrecognized_not_as_admin_only() {
+    // The refusal wording is the whole control: an operator who removed a tool
+    // from `exposed_meta_tools` must not get a reply confirming the tool exists
+    // and was withheld. `gateway_kill_server` is an admin meta-tool, so an
+    // admin gate placed before the exposure check answers `-32600 requires
+    // admin access` and discloses exactly what the allow-list hides. The caller
+    // here is non-admin, which is the case that reaches that gate first.
+    let response = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_exposed_meta_tools(&["gateway_invoke".to_string()])
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_kill_server",
+            json!({}),
+            None,
+            allow_all_ctx(),
+        )
+        .await;
+
+    let error = response
+        .error
+        .expect("an unexposed admin meta-tool must still be refused");
+    assert_eq!(
+        error.code, -32601,
+        "an unexposed tool must read as unrecognized, never as admin-only: {error:?}"
+    );
+    assert!(
+        !error.message.contains("admin"),
+        "the refusal must not name the admin requirement: {error:?}"
+    );
+}
+
+#[tokio::test]
 async fn exposed_meta_tool_still_runs() {
     // Without this the refusal above passes for a gateway that refuses
     // everything. Same subject as the refusal test, so the allow-list is the
