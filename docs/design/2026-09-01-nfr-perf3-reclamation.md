@@ -256,8 +256,8 @@ reclamation path reads it — so it is not the independent `AtomicU64` the earli
 forbidden to be. Without this case the amplifier guard has no observation that fails when every
 refused attempt still walks the map.
 
-Between them the two cases read both directions of the invariant table above; without them that
-table is prose.
+Between them the staggered and idle-at-capacity cases read both directions of the invariant table
+above; without them that table is prose.
 
 The last row is what makes this a real test rather than a ritual: **it fails on the current tree**,
 at a predictable point, for the stated reason. Written before the fix, it is the §P2 failing test;
