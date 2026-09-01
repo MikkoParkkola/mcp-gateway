@@ -217,12 +217,56 @@ by whoever next touches `meta_mcp` -- either wire them or delete them. `#[allow(
 `pub` setter is what let all five survive the clippy gate: the attribute silences the exact warning
 that would have reported them.
 
+## NFR (section 4 of the requirements) — 22 criteria, opened 2026-09-01
+
+These rows exist so the ledger stops silently omitting a fifth of its own requirement set. A row
+marked `not assessed` is an admission, not a verdict: it counts against the release exactly as an
+unmet criterion does, because a criterion nobody has checked cannot be claimed.
+
+Several of these are not independent work. `NFR.SEC.2`, `.3`, `.4`, `NFR.OBS.4` and `NFR.PERF.3` all
+verify the continuation envelope, which is the MIK-7212 cluster and is unwired; `NFR.OBS.3` verifies
+era detection, which is MIK-7217.DISCOVER.4-5 and is unwired. They cannot be closed before the
+criteria they observe, and closing those does not close these — each still needs its own evidence.
+
+| criterion ID | requirement (short) | status | evidence (file:line) | blocking |
+|---|---|---|---|---|
+| NFR.COMPAT.1 | 2026-07-28, 2025-11-25, 2025-06-18 served; 2025-03-26 and 2024-11-05 not dropped | not assessed | no row existed before 2026-09-01; no verification run | yes |
+| NFR.COMPAT.2 | a client working against 3.5.0 works against 4.0.0 with no config change | not assessed | no row existed before 2026-09-01; no verification run | yes |
+| NFR.COMPAT.3 | upgrading operator not required to edit config for existing behaviour | not assessed | no row existed before 2026-09-01; no verification run | yes |
+| NFR.COMPAT.4 | every requirement verified in both roles and on every transport implementing it | not assessed | no row existed before 2026-09-01; no verification run. Note this is a meta-criterion over every other row in this file, and no row above records a role/transport matrix | yes |
+| NFR.SEC.1 | no 3.5.0 control becomes inoperative for a modern caller; each has a refusal test | not assessed | no row existed before 2026-09-01; no verification run | yes |
+| NFR.SEC.2 | continuation state confidential to the gateway; a client cannot read backend state from its echo | ABSENT | verifies the MIK-7212 continuation envelope, which is unwired: nothing mints or opens a continuation on the live path | yes |
+| NFR.SEC.3 | continuation envelope versioned, key rotatable, verification keys retained for the max lifetime | ABSENT | same envelope; no rotation or retention exists to test | yes |
+| NFR.SEC.4 | deterministic fixtures for tamper, expiry, replay, wrong principal, wrong request, rotation, oversize, wrong replica | ABSENT | same envelope; eight named fixtures, none of which can be written against an unwired path | yes |
+| NFR.SEC.5 | clippy, `cargo fmt --check`, `cargo audit` and the secret scan clean; `deny(unsafe_code)` holds | UNTESTED | two of four gates verified 2026-09-01: `cargo fmt --check` rc=0, and `#![deny(unsafe_code)]` present at `src/lib.rs:1`. `cargo clippy --all-targets -- -D warnings`, `cargo audit` and the secret scan were NOT run for this row | yes |
+| NFR.SEC.6 | MIK-7249, MIK-7256, MIK-7262 and MIK-7222 closed in this release | UNTESTED | `tests/mik_7222_acs.rs` exists and carries the credential-disclosure sweep. MIK-7256 is referenced in `src/config/env_overlay.rs`, `src/config/tests.rs`, `src/config_reload/mod.rs`, `src/config_reload/tests.rs`. MIK-7249 and MIK-7262 have ZERO references in `src/` or `tests/`, so nothing in the tree evidences their closure | yes |
+| NFR.PERF.1 | tool-call latency not regressed >5% P50 / >10% P99 against 3.5.0 | ABSENT | no measurement against 3.5.0 has been run; a code read cannot substitute for one | yes |
+| NFR.PERF.2 | header-first routing justified by measurement against the full-parse path, or it does not ship | ABSENT | no measurement recorded. The requirement states its own consequence: without a number the change does not ship | yes |
+| NFR.PERF.3 | memory does not grow unboundedly with abandoned continuations; a soak shows reclamation | ABSENT | verifies bounded in-flight continuation state (MIK-7212.MRTR.8), which is unwired; no soak exists | yes |
+| NFR.PERF.4 | Meta-MCP surface remains 14-16 tools; `server/discover` does not count against it | not assessed | no row existed before 2026-09-01; the count was not enumerated for this row | yes |
+| NFR.OBS.1 | per request, record the protocol revision observed and whether it arrived by `_meta` or handshake | not assessed | no row existed before 2026-09-01; no verification run | yes |
+| NFR.OBS.2 | per `tools/list`, record which filters ran and the `cacheScope` that would be emitted | not assessed | no row existed before 2026-09-01; related to the MIK-7213 cache-keying cluster | yes |
+| NFR.OBS.3 | era detection observable: which era, by what evidence, when re-probed | ABSENT | verifies MIK-7217.DISCOVER.4-5, both unwired; there is no detection to observe | yes |
+| NFR.OBS.4 | continuation mint, redeem, expiry and rejection counted, with reason | ABSENT | same unwired envelope; no counters exist | yes |
+| NFR.OBS.5 | modern-protocol serving behind a flag, default off, revertible without a downgrade | MET (I) | `ServerConfig::modern_protocol` at `src/config/mod.rs:1127`, defaulted `false` at `:1174`, read on the live request path at `src/gateway/router/handlers.rs:221`, `:700` and `:912`. Toggled in `src/gateway/router/tests.rs`. Marked (I) — one pass, no falsifier run | no |
+| NFR.DOC.1 | every document this release makes untrue updated within the release | not assessed | no row existed before 2026-09-01; no document sweep run | yes |
+| NFR.DOC.2 | upgrade note states what changes for an operator, for a client author, and what does not | not assessed | no row existed before 2026-09-01; no verification run | yes |
+| NFR.DOC.3 | any deliberate divergence from the specification recorded with its reason | not assessed | no row existed before 2026-09-01; no verification run | yes |
+
+
 ## What this audit does not cover
 
-This file audits 73 criteria and the requirements list 73, so every requirement ID now has a row.
-The coverage gap this section was written to record — 10 unexamined MIK-7272 criteria — was closed on
-2026-08-31 and each of the 10 was re-verified against source on the same date. What remains uncovered
-is not criteria but reconciliation: the identifier-scheme conflict described at the end of this section.
+This file audits the 73 functional criteria and the requirements list 73, so every FUNCTIONAL
+requirement ID has a row. The coverage gap this section was written to record — 10 unexamined
+MIK-7272 criteria — was closed on 2026-08-31 and each of the 10 was re-verified against source on
+the same date.
+
+That is not the same as covering the requirements document. Section 4 of
+`docs/requirements/RELEASE-4.0.0-requirements.md` (lines 204-253) carries 22 non-functional
+requirements, each with its own verification method, and until 2026-09-01 not one of them had a row
+anywhere in this file. They now have rows, below. Half of them are still unassessed and say so.
+What also remains uncovered is reconciliation: the identifier-scheme conflict described at the end of
+this section.
 
 | Group | Criteria | Audited here |
 |---|---|---|

@@ -1,14 +1,22 @@
-# v4.0.0 release plan — closing the 24 blocking criteria
+# v4.0.0 release plan — closing the 45 blocking criteria
 
 Companion to `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is the status SSOT.
 This file is the ORDER OF WORK, not a second status table. When the two disagree, the status
 doc wins.
 
-Standing as of 2026-09-01: 77 rows, 53 met — 49 `MET`, 2 `MET (I)`, 1 `MET (caveat)`, 1
-`MET (residual)`. 24 are blocking: 14 UNWIRED (code exists, nothing on the production path
+Standing as of 2026-09-01: **99 rows, 54 met, 45 blocking.**
+
+The functional half is 77 rows, 53 met — 49 `MET`, 2 `MET (I)`, 1 `MET (caveat)`, 1
+`MET (residual)` — and 24 blocking: 14 UNWIRED (code exists, nothing on the production path
 calls it), 9 ABSENT (nothing implements it), 1 UNTESTED (implemented and wired, no test
-proving the clause). Every number is counted from the blocking column of the status doc's
+proving the clause). Those numbers are counted from the blocking column of the status doc's
 tables by script, never carried forward by hand.
+
+The non-functional half is the 22 requirements of section 4, given rows in the status doc on
+2026-09-01 and previously absent from it entirely. One is met (NFR.OBS.5); 21 are blocking, of
+which eleven have never been assessed by anyone and say so in their evidence column. An
+unassessed criterion counts against the release exactly as an unmet one does — the release
+cannot be claimed against a check nobody ran.
 
 The previous revision of this file counted 27. The drop to 24 is exactly three rows and
 nothing else: `TENANT.1`, `CONTROL.2`, `CONTROL.3`. The table has not grown or shrunk between
@@ -18,23 +26,31 @@ the counts above. Earlier closures named in the previous revision (`ERROR.2`, `R
 `HEADER.5`, `HEADER.7`, `HEADER.8`) had already landed before that count was taken, and
 counting them again here would have double-counted them.
 
-## 24 is a floor, and the gap is named
+## 45 is still a floor, and what remains unverified is named
 
-The status doc still carries **no row for any of the 22 non-functional requirements** in
-section 4 of `docs/requirements/RELEASE-4.0.0-requirements.md` (lines 204-253): NFR.COMPAT.1-4,
-NFR.SEC.1-6, NFR.PERF.1-4, NFR.OBS.1-5, NFR.DOC.1-3. Each carries a verification method in the
-requirements table (T test, M measurement, D demonstration, I inspection), so each is a
-criterion and not a wish. A release cannot be declared ready against a ledger that does not
-contain a fifth of its own requirements.
+The gap this section previously recorded — no row anywhere for any of the 22 non-functional
+requirements in section 4 of `docs/requirements/RELEASE-4.0.0-requirements.md` (lines 204-253)
+— is closed. Every NFR ID now has a row in the status doc. What is NOT closed is the
+assessment behind eleven of those rows, each of which reads `not assessed` with the reason
+that no verification has been run.
 
-Two things are known about that block without the sweep. `cargo fmt --check` now passes, so
-the NFR.SEC.5 failure recorded in the previous revision is repaired — that claim is retired,
-not carried. NFR.PERF.1-2 require a measurement against 3.5.0 that has never been run, and a
-measurement is not something a code read can substitute for.
+Of the 21 blocking NFRs, six are not independent work: NFR.SEC.2-4, NFR.OBS.4 and NFR.PERF.3
+all verify the MIK-7212 continuation envelope, and NFR.OBS.3 verifies MIK-7217 era detection.
+Both are unwired, so those rows cannot close before the clusters below — and closing a cluster
+does not close them either, since each still needs its own evidence.
 
-Sweeping the block is therefore item zero of this plan, ahead of every cluster below. It is
-cheap next to what it protects: the alternative is shipping and discovering the count was
-never the count.
+Three are known without a sweep. `cargo fmt --check` passes and `#![deny(unsafe_code)]` holds
+at `src/lib.rs:1`, so the NFR.SEC.5 failure recorded two revisions ago is repaired — but two
+of that criterion's four gates (clippy, audit, secret scan) have not been run, so it stays
+UNTESTED rather than met. NFR.SEC.6 names four tickets as closed in this release and two of
+them, MIK-7249 and MIK-7262, have no reference anywhere under `src/` or `tests/`.
+NFR.PERF.1-2 require a measurement against 3.5.0 that has never been run, and a measurement is
+not something a code read can substitute for. NFR.PERF.2 states its own consequence: without a
+number, header-first routing does not ship.
+
+Assessing the eleven unassessed rows is therefore item zero of this plan, ahead of every
+cluster below. It is cheap next to what it protects: the alternative is shipping and
+discovering the count was never the count.
 
 ## The shape of the problem
 
@@ -122,11 +138,14 @@ be built before cluster A lands.
 
 ## Order of work
 
-**Wave 0 — the NFR sweep.** Assess all 22 non-functional requirements against source and
-running behaviour, one row each into the status doc, using the verification method the
-requirements table already names for each. Two of them (NFR.PERF.1-2) need a measurement run
-against 3.5.0, not a read. This wave changes the size of every wave after it, which is why it
-runs first rather than last.
+**Wave 0 — the NFR sweep.** The 22 rows now exist; eleven of them read `not assessed`.
+Assess those eleven against source and running behaviour, using the verification method the
+requirements table already names for each, and finish the two that are partly done
+(NFR.SEC.5's clippy, audit and secret-scan gates; NFR.SEC.6's MIK-7249 and MIK-7262). Two
+of the eleven (NFR.PERF.1-2) need a measurement run against 3.5.0, not a read. The six that
+verify the continuation envelope and era detection are NOT in this wave — they follow their
+clusters. This wave changes the size of every wave after it, which is why it runs first
+rather than last.
 
 **Wave 1 — designs only, no code, all parallel.** C, F, G, and the design-first half of B.
 Each is a §P1 note reviewed by two vendors before an edit. This is the wave that decides
