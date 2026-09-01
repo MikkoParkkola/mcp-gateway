@@ -4,12 +4,12 @@ Companion to `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is the 
 This file is the ORDER OF WORK, not a second status table. When the two disagree, the status
 doc wins.
 
-Standing as of 2026-09-01: **99 rows, 53 met or non-blocking, 46 blocking.**
+Standing as of 2026-09-01: **99 rows, 54 met or non-blocking, 45 blocking.**
 
-The functional half is 77 rows, 53 met or non-blocking — 49 `MET`, 2 `MET (I)`, 1 `MET (caveat)`, 1
-`MET (residual)` — and 24 blocking: 14 UNWIRED (code exists, nothing on the production path
-calls it), 9 ABSENT (nothing implements it), 1 UNTESTED (implemented and wired, no test
-proving the clause). Those numbers are counted from the blocking column of the status doc's
+The functional half is 77 rows, 54 met or non-blocking — 49 `MET`, 2 `MET (I)`, 1 `MET (caveat)`, 1
+`MET (residual)` — and 23 blocking: 14 UNWIRED (code exists, nothing on the production path
+calls it), 9 ABSENT (nothing implements it). MIK-6865.SCHEMA.1's 2020-12 clause was the
+last functional UNTESTED row and closed on 2026-09-01. Those numbers are counted from the blocking column of the status doc's
 tables by script, never carried forward by hand.
 
 The non-functional half is the 22 requirements of section 4, given rows in the status doc on

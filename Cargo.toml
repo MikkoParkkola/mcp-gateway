@@ -157,6 +157,7 @@ pretty_assertions = "1.4"
 tempfile = "3.14"
 serde_urlencoded = "0.7"
 criterion = { version = "0.8", features = ["html_reports"] }
+jsonschema = { version = "0.52.1", default-features = false }
 
 [features]
 default = ["a2a", "webui", "config-export", "cost-governance", "firewall", "discovery", "semantic-search", "tool-profiles", "metrics"]
