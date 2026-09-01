@@ -1394,3 +1394,210 @@ mod era_resolution {
         assert_eq!(second, Era::Modern);
     }
 }
+
+// ── MRTR.10 — the retry pair discriminates a cached result ───────────────────
+//
+// A client's idempotency key is an opaque string it chose, and a retry reuses
+// it: the retry *is* the same logical request. So the key alone cannot tell one
+// continuation of that request from another, and the fingerprint bound to it
+// must. Without the retry pair in that fingerprint, a user who answers a
+// confirmation gate "accept" and then, on a second continuation, "decline" is
+// served the first answer's result — one side effect standing in for the
+// opposite one.
+
+use mcp_gateway::protocol::mrtr::RetryFields;
+use serde_json::json;
+
+fn retry(input_responses: Option<serde_json::Value>, request_state: Option<&str>) -> RetryFields {
+    RetryFields {
+        input_responses,
+        request_state: request_state.map(str::to_string),
+        idempotency_key: None,
+        malformed: Vec::new(),
+    }
+}
+
+#[test]
+fn ac_mrtr_10_a_fresh_call_contributes_nothing_to_the_key() {
+    // GIVEN a call carrying neither retry field
+    let fresh = retry(None, None);
+    // THEN it must not perturb the key, or every warm cache entry in every
+    // deployment is silently dropped by the upgrade that adds this.
+    assert_eq!(
+        fresh.key_discriminator(),
+        "",
+        "a fresh call must derive the same key it derived before MRTR.10"
+    );
+}
+
+#[test]
+fn ac_mrtr_10_different_answers_derive_different_keys() {
+    // GIVEN two continuations of one request that differ only in the answer
+    let accepted = retry(Some(json!({"confirm": {"action": "accept"}})), Some("st-1"));
+    let declined = retry(
+        Some(json!({"confirm": {"action": "decline"}})),
+        Some("st-1"),
+    );
+    // THEN the stored result of one must be unreachable by the other
+    assert_ne!(
+        accepted.key_discriminator(),
+        declined.key_discriminator(),
+        "answering a confirmation gate differently must not replay the first answer"
+    );
+}
+
+#[test]
+fn ac_mrtr_10_different_backend_state_derives_a_different_key() {
+    // GIVEN two continuations with the same answer against different state
+    let first = retry(Some(json!({"confirm": true})), Some("st-1"));
+    let second = retry(Some(json!({"confirm": true})), Some("st-2"));
+    // THEN they are distinct exchanges and must not share a cached result
+    assert_ne!(
+        first.key_discriminator(),
+        second.key_discriminator(),
+        "the backend's own state distinguishes two exchanges"
+    );
+}
+
+#[test]
+fn ac_mrtr_10_the_same_retry_derives_the_same_key() {
+    // GIVEN the same retry expressed with its JSON keys in either order
+    let one = retry(Some(json!({"a": 1, "b": 2})), Some("st-1"));
+    let two = retry(Some(json!({"b": 2, "a": 1})), Some("st-1"));
+    // THEN duplicate protection still recognises it, or the guard protects
+    // nothing: a key that changes per attempt admits every attempt.
+    assert_eq!(
+        one.key_discriminator(),
+        two.key_discriminator(),
+        "the discriminator must be stable across JSON key ordering"
+    );
+}
+
+#[test]
+fn ac_mrtr_10_the_two_fields_cannot_be_transposed() {
+    // GIVEN one retry whose state is a value, and another where that same value
+    // appears in the answers instead
+    let state_carries_it = retry(None, Some("x"));
+    let answers_carry_it = retry(Some(json!({"": "x"})), None);
+    // THEN they must not collide: concatenation without a separator is how two
+    // different requests come to share one key.
+    assert_ne!(
+        state_carries_it.key_discriminator(),
+        answers_carry_it.key_discriminator(),
+        "the fields must be separated, not concatenated"
+    );
+}
+
+// ===========================================================================
+// MRTR.9 — the gateway MUST NOT relay an `inputRequest` of a type the client
+// has not declared support for.
+//
+// The declaration is per capability, so the refusal is per entry: a client that
+// declared `elicitation` and not `sampling` may be asked the one and not the
+// other, and a verdict over the whole result cannot express that.
+// ===========================================================================
+
+mod capability_gate {
+    use mcp_gateway::protocol::mrtr::InputRequired;
+    use serde_json::json;
+
+    fn interim(requests: &serde_json::Value) -> InputRequired {
+        InputRequired::from_result(&json!({
+            "resultType": "input_required",
+            "inputRequests": requests,
+            "requestState": "backend-opaque"
+        }))
+        .expect("a well-formed interim result")
+    }
+
+    fn declared(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    #[test]
+    fn ac_mrtr_9_a_declared_type_is_relayed() {
+        // GIVEN a client that declared `elicitation`
+        // WHEN the backend asks for an elicitation
+        let interim = interim(&json!({
+            "confirm": { "method": "elicitation/create", "params": {} }
+        }));
+        // THEN nothing is refused: the gate must not block the exchange it
+        // exists to make safe.
+        assert!(
+            interim.undeclared(&declared(&["elicitation"])).is_none(),
+            "a declared capability must be relayable"
+        );
+    }
+
+    #[test]
+    fn ac_mrtr_9_an_undeclared_type_is_refused() {
+        // GIVEN a client that declared `elicitation` and nothing else
+        // WHEN the backend asks for sampling
+        let interim = interim(&json!({
+            "draft": { "method": "sampling/createMessage", "params": {} }
+        }));
+        let refused = interim
+            .undeclared(&declared(&["elicitation"]))
+            .expect("sampling was never declared");
+        // THEN the refusal names the capability the client would have had to
+        // declare, so the client can act on it rather than guess.
+        assert_eq!(refused.capability, Some("sampling"));
+        assert_eq!(refused.key, "draft");
+    }
+
+    #[test]
+    fn ac_mrtr_9_each_entry_is_judged_on_its_own_capability() {
+        // GIVEN one result carrying both a declared and an undeclared type
+        let interim = interim(&json!({
+            "confirm": { "method": "elicitation/create", "params": {} },
+            "draft": { "method": "sampling/createMessage", "params": {} }
+        }));
+        // THEN the undeclared entry is found whichever position it holds — a
+        // check that stopped at the first entry would pass this result.
+        let refused = interim
+            .undeclared(&declared(&["elicitation"]))
+            .expect("the sampling entry must still be caught");
+        assert_eq!(refused.key, "draft");
+        assert_eq!(refused.capability, Some("sampling"));
+    }
+
+    #[test]
+    fn ac_mrtr_9_an_unrecognised_type_is_refused_and_names_no_capability() {
+        // A method outside the revision's vocabulary cannot have been declared:
+        // the declaration is a list of capability names, and this has none.
+        let interim = interim(&json!({
+            "odd": { "method": "vendor/askSomething", "params": {} }
+        }));
+        let refused = interim
+            .undeclared(&declared(&["elicitation", "sampling", "roots"]))
+            .expect("an unclassifiable request must not be relayed");
+        assert_eq!(refused.method, "vendor/askSomething");
+        assert_eq!(
+            refused.capability, None,
+            "no capability may be named, or the client is told to declare one that does not exist"
+        );
+    }
+
+    #[test]
+    fn ac_mrtr_9_an_entry_carrying_no_method_is_refused() {
+        // Fail closed. Skipping an entry the gate cannot read would relay it.
+        let interim = interim(&json!({ "nameless": { "params": {} } }));
+        assert!(
+            interim
+                .undeclared(&declared(&["elicitation", "sampling", "roots"]))
+                .is_some(),
+            "an entry with no method must be refused, not skipped"
+        );
+    }
+
+    #[test]
+    fn ac_mrtr_9_a_client_that_declared_nothing_is_asked_nothing() {
+        let interim = interim(&json!({
+            "confirm": { "method": "elicitation/create", "params": {} }
+        }));
+        assert!(
+            interim.undeclared(&[]).is_some(),
+            "an empty declaration permits no question at all"
+        );
+    }
+}

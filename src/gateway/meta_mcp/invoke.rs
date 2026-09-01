@@ -13,7 +13,6 @@ use std::time::Instant;
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
-use crate::cache::ResponseCache;
 use crate::capability::validate_output;
 use crate::context_integrity::{
     ContextActionRisk, ContextIntegrityDecisionKind, ContextIntegrityEvaluation,
@@ -122,7 +121,7 @@ use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, extract_cached_tokens, inject_cache_key};
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
-    idempotency_key_for, strip_backend_provenance,
+    idempotency_key_for, response_cache_key_for, strip_backend_provenance,
 };
 
 async fn call_capability_tool_with_identity(
@@ -353,6 +352,108 @@ fn json_is_populated(value: &Value) -> bool {
         Value::Object(map) => !map.is_empty(),
         Value::Array(items) => !items.is_empty(),
         _ => true,
+    }
+}
+
+/// Seal one interim exchange into a continuation this caller can redeem, or
+/// `None` when it cannot be bound (MRTR.2).
+///
+/// `None` is a refusal, not a degraded mint. A continuation names who may
+/// redeem it, and there is no honest name for a caller the gateway cannot
+/// identify: a placeholder would be shared with every other such caller, so the
+/// envelope would satisfy its own binding check while binding nothing. See
+/// `mrtr::principal_fingerprint` for which credential schemes are constructible
+/// today and why the others are not.
+///
+/// A keyring refusal — budget exhausted, envelope too large — lands here too.
+/// The cause is logged and not returned, because the caller can act on neither:
+/// they are properties of this gateway's state, not of the request, and naming
+/// them tells a client how close the mint budget is to being spent.
+fn mint_continuation(
+    continuation: &crate::protocol::continuation::ContinuationState,
+    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    server: &str,
+    tool: &str,
+    arguments: &Value,
+    backend_request_state: Option<String>,
+) -> Option<String> {
+    let payload = crate::protocol::continuation::Payload::mint(
+        server.to_string(),
+        backend_request_state,
+        crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)?,
+        crate::protocol::mrtr::original_request_digest(server, tool, arguments),
+        continuation.replica().to_string(),
+        crate::protocol::continuation::now_unix_secs(),
+    );
+    match continuation.keyring().mint(&payload) {
+        Ok(envelope) => Some(envelope),
+        Err(error) => {
+            warn!(server, tool, %error, "Continuation mint refused");
+            None
+        }
+    }
+}
+
+/// The refusal for an interim exchange this gateway cannot bind to its caller
+/// (MRTR.2).
+///
+/// `-32003` is the gateway's existing "Forbidden", reused rather than minted:
+/// this is a refusal to proceed, and the client has done nothing it could undo.
+/// Deliberately *not* `-32021`: that code invites the client to declare a
+/// capability and retry, and no declaration makes an unnameable caller
+/// nameable, so pointing at one would be a lie the client would act on.
+///
+/// One message for every cause. A client that could tell "we cannot name you"
+/// from "our mint budget is spent" learns the gateway's internal state from a
+/// call it was refused; the distinction is in the log, where the operator who
+/// can act on it will look.
+fn unbindable_continuation(server: &str, tool: &str) -> Error {
+    Error::JsonRpc {
+        code: -32003,
+        message: format!(
+            "Tool '{tool}' on server '{server}' asked for input, but this exchange cannot be \
+             continued for this caller"
+        ),
+        data: None,
+    }
+}
+
+/// The refusal for an interim result naming a request type this client cannot
+/// be asked (MRTR.9).
+///
+/// `-32021` with a `requiredCapabilities` payload is the router's existing
+/// answer to "the client did not declare that", reused here so one condition
+/// meets a client in one shape however the request reached it. An unrecognised
+/// method carries no payload: there is no capability name a client could add to
+/// its declaration to make the request acceptable, and naming one would invite
+/// exactly that.
+fn undeclared_input_request(
+    server: &str,
+    tool: &str,
+    refused: &crate::protocol::mrtr::Undeclared<'_>,
+) -> Error {
+    let (message, data) = match refused.capability {
+        Some(capability) => (
+            format!(
+                "Tool '{tool}' on server '{server}' asked for input '{}', which needs the \
+                 '{capability}' capability the client did not declare",
+                refused.key
+            ),
+            Some(json!({ "requiredCapabilities": [capability] })),
+        ),
+        None => (
+            format!(
+                "Tool '{tool}' on server '{server}' asked for input '{}' of unrecognised type \
+                 '{}', which no client can have declared",
+                refused.key, refused.method
+            ),
+            None,
+        ),
+    };
+    Error::JsonRpc {
+        code: -32021,
+        message,
+        data,
     }
 }
 
@@ -801,9 +902,17 @@ impl MetaMcp {
         // chose, so nothing about it says which request it was minted for;
         // without this a key reused for a different call replays the first
         // call's result as though it were this one's.
-        let idem_fingerprint = idem_key
-            .as_ref()
-            .map(|_| derive_key(&format!("{server}:{tool}"), &arguments));
+        //
+        // The retry pair is part of that binding (MRTR.10). A retry reuses the
+        // client's key and the original arguments, so those alone cannot tell
+        // one continuation from another: a confirmation answered "accept" and
+        // then "decline" would fingerprint identically, and the decline would
+        // be served the acceptance.
+        let idem_fingerprint = idem_key.as_ref().map(|_| {
+            let base = derive_key(&format!("{server}:{tool}"), &arguments);
+            let discriminator = caller.retry.key_discriminator();
+            format!("{base}{discriminator}")
+        });
 
         // Owns the in-flight entry from admission until a terminal state. Its
         // `Drop` releases the key, so an early return after dispatch cannot
@@ -849,12 +958,13 @@ impl MetaMcp {
         }
 
         if !want_full && let Some(ref cache) = self.cache {
-            let cache_key = ResponseCache::response_key(
+            let cache_key = response_cache_key_for(
                 server,
                 tool,
                 &arguments,
                 &projection_key_suffix,
                 caller_principal.as_deref(),
+                &caller.retry,
             );
             if let Some(cached) = cache.get(&cache_key) {
                 debug!(server, tool, trace_id, "Cache hit");
@@ -1088,13 +1198,29 @@ impl MetaMcp {
             }
         };
 
+        // Answering or asking? Read once, because the same verdict decides two
+        // things: whether the idempotency key may be settled as completed, and
+        // whether the question may be put to this client at all.
+        let interim = crate::protocol::mrtr::InputRequired::from_result(&result);
+
         // The backend has acted. Every early return below this point must settle
         // the idempotency key as completed rather than release it: a released key
         // readmits the retry that would execute the side effect a second time.
         // `release()` on the dispatch-error path above has already settled, so
         // this is a no-op there. The stored value withholds the response body on
         // purpose — a gate below may be about to block it.
-        if let Some(reservation) = idem_reservation.as_mut() {
+        //
+        // An interim result is excluded because there the backend has said it
+        // did *not* act: it stopped to ask. Settling one would be false and
+        // permanent — the placeholder reads "side effect executed", so a client
+        // that declared the capability it was missing and retried under the same
+        // key would be served that sentence in place of its question.
+        // `mark_completed` refuses a non-final result for this reason
+        // (`src/idempotency.rs:531-539`), and the placeholder is deliberately
+        // final-shaped, so only this condition keeps the rule for it.
+        if interim.is_none()
+            && let Some(reservation) = idem_reservation.as_mut()
+        {
             reservation.commit(&json!({
                 "resultType": "complete",
                 "isError": true,
@@ -1106,6 +1232,58 @@ impl MetaMcp {
                 }],
             }));
         }
+
+        // MRTR.9: a question the client never said it could answer is refused
+        // where the backend's interim result is first seen — before a
+        // continuation is minted and before the result is cached, so nothing
+        // survives the refusal. Relaying it instead leaves the client holding
+        // an `inputRequests` entry it has no handler for and the backend
+        // holding an exchange that can never be completed.
+        if let Some(interim) = &interim
+            && let Some(refused) = interim.undeclared(caller.input_capabilities)
+        {
+            warn!(
+                server,
+                tool,
+                trace_id,
+                request_key = refused.key,
+                method = refused.method,
+                "Backend asked for input of a type the client did not declare"
+            );
+            return Err(undeclared_input_request(server, tool, &refused));
+        }
+
+        // MRTR.2: the backend's own `requestState` never reaches the client.
+        // It is sealed into a continuation the gateway minted, bound to this
+        // caller and this request, and the envelope goes out in its place. The
+        // backend's string is opaque to us and unauthenticated to it — a client
+        // that could echo one it was not given could resume an exchange never
+        // offered to it, and the backend has no way to tell the difference.
+        //
+        // Minted here, where the capability gate has just decided the question
+        // may be asked at all: a continuation for a question the client will
+        // never be shown is a redeemable envelope for an exchange that cannot
+        // happen.
+        let interim = if let Some(interim) = interim {
+            let Some(envelope) = mint_continuation(
+                &self.continuation,
+                caller,
+                server,
+                tool,
+                &arguments,
+                interim.request_state,
+            ) else {
+                warn!(
+                    server,
+                    tool, trace_id, "Cannot mint a continuation for this caller; refusing"
+                );
+                return Err(unbindable_continuation(server, tool));
+            };
+            result["requestState"] = json!(envelope);
+            true
+        } else {
+            false
+        };
 
         // === POST-INVOKE: Response contract gate (issue #133, D1) ===
         //
@@ -1304,13 +1482,22 @@ impl MetaMcp {
             }
         }
 
-        if !want_full && let Some(ref cache) = self.cache {
-            let cache_key = ResponseCache::response_key(
+        // `!interim` for the reason the idempotency commit above is gated the
+        // same way: a question is not an answer. A cached one would be served
+        // to a later caller as though the backend had replied, and the
+        // continuation it carries is redeemable only by the caller it was
+        // minted for — so the reply they were handed could never be completed.
+        if !want_full
+            && !interim
+            && let Some(ref cache) = self.cache
+        {
+            let cache_key = response_cache_key_for(
                 server,
                 tool,
                 &arguments,
                 &projection_key_suffix,
                 caller_principal.as_deref(),
+                &caller.retry,
             );
             if cache.set(&cache_key, result.clone(), self.default_cache_ttl) {
                 debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");

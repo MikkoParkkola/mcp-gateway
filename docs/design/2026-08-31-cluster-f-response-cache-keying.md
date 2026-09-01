@@ -944,3 +944,33 @@ it must fail on.
 in B1's case — eliminated. The one item that arrived without supporting
 evidence (the profile-segment claim) was verified at source before being acted
 on, and turned out to be real.
+
+## Design event, 2026-09-02 — the retry discriminator composes with the principal, it does not replace it
+
+This document and the MRTR.10 work were written against different versions of the same key.
+Integrating them forced a decision neither had made, so it is named here rather than left in a
+merge resolution.
+
+The two versions disagreed on what identifies the caller. This document keys the response cache on
+`caller_principal` — the propagated binding when identity propagation is minting per-user
+credentials, otherwise the verified subject — because keying on the binding alone let two
+authenticated callers share one entry whenever propagation was off, which is the shipped default.
+The MRTR.10 builder keyed on `identity_suffix`, the binding alone, and added a retry discriminator
+so that two continuations answering one gate differently cannot share an entry.
+
+Each side carried a property the other lacked, so taking either wholesale would have shipped a
+known defect: the MRTR side reintroduces the cross-caller collision this document exists to close,
+and this side drops the discriminator that stops a declined booking being served the accepted
+booking's result.
+
+The resolution is composition, not choice. `response_cache_key_for` now delegates its base to
+`ResponseCache::response_key`, which owns the principal, and appends only the retry discriminator.
+One key builder, two independent contracts, neither able to silently drop the other — the
+discriminator cannot be removed without failing `response_cache_key_separates_two_answers_to_one_gate`,
+and the principal cannot be removed without failing `response_cache_key_separates_two_principals`.
+
+What this changes for anything already deployed: nothing. `NO_RETRY.key_discriminator()` is empty,
+so an ordinary call derives exactly the key the principal-scoped builder derives on its own. That
+is what `response_cache_key_is_unchanged_for_an_ordinary_call` asserts, and it is the assertion
+that would fail if a future discriminator became non-empty for ordinary calls and quietly emptied
+every cache.

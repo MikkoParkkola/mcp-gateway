@@ -3183,4 +3183,214 @@ async fn an_enforced_transform_refuses_a_malformed_control_field() {
             "{label}: a refused round carries no backend structure: {result:#}"
         );
     }
+
+/// A caller context that permits everything and declares the given input
+/// capabilities.
+///
+/// Separate from [`allow_all_ctx_named`] rather than a parameter added to it:
+/// every existing call site passes no declaration, and a widened signature
+/// would make each of them state a value it has no opinion about.
+fn allow_all_ctx_declaring(
+    declared: &[String],
+) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        authorizer: &ALLOW_ALL,
+        api_key_name: None,
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: Some(&NAMED_CALLER),
+        is_admin: false,
+        input_capabilities: declared,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+    }
+}
+
+/// The same caller, unnameable: no API key, no agent, no verified identity.
+fn anonymous_ctx_declaring(
+    declared: &[String],
+) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        verified_identity: None,
+        ..allow_all_ctx_declaring(declared)
+    }
+}
+
+/// A backend that answers every `tools/call` with an interim result asking for
+/// an elicitation.
+fn backend_asking_for_elicitation() -> Arc<BackendRegistry> {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::transport::Transport;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "booking",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let transport: Arc<dyn Transport> = Arc::new(ToolCallTestTransport {
+        result: json!({
+            "resultType": "input_required",
+            "inputRequests": {
+                "confirm": {
+                    "method": "elicitation/create",
+                    "params": { "message": "Charge the card?" }
+                }
+            },
+            "requestState": "backend-opaque"
+        }),
+    });
+    backend.set_transport_for_test(transport);
+    let _ = registry.register(backend);
+    registry
+}
+
+fn book_flight() -> serde_json::Value {
+    json!({ "server": "booking", "tool": "book_flight", "arguments": {} })
+}
+
+// The other half of the same gate: it must not be a blanket refusal of every
+// interim result. A declared capability passes through.
+//
+// MRTR.2 rides on the same call, because the two are one observable event: the
+// question reaches the client, and what it carries as `requestState` is the
+// gateway's sealed envelope rather than the backend's own string. Asserting
+// only `resultType` here would have passed unchanged the day minting landed —
+// a case that cannot fail is worse than one that breaks.
+#[tokio::test]
+async fn a_declared_input_request_passes_the_gateway_gate() {
+    let meta = MetaMcp::new(backend_asking_for_elicitation());
+    let declared = vec!["elicitation".to_string()];
+    let result = meta
+        .invoke_tool(
+            &book_flight(),
+            Some("session-1"),
+            &allow_all_ctx_declaring(&declared),
+        )
+        .await
+        .expect("a declared capability must not be refused");
+    assert_eq!(
+        result["resultType"], "input_required",
+        "the interim result must reach the client intact: {result:#}"
+    );
+
+    let state = result["requestState"]
+        .as_str()
+        .expect("an interim result must carry a requestState for the client to echo");
+    assert_ne!(
+        state, "backend-opaque",
+        "the backend's own state must never reach the client: {result:#}"
+    );
+
+    let payload = meta
+        .continuation()
+        .keyring()
+        .open(state, crate::protocol::continuation::now_unix_secs())
+        .expect("the envelope must open on the replica that minted it");
+    assert_eq!(
+        payload.backend_request_state.as_deref(),
+        Some("backend-opaque"),
+        "the backend's state must be recoverable from the envelope, or the retry \
+         cannot carry it back"
+    );
+    payload
+        .redeemable_by(
+            &crate::protocol::mrtr::principal_fingerprint(Some(&NAMED_CALLER))
+                .expect("a named caller has a fingerprint"),
+            &crate::protocol::mrtr::original_request_digest("booking", "book_flight", &json!({})),
+        )
+        .expect("the envelope must be bound to this caller and this request");
+}
+
+// The third thing that must not survive the refusal: the idempotency key.
+// After dispatch the gateway settles the key as completed so that a
+// post-dispatch gate cannot readmit a retry that would repeat the side effect.
+// An interim result is the backend stating it has *not* acted, so there is no
+// side effect to protect here — and settling one is not merely redundant, it is
+// permanent and false: the stored placeholder reads "side effect executed", so
+// a client that declared the capability it was missing and retried under the
+// same key would be served that sentence in place of its question, forever.
+#[tokio::test]
+async fn a_refused_input_request_leaves_the_idempotency_key_retryable() {
+    let mut meta = MetaMcp::new(backend_asking_for_elicitation());
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        Duration::from_secs(300),
+    );
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("client-chosen-key".to_string()),
+        ..Default::default()
+    };
+    let mut ctx = allow_all_ctx_declaring(&[]);
+    ctx.retry = &retry;
+
+    // The second attempt is the assertion. It stands for the client that read
+    // the refusal, declared the capability and came back with the same key: it
+    // must be judged on its merits rather than answered from what the first
+    // attempt left behind.
+    for attempt in ["first", "second"] {
+        let err = meta
+            .invoke_tool(&book_flight(), Some("session-1"), &ctx)
+            .await
+            .expect_err("a refusal must not be replaced by a stored result");
+        assert_eq!(
+            err.to_rpc_code(),
+            -32021,
+            "the {attempt} attempt must be refused as an undeclared capability"
+        );
+    }
+}
+
+// MRTR.9 end-to-end: the refusal happens on the live invoke path, not only in
+// the protocol type. A client that declared no input capability is never handed
+// an `inputRequests` entry it has no handler for.
+#[tokio::test]
+async fn an_undeclared_input_request_is_refused_at_the_gateway() {
+    let meta = MetaMcp::new(backend_asking_for_elicitation());
+    let err = meta
+        .invoke_tool(
+            &book_flight(),
+            Some("session-1"),
+            &allow_all_ctx_declaring(&[]),
+        )
+        .await
+        .expect_err("a client that declared nothing must not be asked");
+
+    assert_eq!(
+        err.to_rpc_code(),
+        -32021,
+        "the refusal must reuse the gateway's undeclared-capability code"
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains("elicitation"),
+        "the refusal must name the capability the client would have had to \
+         declare, so it can act on it: {message}"
+    );
+}
+
+// MRTR.2's refusal, which is the half a passing mint cannot demonstrate. A
+// caller the gateway cannot name would have to be bound to a fingerprint every
+// other unnameable caller also holds — which is not a binding — so the
+// exchange is refused instead. Without this case the refusal ships unexercised
+// and the choice between refusing and approximating is untested.
+#[tokio::test]
+async fn an_unnameable_caller_is_not_offered_an_interim_exchange() {
+    let meta = MetaMcp::new(backend_asking_for_elicitation());
+    let declared = vec!["elicitation".to_string()];
+    let err = meta
+        .invoke_tool(
+            &book_flight(),
+            Some("session-1"),
+            &anonymous_ctx_declaring(&declared),
+        )
+        .await
+        .expect_err("a caller that cannot be bound must not be handed a continuation");
+    assert_eq!(
+        err.to_rpc_code(),
+        -32003,
+        "the refusal must reuse the gateway's existing refusal code"
+    );
+}
 }
