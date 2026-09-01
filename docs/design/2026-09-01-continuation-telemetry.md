@@ -23,9 +23,21 @@ name set and what may appear in a label, and one of those two has a security ans
 
 `redeem_total` counts **acceptances, not attempts**. A rejected redemption is already an
 increment of `rejected_total`, so counting attempts here would double-count every refusal and
-make `redeem_total` unusable as a success count. Attempts are recoverable as
-`redeem_total + rejected_total{phase="redeem"}` — the sum is the derived quantity, not the
-primitive, because the reverse decomposition is not available from an attempt counter alone.
+make `redeem_total` unusable as a success count. The derived quantity is
+
+```
+decided redemptions = redeem_total
+                    + rejected_total{phase="redeem"}
+                    + expired_total{detected="presented"}
+```
+
+with the third term carrying the redemptions refused on deadline grounds, which the no-double-count
+rule below books as an expiry rather than a rejection (`presented` implies a redeem attempt, which
+is why it needs no `phase` selector). It is named *decided redemptions* and not *attempts* because
+an attempt whose transport died before the gateway decided anything increments nothing here, and a
+name promising every attempt would be a name this gateway cannot keep. The sum is the derived
+quantity, not the primitive, because the reverse decomposition is not available from an attempt
+counter alone.
 
 `expired` and `rejected` were nearly split the other way, with a redeem-time expiry counted as
 `rejected{reason="expired"}` and only the reaper incrementing `expired_total`. That is wrong in a
@@ -54,11 +66,22 @@ no entry and no reaper) and not presented (nothing arrived at all), and an imple
 pick one would make the deadline series incomparable across phases. Note the observer, not the
 phase, is what `detected` reports — the two columns above agree today and are not required to.
 
+`expired_total{detected="awaited"}` counts **deadline observations, not lost prompts**. A single
+bridged prompt increments it twice when its per-prompt wait and the aggregate wall budget both
+expire, because each is a separate observation with its own remedy — one says the prompt was slow,
+the other says the call ran out of room. An operator reading the series as a prompt count would
+over-read it by exactly the overlap.
+
 **`reaped` has a producer, and naming it is part of this design.** A counter whose incrementing
 site does not run is a flat line an operator reads as "no abandonment". The reclaimer is called from
 lifecycle-owned periodic maintenance, per `2026-09-01-nfr-perf3-reclamation.md` — an earlier
 revision of that document argued it needed no caller, which would have left this series dead. Each
-entry it drops is one increment. Pressure-triggered reclamation increments the same series.
+entry it drops is one increment. Pressure-triggered reclamation increments the same series, and
+that is safe only because **the reclaimer cannot drop a live entry**: both the periodic sweep and
+the inline retain-at-capacity select on the deadline, so every drop is an expiry and no capacity
+event can enter this series. If a future revision lets pressure evict unexpired entries, that
+eviction needs its own counter — booking it here would put a capacity signal inside the abandonment
+signal `NFR.PERF.3` soaks for, which is the one reading this counter exists to support.
 
 **`detected=reaped` is defined only over stateful continuations, and that bound is structural.**
 A reaper can only observe what something holds. A stateless continuation — an envelope the gateway
@@ -95,6 +118,16 @@ what keeps it from being read as one.
 
 The same label is on `expired_total`, for the same reason and at no extra cost: a bridge round
 timing out and a stored continuation aging out are different operational facts.
+
+The alert this buys, written out so the discipline is copyable rather than described:
+
+```
+rate(mcp_continuation_rejected_total{phase="redeem", reason=~"not_authentic|unknown_key"}[5m]) > 0
+```
+
+Every term is load-bearing. `phase="redeem"` excludes bridge refusals, which are users and policy.
+The two reasons are the only ones that mean *this gateway did not mint what was presented*. Any
+alert on `rejected_total` without both selectors is the diluted alert this section exists to avoid.
 
 ## The reason set is the refusal set, not one type's variants
 
@@ -155,8 +188,12 @@ endpoint.
 ## What this does not decide
 
 Whether the counters are also exported through the A2A adapter's metrics surface. Nothing in
-`NFR.OBS.4` asks for it and no other counter in the tree does it, so the default is no; if that
-turns out to be wrong it is an additive change to `install()`, not a rename.
+`NFR.OBS.4` asks for it and no other counter in the tree does it, so the default is no. The
+trigger that reopens it is named rather than left to judgement: **the first A2A consumer that asks
+to see continuation state, or the first A2A adapter requirement that references a continuation
+deadline.** Either is a concrete event someone can point at; "if that turns out to be wrong" is not,
+and a default with no reopening condition is a decision disguised as a deferral. Reopening is an
+additive change to `install()`, not a rename, which is why deferring costs nothing now.
 
 ## Trust boundary and threats
 
@@ -178,7 +215,7 @@ construction, and a counter that cannot be incremented never fails the operation
 | **T** | a caller steers label *values* to pollute a dashboard | the `reason` and `phase` sets are closed enums owned by the orchestration; attacker-chosen `u8` payloads never reach a label |
 | **R** | — | counters are the repudiation control for other paths, not a target of one |
 | **I** | label cardinality leaks which key ids or wire versions the keyring holds, one probe at a time | the same disclosure the type already refuses in `client_message` (`continuation.rs:214-218`); the variant name is exported, the payload is not |
-| **D** | cardinality explosion as a memory-exhaustion vector | bounded by construction — the label sets are enums, so the series count is a compile-time product, not a function of traffic |
+| **D** | cardinality explosion as a memory-exhaustion vector | bounded by construction — the label sets are enums, so the series count is a compile-time product, not a function of traffic. At most 30: `rejected_total` is 11 reasons x 2 phases, `expired_total` is 3 `detected` values x 2 phases, and the two unlabelled counters are one series each. The legal set is smaller still, because the table above rules out combinations such as `phase="bridge"` with `detected="reaped"` |
 | **E** | — | no authorisation decision reads a counter |
 
 ## The label schema's stability expectation
