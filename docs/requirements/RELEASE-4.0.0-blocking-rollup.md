@@ -170,3 +170,36 @@ When the cluster-D review is called, scope its material to `src/cache.rs`,
 `src/gateway/meta_mcp/invoke.rs`, `tests/mik_7213_acs.rs` and the cluster's own doc sites.
 The general rule this is an instance of: on a branch with concurrent sessions, stage explicit
 paths. `git add -A` is a claim about the whole tree, and on a shared tree that claim is false.
+
+### Two more operator decisions, surfaced from the residue
+
+The four decisions above were derived from the clusters. The residue rows carry two
+more, and neither is settled by "close the full scope" — both answers to each are a
+defensible release.
+
+`MIK-7215.CONTROL.4` is not blocked on ownership. `SessionLifecycle::register` takes a
+closure, so registration lives at gateway startup and needs no edit to a firewall file.
+It is blocked on a decision nobody has made: the module replaced the disconnect trigger
+the modern revision deleted with a `track`/`reap` deadline, and nothing has chosen
+**who calls the reaper** or **what the TTL is**. The TTL is an operator-visible retention
+number, not an implementation detail. Wiring `register` alone would leave handlers that
+are registered and never fire — indistinguishable from today except that the criterion
+would read as met. That is the worst available outcome and it was correctly not built.
+
+`MIK-7246.CONFIRM.2` names a confirmation mechanism; what exists is `elicitation/create`
+over SSE, a different mechanism reaching the same outcome. Both readings are consistent
+with everything in the tree, so no amount of reading code settles it. It is also
+downstream of cluster A: even under the generous reading, reachability depends on the
+continuation-envelope wiring, so it cannot close before A does and is not an independent
+item on the critical path.
+
+### One row that looked like a decision and is not
+
+`NFR.SEC.1` row 5, the per-client circuit breaker, was flagged as arguably N/A on the
+grounds that it refuses on a trip count rather than an absent input. The criterion asks
+each control for a refusal test, and a circuit breaker has a perfectly ordinary one:
+trip it, then be refused. `record_client_failure` (`src/gateway/auth.rs:292`) and
+`check_client_circuit_breaker` (`:272`) are both public and `failure_threshold` is a
+config field, so the test is short. Writing it closes the row without narrowing a
+security criterion's population — which is the more expensive mistake of the two, and
+the one that needs an operator's recorded agreement.
