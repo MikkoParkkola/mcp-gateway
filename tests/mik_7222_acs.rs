@@ -114,13 +114,13 @@ async fn sweep_decode_error_must_not_echo_url_credentials() {
         .expect("bind");
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
         let (mut stream, _) = listener.accept().await.expect("accept");
         let body = b"not-json";
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
         );
-        use tokio::io::AsyncWriteExt;
         let _ = stream.write_all(response.as_bytes()).await;
         let _ = stream.write_all(body).await;
     });
@@ -138,8 +138,7 @@ async fn sweep_decode_error_must_not_echo_url_credentials() {
         .expect_err("malformed body must fail decode");
     assert!(
         err.to_string().contains(CANARY),
-        "fixture is only useful if Display would leak; got {}",
-        err
+        "fixture is only useful if Display would leak; got {err}"
     );
     let safe = safe_reqwest_message("Failed to parse token response", &err);
     assert!(!safe.contains(CANARY), "{safe}");
