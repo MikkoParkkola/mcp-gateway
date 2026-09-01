@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7222: credential-disclosure sweep. Canary through every diagnostic helper.
 //! If a helper is reverted to echo its input, these fail.
 
@@ -25,9 +27,10 @@ fn sweep2_oauth_error_body_is_not_reachable_as_token_json() {
     // access_token. Keep P2. The body is still untrusted — a helper that
     // interpolates it would leak a buggy AS echo of client_secret.
     let body = format!("{{\"error\":\"invalid_client\",\"client_secret\":\"{CANARY}\"}}");
-    let out = safe_oauth_http_error("Client credentials failed", StatusCode::UNAUTHORIZED, &body);
-    assert!(!out.contains(CANARY), "{out}");
-    assert!(out.contains("HTTP 401"), "{out}");
+    let redacted =
+        safe_oauth_http_error("Client credentials failed", StatusCode::UNAUTHORIZED, &body);
+    assert!(!redacted.contains(CANARY));
+    assert!(redacted.contains("HTTP 401"));
 }
 
 #[test]

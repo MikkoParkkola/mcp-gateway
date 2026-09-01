@@ -91,10 +91,10 @@ mod tests {
     #[test]
     fn oauth_and_status_drop_body_canary() {
         let body = format!("{{\"access_token\":\"{CANARY}\",\"client_secret\":\"{CANARY}\"}}");
-        let oauth =
+        let redacted =
             safe_oauth_http_error("Client credentials failed", StatusCode::UNAUTHORIZED, &body);
-        assert!(!oauth.contains(CANARY), "{oauth}");
-        assert!(oauth.contains("HTTP 401"), "{oauth}");
+        assert!(!redacted.contains(CANARY));
+        assert!(redacted.contains("HTTP 401"));
         let err = safe_http_status_error(StatusCode::BAD_REQUEST, &body);
         assert!(!err.to_string().contains(CANARY), "{err}");
     }
