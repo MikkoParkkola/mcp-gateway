@@ -1,4 +1,4 @@
-# v4.0.0 release plan — closing the 45 blocking criteria
+# v4.0.0 release plan — closing the blocking criteria
 
 Companion to `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is the status SSOT.
 This file is the ORDER OF WORK, not a second status table. When the two disagree, the status
@@ -25,15 +25,15 @@ the counts above. Earlier closures named in the previous revision (`ERROR.2`, `R
 `HEADER.5`, `HEADER.7`, `HEADER.8`) had already landed before that count was taken, and
 counting them again here would have double-counted them.
 
-## 45 is still a floor, and what remains unverified is named
+## The blocking count is a floor, and what remains unverified is named
 
 The gap this section previously recorded — no row anywhere for any of the 22 non-functional
 requirements in section 4 of `docs/requirements/RELEASE-4.0.0-requirements.md` (lines 204-253)
-— is closed. Every NFR ID now has a row in the status doc. What is NOT closed is the
-assessment behind eleven of those rows, and that closed on 2026-09-01: every NFR row now
-carries a verdict and the evidence it rests on.
+— is closed. Every NFR ID has a row in the status doc, and as of 2026-09-01 every one of
+those rows carries a verdict and the evidence it rests on. The eleven that were recorded
+without an assessment no longer are.
 
-Of the 21 blocking NFRs, six are not independent work: NFR.SEC.2-4, NFR.OBS.4 and NFR.PERF.3
+Of the blocking NFRs, six are not independent work: NFR.SEC.2-4, NFR.OBS.4 and NFR.PERF.3
 all verify the MIK-7212 continuation envelope, and NFR.OBS.3 verifies MIK-7217 era detection.
 Both are unwired, so those rows cannot close before the clusters below — and closing a cluster
 does not close them either, since each still needs its own evidence.

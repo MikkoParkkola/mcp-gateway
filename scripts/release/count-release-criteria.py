@@ -18,6 +18,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 STATUS = ROOT / "docs/requirements/RELEASE-4.0.0-criteria-status.md"
 REQUIREMENTS = ROOT / "docs/requirements/RELEASE-4.0.0-requirements.md"
+PLAN = ROOT / "docs/requirements/RELEASE-4.0.0-plan.md"
 ID = re.compile(r"^((?:MIK-\d+|NFR)\.[A-Z0-9]+\.\d+)([a-z]?)")
 # The verification-method vocabulary: test, measurement, inspection, demonstration.
 METHOD = re.compile(r"^[TMID](, ?[TMID])*$")
@@ -25,6 +26,47 @@ METHOD = re.compile(r"^[TMID](, ?[TMID])*$")
 HEADLINE = re.compile(
     r"Coverage: (\d+) criteria, (\d+) rows, (\d+) met or non-blocking, (\d+) blocking\."
 )
+
+
+# Tokens that carry a number without claiming a count: a version, a ticket or
+# criterion ID, a date.
+NOT_A_COUNT = re.compile(
+    r"v?\d+(?:\.\d+)+|(?:MIK-\d+|NFR)(?:\.[A-Z0-9]+\.\d+[a-z]?)?|\d{4}-\d{2}-\d{2}"
+)
+# What a heading's number may say next. `10 criteria`, `7 of 17`, `3 of 3`.
+SAYS_WHAT_IT_COUNTS = re.compile(r"(?:\bof\s+)?\b\d{1,3}\b(?:\s+(?:criteri\w*|of\b))?")
+
+
+def heading_counts(text):
+    """Headings whose number does not immediately say what it counts.
+
+    The headline check reads ONE designated line in ONE file, so a total
+    restated in a title or a section heading drifts unwatched -- both did,
+    while the derived line two paragraphs below stayed right.
+
+    Prose cannot be policed this way: `23 blocking` and `5 of the 10 criteria
+    blocking` are both legitimate, and telling a stale total from a live
+    subtotal needs the meaning of the sentence. A heading is narrower. It
+    states a count in two shapes only, `<n> criteria` and `<n> of <m>`, so a
+    number followed by anything else is a claim no check maintains.
+
+    RESIDUAL, stated: a stale total in a PARAGRAPH is still undetectable here.
+    This closes the surface that went stale, not the possibility.
+    """
+    bad = []
+    for line in text.splitlines():
+        if not re.match(r"^#{1,6} ", line):
+            continue
+        stripped = NOT_A_COUNT.sub("", line)
+        for found in re.finditer(r"\b\d{1,3}\b", stripped):
+            span = SAYS_WHAT_IT_COUNTS.match(stripped, found.start())
+            preceded = stripped[: found.start()].rstrip().endswith(" of") or stripped[
+                : found.start()
+            ].rstrip().endswith("of")
+            if not preceded and (span is None or span.group(0).strip() == found.group(0)):
+                bad.append(line)
+                break
+    return bad
 
 
 def rows(text):
@@ -98,6 +140,14 @@ def method_mismatches(text, methods):
 
 def main():
     text = STATUS.read_text()
+    headings = heading_counts(text) + heading_counts(PLAN.read_text())
+    if headings:
+        print(
+            "heading states a count that says nothing about what it counts:\n  "
+            + "\n  ".join(headings),
+            file=sys.stderr,
+        )
+        return 1
     criteria, malformed = rows(text)
     if malformed:
         print(f"malformed blocking column on: {', '.join(malformed)}", file=sys.stderr)
