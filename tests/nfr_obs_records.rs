@@ -283,6 +283,15 @@ mod http {
             .unwrap_or_else(|| panic!("a modern tools/list advertises a cacheScope: {body}"));
 
         let record = only(|r| r.fields.contains_key("cache_scope"));
+        // The record names observed inputs. A `filters` list was a synthesized
+        // claim about which filters ran, and it said `session_profile` on every
+        // request including those that carried no profile. Restoring it beside
+        // these fields must fail here, not merely go unnoticed.
+        assert!(
+            !record.fields.contains_key("filters"),
+            "the record names inputs, never a synthesized filter list: {:?}",
+            record.fields
+        );
         assert_eq!(
             record.field("cache_scope"),
             advertised,
@@ -359,22 +368,46 @@ mod http {
     async fn an_oversized_revision_is_recorded_as_a_sentinel_not_echoed() {
         let _capture = capture_lock().await;
 
+        // A complete `_meta`, so this classifies Modern and the recorded value
+        // is the one the Modern arm reads. A malformed fixture would fail
+        // before the bound on the missing-field answer instead, and reverting
+        // the bound alone would still pass.
         let huge = "2026-07-28".repeat(64);
-        let (status, _) = post_with_headers(
+        let (status, body) = post_with_headers(
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/list",
                 "params": { "_meta": {
-                    "io.modelcontextprotocol/protocolVersion": huge
+                    "io.modelcontextprotocol/protocolVersion": huge,
+                    "io.modelcontextprotocol/clientCapabilities": {}
                 }}
             }),
-            &[],
+            &[("mcp-method", "tools/list")],
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
         let record = only(|r| r.fields.contains_key("revision_source"));
-        assert_eq!(record.field("protocol_revision"), "oversized");
+        assert_eq!(
+            record.field("protocol_revision"),
+            "oversized",
+            "status {status}, body {body}"
+        );
+    }
+
+    /// NFR.OBS.1 — the method shares the record with the revision and arrives
+    /// from the same body, so it carries the same bound. Without it the bound
+    /// on one field is decoration: a caller moves the megabytes one key left.
+    #[tokio::test]
+    async fn an_oversized_method_is_recorded_as_a_sentinel_not_echoed() {
+        let _capture = capture_lock().await;
+
+        let huge = "tools/list".repeat(64);
+        let mut request = modern_body("tools/list");
+        request["method"] = json!(huge.clone());
+        let (_status, _body) = post_with_headers(request, &[("mcp-method", &huge)]).await;
+
+        let record = only(|r| r.fields.contains_key("revision_source"));
+        assert_eq!(record.field("method"), "oversized");
     }
 
     /// NFR.OBS.2 — the profile field reports the profile the request carried.

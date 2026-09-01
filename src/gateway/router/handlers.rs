@@ -713,20 +713,13 @@ pub(super) async fn meta_mcp_handler(
             None => ("absent", "none"),
         },
     };
-    // Bounded before it is written. The revision arrives from the request and
-    // a body may carry megabytes of it, so logging the value verbatim lets a
-    // caller choose how much operator disk one request consumes. A revision is
-    // a short dated token; anything longer is not one, and the record says so
-    // rather than repeating it.
-    let protocol_revision = if protocol_revision.len() > MAX_LOGGED_REVISION_LEN {
-        "oversized"
-    } else {
-        protocol_revision
-    };
+    // Both request-sourced fields are bounded before they are written. A
+    // revision is a short dated token and a method is a short name; anything
+    // longer is neither, and the record says so rather than repeating it.
     info!(
         target: "mcp_gateway::observed",
-        method = %method,
-        protocol_revision,
+        method = bounded_for_log(&method),
+        protocol_revision = bounded_for_log(protocol_revision),
         revision_source,
         "protocol revision observed"
     );
@@ -1489,7 +1482,22 @@ const CACHEABLE_METHODS: &[&str] = &[
 /// The longest protocol revision this gateway will repeat into its own log.
 /// `2026-07-28` is ten characters; the bound is generous enough that no real
 /// revision reaches it and small enough that a hostile one cannot fill a disk.
-const MAX_LOGGED_REVISION_LEN: usize = 64;
+const MAX_LOGGED_FIELD_LEN: usize = 64;
+
+/// Bounds a request-sourced string before it reaches an observation record.
+///
+/// Every field on the NFR.OBS.1 record arrives from the request and the body
+/// limit is megabytes, so writing any of them verbatim lets one caller choose
+/// how much operator disk a single request consumes. Applied per field rather
+/// than per value so a field added later inherits the bound instead of
+/// reintroducing the hole beside the fields that carry it.
+fn bounded_for_log(value: &str) -> &str {
+    if value.len() > MAX_LOGGED_FIELD_LEN {
+        "oversized"
+    } else {
+        value
+    }
+}
 
 /// How long a client may consider a list fresh. A freshness hint, not a
 /// promise: `listChanged` notifications remain the authority on change, and
