@@ -48,6 +48,44 @@ def rows(text):
     return out, malformed
 
 
+def required_methods(text):
+    """The verification method each NFR requirement states, keyed by ID.
+
+    The requirements file owns these letters (T test, M measurement, I
+    inspection, D demonstration). The status ledger repeats them so a reader can
+    see at a glance whether a row's evidence is even the right KIND of evidence
+    -- inspection cited against a requirement that says T is the failure this
+    catches. A repeated value drifts unless something compares the two copies,
+    which is what `method_mismatches` is for. Functional (MIK-*) requirements
+    state no method, so nothing is checked for them.
+    """
+    methods = {}
+    for line in text.splitlines():
+        if not line.startswith("| NFR."):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 3 and ID.match(cells[0]):
+            methods[cells[0]] = cells[-1]
+    return methods
+
+
+def method_mismatches(text, methods):
+    """NFR rows whose stated method is absent or disagrees with the requirement."""
+    bad = []
+    for line in text.splitlines():
+        if not line.startswith("| NFR."):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 4 or not ID.match(cells[0]):
+            continue
+        want = methods.get(cells[0])
+        if want is None:
+            continue
+        if len(cells) < 6 or cells[2] != want:
+            bad.append(f"{cells[0]} (requirement says {want!r}, row says {cells[2] if len(cells) > 2 else '<no column>'!r})")
+    return bad
+
+
 def main():
     text = STATUS.read_text()
     criteria, malformed = rows(text)
@@ -57,7 +95,9 @@ def main():
 
     blocking = sum(1 for _, b in criteria if b == "yes")
     ids = {i for i, _ in criteria}
-    declared = set(re.findall(r"\|\s*((?:MIK-\d+|NFR)\.[A-Z0-9]+\.\d+)\s*\|", REQUIREMENTS.read_text()))
+    requirements = REQUIREMENTS.read_text()
+    declared = set(re.findall(r"\|\s*((?:MIK-\d+|NFR)\.[A-Z0-9]+\.\d+)\s*\|", requirements))
+    mismatched = method_mismatches(text, required_methods(requirements))
     uncovered = sorted(declared - ids)
 
     totals = (len(declared), len(criteria), len(criteria) - blocking, blocking)
@@ -67,6 +107,8 @@ def main():
     )
     if uncovered:
         print(f"requirement IDs with no row: {', '.join(uncovered)}", file=sys.stderr)
+    if mismatched:
+        print(f"NFR rows whose method disagrees with the requirement: {'; '.join(mismatched)}", file=sys.stderr)
 
     if "--check" not in sys.argv:
         return 0
@@ -77,7 +119,7 @@ def main():
     if tuple(int(g) for g in found.groups()) != totals:
         print(f"headline says {found.group(0)!r}, the tables say the line above", file=sys.stderr)
         return 1
-    return 1 if uncovered else 0
+    return 1 if uncovered or mismatched else 0
 
 
 if __name__ == "__main__":

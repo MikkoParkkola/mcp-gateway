@@ -39,18 +39,36 @@ all verify the MIK-7212 continuation envelope, and NFR.OBS.3 verifies MIK-7217 e
 Both are unwired, so those rows cannot close before the clusters below — and closing a cluster
 does not close them either, since each still needs its own evidence.
 
-Three are known without a sweep. `cargo fmt --check` passes and `#![deny(unsafe_code)]` holds
-at `src/lib.rs:1`, so the NFR.SEC.5 failure recorded two revisions ago is repaired — but two
-of that criterion's four gates (clippy, audit, secret scan) have not been run, so it stays
-UNTESTED rather than met. NFR.SEC.6 names four tickets as closed in this release and two of
-them, MIK-7249 and MIK-7262, have no reference anywhere under `src/` or `tests/`.
+Two are known without a sweep. NFR.SEC.5 is now met: all four of its command gates were run on
+this worktree on 2026-09-01 — `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`
+and `cargo audit` each exited zero, and the secret scan is clean in both halves CI runs it in,
+`trufflehog --only-verified` finding nothing across 33,935 chunks and the CWE-532 leak lint
+clean over 400 files. `#![deny(unsafe_code)]` holds at `src/lib.rs:1`. NFR.SEC.6 names four
+tickets as closed in this release and two of them, MIK-7249 and MIK-7262, have no reference
+anywhere under `src/` or `tests/`.
 NFR.PERF.1-2 require a measurement against 3.5.0 that has never been run, and a measurement is
 not something a code read can substitute for. NFR.PERF.2 states its own consequence: without a
 number, header-first routing does not ship.
 
+Each NFR row now also carries the verification method its requirement states — T, M, I or D —
+and `scripts/release/count-release-criteria.py` refuses when a row's letter disagrees with the
+requirements file. The point is not the letter but the mismatch it exposes: a row citing a code
+read against a requirement that says M is not weak evidence, it is the wrong kind of evidence,
+and that was invisible while the method lived only in the requirements document.
+
 Assessing the eleven unassessed rows is therefore item zero of this plan, ahead of every
 cluster below. It is cheap next to what it protects: the alternative is shipping and
 discovering the count was never the count.
+
+### Deferred: re-auditing the MRTR cluster's implemented-but-unwired split
+
+A reviewer asked for the MIK-7212 rows to be split by whether each clause is implemented and
+unwired or genuinely absent, on the ground that the two carry very different remaining work.
+That is right and it is not being done now. The cluster is being worked in another session, so
+an audit taken today would describe a tree that no longer exists by the time anyone read it.
+The split happens once that session's work lands, against the tree as it then stands. Recorded
+here rather than dropped, because a deferral nobody wrote down is indistinguishable from an
+oversight.
 
 ## The shape of the problem
 
