@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`gateway_search` returns L0 by default** (MIK-7084): tool name, one-line purpose, and score. `detail=l1` adds signature, when-to-use, and required params; `detail=l2` returns the full `input_schema`. `include_schema=true` still maps to L2 and is deprecated, not removed. Ranking diagnostics (`ranking` reasons and signals) are omitted unless `explain=true`. `gateway_search_tools` also omits `ranking` unless `explain=true`.
+- **`meta_mcp.exposed_meta_tools` is now enforced** (GH issue 449): this config field was documented as an allow-list of meta-tools to expose but had no effect outside tests. It now restricts both `tools/list` and `tools/call` for every meta-tool built-in, including the two Code Mode tools (`gateway_search`, `gateway_execute`), which were an unlisted escape hatch — reaching every backend tool regardless of the allow-list. **Breaking for operators who already set this field**: a name that was accepted but ignored now actually removes that tool from the surface. An allow-list that omits `gateway_invoke` is logged as a warning, since it leaves backend tools unreachable through the gateway. `meta_mcp.surfaced_tools` (individually surfaced backend tools) is unaffected.
 
 ## [4.0.0] - 2026-08-29
 
