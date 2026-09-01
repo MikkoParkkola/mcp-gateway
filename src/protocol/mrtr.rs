@@ -174,6 +174,13 @@ pub struct InputRequired {
     pub request_state: Option<String>,
 }
 
+/// The `resultType` value marking a result as an unfinished round.
+///
+/// Wire value from the MCP multi-round tool-result spec, so it is named rather
+/// than spelled out: a second spelling is a discriminator that can disagree
+/// with itself.
+const RESULT_TYPE_INPUT_REQUIRED: &str = "input_required";
+
 impl InputRequired {
     /// Read an interim result, or `None` if the result is a completed one.
     ///
@@ -182,7 +189,7 @@ impl InputRequired {
     /// ordinary legacy answer must never be mistaken for a question.
     #[must_use]
     pub fn from_result(result: &Value) -> Option<Self> {
-        if result.get("resultType").and_then(Value::as_str)? != "input_required" {
+        if result.get("resultType").and_then(Value::as_str)? != RESULT_TYPE_INPUT_REQUIRED {
             return None;
         }
         let requests = result

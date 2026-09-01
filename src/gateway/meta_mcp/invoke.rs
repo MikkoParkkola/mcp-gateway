@@ -25,6 +25,7 @@ use crate::hashing::{canonical_json, sha256_hex};
 use crate::idempotency::{GuardOutcome, IdempotencyReservation, derive_key, enforce};
 use crate::identity_grants::{GrantScope, GrantSubject, IdentityGrantRequest};
 use crate::playbook::PlaybookEngine;
+use crate::protocol::mrtr::InputRequired;
 use crate::provider::Transform as _;
 use crate::provider::transforms::ResponseTransform;
 use crate::security::validate_tool_name;
@@ -1551,10 +1552,6 @@ impl MetaMcp {
         evaluation: &ContextIntegrityEvaluation,
         original: &Value,
     ) -> Value {
-        /// Envelope fields carried across an enforced transform. Protocol
-        /// state, not content: everything else is rebuilt.
-        const PRESERVED_PROTOCOL_FIELDS: [&str; 1] = ["requestState"];
-
         let Some(delivered) = evaluation.transformed.delivered.clone() else {
             return json!({
                 "isError": true,
@@ -1573,32 +1570,69 @@ impl MetaMcp {
             .map_or_else(|| delivered.to_string(), str::to_string);
         let content = json!([{"type": "text", "text": text}]);
 
-        // Rebuild from a named set of fields rather than cloning the backend's
-        // result. The kernel has just judged this payload untrusted, so any
-        // field carried across is one enforcement never inspected -- `_meta` is
-        // free-form and a compromised backend can hang anything off it.
-        // `requestState` is the opaque handle a multi-round exchange needs to
-        // continue, and building a fresh envelope silently ended the exchange
-        // on every enforced path.
-        let fields = original.as_object();
+        // Rebuild rather than clone the backend's result. The kernel has just
+        // judged this payload untrusted, so any field carried across is one
+        // enforcement never inspected -- `_meta` is free-form and a compromised
+        // backend can hang anything off it.
+        //
+        // The one thing that must survive is the fact that this is an interim
+        // round, not a finished call. `resultType` is the discriminator and
+        // `requestState` the handle; carrying either without the other produces
+        // a result that lies about which of the two it is. `InputRequired`
+        // already owns that parse, so ask it rather than copying field names:
+        // a handle only crosses when the protocol type says it is one.
+        //
+        // The questions themselves (`inputRequests`) do NOT cross as structure.
+        // Note what that does and does not buy: `Strip` renders the whole
+        // envelope into the delivered text, so the question text reaches the
+        // caller regardless. What is withheld is a machine-actionable copy of
+        // uninspected backend JSON, not the attacker's words.
+        //
+        // That leaves the caller holding a handle and no structured questions,
+        // which is a deliberate narrowing and not a settled policy. The wider
+        // choice -- carry the questions, or refuse the round outright with no
+        // handle at all -- changes what enforcement means for an unfinished
+        // exchange and is the operator's to make. Tracked in the v4.0.0
+        // release notes as an open decision; until it is made, the conservative
+        // reading applies: the exchange is known to continue, and nothing the
+        // kernel judged untrusted crosses as structure.
         let mut envelope = serde_json::Map::new();
-        if let Some(fields) = fields {
-            for key in PRESERVED_PROTOCOL_FIELDS {
-                if let Some(value) = fields.get(key) {
-                    envelope.insert(key.to_string(), value.clone());
-                }
-            }
+        // Any non-empty `resultType` crosses verbatim, not just the one value
+        // this gateway recognizes. Emitting it selectively would make every
+        // other discriminator -- a future round type, a backend extension --
+        // read to the caller as a completed call, which is the exact defect
+        // this block exists to prevent.
+        if let Some(result_type) = original
+            .get("resultType")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            envelope.insert(
+                "resultType".to_string(),
+                Value::String(result_type.to_string()),
+            );
+        }
+        // The handle is gated on the protocol type rather than on the field
+        // name: `InputRequired` owns that parse, so a `requestState` crosses
+        // only when the payload really is an input-required round.
+        if let Some(request_state) =
+            InputRequired::from_result(original).and_then(|interim| interim.request_state)
+        {
+            envelope.insert("requestState".to_string(), Value::String(request_state));
         }
         envelope.insert("content".to_string(), content);
         envelope.insert("structuredContent".to_string(), delivered);
-        // Carried as the backend set it: stripping content does not turn a
-        // failed call into a successful one.
+        // Carried as the backend set it, normalized to a boolean: stripping
+        // content does not turn a failed call into a successful one, and a
+        // non-boolean `isError` from a backend is not a truth we pass on.
         envelope.insert(
             "isError".to_string(),
-            fields
-                .and_then(|f| f.get("isError"))
-                .cloned()
-                .unwrap_or(Value::Bool(false)),
+            Value::Bool(
+                original
+                    .get("isError")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            ),
         );
         Value::Object(envelope)
     }
