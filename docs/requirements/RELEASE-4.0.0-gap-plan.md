@@ -42,11 +42,13 @@ above. One in five of the section 1 rows re-read that day
 had moved, and it moved because the work was done, not because the reading was wrong. That is a rate
 over five rows, not over the audit.
 
-### The completed sweep: 31 blocking, and they do not cost the same
+### The completed sweep: the blocking rows do not cost the same
 
 Every criterion in `RELEASE-4.0.0-requirements.md` now has a row in
-`RELEASE-4.0.0-criteria-status.md`: 77 rows, 42 clean MET, **31 blocking**. The audit's "at least
-eight outside MRTR" was a floor; the answer is 21. SUB.1's GET clause and SUB.3 came off the list on
+`RELEASE-4.0.0-criteria-status.md`. That file's headline states the totals and
+`scripts/release/count-release-criteria.py --check` recounts them from its tables, so the number is
+not quoted a second time here — this section quoted `31 blocking` against a 77-row ledger and was
+still saying so at 99 rows. The audit's "at least eight outside MRTR" was a floor; the answer is 21. SUB.1's GET clause and SUB.3 came off the list on
 2026-08-31 when the `GET /mcp` era gate landed, taking the count from 33 to 31.
 
 | status | count | what it means | the work |
@@ -85,7 +87,7 @@ their files are not ours to stash or clean.
 
 Release ready means all 31 rows read MET with a file:line for production code and a file:line for a
 test reaching it through a production path. Not "implemented", not "tests pass". Two things that
-does not promise: the 42 clean MET rows are not guaranteed to hold, since wiring sixteen unwired
+does not promise: the clean MET rows are not guaranteed to hold, since wiring sixteen unwired
 symbols touches paths they cover, so the full suite gates every increment; and the count is not
 guaranteed to fall monotonically, because an UNTESTED row that goes red splits into a defect and a
 test.
