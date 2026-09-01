@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use mcp_gateway::backend::Backend;
 use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
+use mcp_gateway::protocol::era::Era;
 use tempfile::TempDir;
 
 /// A recorder, not a peer: every received line is appended to the log **before** any answer is
@@ -36,7 +37,7 @@ while IFS= read -r request; do
             printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"__VERSION__","capabilities":{},"serverInfo":{"name":"era-fixture","version":"1"}}}\n' "$id"
             ;;
         *'"method":"server/discover"'*)
-            printf '{"jsonrpc":"2.0","id":%s,__DISCOVER__}\n' "$id"
+            __DISCOVER_ARM__
             ;;
         *'"method":"tools/list"'*)
             printf '{"jsonrpc":"2.0","id":%s,__TOOLS__}\n' "$id"
@@ -55,13 +56,28 @@ impl Fixture {
     /// `discover` and `tools` are the JSON-RPC payload that follows the echoed `id` — either
     /// `"result":{...}` or `"error":{...}`.
     fn new(handshake_version: &str, discover: &str, tools: &str) -> Self {
+        let arm = format!(r#"printf '{{"jsonrpc":"2.0","id":%s,{discover}}}\n' "$id""#);
+        Self::with_discover_arm(handshake_version, &arm, tools)
+    }
+
+    /// A peer that completes `initialize` and then never answers the probe at all.
+    ///
+    /// `:` is the shell no-op: the request line is still logged by the loop above — so the frame
+    /// count still sees the probe — and nothing is written back. This is the only way to reach
+    /// `ProbeOutcome::NoAnswer` from a fixture without the fixture deciding anything: silence is
+    /// produced by not answering, not by a canned "no answer" payload.
+    fn silently_ignoring_discover(handshake_version: &str, tools: &str) -> Self {
+        Self::with_discover_arm(handshake_version, ":", tools)
+    }
+
+    fn with_discover_arm(handshake_version: &str, discover_arm: &str, tools: &str) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let log = dir.path().join("frames.log");
         let script = dir.path().join("peer.sh");
         let body = FIXTURE
             .replace("__LOG__", &log.display().to_string())
             .replace("__VERSION__", handshake_version)
-            .replace("__DISCOVER__", discover)
+            .replace("__DISCOVER_ARM__", discover_arm)
             .replace("__TOOLS__", tools);
         std::fs::write(&script, body).expect("write fixture");
         let command = format!("sh {}", script.display());
@@ -280,5 +296,65 @@ async fn discover_5_only_a_2026_code_re_probes_an_ordinary_error_does_not() {
         "an ordinary -32602 says nothing about the peer's era and must NOT trigger a re-probe, so \
          the start-path probe must remain the only one; recorded frames were:\n{}",
         ordinary.frames()
+    );
+}
+
+/// DISCOVER.4, classification half — a peer that rejects the probe is remembered as `Legacy`.
+///
+/// This is the cell the first four tests deliberately left empty. They prove the gateway *asked*;
+/// this proves it *classified*, and neither stands in for the other. It became expressible only
+/// when `Backend::cached_era` landed as a reader production itself uses — a `pub` method on a type
+/// no test could construct would have been a debug helper wearing a nicer hat.
+///
+/// Not vacuous in the direction that matters: an implementation that never probes returns `None`
+/// here, so this assertion cannot be satisfied by doing nothing.
+#[tokio::test]
+async fn discover_4_a_peer_that_rejects_the_probe_is_classified_legacy() {
+    let fixture = Fixture::new("2025-11-25", LEGACY_DISCOVER, EMPTY_TOOLS);
+    let backend = fixture.backend("rejects-probe");
+
+    backend.ensure_started().await.expect("backend starts");
+
+    assert_eq!(
+        backend.cached_era().await,
+        Some(Era::Legacy),
+        "a peer that answered server/discover with -32601 must be classified Legacy and that \
+         verdict cached; recorded frames were:\n{}",
+        fixture.frames()
+    );
+}
+
+/// DISCOVER.4, classification half — silence is not a finding, so nothing is cached.
+///
+/// `ProbeOutcome::NoAnswer` classifies as `Legacy` for the purpose of treating the *next* request
+/// and is deliberately not written to the cache (`src/protocol/era.rs`, "Silence is not a finding"
+/// — cache only what the peer actually told us), so a briefly-unreachable peer is not pinned to
+/// the legacy path for the life of the process.
+///
+/// The probe-count assertion comes FIRST and is the whole reason this row can fail. `None` is also
+/// what a backend nobody probed returns, so the cache assertion alone would pass vacuously against
+/// an implementation that never probes at all — the same defect shape as an upper bound that holds
+/// at zero. Asserting the probe was sent, and only then that its silence was not remembered, makes
+/// the pair falsifiable in both directions.
+#[tokio::test]
+async fn discover_4_a_probe_that_is_never_answered_caches_nothing() {
+    let fixture = Fixture::silently_ignoring_discover("2025-11-25", EMPTY_TOOLS);
+    let backend = fixture.backend("never-answers-probe");
+
+    backend.ensure_started().await.expect("backend starts");
+
+    assert_eq!(
+        fixture.discover_count(),
+        1,
+        "a peer that never answers the probe must still have been probed exactly once; recorded \
+         frames were:\n{}",
+        fixture.frames()
+    );
+    assert_eq!(
+        backend.cached_era().await,
+        None,
+        "a probe that timed out with no answer must leave the cache empty, so the next request \
+         re-probes instead of treating the peer as permanently Legacy; recorded frames were:\n{}",
+        fixture.frames()
     );
 }
