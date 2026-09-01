@@ -995,8 +995,7 @@ pub(super) async fn meta_mcp_handler(
                 profile = header_profile.as_deref().unwrap_or("none"),
                 code_mode = state.meta_mcp.code_mode_enabled || code_mode_url_active,
                 query_present,
-                cache_scope =
-                    crate::protocol::cacheable::CacheScope::current_for_tools_list().as_str(),
+                cache_scope = crate::protocol::cacheable::scope_for_method("tools/list").as_str(),
                 // A legacy result carries no `cacheScope`, so a record naming
                 // one without saying whether it reaches the client would be
                 // reporting a field that was never sent.

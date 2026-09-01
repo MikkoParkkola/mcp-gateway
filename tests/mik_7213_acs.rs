@@ -383,10 +383,14 @@ fn ac_cache_3_the_deciding_functions_name_the_table() {
             .split(signature)
             .next()
             .expect("a split always yields a first part");
+        // The contiguous run, not a line count: a neighbour's doc satisfying
+        // this assertion is the failure mode it exists to catch.
+        let block = doc
+            .rsplit("\n\n")
+            .next()
+            .expect("a split always yields a first part");
         assert!(
-            doc.rsplit("///")
-                .take(12)
-                .any(|line| line.contains("scope_for_method")),
+            block.contains("scope_for_method"),
             "the doc above `{signature}` must send a reader to the table that \
              decides per method, or the table is a document beside the code"
         );
