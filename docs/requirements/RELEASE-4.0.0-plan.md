@@ -4,7 +4,7 @@ Companion to `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is the 
 This file is the ORDER OF WORK, not a second status table. When the two disagree, the status
 doc wins.
 
-Standing as of 2026-09-01: **99 rows, 54 met or non-blocking, 45 blocking.**
+Standing as of 2026-09-01: **99 rows, 55 met or non-blocking, 44 blocking.**
 
 The functional half is 77 rows, 54 met or non-blocking — 49 `MET`, 2 `MET (I)`, 1 `MET (caveat)`, 1
 `MET (residual)` — and 23 blocking: 14 UNWIRED (code exists, nothing on the production path

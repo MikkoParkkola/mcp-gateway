@@ -8,7 +8,7 @@ stateless path, identity, all 17 MIK-7272 criteria (RESULT/ERROR/ORDER, then SUB
 the MIK-7246 destructive-confirmation gate, and the MIK-7217 discovery/era group. Every requirement ID
 in `RELEASE-4.0.0-requirements.md` now has a row, functional and non-functional alike.
 
-Coverage: 95 criteria, 99 rows, 54 met or non-blocking, 45 blocking.
+Coverage: 95 criteria, 99 rows, 55 met or non-blocking, 44 blocking.
 
 That line is the only place in this file that states totals, and it is not maintained by hand.
 `scripts/release/count-release-criteria.py --check` recounts the blocking column of every table
@@ -245,7 +245,7 @@ criteria they observe, and closing those does not close these — each still nee
 | NFR.SEC.2 | continuation state confidential to the gateway; a client cannot read backend state from its echo | ABSENT | verifies the MIK-7212 continuation envelope, which is unwired: nothing mints or opens a continuation on the live path | yes |
 | NFR.SEC.3 | continuation envelope versioned, key rotatable, verification keys retained for the max lifetime | ABSENT | same envelope; no rotation or retention exists to test | yes |
 | NFR.SEC.4 | deterministic fixtures for tamper, expiry, replay, wrong principal, wrong request, rotation, oversize, wrong replica | ABSENT | same envelope; eight named fixtures, none of which can be written against an unwired path | yes |
-| NFR.SEC.5 | clippy, `cargo fmt --check`, `cargo audit` and the secret scan clean; `deny(unsafe_code)` holds | UNTESTED | one of the four command gates verified 2026-09-01: `cargo fmt --check` rc=0. The separate unsafe-code requirement holds, `#![deny(unsafe_code)]` at `src/lib.rs:1`. Three commands remain unrun — `cargo clippy --all-targets -- -D warnings`, `cargo audit` and the secret scan were NOT run for this row | yes |
+| NFR.SEC.5 | clippy, `cargo fmt --check`, `cargo audit` and the secret scan clean; `deny(unsafe_code)` holds | MET | all four command gates run on this worktree 2026-09-01: `cargo fmt --check` rc=0, `cargo clippy --all-targets -- -D warnings` rc=0, `cargo audit` rc=0 (one allowed advisory warning, no vulnerability), and the secret scan CI runs in two parts — `trufflehog git file://. --only-verified --fail` rc=0 with `verified_secrets: 0` over 33,935 chunks, and `scripts/dev/cwe532-leak-lint.py src crates` clean over 400 files with its parser test at 12/12. The separate unsafe-code requirement holds, `#![deny(unsafe_code)]` at `src/lib.rs:1` | no |
 | NFR.SEC.6 | MIK-7249, MIK-7256, MIK-7262 and MIK-7222 closed in this release | UNTESTED | `tests/mik_7222_acs.rs` exists and carries the credential-disclosure sweep. MIK-7256 is referenced in `src/config/env_overlay.rs`, `src/config/tests.rs`, `src/config_reload/mod.rs`, `src/config_reload/tests.rs`. MIK-7249 and MIK-7262 have ZERO references in `src/` or `tests/`, so nothing in the tree evidences their closure | yes |
 | NFR.PERF.1 | tool-call latency not regressed >5% P50 / >10% P99 against 3.5.0 | ABSENT | no measurement against 3.5.0 has been run; a code read cannot substitute for one | yes |
 | NFR.PERF.2 | header-first routing justified by measurement against the full-parse path, or it does not ship | ABSENT | no measurement recorded. The requirement states its own consequence: without a number the change does not ship | yes |
