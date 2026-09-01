@@ -1,26 +1,38 @@
-# v4.0.0 release plan — closing the 27 blocking criteria
+# v4.0.0 release plan — closing the 24 blocking criteria
 
 Companion to `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is the status SSOT.
 This file is the ORDER OF WORK, not a second status table. When the two disagree, the status
 doc wins.
 
-Standing as of 2026-08-31: 45 MET, plus 3 qualified MET (1 `MET (I)`, 1 residual, 1 caveat). 27
-criteria are blocking — 16 UNWIRED (code exists, nothing calls it), 10 ABSENT (nothing implements
-it), 1 UNTESTED. Every number here is counted from the blocking column of the status doc's tables,
-never carried forward by hand; an earlier revision of this paragraph said 26 blocking and split it
-17/12/0, which sums to 29.
+Standing as of 2026-09-01: 77 rows, 53 met — 49 `MET`, 2 `MET (I)`, 1 `MET (caveat)`, 1
+`MET (residual)`. 24 are blocking: 14 UNWIRED (code exists, nothing on the production path
+calls it), 9 ABSENT (nothing implements it), 1 UNTESTED (implemented and wired, no test
+proving the clause). Every number is counted from the blocking column of the status doc's
+tables by script, never carried forward by hand.
 
-That 27 is now known to be INCOMPLETE, not conservative. The status doc it is counted
-from carries no row for any of the 22 non-functional requirements in section 4 of
-`docs/requirements/RELEASE-4.0.0-requirements.md` (lines 204-253): NFR.COMPAT.1-4,
-NFR.SEC.1-6, NFR.PERF.1-4, NFR.OBS.1-5, NFR.DOC.1-3. Each carries a verification method
-in the requirements table (T test, M measurement, D demonstration, I inspection), so each
-is a criterion, not a wish. Three are already known unmet: NFR.SEC.5 fails today because
-`cargo fmt --check` fails at `src/idempotency.rs:305`, `:566` and `src/protocol/mrtr.rs:113`,
-and NFR.PERF.1-2 require measurement against 3.5.0 that has not been run. An audit of the
-block is in flight; until it lands, treat 27 as a floor. Discovered 2026-08-31 by an audit
-of `tests/mik_7212_acs.rs`, which cites NFR.SEC.3 and NFR.SEC.4 as criteria it satisfies
-while the ledger holds neither.
+The previous revision counted 27 against 75 rows. Five blocking criteria closed and two rows
+appeared as clauses were split out of criteria that had been assessed as one, so the drop from
+27 to 24 understates what was finished. Closed since: `ERROR.2`, `RESULT.2`, `HEADER.5`,
+`HEADER.7`, `HEADER.8`, `TENANT.1`, `CONTROL.2`, `CONTROL.3` — which emptied the whole of the
+wave-2 queue and all but one row each of clusters D and E.
+
+## 24 is a floor, and the gap is named
+
+The status doc still carries **no row for any of the 22 non-functional requirements** in
+section 4 of `docs/requirements/RELEASE-4.0.0-requirements.md` (lines 204-253): NFR.COMPAT.1-4,
+NFR.SEC.1-6, NFR.PERF.1-4, NFR.OBS.1-5, NFR.DOC.1-3. Each carries a verification method in the
+requirements table (T test, M measurement, D demonstration, I inspection), so each is a
+criterion and not a wish. A release cannot be declared ready against a ledger that does not
+contain a fifth of its own requirements.
+
+Two things are known about that block without the sweep. `cargo fmt --check` now passes, so
+the NFR.SEC.5 failure recorded in the previous revision is repaired — that claim is retired,
+not carried. NFR.PERF.1-2 require a measurement against 3.5.0 that has never been run, and a
+measurement is not something a code read can substitute for.
+
+Sweeping the block is therefore item zero of this plan, ahead of every cluster below. It is
+cheap next to what it protects: the alternative is shipping and discovering the count was
+never the count.
 
 ## The shape of the problem
 
@@ -36,19 +48,17 @@ edit. Every one of those decisions is a §P1 design event and none of them is an
 MRTR.1 through MRTR.10a: sealed continuation envelopes minted by the gateway, principal and
 request binding, single-use with expiry holding across replicas, replica affinity on retry,
 the modern-to-legacy `InputRequiredResult` bridge, bounded in-flight state, and never sending
-an `inputRequest` type the client has not declared.
+an `inputRequest` type the client has not declared. Eight UNWIRED, two ABSENT (MRTR.9, the
+declared-type check; MRTR.10a, the idempotency-key contents).
 
-Largest cluster, deepest security surface, and it gates two other clusters. Already in flight
-in another session (`src/protocol/continuation.rs`, `tests/mik_7212_acs.rs`).
+Largest cluster, deepest security surface, and it gates two other clusters. In flight in
+another session (`src/protocol/continuation.rs`, `tests/mik_7212_acs.rs`).
 Blocks: cluster H, and MRTR.10a feeds cluster B's SUB.4 key contents.
 
-### B. MCP 2026 protocol semantics — MIK-7272, 10 of 17 criteria
+### B. MCP 2026 protocol semantics — MIK-7272, 6 criteria
 
-Not one job. It splits by size:
+The small self-contained half of this cluster has landed. What remains splits two ways:
 
-- **Small, self-contained**: ERROR.2 (resource-not-found returns `-32602`, not `-32002`),
-  RESULT.2 (a missing `resultType` defaults to complete when the gateway reads a backend
-  reply). Each is a narrow change with a test that is red today.
 - **Design-first**: SUB.4 (idempotency wiring — design at revision 4, see
   `docs/design/2026-08-31-sub-4-idempotency-wiring.md`. Larger than it looked: seven verified
   implementation defects are prerequisites, and no advertised way exists for a client to send a
@@ -56,33 +66,31 @@ Not one job. It splits by size:
   both the meta-MCP surface and the direct `POST /mcp/{name}` route are in scope. The operator
   was asked on 2026-08-31 and was away; the call is the team lead's, made on the full-scope
   direction recorded at the foot of this file, and it is not operator-confirmed),
-  ORDER.2 (tool set must not vary per connection), SUB.2 (request-scoped notifications on the
-  request's own response stream), EXT.1 (declare extensions through server capabilities),
+  ORDER.2 (tool set must not vary per connection nor as a side effect of another request),
+  SUB.2's surviving clause (request-scoped notifications on the request's own response stream),
+  EXT.1 (declare the gateway's own extensions through server capabilities),
   OTEL.1 (`traceparent`/`tracestate`/`baggage` through `_meta`).
 - **Whole feature**: TASK.1, the `io.modelcontextprotocol/tasks` extension for long-running
   backend calls. Largest single item outside cluster A. It is also SUB.4's alternative
   branch, so a decision to build it changes SUB.4's scope.
 
-### C. Backend era detection — MIK-7217, 7 criteria
+### C. Backend era detection — MIK-7217, 2 criteria
 
 DISCOVER.4 (detect a backend's protocol era by probing, never by trusting a version string)
-and DISCOVER.5 (cache the detected era per backend, re-probe when a cached assumption fails)
-are the two named. One coherent design covers the cluster.
+and DISCOVER.5 (cache the detected era per backend, re-probe when a cached assumption fails).
+DISCOVER.1-3 are met; one coherent design covers what is left.
 Blocks: cluster D's HEADER.9, which is conditioned on what the peer negotiated.
 
-### D. Header forwarding — MIK-7214, 4 criteria
+### D. Header forwarding — MIK-7214, 1 criterion
 
-HEADER.5 (`x-mcp-header` mirroring an argument into `Mcp-Param-{name}` outbound, SEP-2243)
-plus HEADER.7-9. HEADER.9 sends the modern `_meta` envelope only where the peer negotiated it,
-so it cannot be finished before cluster C.
+HEADER.9 alone: outbound requests carry the modern `_meta` envelope and the standard headers,
+and only where the peer negotiated them. Cannot be finished before cluster C.
 
-### E. Principal-keyed security — MIK-7116 + MIK-7215, 4 criteria
+### E. Principal-keyed security — MIK-7215, 1 criterion
 
-TENANT.1 (cross-tenant data-minimisation keyed on authenticated principal, not session),
-CONTROL.2 (principal-keyed budget), CONTROL.3 (transparency-log correlation on the OTel trace
-id, not session id), CONTROL.4 (session-lifecycle TTL reaping owning cleanup that disconnect
-used to do). One theme: session identity is the wrong key everywhere it is still used.
-In flight in another session (`src/security/firewall/principal_window.rs`, `tenant_guard.rs`).
+CONTROL.4: session-lifecycle TTL reaping owns the cleanup that disconnect used to do.
+TENANT.1, CONTROL.2 and CONTROL.3 closed — the theme they shared, that session identity was
+the wrong key, is settled everywhere except reaping.
 
 ### F. Response-cache keying — MIK-7213, 2 criteria
 
@@ -92,10 +100,11 @@ questions, independent of everything above, and safe to run in parallel.
 
 ### G. Schema validity — MIK-6865.SCHEMA.1
 
-Tool schemas must remain valid under JSON Schema 2020-12. There is no validator in the
-dependency tree, so this is a dependency decision before it is a test: which crate, what it
-costs at startup, and whether validation runs at load time or in CI only. Supply-chain gate
-(DoD D30) applies. Design first; the criterion cannot be closed by a hand-rolled check.
+Tool schemas must remain valid under JSON Schema 2020-12. Implemented and wired; the clause
+has no test. There is no validator in the dependency tree, so this is a dependency decision
+before it is a test: which crate, what it costs at startup, and whether validation runs at
+load time or in CI only. Supply-chain gate (DoD D30) applies. Design first; the criterion
+cannot be closed by a hand-rolled check.
 
 ### H. Confirmation gate reachability — MIK-7246.CONFIRM.2
 
@@ -105,14 +114,21 @@ be built before cluster A lands.
 
 ## Order of work
 
+**Wave 0 — the NFR sweep.** Assess all 22 non-functional requirements against source and
+running behaviour, one row each into the status doc, using the verification method the
+requirements table already names for each. Two of them (NFR.PERF.1-2) need a measurement run
+against 3.5.0, not a read. This wave changes the size of every wave after it, which is why it
+runs first rather than last.
+
 **Wave 1 — designs only, no code, all parallel.** C, F, G, and the design-first half of B.
 Each is a §P1 note reviewed by two vendors before an edit. This is the wave that decides
 things, and it is the one most likely to be skipped under release pressure.
 
-**Wave 2 — the small self-contained items.** B's ERROR.2 and RESULT.2, and D's HEADER.5.
-Failing test first, then the change. These need no wave-1 output and can start immediately.
+**Wave 2 — cleared.** ERROR.2, RESULT.2 and HEADER.5 are met. Nothing is queued here; the
+heading stays so the wave numbering below does not silently shift.
 
-**Wave 3 — implementation of wave 1.** Plus D's HEADER.7-9 once C lands.
+**Wave 3 — implementation of wave 1.** Plus D's HEADER.9 once C lands, and E's CONTROL.4,
+which depends on nothing and can move earlier if a slot opens.
 
 **Wave 4 — the two long poles.** Cluster A (in flight) and B's TASK.1. H follows A.
 
