@@ -19,6 +19,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 STATUS = ROOT / "docs/requirements/RELEASE-4.0.0-criteria-status.md"
 REQUIREMENTS = ROOT / "docs/requirements/RELEASE-4.0.0-requirements.md"
 ID = re.compile(r"^((?:MIK-\d+|NFR)\.[A-Z0-9]+\.\d+)([a-z]?)")
+# The verification-method vocabulary: test, measurement, inspection, demonstration.
+METHOD = re.compile(r"^[TMID](, ?[TMID])*$")
 # The headline sentence this script owns. Nothing else in the file may state totals.
 HEADLINE = re.compile(
     r"Coverage: (\d+) criteria, (\d+) rows, (\d+) met or non-blocking, (\d+) blocking\."
@@ -59,14 +61,22 @@ def required_methods(text):
     which is what `method_mismatches` is for. Functional (MIK-*) requirements
     state no method, so nothing is checked for them.
     """
-    methods = {}
+    methods, unreadable = {}, []
     for line in text.splitlines():
         if not line.startswith("| NFR."):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if len(cells) >= 3 and ID.match(cells[0]):
+            # The method is read POSITIONALLY, from the last cell. Add a column
+            # to that table and this keys on the wrong one -- silently, because
+            # any string compares fine against the status ledger's copy of the
+            # same wrong string. The vocabulary is the guard: a last cell that
+            # is not a method refuses rather than becoming one.
+            if not METHOD.match(cells[-1]):
+                unreadable.append(f"{cells[0]} ({cells[-1]!r})")
+                continue
             methods[cells[0]] = cells[-1]
-    return methods
+    return methods, unreadable
 
 
 def method_mismatches(text, methods):
@@ -97,7 +107,11 @@ def main():
     ids = {i for i, _ in criteria}
     requirements = REQUIREMENTS.read_text()
     declared = set(re.findall(r"\|\s*((?:MIK-\d+|NFR)\.[A-Z0-9]+\.\d+)\s*\|", requirements))
-    mismatched = method_mismatches(text, required_methods(requirements))
+    methods, unreadable = required_methods(requirements)
+    if unreadable:
+        print(f"unreadable verification method on: {', '.join(unreadable)}", file=sys.stderr)
+        return 1
+    mismatched = method_mismatches(text, methods)
     uncovered = sorted(declared - ids)
 
     totals = (len(declared), len(criteria), len(criteria) - blocking, blocking)
