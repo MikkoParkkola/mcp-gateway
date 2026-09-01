@@ -152,10 +152,23 @@ defect.
 `NFR.COMPAT.1` is listed under cluster F as an operator fact, and it is also a dependency the
 other two wirings run on. `SUPPORTED_VERSIONS` (`src/protocol/mod.rs:43`) does not name
 `2026-07-28`; `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) names it alone, and era-r4-repair's
-frozen scope declares adding it explicitly out. So the gateway can wire the continuation
-envelope and the revision surface in full and never negotiate the revision that reaches them —
-unwiredness moved one level up, where no criterion in cluster A or C would report it. Whoever
-adds the version is a decision, not an analysis; it is not currently anyone's.
+frozen scope declares adding it explicitly out.
+
+An earlier revision of this paragraph read that as a gap: wire both clusters, never negotiate
+the revision, unwiredness moved one level up. That is wrong, and the correction matters more
+than the claim did. The omission is deliberate and documented at the source
+(`src/protocol/mod.rs:38-42`): listing `2026-07-28` in `SUPPORTED_VERSIONS` would make
+`initialize` negotiate a revision the gateway cannot yet serve, so a client would be told yes
+and then served 2025 semantics — silent, and worse than a refusal. `meta.rs:213-219` says the
+same from the other side, and `discover_document` (`src/gateway/meta_mcp/mod.rs:1063-1082`)
+already advertises `MODERN_VERSIONS` when the modern path is enabled, with a comment recording
+that omitting it once made enabling it unreachable. era-r4-repair was right to scope the
+addition out; the surface is not missing a version, it is gated.
+
+The gate is `server.modern_protocol`, and it defaults to **false** (`src/config/mod.rs:1127`,
+`:1174`, whose comment reads *"Off until the revision is served completely, not partly."*), read
+at `src/gateway/router/handlers.rs:221`, `:755-760`, `:967`. So the real question is not who adds
+a string to a list. It is whether 4.0.0 flips that default — see operator decision 5.
 
 ### One commit must not be handed to a reviewer whole
 
@@ -192,6 +205,22 @@ with everything in the tree, so no amount of reading code settles it. It is also
 downstream of cluster A: even under the generous reading, reachability depends on the
 continuation-envelope wiring, so it cannot close before A does and is not an independent
 item on the critical path.
+
+### A fifth decision, from correcting the fourth
+
+The `NFR.COMPAT.1` paragraph above was published wrong and is now repaired. What the repair
+exposes is a decision that no cluster surfaced, because no criterion is phrased to ask it:
+**does 4.0.0 ship with `server.modern_protocol` defaulting to false?**
+
+Both answers are defensible and neither is an analysis result.
+
+| answer | what it costs |
+|---|---|
+| leave it false | 4.0.0 ships the modern revision behind an opt-in flag. Every cluster A and C row can be met and no default install exercises them. The release notes must say so plainly, or the version number overpromises. |
+| flip it true | the default install negotiates `2026-07-28`. That is only honest once the modern path is served completely — which is exactly what clusters A and C are for, so the flip is a release-gating dependency on them, not an independent switch. |
+
+The flag is not a gap and needs no ticket. It needs a sentence in the release notes under the
+first answer, and a gating dependency under the second.
 
 ### One row that looked like a decision and is not
 
