@@ -43,7 +43,7 @@ Instead the bridge carries a closed type:
 
 ```rust
 enum ServerRequest {
-    Sampling(CreateMessageParams),
+    Sampling(SamplingCreateMessageParams),
     Elicitation(ElicitationCreateParams),
 }
 ```
@@ -96,7 +96,7 @@ per variant, never the envelope and never the whole result:
 | `Elicitation`, `action = "accept"` | `content`, or `Malformed` if it is absent |
 | `Elicitation`, `action = "decline"` or `"cancel"` | `DeliveryError::Declined { action }` |
 | `Elicitation`, any other `action` | `DeliveryError::Malformed` |
-| `Sampling`, a `CreateMessageResult` | the result, which *is* the answer for this variant |
+| `Sampling`, a `SamplingCreateMessageResult` | the result, which *is* the answer for this variant |
 | a JSON-RPC `error` member | `DeliveryError::ClientRefused { code, message }` |
 | neither `result` nor `error` | `DeliveryError::Malformed` |
 
@@ -109,17 +109,17 @@ what an operator reading `NFR.OBS.4`'s counter needs to tell a declining human f
 
 The other direction needs the same specificity. An `inputRequest`'s params arrive as a
 `serde_json::Value` (`src/protocol/mrtr.rs:194-202`) and must become a typed
-`ElicitationCreateParams` or `CreateMessageParams` (`messages.rs:478-484`) — the mapping is the
+`ElicitationCreateParams` (`messages.rs:478`) or `SamplingCreateMessageParams` (`:502`) — the mapping is the
 document's central mechanism and was previously asserted rather than stated:
 
 | variant | from the `inputRequest` | refusal |
 |---|---|---|
 | `Elicitation` | `message` (required, string), `requestedSchema` (optional, object) | absent or non-string `message` |
-| `Sampling` | the params object deserialized as `CreateMessageParams` whole | any field `serde` rejects |
+| `Sampling` | the params object deserialized as `SamplingCreateMessageParams` whole | any field `serde` rejects |
 
 A payload that fails its row is refused **before anything is sent to the client**, as a bridge
 refusal with the backend's key named, counted through `NFR.OBS.4`. It is never repaired, defaulted
-or forwardedhalf-formed: a backend that asks a malformed question gets an error, not a user prompt
+or forwarded half-formed: a backend that asks a malformed question gets an error, not a user prompt
 built from guesses.
 
 ## 2. The client's connection, not the client's SSE stream
@@ -149,7 +149,7 @@ blocks inside that dispatch awaiting the client's reply blocks *the only reader 
 it* — a guaranteed deadlock until the timeout, then a failed call, on every stdio client. The
 send half was never the obstacle; the receive half is, and it is absent.
 
-So stdio support is a stated part of this increment with two named changes, not an inherited
+So stdio support is a stated part of this increment with three named changes, not an inherited
 property:
 
 - **dispatch concurrently.** The serve loop spawns each request rather than awaiting it inline, so
@@ -158,15 +158,30 @@ property:
   prefix (§1) is handed to `resolve_pending` and never reaches request parsing — the stdio analogue
   of the SSE ingress branch at `handlers.rs:633`, which exists because the same problem was already
   solved once on the other transport.
+- **serialize the writer.** The loop owns the sink outright — `let mut stdout = stdout;`
+  (`server/mod.rs:1557`) and `write_response(stdout: &mut tokio::io::Stdout, …)` (`:1631`). A
+  `Stdout` handle is not `Clone`, so spawned tasks cannot each take one, and two interleaved
+  `write_all` calls splice two JSON-RPC lines into one that every client's parser rejects. The
+  writer becomes a single owned sink behind a mutex, or an outbound channel drained by one task —
+  either is fine, and picking neither is not. This is the same edit as the first bullet, not a
+  follow-up to it: making dispatch concurrent without making the framing safe is the defect.
 
 With those, the bridge takes a `ClientChannel` — send a request, await the correlated reply, or
 fail — with an SSE implementation that is today's `send_to_session` path and a stdio implementation
 over the serve loop's stdout and the routing branch above. The pending-id map and its session
 ownership check (`proxy.rs:466-533`) are transport-independent already and are reused unchanged.
 
-If concurrent dispatch proves to have consequences beyond this bridge — ordering guarantees a
-single-threaded loop was silently providing — that is a finding about the serve loop and is
-resolved there, before MRTR.7 claims stdio. It is not resolved by narrowing the requirement.
+One ordering guarantee the single-threaded loop provides today is known and must survive, so it is
+stated as a check rather than left as a caveat: **`initialize` completes before any other request
+is dispatched.** A session whose capability store (§6) is written by `initialize` and read by a
+bridged prompt has a race the sequential loop made impossible; the boundary test drives an
+`initialize` immediately followed by a call and asserts the store is populated when the second is
+served. Owner is this increment — the change that introduces the concurrency owns the guarantee it
+removes.
+
+If concurrent dispatch proves to have consequences *beyond* that one — further ordering the loop
+was silently providing — that is a finding about the serve loop and is resolved there, before
+MRTR.7 claims stdio. It is not resolved by narrowing the requirement.
 
 ## 3. The session id at the call site names a backend, not a client
 
@@ -213,9 +228,14 @@ Three limits, each on the original call rather than on a round:
 The values are stated here rather than deferred to a named constant so that the boundary tests and
 the implementation converge on one contract; they are named constants in code, and changing one is
 a change to this document. The batch check runs *before the first send* deliberately: refusing
-after prompt 8 of 20 has already asked the user eight questions the gateway then discards. Every
-refusal counts through `NFR.OBS.4`'s bridge counter
-(`docs/design/2026-09-01-continuation-telemetry.md`).
+after prompt 8 of 20 has already asked the user eight questions the gateway then discards.
+
+Refusals and deadlines count separately, on the two counters `NFR.OBS.4` already separates
+(`docs/design/2026-09-01-continuation-telemetry.md`): a bound refused before or during a round
+increments `rejected_total{phase="bridge"}`, a per-prompt or aggregate deadline passing increments
+`expired_total{phase="bridge", detected="awaited"}`. Routing a deadline to the refusal counter
+would put a timeout on the same series as a user declining, which is the distinction `phase` was
+added to preserve.
 
 ### What the table above does not say, and must
 
@@ -263,8 +283,10 @@ nothing in the tree provides it.
 
 The store is not the only capability fact in the tree. `MetaMcpCallerContext.input_capabilities`
 (`meta_mcp/mod.rs:139`) already carries a per-request slice, derived from the caller's `_meta` on
-the call being served, and `MRTR.9` gates on it. Two sources, no stated precedence, is an
-implementer's coin toss — so:
+the call being served, and when `MRTR.9`'s per-method gate lands it reads that slice. The gate is
+not shipped: every occurrence of the field in `src/` is an assignment, and the only non-empty one
+is `handlers.rs:1284`. Stating the precedence now is still worth a paragraph, because two sources
+with no stated precedence is an implementer's coin toss the moment the second one gains a reader:
 
 **The session store is authoritative for the bridge, and the per-request slice may only narrow it.**
 

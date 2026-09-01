@@ -34,10 +34,25 @@ envelope the gateway holds nothing for — is never reaped, so its expiry would 
 expiry counter entirely, and the two populations would be split across two counters by an accident
 of storage rather than by what happened.
 
-So one counter owns deadlines, labelled `detected=reaped` (nobody came back) or
-`detected=presented` (came back too late). Those remain the two operational facts they always
-were — the first is the abandonment rate `NFR.PERF.3` soaks for, the second a tuning signal for
-the lifetime — and `expired` is not a member of the `reason` set, so no event is counted twice.
+So one counter owns deadlines, and `detected` names **who noticed** — which is the only thing that
+distinguishes one expiry from another once the deadline itself is the event.
+
+| `detected` | who noticed | phase it arises in |
+|---|---|---|
+| `reaped` | a reclaimer, sweeping entries nobody came back for | `redeem` |
+| `presented` | the envelope itself, arriving after its deadline | `redeem` |
+| `awaited` | the gateway, waiting on a round it had already started | `bridge` |
+
+`reaped` is the abandonment rate `NFR.PERF.3` soaks for; `presented` is a tuning signal for the
+lifetime; `awaited` is a bridged prompt whose per-prompt or aggregate deadline (`MRTR.7` §5) passed
+while the gateway held the round open. `expired` is not a member of the `reason` set, so no event
+is counted twice.
+
+The third value exists because `phase` and the stateful narrowing below would otherwise leave
+`expired_total{phase="bridge"}` with no legal `detected`: a bridge deadline is not reaped (there is
+no entry and no reaper) and not presented (nothing arrived at all), and an implementer forced to
+pick one would make the deadline series incomparable across phases. Note the observer, not the
+phase, is what `detected` reports — the two columns above agree today and are not required to.
 
 **`detected=reaped` is defined only over stateful continuations, and that bound is structural.**
 A reaper can only observe what something holds. A stateless continuation — an envelope the gateway
