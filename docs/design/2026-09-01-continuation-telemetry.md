@@ -54,6 +54,12 @@ no entry and no reaper) and not presented (nothing arrived at all), and an imple
 pick one would make the deadline series incomparable across phases. Note the observer, not the
 phase, is what `detected` reports — the two columns above agree today and are not required to.
 
+**`reaped` has a producer, and naming it is part of this design.** A counter whose incrementing
+site does not run is a flat line an operator reads as "no abandonment". The reclaimer is called from
+lifecycle-owned periodic maintenance, per `2026-09-01-nfr-perf3-reclamation.md` — an earlier
+revision of that document argued it needed no caller, which would have left this series dead. Each
+entry it drops is one increment. Pressure-triggered reclamation increments the same series.
+
 **`detected=reaped` is defined only over stateful continuations, and that bound is structural.**
 A reaper can only observe what something holds. A stateless continuation — an envelope the gateway
 keeps no entry for — is abandoned by a caller simply never returning, and there is nothing in the

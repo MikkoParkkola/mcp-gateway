@@ -60,18 +60,47 @@ a capacity error naming a table whose entries all expired hours ago.
 That is the second clause failing. There is no reclamation, so a soak with abandonment cannot show
 any — which is precisely the observation the criterion asks the soak to make.
 
-## The fix is the ledger's shape, not a background task
+## `MRTR.8` says "count **and lifetime**", and those need different mechanisms
 
-Two ways to reclaim, and the tree has already chosen between them once.
+`MIK-7212.MRTR.8` (`docs/requirements/RELEASE-4.0.0-requirements.md:144`), verbatim: *"State held
+for an in-flight exchange MUST be bounded in count **and lifetime**"*. An earlier revision of this
+document read the criterion as one obligation and answered it with one mechanism — an inline retain
+at capacity — while explicitly rejecting a periodic reaper as "the obvious answer and the wrong
+one". That reading was wrong, and the word it missed is `lifetime`.
 
-A **reaper task** — a `tokio::spawn` loop calling `reap` on an interval — is the obvious answer and
-the wrong one here. It adds a task to own, an interval to tune, a shutdown path to get right, and a
-window during which the table is full and refusing while the reaper sleeps. It also reclaims when
-nobody is asking, which is when reclamation is worthless.
+**Design event, named as one** (`development-process.md` §P3): this reverses a rejection this
+document previously argued for. It is recorded rather than quietly rewritten because the rejection
+was the load-bearing claim of the section it replaces.
+
+Pressure-triggered reclamation bounds *count* and nothing else. On a gateway that never reaches
+4 096 concurrent exchanges — which is every gateway, most of the time — no `hold` is ever refused,
+so the retain never runs, and an entry abandoned at 09:00 with a 30-second deadline is still
+occupying the map at midnight. Count: bounded. Lifetime: unbounded. The MUST is half-met.
+
+It also breaks the sibling document. `2026-09-01-continuation-telemetry.md` defines
+`detected=reaped` as "nobody came back" and calls it *the abandonment rate `NFR.PERF.3` soaks for*.
+If nothing calls `reap` outside pressure, that series is flat zero on every healthy gateway, and the
+one counter an operator would use to see abandonment reports none of it. Two documents in this
+increment depend on a reclaimer that the third had argued should not have a caller.
+
+So: **two mechanisms, one for each clause of the MUST.**
+
+| clause | mechanism | when it runs |
+|---|---|---|
+| bounded **count** | inline retain in `hold`, guarded by the earliest deadline | at capacity, in the caller about to be refused |
+| bounded **lifetime** | `reap` called from lifecycle-owned periodic maintenance | on an interval, independent of traffic |
+
+The original objections to a reaper survive as *constraints on it*, not as reasons to omit it: it is
+owned by the same lifecycle that owns the router (not a free-floating `tokio::spawn`), it shuts down
+with it, and the earliest-deadline guard makes a tick over a table with nothing expired an O(1)
+comparison rather than a sweep. The interval is a bound on staleness, not on correctness — a longer
+one delays a counter increment and holds a slot longer; it cannot wedge anything, because the inline
+retain still owns the pressure case. Each removal increments `expired_total{detected="reaped"}`,
+which is what gives that series a producer.
 
 The **inline retain** is what `ConsumedLedger::consume` already does, and it is strictly better for
-this shape: reclaim at the moment of pressure, in the caller that is about to be refused, under a
-lock that caller was taking anyway. Cost is zero until the table is full; at capacity it is one
+the *pressure* case: reclaim at the moment of pressure, in the caller that is about to be refused,
+under a lock that caller was taking anyway. Cost is zero until the table is full; at capacity it is one
 `retain` over 4 096 entries, on a path that was about to return an error. Nobody waits longer than
 they would have.
 
@@ -113,16 +142,41 @@ The tree injects clocks rather than reading them, which is also what makes the s
 advance time instead of sleeping.
 
 Named here rather than discovered during implementation, because it is a public-API change:
-`InFlight::hold` is `pub`, and the eight existing call sites (`tests/mik_7212_acs.rs:402`, `:415`,
-`:446`, `:449`, `:459`, `:467`, `:477`, `:478`) all update in the same commit. It is acceptable
+`InFlight::hold` is `pub`, and the **thirteen** existing call sites — all in `tests/mik_7212_acs.rs`, and `rg '\.hold\(' --glob '*.rs'`
+returns no others — all update in the same commit. The compiler defines that inventory, not this
+list; an earlier revision of this paragraph said eight, counted by hand, and was wrong. It is acceptable
 because every one of them is in this repository and the alternative — reading a clock inside
 `hold` — would make the soak untestable without sleeping, which is the property the neighbours were
 designed to avoid.
 
-Consequence worth stating plainly: **`reap` stops being required for correctness** and becomes what
-its doc comment already claims it is — a backstop. It stays public and tested, because a future
-caller (a shutdown drain, an operator endpoint) is a reasonable thing to add, and because deleting a
-tested reclaimer to re-add it later is churn. But nothing depends on it running.
+Consequence worth stating plainly, and it is the opposite of what an earlier revision of this
+paragraph said: **`reap` is required, and it needs a caller.** It is not a backstop the inline
+retain makes optional — it is the mechanism for the `lifetime` half of `MRTR.8` and the sole
+producer of `expired_total{detected="reaped"}`. What the inline retain removes is `reap`'s
+responsibility for *availability*: a missed tick can no longer wedge the table, because pressure
+reclaims on its own path. Staleness, not correctness, is what the interval trades.
+
+### The earliest-deadline value lives under the same lock as the map
+
+Stated because a cache beside a map is a correctness hazard in exactly two directions, and both are
+silent. **Stale-high** (the cached deadline is later than the true earliest) suppresses a retain that
+would have freed space — the table refuses with reclaimable entries in it, which is the wedge this
+document exists to remove. **Stale-low** re-admits the amplification: every attempt passes the guard
+and scans.
+
+So it is a field of the same guarded structure, written under the same acquisition as the map it
+describes, never an independent `AtomicU64`:
+
+| operation | effect on the cached earliest deadline |
+|---|---|
+| `hold` admits | `min(cached, new entry's deadline)` — O(1) |
+| `complete` removes | left unchanged. Removing an entry can only make the true earliest *later*, so the cache stays valid-low: a spurious retain that frees nothing, never a suppressed one |
+| retain / `reap` sweeps | recomputed from the surviving entries during the same pass — the scan is already paying for the traversal |
+| table empties | `u64::MAX`, so the guard refuses to scan an empty map |
+
+The invariant is one line and it is deliberately one-sided: **the cached value is never later than
+the true earliest deadline.** Valid-low costs a wasted scan; valid-high costs a wedge. The table
+above never permits the second.
 
 ### Why not simply call `reap` from `hold`
 
@@ -156,6 +210,26 @@ admission — reclamation proved by luck. Filling an epoch, then stepping the cl
 shared deadline, means the admission at the start of the next epoch *can only* succeed if the retain
 ran. Deterministic, and it names which line of the fix it is testing.
 
+### Two cases the uniform-deadline epochs cannot reach
+
+The epoch shape proves the *pressure* clause and is blind to the other two things this design now
+claims.
+
+**A lifetime case, because the epochs never idle.** Hold a handful of exchanges, abandon them,
+advance the clock past their deadlines, and run *no further traffic at all*. Passes when the entries
+are gone and `expired_total{detected="reaped"}` has advanced by exactly that many. Fails if the map
+still holds them — which is what the pre-repair design would do, and is the `MRTR.8` `lifetime`
+clause stated as an assertion instead of a paragraph. It is the only case in the plan that can fail
+for the reason this revision exists.
+
+**A staggered-deadline case, because uniform deadlines make the cache trivially correct.** With
+every entry sharing one deadline, a cached earliest is right by construction and the invariant is
+untested. Hold entries with deadlines spread across a range, expire them out of insertion order, and
+interleave `complete` on live entries between admissions. Passes when a `hold` is admitted at
+capacity exactly when at least one entry has genuinely expired — no admission with nothing expired
+(stale-low would allow one), no refusal with something expired (stale-high, the wedge). This is the
+case that reads the invariant table above; without it that table is prose.
+
 The last row is what makes this a real test rather than a ritual: **it fails on the current tree**,
 at a predictable point, for the stated reason. Written before the fix, it is the §P2 failing test;
 the fix is done when it goes green.
@@ -176,9 +250,14 @@ the stateful population, and so does the counter.
 
 ## Trust boundary and threats
 
-**C15.** `unauth` on the input side — a client needs no privilege to start an elicitation and walk
-away, which is what makes this a security-adjacent availability property rather than a performance
-tuning matter. Data locality: `local`, one process's table. Partition behaviour: `AP` — a refusal
+**C15.** `auth-user` at the front door, `unauth` for the property that matters here. Minting a
+continuation binds a `principal_fingerprint` (`continuation.rs:75`, checked at `:175`), so a caller
+is not anonymous to the envelope machinery. But `InFlight::hold` does not consult it: nothing in the
+capacity path is keyed by principal, so *any* caller that can reach the legacy elicitation path can
+occupy slots, and slots are shared across every principal. The authenticated identity is recorded
+and not enforced against this resource — which is what makes this a security-adjacent availability
+property rather than a performance tuning matter. Per-principal quotas would change that and are out
+of scope; the honest statement is that this table has one shared pool. Data locality: `local`, one process's table. Partition behaviour: `AP` — a refusal
 at capacity is a degraded answer, never an incorrect one.
 
 **C6.** One threat dominates and the others are genuinely empty here.
