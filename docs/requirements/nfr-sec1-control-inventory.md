@@ -86,11 +86,11 @@ hit them and should not have to guess whether they were missed.
 | 4 | Per-client rate limit | `client_preflight` — `src/gateway/auth.rs:956` | remaining budget in the client's window | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 5 | Client circuit breaker | `client_preflight` — `src/gateway/auth.rs:963` | a closed circuit for that client | NONE — see *Not closed* below |
 | 6 | Agent identity allowlist | `validate_agent_identity` — `src/security/agent_identity.rs:141`, called at `handlers.rs:504` | an `X-Agent-ID` that is present and known | **`tests/nfr_sec1_controls.rs`** — NEW |
-| 7 | Request body ceiling (10 MiB) | `handlers.rs:513` | a body within the ceiling | NONE — see *Not closed* |
-| 8 | JSON well-formedness | `handlers.rs:526` | parseable JSON | NONE — see *Not closed* below |
+| 7 | Request body ceiling (10 MiB) | `handlers.rs:513` | a body within the ceiling | **`tests/nfr_sec1_controls.rs`** — NEW |
+| 8 | JSON well-formedness | `handlers.rs:526` | parseable JSON | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 9 | Meta-MCP surface enabled | `handlers.rs:541` | the surface being enabled | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 10 | JSON-RPC envelope shape | `parse_request` — `handlers.rs:648` | `jsonrpc`, `method`, `id` | `src/gateway/router/tests.rs:746`, `:761`, `:768` — on `parse_request` directly, not through the modern route |
-| 11 | Input sanitization | `sanitize_json_value` — `handlers.rs:610` | input free of the injected shapes it strips | NONE — see *Not closed* |
+| 11 | Input sanitization | `sanitize_json_value` — `handlers.rs:610` | a string free of null bytes | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 12 | Admin gate on management meta-tools | `require_admin_tool_access` — `src/gateway/router/authorization.rs:84`, called at `handlers.rs:985` | an authenticated client with `admin: true` | `src/gateway/router/tests.rs:3207` (`ac_order_2_a_modern_caller_is_refused_gateway_set_profile`) — through the modern route |
 | 13 | Tool-scope / tenancy / SSRF authorization | `authorize_tool_target` — `src/gateway/router/authorization.rs:98`, called at `handlers.rs:993` | an API key whose `allowed_tools` covers the target | **`tests/nfr_sec1_controls.rs`** — NEW (existing `tests.rs:1287`, `:1436`, `:1570` call the gate directly, not through the modern route). Its agent-scope branch (`authorization.rs:165`) is asserted at `tests.rs:1508`, also directly |
 | 14 | Destructive-action confirmation | `require_destructive_confirmation` — `handlers.rs:1112` | someone to ask | `tests/mik_7215_acs.rs:630` |
@@ -105,10 +105,7 @@ Not tested here, not edited here, recorded so the set is not silently short.
 | # | control | why no test |
 |---|---|---|
 | 2 | agent JWT validity | The middleware refuses a request carrying no bearer token, an unknown agent, or a JWT that fails validation. Driving any of those needs an agent registry and a signed token — a fixture this file does not own. `tests.rs:1508` was cited here in an earlier draft and does not reach this gate: it exercises `authorize_tool_target`'s agent-scope branch, which is row 13's symbol, and never crosses `mod.rs:255`. Row stands as a gap. |
-| 5 | client circuit breaker | Refuses on a *trip count*, not an absent input. Driving it through the modern route means failing N calls first, which needs a backend that fails on demand — a fixture this file does not own. Row stands as a gap. |
-| 7 | 10 MiB body ceiling | Refusal is `axum::body::to_bytes` returning `Err`; asserting it means shipping an 11 MiB fixture into the test binary. Cost outweighs the claim. |
-| 8 | JSON well-formedness | Was recorded as "covered by 10". It is not: row 8 is `-32700` from `serde_json::from_slice` at `handlers.rs:526`, row 10 is `parse_request`'s envelope check ~120 lines later, and a body that fails row 8 never reaches row 10. The `-32700` assertions that exist (`tests.rs:911`, `:922`, `:981`) call `build_http_error_response`, the constructor, not the gate; `tests/stdio_tests.rs:254` asserts the stdio loop, not `/mcp`. Row stands as a gap. |
-| 11 | input sanitization | Off by default (`sanitize_input: false`) and the refusal depends on what `sanitize_json_value` chooses to reject — a moving target this criterion does not pin. |
+| 5 | client circuit breaker | Refuses on a *trip count*, not an absent input. **This is a scope argument, not a cost one**: the criterion says "refusal when its input is absent", and a circuit breaker has no absent input to remove. Under the derivation rule that reads as N/A-with-reason rather than a gap — but reclassifying a row is the operator's call, not this document's, so it is flagged here and left counted as a gap. |
 
 ## Controls that are NOT in the set (new in 4.0.0)
 
@@ -128,16 +125,34 @@ one, is the substance of the defect — not merely that the list was short.
 
 ## Verdict
 
-Set closed and derivable: 14 controls plus one blocked (firewall). **Nine**
-carry a refusal test (rows 1, 3, 4, 6, 9, 10, 12, 13, 14); **five** are
-recorded gaps with their reasons (rows 2, 5, 7, 8, 11); one — the firewall —
-is blocked on a file this session must not touch.
+Set closed and derivable: 14 controls plus one blocked (firewall). **Twelve**
+carry a refusal test (rows 1, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14); **two**
+are open (rows 2 and 5, and row 5 only because reclassifying it is the
+operator's call — see the table above); one — the firewall — is blocked on a
+file this session must not touch.
+
+`NFR.SEC.1` remains unmet until row 2 carries a test and row 5 is either
+tested or reclassified. Neither is a code gap in the control: both are
+fixture and scope questions, and both are named rather than estimated away.
 
 An earlier draft of this table said twelve. It reached that number by citing,
 for rows 2 and 8, a test that asserts a *nearby* claim rather than the row's
 own. That is the same defect the ledger filed against the original four
 citations, committed inside the document written to close it, which is why
 both rows are now gaps and why each carries its disproof in the table above.
+
+The defect recurred a third time, in this document, and is recorded rather
+than quietly repaired. Row 11's excuse read "off by default
+(`sanitize_input: false`)". `SecurityConfig::default()` sets that field
+**true** (`src/config/features/security.rs:472`) and the gateway reads it into
+`AppState` at `src/gateway/server/mod.rs:1187`, so an operator config that
+omits the field runs with sanitization ON — the control was live on the
+default path the whole time the row was excused for being off. Its second
+clause was sound and is what the test answers: the refusal is pinned to a
+null byte, which `sanitize_string` refuses by contract rather than by
+heuristic. Three miscitations in the document written to close this
+criterion is the argument for the derivation rule at the top, not against
+it: the rule is what made each one findable.
 
 ## Gate order is part of the claim
 
