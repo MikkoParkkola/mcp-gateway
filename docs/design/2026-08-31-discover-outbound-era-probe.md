@@ -254,8 +254,7 @@ left to get wrong, because there is exactly one method whose contract is *this i
 it arrives as `Ok(JsonRpcResponse)` with `error: Some(..)` (`src/protocol/messages.rs:45-55`, and
 the same fact is relied on at `src/transport/http/mod.rs:174-176`; `src/backend/metadata.rs:117-118`
 is the existing caller that gets this right). So the mapping into `ProbeOutcome` is:
-`Ok` with `result: Some(v)` → `Result(v)`; `Ok` with `error: Some(e)` → `Error(e.code)`.
-. Written down because the obvious implementation — matching on the
+`Ok` with `result: Some(v)` → `Result(v)`; `Ok` with `error: Some(e)` → `Error(e.code)`. Written down because the obvious implementation — matching on the
 `Result` — makes the `-32022` arm of `classify` unreachable and every 2026 peer read as `NoAnswer`,
 which fails silently in the Legacy direction and would pass every test in the plan below that did
 not name it.
@@ -465,8 +464,9 @@ not ordering, and it needs no new protocol because the entry already holds the d
 probe result is written only if the transport it was issued against is still the transport in the pool
 entry** — the same `Arc` the probe borrowed, compared by pointer identity. A probe against a replaced
 transport discards its outcome and logs it as such; it never retries, because the new process will be
-probed on its own start path. `force_restart` therefore does not wait for anything, and no in-flight
-resolution has to be tracked. Test row 13 drives exactly this interleaving.
+probed on its own start path. `force_restart` therefore does not wait for anything, and no
+shared in-flight resolution has to be coordinated between callers. Test row 13 drives exactly
+this interleaving.
 
 **What re-probing costs, over time.** One limit, per backend: at most one re-probe per 30s, reusing
 the ceiling the retry path already uses (`max_gap`, `src/gateway/server/warmstart.rs:46-49`) rather
@@ -526,7 +526,7 @@ and the version that is true. Two things are *accepted*, and an accepted limit i
 question in disguise: a modern-only peer is unreachable until HEADER.9 offers a version it takes
 (constraint 1 — owner named, nothing here depends on it), and N-waiter serialisation on a stalled
 peer, which revision 4 tried to repair and revision 5 accepts with a bound after the repair was found
-unbuildable under this lock discipline (A3 below). Both have an owner and a trigger; neither blocks
+defective as written, twice (A3 below). Both have an owner and a trigger; neither blocks
 anything in this increment.
 
 Revision 4 opened one deferral and it was **closed the same day** by the team-lead. It is recorded
@@ -729,7 +729,7 @@ source before any repair; one died on inspection and cost no round.
 | G3 | invalidation cannot correct a false Modern, and nothing re-resolves from the request path | both, and found here as F9 | **eliminated** — one owner (`classify`) decides contradiction in both directions, fed only by era-conditional answers, with a resolver reachable from a connected backend. Found in this session at `src/protocol/era.rs:91-93`; the reviewers supplied the half this session had missed — that `resolve_with` has no caller outside `start_entry` (`src/backend/lifecycle.rs:202-207`). Bounded in time and pinned to Legacy after a second contradiction, so the fix cannot open a probe loop |
 | G4 | the F8 bound is too strong: a legacy peer may own a same-named extension without violating JSON-RPC | both | **repaired** — "nonconforming" narrowed to "unlikely, not forbidden", and the bound now states its dependency on G3's correction path. A patch rather than an elimination because the classifier is sound; what was wrong was the strength of a claim about it |
 | G5 | the test plan cannot fail: `start_entry` accepts no injected transport, one row is vacuous, one asserts a value the cache never stores | both | **eliminated** — the table is withdrawn, not amended, and rebuilt on the config-level fixture seam the repo already uses (`src/backend/pool_tests.rs:1564`, `src/transport/http/tests.rs:708`). Every row now names its assertion and why it fails on HEAD; the two rows vacuous on HEAD are marked as regression rows rather than counted as evidence |
-| G6 | `NoAnswer` resolutions do not collapse; waiters serialise for 10s each | gpt | **accepted and ranked (A3)** — confirmed at `src/protocol/era.rs:143-170,:164-167`. Not repaired: the repairs are to cache a non-answer, which pins a healthy peer to Legacy for being briefly slow, or to split in-flight sharing from durable caching, which is a change to `era.rs` that this increment does not touch. **Superseded in revision 4 (H7)**, then **restored in revision 5 (F2)**: the in-flight sharing proved unbuildable under this lock discipline, and G6's original acceptance is what stands |
+| G6 | `NoAnswer` resolutions do not collapse; waiters serialise for 10s each | gpt | **accepted and ranked (A3)** — confirmed at `src/protocol/era.rs:143-170,:164-167`. Not repaired: the repairs are to cache a non-answer, which pins a healthy peer to Legacy for being briefly slow, or to split in-flight sharing from durable caching, which is a change to `era.rs` that this increment does not touch. **Superseded in revision 4 (H7)**, then **restored in revision 5 (F2)**: the in-flight sharing was not expressible in the shape revision 4 wrote it, and G6's original acceptance is what stands |
 | G7 | the 120s attempt figure is a floor, not a ceiling, and the retry-gap clause is unrelated | gpt, and grok on the gap clause | **repaired** — confirmed at `src/gateway/server/warmstart.rs:219-221`. The arithmetic is restated against the smallest ceiling the system can produce, and the `initial_gap` comparison is withdrawn |
 | G8 | two citations do not resolve: `src/backend/cache.rs`, and `src/backend/mod.rs:200-207` | grok | **repaired** — verified: that file does not exist and those lines are `CleanupState`. Replaced with `src/backend/mod.rs:34,:54` and `src/backend/lifecycle.rs:134` |
 | G9 | the `JsonRpcResponse` → `ProbeOutcome` adapter is unspecified, and the obvious implementation disables the error-code arm | grok | **repaired** — specified in §3a, with test row 3 written to fail on exactly that mistake. Confirmed at `src/protocol/messages.rs:45-55` and `src/transport/http/mod.rs:174-176` |
@@ -808,24 +808,28 @@ argued about.
 
 ## Revision 5 — findings and dispositions
 
-Sources: `gpt-review` (six findings, three improvements) and `claude-review` (four findings, one
-improvement), both against revision 4 on disk. Both verdicts SHIP-WITH-FIXES, both naming the
-adapter's treatment of a dead transport.
+Sources: `gpt-review` (six findings, three improvements) and `grok-review` (four findings, one
+improvement), run on identical material. Both verdicts are `SHIP-WITH-FIXES`, read from the ledger
+rows (`gpt-20260901T143023Z-25724.md`, `grok-20260901T143023Z-25722.md`) and both exit statuses,
+not scraped from the transcripts. `gpt-review` read revision 4 as frozen; `grok-review`'s log records
+that the file changed under it and that it re-read the then-current text in full, which is why F12
+critiques a sentence revision 4 did not contain. Both name the adapter's treatment of a dead
+transport.
 
 | # | finding | from | disposition |
 |---|---|---|---|
 | F1 | the adapter maps a transport that died during the probe to `NoAnswer` and a successful Legacy start, and separately, mapping every `Err` to fatal would fail the start on a peer-authored HTTP 404 — the commonest legacy answer | both | **repaired, and the reason it is a patch: the mechanism is sound and the defect is one missing distinction.** `Err` splits by authorship — an error the peer wrote is an answer, silence is an answer, a connection that is gone is fatal. The table in §3a enumerates the four cases, and rows 4b and 4c are the two sides |
 | F2 | shared in-flight resolution has no invalidation-versus-commit ordering, so a probe against the old peer can repopulate the cache after `force_restart` invalidated it | gpt | **eliminated.** Revision 4 added the sharing to repair A3; a waiter can only observe the cache after the leader releases the lock, and the leader stores nothing on `NoAnswer`, so the mechanism could not do its job under this lock discipline in the first place. Deleting it also deletes the ordering question, and A3 returns to an accepted cost with a stated bound and a falsifier. The generation-tagged state machine the finding proposed is a concurrency protocol invented in a review round, to protect a mechanism that should not exist |
-| F3 | the transport-identity rule cites test row 13, which is not in the plan | claude | **repaired** — the row is added. A rule whose only proof is a citation to a row that does not exist is a rule nothing can fail |
+| F3 | the transport-identity rule cites test row 13, which is not in the plan | grok | **repaired** — the row is added. A rule whose only proof is a citation to a row that does not exist is a rule nothing can fail |
 | F4 | probe-mode omission of the two reserved headers can be undone by the configured header map, merged unconditionally afterwards | gpt | **repaired** — the rule was already stated as a post-condition on the map that reaches the sender (`src/transport/http/mod.rs:607-615`); what was missing was the case that pins it. Row 6 now runs again against a backend whose config sets both names in mixed case |
-| F5 | rows 4 and 5 assert `start_entry` Ok plus era `Legacy`, which is the effective-era default this design adds, so both go green without a probe ever being issued | claude, gpt (improvement) | **repaired** — both rows assert the fixture recorded exactly one `server/discover` frame. This is the second time a row in this plan asserted a value the system produces for free; the general form is that an assertion equal to the default is not an assertion |
-| F6 | the re-probe rule classifies outcomes with a second mapping that contradicts `classify()`: a 2026 error code reads Legacy, an envelope reads Modern | claude | **eliminated** — the paraphrase is deleted and the re-probe path calls `classify()` unchanged. Revision 4 believed it had closed "two classifiers" by feeding `classify` only `ProbeOutcome`; it then wrote a second classifier longhand in another section. A dual-era peer answering `-32022` would have been pinned Legacy with no way back |
+| F5 | rows 4 and 5 assert `start_entry` Ok plus era `Legacy`, which is the effective-era default this design adds, so both go green without a probe ever being issued | grok, gpt (improvement) | **repaired** — both rows assert the fixture recorded exactly one `server/discover` frame. This is the second time a row in this plan asserted a value the system produces for free; the general form is that an assertion equal to the default is not an assertion |
+| F6 | the re-probe rule classifies outcomes with a second mapping that contradicts `classify()`: a 2026 error code reads Legacy, an envelope reads Modern | grok | **eliminated** — the paraphrase is deleted and the re-probe path calls `classify()` unchanged. Revision 4 believed it had closed "two classifiers" by feeding `classify` only `ProbeOutcome`; it then wrote a second classifier longhand in another section. A dual-era peer answering `-32022` would have been pinned Legacy with no way back |
 | F7 | the design does not decide whether a request-triggered re-probe is awaited or detached | gpt | **repaired by deciding it** — detached, tracked, cancelled at shutdown, owning a clone of the transport `Arc`; the triggering caller gets its original response and the *next* request sees the corrected era. A decision the design did not make is one an implementer makes four times, differently |
 | F8 | the rate-limit row checks suppression inside one window but never that probing becomes eligible again after it | gpt | **repaired** — row 11 gains a second half on a controllable clock. A limit that suppresses correctly and never re-opens passes the first half unaided |
 | F9 | the H7 single-flight repair has no test | gpt | **died at source** — F2 removes the mechanism, so there is nothing to test. Recorded rather than dropped, because the finding was correct against the document it read |
 | F10 | remove the stale statements that `NoAnswer` waiter serialisation is still an accepted assumption | gpt (improvement) | **inverted by F2, and applied in that direction** — with the repair withdrawn, serialisation *is* the accepted assumption again, so the statements are made consistent by restoring A3 rather than by deleting them. §P0, the open-questions paragraph, the lead's answer, the A3 row and the H7 row all now say the same thing |
 | F11 | enforce the 10s deadline in a non-overridable wrapper rather than in the trait default | gpt (improvement) | **accepted** — the transport that overrides `probe` is exactly the one that needs the bound, and it was the one inheriting nothing. HTTP would have waited the configured client timeout instead (`src/config/mod.rs:1386`) |
-| F12 | the revision-5 claim that shared in-flight resolution is unbuildable is too strong: `CachedMetadata` already drops the lock and waits on a watch channel | claude (improvement) | **accepted, and the claim is narrowed** — it is unbuildable *as revision 4 wrote it*, holding the mutex across the await. A watch-channel spelling exists in this repo. That does not restore the mechanism: F2's disposal rests on the cost being acceptable and bounded, not on the repair being impossible, and a buildable repair to an unnecessary mechanism is still unnecessary |
+| F12 | the revision-5 claim that shared in-flight resolution is unbuildable is too strong: `CachedMetadata` already drops the lock and waits on a watch channel | grok (improvement) | **accepted, and the claim is narrowed** — it is unbuildable *as revision 4 wrote it*, holding the mutex across the await. A watch-channel spelling exists in this repo. That does not restore the mechanism: F2's disposal rests on the cost being acceptable and bounded, not on the repair being impossible, and a buildable repair to an unnecessary mechanism is still unnecessary |
 
 Revision 5, counted: two eliminated, six repaired, one died at source, three improvements accepted —
 twelve rows. Both eliminations are in revision 4's own repairs, which is the argument for reading a
