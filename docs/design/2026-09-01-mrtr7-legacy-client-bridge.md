@@ -388,7 +388,9 @@ otherwise have no way to tell which one won.
 ## Refusals, before any of the above runs
 
 Two, both explicit failures rather than silent completion: the client declared no capability for
-the variant being asked (§6), or the call has no client session to reach at all. In each case the
+what is being asked (§6), or the call has no client session to reach at all. "What is being asked"
+is deliberately wider than "which variant": a mode *within* a variant is covered by the same
+refusal, which is what the URL-mode check in §1 relies on. In each case the
 call fails with its reason and the backend's interim result is dropped rather than answered
 emptily. Transport is *not* a refusal reason (§2).
 
@@ -420,6 +422,27 @@ proceeding on an assumed answer, which is the same fail-explicitly arm `MRTR.6` 
 
 The **I** row is the one with a real residual. It is the price of the feature: a mechanism whose
 purpose is to relay a backend's question to a person cannot also guarantee the question is benign.
+
+## Two decisions this document made that the reviewed design did not
+
+Both were settled while repairing the review findings, neither was in the design the reviewers
+approved, and both change what an acceptance criterion asserts — so they are named here rather than
+left to be found in a diff. Naming them grants nothing: it exposes them to §P0 and to the next
+review, which is the whole point.
+
+**The batch bound counts every `inputRequest` entry, including `Roots`.** §5 argues the case; this
+records that it *was* a case. The alternative — exempting the one variant that asks no human
+anything — is the more natural reading of a bound whose stated purpose is limiting how often a
+person is interrupted, and it is rejected because it hands a backend one unbounded channel. The
+counted unit is therefore the entry, not the interruption, and §5's table is the contract.
+
+**The existing capability refusal absorbs the sub-capability case rather than gaining a new
+member.** `elicitation.url` is a mode within a variant, not a variant, so a closed set enumerated
+by variant would have had no row for it on day one. Two ways out: add a member, or widen the
+existing one. Widening wins because a set that grows a member per sub-capability is not closed in
+any useful sense — the next mode reopens it. The cost is that the refusal reason no longer tells a
+caller *which* granularity failed; the refusal's message carries that, and the reason stays a
+closed enumeration.
 
 ## Unknowns
 
