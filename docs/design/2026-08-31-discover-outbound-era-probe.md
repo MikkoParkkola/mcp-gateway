@@ -34,9 +34,10 @@ Revision 4 moved neither FOR nor OUT, but it did move the **implementation surfa
 (shared in-flight resolution, revision-4 finding H7) meant this increment would modify the resolution
 path in `src/protocol/era.rs`, which revision 3 said it would not touch. Revision 5 **withdraws that
 move**: the shared in-flight resolution is deleted (F2 below). Revision 6 makes the **third** move,
-in the growing direction again but far smaller: `era.rs` gains `cached()` and `commit_if()` beside
-the effective-era accessor, and `resolve_with` — which probes under the lock — is used by neither
-path. The reason is argued where the decision is made, under F2 below. All three moves are recorded
+in the growing direction again but far smaller: `era.rs` gains `commit_if()` (`cached()` is already
+there at `:130` and merely gains its first production caller), and `Backend` gains `cached_era()` —
+the public read the classification half of DISCOVER.4 has to assert through. `resolve_with`, which
+probes under the lock, is used by neither path. The reason is argued where the decision is made, under F2 below. All three moves are recorded
 rather than rounded away — a surface move is visible or it is not a decision, and that holds in the
 direction that shrinks it too.
 
@@ -446,8 +447,9 @@ neither holds the lock across an await:
 
 | method | does |
 |---|---|
-| `cached(&self) -> Option<Era>` | reads the entry, drops the lock, returns |
-| `commit_if(&self, era: Era, still_current: impl FnOnce() -> bool)` | takes the lock, evaluates `still_current` **while holding it**, stores `Some(era)` only if it returned `true` |
+| `cached(&self) -> Option<Era>` | reads the entry, drops the lock, returns. **Already exists** (`src/protocol/era.rs:130`); this increment gives it its first production caller |
+| `commit_if(&self, era: Era, still_current: impl FnOnce() -> bool)` | takes the lock, evaluates `still_current` **while holding it**, stores `Some(era)` only if it returned `true`. New |
+| `Backend::cached_era(&self) -> Option<Era>` | delegates to the above. New, and it is what makes the classification observable — see below |
 
 `still_current` is **synchronous by signature** — `FnOnce() -> bool`, no `Future`, nothing to
 `.await`. That is the whole correctness of the method and it is a type-level guarantee rather than a
@@ -455,6 +457,35 @@ convention: an async predicate would re-introduce the await-under-lock this move
 and evaluating a sync predicate *outside* the lock and then storing would leave a window in which
 `force_restart` invalidates between the check and the write. Predicate and store are one critical
 section. **No path added by this increment holds the era lock across an await.**
+
+**Can a test read the classification, without a debug helper and without touching a private
+field?** Not today, and not from the two methods above either: `EraCache` has no production
+constructor anywhere in the tree (`rg -n EraCache src/` returns only `era.rs` itself), and once this
+increment gives it one, it is a private field on `Backend` beside the other caches. `cached()` being
+`pub` on `EraCache` buys a test nothing if no test can name the `EraCache`.
+
+So the surface carries a third method, and it is public: **`Backend::cached_era(&self) ->
+Option<Era>`**. The reachability chain is entirely public already —
+`BackendRegistry::get(name) -> Option<Arc<Backend>>` (`src/backend/registry.rs:252`, exported at
+`src/backend/mod.rs:29`), `mcp_gateway::backend` (`src/lib.rs:34`), `mcp_gateway::protocol::era::Era`
+(`src/lib.rs:64`, `src/protocol/mod.rs:8`) — so an integration test holding a registry can read the
+era of a named backend through it and nothing else.
+
+**It returns `Option<Era>`, and the `Option` is the point.** An accessor returning a bare `Era`,
+defaulting to `Legacy` for a peer never probed, would be unable to fail the very test it exists for:
+`Legacy` is both the honest classification of a peer that answered `-32601` and the value a backend
+carries when nothing ever asked it. That is the defect this document already repaired twice, in rows
+4/5 and again in row 9, and building it into the accessor would reintroduce it everywhere at once.
+`None` means *no belief*; `Some(Legacy)` means *the peer was asked and it answered like a 2025 peer*.
+The request path applies the `Legacy` default itself, at the point of use, where it is a treatment
+rather than a record.
+
+Two rows in the plan below turn on that distinction and are stated in these terms: row 4 (peer
+answers `-32601`) asserts `Some(Era::Legacy)`, and row 5 (peer hangs, `NoAnswer` at the deadline)
+asserts **`None`** — because `NoAnswer` is deliberately not cached (`src/protocol/era.rs:164-167`),
+so a briefly-unreachable peer is not pinned to Legacy for the life of the process. Those two rows
+read identically under a bare-`Era` accessor and differ under this one. That is the shape-
+classification half of DISCOVER.4, which the plan could not express before this method existed.
 
 **What the closure captures, and which lock keeps it from being a tautology.** `EraCache` does not
 own the pool entry, so the predicate has to reach it from outside, and there are two ways to write
@@ -751,10 +782,10 @@ evidence of this increment.
 | 1 | stdio fixture answers `server/discover` → `Backend`'s era is `Modern` | DISCOVER.4 positive path, stdio | `Backend` has no era field; the read does not compile |
 | 2 | HTTP mock answers `server/discover` → era is `Modern` | DISCOVER.4 positive path, HTTP — the arm with the header and re-entry hazards | same |
 | 3 | fixture answers the probe `-32022` → era is `Modern` | the error-code arm, reached through the real caller, and the §3a adapter: a JSON-RPC error arrives as `Ok(_)` and must not be read as `NoAnswer` | no caller maps `JsonRpcResponse` to `ProbeOutcome`; with the naive mapping this row fails as `Legacy` |
-| 4 | fixture answers `initialize`, then answers the probe `-32601` → **the fixture recorded exactly one `server/discover` frame**, era `Legacy`, `start_entry` returns Ok | a probe the peer *answers negatively* does not fail a start. The frame assertion is load-bearing: `Legacy` is also the effective-era default for a backend that was never probed, so an era assertion alone certifies the accessor rather than the probe | nothing probes, so the frame assertion fails on HEAD — which is the assertion that distinguishes this row from the default |
+| 4 | fixture answers `initialize`, then answers the probe `-32601` → **the fixture recorded exactly one `server/discover` frame**, **`cached_era()` reads `Some(Era::Legacy)`** — classified, not defaulted — and `start_entry` returns Ok | a probe the peer *answers negatively* does not fail a start. The frame assertion is load-bearing: `Legacy` is also the effective-era default for a backend that was never probed, so an era assertion alone certifies the accessor rather than the probe | nothing probes, so the frame assertion fails on HEAD — which is the assertion that distinguishes this row from the default |
 | 4b | fixture closes the pipe *before* answering the probe → `start_entry` **fails**, and no backend is published | a dead transport is a failed start, not a Legacy backend. Revision 3 collapsed this into row 4 and would have published a corpse as Legacy | HEAD fails the start for its own reasons, so this row cannot fail honestly on HEAD — a **regression row**, labelled like 8 and 10, not evidence of this increment |
 | 4c | HTTP mock returns **404 with a peer-authored body** for `server/discover` → `start_entry` returns Ok and era reads `Legacy` | the other half of the adapter split (F1): a peer-authored HTTP error is an *answer*. This is the row that fails if an implementer reaches for `send_request`, which flattens 404 to `Error::Transport("HTTP 404")` (`src/transport/http/mod.rs:909-913`) — the same shape a dead socket produces — instead of reading `response.status()` directly. Without it the natural override fails the start on the commonest legacy answer the default SSE transport gives | nothing probes; once a probe exists, the naive `?` on `probe()` fails the start, and this row catches it |
-| 5 | fixture completes the `initialize` handshake, then hangs on `server/discover` → **the fixture recorded exactly one `server/discover` frame**, the probe returns `NoAnswer` at its deadline, `start_entry` returns Ok, era reads `Legacy` | the 10s bound terminates. Revision 3's fixture "accepts the connection and never answers" never reached the probe at all — it dies at `initialize`, so the row certified nothing. The assertion is **termination**, not latency: a broken bound fails by exhausting the harness timeout, deterministically. **Note the assertion is on `Era`, not on the cache**: `NoAnswer` is not stored, so asserting a cached value here is the trap revision 2 fell into, and `Legacy` alone is the un-probed default, which is why the frame count carries the row | no probe, no timeout, nothing to bound |
+| 5 | fixture completes the `initialize` handshake, then hangs on `server/discover` → **the fixture recorded exactly one `server/discover` frame**, the probe returns `NoAnswer` at its deadline, `start_entry` returns Ok, and **`cached_era()` reads `None`** — nothing was learned, so nothing is remembered (`src/protocol/era.rs:164-167`); the request path treats `None` as Legacy without recording it | the 10s bound terminates. Revision 3's fixture "accepts the connection and never answers" never reached the probe at all — it dies at `initialize`, so the row certified nothing. The assertion is **termination**, not latency: a broken bound fails by exhausting the harness timeout, deterministically. **Note the assertion is on `Era`, not on the cache**: `NoAnswer` is not stored, so asserting a cached value here is the trap revision 2 fell into, and `Legacy` alone is the un-probed default, which is why the frame count carries the row | no probe, no timeout, nothing to bound |
 | 6 | HTTP probe frame captured at the mock → carries neither `MCP-Protocol-Version` nor `MCP-Session-Id`, asserted on **both** the start-path probe and a re-probe frame, **and again with a backend whose `headers` config pins both names in mixed case** | §3a: the probe must not carry the handshake's negotiated version | HEAD inserts both unconditionally (`src/transport/http/mod.rs:570,:605`), so this fails on HEAD *and* fails against a probe naively sent via `Transport::request`, *and* against a probe-mode branch that omits the two names before the configured map is merged over the top (`:607-615`) — the post-condition is on the map that reaches the sender, so the configured variant is the case that pins it |
 | 7 | two backends, one Modern fixture and one Legacy fixture, started together → each reads its own era | DISCOVER.5's per-backend caching | no era to read |
 | 8 | one backend, probe answered once, then N tool calls → the fixture records exactly one `server/discover` | the era is cached, not re-derived per request | vacuous on HEAD (zero probes); it becomes meaningful only once row 1 passes, and is listed as a *regression* row, not evidence of the increment |
@@ -837,7 +868,7 @@ source before any repair; one died on inspection and cost no round.
 | G3 | invalidation cannot correct a false Modern, and nothing re-resolves from the request path | both, and found here as F9 | **eliminated** — one owner (`classify`) decides contradiction in both directions, fed only by era-conditional answers, with a resolver reachable from a connected backend. Found in this session at `src/protocol/era.rs:91-93`; the reviewers supplied the half this session had missed — that `resolve_with` has no caller outside `start_entry` (`src/backend/lifecycle.rs:202-207`). Bounded in time and pinned to Legacy after a second contradiction, so the fix cannot open a probe loop |
 | G4 | the F8 bound is too strong: a legacy peer may own a same-named extension without violating JSON-RPC | both | **repaired** — "nonconforming" narrowed to "unlikely, not forbidden", and the bound now states its dependency on G3's correction path. A patch rather than an elimination because the classifier is sound; what was wrong was the strength of a claim about it |
 | G5 | the test plan cannot fail: `start_entry` accepts no injected transport, one row is vacuous, one asserts a value the cache never stores | both | **eliminated** — the table is withdrawn, not amended, and rebuilt on the config-level fixture seam the repo already uses (`src/backend/pool_tests.rs:1564`, `src/transport/http/tests.rs:708`). Every row now names its assertion and why it fails on HEAD; the two rows vacuous on HEAD are marked as regression rows rather than counted as evidence |
-| G6 | `NoAnswer` resolutions do not collapse; waiters serialise for 10s each | gpt | **accepted and ranked (A3)** — confirmed at `src/protocol/era.rs:143-170,:164-167`. Not repaired: the repairs are to cache a non-answer, which pins a healthy peer to Legacy for being briefly slow, or to split in-flight sharing from durable caching, which was then a change to `era.rs` that this increment did not touch. **Superseded in revision 4 (H7)**, **restored in revision 5 (F2)**, and the closing clause **overtaken in revision 6**: revision 6 does touch `era.rs`, adding `cached()` and `commit_if()` (recorded as the third implementation-surface move). What still stands is G6's original acceptance — the cost is accepted, not repaired — and the reason is now simpler than the one written here: with no shared in-flight resolution there is nothing to collapse |
+| G6 | `NoAnswer` resolutions do not collapse; waiters serialise for 10s each | gpt | **accepted and ranked (A3)** — confirmed at `src/protocol/era.rs:143-170,:164-167`. Not repaired: the repairs are to cache a non-answer, which pins a healthy peer to Legacy for being briefly slow, or to split in-flight sharing from durable caching, which was then a change to `era.rs` that this increment did not touch. **Superseded in revision 4 (H7)**, **restored in revision 5 (F2)**, and the closing clause **overtaken in revision 6**: revision 6 does touch `era.rs`, adding `commit_if()` and giving the existing `cached()` its first production caller (recorded as the third implementation-surface move). What still stands is G6's original acceptance — the cost is accepted, not repaired — and the reason is now simpler than the one written here: with no shared in-flight resolution there is nothing to collapse |
 | G7 | the 120s attempt figure is a floor, not a ceiling, and the retry-gap clause is unrelated | gpt, and grok on the gap clause | **repaired** — confirmed at `src/gateway/server/warmstart.rs:219-221`. The arithmetic is restated against the smallest ceiling the system can produce, and the `initial_gap` comparison is withdrawn |
 | G8 | two citations do not resolve: `src/backend/cache.rs`, and `src/backend/mod.rs:200-207` | grok | **repaired** — verified: that file does not exist and those lines are `CleanupState`. Replaced with `src/backend/mod.rs:34,:54` and `src/backend/lifecycle.rs:134` |
 | G9 | the `JsonRpcResponse` → `ProbeOutcome` adapter is unspecified, and the obvious implementation disables the error-code arm | grok | **repaired** — specified in §3a, with test row 3 written to fail on exactly that mistake. Confirmed at `src/protocol/messages.rs:45-55` and `src/transport/http/mod.rs:174-176` |
