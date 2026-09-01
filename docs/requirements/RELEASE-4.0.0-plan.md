@@ -56,8 +56,8 @@ read against a requirement that says M is not weak evidence, it is the wrong kin
 and that was invisible while the method lived only in the requirements document.
 
 Assessing the eleven unassessed rows was therefore item zero of this plan, and it is done. It
-paid for itself immediately: the sweep found that `docs/ARCHITECTURE.md:65` advertises a
-protocol revision the gateway does not serve, and it found that the Meta-MCP surface's own
+paid for itself immediately: the sweep found that `docs/ARCHITECTURE.md:65` advertised a
+protocol revision the gateway does not serve — now corrected — and it found that the Meta-MCP surface's own
 published 17-tool scenario (`benchmarks/public_claims.json:4-6`) exceeds the 14-16 ceiling
 NFR.PERF.4 states — a criterion violated by the shipped configuration, not merely untested.
 
