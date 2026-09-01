@@ -82,7 +82,7 @@ owner, and unowned work does not fail loudly. It simply never starts.
 
 | cluster | rows | owner |
 |---|---|---|
-| A continuation envelope | 15 | a concurrent session; increments recorded in `RELEASE-4.0.0-gap-plan.md` |
+| A continuation envelope | 15 | `envelope-a`, design first. **Was assigned to a concurrent session on commit archaeology and that was wrong** — `src/protocol/continuation.rs` has not moved in 16 hours and the last substantive cluster-A commit is `149e553a`, 24 hours old. The largest cluster was unowned while this table said otherwise. |
 | B era detection | 3 | `era-r4-repair` owns `src/protocol/era.rs`; `era-probe` owns `tests/mik_7217_era_probe_acs.rs`, held |
 | C MIK-7272 revision surface | 6 | `surface-c`, design first |
 | D response-cache keying | 2 | `cache-34` |
