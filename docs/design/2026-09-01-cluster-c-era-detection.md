@@ -13,7 +13,8 @@ met by the live outbound path rather than by an unused module.
 - DISCOVER.1/2, the inbound `server/discover` surface — shipped and assessed.
 - The stdio dispatcher's always-legacy answer (`gateway/server/mod.rs:1687-1693`) —
   inbound, unaffected.
-- `doctor` and operator-facing era reporting — see U5.
+- NFR.OBS.3 operator-facing era reporting (`criteria-status.md:269`) — its own ledger
+  row, closing on its own evidence. Folding it in widens the scope §P0 froze.
 - Retiring the error-text parsing in `negotiate_and_retry` / `negotiate_protocol_version`
   — a Legacy classification still lands there; deleting it is a separate change.
 
@@ -74,10 +75,9 @@ ownership: no map, no key type, no lifetime rule. The probe is written **once**,
 reachable, so request, warm start and `force_restart` are one call site.
 
 Ordering: HTTP calls `initialize()` inside `start_entry`, stdio inside `start()`.
-**This design probes after `initialize` on both and does not split `start()`** — the era
-comes from the probe's answer shape either way, so DISCOVER.4 holds. Ordering only
-becomes load-bearing if U1 says the gateway must *speak* 2026-07-28 on its first send,
-and splitting `start()` is then work inside U1's answer.
+**The probe runs after `initialize` on both and `start()` is not split** — the era comes
+from the probe's answer shape either way, so DISCOVER.4 holds, and U1 says the gateway
+never speaks 2026-07-28 first.
 
 Invalidation hangs off the existing version-mismatch branch inside each transport and
 must reach the `Backend` — the one piece of coupling this option pays for.
@@ -89,13 +89,21 @@ Revisit if U2 comes back badly.
 **(e) Infer era from the `initialize` response.** *Rejected* — current behaviour, and what
 DISCOVER.4 names wrong.
 
-**(f) Detection only: probe, cache, record, keep sending `initialize` regardless.**
-Depends on U1: if the answer is detection-only, (f) rides on (c) and is the change.
+**(f) Detection only.** U1 answers detection-only, so (f) rides on (c) and **is** this
+change: probe, classify, cache, record — `initialize` still carries every send.
 
 ## Open questions
 
 ### Resolved
 
+- **U1 — does 4.0.0 ship the gateway *speaking* 2026-07-28 outbound, or only detecting
+  the era?** Read `protocol/mod.rs:26,38,43` and the stdio init path
+  (`stdio.rs:275,307,373`). `PROTOCOL_VERSION = "2025-11-25"`; `SUPPORTED_VERSIONS` names
+  no 2026 revision, and `:38` records that omission as deliberate — "`2026-07-28` is
+  deliberately ABSENT until the modern request path exists"; callers pass that constant or
+  a negotiated downgrade. **Detect only.** Changed: (f) rides on (c) and is the whole
+  change — no modern outbound request path is written, and the stdio ordering question
+  dissolves with it.
 - **U3 — does any configured backend advertise a 2026 revision today?** Surveyed configured
   and example backends: `gateway.example.yaml:54,66,78` set `protocol_version: null`;
   `examples/gateway-full.yaml:241` shows `2025-03-26`; `2026-07-28` appears in `src/` only.
@@ -111,6 +119,4 @@ Depends on U1: if the answer is detection-only, (f) rides on (c) and is the chan
 
 | # | Question | Owner | What resolves it | When | If it resolves badly |
 |---|---|---|---|---|---|
-| U1 | Does 4.0.0 ship the gateway *speaking* 2026-07-28 outbound, or only detecting the era while `initialize` still carries every send? | operator | ask | before the design review closes | Detection-only ⇒ (f) is the whole change; the modern outbound request path is never written. |
 | U2 | Is one extra round-trip before `initialize` acceptable at connect? | operator decides; measurement mine | measure connect fan-out latency × backend count | before implementation | Unacceptable ⇒ fall back to (d), lazy, keeping (c)'s ownership. |
-| U5 | Is NFR.OBS.3 (`criteria-status.md:269` — which era, by what evidence, when re-probed) in this change? | operator | ask | with U1 | In scope ⇒ the probe must record evidence and probe time, not just an `Era`. |
