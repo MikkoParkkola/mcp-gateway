@@ -129,3 +129,16 @@ Removing an enumerated tool is visible to any client that named it. Question 3 e
 that is the operator's call, not the design's. If the answer is that it must stay enumerated,
 option A fails and the row returns to the operator with only option C — widening — remaining,
 which they have already rejected once with reasons that would then need revisiting.
+
+## DEFERRED — the breaking-change classification (question 3)
+
+| field | value |
+|---|---|
+| owner | the operator; this release's own decision list |
+| what would resolve it | question 3 above, put to them: does removing an enumerated meta-tool ride the `exposed_meta_tools` breaking-change ruling of 2026-09-02, or need its own? |
+| when | before the push at `meta_mcp_tool_defs.rs:565` is deleted |
+| what if it resolves badly | if it needs its own ruling and the ruling is *no*, option A is unavailable and the row returns to the operator with only option C — widening the ceiling — which they have already rejected with reasons that would then need revisiting |
+
+The mechanism itself is settled and unaffected: the ceiling assertion against the live
+model-facing count is worth adding whatever the classification turns out to be, since it is
+what makes the criterion checkable rather than recorded.

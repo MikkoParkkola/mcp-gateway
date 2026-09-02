@@ -182,3 +182,22 @@ elicitation, and today's stdio behaviour by omission) or is it **refused**? GPT 
 refusal. Refusal is safer and is a behaviour change for anyone driving `gateway_kill_server`
 over stdio today. It is a question about what a user is owed, so it is the operator's,
 asked before implementation rather than after.
+
+## DEFERRED — the stdio confirmation behaviour (§P1)
+
+Put to the operator on 2026-09-02 with three options — refuse the call, proceed with a
+warning, or build a stdio elicitation transport. **No answer was given.** It is recorded
+deferred rather than decided, because what a user is owed when a destructive call cannot be
+confirmed is not a question this design may answer for itself.
+
+| field | value |
+|---|---|
+| owner | the operator; no ticket, this release's own decision list |
+| what would resolve it | the question above, re-put; it is a choice between three stated behaviours, not a check that can be run |
+| when | before any code implements `CONFIRM.1a` on stdio — the branch cannot be written without it |
+| what if it resolves badly | if the answer is *proceed with a warning*, `CONFIRM.1a` closes with stdio still unable to refuse anything, and that must be recorded as accepted residual risk on the criterion rather than presented as parity. If the answer is *build the transport*, the row leaves this cluster and becomes its own change with its own design |
+
+**What this blocks, and what it does not.** It blocks `MIK-7246.CONFIRM.1a` alone.
+`NFR.OBS.1` and `NFR.OBS.2` do not depend on it: both are records, neither asks anything of
+a client, and the corrected convergence points for them stand on their own. Those two
+proceed; the confirmation branch waits.
