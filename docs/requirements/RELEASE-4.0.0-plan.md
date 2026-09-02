@@ -171,9 +171,9 @@ The letter is retired rather than reused. A reused letter makes two different pl
 ### H. Confirmation gate reachability — MIK-7246.CONFIRM.2
 
 The destructive-action confirmation gate must be reachable through the MRTR path so a modern
-client can actually confirm. CONFIRM.1b closed 2026-08-31 and CONFIRM.1a is still open on
-the stdio path; this is the other half of the pair and it cannot be built before cluster A
-lands.
+client can actually confirm. CONFIRM.1b closed 2026-08-31 and CONFIRM.1a is answered in the
+working tree (see cluster I below); this is the other half of the pair and it cannot be
+built before cluster A lands.
 
 ### I. The stdio dispatch path — NFR.OBS.1, NFR.OBS.2, MIK-7246.CONFIRM.1a, 3 criteria
 
@@ -181,15 +181,22 @@ One wiring question answers all three rows. The gateway serves MCP over two tran
 all three controls started in the HTTP router only: both migration-telemetry records in
 `handlers.rs`, and `require_destructive_confirmation`, whose module
 `src/gateway/destructive_confirmation.rs` had exactly one consumer. **CONFIRM.1a is answered
-in the tree and awaiting a green suite and a review**: the gate moved out of `handlers.rs`
-into `dispatch_single` (`src/gateway/server/mod.rs:1656`), which `run_stdio` (`:1495`) routes
-every request through, so stdio now refuses an unconfirmable destructive call with `-32001`
-before `MetaMcp::handle_tools_call` is reached. The two telemetry rows are unchanged: over
-stdio both migration records are still absent.
+in the working tree and awaiting a commit, a green suite and a review**: the gate moved out
+of `handlers.rs` into `dispatch_single` (`src/gateway/server/mod.rs:1656`), which `run_stdio`
+(`:1495`) routes every request through. The mechanism is not a check that runs ahead of
+`MetaMcp::handle_tools_call` — it is the confirmation channel the dispatcher hands that call.
+`dispatch_single` builds the `tools/call` context with
+`ConfirmationChannel::Unavailable` (`:1750`), on the stated ground that stdio speaks to one
+process over two pipes and has no elicitation channel, so no operator exists for this
+transport to ask. `handle_tools_call` routes every call through
+`destructive_confirmation_gate` (`src/gateway/meta_mcp/mod.rs:1389`, defined `:1614`), which
+sees an unavailable channel and refuses with `-32001` instead of executing (`:1656`). The two telemetry rows are unchanged: over stdio both
+migration records are still absent.
 
 CONFIRM.1a is the reason this cluster is not filed under telemetry. Two of the rows are a
-missing record; the third is a security control that one of two shipped transports does not
-apply. The HTTP half stays evidenced — this is a reachability gap, not a broken gate.
+missing record; the third is a security control that reached only one of two shipped
+transports until this change. The HTTP half was always evidenced — it was a reachability
+gap, not a broken gate.
 
 The design starts from an argument the code already makes. The stdio arm withholds admin
 capability on the ground that the client *spawned* the process and so already holds whatever

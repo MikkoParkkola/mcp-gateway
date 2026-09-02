@@ -31,10 +31,12 @@ oracle: the shape of the reply tells a caller which of the two it hit, which is 
 disclosure the refusal exists to prevent, relocated from the code into the message.
 
 What makes this a repair rather than an expansion is that the source already commits to the
-invariant. The comment above the refusal in `src/gateway/meta_mcp/mod.rs` states that the two
-answers are built the same way and are byte-identical, and records that an earlier version
-diverged in exactly this manner and was fixed for exactly this reason. The finding does not
-add a requirement; it demonstrates that one the file asserts does not hold. Restoring an
+invariant. The comment above the refusal in `src/gateway/meta_mcp/mod.rs` promises that the
+refusal "is worded exactly like the unrecognised-tool fallback below", precisely so that an
+operator hiding a tool does not get a reply confirming it exists. A `JSON-RPC error -32601: `
+prefix on one reply and not the other is different wording, so the promise as written is what
+the finding falsifies. The finding does not add a requirement; it demonstrates that one the
+file asserts does not hold. Restoring an
 invariant a module claims about itself sits inside any scope that touches the module.
 
 The rest of MIK-7364 stays out. The other disclosure route is untouched, and this note does
@@ -265,6 +267,14 @@ transport, and the criterion's own wording no longer describes the code.
 The gate has exactly **one call site** in the whole tree — `src/gateway/router/handlers.rs:1196`,
 inside the HTTP router (V: `rg 'require_destructive_confirmation|is_destructive_meta_tool'`,
 2026-09-02). Everything below follows from that single fact.
+
+> **Superseded 2026-09-03 — this section states the gap, not the current tree.** The work it
+> specifies has landed. The gate now lives in `destructive_confirmation_gate`
+> (`src/gateway/meta_mcp/mod.rs:1614`), called from `handle_tools_call` (`:1389`) on every
+> transport; `dispatch_single` supplies `ConfirmationChannel::Unavailable`
+> (`src/gateway/server/mod.rs:1750`), so stdio refuses with `-32001`. The one-call-site and
+> never-reaches-the-gate statements below are the design-time findings that justified the
+> change, and are read as history.
 
 | the criterion says | the code does | evidence |
 |---|---|---|
