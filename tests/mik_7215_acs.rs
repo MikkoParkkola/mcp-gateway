@@ -670,7 +670,7 @@ mod http {
                 "method": "tools/call",
                 "params": {
                     "name": "gateway_kill_server",
-                    "arguments": { "name": "any-backend" },
+                    "arguments": { "server": "any-backend" },
                     "_meta": {
                         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                         "io.modelcontextprotocol/clientCapabilities": {},
@@ -704,6 +704,17 @@ mod http {
         assert!(
             message.contains("none could be obtained"),
             "the refusal must be the unconfirmable branch, not a decline: {message}"
+        );
+        // The fixture's `arguments` key must be the one production reads
+        // (`server`), or the description degrades to the `<unknown>` fallback
+        // while every other assertion here still passes -- the prefix asserted
+        // above is a format-string literal that precedes the interpolation.
+        // `docs/DEPLOYMENT.md` promises the refusal names the action, so a
+        // fixture exercising the fallback path would contradict shipped
+        // documentation.
+        assert!(
+            message.contains("any-backend"),
+            "the refusal must name the server it refused, not the fallback text: {message}"
         );
         assert!(
             body.get("result").is_none(),
@@ -797,6 +808,7 @@ mod http {
             "a hidden tool must not run: {body}"
         );
     }
+
 }
 
 // ===========================================================================
