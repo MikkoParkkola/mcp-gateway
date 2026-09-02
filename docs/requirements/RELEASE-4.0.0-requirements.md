@@ -134,16 +134,26 @@ This is the release's hardest requirement and the one no other portfolio surface
 
 | ID | Requirement | Source | Verify |
 |---|---|---|---|
-| MIK-7212.MRTR.1 | The gateway MUST carry `inputResponses` and `requestState` on a `tools/call` retry. They are currently dropped: `extract_tools_call_params` returns only `(name, arguments)`. | `src/gateway/router/helpers.rs:178`, confirmed at source | T |
-| MIK-7212.MRTR.2 | The gateway MUST NOT forward a backend's `requestState` to a client verbatim. It MUST mint its own integrity-protected value carrying the backend's opaque state inside. | Spec: requestState is *"meaningful only to the server"*; the gateway is a server to its client | T, I |
-| MIK-7212.MRTR.3 | A `requestState` presented by a client MUST be treated as attacker-controlled: verified before use, and rejected on failure. | Spec: *"servers MUST treat requestState as attacker-controlled input"* | T |
-| MIK-7212.MRTR.4 | A continuation MUST be bound to the principal and to the original request, and MUST NOT be usable for a different request or a different caller. | Spec: *"They MUST NOT be used for any other request"* | T |
-| MIK-7212.MRTR.5 | A continuation MUST be single-use and MUST expire. Enforcement MUST be atomic and MUST hold across every replica that can receive the retry. Integrity protection alone does not satisfy this. | Spec: *"MUST enforce that invariant server-side"* | T |
+| MIK-7212.MRTR.1a | The gateway MUST carry `inputResponses` on a `tools/call` retry. They are currently dropped: `extract_tools_call_params` returns only `(name, arguments)`. | `src/gateway/router/helpers.rs:178`, confirmed at source | T |
+| MIK-7212.MRTR.1b | The gateway MUST carry `requestState` on a `tools/call` retry. It is currently dropped: `extract_tools_call_params` returns only `(name, arguments)`. | `src/gateway/router/helpers.rs:178`, confirmed at source | T |
+| MIK-7212.MRTR.2a | The gateway MUST NOT forward a backend's `requestState` to a client verbatim. | Spec: requestState is *"meaningful only to the server"*; the gateway is a server to its client | T, I |
+| MIK-7212.MRTR.2b | The gateway MUST mint its own integrity-protected value carrying the backend's opaque state inside. | Spec: requestState is *"meaningful only to the server"*; the gateway is a server to its client | T, I |
+| MIK-7212.MRTR.3a | A `requestState` presented by a client MUST be treated as attacker-controlled and verified before use. | Spec: *"servers MUST treat requestState as attacker-controlled input"* | T |
+| MIK-7212.MRTR.3b | A `requestState` presented by a client MUST be rejected when that verification fails. | Spec: *"servers MUST treat requestState as attacker-controlled input"* | T |
+| MIK-7212.MRTR.4a | A continuation MUST be bound to the principal, and MUST NOT be usable by a different caller. | Spec: *"They MUST NOT be used for any other request"* | T |
+| MIK-7212.MRTR.4b | A continuation MUST be bound to the original request, and MUST NOT be usable for a different request. | Spec: *"They MUST NOT be used for any other request"* | T |
+| MIK-7212.MRTR.5a | A continuation MUST be single-use. | Spec: *"MUST enforce that invariant server-side"* | T |
+| MIK-7212.MRTR.5b | A continuation MUST expire. | Spec: *"MUST enforce that invariant server-side"* | T |
+| MIK-7212.MRTR.5c | Single-use enforcement MUST be atomic. Integrity protection alone does not satisfy this. | Spec: *"MUST enforce that invariant server-side"* | T |
+| MIK-7212.MRTR.5d | Single-use enforcement MUST hold across every replica that can receive the retry. | Spec: *"MUST enforce that invariant server-side"* | T |
 | MIK-7212.MRTR.6 | Given a modern client and a **legacy** backend holding an open request, When the client retries with its inputs, Then the retry MUST reach the replica holding that exchange, or fail explicitly. It MUST NOT silently start a second exchange. | Multi-replica deployment is the default behind a load balancer | T, D |
-| MIK-7212.MRTR.7 | Given a **modern backend** returning `InputRequiredResult` and a **legacy client**, When the gateway bridges, Then it MUST issue the equivalent server-initiated request on the client's connection and retry the backend with the collected responses. | The likelier direction in practice: backends move first | T, D |
-| MIK-7212.MRTR.8 | State held for an in-flight exchange MUST be bounded in count and lifetime, and MUST be reclaimed when a client abandons a continuation — the expected case, since the spec permits a client never to retry. | Spec: *"Servers MUST NOT assume that clients will fulfill…"* | T, M |
+| MIK-7212.MRTR.7a | Given a **modern backend** returning `InputRequiredResult` and a **legacy client**, When the gateway bridges, Then it MUST issue the equivalent server-initiated request on the client's connection. | The likelier direction in practice: backends move first | T, D |
+| MIK-7212.MRTR.7b | Given a **modern backend** returning `InputRequiredResult` and a **legacy client**, When the gateway bridges, Then it MUST retry the backend with the responses collected from that client. | The likelier direction in practice: backends move first | T, D |
+| MIK-7212.MRTR.8a | State held for an in-flight exchange MUST be bounded in count. | Spec: *"Servers MUST NOT assume that clients will fulfill…"* | T, M |
+| MIK-7212.MRTR.8b | State held for an in-flight exchange MUST be bounded in lifetime, and MUST be reclaimed when a client abandons a continuation — the expected case, since the spec permits a client never to retry. | Spec: *"Servers MUST NOT assume that clients will fulfill…"* | T, M |
 | MIK-7212.MRTR.9 | The gateway MUST NOT include an `inputRequest` of a type the client has not declared support for. | Spec: *"Servers MUST NOT send an inputRequests that the client has not declared support for"* | T |
-| MIK-7212.MRTR.10 | Idempotency keys MUST include `inputResponses` and `requestState`, and an `InputRequired` result MUST NOT be cached as a completed call. | `src/idempotency.rs:10` keys on `server:tool:hash(arguments)` | T |
+| MIK-7212.MRTR.10a | Idempotency keys MUST include `inputResponses` and `requestState`. | `src/idempotency.rs:10` keys on `server:tool:hash(arguments)` | T |
+| MIK-7212.MRTR.10b | An `InputRequired` result MUST NOT be cached as a completed call. | `src/idempotency.rs:10` keys on `server:tool:hash(arguments)` | T |
 
 ### 3.7 Controls that must survive the migration
 
