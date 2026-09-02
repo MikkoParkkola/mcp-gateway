@@ -240,6 +240,13 @@ Both answers are defensible and neither is an analysis result.
 The flag is not a gap and needs no ticket. It needs a sentence in the release notes under the
 first answer, and a gating dependency under the second.
 
+**Answered by the operator 2026-09-02: flip it true.** 4.0.0 serves `2026-07-28` out of the box.
+The second column is therefore the one that binds: the flip is a release-gating dependency on
+clusters A and C, not an independent switch, and it lands last — after the continuation path is
+wired, because a default-on stateless path turns every remaining gap in it into a first-run
+defect rather than an opt-in one. Until the flip lands, `README.md:355` and the PR body stating
+`off by default` remain true and are not to be updated ahead of it.
+
 ### One row that looked like a decision and is not
 
 `NFR.SEC.1` row 5, the per-client circuit breaker, was flagged as arguably N/A on the
