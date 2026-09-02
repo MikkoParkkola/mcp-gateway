@@ -2858,9 +2858,9 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
     // NOT appear here. Both halves are checked, because either alone would pass
     // on a result that ends the exchange or on one that leaks the backend's
     // state verbatim.
-    let handle = result["requestState"]
-        .as_str()
-        .unwrap_or_else(|| panic!("an enforced transform must not end the multi-round exchange: {result:#}"));
+    let handle = result["requestState"].as_str().unwrap_or_else(|| {
+        panic!("an enforced transform must not end the multi-round exchange: {result:#}")
+    });
     assert!(
         !handle.is_empty(),
         "an enforced transform must not end the multi-round exchange: {result:#}"

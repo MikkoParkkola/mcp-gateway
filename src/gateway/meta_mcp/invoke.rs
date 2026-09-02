@@ -964,7 +964,7 @@ impl MetaMcp {
                 &arguments,
                 &projection_key_suffix,
                 caller_principal.as_deref(),
-                &caller.retry,
+                caller.retry,
             );
             if let Some(cached) = cache.get(&cache_key) {
                 debug!(server, tool, trace_id, "Cache hit");
@@ -1497,7 +1497,7 @@ impl MetaMcp {
                 &arguments,
                 &projection_key_suffix,
                 caller_principal.as_deref(),
-                &caller.retry,
+                caller.retry,
             );
             if cache.set(&cache_key, result.clone(), self.default_cache_ttl) {
                 debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
