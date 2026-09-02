@@ -31,9 +31,9 @@ to wait on. Row 16 covers it.
 | 13 | `CONFIRM.1a` | the **existing** HTTP case `ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused` (`tests/mik_7215_acs.rs:630`) still refuses after the gate is moved to serve both transports, with one assertion added: the execution sentinel is untouched | integration | invariance probe | **not free** — HTTP already refuses; the red comes from moving the gate, so the probe is to move it wrongly and watch this go red |
 | 14 | `OBS.2` | a `tools/list` whose profile **excludes** at least one tool records the **effective filter decisions** — which filters ran and what each removed — and the record is stamped **before** the response is written | integration | content + ordering | free — the live record names filter *inputs* only, so it cannot carry a decision |
 | 15 | `OBS.1` | a `tools/call` over **HTTP** carrying no revision in either `_meta` or the header records `protocol_revision` = `absent` and `revision_source` = `none` — the exact strings, not any falsy value | integration | regression | **not free** — production already emits these literals, so the row passes today; probe required, see below |
-| 19 | `CONFIRM.1a` | **differential, in both directions.** (a) Two refusal responses built through the gate's own refusal path, identical but for the marker, serialize **byte-identically**; (b) an in-process assertion on the marked one shows the marker set, so (a) is not passing because both are unmarked; (c) a response JSON carrying a key named for the marker deserializes with the flag **false**. | unit | contract | **not free** — the field does not exist yet, so the row arrives red as a compile error rather than an assertion, and a compile error is not a caught defect. What it catches once the field exists: (a) goes red if any edit puts the marker on the wire **under any key name, at any depth**, because it never names a key; (b) goes red if the refusal path stops setting the marker at all, which (a) alone would read as success; (c) goes red if `#[serde(skip)]` is weakened to `skip_serializing`, which leaves the marker settable *from* the wire — the forge this row exists to prevent |
+| 19 | `CONFIRM.1a` | **differential, in both directions.** (a) Two refusal responses built through the gate's own refusal path, identical but for the marker, serialize **byte-identically**; (b) an in-process assertion on the marked one shows the marker set, so (a) is not passing because both are unmarked; (c) a response JSON carrying a key named for the marker deserializes with the flag **false**, or the frame is rejected outright — either outcome is safe; what is forbidden is a wire key reaching the flag. | unit | contract | **not free** — the field does not exist yet, so the row arrives red as a compile error rather than an assertion, and a compile error is not a caught defect. What it catches once the field exists: (a) goes red if any edit puts the marker on the wire **under any key name, at any depth**, because it never names a key; (b) goes red if the refusal path stops setting the marker at all, which (a) alone would read as success; (c) guards the ingest direction — the forge this row exists to prevent |
 | 18 | `CONFIRM.1a` | an **authenticated admin** caller, for whom `gateway_kill_server` is nonetheless hidden by `meta_tool_exposure`, calls it over HTTP and receives `-32601` / unknown tool — **not** `-32001` / requires confirmation | integration | disclosure | **red on arrival** — today's gate answers before the exposure check, so the hidden tool confirms its own existence |
-| 17 | `CONFIRM.1a` | an **HTTP** client whose breaker already carries **one** recorded failure refuses a destructive call and still carries **exactly one** — asserted for both *HTTP* refusal branches, the explicit operator decline and the unconfirmable-channel short-circuit — **and** an ordinary backend error on the same client then takes it to two | integration | regression + negative control | **red on arrival via the unconfirmable-channel branch**, which does not exist over HTTP yet. The decline arm passes today for a reason that disappears with this change: the gate returns at `handlers.rs:1205` and `:1237`, so a refusal never reaches the accounting tail at all. Moving the gate inside `handle_tools_call` puts refusals *on* that path, which is what makes the exclusion marker necessary rather than decorative — and the row then discriminates all three implementations of it: erased reads zero, excluded reads one, counted reads two |
+| 17 | `CONFIRM.1a` | an **HTTP** client whose breaker already carries **one** recorded failure refuses a destructive call and still carries **exactly one** — asserted for both *HTTP* refusal branches, the explicit operator decline and the unconfirmable-channel short-circuit — **and** an ordinary backend error on the same client then takes it to two. Fixture pins the breaker's failure threshold above two, so the count is the oracle and no arm trips the breaker open and changes what is observable | integration | regression + negative control | **green on arrival, and the row owes a falsifier probe** (§P2 retrofitting exception). Both HTTP refusal branches return before the accounting tail — the decline at `handlers.rs:1205`, the unconfirmable short-circuit at `:1237`, which *does* already exist over HTTP — so a refusal never reaches accounting and the count trivially stays at one. That is the structure this change removes: moving the gate inside `handle_tools_call` puts refusals *on* that path, which is what makes the exclusion marker necessary rather than decorative. The probe is therefore the row's only real evidence — move the gate, omit the exclusion, and the row must go red reading two — and it discriminates all three implementations: erased reads zero, excluded reads one, counted reads two |
 | 16 | `CONFIRM.1a` | a destructive `tools/call` over **stdio** from an **admin** caller naming `gateway_kill_server`, where no confirmation can be obtained, returns code `-32001` **and** a message that opens `Destructive action requires confirmation and none could be obtained:` **and** names the fixture's server verbatim **and** leaves the execution sentinel untouched | integration | fail-closed | **red on arrival** — the gate is HTTP-only; this is the acceptance test for wiring it |
 
 Row 5 exists because both reviewers raised it independently in round 1: the design's "both
@@ -741,8 +741,9 @@ Not the message text and not the `-32001` code, both of which a backend could al
 internal marker on the response, set only by the confirmation gate.
 
 Its contract, because "an internal marker" is not one: a `bool` field on `JsonRpcResponse` carrying
-`#[serde(skip)]`, so it never reaches a client and cannot be forged by a backend that learns to
-set it. Explicitly **not** a stamp inside `error.data`: that is the adjacent pattern
+`#[serde(skip)]`, so it never reaches a client — and, separately, unreachable *from* the wire
+because the type's hand-written `Deserialize` cannot construct it, so a backend that learns of it
+still cannot set it (both mechanisms below). Explicitly **not** a stamp inside `error.data`: that is the adjacent pattern
 (`router/handlers.rs:845`), it is the one an implementer reaches for by imitation, and it puts
 the marker on the wire where a backend can set it and buy itself an accounting exclusion.
 `refusal_status` (`router/handlers.rs:1564`) already reads a refusal off the response — but it
@@ -753,6 +754,23 @@ already visible to whoever receives the response, so adding a second wire-visibl
 carrying an accounting consequence — is how a backend would come to hold the pen on its own
 breaker. The new marker is a `#[serde(skip)]` field on `JsonRpcResponse`, read by the accounting
 tail and by nothing else.
+
+Both responses in clause (a) come from the same gate-produced value: build the refusal
+through the gate's refusal path, clone it, clear the marker on the clone, and compare the two
+serializations. Nothing else may differ, so a fixture difference cannot be what the byte
+comparison sees. The four serialized fields — `jsonrpc`, `id`, `result`, `error` — are all
+deterministic for a fixed refusal, so there is no timestamp or nonce to pin.
+
+**Ingest is closed structurally, and clause (c) is a guard on that structure rather than on a
+serde attribute.** `JsonRpcResponse` does not deserialize through the derive at all: it has a
+hand-written `Deserialize` (`src/protocol/messages.rs:62-91`) over a wire-only `Shadow`, converted
+by an **exhaustive struct literal**. A marker field added to `JsonRpcResponse` cannot compile into
+that impl unless someone writes it into the literal by hand, so no key name, alias or nesting on
+the wire can reach it — the `#[serde(skip)]` attribute governs serialization only. Residual, stated
+rather than papered over: an author who deliberately adds the marker to `Shadow` under a different
+key *and* threads it through the literal defeats clause (c)'s single spelling. That is a multi-line
+edit to an impl whose doc comment says what it is for, not the accidental attribute weakening the
+row was built to catch, and the honest bound of a test at this level.
 
 **Excluded from both arms, not just the failure arm.** The tail is an `if`/`else`
 (`router/handlers.rs:1425-1430`): an error records a failure, anything else records a *success*,
