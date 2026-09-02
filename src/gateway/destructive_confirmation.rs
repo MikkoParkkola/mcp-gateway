@@ -503,4 +503,62 @@ mod tests {
             ConfirmationOutcome::Declined
         );
     }
+    // ── describe_destructive_action ──────────────────────────────────────────
+
+    #[test]
+    fn kill_server_description_names_the_target() {
+        // GIVEN: the tool's own arguments object, carrying the target
+        let arguments = json!({"server": "brave"});
+        // WHEN/THEN: the description names the server the operator agrees to lose
+        assert_eq!(
+            describe_destructive_action("gateway_kill_server", &arguments),
+            "kill server 'brave'"
+        );
+    }
+
+    #[test]
+    fn kill_server_without_a_target_falls_back_rather_than_panicking() {
+        // GIVEN: a call that names no server (the gate still has to say something)
+        let arguments = json!({});
+        // WHEN/THEN: the stand-in appears in place of a name, and nothing panics
+        assert_eq!(
+            describe_destructive_action("gateway_kill_server", &arguments),
+            "kill server '<unknown>'"
+        );
+    }
+
+    #[test]
+    fn the_enclosing_params_object_yields_the_fallback_not_the_server_name() {
+        // GIVEN: the ENCLOSING request params, not the arguments object. This is
+        // the mistake this function's doc comment warns about: it type-checks,
+        // and every action then silently describes itself as untargeted.
+        let params = json!({
+            "name": "gateway_kill_server",
+            "arguments": {"server": "brave"}
+        });
+        // WHEN: described from the wrong level
+        let described = describe_destructive_action("gateway_kill_server", &params);
+        // THEN: the fallback, never the name buried one level down. Asserting the
+        // absence as well as the equality is what makes this a check on the
+        // degradation rather than on the fallback string: a describer that
+        // reached into `arguments` would break the first assertion, and one that
+        // found the name by some other route would break the second.
+        assert_eq!(described, "kill server '<unknown>'");
+        assert!(
+            !described.contains("brave"),
+            "the wrong level must not reach the target name: {described}"
+        );
+    }
+
+    #[test]
+    fn an_unrecognised_destructive_tool_is_described_by_name() {
+        // GIVEN: a destructive tool this match has no arm for -- the annotations
+        // can govern a tool the describer never learned about
+        let arguments = json!({"server": "brave"});
+        // WHEN/THEN: the operator is still told which tool, not just "something"
+        assert_eq!(
+            describe_destructive_action("gateway_future_wipe", &arguments),
+            "execute destructive meta-tool 'gateway_future_wipe'"
+        );
+    }
 }
