@@ -608,3 +608,70 @@ place and changing it is a separate argument with separate consequences.
 |---|---|---|---|
 | Does any shipped flow kill a backend over stdio, so that refusing would break it? | `rg -rn 'gateway_kill_server'` across the tree, then read the two docs that mention it | `docs/DEPLOYMENT.md:745` lists it among admin-only meta-tools; no documented or tested stdio kill flow exists | nothing — the refusal breaks no shipped path |
 | Does the message the two transports emit have to match exactly, or only by prefix? | read the existing HTTP test's assertions and row 13 | the tests assert code plus a message prefix, so an exact match is not forced by the tests — which is precisely why the *construction* is shared rather than the assertion tightened | made the shared-function step load-bearing rather than tidiness |
+
+### Round 1 of design review: the pre-dispatch refusal is the wrong mechanism
+
+GPT raised the refusal's placement: a stdio gate sitting *before* dispatch answers a hidden
+destructive tool with `-32001` where the dispatcher would have said `Unknown tool`. **Verified at
+source, and the code anticipates exactly this attack** (`meta_mcp/mod.rs:1343`):
+
+> The refusal is worded exactly like the unrecognised-tool fallback below: an operator hiding a
+> tool must not get a reply confirming it exists and was deliberately withheld.
+
+`meta_tool_exposure.is_exposed` is an operator allow-list, deliberately checked *ahead of* the
+admin gate so that hiding a tool does not disclose it. A confirmation refusal in front of the
+dispatcher walks straight past it.
+
+**The same leak already exists on HTTP.** The gate is at `router/handlers.rs:1195-1249`; dispatch
+— and therefore the exposure check — is at `:1272`. An admin caller naming a hidden
+`gateway_kill_server` over HTTP is told today that a destructive action requires confirmation,
+which is a reply confirming the tool exists. This is not a defect the stdio work introduces; it
+is one the stdio work would have copied.
+
+#### Response: eliminate the mechanism rather than order it correctly
+
+The patch GPT suggests — check exposure first, then refuse — leaves the defect describable: two
+transports each carrying their own copy of a gate that must stay in a particular relationship to
+two other checks. The elimination is GPT's own IMPROVEMENT, and it is the right shape:
+**move the confirmation preflight inside `handle_tools_call`**, after the exposure check and
+after the admin gate, and give it its transport-specific behaviour through
+`MetaMcpCallerContext`.
+
+This is the move the codebase has already made once, for the same reason. The tool-policy check
+used to be inline on each path; it now travels as `caller.authorizer`, with `RouterAuthorizer`
+on HTTP and `ToolPolicyAuthorizer` on stdio, and the HTTP site says why in as many words: it is
+"constructed concretely rather than taken as a parameter, so the weaker stdio authorizer cannot
+reach the network path" (`router/handlers.rs:1254-1258`). Confirmation is the same problem with a
+different noun.
+
+| what it buys | how |
+|---|---|
+| stdio is gated | it calls the dispatcher, and the gate is now in the dispatcher |
+| the disclosure leak closes on both transports | the gate now sits behind the exposure check by construction, not by each caller remembering to order it |
+| no shared refusal-builder is needed | there is one call site, so there is nothing to keep in step — the sharing step from the previous revision is deleted, not implemented |
+| a third transport inherits it | it cannot reach `handle_tools_call` without supplying a caller context |
+| row 16's admin fixture stays correct | the admin gate still runs first, now in the dispatcher rather than in the router |
+
+#### What travels in the caller context
+
+Not a boolean. The two transports differ in *whether an asker can exist*, and HTTP additionally
+needs the `ProxyManager` to reach one — which the dispatcher does not hold and should not learn
+about. So confirmation travels the way authorization already does: a small trait in the caller
+context, implemented once per transport. HTTP's implementation elicits over the session and
+applies the modern/legacy policy. Stdio's answers that no asker can exist, which the shared gate
+turns into a refusal.
+
+#### The superseded design, and why it is recorded rather than deleted
+
+Option 3 above — refuse in the stdio dispatcher, share the message builder — is **withdrawn**.
+It was chosen for being the smallest change that satisfies CONFIRM.1a, and it does satisfy it;
+what it does not do is survive contact with the two checks either side of it. The problem
+statement, the structural-no-asker constraint and the rejection of options 1 and 2 all stand
+unchanged. Only the placement moves.
+
+#### Cost, stated honestly
+
+This is a larger change than the one it replaces: a new trait, two implementations, a caller-context
+field, and the HTTP gate deleted from the router rather than left in place. The alternative is two
+copies of a security check whose correctness depends on their position relative to two other
+checks, in a file where that ordering has already been got wrong once and commented about twice.
