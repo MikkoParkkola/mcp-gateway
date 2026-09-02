@@ -21,17 +21,17 @@ to wait on. Row 13 covers it.
 | 3 | `OBS.1` | a request declaring itself modern while omitting a required field emits a record **and then** returns `-32602` | integration | negative-path | free — and it pins the ordering, not just the presence |
 | 4 | `OBS.1` | the same three shapes over HTTP still emit exactly one record each | integration | regression | **not free** — see the honesty section |
 | 5 | `OBS.1` | **over stdio**, an inbound message whose handling reaches the meta-MCP layer a second time (playbook step, code-mode step) produces **exactly one** record | integration | exactly-once | free **because the transport is stdio** — `exactly one` fails at zero as well as at two |
-| 6 | `OBS.2` | a `tools/list` over stdio emits **exactly one** `tools/list` record, carrying every field the oracle table names, with `cache_scope_advertised` = `false` — stdio negotiates no modern shape, so the field records that, not a default | integration | positive + cardinality | free — stdio emits nothing today |
+| 6 | `OBS.2` | a `tools/list` over stdio emits **exactly one** `tools/list` record, carrying every field the oracle table names, with `cache_scope_advertised` = `false`, because the fixture carries no `_meta` and no version header and therefore classifies as legacy — a reason that survives stdio later gaining a shape | integration | positive + cardinality | free — stdio emits nothing today |
 | 7 | `OBS.2` | a `tools/list` over HTTP still emits exactly one, not two, after the change | integration | regression | **not free** — see the honesty section |
 | 8 | `OBS.2` | a `tools/list` over HTTP **with the Code Mode URL override active** emits the record, carrying `code_mode` true | integration | regression | **not free** today, but free against the rejected design — see below |
 | 9 | `OBS.1` | a notification (no `id`, no response — `notifications/initialized`) over stdio emits exactly one record and carries no response-shaped field | integration | boundary | free — nothing records notifications today |
 | 10 | `OBS.1` | a stdio batch of **three** requests emits **exactly three** records, one per element, each carrying that element's own `method` | integration | cardinality | free — and it fails against the one-record-per-envelope shape a transport-entry record naturally takes |
 | 11 | `OBS.1` | a stdio batch **mixing** requests and notifications emits one record per element **and** returns responses only for the requests | integration | cardinality + boundary | half free — see below |
 | 12 | `OBS.1` | a stdio message arriving **before any `initialize`** emits a record whose `protocol_revision` and `revision_source` carry the literal strings `absent` and `none` — the same vocabulary row 15 pins on the HTTP side, so the two transports are checkable against each other | integration | boundary | free — nothing records it today, and it is the row that stops the absent case drifting into a constant |
-| 13 | `CONFIRM.1a` | a destructive `tools/call` over **HTTP** naming `gateway_kill_server` with a live sentinel backend, where no confirmation can be obtained, returns code `-32001` **and** the message prefix `Destructive action requires confirmation and none could be obtained:` **and** leaves the execution sentinel untouched | integration | fail-closed | free — the gate proceeds today when there is no session, and after this release there is never a session |
+| 13 | `CONFIRM.1a` | the **existing** HTTP case `ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused` (`tests/mik_7215_acs.rs:630`) still refuses after the gate is moved to serve both transports, with one assertion added: the execution sentinel is untouched | integration | invariance probe | **not free** — HTTP already refuses; the red comes from moving the gate, so the probe is to move it wrongly and watch this go red |
 | 14 | `OBS.2` | a `tools/list` whose profile **excludes** at least one tool records the **effective filter decisions** — which filters ran and what each removed — and the record is stamped **before** the response is written | integration | content + ordering | free — the live record names filter *inputs* only, so it cannot carry a decision |
 | 15 | `OBS.1` | a `tools/call` over **HTTP** carrying no revision in either `_meta` or the header records `protocol_revision` = `absent` and `revision_source` = `none` — the exact strings, not any falsy value | integration | regression | **not free** — production already emits these literals, so the row passes today; probe required, see below |
-| 16 | `CONFIRM.1a` | a destructive `tools/call` over **stdio** naming `gateway_kill_server`, where no confirmation can be obtained, returns code `-32001` **and** the message prefix **and** leaves the execution sentinel untouched — the same assertion as row 13, over the transport that has no gate | integration | fail-closed | **red on arrival** — the gate is HTTP-only, so this fails until it is wired |
+| 16 | `CONFIRM.1a` | a destructive `tools/call` over **stdio** from an **admin** caller naming `gateway_kill_server`, where no confirmation can be obtained, returns code `-32001` **and** the message prefix `Destructive action requires confirmation and none could be obtained:` **and** leaves the execution sentinel untouched | integration | fail-closed | **red on arrival** — the gate is HTTP-only; this is the acceptance test for wiring it |
 
 Row 5 exists because both reviewers raised it independently in round 1: the design's "both
 callers" tables enumerate the *transports*, and the tool-policy precedent the design leans
@@ -122,7 +122,7 @@ no modern shape at all — stdio constructs none, see round 7 — and the reques
 | `code_mode` | `false` | both disjuncts false — config off, no URL override |
 | `query_present` | `false` | no `params`, so no `query` |
 | `cache_scope` | `private` | as the table above, independent of transport |
-| `cache_scope_advertised` | `false` | stdio constructs no `RequestShape`, so nothing modern is advertised |
+| `cache_scope_advertised` | `false` | no `_meta`, no version header: the request classifies as legacy, whatever the transport later learns to construct |
 
 Row 14 needs a profile and so cannot run over stdio; it runs over HTTP with a profile that
 excludes a known tool. That split is deliberate — the two rows check different halves of the
@@ -150,7 +150,7 @@ the failure mode this whole section exists to catch.
 
 ## Can each case actually fail? (§P2 question 2)
 
-Rows 1, 2, 3, 5, 6, 9, 10, 12, 13 and 14 fail for free: they assert a record that no code emits today, so
+Rows 1, 2, 3, 5, 6, 9, 10, 12 and 14 fail for free: they assert a record that no code emits today, so
 writing them first produces a real red. Row 5 earns that word only because it was rewritten:
 as *does not add a second record* it was a negative assertion that passes at zero records — 
 the decoration class this section exists to catch, and a reviewer caught it here. As **exactly one** it fails at zero *and* at two, so the same content now carries its own red.
@@ -179,11 +179,28 @@ string, or any other falsy value, and row 15 must go red on the exact-literal as
 stays green it is asserting truthiness rather than the vocabulary, which is the one thing it
 exists to prevent.
 
+**Row 13 is not a free red either, and it is not the test it started as.** The case it names
+already exists and already passes: `ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused`
+at `tests/mik_7215_acs.rs:630` refuses today, because a modern request carries no session, so there
+is nobody to elicit over and `Unsupported` is the outcome every time. Writing a second copy of it
+would have added a row and no coverage. What row 13 is for is the move: when the gate stops being a
+block of code inside the HTTP handler and becomes something both transports reach, the HTTP verdict
+must not change. Its probe is to move it wrongly on purpose — have the shared gate classify an HTTP
+request with a modern `_meta` declaration as legacy — and watch row 13 go red on the code and the
+message rather than on the sentinel. If it stays green the gate is no longer reading the shape it
+is supposed to read.
+
 **Row 16 fails on arrival and that is deliberate.** The confirmation gate is HTTP-only, so a
 destructive stdio call reaches the backend and the row's three assertions all fail. No probe is
 needed to show it can fail — the difficulty is the opposite one, showing it can ever pass, and
-that is not a property of the test but of work the gate does not yet do. It is the only row in
-this plan expected red at the moment it is committed.
+that is work this release now carries (see the scope receipt below). It is the only row in this
+plan expected red at the moment it is committed.
+
+Its caller must be **admin**. The admin check runs before the confirmation gate
+(`router/handlers.rs:1139-1170` consults the policy; the gate sits at `:1224-1249`), and
+`gateway_kill_server` is refused outright for everyone else. A non-admin fixture would go red
+today and green after the wiring while never once reaching the gate — a test that passes for the
+wrong reason is worse than the gap it was written to close.
 
 **Row 11 is half free.** Its record count fails today like the rest, but its second assertion —
 that notification elements produce no response envelope — passes today, because `run_stdio`
@@ -477,3 +494,26 @@ none could resolve either — because the blocker was a fact about the code, not
 disagreement about the plan. Two greps and two file reads settled what a fourth
 review round would have restated. A reviewer names the question; only the source
 answers it.
+
+
+## Scope receipt: the gate is being wired onto stdio in this release
+
+The plan's FOR was *the test plan for cluster G*, and wiring the confirmation gate was OUT.
+The operator moved it in. What forced the question was row 16: the plan could either assert
+the requirement and ship a red test, or write a characterization test that recorded the
+bypass as acceptable. The second is what a reviewer named as signing off a safety gap — a
+destructive stdio `tools/call` reaches the backend without confirmation, and a plan that
+documents that has made the gap survivable. So the surface moved: **FOR now includes routing
+the stdio `tools/call` path through the confirmation gate**, and row 16 stops being a red we
+tolerate and becomes the acceptance test for work in this release.
+
+That move opens one unknown, and it is scheduled here rather than assumed. On HTTP the
+outcome is settled by the absence of a session: a modern request cannot carry one, so
+`on_unconfirmable` refuses and there is nothing to ask. Stdio is the opposite case — the
+session exists, so *confirmation could actually be obtained*. Whether the wiring elicits over
+that session or refuses without asking is a decision the implementing change makes and names,
+in the same way the `revision_source` vocabulary above is named. Row 16 asserts the refusal
+because refusal is what the criterion requires when confirmation cannot be had; if the wiring
+elicits instead, row 16's fixture must be the case where elicitation is unavailable, and the
+elicited path gets its own row. **The row is written against the requirement, not against a
+mechanism that does not exist yet.**
