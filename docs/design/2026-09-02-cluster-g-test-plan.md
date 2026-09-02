@@ -196,6 +196,12 @@ needed to show it can fail — the difficulty is the opposite one, showing it ca
 that is work this release now carries (see the scope receipt below). It is the only row in this
 plan expected red at the moment it is committed.
 
+Its assertion includes the **server name** inside the refusal message, not merely the prefix.
+The moved `describe_destructive_action` reads its arguments from a different shape at the new
+call site (above); passing the wrong one still compiles and yields the generic fallback
+description. A prefix-only assertion passes either way. This is the cheapest thing that fails
+if the shape is wrong.
+
 Its caller must be **admin**. The admin check runs before the confirmation gate
 (`router/handlers.rs:1139-1170` consults the policy; the gate sits at `:1224-1249`), and
 `gateway_kill_server` is refused outright for everyone else. A non-admin fixture would go red
@@ -700,10 +706,50 @@ what it does not do is survive contact with the two checks either side of it. Th
 statement, the structural-no-asker constraint and the rejection of options 1 and 2 all stand
 unchanged. Only the placement moves.
 
+#### The placement changes who gets blamed for a refusal
+
+Today the HTTP gate returns early via `build_error_response` (`router/handlers.rs:1195-1249`),
+so a refusal never reaches the tail of the handler. The tail is where client reputation is
+recorded: `record_client_failure` on any `response.error`, `record_client_success` otherwise
+(`:1425-1430`). Move the gate into the dispatcher and the refusal comes back as an ordinary
+error response — so **an admin who correctly declines a destructive action is recorded as a
+failing client**, and enough declines trip their circuit breaker. Using the feature as designed
+would degrade the caller's standing.
+
+The refusal therefore carries a type the tail can recognise, and the accounting excludes it.
+Not the message text and not the `-32001` code, both of which a backend could also produce: an
+internal marker on the response, set only by the confirmation gate. Request telemetry still
+counts it — this is about *reputation*, not visibility, and a refused destructive call is
+exactly the kind of thing the metrics should show.
+
+This is worth stating as a general property of the move: siting a gate behind dispatch puts its
+output into a pipeline the early return was skipping. Failure accounting is the instance that
+bites here; it is unlikely to be the only pipeline that treats "error" as "the client did
+something wrong".
+
+#### Threat model for the change (STRIDE, short form)
+
+| threat | before | after | mitigation |
+|---|---|---|---|
+| **I**nformation disclosure — hidden tool confirmed by a distinguishable reply | HTTP's gate answers before the exposure check, so a hidden destructive tool is disclosed | the gate sits behind exposure by construction, on both transports | placement, not vigilance; row 13 probes it |
+| **E**levation of privilege — stdio client kills a backend it was never authorised to | open: stdio is unconditionally admin and ungated | refused | the change itself; row 16 is the acceptance test |
+| **D**enial of service — refusals degrade a legitimate caller | n/a (refusals returned early) | introduced by the move | typed refusal excluded from failure accounting, above |
+| **T**ampering — a backend forges a confirmation refusal to look like the gate | possible by message text | unchanged by this design | the internal marker is set by the gate only and is not derived from backend output |
+| **S**poofing, **R**epudiation | out of scope — this change adds no identity or audit surface | | |
+
+#### Reversibility
+
+One-way door: **no**. The gate is a preflight in one function; reverting is deleting it and the
+enum. The behavioural change it makes — stdio can no longer kill a backend — is what an operator
+would notice, and the rollback for that is the revert, not a flag. No feature flag is proposed:
+a flag whose "off" position restores an ungated destructive path is a documented way to reopen
+the vulnerability, and CONFIRM.1a is unconditional.
+
 #### Cost, stated honestly
 
-This is a larger change than the one it replaces: a new trait, two implementations, a caller-context
-field, and the HTTP gate deleted from the router rather than left in place. The alternative is two
+This is a larger change than the one it replaces: a two-variant enum, a caller-context field,
+an explicit channel at every `MetaMcpCallerContext` construction site, and the HTTP gate deleted
+from the router rather than left in place. The alternative is two
 copies of a security check whose correctness depends on their position relative to two other
 checks, in a file where that ordering has already been got wrong once and commented about twice.
 
@@ -733,10 +779,33 @@ written down where the implementer is looking:
 - `destructive_confirmation.rs:5-30` — the module's own contract still tells callers to proceed
   when there is no session. It is the documentation of the behaviour this change exists to
   reverse, and it ships inside this change (§P4a), not after it.
-- `meta_mcp/tests.rs:39-55` — the dispatcher tests need a confirmation channel in their caller
-  context. It is named explicitly (`allow_all_ctx`) rather than supplied by a `Default`
-  implementation. A `Default` that means *permit* is a fail-open one keystroke from production.
+- **Every** `MetaMcpCallerContext` construction site gets an explicit channel — not just the
+  dispatcher tests' helper. The router path, the authorization tests, the trace-correlation tests
+  and the invoke tests each build the struct as a literal, so the field is a compile error at all
+  of them until it is filled in. That is the desired failure: a new construction site cannot
+  silently inherit a permissive channel. For the same reason there is **no `Default`** — a
+  `Default` meaning *permit* is a fail-open one keystroke from production. Test helpers name it
+  `allow_all_ctx` so the permission is legible at the call site.
 
 #### Verdicts
 
 Recorded in the ledger, not scraped from either reviewer's prose (§PA).
+
+#### Out-of-scope findings and their disposal
+
+Round 3 found two hidden-tool disclosure routes that this change neither creates nor closes.
+Both verified at source before being accepted:
+
+| route | source | why it is out of scope |
+|---|---|---|
+| the unknown-tool fallback builds typo suggestions from a hardcoded `META_TOOLS` const, never filtered through `meta_tool_exposure` (`meta_mcp/mod.rs:1415-1425`) | verified: the const is a literal list and the suggestion path does not consult exposure | changes HTTP-visible behaviour on a path this change does not touch, and needs its own test |
+| HTTP checks admin access at `router/handlers.rs:1069-1073`, before dispatch at `:1272` where exposure is checked — so a non-admin naming a hidden admin tool is told *admin only* rather than *unknown tool* | verified: the `is_admin_meta_tool` guard returns early | same |
+
+**Disposal: filed**, as one ticket, because a human decides whether a behaviour change on the
+shipped HTTP path belongs in this release. Not repaired here — the repair is not smaller than
+the ticket, and each route needs an assertion of its own.
+
+Worth naming: these are the **second and third instances** of the class round 1 found in the
+confirmation gate. That gate's instance is closed by construction here. Two more survive on the
+same path, which says the defect is not "someone ordered two checks wrongly" but that
+*disclosure-safety is not a property anything on this path enforces*. The ticket says so.
