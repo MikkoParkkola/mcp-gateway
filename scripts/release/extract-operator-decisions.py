@@ -3,8 +3,12 @@
 
 An answer given through the question tool arrives as a tool result, never as a
 user turn. A search over user turns therefore returns nothing for it and the
-ruling reads as invented -- which is how sixteen genuine decisions were once
+ruling reads as invented -- which is how eleven genuine decisions were once
 withdrawn. This reads the tool results, which is where the answers actually are.
+
+Reads a whole project directory by default. A decision may have been given in
+any session, so a ledger built from one transcript is silently partial: the
+single-file run returned 19 rows where the directory returns 24.
 """
 
 import argparse
@@ -20,7 +24,7 @@ ANSWERED = re.compile(
 # that shares this directory, and an unfiltered ledger is unreadable.
 RELEASE = re.compile(
     r"4\.0\.0|SUPPORTED_VERSIONS|exposed_meta_tools|COMPAT\.4|PERF\.4|conformance"
-    r"|resumable|CONFIRM|449|idempotency|progress update|2020-12|MCP_GATEWAY"
+    r"|resumable|CONFIRM\.\d|449|idempotency|progress update|2020-12|MCP_GATEWAY"
     r"|gateway_set_profile|hardening",
     re.I,
 )
@@ -58,15 +62,35 @@ def decisions(transcript: pathlib.Path, topic: re.Pattern) -> list[tuple[str, st
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("transcript", type=pathlib.Path)
+    ap.add_argument(
+        "transcript",
+        type=pathlib.Path,
+        help="a transcript, or a project directory of them",
+    )
     ap.add_argument(
         "--all", action="store_true", help="do not filter to release topics"
     )
     args = ap.parse_args()
-    if not args.transcript.is_file():
+    if args.transcript.is_dir():
+        # Sorted so the ledger's numbering is stable across runs.
+        sources = sorted(args.transcript.glob("*.jsonl"))
+        if not sources:
+            print(f"no transcripts in {args.transcript}", file=sys.stderr)
+            return 2
+    elif args.transcript.is_file():
+        sources = [args.transcript]
+    else:
         print(f"no such transcript: {args.transcript}", file=sys.stderr)
         return 2
-    rows = decisions(args.transcript, re.compile(".") if args.all else RELEASE)
+    topic = re.compile(".") if args.all else RELEASE
+    rows: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for source in sources:
+        for row in decisions(source, topic):
+            if row in seen:
+                continue
+            seen.add(row)
+            rows.append(row)
     print("| # | question put to the operator | answer |")
     print("|---|---|---|")
     for index, (question, answer) in enumerate(rows, 1):

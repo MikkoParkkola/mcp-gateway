@@ -77,8 +77,9 @@ field and the rule, TASK.1 ships the first entry.
 
 - Connection-invariance §4.1 and §4.3 were **both answered by the operator on 2026-08-31**.
   §4.1: `gateway_set_profile`/`gateway_get_profile` are removed from the modern path outright —
-  a knowing break of a tool documented at `ARCHITECTURE.md:56`. §4.3: v4.0.0 meets `SUB.2` **as
-  written**; the criterion is not amended. The "deferred question that blocks" at line 359 is
+  a knowing break of a tool documented at `ARCHITECTURE.md:56`. §4.3: v4.0.0 **will build the per-request
+  channel** so that `SUB.2` is met as written; the criterion is not amended. Present tense would
+  be wrong — the clause is still an absence, and this is a commitment, not a status. The "deferred question that blocks" at line 359 is
   superseded by §4.3 and should be read as history, not as an open item.
 - Capability doc §4.2 (numeric bounds for `tracestate`/`baggage`) and §4.3 (disposal of
   `src/tracing_context/`) remain **deferred with owners recorded**.
