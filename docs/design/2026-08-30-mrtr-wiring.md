@@ -607,3 +607,52 @@ matters: a *state-only* result, which asks the user nothing but wants another tu
 is fixed as a requirement by `ac_mrtr_7_a_state_only_interim_result_needs_no_client_round_trip`. A
 first attempt at this guard refused that case too and the acceptance suite caught it, which is the
 argument for the criterion existing rather than the guard being written carefully.
+
+### DE-8 — the capability gate cannot express a mode, and that is a design decision this document made
+
+The 2026-09-02 review found that `InputRequired::undeclared` refuses a request by
+**capability name** and nothing finer. That is not an oversight in the implementation; it is
+what this design specified. `RequestShape::declared_capabilities` was defined to return the
+declaration's names precisely so a client declaring `elicitation` and not `sampling` could be
+told apart from one declaring both, and the names were treated as the whole of the declaration.
+
+The specification does not agree. It fixes `elicitation: {}` as equivalent to `{ "form": {} }`,
+requires a declaring client to support at least one of `form` or `url`, and states plainly that
+servers **MUST NOT** send elicitation requests in a mode the client does not support
+(<https://modelcontextprotocol.io/specification/2026-07-28/client/elicitation#capabilities>).
+A declaration is therefore a shape, not a name, and flattening it at the parse boundary throws
+away the half that carries the mode. A URL-mode question relayed to a form-only client passes
+this gate by construction — no code path can refuse it, because by the time the gate runs the
+mode is no longer in the data.
+
+Recorded as `MIK-7212.MRTR.9a`, blocking, rather than repaired inside the change that found it.
+The repair is not local: it moves the declaration type, the per-method capability answer and the
+comparison together, and it needs its own test plan because a mode gate can fail in ways a type
+gate cannot — a client declaring both modes, a client declaring neither and relying on the
+backwards-compatible default, a request naming a mode the specification does not define.
+MRTR.9 stays closed. Its per-type refusal is implemented and tested, and nothing in this finding
+weakens it; the two halves fail differently and no repair to one addresses the other.
+
+### DE-9 — the other two review findings, and why only one of them survives
+
+The same review raised two further points about the refusal this gate emits. They are recorded
+together because they were raised together and reached opposite ends.
+
+The first said the `requiredCapabilities` payload must be a `ClientCapabilities`-shaped object
+and the refusal must carry HTTP 400 rather than 200. **Closed at source, unrepaired.** The
+specification page the finding cites for the requirement contains neither the field name nor any
+status-code mandate; on error handling it says only that protocol errors "**SHOULD** return a
+JSON-RPC error response with an appropriate error code and message"
+(<https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr>, Error Handling).
+`requiredCapabilities` is this gateway's own convention, already used by the router for an
+undeclared capability, and an array of names is a legible shape for it. A finding whose cited
+authority does not say what it is quoted as saying is a lead that did not survive checking, not a
+repair deferred.
+
+The second said an *unrecognised* input method is refused with `-32021`, the code that means a
+capability is missing, when nothing is missing — the backend has sent a method this gateway
+cannot classify. That one holds against the same sentence: `-32021` is not an appropriate code
+for a malformed upstream response, and a client reading it will retry with a capability
+declaration that cannot help. It is not repaired here because changing a refusal's error code is
+an observable contract change and belongs with the mode gate above, which rewrites this same
+refusal path; doing it twice would mean reviewing it twice. It travels with `MRTR.9a`.
