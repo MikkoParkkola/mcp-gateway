@@ -221,7 +221,8 @@ directory. Named here so a reviewer can refuse it, rather than passing silently.
 ## Out of scope
 
 - Populating the matrix. This decides the shape; filling it is the work it gates.
-- Wiring `--check` as a blocking CI job (see U-C).
+- Wiring `--check` into CI. U-C settled what that wiring must DO — report on
+  pull requests, block at tag time — but doing it is a separate change.
 - Any change to `SUPPORTED_VERSIONS`, `MODERN_VERSIONS`, or the modern request path.
 - Any change to what `criteria-status.md` records.
 
@@ -235,16 +236,14 @@ directory. Named here so a reviewer can refuse it, rather than passing silently.
 | Is there precedent for a checked-in data file plus a drift check? | listed `scripts/` and `benchmarks/`; read `scripts/release/count-release-criteria.py` | Two precedents | Chose option (c) over hand-maintained markdown |
 | Can the axis set be read off requirement text? | token scan over all 95 criteria | 15 role / 12 transport / 4 revision | NO — this killed derivation as a mechanism, and per-row declaration fell to review for relocating the same judgement, leaving Q2's total product |
 | Must an evidence reference resolve to an EXECUTED test, or is an existing test name enough? (U-B) | asked of the operator, 2026-09-02 | EXISTENCE for 4.0.0 — a named test that exists and is WIRED (a production call site outside `tests/`, per DoD D7); the executed-run bar becomes a tracked follow-up, not a deferred intention, filed as MIK-7359 before the release rather than after it | `--check` needs no CI-artefact access, so it runs on any machine and can go blocking inside this release. The weaker bar is stated as weaker: a named test that is skipped or quarantined still reads as evidence, and closing that is the follow-up's job |
+| Does `--check` fail the build while cells are unfilled? (U-C) | asked of the operator, 2026-09-02 | REPORT ONLY on every pull request, exit 0; a separate pre-tag step refuses to cut the release while `EMPTY` is non-zero | The checker can be wired immediately, because wiring it can no longer turn an unrelated branch red. Two rejected alternatives and why: blocking every PR starts red for weeks and gets a skip flag added, killing the gate; a committed EMPTY-baseline ratchet conflicts on every branch and is itself editable, so lowering the bar looks like doing the work |
 | Does the `NFR.COMPAT.4` role clause stay unqualified? (U-A) | asked of the operator, 2026-09-02, with the 15-of-95 number | YES — the criterion text is not edited, and a requirement with no client-role surface is exempted AT THE CELL with its reason | `NO-SURFACE-IN-ROLE` stays in the vocabulary. It also corrected this document: the branch table below had treated "criterion unqualified" and "no exemption code" as one branch, and they are separable |
 
-## Open questions — deferred
+## Open questions — none deferred
 
-| id | question | owner | resolved by | when | if it resolves badly |
-|---|---|---|---|---|---|
-| U-C | Does `--check` block pre-tag on non-zero `EMPTY`? | release owner | confirmation of the proposal in Q5 | before `--check` is wired | Blocking from day one turns every PR red while the modern path is unbuilt |
-
-U-C blocks nothing in this document; it blocks WIRING the checker, which is not
-in scope here.
+Every question this design raised is answered above with a recorded result. That
+is the state §P1 requires before the design is built against, and it is worth
+saying plainly rather than leaving an empty heading to be read as an oversight.
 
 **The evidence bar is deliberately weaker than it should end up, and the gap is
 named rather than absorbed.** `--check` verifies that a cell's reference resolves
