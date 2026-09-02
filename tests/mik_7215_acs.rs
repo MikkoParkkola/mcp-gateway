@@ -724,7 +724,7 @@ mod http {
         );
     }
 
-    /// MIK-7246.CONFIRM.1a — a meta-tool an operator has hidden with
+    /// MIK-7364.DISCLOSE.1 — a meta-tool an operator has hidden with
     /// `exposed_meta_tools` must answer as if it did not exist, even for the
     /// admin who would otherwise be allowed to run it.
     ///
@@ -739,7 +739,7 @@ mod http {
     /// `router/handlers.rs:1069` and never reaches either branch, so the test
     /// would go green while proving nothing.
     #[tokio::test]
-    async fn ac_confirm_1a_a_hidden_destructive_meta_tool_is_not_disclosed() {
+    async fn mik_7364_a_hidden_destructive_meta_tool_is_not_disclosed() {
         let auth = mcp_gateway::config::AuthConfig {
             enabled: true,
             bearer_token: None,
