@@ -18,6 +18,28 @@ stdio dispatcher never reaches.
   it does not reopen it. See the residual at the end.
 - Any third transport. A2A does not dispatch `tools/call` through this path.
 
+### Scope move, 2026-09-03 — one hidden-tool disclosure route folded into FOR
+
+The OUT list held the hidden-tool disclosure routes for MIK-7364. One of them moves into
+FOR, and only one. Writing down why, because §P0 freezes the surface at first review and a
+move that is not recorded is indistinguishable from drift.
+
+A test committed for row 18 showed the refusal for a hidden meta-tool and the fallback for a
+name nobody implemented arriving with different wording — the second carries a
+`JSON-RPC error -32601: ` prefix, the first does not. The difference is a name-existence
+oracle: the shape of the reply tells a caller which of the two it hit, which is the
+disclosure the refusal exists to prevent, relocated from the code into the message.
+
+What makes this a repair rather than an expansion is that the source already commits to the
+invariant. The comment above the refusal in `src/gateway/meta_mcp/mod.rs` states that the two
+answers are built the same way and are byte-identical, and records that an earlier version
+diverged in exactly this manner and was fixed for exactly this reason. The finding does not
+add a requirement; it demonstrates that one the file asserts does not hold. Restoring an
+invariant a module claims about itself sits inside any scope that touches the module.
+
+The rest of MIK-7364 stays out. The other disclosure route is untouched, and this note does
+not become the place where that ticket gets worked.
+
 ## The problem, stated once
 
 Two call sites reach the same meta-MCP layer:
