@@ -18,9 +18,10 @@ answer per backend — so DISCOVER.4 and DISCOVER.5 stop being UNWIRED. Both tra
 - the modern outbound request path (`_meta` envelopes, modern framing). That is
   MIK-7214.HEADER.9, currently ABSENT and blocking; this design builds nothing on it and,
   as of revision 2, reserves nothing for it either.
-- adding `2026-07-28` to `SUPPORTED_VERSIONS`. `src/protocol/mod.rs:38-47` states plainly the
-  revision is absent "until the modern request path exists… It is added in the increment that
-  makes it true." This is not that increment.
+- adding `2026-07-28` to `SUPPORTED_VERSIONS`. No increment does: the 2026-07-28 lifecycle
+  scopes `initialize` to "`2025-11-25` and earlier", so the legacy handshake negotiates legacy
+  revisions only and the omission is permanent (`src/protocol/mod.rs:38-52`). HEADER.9 builds the
+  modern *request shaping* — `_meta` envelopes on the stateless path — not an entry in this list.
 - A2A backends — `src/backend/lifecycle.rs:372-383` refuses them on this path outright ("must be
   started via A2aProvider, not the legacy Backend::start() path").
 - the `src/lib.rs:23` `2024-10-07` doc residual noted under DISCOVER.7. One-line doc fix,
@@ -124,7 +125,7 @@ the same objection: probing after the handshake cannot discover a backend that r
 handshake. That is true, and it is not a defect this design introduces — it is the state of the tree.
 The gateway's outbound `initialize` offers `PROTOCOL_VERSION` (`src/transport/http/mod.rs:440-452`,
 `src/transport/stdio.rs:266-269`), which is `2025-11-25`
-(`src/protocol/mod.rs:26`), and `SUPPORTED_VERSIONS` (`:43`) contains no 2026 revision. A peer that
+(`src/protocol/mod.rs:26`), and `SUPPORTED_VERSIONS` (`:48`) contains no 2026 revision. A peer that
 speaks only `2026-07-28` is therefore unreachable *today*, before any era work, and probing before
 the handshake would not have made it reachable either — constraint 1 showed a pre-handshake probe
 does not arrive on SSE or OAuth backends at all. Reaching such a peer means offering a version it
@@ -141,11 +142,12 @@ it and concluding the gateway can already negotiate 2026 with a backend inverts 
 the connection. The outbound offer is `PROTOCOL_VERSION`/`SUPPORTED_VERSIONS`, cited above, and it
 has no 2026 revision. V.
 
-Named consequence, so HEADER.9 inherits it rather than discovering it: today the legacy handshake
-must run regardless, because `SUPPORTED_VERSIONS` has no modern revision to negotiate. When HEADER.9
-adds one, the era may need to *select* the handshake, which puts the probe back before it — on a
-connected transport, which is the part that has to be built either way. HEADER.9 re-opens this
-ordering question; it is named here as one rather than left to be rediscovered.
+Named consequence, so HEADER.9 inherits it rather than discovering it: the legacy handshake must
+run regardless, and permanently, because `SUPPORTED_VERSIONS` has no modern revision to negotiate
+and will not acquire one. The ordering question HEADER.9 re-opens is therefore not "does the era
+select the handshake" but "does a modern-shaped request need the era before the handshake has
+answered" — on a connected transport, which is the part that has to be built either way. Named
+here rather than left to be rediscovered.
 
 ### 2. With the probe after connection, both transports expose the same seam
 

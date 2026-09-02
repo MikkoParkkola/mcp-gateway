@@ -610,15 +610,17 @@ column — "nothing probes, so this row passes vacuously on `HEAD`". A discrimin
 reachable both before and after implementation replaces it: two backends in one run, one answering
 `-32602` and one `-32022`, asserted as a pair against a single fixture.
 
-### `NFR.COMPAT.1` has no owner, and it is a dependency rather than a neighbour
+### `NFR.COMPAT.1` is owned by the `server.modern_protocol` default, and it is a dependency
 
 `SUPPORTED_VERSIONS` (`src/protocol/mod.rs:48`) names four revisions and `2026-07-28` is not among
-them; `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) names it alone. `COMPAT.1` requires the modern
-revision be *served*. Two designs mention `SUPPORTED_VERSIONS` and both exclude it deliberately, so
-no increment owns the row — the omission is recorded in three places and closed in none. GPT's era
-finding reaches the same wall from the other direction: a test cannot exercise a modern-shaped
-request while no modern request path exists. Work that assumes a served modern revision is blocked
-behind this, which makes it a dependency of the era and header increments, not a parallel item.
+them, permanently: the 2026-07-28 lifecycle scopes `initialize` to "`2025-11-25` and earlier".
+`MODERN_VERSIONS` (`src/protocol/meta.rs:219`) names the modern revision alone, for the stateless
+path that serves it. `COMPAT.1` requires the modern revision be *served*, which the legacy list
+cannot do and was never going to. The row's single gate is the `server.modern_protocol` default
+(`src/config/mod.rs:1174`), today `false`. GPT's era finding reaches the same wall from the other
+direction: a test cannot exercise a modern-shaped request while no modern request path exists.
+Work that assumes a served modern revision is blocked behind the header and era increments, so
+`COMPAT.1` is a dependency of them, not a parallel item.
 
 ### One clusterF finding is not yet disposed
 
@@ -695,11 +697,13 @@ Three things can run alongside it without waiting:
   than no number.
 - **Cluster B's consuming side** is a small change once someone decides what reads the era, and it
   is independent of the continuation envelope.
-- **Cluster F is four operator decisions, not four pieces of work.** Whether the modern revision
-  joins `SUPPORTED_VERSIONS`, whether `exposed_meta_tools` enforcement ships as a breaking change,
-  whether a dual-role matrix is required, and whether the 17-tool scenario or the documented 14-16
-  ceiling is the one that moves. Each is a stated fact awaiting a call. They are the cheapest rows
-  on the board and they are blocked on nobody writing code.
+- **Cluster F is three operator decisions, not four pieces of work.** Whether
+  `exposed_meta_tools` enforcement ships as a breaking change, whether a dual-role matrix is
+  required, and whether the 17-tool scenario or the documented 14-16 ceiling is the one that moves.
+  Each is a stated fact awaiting a call. They are the cheapest rows on the board and they are
+  blocked on nobody writing code. The fourth — whether the modern revision joins
+  `SUPPORTED_VERSIONS` — is decided and closed: it does not, because the handshake it belongs to
+  does not reach the modern revision. What remains there is the `server.modern_protocol` default.
 
 Clusters C and D follow A, because both need a served modern request path to test against — the
 dependency section above already establishes that, and nothing since has changed it.

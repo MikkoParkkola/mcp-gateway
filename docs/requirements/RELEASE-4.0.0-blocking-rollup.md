@@ -67,8 +67,8 @@ Everything above is engineering except these. They are operator calls, and no am
 test-writing settles them.
 
 1. **Does 4.0.0 ship the continuation envelope wired, or ship without it?** Fifteen criteria
-   hang on the answer. `SUPPORTED_VERSIONS` does not name the 2026 revision, so an unwired
-   envelope is consistent with the protocol the gateway actually serves.
+   hang on the answer. `server.modern_protocol` defaults to `false`, so no default install
+   reaches the modern path at all and an unwired envelope is consistent with what ships.
 2. **Does 4.0.0 ship era detection wired, or detect-only?** The design already resolved that
    the gateway detects and does not speak the modern revision outbound. Wiring the detector is
    still a separate yes.
@@ -252,7 +252,7 @@ Both answers are defensible and neither is an analysis result.
 | answer | what it costs |
 |---|---|
 | leave it false | 4.0.0 ships the modern revision behind an opt-in flag. Every cluster A and C row can be met and no default install exercises them. The release notes must say so plainly, or the version number overpromises. |
-| flip it true | the default install negotiates `2026-07-28`. That is only honest once the modern path is served completely — which is exactly what clusters A and C are for, so the flip is a release-gating dependency on them, not an independent switch. |
+| flip it true | the default install serves `2026-07-28`. That is only honest once the modern path is served completely — which is exactly what clusters A and C are for, so the flip is a release-gating dependency on them, not an independent switch. |
 
 The flag is not a gap and needs no ticket. It needs a sentence in the release notes under the
 first answer, and a gating dependency under the second.

@@ -2,32 +2,15 @@
 
 Every place in the source that departs from, extends, or does not implement
 part of the Model Context Protocol specification, with the reason as the code
-states it. Two entries. Search method below.
+states it. One entry. Search method below.
 
-## 1. `2026-07-28` withheld from `SUPPORTED_VERSIONS`
+`SUPPORTED_VERSIONS` withholding `2026-07-28` was listed here and is not a
+divergence: the 2026-07-28 lifecycle scopes `initialize` to "`2025-11-25` and
+earlier", so a handshake that omits the modern revision is what the specification
+asks for. The rule and its reason live at `src/protocol/mod.rs:38-52`, asserted by
+`protocol::tests::handshake_and_modern_path_keep_separate_version_lists`.
 
-**Location:** `src/protocol/mod.rs:38`
-
-`SUPPORTED_VERSIONS` lists every protocol revision this gateway's classic
-`initialize` handshake negotiates: `2025-11-25`, `2025-06-18`, `2025-03-26`,
-`2024-11-05`. The `2026-07-28` revision is a specification-defined revision
-the gateway does not list there.
-
-**Reason (from the specification):** the 2026-07-28 lifecycle scopes
-`initialize` to "`2025-11-25` and earlier", so the handshake negotiates legacy
-revisions only, and listing `2026-07-28` there would have it negotiate a
-revision that has no handshake. The omission is permanent, not an increment
-waiting to land: `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) carries the
-revision for the stateless path that serves it.
-
-**Scope note:** this is narrower than "2026-07-28 is unsupported." The
-revision is separately advertised in `server/discover`'s `supportedVersions`
-(`src/gateway/meta_mcp/mod.rs:1075-1082`) and partially served over the
-stateless path when `server.modern_protocol` is enabled — the divergence is
-specifically that the classic `initialize` handshake will never negotiate it,
-by design, because that handshake does not exist in `2026-07-28`.
-
-## 2. Backend and capability tools excluded from destructive-tool governance
+## 1. Backend and capability tools excluded from destructive-tool governance
 
 **Location:** `src/gateway/destructive_confirmation.rs:151`
 
@@ -66,7 +49,7 @@ would use:
 - `known gap`, `not (yet )?fully (mcp )?compliant`, `partial(ly)? implement`,
   `does not (yet )?support the (full |complete )?spec`
 
-Every hit outside the two entries above cited the specification to explain
+Every hit outside the entry above cited the specification to explain
 *compliance* (what it requires and how the code meets it) or filled a gap the
 specification leaves unstated (which is not a divergence). None asserted a
 deliberate departure. Two matches on `does not implement`
