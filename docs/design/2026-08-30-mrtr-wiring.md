@@ -545,3 +545,41 @@ all of them building a `credential:{}` string in `router/handlers.rs` and
 `CertIdentity` at the point the chain is already being parsed. Both touch files
 this increment does not own, which is why they are named here rather than done
 here.
+
+### DE-6 — three properties of the shipped continuation path the design did not state
+
+DE-5 records what the *planned* fingerprint schemes can be built from. This
+records what the code that ships today already does, discovered by writing
+MRTR.9's end-to-end cases and watching them fail for reasons the design does not
+mention. None of these is a decision taken in this increment. Each is a decision
+taken earlier and never written down, which is why a test author had to
+rediscover it from an error code.
+
+**An API-key caller is not nameable, so it is offered no continuation.**
+`principal_fingerprint` (`src/protocol/mrtr.rs`) reads the OIDC identity alone.
+A caller carrying `api_key_name: Some("alice")` and no `verified_identity` exits
+on MRTR.2's unnameable-caller refusal — `-32003`, "this exchange cannot be
+continued for this caller" — before any transform or capability check runs. The
+consequence is a deployment-shaped one and belongs in the release notes rather
+than in a test comment: **a gateway whose callers authenticate by API key alone
+has no multi-round exchanges at all.** Every backend interim result is refused at
+the door. That is the intended posture per DE-5 — refuse rather than approximate
+— but DE-5 frames it as a property of two unbuilt schemes, which reads as a
+future limitation. It is a present one, and the class of deployment it removes
+the feature from is the common one.
+
+**The client never sees the backend's `requestState`.** The gateway seals the
+backend's opaque value inside its own continuation and hands the client that
+handle instead. A test asserting the client's `requestState` equals the
+backend's is asserting the leak the module exists to prevent, so the assertion
+that belongs there is the inequality. Recorded because the natural test to write
+is the wrong one, and it fails in a way that reads like a bug in the gateway.
+
+**An input request with no `method` is unclassifiable, not permissive.**
+`required_capability` (`src/protocol/meta.rs`) maps three method names to
+capabilities and returns `None` for everything else, and the caller treats
+`None` as a refusal: `-32021`, "asked for input of unrecognised type '', which
+no client can have declared". A fixture that omits `method` therefore never
+reaches the gate it was written to test. Fail-closed is right — a question no
+client could have declared cannot be answered — but the error names the input's
+type rather than its absence, which is what made it read as a fixture typo.
