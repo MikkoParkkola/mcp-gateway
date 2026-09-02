@@ -153,26 +153,6 @@ the row stays in cluster F and stays blocking. Four options exist and only the o
 one: warn in 4.0 and enforce in 4.1; enforce now and accept the break; hide enforcement behind a
 second opt-in flag, which meets the criterion rather than waiving it; or drop the field.
 
-### The five open operator decisions, in one place
-
-Put to the operator 2026-09-02 and unanswered at the time of writing. Each is deferred rather
-than assumed, with the four fields `development-process.md` §P1 requires of a deferred question.
-None may be settled by inference from the full-scope instruction: that instruction decides which
-work happens. It does not decide what an upgrading operator is owed, what a stock install serves,
-or where a stated ceiling sits.
-
-| # | decision | owner | what resolves it | when | if it goes against the recommendation |
-|---|---|---|---|---|---|
-| 1 | Does a stock 4.0.0 serve `2026-07-28` — that is, does `server.modern_protocol` default to true? This subsumes the `NFR.COMPAT.1` serve question; they are one decision asked twice. | operator | asking. Nothing in the tree decides what a default ought to serve. | before the release notes are finalised, and before any flip is written | left false, 4.0.0 ships the revision behind an opt-in and the notes say so plainly, so the version number does not overpromise |
-| 2 | Does `exposed_meta_tools` enforcement ship as a break, `NFR.COMPAT.3`? Four answers: warn in 4.0 and enforce in 4.1; enforce now; a second opt-in flag; drop the field. | operator | asking | before the release notes are finalised | the second opt-in flag meets the criterion instead of waiving it, at the cost of one more configuration surface |
-| 3 | Does the `NFR.PERF.4` meta-tool ceiling stand at 14-16 with the seventeenth held behind `webhooks_enabled`, or widen to 14-17? | operator | asking | before the benchmark numbers are published | widening raises the ceiling to match whatever shipped, reversing an earlier decision. Recorded as the argument against, not as the answer. |
-| 4 | Does the `NFR.COMPAT.4` role clause stay unqualified, with no-client-role requirements exempted at the matrix cell? | operator | asking | before the conformance matrix is filled | qualifying the criterion lets whoever fills the matrix decide what it is graded on, in the same pass |
-| 5 | Do the conformance matrix sub-questions take this document's recommendations: evidence means an existing wired test, and `--check` reports without failing pull requests? | operator | asking | before `--check` is wired into CI | each recommendation carries its rejected alternatives in `docs/design/2026-09-02-conformance-matrix.md`, and none is load-bearing on the others |
-
-Decisions 1 to 4 block their criterion rows. Decision 5 blocks wiring the checker into CI, not
-the release. Work that does not turn on these proceeds; work whose correctness turns on an open
-answer does not.
-
 ### The count is checked, not asserted
 
 `scripts/release/count-release-criteria.py --check` recounts the blocking column of every table

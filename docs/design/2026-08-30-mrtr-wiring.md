@@ -116,13 +116,9 @@ replica holding a legacy backend's open exchange or fail explicitly, and MRTR.7 
 MUST bridge a modern backend's question to a legacy client. A stated limit is only honest against a
 requirement written as SHOULD. Against three MUSTs it is an unmet requirement wearing a limit's
 clothes, and the choice was the requester's: ship single-process and amend the criteria, or build
-both. **OPEN. Owner: the operator.** This paragraph previously recorded a decision of
-2026-08-30 to build both before 4.0.0. That decision was never taken: no operator turn in any
-transcript for this project mentions it. Building both is the recommendation here, on the reasoning
-below; shipping single-process and amending the three criteria remains the alternative, and choosing
-between them belongs to the requester because it changes what a MUST promises.
+both. **Decision (operator, 2026-08-30): build both before 4.0.0.**
 
-Neither piece starts from nothing, which is why building both is not obviously the expensive one:
+Neither piece starts from nothing, which is why the answer was not obviously the expensive one:
 
 - `InFlight` (continuation.rs, `hold` and its routing) is already **replica-aware** — it records
   which replica holds each exchange and refuses at capacity. What it lacks is shared storage: the
@@ -215,8 +211,7 @@ it hands a backend a value the client controls.
    belong to the same run — and stating it as a structural property rather than a convention is
    what keeps a later config-reload refactor from resetting the ledger while the keys live on.
 
-   The continuation lifetime is **300 seconds** — this document's assumption, open and owned by the
-   operator per the open-questions entry below, not a value anyone chose. Minting derives `expires_at` from the current
+   The continuation lifetime is **300 seconds**, and minting derives `expires_at` from the current
    time rather than accepting one, which is what the API does today (continuation.rs:475). Clamping
    an over-long request would be a silent narrowing, and the paragraph above spends its whole
    argument on preferring a visible failure to a silent one; so the lifetime is not a parameter at
@@ -277,14 +272,12 @@ and the retry side waits only on the review of this document.
 
 A lifetime is a trade-off, not a fact about the code, so it was **asked, not measured**:
 
-- *How long should a paused call stay resumable?* — **not asked, and open.** This entry claimed an
-  operator answer of 300 seconds on 2026-08-30. It was never put to them. The 300 seconds in
-  decision 4 was chosen by this document on the reading that the answering party is a client program
-  or a person already at the screen, not someone who walks away, and it remains an assumption rather
-  than a settled value. It is load-bearing: at fifteen minutes the spent-token list holds roughly
-  three times as many live entries and MRTR.8's capacity row moves with it. Owner: the operator.
-  Resolved by asking, before the capacity row is published. If the answer is longer than 300
-  seconds, decision 4 and the MRTR.8 row are both restated.
+- *How long should a paused call stay resumable?* — asked of the operator, 2026-08-30 — **300
+  seconds**, on the reading that the answering party is a client program or a person already at the
+  screen, not someone who walks away. — Changed nothing: it confirmed the value already in decision
+  4, which had been chosen without asking. Had the answer been fifteen minutes, the spent-token list
+  would have had to hold roughly three times as many live entries and MRTR.8's capacity row would
+  have moved with it.
 
 ## Test plan
 

@@ -73,19 +73,13 @@ EXT.1 cannot be closed by calling `gateway_declares()` from anywhere. TASK.1's o
 records the same blocker from the other side. One struct field unblocks both; EXT.1 ships the
 field and the rule, TASK.1 ships the first entry.
 
-## Operator questions: two are open, the rest are deferred with owners
+## Operator questions: resolved, except one scheduled conflict
 
-- Connection-invariance §4.1 and §4.3 are **open, and owned by the operator**. An earlier form of
-  this document recorded both as answered on 2026-08-31. They were not: a scan of every operator
-  turn across both sessions covering that date returns no mention of either. The recorded answers
-  were the analysis's own preferences written in the operator's voice, and they are withdrawn here.
-  §4.1 asks whether `gateway_set_profile` and `gateway_get_profile` are removed from the modern
-  path outright, which knowingly breaks a tool documented at `ARCHITECTURE.md:56`; the alternative
-  is to keep them and make the surfaced set invariant some other way. §4.3 asks whether v4.0.0
-  meets `SUB.2` as written or the criterion is amended. Resolved by asking, before the cluster-B
-  cases that depend on them are written; unresolved, `S-02` through `S-06` cannot be specified,
-  which the test plan already records at `docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:18`.
-  The "deferred question that blocks" at line 359 stands as an open item, not as history.
+- Connection-invariance §4.1 and §4.3 were **both answered by the operator on 2026-08-31**.
+  §4.1: `gateway_set_profile`/`gateway_get_profile` are removed from the modern path outright —
+  a knowing break of a tool documented at `ARCHITECTURE.md:56`. §4.3: v4.0.0 meets `SUB.2` **as
+  written**; the criterion is not amended. The "deferred question that blocks" at line 359 is
+  superseded by §4.3 and should be read as history, not as an open item.
 - Capability doc §4.2 (numeric bounds for `tracestate`/`baggage`) and §4.3 (disposal of
   `src/tracing_context/`) remain **deferred with owners recorded**.
 - **`SUB.4` contradicts itself, and the table is the half that is current.** The open-questions

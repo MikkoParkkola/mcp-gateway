@@ -450,14 +450,12 @@ above, and each is disposed of explicitly rather than dropped.
 
 Collected, not answered. Each changes what gets built.
 
-**§4.1 — OPEN. Owner: the operator.** An earlier form of this section recorded it
-as resolved on 2026-08-31 by an operator answer. No such answer exists: a scan of
-every operator turn across all 193 transcripts for this project returns no mention
-of either tool. The recorded answer was this document's own preference written in
-the operator's voice, and it is withdrawn. That preference — option (b), remove
-`gateway_set_profile` and `gateway_get_profile` from the modern path, accepting a
-knowing break of a tool documented at `ARCHITECTURE.md:56` — stands as the
-recommendation and nothing more. The question as originally posed follows.
+**§4.1 — RESOLVED 2026-08-31, by the operator, asked and answered: remove them
+outright (option b).** `gateway_set_profile` and `gateway_get_profile` leave the
+modern path; the tool surface is decided by the authorization presented on each
+request, which `ORDER.2` explicitly permits. The break is accepted knowingly:
+`ARCHITECTURE.md:56` documents the tool publicly, so a client calling it will be
+refused rather than silently narrowed. The question as originally posed follows.
 
 **Are per-session routing profiles a supported product feature that must
 be preserved for existing clients, or may they be removed outright?**
@@ -481,12 +479,11 @@ change than the criterion requires, and (a) or (b) closes the criterion without
 it. Worth answering anyway because the same question is open in other clusters
 where session identity is used as a key.
 
-**§4.3 — OPEN. Owner: the operator.** Recorded as resolved on 2026-08-31 by the
-same invented answer as §4.1, and withdrawn on the same evidence. The
-recommendation is option (i), v4.0.0 meets `SUB.2` as written with the criterion
-unamended, the §II.2 transport work and the §II.5 shared identity landing with the
-MRTR increment. It is a recommendation, not a ruling. The question as originally
-posed follows.
+**§4.3 — RESOLVED 2026-08-31, by the operator, asked and answered: option (i),
+v4.0.0 meets `SUB.2` as written.** The criterion is not amended. The §II.2
+transport work and the §II.5 shared identity are in scope for this release and
+land together with the MRTR increment, as the table below anticipated. The
+question as originally posed follows.
 
 **`SUB.2`'s second clause requires emitting. Does v4.0.0 meet it, or is the
 criterion being amended?**
