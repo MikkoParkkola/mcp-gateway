@@ -737,6 +737,10 @@ documented 14-16 ceiling is the number that moves (`NFR.PERF.4`).
 
 ### Cluster F decision 3 — the criterion has a defect, and repairing it is the operator's call
 
+**RULED 2026-09-02: the role clause stays unqualified; inapplicability is recorded at the matrix cell
+under `NO-SURFACE-IN-ROLE`. Cluster F decision 3 is closed.** The reasoning that produced the
+question is kept below because it names what the ruling decided against.
+
 `NFR.COMPAT.4` was listed above as an operator call: *is a dual-role compatibility matrix required
 for 4.0.0?* Half of that question is already answered and half is sharper than it was.
 
