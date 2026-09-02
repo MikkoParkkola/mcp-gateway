@@ -2376,6 +2376,72 @@ mod tests {
     // so the revision is a serviceable proxy. Stdio reaches the same condition
     // by a different route -- there is no session and never will be -- and the
     // criterion is written about the condition, not the route.
+    // Row 19: the marker that keeps a refusal out of failure accounting is
+    // internal, and internal has to mean both directions. A stamp inside
+    // `error.data` would satisfy the accounting and leak the gateway's own
+    // bookkeeping to the caller; a plain field that serde still reads would let
+    // a caller mint the marker by sending its name.
+    #[tokio::test]
+    async fn ac_confirm_1a_the_refusal_marker_never_reaches_the_wire() {
+        let meta = test_meta_mcp();
+        let tool_policy = test_tool_policy();
+        let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
+            tool_policy: tool_policy.as_ref(),
+        };
+        // Built by the gate itself, not by hand: a hand-made response would
+        // only prove that serde skips a field, never that the refusal the
+        // gateway actually emits carries it.
+        let marked = meta
+            .handle_tools_call(
+                RequestId::Number(19),
+                "gateway_kill_server",
+                json!({ "server": "row19-sentinel" }),
+                Some("stdio-session"),
+                crate::gateway::meta_mcp::MetaMcpCallerContext {
+                    authorizer: &authorizer,
+                    api_key_name: None,
+                    agent_id: None,
+                    grant_subject: None,
+                    verified_identity: None,
+                    is_admin: true,
+                    input_capabilities: &[],
+                    retry: &crate::protocol::mrtr::NO_RETRY,
+                    confirmation:
+                        crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+                },
+            )
+            .await;
+
+        // (b) in-process, the accounting can see it.
+        assert!(
+            marked.confirmation_refusal,
+            "the gate's refusal must be marked, or failure accounting cannot              tell it from a client error"
+        );
+
+        // (a) on the wire, nothing can. Two responses differing only in the
+        // marker serialize identically.
+        let mut unmarked = marked.clone();
+        unmarked.confirmation_refusal = false;
+        assert_eq!(
+            serde_json::to_string(&marked).expect("a refusal must serialize"),
+            serde_json::to_string(&unmarked).expect("a refusal must serialize"),
+            "the marker must not be observable in the response the caller reads"
+        );
+
+        // (c) inbound, a wire key of that name cannot set it. Read back the
+        // frame the gateway just emitted, with the key added.
+        let mut frame: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&marked).expect("serialize"))
+                .expect("a refusal must be valid JSON");
+        frame["confirmation_refusal"] = json!(true);
+        let ingested: crate::protocol::JsonRpcResponse =
+            serde_json::from_value(frame).expect("a response frame must deserialize");
+        assert!(
+            !ingested.confirmation_refusal,
+            "a caller must not be able to mint the marker by naming it"
+        );
+    }
+
     #[tokio::test]
     async fn ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm() {
         // Bound rather than inlined: the kill switch is the execution sentinel,
