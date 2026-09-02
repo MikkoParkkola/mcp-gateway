@@ -27,11 +27,11 @@ to wait on. Row 13 covers it.
 | 9 | `OBS.1` | a notification (no `id`, no response — `notifications/initialized`) over stdio emits exactly one record and carries no response-shaped field | integration | boundary | free — nothing records notifications today |
 | 10 | `OBS.1` | a stdio batch of **three** requests emits **exactly three** records, one per element, each carrying that element's own `method` | integration | cardinality | free — and it fails against the one-record-per-envelope shape a transport-entry record naturally takes |
 | 11 | `OBS.1` | a stdio batch **mixing** requests and notifications emits one record per element **and** returns responses only for the requests | integration | cardinality + boundary | half free — see below |
-| 12 | `OBS.1` | a stdio message arriving **before any `initialize`** emits a record whose `protocol_revision` and `revision_source` are both **absent** — not defaulted, not a sentinel | integration | boundary | free — nothing records it today, and it is the row that stops the absent case drifting into a constant |
+| 12 | `OBS.1` | a stdio message arriving **before any `initialize`** emits a record whose `protocol_revision` and `revision_source` carry the literal strings `absent` and `none` — the same vocabulary row 15 pins on the HTTP side, so the two transports are checkable against each other | integration | boundary | free — nothing records it today, and it is the row that stops the absent case drifting into a constant |
 | 13 | `CONFIRM.1a` | a destructive `tools/call` over **HTTP** naming `gateway_kill_server` with a live sentinel backend, where no confirmation can be obtained, returns code `-32001` **and** the message prefix `Destructive action requires confirmation and none could be obtained:` **and** leaves the execution sentinel untouched | integration | fail-closed | free — the gate proceeds today when there is no session, and after this release there is never a session |
 | 14 | `OBS.2` | a `tools/list` whose profile **excludes** at least one tool records the **effective filter decisions** — which filters ran and what each removed — and the record is stamped **before** the response is written | integration | content + ordering | free — the live record names filter *inputs* only, so it cannot carry a decision |
-| 15 | `OBS.1` | a `tools/call` over **HTTP** carrying no revision in either `_meta` or the header records `protocol_revision` = `absent` and `revision_source` = `none` — the exact strings, not any falsy value | integration | boundary | free — no row pins the source on the no-revision path, so a constant would pass |
-| 16 | `CONFIRM.1a` | a destructive `tools/call` over **stdio** reaches the backend **without** passing a confirmation gate — asserted as the behaviour that exists, named for the gap ticket so the failure explains itself when the gate is wired | integration | characterization | free — it asserts today's behaviour, so it fails the moment the gate is wired |
+| 15 | `OBS.1` | a `tools/call` over **HTTP** carrying no revision in either `_meta` or the header records `protocol_revision` = `absent` and `revision_source` = `none` — the exact strings, not any falsy value | integration | regression | **not free** — production already emits these literals, so the row passes today; probe required, see below |
+| 16 | `CONFIRM.1a` | a destructive `tools/call` over **stdio** naming `gateway_kill_server`, where no confirmation can be obtained, returns code `-32001` **and** the message prefix **and** leaves the execution sentinel untouched — the same assertion as row 13, over the transport that has no gate | integration | fail-closed | **red on arrival** — the gate is HTTP-only, so this fails until it is wired |
 
 Row 5 exists because both reviewers raised it independently in round 1: the design's "both
 callers" tables enumerate the *transports*, and the tool-policy precedent the design leans
@@ -112,8 +112,8 @@ any real client* is otherwise a claim no case checks.
 
 Row 6 asserts *every field the oracle table names*, which is only checkable once the fixture
 fixes each one. The stdio case runs a gateway with **no profile header possible** (stdio
-carries none), Code Mode **off** in config and no URL override, an `initialize` that negotiated
-the modern revision, and the request `{"jsonrpc":"2.0","id":1,"method":"tools/list"}` — no
+carries none), Code Mode **off** in config and no URL override, an `initialize` that negotiates
+no modern shape at all — stdio constructs none, see round 7 — and the request `{"jsonrpc":"2.0","id":1,"method":"tools/list"}` — no
 `params`, therefore no `query`. That fixes all five:
 
 | field | literal expected in the stdio case | why |
@@ -122,7 +122,7 @@ the modern revision, and the request `{"jsonrpc":"2.0","id":1,"method":"tools/li
 | `code_mode` | `false` | both disjuncts false — config off, no URL override |
 | `query_present` | `false` | no `params`, so no `query` |
 | `cache_scope` | `private` | as the table above, independent of transport |
-| `cache_scope_advertised` | `true` | the handshake negotiated modern |
+| `cache_scope_advertised` | `false` | stdio constructs no `RequestShape`, so nothing modern is advertised |
 
 Row 14 needs a profile and so cannot run over stdio; it runs over HTTP with a profile that
 excludes a known tool. That split is deliberate — the two rows check different halves of the
@@ -132,13 +132,21 @@ For `OBS.1` the two revision fields get the same treatment:
 
 | case | `protocol_revision` | `revision_source` |
 |---|---|---|
-| stdio, after `initialize` negotiated a revision | the negotiated value, exactly | the handshake |
-| stdio, message arriving before any `initialize` | absent — **not** a sentinel, not a default | absent |
+| stdio, after `initialize` negotiated a revision | the negotiated value, exactly | **open — see below** |
+| stdio, message arriving before any `initialize` | the literal `absent` | the literal `none` |
 | HTTP, revision declared in the request | the declared value | `_meta` |
 
-The middle row is the one that must not drift into a constant. An absent field and a field
-holding a plausible-looking default are indistinguishable to an operator reading the telemetry,
-and only one of them is honest.
+The middle row is the one that must not drift into a plausible-looking default. `absent` and
+`none` are the literals `handlers.rs:678-700` already emits, and asserting the exact strings is
+what stops a test passing on any falsy value — the same pin row 15 puts on the HTTP side.
+
+The first row carries a decision this plan will not take silently. The HTTP vocabulary for
+`revision_source` is exactly `_meta`, `header`, `none` (`handlers.rs:678-700`), and a revision
+learned from a stdio `initialize` came from none of the three. Either the vocabulary gains a
+fourth value for it, or the stdio record reports `none` and the revision is carried without a
+source. **Whichever is chosen, it is a named decision in the implementing change** — writing a
+test against an invented fourth value would assert a string production cannot emit, which is
+the failure mode this whole section exists to catch.
 
 ## Can each case actually fail? (§P2 question 2)
 
@@ -162,6 +170,20 @@ written, against a deliberately wrong implementation:
 
 Both probes restore the correct implementation and re-run, so the restore is verified by a
 green run rather than by `git status`.
+
+**Row 15 belongs with rows 4, 7 and 8, not with the free ones.** Its falsifier cell claims a
+free red, and that is wrong: `handlers.rs:678-700` already emits `absent` and `none` on the
+HTTP no-revision path today, so row 15 passes before anything is written. It is a regression
+guard on existing behaviour and takes the same probe: change the derivation to emit an empty
+string, or any other falsy value, and row 15 must go red on the exact-literal assertion. If it
+stays green it is asserting truthiness rather than the vocabulary, which is the one thing it
+exists to prevent.
+
+**Row 16 fails on arrival and that is deliberate.** The confirmation gate is HTTP-only, so a
+destructive stdio call reaches the backend and the row's three assertions all fail. No probe is
+needed to show it can fail — the difficulty is the opposite one, showing it can ever pass, and
+that is not a property of the test but of work the gate does not yet do. It is the only row in
+this plan expected red at the moment it is committed.
 
 **Row 11 is half free.** Its record count fails today like the rest, but its second assertion —
 that notification elements produce no response envelope — passes today, because `run_stdio`
@@ -370,17 +392,21 @@ which is a finding about the *criterion*, not about the test.
 
 ### Row 12 asks for an absence production does not produce
 
-Row 12 requires `protocol_revision` and `revision_source` to be **absent** —
+Row 12 required `protocol_revision` and `revision_source` to be **absent** —
 "not defaulted, not a sentinel". The HTTP derivation at `handlers.rs:678-700`
 does the opposite: with nothing carrying a revision it records the literal
-strings `absent` and `none`. Those *are* sentinels.
+strings `absent` and `none`. Those *are* sentinels, so row 12 as written would
+have made stdio contradict HTTP for the same condition.
 
-Row 12 as written would make stdio contradict HTTP for the same condition. The
-row is kept and its wording is wrong, so the resolution is stated rather than
-silently patched: **stdio matches the HTTP vocabulary** — `absent` and `none` as
-strings — and row 12's assertion becomes those literals. Row 15 pins the same
-pair on the HTTP side, which is what makes the two transports checkable against
-each other instead of each against its own prose.
+**Stdio matches the HTTP vocabulary** — `absent` and `none` as strings — and row
+12 has been rewritten to assert those literals. Row 15 pins the same pair on the
+HTTP side, which is what makes the two transports checkable against each other
+instead of each against its own prose.
+
+Stating the resolution here and leaving the row alone was the first attempt, and
+it was not a resolution: a plan whose prose and whose table disagree is read
+table-first by whoever writes the test. The row is the artefact; the paragraph
+is the reason.
 
 The vocabulary, complete, from `handlers.rs:678-700`: `revision_source` is one of
 `_meta`, `header`, `none`. A test asserting anything outside that set is
@@ -423,18 +449,26 @@ So row 13 as written could not pass, and no test could have made it pass. It now
 exercises `CONFIRM.1a` over HTTP, where the mechanism it asserts actually
 exists, with the literals pinned in round 6.
 
-That is not a quiet narrowing of the criterion. The stdio half becomes row 16, a
-characterization test asserting the gap as it stands today, so the gap is
-carried in the suite instead of in a paragraph. When the gate is wired to stdio,
-row 16 goes red and names the ticket that made it go red — which is the intended
-signal, not a regression.
+The stdio half becomes row 16, and the first attempt at it was wrong in a way
+worth recording. It was written as a *characterization* test — asserting that a
+destructive stdio call reaches the backend ungated, which is what happens today.
+That test would have passed on arrival and gone red the day someone fixed the
+gap. A test that passes by asserting a safety hole is not coverage of
+`CONFIRM.1a`; it is a signed statement that the hole is intended, and writing it
+narrows the criterion to HTTP without anyone agreeing to narrow it.
+
+Row 16 now asserts the same thing row 13 does — refusal code, message prefix,
+untouched sentinel — over stdio. **It is red on arrival**, and that is its
+entire value: it fails because the mechanism does not exist, which is the free
+and real failure a test written first is supposed to produce. It specifies the
+work instead of blessing its absence.
 
 **One decision is left for the requester, and it is not one this plan can take**:
-is an unconfirmed destructive call over stdio in scope for this release, or a
-defect filed against a later one? The test plan proceeds either way — row 13
-covers the criterion, row 16 pins the gap. What the answer changes is whether
-row 16 is expected to stay green through the release or to be deliberately
-turned red inside it.
+is wiring the confirmation gate onto stdio inside this release, or is row 16 a
+deferred unknown with a named owner and a trigger? The plan states the
+requirement either way. What the answer changes is whether row 16 is expected to
+go green in this release or to be carried, explicitly red, into a named next
+one.
 
 ### Why this was worth a source read rather than another review round
 
