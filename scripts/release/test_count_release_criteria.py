@@ -307,34 +307,6 @@ def test_a_mistyped_criterion_id_is_refused_rather_than_read_as_a_real_one():
     assert counter.rows("\n".join(table)) == ([], [])
 
 
-def test_the_handshake_and_the_modern_path_keep_separate_version_lists():
-    """The release gate is the `server.modern_protocol` default, and only that.
-
-    Two documents and one reviewer read the absent `2026-07-28` in
-    `SUPPORTED_VERSIONS` as a second half of the gate. It is not: the
-    2026-07-28 lifecycle scopes `initialize` to "2025-11-25 and earlier", so
-    adding the string would have a retired handshake negotiate a revision that
-    has none. Prose said so three times and was rewritten twice; this asserts it
-    against the constants, where an edit made on the wrong reading would land.
-    """
-    root = pathlib.Path(__file__).resolve().parents[2]
-    legacy = (root / "src/protocol/mod.rs").read_text()
-    modern = (root / "src/protocol/meta.rs").read_text()
-
-    # The whole declaration, not the line the name appears on: rustfmt wraps a
-    # list once it crosses the width, and a line-scoped read of a wrapped
-    # constant sees only `&[` -- it would pass while carrying the string it
-    # exists to forbid.
-    def declaration(text, name):
-        start = text.index(f"pub const {name}")
-        return text[start : text.index("];", start) + 2]
-
-    handshake = declaration(legacy, "SUPPORTED_VERSIONS")
-    stateless = declaration(modern, "MODERN_VERSIONS")
-    assert "2026-07-28" not in handshake, handshake
-    assert "2026-07-28" in stateless, stateless
-
-
 def test_the_live_documents_agree_with_the_ledger():
     criteria, _ = counter.rows(counter.STATUS.read_text())
     assert counter.rollup_membership(criteria, counter.ROLLUP.read_text()) == []

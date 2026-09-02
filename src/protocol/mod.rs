@@ -60,3 +60,29 @@ pub fn negotiate_version(client_version: &str) -> &'static str {
     // Fallback to latest version (client should handle incompatibility)
     PROTOCOL_VERSION
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SUPPORTED_VERSIONS;
+    use crate::protocol::meta::MODERN_VERSIONS;
+
+    /// The release gate is the `server.modern_protocol` default, and only that.
+    ///
+    /// A reading that keeps recurring treats `2026-07-28` joining
+    /// `SUPPORTED_VERSIONS` as a second half of the gate. It is not: the
+    /// 2026-07-28 lifecycle scopes `initialize` to "2025-11-25 and earlier", so
+    /// adding it would have a retired handshake negotiate a revision that has
+    /// none. Prose said so three times and was rewritten twice; asserting it
+    /// against the constants puts the check where such an edit would land.
+    #[test]
+    fn handshake_and_modern_path_keep_separate_version_lists() {
+        assert!(
+            !SUPPORTED_VERSIONS.contains(&"2026-07-28"),
+            "the legacy handshake must not offer a revision that has no handshake"
+        );
+        assert!(
+            MODERN_VERSIONS.contains(&"2026-07-28"),
+            "the stateless path is what serves the modern revision"
+        );
+    }
+}
