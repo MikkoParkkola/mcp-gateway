@@ -893,6 +893,13 @@ async fn ac_mrtr_5d_a_handle_minted_by_another_process_is_refused() {
 /// This is the half no unit case can reach, and it is the whole of what MRTR.8
 /// still owes: the count bound and the lifetime bound are proved; their
 /// subject is not.
+///
+/// Red today for two independent reasons, and it cannot yet tell them apart:
+/// nothing writes the table, *and* the mint refuses this caller for want of a
+/// principal (the answer in the message is the `-32003` refusal, not an
+/// interim result). The second reason clears with DE-6; the first needs the
+/// MRTR.7 bridge to exist. Stated here so a future reader does not read a
+/// green as proof of wiring when it may only prove a principal arrived.
 #[tokio::test]
 async fn ac_mrtr_8_an_exchange_the_gateway_opened_occupies_a_slot() {
     let state = app_state();
