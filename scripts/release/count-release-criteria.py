@@ -19,6 +19,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 STATUS = ROOT / "docs/requirements/RELEASE-4.0.0-criteria-status.md"
 REQUIREMENTS = ROOT / "docs/requirements/RELEASE-4.0.0-requirements.md"
 PLAN = ROOT / "docs/requirements/RELEASE-4.0.0-plan.md"
+ROLLUP = ROOT / "docs/requirements/RELEASE-4.0.0-blocking-rollup.md"
 ID = re.compile(r"^((?:MIK-\d+|NFR)\.[A-Z0-9]+\.\d+)([a-z]?)")
 # The verification-method vocabulary: test, measurement, inspection, demonstration.
 METHOD = re.compile(r"^[TMID](, ?[TMID])*$")
@@ -185,6 +186,30 @@ def method_mismatches(text, methods):
     return bad
 
 
+# A cluster row in the rollup: a single-letter id or an em dash, then the
+# cluster name, the parent-criterion key, and the count of ledger rows.
+CLUSTER = re.compile(
+    r"^\|\s*(?:[A-Z]|—)\s*\|[^|]*\|[^|]*\|\s*(\d+)\s*\|", re.MULTILINE
+)
+
+
+def rollup_shortfall(blocking, text):
+    """The rollup's clusters must account for every blocking row.
+
+    Only the total is checked, not the placement: a row in the wrong cluster is
+    a judgement a reader can correct, whereas a row in NO cluster is invisible.
+    The revision this catches grouped 37 of 52 and read as though it covered
+    all of them, so the plan derived from it understated the work by fifteen.
+    """
+    counts = [int(m.group(1)) for m in CLUSTER.finditer(text)]
+    if not counts:
+        return "no cluster table found in the rollup"
+    total = sum(counts)
+    if total != blocking:
+        return f"rollup clusters account for {total} rows, the ledger has {blocking} blocking"
+    return None
+
+
 def main():
     text = STATUS.read_text()
     headings = heading_counts(text) + heading_counts(PLAN.read_text())
@@ -220,6 +245,7 @@ def main():
         return 1
     mismatched = method_mismatches(text, methods)
     stale_sections = section_counts(text)
+    shortfall = rollup_shortfall(blocking, ROLLUP.read_text())
     uncovered = sorted(declared - ids)
 
     totals = (len(declared), len(criteria), len(criteria) - blocking, blocking)
@@ -233,6 +259,8 @@ def main():
         print(f"NFR rows whose method disagrees with the requirement: {'; '.join(mismatched)}", file=sys.stderr)
     if stale_sections:
         print(f"section headings disagreeing with their own rows: {'; '.join(stale_sections)}", file=sys.stderr)
+    if shortfall:
+        print(shortfall, file=sys.stderr)
 
     if "--check" not in sys.argv:
         return 0
@@ -243,7 +271,7 @@ def main():
     if tuple(int(g) for g in found.groups()) != totals:
         print(f"headline says {found.group(0)!r}, the tables say the line above", file=sys.stderr)
         return 1
-    return 1 if uncovered or mismatched or stale_sections else 0
+    return 1 if uncovered or mismatched or stale_sections or shortfall else 0
 
 
 if __name__ == "__main__":

@@ -86,3 +86,31 @@ def test_accepts_a_status_row_whose_method_agrees():
     methods, _ = counter.required_methods(REQ)
     row = "| NFR.PERF.1 | latency | T, M | MET | some evidence | no |"
     assert counter.method_mismatches(row, methods) == []
+
+
+ROLLUP_TABLE = "\n".join(
+    [
+        "| # | cluster | rows | count | what is actually missing |",
+        "|---|---|---|---|---|",
+        "| A | envelope | `MRTR.1-8` | 22 | nothing mints one |",
+        "| — | residue | `NFR.SEC.1` | 9 | genuinely independent |",
+    ]
+)
+
+
+def test_a_cluster_table_accounting_for_every_blocking_row_passes():
+    assert counter.rollup_shortfall(31, ROLLUP_TABLE) is None
+
+
+def test_a_cluster_table_that_groups_only_some_of_them_is_flagged():
+    # The revision this catches grouped 37 of 52 and read as though it were
+    # the whole set, so the plan derived from it understated the work by 15.
+    assert counter.rollup_shortfall(52, ROLLUP_TABLE) == (
+        "rollup clusters account for 31 rows, the ledger has 52 blocking"
+    )
+
+
+def test_a_rollup_with_no_cluster_table_is_flagged_rather_than_read_as_zero():
+    assert counter.rollup_shortfall(52, "# rollup\n\nprose only.\n") == (
+        "no cluster table found in the rollup"
+    )
