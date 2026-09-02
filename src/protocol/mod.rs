@@ -35,11 +35,16 @@ pub const PROTOCOL_VERSION: &str = "2025-11-25";
 /// and no conforming client can ask for a revision that does not exist — but
 /// `server/discover` publishes this list as the gateway's own statement of what
 /// it speaks, which turns an unused constant into a claim.
-/// `2026-07-28` is deliberately ABSENT until the modern request path exists.
-/// Listing it here would make `initialize` negotiate a revision the gateway
-/// cannot serve, and the client would be told yes and then served 2025
-/// semantics — a worse failure than refusing, because it is silent. It is added
-/// in the increment that makes it true.
+/// `2026-07-28` is deliberately ABSENT and stays that way. The 2026-07-28
+/// lifecycle scopes `initialize` to "2025-11-25 and earlier", so a modern
+/// client never sends it — the same page records a modern client against a
+/// legacy server failing because `initialize` is an unrecognised method. A
+/// dual-era server answers `initialize` only for legacy clients and serves them
+/// the negotiated legacy revision. Listing the modern revision here would have
+/// a retired handshake negotiate a revision that has none, and the client would
+/// be told yes and then served 2025 semantics — a worse failure than refusing,
+/// because it is silent. `MODERN_VERSIONS` (`protocol::meta`) carries it
+/// instead, for the stateless path that can actually serve it.
 pub const SUPPORTED_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 /// Negotiate the best protocol version between client and server
