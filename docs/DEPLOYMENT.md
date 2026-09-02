@@ -740,6 +740,19 @@ cross-site, and it is marked `Secure` when the listener speaks TLS.
 With `auth.enabled = false` every caller **over HTTP** is anonymous and holds
 **no admin**. A stdio caller is treated as admin: the client spawned the
 process, so it already holds whatever the operator holds.
+
+Admin is not the whole story for the destructive tools. `gateway_kill_server`
+carries `destructiveHint: true`, and the gateway asks the operator to confirm
+such a call before running it. That ask travels over the elicitation channel,
+which only the HTTP transport has — stdio speaks to one process over two pipes
+and can reach nobody. **A destructive tool called over stdio is therefore
+refused**, with `-32001` and a message naming the action; it is not silently
+executed and not silently dropped. Earlier revisions ran it. Reach the
+management tools over the HTTP listener with a client that answers
+`elicitation/create`, or change the backend's configuration directly. Today
+`gateway_kill_server` is the only meta-tool carrying the hint, so it is the only
+one this gate refuses; the list below is the separate admin control, which a
+stdio caller already satisfies.
 Ordinary tools work, so a local MCP client needs no configuration. These do not:
 
 - `gateway_kill_server`, `gateway_revive_server`, `gateway_reload_config`,
