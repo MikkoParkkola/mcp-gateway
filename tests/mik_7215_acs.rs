@@ -221,6 +221,18 @@ mod http {
     /// real auth config, which is why this is parameterised rather than a
     /// second copy of the state below.
     fn state_with(modern: bool, auth: mcp_gateway::config::AuthConfig) -> Arc<AppState> {
+        state_with_exposure(modern, auth, &[])
+    }
+
+    /// As [`state_with`], plus the operator's meta-tool allow-list. An empty
+    /// slice exposes every meta-tool, which is what every other caller here
+    /// wants; the exposure row needs a list that deliberately omits the tool it
+    /// then calls.
+    fn state_with_exposure(
+        modern: bool,
+        auth: mcp_gateway::config::AuthConfig,
+        exposed: &[String],
+    ) -> Arc<AppState> {
         let mut config = Config::default();
         config.server.modern_protocol = modern;
         config.auth = auth;
@@ -234,7 +246,9 @@ mod http {
         Arc::new(AppState {
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
             env: None,
-            meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
+            meta_mcp: Arc::new(
+                MetaMcp::new(Arc::clone(&backends)).with_exposed_meta_tools(exposed),
+            ),
             backends,
             meta_mcp_enabled: true,
             multiplexer,
@@ -694,6 +708,93 @@ mod http {
         assert!(
             body.get("result").is_none(),
             "a refused destructive call must not also return a result: {body}"
+        );
+    }
+
+    /// MIK-7246.CONFIRM.1a — a meta-tool an operator has hidden with
+    /// `exposed_meta_tools` must answer as if it did not exist, even for the
+    /// admin who would otherwise be allowed to run it.
+    ///
+    /// The confirmation gate and the exposure allow-list would both refuse this
+    /// call, with different wording, and only one of them may answer. `-32001`
+    /// ("requires confirmation") tells the caller the tool is real, is
+    /// destructive, and was withheld deliberately — which is the disclosure the
+    /// allow-list exists to prevent. `-32601` is the same answer a name nobody
+    /// implemented gets, and tells the caller nothing.
+    ///
+    /// Admin, deliberately: a non-admin is refused by the admin gate at
+    /// `router/handlers.rs:1069` and never reaches either branch, so the test
+    /// would go green while proving nothing.
+    #[tokio::test]
+    async fn ac_confirm_1a_a_hidden_destructive_meta_tool_is_not_disclosed() {
+        let auth = mcp_gateway::config::AuthConfig {
+            enabled: true,
+            bearer_token: None,
+            api_keys: vec![mcp_gateway::config::ApiKeyConfig {
+                key: "admin-key".to_string(),
+                name: "admin-client".to_string(),
+                rate_limit: 0,
+                backends: Vec::new(),
+                allowed_tools: None,
+                denied_tools: None,
+                admin: true,
+            }],
+            public_paths: Vec::new(),
+            client_circuit_breaker: None,
+            single_user: false,
+        };
+        // The allow-list names one unrelated meta-tool, so it is non-empty — an
+        // empty list exposes everything — and `gateway_kill_server` is absent.
+        let state = state_with_exposure(true, auth, &["gateway_invoke".to_string()]);
+        let (status, _session, body) = post_mcp_authed(
+            state,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 18,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_kill_server",
+                    "arguments": { "server": "row18-sentinel" },
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                        "io.modelcontextprotocol/clientInfo": {
+                            "name": "ExampleClient", "version": "1.0.0"
+                        }
+                    }
+                }
+            }),
+            Some("admin-key"),
+        )
+        .await;
+
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "JSON-RPC reports errors in the body: {body}"
+        );
+        let code = body.pointer("/error/code").and_then(Value::as_i64);
+        assert_ne!(
+            code,
+            Some(-32001),
+            "a hidden tool must not confirm its own existence by asking for confirmation to run it: {body}"
+        );
+        assert_eq!(
+            code,
+            Some(-32601),
+            "a hidden meta-tool answers exactly as a name nobody implemented does: {body}"
+        );
+        let message = body
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            message.contains("Unknown tool: gateway_kill_server"),
+            "the wording must match the unrecognised-name fallback verbatim, or the difference is itself the disclosure: {message}"
+        );
+        assert!(
+            body.get("result").is_none(),
+            "a hidden tool must not run: {body}"
         );
     }
 }
