@@ -51,21 +51,26 @@ not quoted a second time here — this section quoted `31 blocking` against a 77
 still saying so at 99 rows. The audit's "at least eight outside MRTR" was a floor; the answer is 21. SUB.1's GET clause and SUB.3 came off the list on
 2026-08-31 when the `GET /mcp` era gate landed, taking the count from 33 to 31.
 
-| status | count | what it means | the work |
-|---|---|---|---|
-| UNWIRED | 16 | the code exists and has zero non-test callers | find the production path, call it, test through it |
-| ABSENT | 12 | no implementing code at all | design, test plan, failing tests, implementation |
-| UNTESTED | 3 | wired, but no test crosses the production path | write the test -- and expect some to go red |
+| status | what it means | the work |
+|---|---|---|
+| UNWIRED | the code exists and has zero non-test callers | find the production path, call it, test through it |
+| ABSENT | no implementing code at all | design, test plan, failing tests, implementation |
+| UNTESTED | wired, but no test crosses the production path | write the test -- and expect some to go red |
 
-Reading that as "16 easy, 12 hard" is the trap. A symbol is unwired because nobody could see where
+The per-status counts that stood here are gone for the same reason the total is: they were
+transcribed, they went stale, and the ledger derives them on demand. The classes are the part
+worth keeping.
+
+Reading UNWIRED as the easy pile is the trap. A symbol is unwired because nobody could see where
 it belonged, so wiring it is a design question in plumbing costume. UNTESTED is the only class that
-can produce a *new* defect rather than a known one: three tests that have never run against
-production are three chances the row itself is wrong. **Take the three UNTESTED rows first** --
-SUB.4, CONFIRM.1, SCHEMA.1. A red one moves a row from "needs a test" to "needs a fix", and learning
-that after the ABSENT increments are scheduled is learning it too late.
+can produce a *new* defect rather than a known one: a test that has never run against production
+is a chance the row itself is wrong. **Take whatever rows the ledger currently reads UNTESTED
+first.** A red one moves a row from "needs a test" to "needs a fix", and learning that after the
+ABSENT increments are scheduled is learning it too late. The membership of that set moves as rows
+close, which is why it is not listed here — `RELEASE-4.0.0-criteria-status.md` is the list.
 
-Blocking rows by ticket: MRTR 10, MIK-7272 9, DISCOVER 5, HEADER 4, CONTROL 4, CONFIRM 3, CACHE 2,
-SCHEMA 1, TENANT 1.
+The per-ticket split lives in `RELEASE-4.0.0-blocking-rollup.md`, which derives it and is checked
+against the ledger total.
 
 Four further rows read MET with a qualifier -- `MET (I)`, `MET (caveat)`, `MET (residual)` -- and no
 blocking count includes them, which is exactly where work hides.
@@ -85,10 +90,10 @@ Shared checkout, 2026-08-31: other sessions hold uncommitted work on MRTR
 CONTROL.2 (`tests/mik_7215_control_2_budget_acs.rs`). Those increments wait on the holding session;
 their files are not ours to stash or clean.
 
-Release ready means all 31 rows read MET with a file:line for production code and a file:line for a
-test reaching it through a production path. Not "implemented", not "tests pass". Two things that
-does not promise: the clean MET rows are not guaranteed to hold, since wiring sixteen unwired
-symbols touches paths they cover, so the full suite gates every increment; and the count is not
+Release ready means every blocking row reads MET with a file:line for production code and a
+file:line for a test reaching it through a production path. Not "implemented", not "tests pass".
+Two things that does not promise: the clean MET rows are not guaranteed to hold, since wiring the
+unwired symbols touches paths they cover, so the full suite gates every increment; and the count is not
 guaranteed to fall monotonically, because an UNTESTED row that goes red splits into a defect and a
 test.
 
@@ -101,7 +106,7 @@ Eight integration-test files each hand-build the same ~45-line `AppState` fixtur
 edit, and the CONFIRM.1 test below was written into `mik_7215_acs.rs` rather than beside
 its sibling unit tests purely because that is where a usable harness already existed.
 
-Recorded here rather than filed: no criterion depends on it, and the remaining 30 rows
+Recorded here rather than filed: no criterion depends on it, and the remaining rows
 will each land in one of these files, so the right moment to extract a shared fixture is
 after the sweep, when the field set has stopped moving. Extracting it now would conflict
 with every in-flight increment.
@@ -675,7 +680,7 @@ consumer must not treat the cached era as a live fact about the current process.
 
 ### The order the remaining work runs in
 
-Cluster A is fifteen of the blocking rows and every other cluster is smaller, so it goes first —
+Cluster A is the largest of the blocking clusters by a wide margin, so it goes first —
 but the first step is not code. Per the delivery process the sequence inside A is a test plan with
 one row per acceptance criterion, reviewed as a plan; then failing tests, reviewed as tests; then
 implementation, which is done when they pass. Skipping to implementation is the path that produced

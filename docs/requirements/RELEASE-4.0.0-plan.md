@@ -45,13 +45,17 @@ Assessing the eleven unassessed rows was therefore item zero of this plan, and i
 paid for itself immediately: the sweep found that `docs/ARCHITECTURE.md:65` advertised a
 protocol revision the gateway does not serve, now corrected.
 
-An earlier revision of this file also read the Meta-MCP surface's published 17-tool scenario
-(`benchmarks/public_claims.json:4-6`) as exceeding the 14-16 ceiling NFR.PERF.4 states, and
-called it a criterion violated by the shipped configuration. That is wrong and the row now says
-so: the seventeenth tool is `gateway_webhook_status` (`src/gateway/meta_mcp_tool_defs.rs:565`),
-which is only registered when webhooks are enabled. The default surface stays inside the
-ceiling and NFR.PERF.4 is affirmed. It left the blocking cluster it was in; what remains there
-is the dual-role matrix, which has never been run.
+It also found that the Meta-MCP surface's published 17-tool scenario
+(`benchmarks/public_claims.json:4-6`) exceeds the 14-16 ceiling NFR.PERF.4 states, with nothing
+clamping the count. The operator ruled on 2026-09-02: the ceiling stands and the seventeenth
+stops counting. The requirement is NOT widened to 14-17, which would raise the ceiling to match
+whatever shipped and reverse a locked decision. The seventeenth is `gateway_webhook_status`
+(`src/gateway/meta_mcp_tool_defs.rs:565`), pushed behind `webhooks_enabled`.
+
+NFR.PERF.4 stays blocking and stays ABSENT. What the ruling changed is its kind: it is no
+longer an open operator call, so it left cluster F of the blocking rollup, and *how* the
+seventeenth stops counting is an unmade engineering decision — a §P1 design event like the
+rest of wave 1, not an edit.
 
 ### The MRTR implemented-but-unwired split, deferred here, has landed
 
@@ -211,7 +215,9 @@ verify the continuation envelope and era detection are NOT in this wave — they
 clusters. This wave changes the size of every wave after it, which is why it runs first
 rather than last.
 
-**Wave 1 — designs only, no code, all parallel.** C, F, G, I, and the design-first half of B.
+**Wave 1 — designs only, no code, all parallel.** C, F, G, I, the design-first half of B,
+and NFR.PERF.4's counting decision, which the operator's ruling converted from a question
+about the ceiling into a question about the mechanism.
 Each is a §P1 note reviewed by two vendors before an edit. This is the wave that decides
 things, and it is the one most likely to be skipped under release pressure.
 
