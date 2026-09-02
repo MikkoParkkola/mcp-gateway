@@ -106,12 +106,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - name: Install cosign
-        # ponytail: floating major tag until pinned to a SHA (follow-up).
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
         with:
           cosign-release: v2.5.2
       - name: Install syft (SBOM)
-        uses: anchore/sbom-action/download-syft@v0
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
       - name: Validate supply-chain smoke script
         run: bash -n scripts/dev/helm-supply-chain-smoke.sh
       - name: Sign + verify chart and image by digest, assert SBOM
@@ -133,12 +132,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - name: Install cosign
-        # ponytail: floating major tag until pinned to a SHA (follow-up).
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
         with:
           cosign-release: v2.5.2
       - name: Install syft (SBOM)
-        uses: anchore/sbom-action/download-syft@v0
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
       - name: Validate air-gap smoke script
         run: bash -n scripts/dev/helm-airgap-smoke.sh
       - name: Export to bundle, import to isolated registry, verify + install offline
@@ -255,6 +253,21 @@ jobs:
       - name: Validate public claim consistency
         run: cargo test --test public_claims_validation
 
+  release-criteria:
+    name: Release criteria ledger (report-only)
+    runs-on: avrea-ubuntu-latest-4-vcpu
+    # Report-only here, blocking in release.yml at tag time. The ledger is a
+    # live working document: a row edited mid-flight must not block unrelated
+    # PRs, but a stale header count must not reach a tag. Same script both
+    # places — scripts/release/count-release-criteria.py.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test the counter (fail on parser regression)
+        run: python3 scripts/release/test_count_release_criteria.py
+      - name: Check the release-criteria ledger header against its rows
+        run: python3 scripts/release/count-release-criteria.py --check
+
   secrets-scan:
     name: Secrets scan
     runs-on: avrea-ubuntu-latest-4-vcpu
@@ -328,12 +341,12 @@ jobs:
         # ponytail: floating major tag until pinned to a SHA (follow-up); the
         # rest of this workflow is SHA-pinned per repo convention. cosign-release
         # is pinned so flag behavior can't drift under a v3 default.
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
         with:
           cosign-release: v2.5.2
 
       - name: Install syft (SBOM)
-        uses: anchore/sbom-action/download-syft@v0
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
 
       - name: Cosign keyless-sign the released image by digest
         env:
