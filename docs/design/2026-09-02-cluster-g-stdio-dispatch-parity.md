@@ -257,11 +257,11 @@ its gates. `CONFIRM.1a` is therefore not a fourth concern bolted onto cluster G 
 same defect as `NFR.OBS.1` and `NFR.OBS.2`, in its third costume, and the elimination this note
 proposes closes all three or none.
 
-**Rows 13 and 14 are load-bearing, not regression tests.** A test written today against the
+**Row 13 is load-bearing, not a regression test.** A test written today against the
 stdio path fails because the behaviour is absent, not because a mutation was staged for it —
 which is the free failure §P2 asks for, and the reason to write them before the code.
 
-### A comment that overstates its own reach — fix it with row 14
+### A comment that overstates its own reach — fix the comment, not with a test
 
 `handlers.rs:1252-1256` reads:
 
@@ -275,10 +275,24 @@ confirmation policy and makes no confirmation call**. Authorization reaches the 
 confirmation does not.
 
 Read as written, the comment tells the next reader that a playbook step invoking a destructive
-tool already faces the gate. It does not. A stale comment is model input, not neutral prose,
-and this one asserts the exact safety property row 14 exists to establish. It is corrected in
-the same change that makes it true — not before, because a comment describing behaviour that
-does not yet exist is the defect we are removing, pointed the other way.
+tool already faces the gate. It does not — and, verified since, it never needs to. A playbook
+or Code Mode step dispatches through `ToolInvoker::invoke`
+(`src/playbook/engine/mod.rs:180-181`), whose only production implementor is `MetaMcpInvoker`
+(`src/gateway/meta_mcp/support.rs:229-238`). That calls `invoke_tool` with a
+`{server, tool, arguments}` **backend** envelope, while the confirmation gate keys on
+*meta*-tool names through `is_destructive_meta_tool`
+(`src/gateway/destructive_confirmation.rs:173`), reached from `handlers.rs:1196-1198` alone.
+An internal step therefore cannot name a destructive meta-tool at all.
+
+So the comment is wrong in a narrower way than it first appeared: not "this path is unguarded"
+but "this path does not exist". The repair is to correct the comment, and the property it
+gestures at is established by construction rather than by a case — a test for a path production
+cannot take would be a test that can never go red, which is exactly what the section below
+objects to. An earlier revision of this note proposed a row 14 to cover it; that row is deleted,
+and the reason is recorded in the test plan's exclusions so the proposal cannot return without
+first contradicting the source.
+
+A stale comment is model input, not neutral prose. It is corrected in the same change.
 
 ### The existing test asserts the policy against itself
 
@@ -286,5 +300,5 @@ does not yet exist is the defect we are removing, pointed the other way.
 `ConfirmationPolicy::for_modern().on_unconfirmable() == REFUSE` and the legacy counterpart.
 That is the policy's own constant compared with the policy's own constructor: it passes whether
 or not any caller consults it, which is how "written for this decision and then never consulted"
-survived to be discovered in the handler comment. Rows 13 and 14 assert the *behaviour at the
+survived to be discovered in the handler comment. Row 13 asserts the *behaviour at the
 boundary* instead, which is the only form of this test that can go red.

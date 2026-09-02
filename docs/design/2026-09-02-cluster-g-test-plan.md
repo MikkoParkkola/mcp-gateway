@@ -10,7 +10,7 @@ Covers all three cluster-G criteria: `NFR.OBS.1`, `NFR.OBS.2` and `MIK-7246.CONF
 An earlier revision of this section excluded `CONFIRM.1a` on the grounds that its stdio
 behaviour was waiting on the operator. That was wrong, and the reason is worth keeping: the
 criterion already specifies the behaviour (fail closed, refuse), so there was never a question
-to wait on. Rows 13 and 14 cover it.
+to wait on. Row 13 covers it.
 
 ## One row per criterion
 
@@ -28,8 +28,8 @@ to wait on. Rows 13 and 14 cover it.
 | 10 | `OBS.1` | a stdio batch of **three** requests emits **exactly three** records, one per element, each carrying that element's own `method` | integration | cardinality | free — and it fails against the one-record-per-envelope shape a transport-entry record naturally takes |
 | 11 | `OBS.1` | a stdio batch **mixing** requests and notifications emits one record per element **and** returns responses only for the requests | integration | cardinality + boundary | half free — see below |
 | 12 | `OBS.1` | a stdio message arriving **before any `initialize`** emits a record whose `protocol_revision` and `revision_source` are both **absent** — not defaulted, not a sentinel | integration | boundary | free — nothing records it today, and it is the row that stops the absent case drifting into a constant |
-| 13 | `CONFIRM.1a` | a destructive `tools/call` over stdio, where no confirmation can be obtained, is **refused** — not executed | integration | fail-closed | free — the gate proceeds today when there is no session, and after this release there is never a session |
-| 14 | `CONFIRM.1a` | a destructive tool reached by an **internal caller** (playbook step, code-mode step) rather than by an inbound request, where no confirmation can be obtained, is likewise **refused** | integration | fail-closed | free — same gate, same missing session |
+| 13 | `CONFIRM.1a` | a destructive `tools/call` over stdio naming a **registered, executable** target, where no confirmation can be obtained, returns the confirmation-refusal response **and** leaves the execution sentinel untouched | integration | fail-closed |
+| 14 | `OBS.2` | a `tools/list` whose profile **excludes** at least one tool records the **effective filter decisions** — which filters ran and what each removed — and the record is stamped **before** the response is written | integration | content + ordering | free — the live record names filter *inputs* only, so it cannot carry a decision | free — the gate proceeds today when there is no session, and after this release there is never a session |
 
 Row 5 exists because both reviewers raised it independently in round 1: the design's "both
 callers" tables enumerate the *transports*, and the tool-policy precedent the design leans
@@ -54,7 +54,7 @@ The live HTTP record at `handlers.rs:995-1004` carries exactly five fields, read
 | `profile` | the header's value, or the literal `none` when absent | the request header, independently of the record |
 | `code_mode` | `code_mode_enabled \|\| code_mode_url_active` | the config and the URL, computed in the test |
 | `query_present` | true only for a non-empty string `query` | the request params |
-| `cache_scope` | the literal scope the criterion specifies for `tools/list`, written out in the test | the criterion text — **not** a call to `scope_for_method` |
+| `cache_scope` | the literal `private`, written out in the test | the scope table at `src/protocol/cacheable.rs:65`, where `tools/list` is `for_list(true)`, and `for_list` returns `Private` for a caller-dependent list (`:46-52`) — **not** a call to `scope_for_method` |
 | `cache_scope_advertised` | `is_modern` — false on a legacy result, which advertises no `cacheScope` | the negotiated revision |
 
 Each expected value is **derived independently in the test**, never copied from the record it
@@ -66,13 +66,62 @@ paragraph, two rows below the table that broke it. The expectation is now a lite
 the criterion, so a change in `scope_for_method` shows up as a failure rather than as agreement. A test that reads the record and asserts the record equals itself is the tautology
 this table exists to make impossible.
 
+### The criterion asks for two things and the live record carries one
+
+`NFR.OBS.2` requires a record of **which filters ran** *and* the `cacheScope`. The five fields
+above cover the second and only gesture at the first: `profile` and `query_present` are the
+*inputs* a filter would consume, not the decisions it reached. A profile naming a filter that
+matched nothing and a profile naming no filter at all produce the same `profile` string, and an
+operator reading that record cannot tell which happened. Presence of an input is not evidence a
+filter ran, which is the same tautology the `cache_scope` row above was rescued from.
+
+The site makes this structural, not an oversight. The `info!` at `handlers.rs:993-1004` is
+emitted *before* `handle_tools_list_with_url_override` is called — so it runs before the list
+is built and physically cannot name what the build decided. Satisfying the criterion means
+moving or splitting the record so the decisions are stamped from the list-building path.
+
+**This is a design decision the design did not make** (§P3): the change now alters where a
+production record is emitted, not merely what a test asserts. It is recorded here rather than
+discovered during implementation. It stays inside what §P0 declared FOR — `NFR.OBS.2` is one
+of cluster G's three criteria and this is the half of it nothing covered.
+
+| field | value under test | derived from |
+|---|---|---|
+| `filters_ran` | the ordered list of filter names the build actually applied — the empty list when none did, never absent | the fixture's profile definition, written out in the test |
+| `filtered_out` | the count each named filter removed | the fixture's tool set minus the expected surviving set, computed in the test |
+
+The ordering half uses row 3's mechanism unchanged: a shared sequence counter, the record's
+stamp against a marker emitted immediately before the response is written. Row 14 is the only
+place `OBS.2` gets an ordering assertion; the criterion's *before that field is advertised to
+any real client* is otherwise a claim no case checks.
+
+### The stdio `OBS.2` fixture, stated concretely
+
+Row 6 asserts *every field the oracle table names*, which is only checkable once the fixture
+fixes each one. The stdio case runs a gateway with **no profile header possible** (stdio
+carries none), Code Mode **off** in config and no URL override, an `initialize` that negotiated
+the modern revision, and the request `{"jsonrpc":"2.0","id":1,"method":"tools/list"}` — no
+`params`, therefore no `query`. That fixes all five:
+
+| field | literal expected in the stdio case | why |
+|---|---|---|
+| `profile` | `none` | stdio has no header to carry one; the record's own fallback |
+| `code_mode` | `false` | both disjuncts false — config off, no URL override |
+| `query_present` | `false` | no `params`, so no `query` |
+| `cache_scope` | `private` | as the table above, independent of transport |
+| `cache_scope_advertised` | `true` | the handshake negotiated modern |
+
+Row 14 needs a profile and so cannot run over stdio; it runs over HTTP with a profile that
+excludes a known tool. That split is deliberate — the two rows check different halves of the
+same criterion and cannot share one fixture.
+
 For `OBS.1` the two revision fields get the same treatment:
 
 | case | `protocol_revision` | `revision_source` |
 |---|---|---|
 | stdio, after `initialize` negotiated a revision | the negotiated value, exactly | the handshake |
 | stdio, message arriving before any `initialize` | absent — **not** a sentinel, not a default | absent |
-| HTTP, revision declared in the request | the declared value | the request |
+| HTTP, revision declared in the request | the declared value | `_meta` |
 
 The middle row is the one that must not drift into a constant. An absent field and a field
 holding a plausible-looking default are indistinguishable to an operator reading the telemetry,
@@ -108,13 +157,6 @@ That half is a regression guard on existing behaviour and takes the same probe t
 the batch path emit an empty array unconditionally, and row 11 must go red on the response
 assertion while its record assertion stays green. Two halves that fail together would not tell
 me which one the row is measuring.
-
-**Row 14 is row 5's other half.** The design says a caller that is not a transport must have
-a stated answer for both concerns it touches — how many records it produces, and whether the
-confirmation gate applies to it. Row 5 answered the first and nothing answered the second, so
-a playbook step invoking a destructive tool could have slipped past a gate that an inbound
-request cannot. The two rows now bracket the same caller: exactly one record, and no execution
-without confirmation.
 
 **Row 13 needs no probe.** The criterion states the gate proceeds today when there is no
 session, and stdio after this release has no session, so a test asserting refusal fails against
@@ -154,9 +196,13 @@ presence assertion just as well as pre-return logging does, so the row as writte
 tell the two apart — it would have been decoration wearing an ordering claim.
 
 The mechanism is a capturing `tracing` subscriber installed for the test, holding a shared
-sequence counter that both the captured record and the response write to. The assertion is on
-the two stamps, not on wall-clock time and not on the order lines appear in a buffer. That
-makes the ordering falsifiable by construction: move the record after the return and the
+sequence counter that both the captured record and a **dispatch-return marker** stamp. The
+marker is emitted immediately before dispatch returns the `-32602` error, *not* when the
+response is written. That distinction is the whole mechanism: a counter read at response-write
+time is satisfied by logging anywhere inside dispatch, so telemetry emitted after the
+classifier had already returned would still pass a claim that it ran before. The assertion is
+on the two stamps, not on wall-clock time and not on the order lines appear in a buffer. That
+makes the ordering falsifiable by construction: move the record after the marker and the
 stamps invert.
 
 ### The probes are code, not a one-time manual mutation
@@ -189,6 +235,29 @@ particular the malformed case (row 3) must be a genuine malformed request throug
 shape classifier, not a hand-constructed `RequestShape::Malformed` — the ordering being
 pinned is *classifier, then record, then return*, and a hand-built shape skips the first two.
 
+## One exclusion this plan makes, and its proof
+
+**An internal caller reaching a destructive operation unconfirmed — no case, because the path
+does not exist.** A playbook or Code Mode step dispatches through `ToolInvoker::invoke`
+(`src/playbook/engine/mod.rs:180-181`); its only production implementor, `MetaMcpInvoker`
+(`src/gateway/meta_mcp/support.rs:229-238`), calls `invoke_tool` with a `{server, tool,
+arguments}` **backend** envelope. The confirmation gate keys on *meta*-tool names via
+`is_destructive_meta_tool` (`src/gateway/destructive_confirmation.rs:173`) and is reached from
+`handlers.rs:1196-1198` alone. A backend invocation cannot name a destructive meta-tool, so
+there is nothing for the gate to refuse.
+
+A row 14 asserting this was written and is deleted. It could not have gone red: the state it
+tested for is unconstructible, so it would have passed on day one and every day after,
+including any day the construction changed underneath it. The exclusion is stronger than the
+row was — a case that cannot fail proves nothing, whereas the call chain above proves the
+property outright. What would reopen it is a second `ToolInvoker` implementor, or `invoke_tool`
+learning to route meta-tool names; either is a change to the cited lines, which is where a
+reviewer would look.
+
+Note the contrast with row 5, which survives: an internal step *does* re-enter the meta-MCP
+layer, so it can produce a second observability record. It re-enters at `invoke_tool`, below
+where the confirmation gate lives. Same caller, two concerns, and only one of them reaches it.
+
 ## Three exclusions this plan claimed, all of them withdrawn
 
 Each entry below was written as something the plan deliberately left out. Review found all
@@ -213,7 +282,7 @@ sit undisturbed. Nothing in this section is outside the plan.
   (`RELEASE-4.0.0-requirements.md:195`). That is a specified fail-closed behaviour, not a
   choice awaiting the operator. Deferring it treated a settled MUST as an open trade-off, which
   would have left a destructive tool callable over stdio without confirmation — and a stated
-  limit against a MUST is an unmet requirement, not an accepted risk. Rows 13 and 14 cover it.
+  limit against a MUST is an unmet requirement, not an accepted risk. Row 13 covers it.
 - Whether `protocol_revision` is *available* to report on stdio. Round 2 narrowed this: stdio
   establishes a revision at `initialize`, so rows 1–3 assert the **negotiated** revision with
   `revision_source` set to the handshake. The open part is only what a record carries for a
