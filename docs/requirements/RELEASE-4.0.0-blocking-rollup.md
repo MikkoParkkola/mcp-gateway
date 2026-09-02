@@ -175,6 +175,16 @@ treat the assignments above as *proposed* rather than *in progress*, and read th
 number that will still be there tomorrow. The only cluster with anything landed is G, and what
 landed is a design note and a test plan — deliberately no code.
 
+**A review is only a review of the revision it ran against.** Cluster G's round-3 review
+raised four findings; three of them were already closed by a commit that landed 23 minutes
+*after* the reviewer started, and the fourth had been closed too. Reading the verdict without
+checking its run timestamp against `git log -1 --format=%cI` on the reviewed file would have
+spent a round re-closing closed findings, and — worse — would have counted a stale verdict as
+the revision's review. Only one clause survived the check: the stdio `tools/list` case stated
+no cardinality where its HTTP twin said *exactly one, not two*. The current revision is
+therefore at round 4, unreviewed until that round returns, and the plan is not a plan of
+record until it is.
+
 One ownership rule makes the rest work: **one owner per file**. `src/protocol/era.rs`,
 `src/protocol/cacheable.rs` and `src/protocol/continuation.rs` each have exactly one, and a
 design that needs something from another owner's file is routed rather than edited. This is not
