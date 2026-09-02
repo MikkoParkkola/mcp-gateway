@@ -17,6 +17,9 @@ stays the source of truth for status.
 
 ## The clusters
 
+How far each cluster has actually got — design, test plan, review, code, owner —
+is tracked in `RELEASE-4.0.0-readiness-board.md`. This section defines them.
+
 | # | cluster | rows | count | what is actually missing |
 |---|---|---|---|---|
 | A | MIK-7212 continuation envelope | `MRTR.1`, `MRTR.3-8`, `MRTR.9`, `MRTR.10a`, `NFR.SEC.2`, `NFR.SEC.3`, `NFR.SEC.4`, `NFR.OBS.4`, `NFR.PERF.3` | 22 | nothing mints or opens a continuation on the live path. The type exists; no route reaches it |

@@ -90,6 +90,17 @@ of cluster G's three criteria and this is the half of it nothing covered.
 | `filters_ran` | the ordered list of filter names the build actually applied — the empty list when none did, never absent | the fixture's profile definition, written out in the test |
 | `filtered_out` | the count each named filter removed | the fixture's tool set minus the expected surviving set, computed in the test |
 
+**Row 14 is DEFERRED, and nothing depending on it may be implemented until it resolves.**
+The design event above has not been through a design review, and naming it grants no exit
+(§P3). Its four fields: **owner** — this plan's author, reopened as a design increment before
+any cluster-G code; **what resolves it** — a dual-vendor review of the record-relocation
+decision alone, asking whether the decisions belong in the existing pre-build record, a second
+record after the build, or a field threaded back; **when** — before the first cluster-G
+implementation commit, because the answer changes where the code goes; **if it resolves badly**
+— if relocating the record is judged out of scope for this release, `NFR.OBS.2`'s filter half
+is recorded as unmet rather than quietly satisfied by the input fields, and that is a release
+decision, not a test-plan one. Rows 1-13 do not depend on it and proceed.
+
 The ordering half uses row 3's mechanism unchanged: a shared sequence counter, the record's
 stamp against a marker emitted immediately before the response is written. Row 14 is the only
 place `OBS.2` gets an ordering assertion; the criterion's *before that field is advertised to
@@ -258,7 +269,7 @@ Note the contrast with row 5, which survives: an internal step *does* re-enter t
 layer, so it can produce a second observability record. It re-enters at `invoke_tool`, below
 where the confirmation gate lives. Same caller, two concerns, and only one of them reaches it.
 
-## Three exclusions this plan claimed, all of them withdrawn
+## Three further exclusions this plan claimed, all of them withdrawn
 
 Each entry below was written as something the plan deliberately left out. Review found all
 three were covered, coverable, or already answered elsewhere, and every one is now a row. They

@@ -1,0 +1,56 @@
+# 4.0.0 readiness board
+
+One row per cluster, one question per column: **what has to happen next, and who
+does it.** The cluster definitions, criterion lists and the reasons each row is
+open live in `RELEASE-4.0.0-blocking-rollup.md`; the ordered work queue lives in
+`RELEASE-4.0.0-execution-plan.md`. Neither answers *how far is each cluster
+actually along*, which is the only thing this file is for. Nothing here is
+restated from those two — where a cell needs a reason it names the file that
+carries it.
+
+Verified 2026-09-02 against the worktree at `fix/mrtr2-continuation-handle`
+(`97203e10`). A cell reading **no** means a search found nothing, not that
+nobody intends to do it.
+
+| # | cluster | rows | design | test plan | plan reviewed | code | the one thing blocking |
+|---|---|---|---|---|---|---|---|
+| A | continuation envelope (MIK-7212) | 22 | yes — `2026-08-30-mrtr-wiring.md`, `2026-08-30-shared-continuation-state.md`, `2026-09-01-continuation-telemetry.md` | yes — `2026-09-02-mrtr-test-plan.md` | yes | **yes** — 85 files, +13,532/−623 vs `main` on this branch | the branch is unmerged and unreviewed: no PR, so none of the 22 rows can be claimed |
+| B | era detection (MIK-7217) | 5 | partial — `2026-08-31-discover-outbound-era-probe.md` covers `DISCOVER.4`; **`NFR.OBS.3` appears in no design document** | no | no | no | a design that covers all five rows, not four |
+| C | revision surface (MIK-7272) | 7 | scattered across five files (`sub-4-idempotency-wiring`, `sub-1-3-get-mcp-era-gate`, `task-1-tasks-extension`, `cluster-b-*`) | no | no | no | five half-wirings with no single owner and no plan that reads as one change |
+| D | response-cache keying (MIK-7213) | 2 | yes — `2026-08-31-cluster-f-response-cache-keying.md` | yes — same stem, `-test-plan.md` | no | no | the test plan has never been through the dual-vendor gate |
+| E | performance measurement | 2 | n/a — this is a measurement, not a design | no | no | n/a | a run against 3.5.0 **on Spark**. A Mac number is worse than none |
+| F | compatibility facts | 2 | `NFR.COMPAT.4` only — `2026-09-02-conformance-matrix.md` | no | no | no | `NFR.COMPAT.1` is a one-line default flip that cannot land before cluster A merges |
+| G | stdio dispatch | 3 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | no | the gate itself: see the reviewer state below |
+| — | residue | 10 | mixed | no | no | no | ten independent rows, each needing its own decision |
+
+53 blocking rows. **One cluster has code.** Six have no branch, no worktree and
+no commit — verified against `git worktree list` and `git branch`, which show
+`fix/mrtr2-continuation-handle` (cluster A) plus two unrelated gap branches.
+
+## The gate is the binding constraint, not the writing
+
+Cluster G's test plan is at review round 5 and the reason it has not converged
+is no longer the document. Reviewer state, 2026-09-02:
+
+| vendor | state | why |
+|---|---|---|
+| Codex / GPT | **was hard-down all afternoon** | `codex` 0.151.0 refuses every directory as untrusted under `--ephemeral`, because ephemeral discards the persisted trust list. Fixed in `~/.claude/bin/gpt-review` by adding `--skip-git-repo-check`; the read-only sandbox already bounds the blast radius |
+| Grok | ERROR | xAI balance exhausted (HTTP 402) |
+| GLM-5.3 | ERROR | `finish_reason='length'` on three consecutive attempts — the Flash distillation cannot hold a 26 KB payload |
+| Kimi K3 | ERROR | returns prose with no parseable verdict line |
+
+Every vendor failed for its own reason on the same day, and the wrapper defect
+made the primary reviewer look like a fourth outage. That is the honest state of
+the gate; per §PA a nonzero exit is `ERROR`, never a scraped verdict.
+
+## What the next session does, in order
+
+1. **Land cluster A.** It is the only cluster with code and it blocks F. Open
+   the PR, run the gates at the head that will be tagged.
+2. **Give B and C a design each.** B needs `NFR.OBS.3` covered; C needs its five
+   half-wirings written as one change with one owner.
+3. **Book the Spark run for E.** It depends on nothing and nobody has started it.
+4. **Close G's gate** now that the reviewer is reachable again.
+
+Order is dependency, not preference: F waits on A, and E waits on nothing at
+all, which is why it should not be last in practice.
