@@ -8,7 +8,7 @@ The ledger (`RELEASE-4.0.0-criteria-status.md`) carries the counts; run
 Whatever the blocking count is on the day, it is not that many decisions. The ledger's own
 evidence cells say so — `NFR.SEC.2`, `.3`, `.4`, `NFR.OBS.4` and `NFR.PERF.3` all read
 "same envelope", and `NFR.OBS.3` reads "verifies MIK-7217.DISCOVER.4-5". Grouping on those
-clauses collapses them into **six clusters and one residue**, of which four are unbuilt
+clauses collapses them into **seven clusters and one residue**, of which five are unbuilt
 mechanisms and two are measurements nobody has run.
 
 This document exists so the shape of the remaining work survives outside one session's
@@ -19,17 +19,26 @@ stays the source of truth for status.
 
 | # | cluster | rows | count | what is actually missing |
 |---|---|---|---|---|
-| A | MIK-7212 continuation envelope | `MRTR.1-8`, `MRTR.9`, `MRTR.10a`, `NFR.SEC.2`, `NFR.SEC.3`, `NFR.SEC.4`, `NFR.OBS.4`, `NFR.PERF.3` | 15 | nothing mints or opens a continuation on the live path. The type exists; no route reaches it |
-| B | MIK-7217 era detection | `DISCOVER.4`, `DISCOVER.5`, `NFR.OBS.3` | 3 | `src/protocol/era.rs` is fully built and called from nothing. Design: `docs/design/2026-08-31-discover-outbound-era-probe.md` |
-| C | MIK-7272 revision surface | `ORDER.2`, `SUB.2` (own-stream clause), `SUB.4`, `EXT.1`, `OTEL.1`, `TASK.1` | 6 | five separate half-wirings: idempotency cache never enabled, extension set write-side absent, task methods advertised and not served, routing profile ignores modern mode |
+| A | MIK-7212 continuation envelope | `MRTR.1-8`, `MRTR.9`, `MRTR.10a`, `NFR.SEC.2`, `NFR.SEC.3`, `NFR.SEC.4`, `NFR.OBS.4`, `NFR.PERF.3` | 22 | nothing mints or opens a continuation on the live path. The type exists; no route reaches it |
+| B | MIK-7217 era detection | `DISCOVER.4`, `DISCOVER.5`, `NFR.OBS.3` | 5 | `src/protocol/era.rs` is fully built and called from nothing. Design: `docs/design/2026-08-31-discover-outbound-era-probe.md` |
+| C | MIK-7272 revision surface | `ORDER.2`, `SUB.2` (own-stream clause), `SUB.4`, `EXT.1`, `OTEL.1`, `TASK.1` | 7 | five separate half-wirings: idempotency cache never enabled, extension set write-side absent, task methods advertised and not served, routing profile ignores modern mode |
 | D | MIK-7213 response-cache keying | `CACHE.3`, `CACHE.4` | 2 | designed in `docs/design/2026-08-31-cluster-f-response-cache-keying.md`, zero tests, decision table not referenced from `cacheable.rs` |
 | E | performance measurements | `NFR.PERF.1`, `NFR.PERF.2` | 2 | no run against 3.5.0 exists. A code read cannot substitute. **Spark only** — a Mac number is worse than no number |
-| F | compatibility and surface facts | `NFR.COMPAT.1`, `NFR.COMPAT.3`, `NFR.COMPAT.4`, `NFR.PERF.4` | 4 | each is a stated fact awaiting an operator decision, not code: the modern revision is not in `SUPPORTED_VERSIONS`; `exposed_meta_tools` enforcement is breaking; no dual-role matrix; the 17-tool scenario exceeds the documented 14-16 ceiling |
-| — | residue | `HEADER.9`, `CONTROL.4`, `CONFIRM.2`, `NFR.SEC.1`, `NFR.SEC.6` | 5 | genuinely independent; see below |
+| F | compatibility and surface facts | `NFR.COMPAT.1`, `NFR.COMPAT.3`, `NFR.COMPAT.4` | 3 | each is a stated fact awaiting an operator decision, not code: the modern revision is not in `SUPPORTED_VERSIONS`; `exposed_meta_tools` enforcement is breaking; no dual-role matrix; the dual-role matrix has never been run. `NFR.PERF.4` was in this cluster until the 14-16 ceiling was affirmed and the 17th tool identified as `gateway_webhook_status` (`src/gateway/meta_mcp_tool_defs.rs:565`), which only appears when webhooks are enabled |
+| G | stdio telemetry | `NFR.OBS.1`, `NFR.OBS.2` | 2 | both records live in the HTTP router (`src/gateway/router/handlers.rs:720,994`) and both criteria say *per request* / *every* `tools/list`. The stdio dispatcher reaches neither, so one of the two transports the gateway serves MCP over is absent from the migration telemetry |
+| — | residue | `HEADER.9`, `CONTROL.4`, `CONFIRM.2`, `NFR.SEC.1`, `NFR.SEC.6`, `MIK-6704.IDENT.1a`, `MIK-6865.SCHEMA.1c`, `MIK-7215.CONTROL.3a` | 6 | genuinely independent; see below |
 
 Cluster A is by far the largest of them. Wire the continuation envelope and the blocking
-count drops to twenty-two without a single new decision being made — though each of the
-fifteen still needs its own evidence afterwards, exactly as the ledger says.
+count drops to thirty without a single new decision being made — though each of the
+twenty-two still needs its own evidence afterwards, exactly as the ledger says.
+
+The `rows` column names PARENT criteria; the `count` counts LEDGER ROWS, and the two stopped
+matching once compound criteria began to be split. `MRTR.1-8` is eight names and nineteen rows.
+Read the names as a key to which cluster a row belongs to, never as its size. The counts here
+are derived from the ledger by prefix, not transcribed from a previous revision of this file:
+every blocking row lands in exactly one cluster and the seven totals sum to the ledger's, which
+is the only reason this table can be trusted to be complete. The last revision covered 37 of
+the blocking rows and read as though it covered all of them.
 
 ## The residue, one line each
 
@@ -42,6 +51,13 @@ fifteen still needs its own evidence afterwards, exactly as the ledger says.
 - `NFR.SEC.1` — 14 controls enumerated in `docs/requirements/nfr-sec1-control-inventory.md`;
   nine carry a refusal test, five are recorded gaps. `each` is unmet until those five do.
 - `NFR.SEC.6` — the sweep exists; the row is a traceability question across MIK-7222/7246/7256.
+- `MIK-6704.IDENT.1a` — deriving authorization from the authenticated credential is implemented
+  and consumed (`principal_of`, `src/gateway/auth.rs:38-43`) and nothing asserts it. All three
+  IDENT.1 tests prove the negative clause, now scored separately as `IDENT.1b`. A test, not a
+  mechanism.
+- `MIK-6865.SCHEMA.1c` — see the ledger row; scored when `SCHEMA.1` was split.
+- `MIK-7215.CONTROL.3a` — scored blocking when `CONTROL.3` was split; the clause it carries is
+  not held by the parent's evidence.
 
 ## The four decisions this reduces to
 
