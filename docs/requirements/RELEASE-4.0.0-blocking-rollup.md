@@ -128,11 +128,23 @@ it is not describing work that is happening.
 | branches advanced in the last 24h | one — `fix/mrtr2-continuation-handle`, this note's own branch |
 | last commit on `main` | 2 days ago |
 | worktrees belonging to a named owner above | none |
-| blocking criteria closed since the table was written | zero — `count-release-criteria.py --check` still reports 53 |
+| remote-tracking branches for a named owner | none — every `origin/*` ref but this note's own is 2 days old |
+| uncommitted work in the main checkout | one file, `CLAUDE.md`, unrelated to any cluster |
+| rollup rows marked met since the table was written | zero — `count-release-criteria.py --check` still reports 53 |
 
-No branch, no worktree, no commit exists for `envelope-a`, `era-r4-repair`, `era-probe`,
-`surface-c`, `cache-34` or `perf-e`. Two agent worktrees do exist — `gap/meta-tool-exposure`
-(locked) and `gap/discover-schema` — and both belong to other work and last moved two days ago.
+No local branch, no remote branch, no worktree and no commit exists for `envelope-a`,
+`era-r4-repair`, `era-probe`, `surface-c`, `cache-34` or `perf-e`. Two agent worktrees do exist —
+`gap/meta-tool-exposure` (locked) and `gap/discover-schema` — and both belong to other work and
+last moved two days ago.
+
+**What was checked, and what was not.** Checked: local branches, remote-tracking refs, worktrees
+in both trees, and the main checkout's working tree. *Not* checked: whether the agent processes
+themselves are still alive. An owner could be running right now with everything still in its own
+context — which is the case the next paragraph is about, not a case this evidence excludes.
+
+The last row is a weaker check than it looks and is listed as what it is. A rollup row is marked
+met by a documentation act, so an owner could have landed working code and never touched this
+file. It is offered as corroboration, not as an activity measure.
 
 **What this does and does not prove.** It does not prove nothing was done: an agent can do real
 work and hold all of it in its own context. It proves something worse is possible, which is that
