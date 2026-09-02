@@ -21,16 +21,17 @@ to wait on. Row 13 covers it.
 | 3 | `OBS.1` | a request declaring itself modern while omitting a required field emits a record **and then** returns `-32602` | integration | negative-path | free — and it pins the ordering, not just the presence |
 | 4 | `OBS.1` | the same three shapes over HTTP still emit exactly one record each | integration | regression | **not free** — see the honesty section |
 | 5 | `OBS.1` | **over stdio**, an inbound message whose handling reaches the meta-MCP layer a second time (playbook step, code-mode step) produces **exactly one** record | integration | exactly-once | free **because the transport is stdio** — `exactly one` fails at zero as well as at two |
-| 6 | `OBS.2` | a `tools/list` over stdio emits **exactly one** `tools/list` record, carrying every field the oracle table names | integration | positive + cardinality | free — stdio emits nothing today |
+| 6 | `OBS.2` | a `tools/list` over stdio emits **exactly one** `tools/list` record, carrying every field the oracle table names, with `cache_scope_advertised` = `false` — stdio negotiates no modern shape, so the field records that, not a default | integration | positive + cardinality | free — stdio emits nothing today |
 | 7 | `OBS.2` | a `tools/list` over HTTP still emits exactly one, not two, after the change | integration | regression | **not free** — see the honesty section |
 | 8 | `OBS.2` | a `tools/list` over HTTP **with the Code Mode URL override active** emits the record, carrying `code_mode` true | integration | regression | **not free** today, but free against the rejected design — see below |
 | 9 | `OBS.1` | a notification (no `id`, no response — `notifications/initialized`) over stdio emits exactly one record and carries no response-shaped field | integration | boundary | free — nothing records notifications today |
 | 10 | `OBS.1` | a stdio batch of **three** requests emits **exactly three** records, one per element, each carrying that element's own `method` | integration | cardinality | free — and it fails against the one-record-per-envelope shape a transport-entry record naturally takes |
 | 11 | `OBS.1` | a stdio batch **mixing** requests and notifications emits one record per element **and** returns responses only for the requests | integration | cardinality + boundary | half free — see below |
 | 12 | `OBS.1` | a stdio message arriving **before any `initialize`** emits a record whose `protocol_revision` and `revision_source` are both **absent** — not defaulted, not a sentinel | integration | boundary | free — nothing records it today, and it is the row that stops the absent case drifting into a constant |
-| 13 | `CONFIRM.1a` | a destructive `tools/call` over stdio naming a **registered, executable** target, where no confirmation can be obtained, returns the confirmation-refusal response **and** leaves the execution sentinel untouched | integration | fail-closed | free — the gate proceeds today when there is no session, and after this release there is never a session |
+| 13 | `CONFIRM.1a` | a destructive `tools/call` over **HTTP** naming `gateway_kill_server` with a live sentinel backend, where no confirmation can be obtained, returns code `-32001` **and** the message prefix `Destructive action requires confirmation and none could be obtained:` **and** leaves the execution sentinel untouched | integration | fail-closed | free — the gate proceeds today when there is no session, and after this release there is never a session |
 | 14 | `OBS.2` | a `tools/list` whose profile **excludes** at least one tool records the **effective filter decisions** — which filters ran and what each removed — and the record is stamped **before** the response is written | integration | content + ordering | free — the live record names filter *inputs* only, so it cannot carry a decision |
 | 15 | `OBS.1` | a `tools/call` over **HTTP** carrying no revision in either `_meta` or the header records `protocol_revision` = `absent` and `revision_source` = `none` — the exact strings, not any falsy value | integration | boundary | free — no row pins the source on the no-revision path, so a constant would pass |
+| 16 | `CONFIRM.1a` | a destructive `tools/call` over **stdio** reaches the backend **without** passing a confirmation gate — asserted as the behaviour that exists, named for the gap ticket so the failure explains itself when the gate is wired | integration | characterization | free — it asserts today's behaviour, so it fails the moment the gate is wired |
 
 Row 5 exists because both reviewers raised it independently in round 1: the design's "both
 callers" tables enumerate the *transports*, and the tool-policy precedent the design leans
@@ -315,7 +316,7 @@ record-relocation decision, which no amount of test-plan prose can settle.
 
 | finding | disposal |
 |---|---|
-| row 6 asserts `cache_scope_advertised = true`, but a scoped stdio system may be unable to negotiate the revision that makes it true | **open, and it is a source check, not a design question.** `is_modern` derives from `RequestShape::Modern` (`src/gateway/router/handlers.rs`), the served stdio path enters at `src/gateway/server/mod.rs:1698`, and nothing read so far shows whether that path can reach the modern shape. Until someone reads `handle_initialize`, row 6's expected value for this one field is unproven — the other four are unaffected |
+| row 6 asserts `cache_scope_advertised = true`, but a scoped stdio system may be unable to negotiate the revision that makes it true | **open, and it is a source check, not a design question.** `is_modern` derives from `RequestShape::Modern` (`src/gateway/router/handlers.rs`), the served stdio path enters at `src/gateway/server/mod.rs:1698`, and nothing read so far shows whether that path can reach the modern shape. Until someone reads `handle_initialize`, row 6's expected value for this one field is unproven — the other four are unaffected. **Answered in round 7: `false`** |
 | row 6's oracle omits `filters_ran` / `filtered_out` although `OBS.2` covers every `tools/list` | **blocked on the deferral** — those fields do not exist on any path until the record moves. Reopens with it |
 | row 14 exercises one profile-filter scenario and defines no taxonomy for exposure, query, Code Mode, routing and isolation filters | **blocked on the deferral** — which filters exist as *named decisions* is exactly what relocating the record decides |
 | the deferral lets rows 6-8 proceed although a second record would change their exactly-one cardinality oracles | **accepted, and the deferral widens**: rows 6, 7 and 8 assert cardinality and defer with row 14. Rows 1-5 and 9-13 proceed |
@@ -384,3 +385,61 @@ each other instead of each against its own prose.
 The vocabulary, complete, from `handlers.rs:678-700`: `revision_source` is one of
 `_meta`, `header`, `none`. A test asserting anything outside that set is
 asserting against a value production cannot emit.
+
+## Round-7: the open question is answered, and it was not a test question
+
+Rounds 5 and 6 left one source check standing, and rows 6 and 13 both waited on
+it: can the served stdio path produce a `RequestShape::Modern`? The answer is
+**no**, and it is stronger than "no" — the stdio path constructs no
+`RequestShape` at all.
+
+| check | result |
+|---|---|
+| `RequestShape` or `is_modern` in `src/gateway/server/mod.rs` | zero occurrences |
+| `RequestShape` or `is_modern` in `src/gateway/meta_mcp/mod.rs` | zero occurrences |
+| `handle_initialize` (`meta_mcp/mod.rs:1112-1152`) | negotiates a version string, records no shape and no session state derived from one |
+| callers of `handle_tools_call` | exactly two: `router/handlers.rs:1272` and `server/mod.rs:1715` |
+| the confirmation gate (`handlers.rs:1224-1249`) | sits above the **first** caller only |
+
+The source says so itself, twelve lines above the stdio `initialize` arm: the
+`server/discover` arm always answers with the legacy document, because
+"advertising it on a transport whose modern path is not wired would be a claim
+the gateway cannot honour" (`server/mod.rs:1687-1694`).
+
+### What it does to row 6
+
+`cache_scope_advertised` over stdio is `false`, and the row now says so. Not a
+default and not an omission — stdio negotiates no modern shape, and the field
+records that fact. The other four fields were never affected.
+
+### What it does to row 13 — and this is a product finding, not a test finding
+
+The confirmation gate is HTTP-only. It is not that a destructive stdio call is
+refused, nor that it proceeds with a warning: **it never reaches the gate**.
+`server/mod.rs:1715` calls `handle_tools_call` directly, and the refusal branch
+lives in the HTTP router above the other call site.
+
+So row 13 as written could not pass, and no test could have made it pass. It now
+exercises `CONFIRM.1a` over HTTP, where the mechanism it asserts actually
+exists, with the literals pinned in round 6.
+
+That is not a quiet narrowing of the criterion. The stdio half becomes row 16, a
+characterization test asserting the gap as it stands today, so the gap is
+carried in the suite instead of in a paragraph. When the gate is wired to stdio,
+row 16 goes red and names the ticket that made it go red — which is the intended
+signal, not a regression.
+
+**One decision is left for the requester, and it is not one this plan can take**:
+is an unconfirmed destructive call over stdio in scope for this release, or a
+defect filed against a later one? The test plan proceeds either way — row 13
+covers the criterion, row 16 pins the gap. What the answer changes is whether
+row 16 is expected to stay green through the release or to be deliberately
+turned red inside it.
+
+### Why this was worth a source read rather than another review round
+
+Three vendors converged on rows 6 and 13 across two rounds, each correctly, and
+none could resolve either — because the blocker was a fact about the code, not a
+disagreement about the plan. Two greps and two file reads settled what a fourth
+review round would have restated. A reviewer names the question; only the source
+answers it.
