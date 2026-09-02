@@ -8,6 +8,7 @@ use serde_json::json;
 use crate::backend::BackendRegistry;
 use crate::config::Config;
 use crate::config_reload::{LiveConfig, ReloadContext};
+use crate::gateway::destructive_confirmation::ConfirmationChannel;
 use crate::protocol::RequestId;
 
 use super::*;
@@ -33,7 +34,7 @@ fn allow_all_ctx_named<'a>(
         is_admin: false,
         input_capabilities: &[],
         retry: &crate::protocol::mrtr::NO_RETRY,
-        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        confirmation: ConfirmationChannel::Unavailable,
     }
 }
 
@@ -53,7 +54,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         is_admin: false,
         input_capabilities: &[],
         retry: &crate::protocol::mrtr::NO_RETRY,
-        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        confirmation: ConfirmationChannel::Unavailable,
     }
 }
 
@@ -693,8 +694,7 @@ providers:
                     is_admin: false,
                     input_capabilities: &[],
                     retry: &crate::protocol::mrtr::NO_RETRY,
-                    confirmation:
-                        crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+                    confirmation: ConfirmationChannel::Unavailable,
                 }
             },
         )
@@ -3252,7 +3252,7 @@ fn allow_all_ctx_declaring(
         is_admin: false,
         input_capabilities: declared,
         retry: &crate::protocol::mrtr::NO_RETRY,
-        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        confirmation: ConfirmationChannel::Unavailable,
     }
 }
 

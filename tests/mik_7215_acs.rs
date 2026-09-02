@@ -367,6 +367,15 @@ mod http {
         })
     }
 
+    /// A modern `tools/call`, same shape, for a named tool.
+    fn modern_tools_call(id: i64, name: &str, arguments: Value) -> Value {
+        let mut request = modern_tools_list(id);
+        request["method"] = json!("tools/call");
+        request["params"]["name"] = json!(name);
+        request["params"]["arguments"] = arguments;
+        request
+    }
+
     #[tokio::test]
     async fn ac_stateless_3_a_modern_response_carries_no_session_header() {
         let (status, session, body) = post_mcp(modern_tools_list(1)).await;
@@ -724,9 +733,17 @@ mod http {
         );
     }
 
-    /// MIK-7364.DISCLOSE.1 — a meta-tool an operator has hidden with
-    /// `exposed_meta_tools` must answer as if it did not exist, even for the
-    /// admin who would otherwise be allowed to run it.
+    /// MIK-7364 `DISC.2`, on the exposure route — a meta-tool an operator has
+    /// hidden with `exposed_meta_tools` must answer as if it did not exist,
+    /// even for the admin who would otherwise be allowed to run it.
+    ///
+    /// `DISC.2` is written against the admin-gate route: a non-admin naming a
+    /// hidden admin tool. This drives the exposure check instead, with an
+    /// *admin* caller precisely so the admin gate cannot be what answers. The
+    /// criterion is the same one — indistinguishable from an absent tool, same
+    /// code and same message — proved on the other of the two routes the
+    /// ticket lists. The admin-gate half is not covered here and still owes a
+    /// test.
     ///
     /// The confirmation gate and the exposure allow-list would both refuse this
     /// call, with different wording, and only one of them may answer. `-32001`
@@ -761,22 +778,11 @@ mod http {
         let state = state_with_exposure(true, auth, &["gateway_invoke".to_string()]);
         let (status, _session, body) = post_mcp_authed(
             Arc::clone(&state),
-            json!({
-                "jsonrpc": "2.0",
-                "id": 18,
-                "method": "tools/call",
-                "params": {
-                    "name": "gateway_kill_server",
-                    "arguments": { "server": "row18-sentinel" },
-                    "_meta": {
-                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                        "io.modelcontextprotocol/clientCapabilities": {},
-                        "io.modelcontextprotocol/clientInfo": {
-                            "name": "ExampleClient", "version": "1.0.0"
-                        }
-                    }
-                }
-            }),
+            modern_tools_call(
+                18,
+                "gateway_kill_server",
+                json!({ "server": "row18-sentinel" }),
+            ),
             Some("admin-key"),
         )
         .await;
@@ -818,22 +824,7 @@ mod http {
         // says "hidden" where the other says "Unknown tool".
         let (control_status, _session, control_body) = post_mcp_authed(
             state,
-            json!({
-                "jsonrpc": "2.0",
-                "id": 1801,
-                "method": "tools/call",
-                "params": {
-                    "name": "row18_nobody_implemented_this",
-                    "arguments": {},
-                    "_meta": {
-                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                        "io.modelcontextprotocol/clientCapabilities": {},
-                        "io.modelcontextprotocol/clientInfo": {
-                            "name": "ExampleClient", "version": "1.0.0"
-                        }
-                    }
-                }
-            }),
+            modern_tools_call(1801, "row18_nobody_implemented_this", json!({})),
             Some("admin-key"),
         )
         .await;
