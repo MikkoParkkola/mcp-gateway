@@ -2353,6 +2353,84 @@ mod tests {
         assert_eq!(response["error"]["message"], "Missing id");
     }
 
+    // -- MIK-7246.CONFIRM.1a: the destructive gate over stdio ---------------
+    //
+    // In-crate and at the dispatcher, deliberately. `MetaMcpCallerContext`
+    // borrows a `pub(crate)` trait object, so it cannot be built from `tests/`
+    // -- and widening that visibility to let it would be the wrong trade
+    // twice: a visibility change is a design shift, and a hand-built context
+    // is one no production caller constructs. `dispatch_single` is what the
+    // stdio read loop calls, so this is the path a spawned client takes.
+    //
+    // Stdio refuses unconditionally rather than consulting `is_modern`. The
+    // reason `for_modern()` refuses is not that the request is modern; it is
+    // that no asker can exist. On HTTP the revision is what removed the asker,
+    // so the revision is a serviceable proxy. Stdio reaches the same condition
+    // by a different route -- there is no session and never will be -- and the
+    // criterion is written about the condition, not the route.
+    #[tokio::test]
+    async fn ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm() {
+        // Bound rather than inlined: the kill switch is the execution sentinel,
+        // and reading it afterwards requires the same instance the call ran on.
+        let meta = test_meta_mcp();
+        let response = Gateway::dispatch_single(
+            &meta,
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 16,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_kill_server",
+                    // `describe_destructive_action` reads `arguments.server`
+                    // (router/handlers.rs:1582). Passing `name` instead yields
+                    // the generic fallback, and the verbatim assertion below
+                    // would then fail for a fixture reason rather than a real
+                    // one.
+                    "arguments": { "server": "row16-sentinel" }
+                }
+            }),
+            "stdio-session",
+        )
+        .await
+        .expect("a tools/call carrying an id must return a response");
+
+        assert_eq!(
+            response
+                .pointer("/error/code")
+                .and_then(serde_json::Value::as_i64),
+            Some(-32001),
+            "stdio has nobody to elicit over, so a destructive call cannot be \
+             confirmed and must be refused: {response}"
+        );
+        let message = response
+            .pointer("/error/message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            message.starts_with(
+                "Destructive action requires confirmation and none could be obtained:"
+            ),
+            "the refusal must be the unconfirmable branch, worded as the HTTP \
+             path words it -- one gate, one string: {message}"
+        );
+        assert!(
+            message.contains("row16-sentinel"),
+            "the refusal must name what it refused to act on: {message}"
+        );
+        assert!(
+            response.get("result").is_none(),
+            "a refused destructive call must not also return a result: {response}"
+        );
+        // The sentinel, and the point of the row: a gate that answers -32001
+        // after the tool has already run has refused nothing.
+        assert!(
+            !meta.kill_switch().is_killed("row16-sentinel"),
+            "the backend must be untouched by a refused call: {response}"
+        );
+    }
+
     // ── MIK-7217: server/discover over stdio ───────────────────────────────
     //
     // Dispatcher-level on purpose. Both dispatchers call one builder, so a test
