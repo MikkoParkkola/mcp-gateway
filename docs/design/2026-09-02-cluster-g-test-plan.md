@@ -31,8 +31,9 @@ to wait on. Row 16 covers it.
 | 13 | `CONFIRM.1a` | the **existing** HTTP case `ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused` (`tests/mik_7215_acs.rs:630`) still refuses after the gate is moved to serve both transports, with one assertion added: the execution sentinel is untouched | integration | invariance probe | **not free** — HTTP already refuses; the red comes from moving the gate, so the probe is to move it wrongly and watch this go red |
 | 14 | `OBS.2` | a `tools/list` whose profile **excludes** at least one tool records the **effective filter decisions** — which filters ran and what each removed — and the record is stamped **before** the response is written | integration | content + ordering | free — the live record names filter *inputs* only, so it cannot carry a decision |
 | 15 | `OBS.1` | a `tools/call` over **HTTP** carrying no revision in either `_meta` or the header records `protocol_revision` = `absent` and `revision_source` = `none` — the exact strings, not any falsy value | integration | regression | **not free** — production already emits these literals, so the row passes today; probe required, see below |
+| 19 | `CONFIRM.1a` | the JSON serialization of a refusal response contains **no** key naming the refusal marker at any depth, while an in-process assertion on the same value shows the marker set — the two halves together, because either alone passes trivially | unit | contract | **not free** — the field does not exist yet, so the row arrives red as a compile error rather than an assertion. It is the only thing that can go red if a later edit drops `#[serde(skip)]` or moves the marker into `error.data`, which is the pattern an implementer copies by imitation (`handlers.rs:845`) and the one that lets a backend forge its own accounting exclusion |
 | 18 | `CONFIRM.1a` | an **authenticated admin** caller, for whom `gateway_kill_server` is nonetheless hidden by `meta_tool_exposure`, calls it over HTTP and receives `-32601` / unknown tool — **not** `-32001` / requires confirmation | integration | disclosure | **red on arrival** — today's gate answers before the exposure check, so the hidden tool confirms its own existence |
-| 17 | `CONFIRM.1a` | a client whose breaker already carries **one** recorded failure refuses a destructive call and still carries **exactly one** — asserted for both refusal branches, the explicit operator decline and the unconfirmable-channel short-circuit — **and** an ordinary backend error on the same client then takes it to two | integration | regression + negative control | **red on arrival** — refusals do not reach the accounting tail today, so the exclusion does not exist |
+| 17 | `CONFIRM.1a` | a client whose breaker already carries **one** recorded failure refuses a destructive call and still carries **exactly one** — asserted for both refusal branches, the explicit operator decline and the unconfirmable-channel short-circuit — **and** an ordinary backend error on the same client then takes it to two | integration | regression + negative control | **red on arrival via the unconfirmable-channel branch**, which does not exist yet. The decline arm passes today for a reason that disappears with this change: the HTTP gate returns at `handlers.rs:1205` and `:1237`, so a refusal never reaches the accounting tail at all. Moving the gate inside `handle_tools_call` puts refusals *on* that path, which is what makes the exclusion marker necessary rather than decorative — and the row then discriminates all three implementations of it: erased reads zero, excluded reads one, counted reads two |
 | 16 | `CONFIRM.1a` | a destructive `tools/call` over **stdio** from an **admin** caller naming `gateway_kill_server`, where no confirmation can be obtained, returns code `-32001` **and** a message that opens `Destructive action requires confirmation and none could be obtained:` **and** names the fixture's server verbatim **and** leaves the execution sentinel untouched | integration | fail-closed | **red on arrival** — the gate is HTTP-only; this is the acceptance test for wiring it |
 
 Row 5 exists because both reviewers raised it independently in round 1: the design's "both
@@ -610,7 +611,7 @@ place and changing it is a separate argument with separate consequences.
 
 | question | how it was settled | answer | what it changed |
 |---|---|---|---|
-| Does any shipped flow kill a backend over stdio, so that refusing would break it? | `rg -rn 'gateway_kill_server'` across the tree, then read the two docs that mention it | no scripted or tested stdio kill flow exists, but `docs/DEPLOYMENT.md:741-745` documents the tool and stdio grants `is_admin: true`, so an operator driving the gateway from a spawned client **can** kill a backend today and will stop being able to | changed the honest answer from "breaks nothing" to "removes a capability deliberately" — which is what CONFIRM.1a asks for, and what the release notes must say |
+| Does any shipped flow kill a backend over stdio, so that refusing would break it? | `rg -rn 'gateway_kill_server'` across the tree, then read the two docs that mention it | no scripted or tested stdio kill flow exists, but `docs/DEPLOYMENT.md:740-748` documents the tool and stdio grants `is_admin: true`, so an operator driving the gateway from a spawned client **can** kill a backend today and will stop being able to | changed the honest answer from "breaks nothing" to "removes a capability deliberately" — which is what CONFIRM.1a asks for, and what the release notes must say |
 | Does the message the two transports emit have to match exactly, or only by prefix? | read the existing HTTP test's assertions and row 13 | the tests assert code plus a message prefix, so an exact match is not forced by the tests | made a shared message-builder load-bearing rather than tidiness — **and that is what the round-1 revision then made moot**. With one call site the two transports cannot emit different strings, so the question stops being about test strictness. Row 13 remains as the probe that the single site is still the only one |
 
 ### Round 1 of design review: the pre-dispatch refusal is the wrong mechanism
@@ -661,8 +662,9 @@ different noun.
 params object. `handle_tools_call` has already destructured that; the arguments object is what is
 in scope. The moved function takes `arguments: &Value` and reads `["server"]` directly. Passing
 the outer params at the new call site would compile and silently produce the fallback description
-for every action — a wrong message on a security refusal, with no test asserting the server name
-to catch it.
+for every action — a wrong message on a security refusal. Row 16 catches it, because round 4
+changed that row to assert the fixture's server name verbatim rather than a message prefix; before
+that repair this mistake would have shipped silently.
 
 #### What travels in the caller context
 
@@ -841,7 +843,7 @@ written down where the implementer is looking:
   can no longer state one, so the finding cannot be restated in either direction. An operator
   reading logs during an incident is the reader least able to check the claim, which is why the
   layer that cannot know must not be the layer that speaks.
-- `docs/DEPLOYMENT.md:739-750` — tells an operator that a stdio caller is treated as admin
+- `docs/DEPLOYMENT.md:740-748` — tells an operator that a stdio caller is treated as admin
   because it spawned the process, and lists the four gateway-wide tools under what an
   *anonymous HTTP* caller cannot reach. After this change **one of those four** —
   `gateway_kill_server` — also refuses over stdio, for an unrelated reason: nobody can be asked.
