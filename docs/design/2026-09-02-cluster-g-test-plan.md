@@ -823,7 +823,7 @@ Both verified at source before being accepted:
 | the unknown-tool fallback builds typo suggestions from a hardcoded `META_TOOLS` const, never filtered through `meta_tool_exposure` (`meta_mcp/mod.rs:1415-1425`) | verified: the const is a literal list and the suggestion path does not consult exposure | changes HTTP-visible behaviour on a path this change does not touch, and needs its own test |
 | HTTP checks admin access at `router/handlers.rs:1069-1073`, before dispatch at `:1272` where exposure is checked — so a non-admin naming a hidden admin tool is told *admin only* rather than *unknown tool* | verified: the `is_admin_meta_tool` guard returns early | same |
 
-**Disposal: filed**, as one ticket, because a human decides whether a behaviour change on the
+**Disposal: filed** as [MIK-7364](https://linear.app/parm/issue/MIK-7364), one ticket for both, because a human decides whether a behaviour change on the
 shipped HTTP path belongs in this release. Not repaired here — the repair is not smaller than
 the ticket, and each route needs an assertion of its own.
 
