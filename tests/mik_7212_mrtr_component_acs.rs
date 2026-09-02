@@ -715,3 +715,161 @@ async fn ac_mrtr_2_the_backends_own_state_is_never_relayed_to_the_client() {
         "the handle must seal the backend's state, or the exchange cannot be resumed"
     );
 }
+
+// ---------------------------------------------------------------------------
+// MRTR.3 — a client-presented handle is attacker-controlled (wire half)
+// ---------------------------------------------------------------------------
+//
+// The plan's original oracle — four presentations "each refused with a distinct
+// reason" — is not satisfiable here and must not be faked. `client_message()`
+// answers one constant for every variant
+// (`src/protocol/continuation.rs:234-236`); the per-variant text exists only in
+// `Display` (`:239-253`) and never reaches a client. So:
+//
+//   * distinctness is proved at unit level, on the `ContinuationError` variant;
+//   * the wire proves the constant, and nothing more.
+//
+// The gap between those two is a finding about the requirement, not a hole in
+// this file: "each refused with a distinct reason" is unobservable at the wire
+// by design, and nobody should later read these cases as covering it. The
+// collapse is treated as the specification — a verifier that tells an attacker
+// whether a forgery failed for want of a signature, a known key, or an intact
+// tag tells them which to fix next.
+//
+// Four identical refusals cannot fail against a verifier that refuses
+// everything, which is exactly what this build does today. The positive control
+// is therefore not decoration; it is the only case at this level that
+// discriminates a correct verifier from a blanket one.
+
+/// A handle minted by a *different* gateway process.
+///
+/// `ContinuationState::new()` draws its own key material, so this is the
+/// arrangement the accepted design deploys — independent keys per process, no
+/// shared store (`docs/design/2026-08-30-shared-continuation-state.md:107-120`).
+/// The payload is identical in every field; only the minting key differs.
+fn mint_on_a_foreign_process(tool: &str, args: &Value) -> String {
+    let foreign = ContinuationState::new();
+    let payload = Payload::mint(
+        BACKEND.to_string(),
+        Some(SEALED_STATE.to_string()),
+        PRINCIPAL_A.to_string(),
+        original_request_digest(BACKEND, tool, args),
+        foreign.replica().to_string(),
+        now_secs(),
+    );
+    foreign
+        .keyring()
+        .mint(&payload)
+        .expect("the foreign keyring must mint")
+}
+
+/// Flip one character in the middle of an envelope, leaving its length intact.
+///
+/// The tampered byte lands in the sealed body, so the envelope stays
+/// well-formed and only its authentication can catch it.
+fn tamper(handle: &str) -> String {
+    let mut chars: Vec<char> = handle.chars().collect();
+    let middle = chars.len() / 2;
+    chars[middle] = if chars[middle] == 'A' { 'B' } else { 'A' };
+    chars.into_iter().collect()
+}
+
+#[tokio::test]
+async fn ac_mrtr_3_every_forged_presentation_is_refused_by_the_continuation_guard() {
+    // GIVEN: a genuine handle, and four ways a client can present something else.
+    let state = app_state();
+    let args = arguments();
+    let genuine = mint_for(&state, PRINCIPAL_A, TOOL, &args);
+
+    let presentations = [
+        (
+            "in the clear, with no envelope at all",
+            json!({
+                "backend": BACKEND,
+                "principal": PRINCIPAL_A,
+                "backend_request_state": SEALED_STATE
+            })
+            .to_string(),
+        ),
+        (
+            "minted by a process with independent key material",
+            mint_on_a_foreign_process(TOOL, &args),
+        ),
+        (
+            "truncated envelope",
+            genuine[..genuine.len() - 8].to_string(),
+        ),
+        ("tampered body, envelope otherwise intact", tamper(&genuine)),
+    ];
+
+    // Every row is driven before anything is asserted, so one failing
+    // presentation cannot hide the colour of the three behind it.
+    let mut offenders: Vec<String> = Vec::new();
+    for (index, (case, handle)) in presentations.iter().enumerate() {
+        // WHEN: it is presented on the retry path.
+        let (_, response) = post(&state, &retry_body(index as u64 + 1, TOOL, &args, handle)).await;
+
+        // THEN: refused in the continuation vocabulary — the same sentence for
+        // all four, which is what the wire specifies. The HTTP status is not
+        // asserted: a 400 and a 200-with-error are both refusals, and pinning
+        // one would fail a case for a reason that is not its criterion.
+        let message = error_message(&response)
+            .unwrap_or_else(|| format!("not refused at all, response was {response}"));
+        if !message.contains(ContinuationError::Malformed.client_message()) {
+            offenders.push(format!("{case}: got {message:?}"));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "every forged presentation must be refused by the continuation guard; these were not: \
+         {offenders:#?}"
+    );
+}
+
+#[tokio::test]
+async fn ac_mrtr_3_a_genuine_handle_is_still_accepted() {
+    // GIVEN: the handle this gateway minted, for this principal and this call.
+    let state = app_state();
+    let args = arguments();
+    let genuine = mint_for(&state, PRINCIPAL_A, TOOL, &args);
+
+    // WHEN: presented unaltered.
+    let (_, response) = post(&state, &retry_body(1, TOOL, &args, &genuine)).await;
+
+    // THEN: the guard did not stop it. Without this half, refusing every
+    // presentation passes all four negatives above.
+    assert_not_refused_by_the_continuation_guard(&response, "a genuine handle");
+}
+
+// ---------------------------------------------------------------------------
+// MRTR.5d — a handle does not travel between processes
+// ---------------------------------------------------------------------------
+//
+// The plan files this at `integration`, on the reading that a second process is
+// needed. What the criterion actually asserts is that key material is per
+// process and a foreign envelope cannot be opened — and two `ContinuationState`
+// values already have independent key material, because that is what
+// `ContinuationState::new()` does. A second OS process would add a port and a
+// binary, not a stronger assertion: the envelope is refused for the same reason
+// either way, and this level can observe the refusal's vocabulary, which a
+// process boundary would only make harder to read.
+//
+// Recorded as a plan-vs-code disagreement rather than silently re-levelled. If
+// the operator wants the process boundary itself proved, that is a different
+// criterion — about deployment, not about continuations.
+
+#[tokio::test]
+async fn ac_mrtr_5d_a_handle_minted_by_another_process_is_refused() {
+    // GIVEN: a handle minted under key material this process never held.
+    let state = app_state();
+    let args = arguments();
+    let foreign = mint_on_a_foreign_process(TOOL, &args);
+
+    // WHEN: presented to this process.
+    let (_, response) = post(&state, &retry_body(1, TOOL, &args, &foreign)).await;
+
+    // THEN: refused explicitly, in the continuation vocabulary — never silently
+    // treated as a fresh call, which is the failure mode a status-only
+    // assertion would miss.
+    assert_refused_by_the_continuation_guard(&response, "a foreign process's handle");
+}
