@@ -26,6 +26,12 @@ Status vocabulary:
 - **MET** — production code implements it AND a test exercises it through a production path (file:line for both).
 - **UNWIRED** — code exists but has zero non-test callers (symbol + "zero production call sites").
 - **UNTESTED** — production code exists and is reachable, but no test covers it (file:line).
+- **PARTIAL** — production code implements part of the clause, or implements it only under
+  conditions the clause does not qualify. Cite file:line for the part that holds AND for the
+  part that does not; a PARTIAL with only the first is a MET that has not been checked.
+  Distinct from UNWIRED (code with no callers) and UNTESTED (callers but no test): a PARTIAL
+  row is wired and tested and still does not meet what the clause says.
+  **PARTIAL is BLOCKING**, per the rule below — it is neither MET nor N/A.
 - **ABSENT** — nothing implements it.
 - **N/A** — with reason.
 
@@ -68,7 +74,7 @@ Sections below are appended incrementally as each requirement group is verified.
 | MIK-7213.CACHE.1a | `ttlMs` returned on all five list/read methods | MET | `handlers.rs:1385-1391,1398-1433`; test `tests/mik_7213_acs.rs:252-295` asserts the field on each of the five methods | no |
 | MIK-7213.CACHE.1b | `cacheScope` returned on all five list/read methods | MET | `handlers.rs:1385-1391,1398-1433`; test `tests/mik_7213_acs.rs:252-295` asserts the field on each of the five methods | no |
 | MIK-7213.CACHE.2 | caller-dependent list results ⇒ private scope | MET | `cacheable.rs:46` `for_list(true)`, recorded per method in `SCOPE_TABLE` (`:62-75`) and read by `handlers.rs:998,1535` through `scope_for_method`; tests `mik_7213_acs.rs:97` `ac_cache_2_this_gateways_list_is_private`, `:89` `ac_cache_3_a_filtered_list_is_never_public` | no |
-| MIK-7213.CACHE.3a | `cacheScope: "public"` only where the response is provably invariant across authorization contexts | MET (vacuous) | `cacheable.rs:62-75` `SCOPE_TABLE` has five rows and **zero** public, so no public answer is emitted today. Coverage is asserted against the table's **membership**, not its answers (`mik_7213_acs.rs:336`), so nothing checks that a future public row is justified — this clause holds because the set it constrains is empty, which is why it is recorded separately from 3b | no |
+| MIK-7213.CACHE.3a | `cacheScope: "public"` only where the response is provably invariant across authorization contexts | MET | Vacuously: `cacheable.rs:62-75` `SCOPE_TABLE` has five rows and **zero** public, so no public answer is emitted today. Coverage is asserted against the table's **membership**, not its answers (`mik_7213_acs.rs:336`), so nothing checks that a future public row is justified — this clause holds because the set it constrains is empty, which is why it is recorded separately from 3b | no |
 | MIK-7213.CACHE.3b | a decision table naming which endpoints may ever be public exists and is referenced from the emitting code | MET | table exists (`cacheable.rs:62-75` `SCOPE_TABLE`) and the emitting code reads it (`handlers.rs:998,1535` via `scope_for_method`), which is the clause that was missing. `mik_7213_acs.rs:336` `ac_cache_3_every_cacheable_method_has_an_assessed_row`, falsified 2026-09-01 by deleting the `prompts/list` row (red at `:350`, green on restore). Doc anchor linted by `:389` | no |
 | MIK-7213.CACHE.4a | shared cache keyed on every request-derived input that varies the response | PARTIAL | The seam exists and both call sites go through it: `cache.rs:229` `ResponseCache::response_key`, called at `meta_mcp/invoke.rs:852,1308`. Principal is in the key, closing the case where two authenticated callers shared one entry with propagation off (the shipped default); test `mik_7213_acs.rs:371` `ac_cache_4_two_principals_do_not_share_an_entry`, falsified 2026-09-01 by dropping the principal (red at `:380`). Still absent from the key: routing profile (4.d) and protocol revision (4.e), plus the behavioural pairs 4.a/4.c that prove the key the cache *consults* is the differing one | yes |
 | MIK-7213.CACHE.4b | shared cache carries a policy epoch that invalidates it on a grant or profile change | ABSENT | no policy epoch participates in `ResponseCache::response_key` (`cache.rs:229`); plan rows 4.f.1-4.f.3 are unimplemented. A grant or profile change therefore leaves prior entries servable | yes |
