@@ -283,12 +283,13 @@ def named_criteria(cell):
             names.append(head)
             continue
         # A range is `<name ending in a digit>-<digit>`. A head ending in a clause
-        # letter (`CACHE.4a-c`) or a descending range is not one, and expanding it
-        # would invent names: keep the head, and let the declared count report the
-        # shortfall rather than crash on a document nobody can then read.
+        # letter (`MRTR.1a-3`) or a descending range (`MRTR.8-3`) is not one, and
+        # neither expanding it nor keeping its head is honest: an author who wrote
+        # a range meant more than one row, so silently counting the head lets a
+        # declared count of one agree with a token that names nothing.
         start = re.search(r"\d+$", head)
         if not start or int(end) < int(start.group()):
-            names.append(head)
+            unreadable.append(match.group(0))
             continue
         names += [
             re.sub(r"\d+$", str(n), head) for n in range(int(start.group()), int(end) + 1)

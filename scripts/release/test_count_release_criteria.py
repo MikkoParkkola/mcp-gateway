@@ -159,7 +159,22 @@ def test_a_malformed_range_is_reported_rather_than_expanded_into_invented_names(
     # `MRTR.1a-3` is not a range: its head ends in a clause letter, so there is no
     # number to count from. Expanding it crashed the checker, which makes the
     # document unreadable instead of reporting what is wrong with it.
-    assert counter.named_criteria("`MRTR.1a-3`, `MRTR.8-3`") == (["MRTR.1a", "MRTR.8"], [])
+    assert counter.named_criteria("`MRTR.1a-3`, `MRTR.8-3`") == (
+        [],
+        ["`MRTR.1a-3`", "`MRTR.8-3`"],
+    )
+
+
+def test_a_malformed_range_does_not_pass_as_its_own_head():
+    # Keeping the head made `MRTR.1a-3` resolve to one blocking row, so a cluster
+    # declaring one agreed with a token that names a range nobody can read.
+    ranged = ROLLUP.replace("`MRTR.1`, `MRTR.3` | 2", "`MRTR.1a-3` | 1")
+    assert membership(LEDGER, ranged) == [
+        "cluster A names `MRTR.1a-3`, which is not a criterion name",
+        "cluster A declares 1 rows, its criteria resolve to 0",
+        "MIK-7212.MRTR.1a is blocking and sits in no cluster",
+        "MIK-7212.MRTR.3a is blocking and sits in no cluster",
+    ]
 
 
 def test_a_token_the_parser_cannot_read_is_reported_rather_than_dropped():
