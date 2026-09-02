@@ -46,15 +46,40 @@ test is whether the finding can still be stated afterwards. Under the patch, it 
 
 ## What eliminates it
 
-Move each concern to the point the two transports **already** converge on.
+Move each concern to the point the two transports **already** converge on — but that is
+not one point for all three, and the first version of this note got that wrong. Review
+round 1 established that `handle_tools_call` is the convergence point for exactly one of
+the three concerns.
 
 | concern | convergence point | both callers |
 |---|---|---|
-| `tools/call` (confirmation, per-request record) | `MetaMcp::handle_tools_call` | `router/handlers.rs:1272`, `server/mod.rs:1715` |
-| `tools/list` record | `MetaMcp::handle_tools_list_with_params` (`meta_mcp/mod.rs:1267`) | `server/mod.rs:1700` directly; HTTP via `handle_tools_list_with_url_override:1312` |
+| destructive confirmation (`CONFIRM.1a`) | `MetaMcp::handle_tools_call` | `router/handlers.rs:1272`, `server/mod.rs:1715` |
+| `tools/list` record (`NFR.OBS.2`) | `MetaMcp::handle_tools_list_with_params` (`meta_mcp/mod.rs:1267`) | `server/mod.rs:1700` directly; HTTP via `handle_tools_list_with_url_override:1312` |
+| per-request record (`NFR.OBS.1`) | **not the dispatcher** — the per-message entry of each transport | see below |
 
-After the move, a transport cannot omit the concern, because reaching the dispatcher *is*
-the concern. The finding stops being statable rather than becoming unreachable.
+### Why `NFR.OBS.1` cannot live in the dispatcher
+
+Verified at source. The HTTP record is emitted at `router/handlers.rs:719`, and two facts
+about that position decide the design:
+
+- It fires for **every JSON-RPC method**, recording `method` as a field. `tools/call` is
+  one of many. A record placed in `handle_tools_call` would silently narrow the criterion
+  from every request to every tool call.
+- It fires **before** the `RequestShape::Malformed` early-return at `:726`. A request that
+  declared itself modern and then omitted a required field is recorded and *then* rejected
+  with `-32602`. Malformed requests never reach the dispatcher at all, so a record placed
+  there would lose exactly the population the migration telemetry most wants to see.
+
+So placing `OBS.1` at `handle_tools_call` would close the row on paper while **regressing
+HTTP**, which today records both classes. The elimination is still available, one layer
+lower: the record-and-classify block that spans `handlers.rs:~660-726` becomes one function
+that both transports call on each inbound message, before any shape-dependent return. A
+transport still cannot omit it, because parsing an inbound request *is* calling it — the
+same property the dispatcher was chosen for, at the layer where it is actually true.
+
+This preserves the elimination test. After the move the finding — *a concern can be added
+to one transport and not the other* — is still not statable, because there is one function
+and both message loops go through it.
 
 ### This is the third instance of a pattern already solved here
 
@@ -101,7 +126,7 @@ stdio merely because no elicitation-capable client is attached.
 | # | question | form | resolves by |
 |---|---|---|---|
 | 1 | Does the stdio dispatcher have the fields `NFR.OBS.1`'s record requires — notably `protocol_revision`? Its `server/discover` comment states it "has no access to the running config" (`server/mod.rs:1688`), which may bound what it can honestly report. | checkable | read the record's field list at `handlers.rs:719-730` against what is in scope at `server/mod.rs:1683`; a field that is unavailable is omitted, never fabricated |
-| 2 | Does the elicitation round-trip complete over stdio, or deadlock against a dispatcher already reading stdin? `ProxyManager` is in scope (`server/mod.rs:944,1181`), so the dependency is available; that is not the same as the round-trip returning. | checkable | drive a destructive call over stdio against a client that answers, and one that does not; the second must reach the "nobody could be asked" branch, not hang |
+| 2 | **RESOLVED — there is no stdio elicitation path at all.** The question asked whether the round-trip completes or deadlocks; both readings assumed a delivery mechanism exists. `rg` for `elicit` and `NotificationMultiplexer` outside tests returns `router/helpers.rs:134-152` (HTTP parsing) and `webhooks/mod.rs`, `streaming.rs` (HTTP delivery). `run_stdio` at `server/mod.rs:1495` touches none of them. So confirmation over stdio is not a wiring detail; it is a transport that does not exist. | checkable | done — see the revised residual below |
 | 3 | Is a per-request record on stdio one record per JSON-RPC message, or per session? "Per request" is unambiguous on HTTP and needs a stated reading here. | checkable | read `NFR.OBS.1` in `RELEASE-4.0.0-requirements.md`; if it does not distinguish, the reading is per JSON-RPC message and is recorded as a reading, not as the requirement |
 
 Question 2 is the one that can change the design's shape. If the round-trip cannot complete
@@ -122,3 +147,38 @@ which is what the criterion asks and all it asks.
 Separate document (§P2), written before any implementation and reviewed as tests. One row
 per criterion; the falsifier for each is that the *old* stdio path decides differently on
 the same fixture.
+
+## Review round 1 — two vendors, both SHIP-WITH-FIXES
+
+Reviewed 2026-09-02 by Codex/GPT (`~/.claude/bin/gpt-review`, 5 findings) and by the
+synthetic reviewer (4 findings). Both returned `SHIP-WITH-FIXES`. Grok was not used: it is
+unavailable, and on Grok-authored material it would be the author reviewing the author.
+
+Two findings were raised independently by both vendors, and both survived source
+verification. They are the reason the design above changed rather than gained a footnote.
+
+| finding | raised by | verified at source | disposition |
+|---|---|---|---|
+| `handle_tools_call` is not a convergence point for `NFR.OBS.1`: every non-`tools/call` method bypasses it, and HTTP records *before* the malformed early-return | both | yes — `handlers.rs:719` precedes the `Malformed` return at `:726` and logs `method` for every request | design corrected; `OBS.1` moved out of the dispatcher to the per-message transport entry |
+| the `ProxyManager` reuse cannot deliver confirmation over stdio | GPT | yes — no elicitation or multiplexer reference reachable from `run_stdio` | Q2 resolved as *no path exists*; residual rewritten below |
+
+The remaining findings — internal callers of `handle_tools_call` being unenumerated,
+double-counting risk for playbook and code-mode steps — are scheduled as a check before
+implementation, not answered here. Enumerating those callers is the first task of the test
+plan, since a caller that is not a transport must have a stated answer for both concerns.
+
+## Residual risk, rewritten after review
+
+The original residual said this note makes stdio *equal* to HTTP on confirmation. Given Q2,
+that claim was wrong: moving the confirmation to the chokepoint makes stdio *reach* the
+confirmation code, which then has nobody to ask, on the transport where `is_admin: true`
+means the admin check never says no either. Both controls would be nominally present and
+neither would be able to refuse anything.
+
+That leaves a decision the design cannot make for itself, and it is now the open question
+that blocks implementation: when confirmation cannot be sought on stdio, does the
+destructive call **proceed with a warning** (today's HTTP behaviour for a client without
+elicitation, and today's stdio behaviour by omission) or is it **refused**? GPT recommends
+refusal. Refusal is safer and is a behaviour change for anyone driving `gateway_kill_server`
+over stdio today. It is a question about what a user is owed, so it is the operator's,
+asked before implementation rather than after.
