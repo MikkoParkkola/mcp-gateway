@@ -187,18 +187,21 @@ The gate is `server.modern_protocol`, and it defaults to **false** (`src/config/
 `:1174`, whose comment reads *"Off until the revision is served completely, not partly."*), read
 at `src/gateway/router/handlers.rs:221`, `:755-760`, `:967`.
 
-**The gate has two halves, and this paragraph is where they are defined.** Both land in the same
-last commit, and either one alone leaves `NFR.COMPAT.1` unmet while the documents read closed:
+**The gate is that default, and this paragraph is where it is defined.** `SUPPORTED_VERSIONS`
+(`src/protocol/mod.rs:43`) is not a second half of it and must stay legacy-only. Checked against the
+specification rather than reasoned from the constant's name: `initialize` belongs to "`2025-11-25`
+and earlier"
+([lifecycle](https://modelcontextprotocol.io/specification/2026-07-28/basic/lifecycle)), and a
+modern client never sends it — the same page records that a modern client against a legacy server
+*fails* because "`initialize` is an unknown method". A dual-era server answers `initialize` only for
+legacy clients, and serves them the negotiated legacy revision. Listing `2026-07-28` there would
+have a retired handshake negotiate a revision that has no handshake.
 
-| half | constant | what it unblocks | without it |
-|---|---|---|---|
-| handshake | `SUPPORTED_VERSIONS` gains `2026-07-28` (`src/protocol/mod.rs:43`) | `initialize` may negotiate the revision | `negotiate_version` (`:48`) answers a 2026 client `2025-11-25` |
-| serving | `server.modern_protocol` defaults true (`src/config/mod.rs:1174`) | the stateless path serves it, discovery advertises it | a stock gateway serves it to nobody |
-
-Whether 4.0.0 does this at all is operator decision 5. The two constants are separate on purpose —
-`MODERN_VERSIONS` (`src/protocol/meta.rs:219`) already carries the string and drives method
-availability on `POST /mcp`, so the modern path can be complete while `initialize` still denies it,
-which is today's state.
+This has been concluded the wrong way twice — once in the release plan, once by a reviewer — so the
+reasoning is recorded here, not the conclusion alone. The two constants are separate on purpose:
+`MODERN_VERSIONS` (`src/protocol/meta.rs:219`) carries the string and drives method availability on
+`POST /mcp`, which is the surface the revision is actually served on. Whether 4.0.0 flips the
+default at all is operator decision 5.
 
 ### One commit must not be handed to a reviewer whole
 

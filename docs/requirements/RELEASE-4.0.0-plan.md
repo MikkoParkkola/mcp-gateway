@@ -228,7 +228,7 @@ scheduled independently of that cluster; the four that stand alone are the excep
 | SEC.2, SEC.3, SEC.4, PERF.3, OBS.4 | with cluster A — each verifies the continuation envelope, and none can be written against an unwired path |
 | OBS.3 | with cluster C — there is no era detection to observe until C lands |
 | OBS.1, OBS.2 | cluster I, above |
-| COMPAT.1 | with cluster B — the ABSENT clause is the modern revision in `SUPPORTED_VERSIONS`, which is B's work, not a separate task |
+| COMPAT.1 | with cluster B — the ABSENT clause is the modern revision being served at all, which the `server.modern_protocol` default gates and B's work unblocks, not a separate task |
 | PERF.1, PERF.2 | wave 0, and still open: both need a measurement against 3.5.0 that no code read can substitute for |
 | PERF.4 | wave 1 — the operator's ruling left the ceiling standing and the counting mechanism undecided |
 | SEC.1 | wave 3 — twelve of fifteen controls carry a refusal test; two remain, and one is blocked on files another session owns |
@@ -341,21 +341,17 @@ release gate.** The `tasks` capability types are dead, not a hazard: `ServerCapa
 is what capability negotiation is for. Nothing mis-serves anyone and deleting them buys nothing this
 release needs.
 
-The audit found the real gap one level up. `SUPPORTED_VERSIONS` (`src/protocol/mod.rs:43`) lists four
-legacy revisions and **deliberately omits `2026-07-28`** — the constant's own comment says why:
-listing it "would make `initialize` negotiate a revision the gateway cannot serve, and the client
-would be told yes and then served 2025 semantics — a worse failure than refusing, because it is
-silent. It is added in the increment that makes it true." That increment is this release. Until the
-constant gains the string, `negotiate_version` (`mod.rs:48-57`) falls back to `PROTOCOL_VERSION`, so
-a client declaring the pinned revision is answered `2025-11-25` at `initialize` and NFR.COMPAT.1's
-first clause is unmet.
+The audit found the real gap one level up, and the first reading of it was wrong. `SUPPORTED_VERSIONS`
+(`src/protocol/mod.rs:43`) lists four legacy revisions and omits `2026-07-28`, and this plan used to
+call adding the string the release gate. It is not: `initialize` is legacy-only in this revision
+([lifecycle](https://modelcontextprotocol.io/specification/2026-07-28/basic/lifecycle) scopes the
+handshake to "`2025-11-25` and earlier"), so a modern client never negotiates through it and the
+constant must stay as it is.
 
-So the flip is a release gate with an order: it is the LAST commit, not an early one, and it is only
-truthful once the modern request path is complete. It is also only half the gate — the constant
-governs `initialize`, while `server.modern_protocol` governs whether the path serves at all. Both
-halves, and why either alone is insufficient, are defined once in
-`docs/requirements/RELEASE-4.0.0-blocking-rollup.md` under "The two gates that are not rows".
-That paragraph is the definition; this one must not restate it.
+The gate is the `server.modern_protocol` default, defined once in
+`docs/requirements/RELEASE-4.0.0-blocking-rollup.md` under "The two gates that are not rows",
+together with the specification citation that settles the constant. That paragraph is the
+definition; this one must not restate it.
 
 The interim behaviour is conforming, checked rather than assumed. Both 2025-06-18 and 2025-11-25
 carry identical version-negotiation text: "If the server supports the requested protocol version, it
