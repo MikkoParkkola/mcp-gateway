@@ -86,16 +86,26 @@ Verification codes: **T** automated test · **M** measurement · **I** inspectio
 
 | ID | Requirement | Source | Verify |
 |---|---|---|---|
-| MIK-7215.STATELESS.1 | The gateway MUST accept a request carrying `io.modelcontextprotocol/protocolVersion` in `_meta` with no prior handshake, and MUST dispatch on that value per request. | Spec §2 major change | T |
+| MIK-7215.STATELESS.1a | The gateway MUST accept a request carrying `io.modelcontextprotocol/protocolVersion` in `_meta` with no prior handshake. | Spec §2 major change | T |
+| MIK-7215.STATELESS.1b | The gateway MUST dispatch on that `_meta` protocol version per request. | Spec §2 major change | T |
 | MIK-7215.STATELESS.2 | The gateway MUST include `io.modelcontextprotocol/serverInfo` in each result's `_meta`. | Spec: servers SHOULD identify themselves — adopted as MUST for this release, since a gateway that will not name itself is unusable to an operator debugging a chain | T |
-| MIK-7215.STATELESS.3 | The gateway MUST NOT emit `Mcp-Session-Id` on the modern path. It MUST continue to emit it on the legacy path. | Spec §1 major change | T |
-| MIK-7215.STATELESS.4 | Version mismatch MUST return `UnsupportedProtocolVersionError` listing supported versions, with HTTP 400. | Spec, Streamable HTTP binding | T |
-| MIK-7215.STATELESS.5 | An unimplemented method MUST return HTTP 404 with JSON-RPC `-32601`, distinguishable from a legacy transport's bare 404. | Spec, Streamable HTTP binding | T |
-| MIK-7215.STATELESS.6 | On the modern path the gateway MUST refuse `ping`, `logging/setLevel` and `notifications/roots/list_changed`. It MUST continue to serve them on the legacy path. | Spec §5 major change | T |
+| MIK-7215.STATELESS.3a | The gateway MUST NOT emit `Mcp-Session-Id` on the modern path. | Spec §1 major change | T |
+| MIK-7215.STATELESS.3b | The gateway MUST continue to emit `Mcp-Session-Id` on the legacy path. | Spec §1 major change | T |
+| MIK-7215.STATELESS.4a | Version mismatch MUST return `UnsupportedProtocolVersionError` listing supported versions. | Spec, Streamable HTTP binding | T |
+| MIK-7215.STATELESS.4b | That version-mismatch response MUST carry HTTP 400. | Spec, Streamable HTTP binding | T |
+| MIK-7215.STATELESS.5a | An unimplemented method MUST return JSON-RPC `-32601`. | Spec, Streamable HTTP binding | T |
+| MIK-7215.STATELESS.5b | That response MUST carry HTTP 404, distinguishable from a legacy transport's bare 404. | Spec, Streamable HTTP binding | T |
+| MIK-7215.STATELESS.6a | On the modern path the gateway MUST refuse `ping`, `logging/setLevel` and `notifications/roots/list_changed`. | Spec §5 major change | T |
+| MIK-7215.STATELESS.6b | The gateway MUST continue to serve `ping`, `logging/setLevel` and `notifications/roots/list_changed` on the legacy path. | Spec §5 major change | T |
 | MIK-7215.STATELESS.7 | The gateway MUST NOT emit `notifications/message` for a request that did not carry `io.modelcontextprotocol/logLevel` in `_meta`. | Spec §5: *"servers MUST NOT emit"* | T |
-| MIK-7215.STATELESS.8 | A dual-era server MUST serve both eras on one endpoint, selecting from how the caller opens: `initialize` selects legacy, per-request `_meta` selects modern. | Spec: *"A dual-era server MAY serve both eras concurrently"* — adopted as MUST because the alternative is a second port operators must know about | T, D |
-| MIK-7215.STATELESS.9 | A modern request MUST carry both `io.modelcontextprotocol/protocolVersion` **and** `io.modelcontextprotocol/clientCapabilities` in `_meta`; both are **required**. A request missing either is malformed and MUST be rejected with JSON-RPC `-32602`, and HTTP `400 Bad Request` on the HTTP path. | Spec, `_meta` per-request fields: *"A request missing any required field is malformed; the server MUST reject it with … `-32602` … the response status MUST be `400 Bad Request`"* | T |
-| MIK-7215.STATELESS.10 | The gateway MUST NOT rely on a capability the client did not declare. Where processing needs one, it MUST return `MissingRequiredClientCapabilityError` (`-32021`) whose `data.requiredCapabilities` lists what was missing, with HTTP 400. | Spec: *"A server MUST NOT rely on capabilities the client has not declared"* | T |
+| MIK-7215.STATELESS.8a | A dual-era server MUST serve both eras on one endpoint, with `initialize` selecting the legacy era. | Spec: *"A dual-era server MAY serve both eras concurrently"* — adopted as MUST because the alternative is a second port operators must know about | T, D |
+| MIK-7215.STATELESS.8b | A dual-era server MUST serve both eras on one endpoint, with per-request `_meta` selecting the modern era. | Spec: *"A dual-era server MAY serve both eras concurrently"* — adopted as MUST because the alternative is a second port operators must know about | T, D |
+| MIK-7215.STATELESS.9a | `io.modelcontextprotocol/protocolVersion` is **required** in a modern request's `_meta`; a request missing it is malformed and MUST be rejected with JSON-RPC `-32602`. | Spec, `_meta` per-request fields: *"A request missing any required field is malformed; the server MUST reject it with … `-32602` … the response status MUST be `400 Bad Request`"* | T |
+| MIK-7215.STATELESS.9b | `io.modelcontextprotocol/clientCapabilities` is **required** in a modern request's `_meta`; a request missing it is malformed and MUST be rejected with JSON-RPC `-32602`. | Spec, `_meta` per-request fields: *"A request missing any required field is malformed; the server MUST reject it with … `-32602` … the response status MUST be `400 Bad Request`"* | T |
+| MIK-7215.STATELESS.9c | On the HTTP path that rejection MUST carry HTTP `400 Bad Request`. | Spec, `_meta` per-request fields: *"A request missing any required field is malformed; the server MUST reject it with … `-32602` … the response status MUST be `400 Bad Request`"* | T |
+| MIK-7215.STATELESS.10a | The gateway MUST NOT rely on a capability the client did not declare. | Spec: *"A server MUST NOT rely on capabilities the client has not declared"* | T |
+| MIK-7215.STATELESS.10b | Where processing needs an undeclared capability, the gateway MUST return `MissingRequiredClientCapabilityError` (`-32021`) whose `data.requiredCapabilities` lists what was missing. | Spec: *"A server MUST NOT rely on capabilities the client has not declared"* | T |
+| MIK-7215.STATELESS.10c | That missing-capability response MUST carry HTTP 400. | Spec: *"A server MUST NOT rely on capabilities the client has not declared"* | T |
 
 ### 3.3 Headers
 
