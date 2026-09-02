@@ -937,48 +937,26 @@ confirmation pass would silently invalidate the citations the next round is chec
 Disposal: **fix it in this change**, as the last edit before the design freezes, once no
 reviewer is holding a line reference into it.
 
-### Round 3 of design review: "inside `handle_tools_call`" does not say what the gate reads there
+### Round 3 of design review — finding raised and withdrawn
 
-Raised while de-risking the implementation step, before any implementation code existed.
+A finding was raised here claiming the ratified mechanism was unimplementable: that "the gate
+moves inside `handle_tools_call`" says where the gate goes but not what it reads there, and that
+both facts the HTTP gate consults — `state.proxy_manager` and `is_modern` — are unavailable at
+that site. It was withdrawn on review, at source, and nothing in it survives.
 
-The round-1 revision moved the gate inside `handle_tools_call` and the document has treated that
-as settled. It specifies **where**, and it does not specify **what the gate consults** once it is
-there — and the two things the current HTTP gate consults are both unavailable at that site.
+Both facts are indeed absent from `MetaMcp` and from `MetaMcpCallerContext` **as they stand
+today**. That is the premise of the change, not an obstacle to it: the section above,
+*What travels in the caller context*, adds a `ConfirmationChannel` to the caller context whose
+`Elicit` variant carries the `ProxyManager` and the `ConfirmationPolicy` already decided at the
+HTTP edge. The finding read the current struct and drew a conclusion about the designed one.
 
-| what the HTTP gate reads | availability inside `handle_tools_call` |
-|---|---|
-| `state.proxy_manager`, passed to `require_destructive_confirmation` (`handlers.rs:1198`) | **absent.** `MetaMcp` has no proxy manager among its fields (`meta_mcp/mod.rs:200-240`), and it cannot hold an `Arc<AppState>` to reach one — the `authorizer` field's own comment records why that would be a cycle that never frees (`:113-116`) |
-| `is_modern`, derived from the request shape (`handlers.rs:738`) | **absent.** The shape is an HTTP request-parsing artefact; stdio constructs none, which is the whole of why option 1 was rejected |
+The CONFIRM.1b regression the finding believed it had discovered — that refusing whenever no
+asker is declared would also refuse a legacy HTTP caller that must keep warning — is named and
+foreclosed in that same section: HTTP always constructs `Elicit`, including when the session is
+empty, precisely because `Unavailable` denotes a transport with no asker rather than a request
+that happened to find no session. The finding restated the design's own rejected shortcut as a
+defect in it.
 
-So the mechanism as written cannot be implemented as written. That is a design finding, not an
-implementation detail, and it arrives at the only moment it is cheap.
-
-**What is available, and why it is nearly the right answer.** `MetaMcpCallerContext` already
-carries `input_capabilities`, and its doc comment states the condition this criterion is about in
-almost the criterion's own words: *"On stdio there is no per-request declaration to read, so the
-slice is empty — absent means absent, and a caller that declared nothing is never sent a
-continuation"* (`meta_mcp/mod.rs:132-137`). "No asker can exist" is readable there directly,
-without a proxy manager and without a shape.
-
-**Why it is not yet the answer, and this is the part that needs deciding rather than writing.**
-Refusing on an empty `input_capabilities` alone would refuse a *legacy HTTP* caller that declared
-no elicitation — which today reaches `Unsupported`, takes `for_legacy()`, and proceeds with a
-warning. `CONFIRM.1b` preserves that deliberately and is currently **MET**. A mechanism that
-reads only the capability slice therefore closes `CONFIRM.1a` by regressing `CONFIRM.1b`, and a
-change that trades one criterion for another has not met either.
-
-The gate at that site consequently needs **two** facts, not one: whether an asker can exist, and
-whether this caller is one the release governs. The first is available. The second is what the
-shape carried, and what stdio does not construct.
-
-**Open, and scheduled rather than assumed** (§P1). Not resolved here, because the resolution is a
-mechanism choice with a contract consequence and it should be reviewed as a design, not
-discovered in a diff:
-
-| question | what would resolve it | blocks |
-|---|---|---|
-| How does the gate, at its new site, distinguish a governed caller from a legacy one without a request shape? | read how `handle_tools_call`'s existing callers already differentiate the two transports, then pick between carrying the era on `MetaMcpCallerContext` and deriving it from what is already there | the implementation step, and nothing else — rows 16, 18 and 19 are unaffected, since they assert on the refusal's observable behaviour rather than on how it is decided |
-
-Rows 16 and 18 stay exactly as specified. Row 16 asserts what a stdio caller receives, and every
-candidate mechanism above gives it the same answer; the disagreement between them is entirely
-about the legacy HTTP caller, which row 16 does not exercise.
+Recorded rather than deleted because the failure is worth one line to a later reader: a design
+review that verifies the code as it currently stands will call every unbuilt mechanism
+unimplementable, and will do it with citations.
