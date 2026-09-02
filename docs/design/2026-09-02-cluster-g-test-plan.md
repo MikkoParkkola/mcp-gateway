@@ -100,7 +100,7 @@ green run rather than by `git status`.
 
 **Row 11 is half free.** Its record count fails today like the rest, but its second assertion —
 that notification elements produce no response envelope — passes today, because `run_stdio`
-already writes nothing when the response vector is empty (`src/gateway/server/mod.rs:1592`).
+already writes nothing when the response vector is empty (`src/gateway/server/mod.rs:1594`).
 That half is a regression guard on existing behaviour and takes the same probe treatment: make
 the batch path emit an empty array unconditionally, and row 11 must go red on the response
 assertion while its record assertion stays green. Two halves that fail together would not tell
@@ -183,7 +183,7 @@ pinned is *classifier, then record, then return*, and a hand-built shape skips t
 
 - **Batch requests — the N/A was WRONG and is withdrawn.** An earlier revision of this plan
   recorded batch as not-applicable on the strength of a search. `run_stdio` checks
-  `request.is_array()` and routes to `dispatch_batch` (`src/gateway/server/mod.rs:1586-1594`),
+  `request.is_array()` and routes to `dispatch_batch` (`src/gateway/server/mod.rs:1585-1598`),
   so batch is live on stdio today. Two verification failures produced that claim, and both are
   mine: the first search covered `src/transport/` and `src/protocol/` while the stdio loop
   lives in `src/gateway/server/`, and the second was piped through `head -15`, which cut the
