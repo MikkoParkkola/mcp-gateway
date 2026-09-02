@@ -25,7 +25,7 @@ Every number here was read out of the tree, not estimated.
 |---|---|---|
 | 1 | Population is 95 declared criteria over 100 ledger rows — a criterion may already split into sub-rows (`MRTR.9a`, `MRTR.10a`, `MRTR.10b`) | `python3 scripts/release/count-release-criteria.py` → `Coverage: 95 criteria, 100 rows, 66 met or non-blocking, 34 blocking.` |
 | 2 | "Outcome" is a fourth axis, not a cell attribute: "crossed with role (server ‖ client), transport, revision, and outcome (positive ‖ negative)" | `RELEASE-4.0.0-test-plan.md:394` |
-| 3 | The revision axis is two-class, not flat: four negotiable revisions, plus `2026-07-28` which is deliberately absent from `SUPPORTED_VERSIONS` until the modern request path exists | `src/protocol/mod.rs:38,43` |
+| 3 | The revision axis is the union of TWO declared sets, each with its own serving path: `SUPPORTED_VERSIONS` (four legacy-negotiable revisions) and `MODERN_VERSIONS` (`2026-07-28`). The modern revision is absent from the first BY DESIGN and present in the second — it is unreachable through legacy `initialize`, not unserved | `src/protocol/mod.rs:38,43`, `src/protocol/meta.rs:215-219`, `src/gateway/meta_mcp/mod.rs:1088-1092` |
 | 4 | The axis set cannot be read off requirement text. A token scan over the 95 criteria finds a client/backend token in 15, a transport token in 12, a revision token in 4 | token scan, this session |
 | 5 | Hand-maintained headline numbers in this document family have drifted three times | `scripts/release/count-release-criteria.py:5-7` |
 
@@ -41,19 +41,55 @@ a promise.
 
 **One row per normative statement, sub-rowed where a statement carries
 independently verifiable clauses.** Row ≠ criterion, and that is not an
-invention: `MRTR.9a/10a/10b` already exist in the ledger, which is why 95
-criteria produce 100 rows (constraint 1). A row carries its own axis set.
+invention: `MRTR.9a/10a/10b` already exist, which is why 95 criteria produce 100
+rows (constraint 1).
+
+**The population derives from the REQUIREMENTS file; the ledger is a
+cross-check.** The 100-row count above was read out of `criteria-status.md`,
+which records *status* — its clause splits happened where someone needed to
+track two verdicts, not wherever a statement carries two independently
+verifiable obligations. Those two sets are not guaranteed equal, and where the
+ledger has not split a compound obligation, evidence for one clause stands in
+for its sibling and the sibling never appears as missing.
+
+So each independently verifiable clause gets a stable subcriterion ID in
+`RELEASE-4.0.0-requirements.md`, in the `<TICKET>.<COMPONENT>.<NUM>` form the
+acceptance-criteria convention already uses, and the population is exactly that
+ID set. The ledger's 100 rows become a reconciliation target: a divergence
+between the two counts is a finding in one of them — a check the current design
+cannot perform at all, because both numbers come from the same file.
 
 ### Q2 — which axes apply to which row?
 
-**Invert the default: axis membership is per-row DATA, declared explicitly, not
-derived from the requirement text.** Constraint 4 is the reason — only 15 of 95
-criteria name a role at all, so a derivation rule would silently drop the axis
-from 80 rows and call the result complete. Declaring membership costs one field
-per row and makes an omission visible as an omission.
+**All four, to every row. The product is TOTAL.** Acceptance condition 2 states
+the matrix as one row per normative statement *crossed with* role, transport,
+revision and outcome. A cross product with per-row opt-outs is not a cross
+product, and a row that declares an axis away removes its own cells from the
+population `--check` then reports as complete.
 
-This also caps the size. Cells exist only where the row declares the axis;
-~4,000 is the naive product, never the population.
+Two candidate mechanisms were considered, and both are rejected:
+
+- *Derive membership from requirement text* — rejected by constraint 4. Only 15
+  of 95 criteria name a role, so derivation drops the axis from ~80 rows and
+  calls the result complete.
+- *Declare membership per row* — rejected because it relocates that judgement
+  rather than removing it. The implementer who fills the matrix also decides
+  which cells the matrix is graded on, in the same pass, and every omission is
+  invisible by construction: an absent cell and an absent axis are the same
+  absence.
+
+What is left is totality. Every row emits every cell, and a combination that
+genuinely cannot apply is `EXEMPT` with a named rule and a witness (Q3) — a
+claim a reviewer can read and disagree with, which is exactly what neither
+rejected mechanism could produce.
+
+**Size is not the objection it looks like.** The total product is ~4,000 cells,
+and the line above about a 4,000-cell artefact being a promise rather than an
+artefact applies to a HAND-MAINTAINED one. Nothing here is hand-maintained:
+cells are generated (Q4), and a human authors two things only — exemption RULES,
+of which a handful cover thousands of cells, and EVIDENCE, which exists only for
+cells genuinely in play. Cell count is the renderer's problem. Authoring count
+is the human's, and it does not scale with the product.
 
 ### Q3 — how is "not applicable" represented?
 
@@ -107,7 +143,13 @@ review material. A data file alone is unreviewable by half the gate.
 4. Headline numbers are owned by the script, never hand-decremented
    (constraint 5).
 
-**The ratchet needs two numbers, not one.** Publish `cells-in-scope` and `EMPTY`
+**The ratchet needs two numbers, not one.** Totality (Q2) already removes the
+easy way to game it — `cells-in-scope` is now a pure function of the requirement
+ID set and the two axis-value constants, so no judgement made while filling the
+matrix can shrink it. What remains is the hard way: editing the requirements
+file, or the version constants, to change the inputs. That is a legitimate act
+which must not be silently indistinguishable from progress, so publish
+`cells-in-scope` and `EMPTY`
 separately. "EMPTY must never increase" alone is gameable by shrinking the
 population: amend a requirement, cells vanish, `EMPTY` falls, and the graph reads
 as progress. A fall in `cells-in-scope` is a scope move and needs a §P0 receipt;
@@ -122,7 +164,7 @@ does not have to be a red PR on day one to bite.
 | option | why not |
 |---|---|
 | (a) one giant markdown table | 100 rows × up to 20 cells. Unreviewable in a diff, unmergeable between two authors, and hand-maintained headline drift is documented three times over (`count-release-criteria.py:5-7`) |
-| (b) several markdown tables, one per requirements section | Readable, but the axis set is per-row (Q2), so a section table cannot carry it uniformly — and nothing is mechanically checkable |
+| (b) several markdown tables, one per requirements section | Readable, but nothing is mechanically checkable, and ~4,000 generated cells (Q2) are not something a human splits across section tables by hand |
 | (d) generate the matrix from test annotations or a `#[test]` harvest | **Strongest rejection.** It can only report cells that HAVE tests, so a missing test yields a missing ROW, not an `EMPTY` cell. That is precisely the failure acceptance 2 forbids: the artefact would be most complete exactly where the work is least done |
 
 Option (c) — data file plus renderer plus check — is chosen. Precedent exists
@@ -159,18 +201,18 @@ directory. Named here so a reviewer can refuse it, rather than passing silently.
 
 - Populating the matrix. This decides the shape; filling it is the work it gates.
 - Wiring `--check` as a blocking CI job (see U-C).
-- Any change to `SUPPORTED_VERSIONS` or the modern request path.
+- Any change to `SUPPORTED_VERSIONS`, `MODERN_VERSIONS`, or the modern request path.
 - Any change to what `criteria-status.md` records.
 
 ## Open questions — answered
 
 | question | what was run | what came back | what it changed |
 |---|---|---|---|
-| Is the revision axis flat? | read `src/protocol/mod.rs:26,38,43` and `src/protocol/meta.rs:218-219` | 4 negotiable revisions plus 1 handshake-unreachable modern one | Axis is two-class; every `2026-07-28` cell is `EMPTY`-or-`EXEMPT` by construction today |
+| Is the revision axis flat? | read `src/protocol/mod.rs:26,38,43`, `src/protocol/meta.rs:215-219`, `src/gateway/meta_mcp/mod.rs:1088-1092` | TWO constants, not one list with a hole: `SUPPORTED_VERSIONS` (4 legacy) and `MODERN_VERSIONS` (`2026-07-28`), the second deliberately separate | Axis = the union of both sets. The first reading of this — that every `2026-07-28` cell is dead by construction — was WRONG, and would have written a whole column off as unservable while the modern path serves it |
 | Is "outcome" an axis or a cell attribute? | read `docs/requirements/RELEASE-4.0.0-test-plan.md:394` and `docs/requirements/RELEASE-4.0.0-requirements.md:320` | "crossed with role …, transport, revision, and outcome (positive ‖ negative)" | It is a fourth axis, cardinality 2 — the sizing had to use it |
 | Does the repo already split a criterion into sub-rows? | `rg` over `docs/requirements/`, plus the counter's output | `MRTR.9a/10a/10b` exist; 95 criteria vs 100 rows | Q1's row-is-not-criterion is established practice here, not invented |
 | Is there precedent for a checked-in data file plus a drift check? | listed `scripts/` and `benchmarks/`; read `scripts/release/count-release-criteria.py` | Two precedents | Chose option (c) over hand-maintained markdown |
-| Can the axis set be read off requirement text? | token scan over all 95 criteria | 15 role / 12 transport / 4 revision | NO — forced Q2's invert-the-default |
+| Can the axis set be read off requirement text? | token scan over all 95 criteria | 15 role / 12 transport / 4 revision | NO — this killed derivation as a mechanism, and per-row declaration fell to review for relocating the same judgement, leaving Q2's total product |
 
 ## Open questions — deferred
 
@@ -186,8 +228,9 @@ WIRING the checker respectively, and neither is in scope here.
 ## `NFR.COMPAT.4` — designed for either answer
 
 U-A is left open deliberately, and the design is built so that either ruling is a
-DATA change, never a redesign. Role-axis membership is per-row data (Q2) and the
-exemption vocabulary is data (Q3):
+DATA change, never a redesign. Every row now emits both role cells (Q2), so the
+ruling changes nothing about which cells exist — it changes only whether one
+exemption code is in the vocabulary, and the vocabulary is data (Q3):
 
 - Operator says the role clause stays **unqualified** → the `NO-SURFACE-IN-ROLE`
   code is deleted from the vocabulary, and those cells become `EMPTY`. That is the
