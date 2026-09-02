@@ -243,7 +243,9 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 | MIK-7272.OTEL.1 | `traceparent`, `tracestate` and `baggage` MUST be propagated through `_meta` across the gateway hop. | Spec §2 minor, SEP-414 | T |
 | MIK-7272.TASK.1 | The tasks extension (`io.modelcontextprotocol/tasks`) MUST be supported for long-running backend calls, with `tasks/get` polling and `tasks/update`. | Spec §6 major | T |
 | MIK-7084.SURFACE.1 | `gateway_search` MUST support tiered disclosure and MUST NOT emit ranking telemetry the caller cannot act on. Measured at ~60% of a lean payload, 13 of 16 signals the constant `1.0`. | MIK-7084, measured 2026-07-31 | T, M |
-| MIK-6865.SCHEMA.1 | Tool schemas exposed by the gateway MUST avoid the nested-object-in-array shapes that induce key invention in current models, and MUST remain valid under JSON Schema 2020-12 with the revision's `$ref` and composition bounds. | MIK-6865; spec §10 minor | T, M |
+| MIK-6865.SCHEMA.1a | Tool schemas exposed by the gateway MUST avoid the nested-object-in-array shapes that induce key invention in current models. | MIK-6865; spec §10 minor | T, M |
+| MIK-6865.SCHEMA.1b | Tool schemas exposed by the gateway MUST remain valid under JSON Schema 2020-12. | MIK-6865; spec §10 minor | T, M |
+| MIK-6865.SCHEMA.1c | Tool schemas exposed by the gateway MUST stay within the revision's `$ref` and composition bounds. | MIK-6865; spec §10 minor | T, M |
 
 ---
 
