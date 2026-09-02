@@ -111,14 +111,25 @@ Verification codes: **T** automated test · **M** measurement · **I** inspectio
 
 | ID | Requirement | Source | Verify |
 |---|---|---|---|
-| MIK-7214.HEADER.1 | Every modern POST MUST carry `MCP-Protocol-Version`; its value MUST equal `_meta.protocolVersion` in the body. | Spec, Protocol Version Header | T |
-| MIK-7214.HEADER.2 | `Mcp-Method` MUST be required on every modern request. `Mcp-Name` MUST be required for `tools/call`, `resources/read` and `prompts/get`, **and for no other method**. | Spec, Standard Request Headers table | T |
-| MIK-7214.HEADER.3 | Where a header and its body field disagree, the gateway MUST reject with HTTP 400 and `HeaderMismatch` (-32020). | Spec, Server Validation | T |
-| MIK-7214.HEADER.4 | A `Mcp-Name` value not representable in ASCII MUST be handled per the Base64 sentinel format, in both directions. | Spec, Value Encoding | T |
+| MIK-7214.HEADER.1a | Every modern POST MUST carry `MCP-Protocol-Version`. | Spec, Protocol Version Header | T |
+| MIK-7214.HEADER.1b | The `MCP-Protocol-Version` value MUST equal `_meta.protocolVersion` in the body. | Spec, Protocol Version Header | T |
+| MIK-7214.HEADER.2a | `Mcp-Method` MUST be required on every modern request. | Spec, Standard Request Headers table | T |
+| MIK-7214.HEADER.2b | `Mcp-Name` MUST be required for `tools/call`, `resources/read` and `prompts/get`. | Spec, Standard Request Headers table | T |
+| MIK-7214.HEADER.2c | `Mcp-Name` MUST be required **for no other method**. | Spec, Standard Request Headers table | T |
+| MIK-7214.HEADER.3a | Where a header and its body field disagree, the gateway MUST reject with `HeaderMismatch` (-32020). | Spec, Server Validation | T |
+| MIK-7214.HEADER.3b | That header-mismatch rejection MUST carry HTTP 400. | Spec, Server Validation | T |
+| MIK-7214.HEADER.4a | A `Mcp-Name` value not representable in ASCII MUST be emitted per the Base64 sentinel format. | Spec, Value Encoding | T |
+| MIK-7214.HEADER.4b | An inbound `Mcp-Name` in the Base64 sentinel format MUST be decoded per that format. | Spec, Value Encoding | T |
 | MIK-7214.HEADER.5 | Where a backend tool's `inputSchema` annotates a property with `x-mcp-header`, the gateway MUST mirror that argument's value into an `Mcp-Param-{name}` header on the outbound Streamable HTTP request. The annotation is a server-side schema declaration, not a caller-supplied parameter. | Spec `server/tools.mdx:334-344` | T |
-| MIK-7214.HEADER.7 | The gateway MUST validate every `x-mcp-header` value against all six spec constraints: non-empty; HTTP field-name token syntax (RFC 9110 §5.1); no control characters including CR or LF; case-insensitively unique across the `inputSchema`; applied only to `integer`, `string` or `boolean` properties, never `number`; integers within the IEEE-754 safe range. | Spec `server/tools.mdx:346-359` | T |
+| MIK-7214.HEADER.7a | The gateway MUST reject an `x-mcp-header` value that is empty. | Spec `server/tools.mdx:346-359` | T |
+| MIK-7214.HEADER.7b | The gateway MUST reject an `x-mcp-header` value that is not HTTP field-name token syntax (RFC 9110 §5.1). | Spec `server/tools.mdx:346-359` | T |
+| MIK-7214.HEADER.7c | The gateway MUST reject an `x-mcp-header` value containing control characters, including CR or LF. | Spec `server/tools.mdx:346-359` | T |
+| MIK-7214.HEADER.7d | The gateway MUST reject `x-mcp-header` values that are not case-insensitively unique across the `inputSchema`. | Spec `server/tools.mdx:346-359` | T |
+| MIK-7214.HEADER.7e | The gateway MUST reject `x-mcp-header` on a property that is not `integer`, `string` or `boolean` — `number` never qualifies. | Spec `server/tools.mdx:346-359` | T |
+| MIK-7214.HEADER.7f | The gateway MUST reject an `x-mcp-header` integer outside the IEEE-754 safe range. | Spec `server/tools.mdx:346-359` | T |
 | MIK-7214.HEADER.8 | A tool violating any HEADER.7 constraint MUST be excluded from `tools/list` and SHOULD be logged as a warning. Exclusion changes the surfaced tool set, so it shares the tool-metadata path with the destructive-annotation gate. | Spec `server/tools.mdx:346-359` | T |
-| MIK-7214.HEADER.9 | Outbound requests MUST carry the modern `_meta` envelope and the standard headers only where the peer negotiated a modern protocol era; emitting them to a legacy-negotiated peer is a regression. Header values MUST be derived from the negotiated envelope, not from the legacy handshake version. | Spec, Protocol Version Header; derived from HEADER.1 applied to the client role | T |
+| MIK-7214.HEADER.9a | Outbound requests MUST carry the modern `_meta` envelope and the standard headers only where the peer negotiated a modern protocol era; emitting them to a legacy-negotiated peer is a regression. | Spec, Protocol Version Header; derived from HEADER.1 applied to the client role | T |
+| MIK-7214.HEADER.9b | Outbound header values MUST be derived from the negotiated envelope, not from the legacy handshake version. | Spec, Protocol Version Header; derived from HEADER.1 applied to the client role | T |
 | MIK-7214.HEADER.6 | The gateway MUST validate header against body **before** authorizing or executing any request whose body it processes. Routing on an unvalidated header is permitted only where the gateway relays without acting. | Spec, Server Validation, and its stated load-balancer-versus-server rationale | T, I |
 
 ### 3.4 Results and errors
