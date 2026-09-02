@@ -146,7 +146,7 @@ is deferred rather than assumed.
 | field | value |
 |---|---|
 | **owner** | the Cluster F implementer, under MIK-7213 |
-| **what would resolve it** | an operator answer to a question only the operator can settle: are CACHE.1-4 read at full transport scope (HTTP + stdio) or HTTP-only? The design flags this as the team lead's reading of the release plan, not an operator confirmation (`…cache-keying.md:57-60`). If stdio is in scope, the second question is a checkable one: does the negotiated revision at `meta_mcp/mod.rs:1053` reach the key site, or does the stdio transport refuse to cache? |
+| **what would resolve it** | an operator answer to a question only the operator can settle: are CACHE.1-4 read at full transport scope (HTTP + stdio) or HTTP-only? The design flags this as the team lead's reading of the release plan, not an operator confirmation (`…cache-keying.md:57-60`). If stdio is in scope, the second question is a checkable one: does the negotiated revision at `handle_initialize` in `meta_mcp/mod.rs` reach the key site, or does the stdio transport refuse to cache? |
 | **when** | before the first line of the key constructor is written — the answer decides whether the constructor takes a `proto` that stdio can supply |
 | **what if it resolves badly** | if stdio cannot supply a revision, the fail-closed exit is taken: the stdio transport does not cache. That exit needs its own case — invoke twice over stdio, assert the backend is called twice — which is written only once the branch is chosen. Nothing depending on this is implemented meanwhile |
 

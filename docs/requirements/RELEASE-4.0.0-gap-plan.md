@@ -612,7 +612,7 @@ reachable both before and after implementation replaces it: two backends in one 
 
 ### `NFR.COMPAT.1` is owned by the `server.modern_protocol` default, and it is a dependency
 
-`SUPPORTED_VERSIONS` (`src/protocol/mod.rs:48`) names four revisions and `2026-07-28` is not among
+`SUPPORTED_VERSIONS` (`src/protocol/mod.rs`) names four revisions and `2026-07-28` is not among
 them, permanently: the 2026-07-28 lifecycle scopes `initialize` to "`2025-11-25` and earlier".
 `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) names the modern revision alone, for the stateless
 path that serves it. `COMPAT.1` requires the modern revision be *served*, which the legacy list

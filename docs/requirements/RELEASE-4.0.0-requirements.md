@@ -314,7 +314,8 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 
 ### 3.1.1 A version we invented and have been advertising
 
-`src/protocol/mod.rs:23` lists `2024-10-07` among supported protocol versions. The specification
+`SUPPORTED_VERSIONS` (`src/protocol/mod.rs`) lists `2024-10-07` among supported protocol
+versions. The specification
 defines five revisions — `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`, `2026-07-28` — and
 that is not one of them. It has been advertised to every client since 2026-01-26 and is repeated in
 `src/protocol/negotiate.rs`, `src/transport/http/tests.rs` and `docs/ARCHITECTURE.md`.

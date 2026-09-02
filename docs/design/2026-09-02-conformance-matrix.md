@@ -25,7 +25,7 @@ Every number here was read out of the tree, not estimated.
 |---|---|---|
 | 1 | Population is 95 declared criteria over 100 ledger rows — a criterion may already split into sub-rows (`MRTR.9a`, `MRTR.10a`, `MRTR.10b`) | `python3 scripts/release/count-release-criteria.py` → `Coverage: 95 criteria, 100 rows, 66 met or non-blocking, 34 blocking.` |
 | 2 | "Outcome" is a fourth axis, not a cell attribute: "crossed with role (server ‖ client), transport, revision, and outcome (positive ‖ negative)" | `RELEASE-4.0.0-test-plan.md:394` |
-| 3 | The revision axis is the union of TWO declared sets, each with its own serving path: `SUPPORTED_VERSIONS` (four legacy-negotiable revisions) and `MODERN_VERSIONS` (`2026-07-28`). The modern revision is absent from the first BY DESIGN and present in the second — it is unreachable through legacy `initialize`, not unserved | `src/protocol/mod.rs:38,43`, `src/protocol/meta.rs:215-219`, `src/gateway/meta_mcp/mod.rs:1088-1092` |
+| 3 | The revision axis is the union of TWO declared sets, each with its own serving path: `SUPPORTED_VERSIONS` (four legacy-negotiable revisions) and `MODERN_VERSIONS` (`2026-07-28`). The modern revision is absent from the first BY DESIGN and present in the second — it is unreachable through legacy `initialize`, not unserved | the `SUPPORTED_VERSIONS` doc comment (`src/protocol/mod.rs`), `src/protocol/meta.rs:215-219`, `src/gateway/meta_mcp/mod.rs:1088-1092` |
 | 4 | The axis set cannot be read off requirement text. A token scan over the 95 criteria finds a client/backend token in 15, a transport token in 12, a revision token in 4 | token scan, this session |
 | 5 | Hand-maintained headline numbers in this document family have drifted three times | `scripts/release/count-release-criteria.py:5-7` |
 
@@ -230,7 +230,7 @@ directory. Named here so a reviewer can refuse it, rather than passing silently.
 
 | question | what was run | what came back | what it changed |
 |---|---|---|---|
-| Is the revision axis flat? | read `src/protocol/mod.rs:26,38,43`, `src/protocol/meta.rs:215-219`, `src/gateway/meta_mcp/mod.rs:1088-1092` | TWO constants, not one list with a hole: `SUPPORTED_VERSIONS` (4 legacy) and `MODERN_VERSIONS` (`2026-07-28`), the second deliberately separate | Axis = the union of both sets. The first reading of this — that every `2026-07-28` cell is dead by construction — was WRONG, and would have written a whole column off as unservable while the modern path serves it |
+| Is the revision axis flat? | read `PROTOCOL_VERSION` and `SUPPORTED_VERSIONS` with its doc comment in `src/protocol/mod.rs`, `src/protocol/meta.rs:215-219`, `src/gateway/meta_mcp/mod.rs:1088-1092` | TWO constants, not one list with a hole: `SUPPORTED_VERSIONS` (4 legacy) and `MODERN_VERSIONS` (`2026-07-28`), the second deliberately separate | Axis = the union of both sets. The first reading of this — that every `2026-07-28` cell is dead by construction — was WRONG, and would have written a whole column off as unservable while the modern path serves it |
 | Is "outcome" an axis or a cell attribute? | read `docs/requirements/RELEASE-4.0.0-test-plan.md:394` and `docs/requirements/RELEASE-4.0.0-requirements.md:320` | "crossed with role …, transport, revision, and outcome (positive ‖ negative)" | It is a fourth axis, cardinality 2 — the sizing had to use it |
 | Does the repo already split a criterion into sub-rows? | `rg` over `docs/requirements/`, plus the counter's output | `MRTR.9a/10a/10b` exist; 95 criteria vs 100 rows | Q1's row-is-not-criterion is established practice here, not invented |
 | Is there precedent for a checked-in data file plus a drift check? | listed `scripts/` and `benchmarks/`; read `scripts/release/count-release-criteria.py` | Two precedents | Chose option (c) over hand-maintained markdown |
@@ -288,7 +288,7 @@ byproduct of this design.
    `docs/requirements/RELEASE-4.0.0-criteria-status.md:257` records it as
    deliberately unresolved.
 3. `docs/requirements/RELEASE-4.0.0-requirements.md:207` (`NFR.COMPAT.1`) says
-   `2026-07-28` MUST be served, while `src/protocol/mod.rs:38,43` deliberately
+   `2026-07-28` MUST be served, while `SUPPORTED_VERSIONS` (`src/protocol/mod.rs`) deliberately
    excludes it. Expected mid-release, not a documentation bug — but it makes the
    whole `2026-07-28` revision column `EMPTY`-or-`EXEMPT` at matrix creation, and
    that should be stated as the honest starting number rather than discovered
