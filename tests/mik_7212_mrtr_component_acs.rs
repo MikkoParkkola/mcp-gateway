@@ -51,6 +51,8 @@ use tower::ServiceExt;
 /// The backend and tool every case in this file continues.
 const BACKEND: &str = "backend";
 const TOOL: &str = "tool";
+/// The fixture tool that answers with an interim result of its own.
+const TOOL_INTERIM: &str = "tool-interim";
 /// The principal a handle is minted for. Opaque to the gateway — what matters
 /// is that the negative pair differs from it in exactly one field.
 /// The backend's own opaque state, sealed inside every handle minted here.
@@ -426,13 +428,30 @@ fn fixture_answer(request: &Value, sink: &Received) -> Value {
             "serverInfo": { "name": "fixture", "version": "0" }
         }),
         Some("tools/list") => json!({
-            "tools": [ { "name": TOOL, "description": "d", "inputSchema": { "type": "object" } } ]
+            "tools": [
+                { "name": TOOL, "description": "d", "inputSchema": { "type": "object" } },
+                { "name": TOOL_INTERIM, "description": "d", "inputSchema": { "type": "object" } }
+            ]
         }),
         Some("tools/call") => {
+            let params = request.get("params").cloned().unwrap_or(Value::Null);
+            let interim = params.get("name").and_then(Value::as_str) == Some(TOOL_INTERIM);
             sink.lock()
                 .expect("the recorder is never poisoned")
-                .push(request.get("params").cloned().unwrap_or(Value::Null));
-            json!({ "content": [ { "type": "text", "text": "ok" } ] })
+                .push(params);
+            if interim {
+                // The shape `InputRequired::from_result` classifies as interim
+                // (`src/protocol/mrtr.rs:225-262`), carrying the backend's own
+                // opaque state — the value MRTR.2 says must never be relayed.
+                // State-only, and deliberately: a result carrying questions
+                // would be refused by the capability gate before any handle is
+                // minted (MRTR.9), and MRTR.2 is about the state, not the
+                // questions. `from_result` accepts this shape
+                // (`src/protocol/mrtr.rs:250-262`).
+                json!({ "resultType": "input_required", "requestState": SEALED_STATE })
+            } else {
+                json!({ "content": [ { "type": "text", "text": "ok" } ] })
+            }
         }
         _ => json!({}),
     };
@@ -591,4 +610,81 @@ async fn ac_mrtr_1_a_retry_reaches_the_backend_carrying_what_it_continued() {
             "{case}: the answers must arrive verbatim, under the keys the server asked with"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// MRTR.2 — the backend's own state never reaches the client
+// ---------------------------------------------------------------------------
+
+/// The first string anywhere in `value` that the *production* keyring opens.
+///
+/// Deliberately not "the field named `requestState`": the criterion is about
+/// which value reaches the client, not where it sits, and a test that knew the
+/// path would still pass if the gateway relayed the backend's string under a
+/// different one. Strings that are themselves JSON are descended into, because
+/// an invoke result travels back as text.
+fn handle_the_client_received(state: &Arc<AppState>, value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            if state.continuation.keyring().open(text, now_secs()).is_ok() {
+                return Some(text.clone());
+            }
+            let nested: Value = serde_json::from_str(text).ok()?;
+            handle_the_client_received(state, &nested)
+        }
+        Value::Array(items) => items
+            .iter()
+            .find_map(|item| handle_the_client_received(state, item)),
+        Value::Object(map) => map
+            .values()
+            .find_map(|item| handle_the_client_received(state, item)),
+        _ => None,
+    }
+}
+
+/// GIVEN a backend that answers with a `requestState` of its own, WHEN the
+/// interim result travels back, THEN the client is handed a handle the gateway
+/// minted and the backend's string appears nowhere on the wire.
+///
+/// The negative alone is not enough: a gateway that dropped the field entirely
+/// would satisfy it while leaving the exchange unresumable. So the same case
+/// carries the positive — some value in the response opens under the gateway's
+/// own keyring, and what it seals is the backend's state.
+///
+/// STOP, and why the red here is not the red MRTR.2 is about. The case fails on
+/// the positive, with `-32003 … cannot be continued for this caller`: nothing
+/// is minted because `principal_fingerprint` is `None` for an API-key-only
+/// caller (`src/protocol/mrtr.rs:357-365`), and what the gateway should use as
+/// that principal is undecided in the code, not merely unwired. So today the
+/// negative passes for the wrong reason — a refusal relays nothing, which is
+/// vacuously not-a-passthrough. The row is written anyway, is red, and must be
+/// re-read once the principal question is answered: only then does its negative
+/// half start discriminating a correct gateway from a silent one.
+#[tokio::test]
+async fn ac_mrtr_2_the_backends_own_state_is_never_relayed_to_the_client() {
+    let state = app_state();
+    let (url, _received) = spawn_fixture_backend().await;
+    register_fixture_backend(&state, &url);
+
+    let (_status, response) = post(&state, &fresh_body(1, TOOL_INTERIM, &arguments())).await;
+
+    let wire = serde_json::to_string(&response).expect("the response must serialise");
+    assert!(
+        !wire.contains(SEALED_STATE),
+        "the backend's own state must not reach the client, it was relayed in {wire}"
+    );
+
+    let handle = handle_the_client_received(&state, &response).unwrap_or_else(|| {
+        panic!("the client must receive a handle the gateway minted; it received {wire}")
+    });
+    let payload = state
+        .continuation
+        .keyring()
+        .open(&handle, now_secs())
+        .expect("the handle just opened, so it opens again");
+    assert_eq!(
+        payload.backend_request_state.as_deref(),
+        Some(SEALED_STATE),
+        "the handle must seal the backend's state, or the exchange cannot be resumed"
+    );
 }
