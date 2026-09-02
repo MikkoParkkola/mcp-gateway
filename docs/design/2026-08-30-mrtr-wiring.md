@@ -656,3 +656,32 @@ for a malformed upstream response, and a client reading it will retry with a cap
 declaration that cannot help. It is not repaired here because changing a refusal's error code is
 an observable contract change and belongs with the mode gate above, which rewrites this same
 refusal path; doing it twice would mean reviewing it twice. It travels with `MRTR.9a`.
+
+### DE-10 — both post-dispatch gates ask what the backend claimed, not what the gateway could parse
+
+Raised by the second leg of the 2026-09-02 review, as two findings one layer apart, and repaired
+here because the defect is local to a mechanism the change already owns.
+
+`InputRequired::from_result` answers a narrow question: can the gateway carry this exchange. It
+declines a malformed `inputRequests` (DE-8) and a round carrying neither a question nor a state,
+because neither can be advanced by anyone. Both of those results still say `resultType:
+input_required` — the backend stopped to ask, badly. Two post-dispatch gates were reading that
+`None` as "the backend acted": the idempotency commit, which would settle the key with the
+final-shaped *side effect executed* placeholder, and the response-cache write, which would serve
+the unusable question to a later caller as though it were a reply. Keying a gate on the
+classification exempts exactly the shapes the classification rejects.
+
+`InputRequired::claims_input_required` reads the discriminator alone and nothing else, and both
+gates now read it. The change also removed the `interim` boolean that stood between them: it meant
+"a continuation was minted", minting requires classification, and classification requires the
+claim — so the boolean was a weaker restatement of the new predicate and could only ever be wrong
+in one direction. One predicate, computed once, is what the two gates were reaching for.
+
+Not a repair to DE-8, which stands: refusing to classify the malformed shape is still correct. What
+DE-8 changed was which results reach these gates as `None`, and this is the second half of that
+change, found after it landed.
+
+Neither gate is reachable today — `router/handlers.rs` refuses every retry before a caller context
+is built, so the idempotency cache is never populated on this path. The repair is recorded as a
+design event rather than left to the criterion that will wire it, because a future reader finding
+`!stopped_to_ask` where the obvious spelling is `interim.is_none()` needs the reason in writing.

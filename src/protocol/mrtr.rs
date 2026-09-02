@@ -264,6 +264,21 @@ impl InputRequired {
         })
     }
 
+    /// Whether the backend claimed to be asking, whatever else the result got
+    /// wrong.
+    ///
+    /// `from_result` answers a narrower question — can this result be turned
+    /// into an exchange the gateway can carry — and declines several shapes
+    /// that do claim `input_required`: a malformed `inputRequests`, and a round
+    /// with neither a question nor a state. Both are unusable, and neither is
+    /// the backend saying it acted. A caller that needs "did the backend
+    /// finish" must ask this rather than reading `from_result`'s `None`, which
+    /// folds "completed" together with "asked badly".
+    #[must_use]
+    pub fn claims_input_required(result: &Value) -> bool {
+        result.get("resultType").and_then(Value::as_str) == Some(RESULT_TYPE_INPUT_REQUIRED)
+    }
+
     /// The first request this client cannot be asked, if there is one.
     ///
     /// A server **MUST NOT** send an `inputRequests` entry of a type the client

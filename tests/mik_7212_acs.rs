@@ -520,6 +520,44 @@ mod reverse {
     }
 
     #[test]
+    fn ac_mrtr_7_a_declined_shape_is_still_a_backend_that_stopped_to_ask() {
+        // Two different questions, and the post-dispatch idempotency gate needs
+        // the second one. `from_result` answers "can the gateway carry this
+        // exchange"; `claims_input_required` answers "did the backend say it
+        // acted". Every shape below answers no to the first and yes to the
+        // second, and a gate reading the first would settle each of them with
+        // the final-shaped "side effect executed" placeholder — over a backend
+        // that had stopped to ask.
+        for declined in [
+            json!({ "resultType": "input_required" }),
+            json!({
+                "resultType": "input_required",
+                "inputRequests": "not-an-object",
+                "requestState": "state-that-would-make-it-look-valid",
+            }),
+        ] {
+            assert!(
+                InputRequired::from_result(&declined).is_none(),
+                "precondition: this shape is one from_result declines"
+            );
+            assert!(
+                InputRequired::claims_input_required(&declined),
+                "a declined shape still claimed input_required: {declined}"
+            );
+        }
+
+        // And the discriminator is the whole test: a completed result, and one
+        // omitting `resultType` as every pre-2026 backend does, must both read
+        // as the backend having acted.
+        assert!(!InputRequired::claims_input_required(
+            &json!({ "resultType": "complete", "tools": [] })
+        ));
+        assert!(!InputRequired::claims_input_required(
+            &json!({ "tools": [] })
+        ));
+    }
+
+    #[test]
     fn ac_mrtr_7_a_completed_result_is_not_mistaken_for_one() {
         // `resultType` is what separates them, and a result omitting it is
         // complete by the client rule — so a legacy backend's ordinary answer

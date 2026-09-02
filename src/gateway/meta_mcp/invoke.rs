@@ -1209,6 +1209,10 @@ impl MetaMcp {
         // things: whether the idempotency key may be settled as completed, and
         // whether the question may be put to this client at all.
         let interim = crate::protocol::mrtr::InputRequired::from_result(&result);
+        // Whether the backend said it acted, which is a different question from
+        // whether the gateway can carry what it sent. Both post-dispatch gates
+        // below need this one, not `interim`.
+        let stopped_to_ask = crate::protocol::mrtr::InputRequired::claims_input_required(&result);
 
         // The backend has acted. Every early return below this point must settle
         // the idempotency key as completed rather than release it: a released key
@@ -1225,9 +1229,14 @@ impl MetaMcp {
         // `mark_completed` refuses a non-final result for this reason
         // (`src/idempotency.rs:531-539`), and the placeholder is deliberately
         // final-shaped, so only this condition keeps the rule for it.
-        if interim.is_none()
-            && let Some(reservation) = idem_reservation.as_mut()
-        {
+        //
+        // The condition reads the backend's own claim rather than `interim`,
+        // because `from_result` declines shapes that do claim `input_required`
+        // — a malformed `inputRequests`, a round with neither question nor
+        // state. Those are unusable, not finished, and settling one would write
+        // "side effect executed" over a backend that stopped to ask. Keying on
+        // the classification would exempt exactly the shapes it rejects.
+        if !stopped_to_ask && let Some(reservation) = idem_reservation.as_mut() {
             reservation.commit(&json!({
                 "resultType": "complete",
                 "isError": true,
@@ -1271,7 +1280,7 @@ impl MetaMcp {
         // may be asked at all: a continuation for a question the client will
         // never be shown is a redeemable envelope for an exchange that cannot
         // happen.
-        let interim = if let Some(interim) = interim {
+        if let Some(interim) = interim {
             let Some(envelope) = mint_continuation(
                 &self.continuation,
                 caller,
@@ -1287,10 +1296,7 @@ impl MetaMcp {
                 return Err(unbindable_continuation(server, tool));
             };
             result["requestState"] = json!(envelope);
-            true
-        } else {
-            false
-        };
+        }
 
         // === POST-INVOKE: Response contract gate (issue #133, D1) ===
         //
@@ -1489,13 +1495,16 @@ impl MetaMcp {
             }
         }
 
-        // `!interim` for the reason the idempotency commit above is gated the
-        // same way: a question is not an answer. A cached one would be served
-        // to a later caller as though the backend had replied, and the
-        // continuation it carries is redeemable only by the caller it was
-        // minted for — so the reply they were handed could never be completed.
+        // `!stopped_to_ask` for the reason the idempotency commit above is
+        // gated the same way: a question is not an answer. A cached one would be
+        // served to a later caller as though the backend had replied, and the
+        // continuation it carries is redeemable only by the caller it was minted
+        // for — so the reply they were handed could never be completed. Asking
+        // the backend's claim rather than "was a continuation minted" also
+        // covers the shapes `from_result` declines, which mint nothing and are
+        // not answers either.
         if !want_full
-            && !interim
+            && !stopped_to_ask
             && let Some(ref cache) = self.cache
         {
             let cache_key = response_cache_key_for(
