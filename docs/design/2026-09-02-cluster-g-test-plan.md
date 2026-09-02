@@ -517,3 +517,94 @@ because refusal is what the criterion requires when confirmation cannot be had; 
 elicits instead, row 16's fixture must be the case where elicitation is unavailable, and the
 elicited path gets its own row. **The row is written against the requirement, not against a
 mechanism that does not exist yet.**
+
+---
+
+## Design: wiring the confirmation gate onto stdio
+
+### The problem, at source
+
+A destructive `tools/call` over stdio reaches the backend unchecked. The gate is a block inside
+the HTTP handler (`router/handlers.rs:1195-1249`); the stdio dispatcher calls
+`handle_tools_call` directly (`server/mod.rs:1715`) with nothing above it. `is_modern`,
+`RequestShape`, `ConfirmationOutcome` and `on_unconfirmable` appear in `router/handlers.rs` and
+`destructive_confirmation.rs` and nowhere else.
+
+Stdio is also the *most* privileged caller, not the least: it sets `is_admin: true`
+unconditionally (`server/mod.rs:1727`, with its reasoning — the client spawned the process, so
+it already holds what the operator holds). On HTTP the admin check refuses
+`gateway_kill_server` for everyone but an admin *before* the gate is consulted. On stdio that
+check passes by construction, so the absent gate is the only thing between any stdio client and
+killing a backend.
+
+### The constraint that decides the design
+
+Confirmation is delivered by `ProxyManager::forward_elicitation_with_response`
+(`destructive_confirmation.rs:195`), which needs an SSE session. Stdio has none, so the call
+returns `SamplingError::NoSession` → `ConfirmationOutcome::Unsupported`. Not intermittently:
+**structurally, every time**. There is no client behaviour, no configuration and no timeout
+value that produces any other answer on this transport.
+
+### What the criterion says
+
+> MIK-7246.CONFIRM.1a — The destructive-operation confirmation gate MUST refuse when it cannot
+> obtain confirmation. Today it proceeds when elicitation is unsupported **or there is no
+> session**.
+
+Unconditional, and it names the no-session case. Stdio is the no-session case in its permanent
+form.
+
+### Options
+
+| # | option | verdict |
+|---|---|---|
+| 1 | call `require_destructive_confirmation` from stdio and let `for_legacy()` decide | **rejected** — stdio constructs no shape, so it classifies legacy, so the answer is `PROCEED_WITH_WARNING` and the gap is unchanged with more code in front of it |
+| 2 | build real elicitation over stdio: a server→client request on stdout, correlated with its reply | **rejected for this release** — the stdio dispatcher is request/response only; adding a server-initiated channel is its own change with its own protocol surface. Recorded as the upgrade path, not as a gap |
+| 3 | refuse destructive meta-tools on stdio, with the same code and message as HTTP | **chosen** |
+
+### Why option 3 is the honest answer and not merely the small one
+
+`ConfirmationOutcome::Unsupported` carries two different meanings that the current code does not
+distinguish, and the distinction is what makes the legacy warning defensible in one place and
+indefensible in the other:
+
+| where | what `Unsupported` means | proceeding is |
+|---|---|---|
+| HTTP, legacy shape | this client did not answer, this time | defensible — an asker exists and may answer the next call |
+| HTTP, modern shape | the revision deleted sessions; nobody can be asked, ever | a gate that is always open |
+| stdio | the transport has no elicitation channel; nobody can be asked, ever | a gate that is always open |
+
+The reason `for_modern()` refuses is not that the request is modern. It is that **no asker can
+exist**. `is_modern` is a proxy for that question which happens to be correct on HTTP, because
+the revision is what removed the asker there. Stdio reaches the same condition by a different
+route, and the criterion is written about the condition, not the route.
+
+CONFIRM.1b keeps `PROCEED_WITH_WARNING` on the legacy path "for callers this release does not
+govern". Stdio is not one of those: it is the caller this build hands unconditional admin.
+
+### Shape of the change
+
+- Move `describe_destructive_action` out of `router/handlers.rs:1579` into
+  `destructive_confirmation.rs` and make it `pub`, so both transports build the same string.
+- Add one function there that produces the refusal — code `-32001` and the message
+  `Destructive action requires confirmation and none could be obtained: {action_desc}` — and
+  have the HTTP handler and the stdio dispatcher both call it. Neither transport composes that
+  message itself, so the two cannot drift. Row 13 is the probe that they have not.
+- Stdio refuses before dispatch when `is_destructive_meta_tool(tool_name)` holds. It does not
+  attempt elicitation first: the answer is knowable without asking, and calling out to a channel
+  that cannot exist would add an `ELICITATION_TIMEOUT` wait to a foregone conclusion.
+- The governed set stays `is_destructive_meta_tool`, which is where CONFIRM.3's
+  "derive from `destructiveHint`, not a hardcoded name" requirement already lives. No second
+  hardcode is introduced.
+
+### Explicitly out of scope
+
+Real stdio elicitation (option 2). Stdio's unconditional `is_admin: true` — it is reasoned in
+place and changing it is a separate argument with separate consequences.
+
+### Unknowns
+
+| question | how it was settled | answer | what it changed |
+|---|---|---|---|
+| Does any shipped flow kill a backend over stdio, so that refusing would break it? | `rg -rn 'gateway_kill_server'` across the tree, then read the two docs that mention it | `docs/DEPLOYMENT.md:745` lists it among admin-only meta-tools; no documented or tested stdio kill flow exists | nothing — the refusal breaks no shipped path |
+| Does the message the two transports emit have to match exactly, or only by prefix? | read the existing HTTP test's assertions and row 13 | the tests assert code plus a message prefix, so an exact match is not forced by the tests — which is precisely why the *construction* is shared rather than the assertion tightened | made the shared-function step load-bearing rather than tidiness |
