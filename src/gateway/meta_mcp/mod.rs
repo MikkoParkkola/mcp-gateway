@@ -1385,86 +1385,10 @@ impl MetaMcp {
             );
         }
 
-        // Destructive-action confirmation. NOT the control -- the admin
-        // requirement is, and `gateway_kill_server`, the only tool carrying
-        // `destructiveHint: true`, is in the admin set. This is the prompt an
-        // honest client shows its user before proceeding.
-        //
-        // Enforced HERE for the same reason as the admin gate above: it lived
-        // on the HTTP edge, so a transport that never ran that code was not
-        // refused, it was unjudged. Whether an operator can be asked is a
-        // property of the transport, and the transport says so in
-        // `caller.confirmation` rather than being inferred here.
-        //
-        // Deliberately not labelled OWASP ASI09. An earlier version was, and
-        // `destructive_confirmation`'s own header was corrected to say why: the
-        // citation reads as a control and invites over-trust in a prompt a
-        // client may simply not support.
-        if crate::gateway::destructive_confirmation::is_destructive_meta_tool(tool_name) {
-            use crate::gateway::destructive_confirmation::{
-                ConfirmationChannel, ConfirmationOutcome, ConfirmationPolicy,
-                describe_destructive_action, require_destructive_confirmation,
-            };
-
-            let action_desc = describe_destructive_action(tool_name, &arguments);
-            let refused = |desc: &str| {
-                warn!(
-                    tool = %tool_name,
-                    "refusing a destructive call that cannot be confirmed"
-                );
-                let mut response = JsonRpcResponse::error(
-                    Some(id.clone()),
-                    -32001,
-                    format!(
-                        "Destructive action requires confirmation and none could be obtained: \
-                         {desc}"
-                    ),
-                );
-                // A refusal is the gate working, not the client failing. Marked
-                // so the caller's failure accounting skips it; the marker is
-                // internal and never reaches the wire.
-                response.confirmation_refusal = true;
-                response
-            };
-
-            match caller.confirmation {
-                // No asker can exist on this transport. Nothing is elicited:
-                // there is no one to elicit from, and producing an "unsupported"
-                // outcome would only re-enter a policy written for a channel
-                // that does exist.
-                ConfirmationChannel::Unavailable => return refused(&action_desc),
-                ConfirmationChannel::Elicit { proxy, policy } => {
-                    let outcome = require_destructive_confirmation(
-                        proxy,
-                        session_id.unwrap_or_default(),
-                        &action_desc,
-                    )
-                    .await;
-                    if outcome == ConfirmationOutcome::Declined {
-                        let mut response = JsonRpcResponse::error(
-                            Some(id),
-                            -32001,
-                            format!("Operator declined: {action_desc}"),
-                        );
-                        // A decline is the operator using the control, not the
-                        // client failing. Before this gate moved into the
-                        // dispatcher a decline returned earlier than the
-                        // accounting and was never counted; marking it keeps
-                        // that true, so exercising the safety control cannot
-                        // walk a caller toward a tripped breaker.
-                        response.confirmation_refusal = true;
-                        return response;
-                    }
-                    // Nobody could be asked. What that means depends on the era,
-                    // and the policy was decided at the edge that knows which era
-                    // this request belongs to.
-                    if outcome == ConfirmationOutcome::Unsupported
-                        && policy.on_unconfirmable() == ConfirmationPolicy::REFUSE
-                    {
-                        return refused(&action_desc);
-                    }
-                }
-            }
+        if let Some(response) =
+            destructive_confirmation_gate(&id, tool_name, &arguments, session_id, &caller).await
+        {
+            return response;
         }
 
         // T2.4: Check surfaced tools BEFORE the meta-tool match.
@@ -1669,3 +1593,98 @@ mod search_disclosure_e2e;
 #[cfg(test)]
 #[path = "trace_correlation_tests.rs"]
 mod trace_correlation_tests;
+
+/// Destructive-action confirmation. NOT the control -- the admin
+/// requirement is, and `gateway_kill_server`, the only tool carrying
+/// `destructiveHint: true`, is in the admin set. This is the prompt an
+/// honest client shows its user before proceeding.
+///
+/// Enforced HERE for the same reason as the admin gate above: it lived
+/// on the HTTP edge, so a transport that never ran that code was not
+/// refused, it was unjudged. Whether an operator can be asked is a
+/// property of the transport, and the transport says so in
+/// `caller.confirmation` rather than being inferred here.
+///
+/// Deliberately not labelled OWASP ASI09. An earlier version was, and
+/// `destructive_confirmation`'s own header was corrected to say why: the
+/// citation reads as a control and invites over-trust in a prompt a
+/// client may simply not support.
+///
+/// Returns the refusal to send, or `None` when the call may proceed.
+async fn destructive_confirmation_gate(
+    id: &RequestId,
+    tool_name: &str,
+    arguments: &Value,
+    session_id: Option<&str>,
+    caller: &MetaMcpCallerContext<'_>,
+) -> Option<JsonRpcResponse> {
+    use crate::gateway::destructive_confirmation::{
+        ConfirmationChannel, ConfirmationOutcome, ConfirmationPolicy, describe_destructive_action,
+        require_destructive_confirmation,
+    };
+
+    if !crate::gateway::destructive_confirmation::is_destructive_meta_tool(tool_name) {
+        return None;
+    }
+
+    let action_desc = describe_destructive_action(tool_name, arguments);
+    let refused = |desc: &str| {
+        warn!(
+            tool = %tool_name,
+            "refusing a destructive call that cannot be confirmed"
+        );
+        let mut response = JsonRpcResponse::error(
+            Some(id.clone()),
+            -32001,
+            format!(
+                "Destructive action requires confirmation and none could be obtained: \
+                     {desc}"
+            ),
+        );
+        // A refusal is the gate working, not the client failing. Marked
+        // so the caller's failure accounting skips it; the marker is
+        // internal and never reaches the wire.
+        response.confirmation_refusal = true;
+        response
+    };
+
+    match caller.confirmation {
+        // No asker can exist on this transport. Nothing is elicited:
+        // there is no one to elicit from, and producing an "unsupported"
+        // outcome would only re-enter a policy written for a channel
+        // that does exist.
+        ConfirmationChannel::Unavailable => return Some(refused(&action_desc)),
+        ConfirmationChannel::Elicit { proxy, policy } => {
+            let outcome = require_destructive_confirmation(
+                proxy,
+                session_id.unwrap_or_default(),
+                &action_desc,
+            )
+            .await;
+            if outcome == ConfirmationOutcome::Declined {
+                let mut response = JsonRpcResponse::error(
+                    Some(id.clone()),
+                    -32001,
+                    format!("Operator declined: {action_desc}"),
+                );
+                // A decline is the operator using the control, not the
+                // client failing. Before this gate moved into the
+                // dispatcher a decline returned earlier than the
+                // accounting and was never counted; marking it keeps
+                // that true, so exercising the safety control cannot
+                // walk a caller toward a tripped breaker.
+                response.confirmation_refusal = true;
+                return Some(response);
+            }
+            // Nobody could be asked. What that means depends on the era,
+            // and the policy was decided at the edge that knows which era
+            // this request belongs to.
+            if outcome == ConfirmationOutcome::Unsupported
+                && policy.on_unconfirmable() == ConfirmationPolicy::REFUSE
+            {
+                return Some(refused(&action_desc));
+            }
+        }
+    }
+    None
+}
