@@ -705,16 +705,18 @@ mod http {
             message.contains("none could be obtained"),
             "the refusal must be the unconfirmable branch, not a decline: {message}"
         );
-        // The fixture's `arguments` key must be the one production reads
-        // (`server`), or the description degrades to the `<unknown>` fallback
-        // while every other assertion here still passes -- the prefix asserted
-        // above is a format-string literal that precedes the interpolation.
-        // `docs/DEPLOYMENT.md` promises the refusal names the action, so a
-        // fixture exercising the fallback path would contradict shipped
-        // documentation.
+        // Guards two things at once, both invisible to every other assertion
+        // here. (1) The fixture's `arguments` key must be the one production
+        // reads (`server`), or the description degrades to the `<unknown>`
+        // fallback. (2) The refusal must actually interpolate the description:
+        // the prefix asserted above is a format-string literal that precedes
+        // the interpolation, so deleting `{action_desc}` from the format string
+        // leaves the prefix, the code, and the describer's own unit tests all
+        // green. `docs/DEPLOYMENT.md` promises the refusal names the action, so
+        // this asserts the whole action phrase, not just the argument inside it.
         assert!(
-            message.contains("any-backend"),
-            "the refusal must name the server it refused, not the fallback text: {message}"
+            message.contains("kill server 'any-backend'"),
+            "the refusal must name the action it refused, not the fallback text: {message}"
         );
         assert!(
             body.get("result").is_none(),
