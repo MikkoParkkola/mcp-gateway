@@ -155,6 +155,13 @@ def test_a_range_is_expanded_rather_than_sampled_at_its_endpoints():
     ]
 
 
+def test_a_malformed_range_is_reported_rather_than_expanded_into_invented_names():
+    # `MRTR.1a-3` is not a range: its head ends in a clause letter, so there is no
+    # number to count from. Expanding it crashed the checker, which makes the
+    # document unreadable instead of reporting what is wrong with it.
+    assert counter.named_criteria("`MRTR.1a-3`, `MRTR.8-3`") == ["MRTR.1a", "MRTR.8"]
+
+
 def test_a_rollup_with_no_cluster_table_is_flagged_rather_than_read_as_zero():
     assert membership(LEDGER, "# rollup\n\nprose only.\n") == [
         "no cluster table found in the rollup"

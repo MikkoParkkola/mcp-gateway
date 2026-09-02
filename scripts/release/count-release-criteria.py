@@ -267,8 +267,17 @@ def named_criteria(cell):
         if not end:
             names.append(head)
             continue
-        first = int(re.search(r"\d+$", head).group())
-        names += [re.sub(r"\d+$", str(n), head) for n in range(first, int(end) + 1)]
+        # A range is `<name ending in a digit>-<digit>`. A head ending in a clause
+        # letter (`CACHE.4a-c`) or a descending range is not one, and expanding it
+        # would invent names: keep the head, and let the declared count report the
+        # shortfall rather than crash on a document nobody can then read.
+        start = re.search(r"\d+$", head)
+        if not start or int(end) < int(start.group()):
+            names.append(head)
+            continue
+        names += [
+            re.sub(r"\d+$", str(n), head) for n in range(int(start.group()), int(end) + 1)
+        ]
     return names
 
 
