@@ -20,7 +20,10 @@ STATUS = ROOT / "docs/requirements/RELEASE-4.0.0-criteria-status.md"
 REQUIREMENTS = ROOT / "docs/requirements/RELEASE-4.0.0-requirements.md"
 PLAN = ROOT / "docs/requirements/RELEASE-4.0.0-plan.md"
 ROLLUP = ROOT / "docs/requirements/RELEASE-4.0.0-blocking-rollup.md"
-ID = re.compile(r"^((?:MIK-\d+|NFR)\.[A-Z0-9]+\.\d+)([a-z]?)")
+# Anchored at BOTH ends. Unanchored, a typo carries: `MRTR.1abc` matches as
+# far as `MRTR.1a` and is counted as that criterion, so a mistyped row is
+# silently attributed to a real one rather than reported.
+ID = re.compile(r"^((?:MIK-\d+|NFR)\.[A-Z0-9]+\.\d+)([a-z]?)$")
 # The verification-method vocabulary: test, measurement, inspection, demonstration.
 METHOD = re.compile(r"^[TMID](, ?[TMID])*$")
 # The headline sentence this script owns. Nothing else in the file may state totals.
@@ -64,7 +67,9 @@ def heading_counts(text):
             preceded = stripped[: found.start()].rstrip().endswith(" of") or stripped[
                 : found.start()
             ].rstrip().endswith("of")
-            if not preceded and (span is None or span.group(0).strip() == found.group(0)):
+            if not preceded and (
+                span is None or span.group(0).strip() == found.group(0)
+            ):
                 bad.append(line)
                 break
     return bad
@@ -99,7 +104,10 @@ def section_counts(text):
             close()
             found = SECTION_COUNT.match(line)
             heading = (
-                (line.split(" — ")[0].strip("# "), (int(found.group(1)), int(found.group(2))))
+                (
+                    line.split(" — ")[0].strip("# "),
+                    (int(found.group(1)), int(found.group(2))),
+                )
                 if found
                 else None
             )
@@ -182,14 +190,27 @@ def method_mismatches(text, methods):
         if want is None:
             continue
         if len(cells) < 6 or cells[2] != want:
-            bad.append(f"{cells[0]} (requirement says {want!r}, row says {cells[2] if len(cells) > 2 else '<no column>'!r})")
+            bad.append(
+                f"{cells[0]} (requirement says {want!r}, row says {cells[2] if len(cells) > 2 else '<no column>'!r})"
+            )
     return bad
 
 
 # A cluster row in the rollup: a single-letter id or an em dash, then the
 # cluster name, the parent-criterion key, and the count of ledger rows.
-CLUSTER = re.compile(
-    r"^\|\s*(?:[A-Z]|—)\s*\|[^|]*\|[^|]*\|\s*(\d+)\s*\|", re.MULTILINE
+CLUSTER = re.compile(r"^\|\s*(?:[A-Z]|—)\s*\|[^|]*\|[^|]*\|\s*(\d+)\s*\|", re.MULTILINE)
+
+# What a cluster row LOOKS like, before asking whether it parses. A skip on
+# non-match is invisible: an invalid cluster letter or a non-numeric count
+# drops the row and its criteria out of the accounting entirely, and the
+# totals still balance because nothing knows the row was there. Four cells
+# and a short first cell separate these from criterion rows (whose ids run
+# far longer) and from the three-column group summaries.
+# The first cell is restricted to word characters and the em dash so that a
+# markdown header (`#`) and a separator (`---`) are not read as broken
+# cluster rows -- table furniture is not a defect.
+CLUSTER_SHAPE = re.compile(
+    r"^\|\s*([A-Za-z0-9\u2014]{1,3})\s*\|[^|]*\|[^|]*\|([^|]*)\|"
 )
 
 
@@ -216,6 +237,13 @@ def rollup_membership(criteria, text):
     for line in text.splitlines():
         match = CLUSTER.match(line)
         if not match:
+            shape = CLUSTER_SHAPE.match(line)
+            if shape:
+                problems.append(
+                    f"cluster row {shape.group(1).strip()!r} does not parse: "
+                    f"id must be a single capital or an em dash and the count cell "
+                    f"a bare number, not {shape.group(2).strip()!r}"
+                )
             continue
         saw_cluster = True
         # The criteria column only. A cluster's notes legitimately name rows that
@@ -230,7 +258,9 @@ def rollup_membership(criteria, text):
         if not names and not unreadable:
             problems.append(f"cluster {cluster} names no criteria")
         for token in unreadable:
-            problems.append(f"cluster {cluster} names {token}, which is not a criterion name")
+            problems.append(
+                f"cluster {cluster} names {token}, which is not a criterion name"
+            )
         for name in names:
             # Granularity decides which ledger key answers: a parent name covers
             # every clause under it, a named clause only itself. Matching a
@@ -315,7 +345,8 @@ def named_criteria(cell):
             unreadable.append(match.group(0))
             continue
         names += [
-            re.sub(r"\d+$", str(n), head) for n in range(int(start.group()), int(end) + 1)
+            re.sub(r"\d+$", str(n), head)
+            for n in range(int(start.group()), int(end) + 1)
         ]
     return names, unreadable
 
@@ -351,7 +382,10 @@ def main():
     )
     methods, unreadable = required_methods(requirements)
     if unreadable:
-        print(f"unreadable verification method on: {', '.join(unreadable)}", file=sys.stderr)
+        print(
+            f"unreadable verification method on: {', '.join(unreadable)}",
+            file=sys.stderr,
+        )
         return 1
     mismatched = method_mismatches(text, methods)
     stale_sections = section_counts(text)
@@ -367,9 +401,15 @@ def main():
     if uncovered:
         print(f"requirement IDs with no row: {', '.join(uncovered)}", file=sys.stderr)
     if mismatched:
-        print(f"NFR rows whose method disagrees with the requirement: {'; '.join(mismatched)}", file=sys.stderr)
+        print(
+            f"NFR rows whose method disagrees with the requirement: {'; '.join(mismatched)}",
+            file=sys.stderr,
+        )
     if stale_sections:
-        print(f"section headings disagreeing with their own rows: {'; '.join(stale_sections)}", file=sys.stderr)
+        print(
+            f"section headings disagreeing with their own rows: {'; '.join(stale_sections)}",
+            file=sys.stderr,
+        )
     for complaint in membership:
         print(complaint, file=sys.stderr)
 
@@ -377,10 +417,15 @@ def main():
         return 0
     found = HEADLINE.search(text)
     if not found:
-        print("no machine-checkable coverage line in the status document", file=sys.stderr)
+        print(
+            "no machine-checkable coverage line in the status document", file=sys.stderr
+        )
         return 1
     if tuple(int(g) for g in found.groups()) != totals:
-        print(f"headline says {found.group(0)!r}, the tables say the line above", file=sys.stderr)
+        print(
+            f"headline says {found.group(0)!r}, the tables say the line above",
+            file=sys.stderr,
+        )
         return 1
     return 1 if uncovered or mismatched or stale_sections or membership else 0
 

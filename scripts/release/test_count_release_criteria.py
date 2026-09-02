@@ -124,8 +124,12 @@ def test_a_rollup_accounting_for_every_blocking_row_exactly_once_passes():
 def test_a_blocking_row_no_cluster_names_is_flagged():
     # The failure the sum could not see: dropping a row here is invisible to any
     # check that only adds the declared counts up.
-    thinned = ROLLUP.replace("| — | residue | `NFR.COMPAT.1` | 1 | genuinely independent |", "")
-    assert membership(LEDGER, thinned) == ["NFR.COMPAT.1 is blocking and sits in no cluster"]
+    thinned = ROLLUP.replace(
+        "| — | residue | `NFR.COMPAT.1` | 1 | genuinely independent |", ""
+    )
+    assert membership(LEDGER, thinned) == [
+        "NFR.COMPAT.1 is blocking and sits in no cluster"
+    ]
 
 
 def test_a_row_two_clusters_both_claim_is_flagged():
@@ -134,7 +138,9 @@ def test_a_row_two_clusters_both_claim_is_flagged():
 
 
 def test_a_cluster_naming_a_row_the_ledger_does_not_call_blocking_is_flagged():
-    stray = ROLLUP.replace("`MRTR.1`, `MRTR.3` | 2", "`MRTR.1`, `MRTR.3`, `NFR.COMPAT.3` | 2")
+    stray = ROLLUP.replace(
+        "`MRTR.1`, `MRTR.3` | 2", "`MRTR.1`, `MRTR.3`, `NFR.COMPAT.3` | 2"
+    )
     assert membership(LEDGER, stray) == [
         "cluster A names NFR.COMPAT.3, which no ledger row calls blocking"
     ]
@@ -271,6 +277,36 @@ def test_a_cluster_whose_cell_names_nothing_at_all_is_reported():
     assert membership(LEDGER, prose) == ["cluster B names no criteria"]
 
 
+def test_a_cluster_row_that_does_not_parse_is_reported_rather_than_skipped():
+    # Skipping an unparseable row is invisible: the row and every criterion it
+    # accounts for leave the reckoning together, so the totals still balance and
+    # nothing records that a cluster went missing.
+    broken = ROLLUP + "\n| BB | cache | `MIK-7212.MRTR.1` | 1 | two-letter id |"
+    assert membership(LEDGER, broken) == [
+        "cluster row 'BB' does not parse: id must be a single capital or an em "
+        "dash and the count cell a bare number, not '1'"
+    ]
+
+
+def test_a_count_cell_that_is_not_a_number_is_reported_rather_than_skipped():
+    broken = ROLLUP + "\n| B | cache | `MIK-7212.MRTR.1` | one | spelled out |"
+    assert membership(LEDGER, broken) == [
+        "cluster row 'B' does not parse: id must be a single capital or an em "
+        "dash and the count cell a bare number, not 'one'"
+    ]
+
+
+def test_a_mistyped_criterion_id_is_refused_rather_than_read_as_a_real_one():
+    # Unanchored, `MRTR.1abc` matches as far as `MRTR.1a` and is counted as that
+    # criterion: a typo is silently attributed to a row that exists.
+    table = [
+        "| id | criterion | method | blocking |",
+        "| --- | --- | --- | --- |",
+        "| MIK-7212.MRTR.1abc | mistyped | T | yes |",
+    ]
+    assert counter.rows("\n".join(table)) == ([], [])
+
+
 def test_the_handshake_and_the_modern_path_keep_separate_version_lists():
     """The release gate is the `server.modern_protocol` default, and only that.
 
@@ -320,5 +356,7 @@ if __name__ == "__main__":
         except AssertionError:
             failed.append(name)
             traceback.print_exc()
-    print(f"{len(failed)} failed of {sum(1 for n in globals() if n.startswith('test_'))}")
+    print(
+        f"{len(failed)} failed of {sum(1 for n in globals() if n.startswith('test_'))}"
+    )
     sys.exit(1 if failed else 0)
