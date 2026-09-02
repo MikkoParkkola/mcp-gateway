@@ -88,73 +88,77 @@ def test_accepts_a_status_row_whose_method_agrees():
     assert counter.method_mismatches(row, methods) == []
 
 
-ROLLUP_TABLE = "\n".join(
+# A cluster's declared count and its named criteria are two statements about the
+# same set, and the ledger settles both. The observed failure had a waived row
+# padding one cluster while a blocking row sat in no cluster at all: two errors
+# that cancelled in the SUM, which was the only thing being checked.
+LEDGER = "\n".join(
+    [
+        "| MIK-7212.MRTR.1a | mints | T | UNWIRED | none | yes |",
+        "| MIK-7212.MRTR.2a | opens | T | MET | done | no |",
+        "| MIK-7212.MRTR.3a | refuses | T | UNWIRED | none | yes |",
+        "| NFR.COMPAT.1 | served | T | ABSENT | none | yes |",
+        "| NFR.COMPAT.3 | no config edit | D | N/A | waived | no |",
+    ]
+)
+
+ROLLUP = "\n".join(
     [
         "| # | cluster | rows | count | what is actually missing |",
         "|---|---|---|---|---|",
-        "| A | envelope | `MRTR.1-8` | 22 | nothing mints one |",
-        "| — | residue | `NFR.SEC.1` | 9 | genuinely independent |",
+        "| A | envelope | `MRTR.1`, `MRTR.3` | 2 | nothing mints one |",
+        "| — | residue | `NFR.COMPAT.1` | 1 | genuinely independent |",
     ]
 )
 
 
-def test_a_cluster_table_accounting_for_every_blocking_row_passes():
-    assert counter.rollup_shortfall(31, ROLLUP_TABLE) is None
+def membership(ledger, rollup):
+    criteria, _ = counter.rows(ledger)
+    return counter.rollup_membership(criteria, rollup)
 
 
-def test_a_cluster_table_that_groups_only_some_of_them_is_flagged():
-    # The revision this catches grouped 37 of 52 and read as though it were
-    # the whole set, so the plan derived from it understated the work by 15.
-    assert counter.rollup_shortfall(52, ROLLUP_TABLE) == (
-        "rollup clusters account for 31 rows, the ledger has 52 blocking"
-    )
+def test_a_rollup_accounting_for_every_blocking_row_exactly_once_passes():
+    assert membership(LEDGER, ROLLUP) == []
 
 
-def test_a_rollup_with_no_cluster_table_is_flagged_rather_than_read_as_zero():
-    assert counter.rollup_shortfall(52, "# rollup\n\nprose only.\n") == (
-        "no cluster table found in the rollup"
-    )
+def test_a_blocking_row_no_cluster_names_is_flagged():
+    # The failure the sum could not see: dropping a row here is invisible to any
+    # check that only adds the declared counts up.
+    thinned = ROLLUP.replace("| — | residue | `NFR.COMPAT.1` | 1 | genuinely independent |", "")
+    assert membership(LEDGER, thinned) == ["NFR.COMPAT.1 is blocking and sits in no cluster"]
 
 
-# A cluster row may name a criterion the ledger no longer calls blocking. The
-# total alone cannot see it: the observed failure had a waived row padding one
-# cluster while a blocking row sat in none, and the two errors cancelled to the
-# right sum. Membership is the direction the total cannot check.
-STRAY_LEDGER = "\n".join(
-    [
-        "| NFR.COMPAT.1 | served | T | ABSENT | none | yes |",
-        "| NFR.COMPAT.3 | no config edit | D | N/A | waived | no |",
-        "| NFR.PERF.4 | ceiling | T | ABSENT | none | yes |",
-    ]
-)
-
-STRAY_ROLLUP = "\n".join(
-    [
-        "| # | cluster | rows | count | what is missing |",
-        "|---|---|---|---|---|",
-        "| F | compat | `NFR.COMPAT.1`, `NFR.COMPAT.3` | 2 | operator decisions |",
-    ]
-)
+def test_a_row_two_clusters_both_claim_is_flagged():
+    doubled = ROLLUP + "\n| B | era | `NFR.COMPAT.1` | 1 | also here |"
+    assert membership(LEDGER, doubled) == ["NFR.COMPAT.1 is claimed by 2 clusters"]
 
 
 def test_a_cluster_naming_a_row_the_ledger_does_not_call_blocking_is_flagged():
-    criteria, _ = counter.rows(STRAY_LEDGER)
-    assert counter.rollup_strays(criteria, STRAY_ROLLUP) == ["NFR.COMPAT.3"]
+    stray = ROLLUP.replace("`MRTR.1`, `MRTR.3` | 2", "`MRTR.1`, `MRTR.3`, `NFR.COMPAT.3` | 2")
+    assert membership(LEDGER, stray) == [
+        "cluster A names NFR.COMPAT.3, which no ledger row calls blocking"
+    ]
 
 
-def test_a_cluster_naming_only_blocking_rows_passes():
-    criteria, _ = counter.rows(STRAY_LEDGER)
-    clean = STRAY_ROLLUP.replace(", `NFR.COMPAT.3`", ", `NFR.PERF.4`")
-    assert counter.rollup_strays(criteria, clean) == []
+def test_a_declared_count_the_named_criteria_do_not_reach_is_flagged():
+    assert membership(LEDGER, ROLLUP.replace("`MRTR.3` | 2", "`MRTR.3` | 5")) == [
+        "cluster A declares 5 rows, its criteria resolve to 2"
+    ]
 
 
-def test_a_range_is_checked_at_both_ends_rather_than_skipped():
-    criteria, _ = counter.rows(
-        "| MIK-7212.MRTR.1 | a | T | ABSENT | none | yes |\n"
-        "| MIK-7212.MRTR.8 | b | T | MET | done | no |"
-    )
-    table = "| A | envelope | `MRTR.1-8` | 8 | nothing mints one |"
-    assert counter.rollup_strays(criteria, table) == ["MRTR.8"]
+def test_a_range_is_expanded_rather_than_sampled_at_its_endpoints():
+    # `MRTR.2` is met and sits inside the range. Checking only the endpoints
+    # reports a stale range as sound, which is how the live document carried one.
+    ranged = ROLLUP.replace("`MRTR.1`, `MRTR.3` | 2", "`MRTR.1-3` | 2")
+    assert membership(LEDGER, ranged) == [
+        "cluster A names MRTR.2, which no ledger row calls blocking"
+    ]
+
+
+def test_a_rollup_with_no_cluster_table_is_flagged_rather_than_read_as_zero():
+    assert membership(LEDGER, "# rollup\n\nprose only.\n") == [
+        "no cluster table found in the rollup"
+    ]
 
 
 CLAUSE_LEDGER = "\n".join(
@@ -166,20 +170,27 @@ CLAUSE_LEDGER = "\n".join(
 
 
 def test_a_named_clause_is_judged_on_its_own_row_not_its_blocking_sibling():
-    criteria, _ = counter.rows(CLAUSE_LEDGER)
-    named_met = "| G | stdio | `MIK-7246.CONFIRM.1b` | 1 | ungated |"
     named_open = "| G | stdio | `MIK-7246.CONFIRM.1a` | 1 | ungated |"
-    assert counter.rollup_strays(criteria, named_open) == []
-    assert counter.rollup_strays(criteria, named_met) == ["MIK-7246.CONFIRM.1b"]
+    named_met = "| G | stdio | `MIK-7246.CONFIRM.1b` | 1 | ungated |"
+    assert membership(CLAUSE_LEDGER, named_open) == []
+    assert membership(CLAUSE_LEDGER, named_met) == [
+        "cluster G names MIK-7246.CONFIRM.1b, which no ledger row calls blocking",
+        "cluster G declares 1 rows, its criteria resolve to 0",
+        "MIK-7246.CONFIRM.1a is blocking and sits in no cluster",
+    ]
 
 
 def test_a_row_named_only_in_the_notes_is_not_a_membership_claim():
-    criteria, _ = counter.rows(CLAUSE_LEDGER)
     row = (
         "| G | stdio | `MIK-7246.CONFIRM.1a` | 1 | "
         "`MIK-7246.CONFIRM.1b` was in this cluster until it was met |"
     )
-    assert counter.rollup_strays(criteria, row) == []
+    assert membership(CLAUSE_LEDGER, row) == []
+
+
+def test_the_live_documents_agree_with_the_ledger():
+    criteria, _ = counter.rows(counter.STATUS.read_text())
+    assert counter.rollup_membership(criteria, counter.ROLLUP.read_text()) == []
 
 
 if __name__ == "__main__":

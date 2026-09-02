@@ -62,7 +62,7 @@ rest of wave 1, not an edit.
 A reviewer asked for the MIK-7212 rows to be split by whether each clause is implemented and
 unwired or genuinely absent, on the ground that the two carry very different remaining work.
 An earlier revision of this file deferred that until the session working the cluster landed.
-It has, and the split is in the ledger: `MRTR.1-8` is eight criterion names carrying nineteen
+It has, and the split is in the ledger: `MRTR.1-8` is eight criterion names carrying seventeen
 rows, and an UNWIRED clause is now scored apart from its absent sibling — `MIK-7212.8a` and
 `MIK-7212.8b` are the worked example. Read the cluster tables' criterion names as a key to
 where a row belongs, never as a count of rows.

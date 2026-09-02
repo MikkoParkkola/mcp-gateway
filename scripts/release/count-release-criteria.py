@@ -193,66 +193,83 @@ CLUSTER = re.compile(
 )
 
 
-def rollup_shortfall(blocking, text):
-    """The rollup's clusters must account for every blocking row.
-
-    Only the total is checked, not the placement: a row in the wrong cluster is
-    a judgement a reader can correct, whereas a row in NO cluster is invisible.
-    The revision this catches grouped 37 of 52 and read as though it covered
-    all of them, so the plan derived from it understated the work by fifteen.
-    """
-    counts = [int(m.group(1)) for m in CLUSTER.finditer(text)]
-    if not counts:
-        return "no cluster table found in the rollup"
-    total = sum(counts)
-    if total != blocking:
-        return f"rollup clusters account for {total} rows, the ledger has {blocking} blocking"
-    return None
-
-
 # A criterion key as a rollup cluster names it: optionally MIK-prefixed, and
 # possibly a range (`MRTR.1-8`) standing for the rows between its endpoints.
 NAMED = re.compile(r"`((?:MIK-\d+\.|NFR\.)?[A-Z][A-Z0-9]*\.\d+[a-z]?)(?:-(\d+))?`")
 
 
-def rollup_strays(criteria, text):
-    """Cluster-named criteria that no ledger row calls blocking.
+def rollup_membership(criteria, text):
+    """Derive each cluster's rows from the ledger and check the rollup against them.
 
-    The total check above is blind to membership, and the two errors cancel:
-    the revision this catches padded one cluster with a waived row while a
-    blocking row sat in no cluster at all, summing to the right number. A range
-    is checked at both endpoints rather than skipped -- one endpoint closing is
-    the way a range goes stale, and skipping it silently is the defect class.
+    Every blocking row belongs to exactly one cluster, and a cluster's declared
+    count is whatever its named criteria resolve to. Checking the SUM alone
+    passes two cancelling errors -- the observed failure padded one cluster with
+    a waived row while a blocking row sat in no cluster at all -- and checking
+    only the names a cluster lists cannot see a row nobody listed. Deriving the
+    membership answers both, and a range is expanded rather than sampled at its
+    endpoints, because a middle row going non-blocking is how a range goes stale.
     """
-    # A cluster may name either a parent (`MRTR.1`, whose ledger rows are the
-    # clause rows `MIK-7212.MRTR.1a` and `.1b`) or one clause of a split parent
-    # (`CONFIRM.1a`, where the sibling clause is met). Granularity decides which
-    # set answers: a parent is blocking when ANY clause under it is, a named
-    # clause only when that clause is. Matching a clause name against parents
-    # would let a met clause ride in on its blocking sibling.
-    parents = {p for p, b, _f in criteria if b == "yes"}
-    clauses = {f for _p, b, f in criteria if b == "yes"}
-
-    def is_blocking(name):
-        known = clauses if name[-1].isalpha() else parents
-        return any(k == name or k.endswith("." + name) for k in known)
-
-    strays = []
+    blocking = [(parent, full) for parent, flag, full in criteria if flag == "yes"]
+    problems = []
+    claimed = {}
+    saw_cluster = False
     for line in text.splitlines():
-        if not CLUSTER.match(line):
+        match = CLUSTER.match(line)
+        if not match:
             continue
+        saw_cluster = True
         # The criteria column only. A cluster's notes legitimately name rows that
         # LEFT it -- a waiver, a re-homing -- and reading the whole row reports
         # each of those as a stray, which teaches the reader to ignore the check.
-        for match in NAMED.finditer(line.split("|")[3]):
-            head, end = match.group(1), match.group(2)
-            names = [head]
-            if end:
-                names.append(re.sub(r"\d+$", end, head))
-            for name in names:
-                if not is_blocking(name) and name not in strays:
-                    strays.append(name)
-    return strays
+        cluster, declared = line.split("|")[1].strip(), int(match.group(1))
+        members = []
+        for name in named_criteria(line.split("|")[3]):
+            # Granularity decides which ledger key answers: a parent name covers
+            # every clause under it, a named clause only itself. Matching a
+            # clause against parents would let a met clause ride in on a
+            # blocking sibling.
+            rows = [
+                full
+                for parent, full in blocking
+                if _names(full if name[-1].isalpha() else parent, name)
+            ]
+            if not rows:
+                problems.append(
+                    f"cluster {cluster} names {name}, which no ledger row calls blocking"
+                )
+            members += rows
+        if len(members) != declared:
+            problems.append(
+                f"cluster {cluster} declares {declared} rows, "
+                f"its criteria resolve to {len(members)}"
+            )
+        for full in members:
+            claimed[full] = claimed.get(full, 0) + 1
+    if not saw_cluster:
+        return ["no cluster table found in the rollup"]
+    for _parent, full in blocking:
+        if not claimed.get(full):
+            problems.append(f"{full} is blocking and sits in no cluster")
+        elif claimed[full] > 1:
+            problems.append(f"{full} is claimed by {claimed[full]} clusters")
+    return problems
+
+
+def _names(key, name):
+    return key == name or key.endswith("." + name)
+
+
+def named_criteria(cell):
+    """The criteria a cluster's rows column names, with every range expanded."""
+    names = []
+    for match in NAMED.finditer(cell):
+        head, end = match.group(1), match.group(2)
+        if not end:
+            names.append(head)
+            continue
+        first = int(re.search(r"\d+$", head).group())
+        names += [re.sub(r"\d+$", str(n), head) for n in range(first, int(end) + 1)]
+    return names
 
 
 def main():
@@ -291,8 +308,7 @@ def main():
     mismatched = method_mismatches(text, methods)
     stale_sections = section_counts(text)
     rollup_text = ROLLUP.read_text()
-    shortfall = rollup_shortfall(blocking, rollup_text)
-    strays = rollup_strays(criteria, rollup_text)
+    membership = rollup_membership(criteria, rollup_text)
     uncovered = sorted(declared - ids)
 
     totals = (len(declared), len(criteria), len(criteria) - blocking, blocking)
@@ -306,13 +322,8 @@ def main():
         print(f"NFR rows whose method disagrees with the requirement: {'; '.join(mismatched)}", file=sys.stderr)
     if stale_sections:
         print(f"section headings disagreeing with their own rows: {'; '.join(stale_sections)}", file=sys.stderr)
-    if shortfall:
-        print(shortfall, file=sys.stderr)
-    if strays:
-        print(
-            f"rollup clusters name rows the ledger does not call blocking: {', '.join(strays)}",
-            file=sys.stderr,
-        )
+    for complaint in membership:
+        print(complaint, file=sys.stderr)
 
     if "--check" not in sys.argv:
         return 0
@@ -323,7 +334,7 @@ def main():
     if tuple(int(g) for g in found.groups()) != totals:
         print(f"headline says {found.group(0)!r}, the tables say the line above", file=sys.stderr)
         return 1
-    return 1 if uncovered or mismatched or stale_sections or shortfall or strays else 0
+    return 1 if uncovered or mismatched or stale_sections or membership else 0
 
 
 if __name__ == "__main__":
