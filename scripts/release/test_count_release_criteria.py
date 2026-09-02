@@ -114,3 +114,89 @@ def test_a_rollup_with_no_cluster_table_is_flagged_rather_than_read_as_zero():
     assert counter.rollup_shortfall(52, "# rollup\n\nprose only.\n") == (
         "no cluster table found in the rollup"
     )
+
+
+# A cluster row may name a criterion the ledger no longer calls blocking. The
+# total alone cannot see it: the observed failure had a waived row padding one
+# cluster while a blocking row sat in none, and the two errors cancelled to the
+# right sum. Membership is the direction the total cannot check.
+STRAY_LEDGER = "\n".join(
+    [
+        "| NFR.COMPAT.1 | served | T | ABSENT | none | yes |",
+        "| NFR.COMPAT.3 | no config edit | D | N/A | waived | no |",
+        "| NFR.PERF.4 | ceiling | T | ABSENT | none | yes |",
+    ]
+)
+
+STRAY_ROLLUP = "\n".join(
+    [
+        "| # | cluster | rows | count | what is missing |",
+        "|---|---|---|---|---|",
+        "| F | compat | `NFR.COMPAT.1`, `NFR.COMPAT.3` | 2 | operator decisions |",
+    ]
+)
+
+
+def test_a_cluster_naming_a_row_the_ledger_does_not_call_blocking_is_flagged():
+    criteria, _ = counter.rows(STRAY_LEDGER)
+    assert counter.rollup_strays(criteria, STRAY_ROLLUP) == ["NFR.COMPAT.3"]
+
+
+def test_a_cluster_naming_only_blocking_rows_passes():
+    criteria, _ = counter.rows(STRAY_LEDGER)
+    clean = STRAY_ROLLUP.replace(", `NFR.COMPAT.3`", ", `NFR.PERF.4`")
+    assert counter.rollup_strays(criteria, clean) == []
+
+
+def test_a_range_is_checked_at_both_ends_rather_than_skipped():
+    criteria, _ = counter.rows(
+        "| MIK-7212.MRTR.1 | a | T | ABSENT | none | yes |\n"
+        "| MIK-7212.MRTR.8 | b | T | MET | done | no |"
+    )
+    table = "| A | envelope | `MRTR.1-8` | 8 | nothing mints one |"
+    assert counter.rollup_strays(criteria, table) == ["MRTR.8"]
+
+
+CLAUSE_LEDGER = "\n".join(
+    [
+        "| MIK-7246.CONFIRM.1a | refuse | T | PARTIAL | stdio ungated | yes |",
+        "| MIK-7246.CONFIRM.1b | no warning | T | MET | held | no |",
+    ]
+)
+
+
+def test_a_named_clause_is_judged_on_its_own_row_not_its_blocking_sibling():
+    criteria, _ = counter.rows(CLAUSE_LEDGER)
+    named_met = "| G | stdio | `MIK-7246.CONFIRM.1b` | 1 | ungated |"
+    named_open = "| G | stdio | `MIK-7246.CONFIRM.1a` | 1 | ungated |"
+    assert counter.rollup_strays(criteria, named_open) == []
+    assert counter.rollup_strays(criteria, named_met) == ["MIK-7246.CONFIRM.1b"]
+
+
+def test_a_row_named_only_in_the_notes_is_not_a_membership_claim():
+    criteria, _ = counter.rows(CLAUSE_LEDGER)
+    row = (
+        "| G | stdio | `MIK-7246.CONFIRM.1a` | 1 | "
+        "`MIK-7246.CONFIRM.1b` was in this cluster until it was met |"
+    )
+    assert counter.rollup_strays(criteria, row) == []
+
+
+if __name__ == "__main__":
+    # CI runs this file as a script, not under pytest. Without this the module
+    # defines its tests, exits 0, and the gate reports a pass having asserted
+    # nothing -- which is what it did from the day the CI step was added.
+    import sys
+    import traceback
+
+    failed = []
+    for name, fn in sorted(globals().items()):
+        if not name.startswith("test_") or not callable(fn):
+            continue
+        try:
+            fn()
+        except AssertionError:
+            failed.append(name)
+            traceback.print_exc()
+    print(f"{len(failed)} failed of {sum(1 for n in globals() if n.startswith('test_'))}")
+    sys.exit(1 if failed else 0)

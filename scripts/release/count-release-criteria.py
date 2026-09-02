@@ -210,6 +210,51 @@ def rollup_shortfall(blocking, text):
     return None
 
 
+# A criterion key as a rollup cluster names it: optionally MIK-prefixed, and
+# possibly a range (`MRTR.1-8`) standing for the rows between its endpoints.
+NAMED = re.compile(r"`((?:MIK-\d+\.|NFR\.)?[A-Z][A-Z0-9]*\.\d+[a-z]?)(?:-(\d+))?`")
+
+
+def rollup_strays(criteria, text):
+    """Cluster-named criteria that no ledger row calls blocking.
+
+    The total check above is blind to membership, and the two errors cancel:
+    the revision this catches padded one cluster with a waived row while a
+    blocking row sat in no cluster at all, summing to the right number. A range
+    is checked at both endpoints rather than skipped -- one endpoint closing is
+    the way a range goes stale, and skipping it silently is the defect class.
+    """
+    # A cluster may name either a parent (`MRTR.1`, whose ledger rows are the
+    # clause rows `MIK-7212.MRTR.1a` and `.1b`) or one clause of a split parent
+    # (`CONFIRM.1a`, where the sibling clause is met). Granularity decides which
+    # set answers: a parent is blocking when ANY clause under it is, a named
+    # clause only when that clause is. Matching a clause name against parents
+    # would let a met clause ride in on its blocking sibling.
+    parents = {p for p, b, _f in criteria if b == "yes"}
+    clauses = {f for _p, b, f in criteria if b == "yes"}
+
+    def is_blocking(name):
+        known = clauses if name[-1].isalpha() else parents
+        return any(k == name or k.endswith("." + name) for k in known)
+
+    strays = []
+    for line in text.splitlines():
+        if not CLUSTER.match(line):
+            continue
+        # The criteria column only. A cluster's notes legitimately name rows that
+        # LEFT it -- a waiver, a re-homing -- and reading the whole row reports
+        # each of those as a stray, which teaches the reader to ignore the check.
+        for match in NAMED.finditer(line.split("|")[3]):
+            head, end = match.group(1), match.group(2)
+            names = [head]
+            if end:
+                names.append(re.sub(r"\d+$", end, head))
+            for name in names:
+                if not is_blocking(name) and name not in strays:
+                    strays.append(name)
+    return strays
+
+
 def main():
     text = STATUS.read_text()
     headings = heading_counts(text) + heading_counts(PLAN.read_text())
@@ -245,7 +290,9 @@ def main():
         return 1
     mismatched = method_mismatches(text, methods)
     stale_sections = section_counts(text)
-    shortfall = rollup_shortfall(blocking, ROLLUP.read_text())
+    rollup_text = ROLLUP.read_text()
+    shortfall = rollup_shortfall(blocking, rollup_text)
+    strays = rollup_strays(criteria, rollup_text)
     uncovered = sorted(declared - ids)
 
     totals = (len(declared), len(criteria), len(criteria) - blocking, blocking)
@@ -261,6 +308,11 @@ def main():
         print(f"section headings disagreeing with their own rows: {'; '.join(stale_sections)}", file=sys.stderr)
     if shortfall:
         print(shortfall, file=sys.stderr)
+    if strays:
+        print(
+            f"rollup clusters name rows the ledger does not call blocking: {', '.join(strays)}",
+            file=sys.stderr,
+        )
 
     if "--check" not in sys.argv:
         return 0
@@ -271,7 +323,7 @@ def main():
     if tuple(int(g) for g in found.groups()) != totals:
         print(f"headline says {found.group(0)!r}, the tables say the line above", file=sys.stderr)
         return 1
-    return 1 if uncovered or mismatched or stale_sections or shortfall else 0
+    return 1 if uncovered or mismatched or stale_sections or shortfall or strays else 0
 
 
 if __name__ == "__main__":
