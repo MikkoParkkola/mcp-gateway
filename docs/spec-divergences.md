@@ -7,7 +7,9 @@ states it. One entry. Search method below.
 `SUPPORTED_VERSIONS` withholding `2026-07-28` was listed here and is not a
 divergence: the 2026-07-28 lifecycle scopes `initialize` to "`2025-11-25` and
 earlier", so a handshake that omits the modern revision is what the specification
-asks for. The rule and its reason live at `src/protocol/mod.rs:38-52`, asserted by
+asks for. The rule and its reason live on the `SUPPORTED_VERSIONS` declaration in
+`src/protocol/mod.rs` — cited by symbol, because a line range into a file that
+grows goes stale silently. Asserted by
 `protocol::tests::handshake_and_modern_path_keep_separate_version_lists`.
 
 ## 1. Backend and capability tools excluded from destructive-tool governance

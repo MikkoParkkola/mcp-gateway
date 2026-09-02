@@ -20,7 +20,7 @@ answer per backend — so DISCOVER.4 and DISCOVER.5 stop being UNWIRED. Both tra
   as of revision 2, reserves nothing for it either.
 - adding `2026-07-28` to `SUPPORTED_VERSIONS`. No increment does: the 2026-07-28 lifecycle
   scopes `initialize` to "`2025-11-25` and earlier", so the legacy handshake negotiates legacy
-  revisions only and the omission is permanent (`src/protocol/mod.rs:38-52`). HEADER.9 builds the
+  revisions only and the omission is permanent (the `SUPPORTED_VERSIONS` declaration in `src/protocol/mod.rs`). HEADER.9 builds the
   modern *request shaping* — `_meta` envelopes on the stateless path — not an entry in this list.
 - A2A backends — `src/backend/lifecycle.rs:372-383` refuses them on this path outright ("must be
   started via A2aProvider, not the legacy Backend::start() path").
