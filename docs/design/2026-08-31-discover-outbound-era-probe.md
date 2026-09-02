@@ -125,7 +125,7 @@ the same objection: probing after the handshake cannot discover a backend that r
 handshake. That is true, and it is not a defect this design introduces — it is the state of the tree.
 The gateway's outbound `initialize` offers `PROTOCOL_VERSION` (`src/transport/http/mod.rs:440-452`,
 `src/transport/stdio.rs:266-269`), which is `2025-11-25`
-(`PROTOCOL_VERSION` in `src/protocol/mod.rs`), and `SUPPORTED_VERSIONS` (`:48`) contains no 2026 revision. A peer that
+(`PROTOCOL_VERSION` in `src/protocol/mod.rs`), and `SUPPORTED_VERSIONS` (`src/protocol/mod.rs`) contains no 2026 revision. A peer that
 speaks only `2026-07-28` is therefore unreachable *today*, before any era work, and probing before
 the handshake would not have made it reachable either — constraint 1 showed a pre-handshake probe
 does not arrive on SSE or OAuth backends at all. Reaching such a peer means offering a version it
