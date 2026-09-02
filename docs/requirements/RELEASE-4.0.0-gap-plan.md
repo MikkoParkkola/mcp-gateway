@@ -734,3 +734,52 @@ useless without the list it now restricts.
 Two decisions remain open, and both are operator calls rather than engineering: whether a dual-role
 compatibility matrix is required for 4.0.0 (`NFR.COMPAT.4`), and whether the 17-tool scenario or the
 documented 14-16 ceiling is the number that moves (`NFR.PERF.4`).
+
+### Cluster F's third decision was not a decision — 2026-09-02
+
+`NFR.COMPAT.4` was listed above as an operator call: *is a dual-role compatibility matrix required
+for 4.0.0?* Reading §9 of the requirements answers it without anyone deciding anything. Release
+acceptance condition 2 already requires "the conformance matrix — one row per normative statement,
+crossed with **role**, transport, revision and outcome" with no empty evidence cell. The matrix is
+required, it has been required since the requirements were written, and `NFR.COMPAT.4` was a second
+demand for the same artifact.
+
+That duplication was not the only defect. The criterion demanded verification in **both** roles
+without qualification, while qualifying transports with *that implements it* — so a server-only
+requirement could not satisfy it by any amount of work. Both are repaired in the requirements file:
+the role clause now carries the same qualifier, and the row points at the matrix rather than naming
+a parallel artifact. A role with no manifestation is an N/A with its reason, which acceptance
+condition 1 already provides for.
+
+What remains ABSENT is the matrix itself, and that was never optional. The status row is unchanged
+in verdict and changed in meaning: `ABSENT` now names a missing artifact with an owner, not a
+missing definition.
+
+One decision therefore remains open in cluster F, not two: whether the 17-tool scenario or the
+documented 14-16 ceiling is the number that moves (`NFR.PERF.4`).
+
+### Meta-tool consolidation — analysed, and smaller than it looks
+
+Asked in service of `NFR.PERF.4`: can the meta-tool surface be cut by merging tools? Three candidate
+clusters, one survivor.
+
+`gateway_search`/`gateway_execute` are **not** duplicates of `gateway_search_tools`/`gateway_invoke`.
+They are the Code Mode surface (`src/gateway/meta_mcp_tool_defs.rs:720-730`) — two tools exposed
+*instead of* the standard surface, not alongside it. The 19 names in that file are 17 standard plus
+2 Code Mode, and there is no free deduplication.
+
+| cluster | tools | slots saved | verdict |
+|---|---|---|---|
+| status | `get_stats`, `cost_report`, `webhook_status`, `list_disabled_capabilities` | 3 at most, 1 in the minimal 14-tool scenario | viable — all four take no arguments, so a merged `gateway_status(section)` has a flat schema with nothing conditionally required |
+| admin | `kill_server`, `revive_server`, `reload_config`, `reload_capabilities`, `set_state` | 4, always present | rejected — kill and revive need a server id, `set_state` needs a state, the reloads need nothing. Merging makes required-ness depend on the action, which is the shape the flat-argument principle exists to avoid |
+| profiles | `list_profiles`, `get_profile`, `set_profile` | 2, `tool-profiles`-gated | rejected on the same ground, and it saves nothing in the minimal scenario |
+
+The honest figure is 1-3 tools off a 14-17 tool surface. The 14/16/17 spread is feature gating, and
+two of the three mergeable status tools are themselves gated — the merge saves least exactly where
+the surface is already smallest.
+
+Recommendation, put to the operator and not yet answered: **status cluster only, after 4.0.0.** A
+1-3 slot win does not justify a design event and its review rounds while blocking rows are open.
+The counter-argument is real and is the operator's to weigh: 4.0.0 already breaks this surface
+through `exposed_meta_tools` enforcement, and a surface that breaks once is cheaper for consumers
+than one that breaks twice.
