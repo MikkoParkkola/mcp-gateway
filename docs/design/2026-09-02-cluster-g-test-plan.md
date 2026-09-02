@@ -509,13 +509,12 @@ tolerate and becomes the acceptance test for work in this release.
 
 That move opens one unknown, and it is scheduled here rather than assumed. On HTTP the
 outcome is settled by the absence of a session: a modern request cannot carry one, so
-`on_unconfirmable` refuses and there is nothing to ask. Stdio is the opposite case — the
-session exists, so *confirmation could actually be obtained*. Whether the wiring elicits over
-that session or refuses without asking is a decision the implementing change makes and names,
-in the same way the `revision_source` vocabulary above is named. Row 16 asserts the refusal
-because refusal is what the criterion requires when confirmation cannot be had; if the wiring
-elicits instead, row 16's fixture must be the case where elicitation is unavailable, and the
-elicited path gets its own row. **The row is written against the requirement, not against a
+`on_unconfirmable` refuses and there is nothing to ask. Stdio looked like the opposite case — a session
+exists, so confirmation might actually be obtainable — and it is not. Elicitation is delivered
+over an SSE session by `ProxyManager::forward_elicitation_with_response`, and stdio's session
+identifier is not one; the call returns `NoSession` every time. The question the move opened was
+therefore answered by reading the delivery path, not deferred: **stdio can never ask**, so row
+16 asserts the refusal the criterion requires. **The row is written against the requirement, not against a
 mechanism that does not exist yet.**
 
 ---
@@ -559,10 +558,10 @@ form.
 | # | option | verdict |
 |---|---|---|
 | 1 | call `require_destructive_confirmation` from stdio and let `for_legacy()` decide | **rejected** — stdio constructs no shape, so it classifies legacy, so the answer is `PROCEED_WITH_WARNING` and the gap is unchanged with more code in front of it |
-| 2 | build real elicitation over stdio: a server→client request on stdout, correlated with its reply | **rejected for this release** — the stdio dispatcher is request/response only; adding a server-initiated channel is its own change with its own protocol surface. Recorded as the upgrade path, not as a gap |
-| 3 | refuse destructive meta-tools on stdio, with the same code and message as HTTP | **chosen** |
+| 2 | build real elicitation over stdio | **rejected for this release**, and when it returns it should not be a server-initiated stdout channel. MRTR's `InputRequiredResult` is a *continuation in the response*: the call returns "I need this input", the client re-calls with it. That is request/response, which is exactly what the stdio dispatcher already is — no new protocol surface, no correlation table, no second writer on stdout. Recorded as the upgrade path in that form |
+| 3 | refuse destructive meta-tools on stdio, with the same code and message as HTTP | **chosen in part** — refusing is right and the argument below stands. *Where* the refusal sits did not survive review: it is inside `handle_tools_call`, not in front of it, and the same-code-and-message half is obtained by having one call site rather than by sharing a builder between two |
 
-### Why option 3 is the honest answer and not merely the small one
+### Why refusing on stdio is the honest answer and not merely the small one
 
 `ConfirmationOutcome::Unsupported` carries two different meanings that the current code does not
 distinguish, and the distinction is what makes the legacy warning defensible in one place and
@@ -582,20 +581,17 @@ route, and the criterion is written about the condition, not the route.
 CONFIRM.1b keeps `PROCEED_WITH_WARNING` on the legacy path "for callers this release does not
 govern". Stdio is not one of those: it is the caller this build hands unconditional admin.
 
-### Shape of the change
+### Shape of the change — WITHDRAWN, see "Round 1 of design review" below
 
-- Move `describe_destructive_action` out of `router/handlers.rs:1579` into
-  `destructive_confirmation.rs` and make it `pub`, so both transports build the same string.
-- Add one function there that produces the refusal — code `-32001` and the message
-  `Destructive action requires confirmation and none could be obtained: {action_desc}` — and
-  have the HTTP handler and the stdio dispatcher both call it. Neither transport composes that
-  message itself, so the two cannot drift. Row 13 is the probe that they have not.
-- Stdio refuses before dispatch when `is_destructive_meta_tool(tool_name)` holds. It does not
-  attempt elicitation first: the answer is knowable without asking, and calling out to a channel
-  that cannot exist would add an `ELICITATION_TIMEOUT` wait to a foregone conclusion.
-- The governed set stays `is_destructive_meta_tool`, which is where CONFIRM.3's
-  "derive from `destructiveHint`, not a hardcoded name" requirement already lives. No second
-  hardcode is introduced.
+This section specified a refusal in the stdio dispatcher ahead of `handle_tools_call`, with a
+shared message-builder to keep the two transports in step. **Design review killed it**, and the
+replacement is not a variant of it: the gate moves inside `handle_tools_call` and the sharing
+step is deleted rather than written. The superseded text is not reproduced here — a withdrawn
+mechanism left in the document's actionable section is the one an implementer follows.
+
+What survives from it, and only this: the governed set stays `is_destructive_meta_tool`, where
+CONFIRM.3's "derive from `destructiveHint`, not a hardcoded name" requirement already lives. No
+second hardcode is introduced by any version of this design.
 
 ### Explicitly out of scope
 
@@ -606,8 +602,8 @@ place and changing it is a separate argument with separate consequences.
 
 | question | how it was settled | answer | what it changed |
 |---|---|---|---|
-| Does any shipped flow kill a backend over stdio, so that refusing would break it? | `rg -rn 'gateway_kill_server'` across the tree, then read the two docs that mention it | `docs/DEPLOYMENT.md:745` lists it among admin-only meta-tools; no documented or tested stdio kill flow exists | nothing — the refusal breaks no shipped path |
-| Does the message the two transports emit have to match exactly, or only by prefix? | read the existing HTTP test's assertions and row 13 | the tests assert code plus a message prefix, so an exact match is not forced by the tests — which is precisely why the *construction* is shared rather than the assertion tightened | made the shared-function step load-bearing rather than tidiness |
+| Does any shipped flow kill a backend over stdio, so that refusing would break it? | `rg -rn 'gateway_kill_server'` across the tree, then read the two docs that mention it | no scripted or tested stdio kill flow exists, but `docs/DEPLOYMENT.md:741-745` documents the tool and stdio grants `is_admin: true`, so an operator driving the gateway from a spawned client **can** kill a backend today and will stop being able to | changed the honest answer from "breaks nothing" to "removes a capability deliberately" — which is what CONFIRM.1a asks for, and what the release notes must say |
+| Does the message the two transports emit have to match exactly, or only by prefix? | read the existing HTTP test's assertions and row 13 | the tests assert code plus a message prefix, so an exact match is not forced by the tests | made a shared message-builder load-bearing rather than tidiness — **and that is what the round-1 revision then made moot**. With one call site the two transports cannot emit different strings, so the question stops being about test strictness. Row 13 remains as the probe that the single site is still the only one |
 
 ### Round 1 of design review: the pre-dispatch refusal is the wrong mechanism
 
@@ -652,14 +648,49 @@ different noun.
 | a third transport inherits it | it cannot reach `handle_tools_call` without supplying a caller context |
 | row 16's admin fixture stays correct | the admin gate still runs first, now in the dispatcher rather than in the router |
 
+`describe_destructive_action` moves with the gate, and **its parameter changes**. It reads
+`params["arguments"]["server"]` today because the HTTP handler holds the whole `tools/call`
+params object. `handle_tools_call` has already destructured that; the arguments object is what is
+in scope. The moved function takes `arguments: &Value` and reads `["server"]` directly. Passing
+the outer params at the new call site would compile and silently produce the fallback description
+for every action — a wrong message on a security refusal, with no test asserting the server name
+to catch it.
+
 #### What travels in the caller context
 
-Not a boolean. The two transports differ in *whether an asker can exist*, and HTTP additionally
-needs the `ProxyManager` to reach one — which the dispatcher does not hold and should not learn
-about. So confirmation travels the way authorization already does: a small trait in the caller
-context, implemented once per transport. HTTP's implementation elicits over the session and
-applies the modern/legacy policy. Stdio's answers that no asker can exist, which the shared gate
-turns into a refusal.
+Not a boolean, and not a trait. An **enum**, because the two transports do not differ in *how*
+they ask — they differ in whether asking is a thing that can happen at all:
+
+```rust
+pub enum ConfirmationChannel<'a> {
+    /// An asker may exist. Elicit over the session, then apply the modern/legacy policy.
+    Elicit { proxy: &'a ProxyManager, shape: RequestShape },
+    /// No asker can exist on this transport. Refuse without calling out.
+    Unavailable,
+}
+```
+
+A trait would need one `async` method, so it would need `async_trait` or a boxed future in a
+struct the dispatcher passes by reference on every call — machinery for two variants that are
+known at compile time and will not grow a third without a new transport.
+
+**The enum is also what keeps `ConfirmationOutcome::Unsupported` meaning one thing.** Round 1
+said stdio "answers that no asker can exist, which the shared gate turns into a refusal", and
+that is unimplementable: the only outcome carrying *nobody answered* is `Unsupported`, and
+CONFIRM.1b **requires** HTTP-legacy to keep mapping `Unsupported` to `PROCEED_WITH_WARNING`. A
+gate that refuses on `Unsupported` breaks 1b; a gate that warns on it fails 1a for stdio. The
+outcome vocabulary cannot express both, and widening it — a second unsupported-ish variant every
+existing `match` must now handle — is the patch, not the fix.
+
+So the two meanings are separated **before** an outcome exists rather than after. `Unavailable`
+short-circuits: stdio never calls elicitation, so it never produces an `Unsupported` for anyone
+to interpret. `Elicit` runs exactly the path that runs today, where `Unsupported` still means
+*this client did not answer* and `for_legacy()` still warns. Neither `ConfirmationOutcome` nor
+`ConfirmationPolicy` changes at all.
+
+The test that this is an elimination and not a patch: after the change, **the finding cannot be
+restated**. There is no call site at which `Unsupported` carries two meanings, because there is
+no call site at which stdio produces one.
 
 #### The superseded design, and why it is recorded rather than deleted
 
@@ -675,3 +706,37 @@ This is a larger change than the one it replaces: a new trait, two implementatio
 field, and the HTTP gate deleted from the router rather than left in place. The alternative is two
 copies of a security check whose correctness depends on their position relative to two other
 checks, in a file where that ordering has already been got wrong once and commented about twice.
+
+### Round 2 of design review: the mechanism survived, the vocabulary did not
+
+Both vendors reviewed the revision. The dispatcher-internal placement was not challenged by
+either. Four findings, all accepted, all applied above rather than recorded here as future work.
+
+| # | finding | where it landed |
+|---|---|---|
+| 1 | the actionable "Shape of the change" section still specified the *withdrawn* pre-dispatch refusal — an implementer reading top-down builds the mechanism review killed | the section is now marked withdrawn and its text removed, not annotated |
+| 2 | the shared gate cannot refuse on `ConfirmationOutcome::Unsupported`, because CONFIRM.1b requires HTTP-legacy to keep warning on exactly that value | the caller-context enum short-circuits before an outcome exists; the outcome vocabulary is untouched |
+| 3 | `describe_destructive_action` reads `params["arguments"]`, but at the new call site the arguments are already destructured | signature changes to `&Value` arguments; noted because the wrong version compiles |
+| 4 | "the refusal breaks no shipped path" was too comfortable — stdio is the documented admin surface and kill works there today | the unknowns row now says a capability is removed on purpose |
+
+**Finding 1 is the fourth instance of one defect class in this document**: prose announces a
+change and the section it changes is left standing. Every previous instance was caught by a
+reviewer, never by the author. The class is not "forgot to edit" — it is *editing the paragraph
+under discussion instead of re-reading the document that paragraph belongs to*. The rule that
+closes it is mechanical: **after any revision, re-read the whole file, not the edited region.**
+
+#### Carried to implementation, not to a follow-up
+
+Two obligations that are not design decisions but will be silently skipped if they are not
+written down where the implementer is looking:
+
+- `destructive_confirmation.rs:5-30` — the module's own contract still tells callers to proceed
+  when there is no session. It is the documentation of the behaviour this change exists to
+  reverse, and it ships inside this change (§P4a), not after it.
+- `meta_mcp/tests.rs:39-55` — the dispatcher tests need a confirmation channel in their caller
+  context. It is named explicitly (`allow_all_ctx`) rather than supplied by a `Default`
+  implementation. A `Default` that means *permit* is a fail-open one keystroke from production.
+
+#### Verdicts
+
+Recorded in the ledger, not scraped from either reviewer's prose (§PA).
