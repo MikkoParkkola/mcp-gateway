@@ -187,6 +187,16 @@ def test_a_token_the_parser_cannot_read_is_reported_rather_than_dropped():
     ]
 
 
+def test_an_unqualified_name_matching_two_tickets_is_flagged():
+    # `MRTR.1` binds by suffix. A second ticket reusing the component name would
+    # hand cluster A a row nobody put there, and the count would still add up.
+    shared = LEDGER + "\n| MIK-9999.MRTR.1a | elsewhere | T | ABSENT | none | yes |"
+    doubled = ROLLUP.replace("`MRTR.1`, `MRTR.3` | 2", "`MRTR.1`, `MRTR.3` | 3")
+    assert membership(shared, doubled) == [
+        "cluster A names MRTR.1, which matches rows under 2 tickets"
+    ]
+
+
 def test_a_rollup_with_no_cluster_table_is_flagged_rather_than_read_as_zero():
     assert membership(LEDGER, "# rollup\n\nprose only.\n") == [
         "no cluster table found in the rollup"

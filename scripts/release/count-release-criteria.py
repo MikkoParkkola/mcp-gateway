@@ -240,6 +240,17 @@ def rollup_membership(criteria, text):
                 problems.append(
                     f"cluster {cluster} names {name}, which no ledger row calls blocking"
                 )
+            # An unqualified name binds by suffix, so `CACHE.4` would claim rows
+            # from every ticket that has a `CACHE.4` -- silently, and the counts
+            # would still add up. No live name is ambiguous today; the check is
+            # what keeps a second ticket reusing a component name from rewriting
+            # a cluster's membership without saying so.
+            owners = {full.rsplit("." + name, 1)[0] for full in rows}
+            if len(owners) > 1:
+                problems.append(
+                    f"cluster {cluster} names {name}, which matches rows under "
+                    f"{len(owners)} tickets"
+                )
             members += rows
         if len(members) != declared:
             problems.append(
