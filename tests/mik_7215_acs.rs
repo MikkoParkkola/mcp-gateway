@@ -739,7 +739,11 @@ mod http {
     ///
     /// `DISC.2` is written against the admin-gate route: a non-admin naming a
     /// hidden admin tool. This drives the exposure check instead, with an
-    /// *admin* caller precisely so the admin gate cannot be what answers. The
+    /// *admin* caller precisely so the admin gate cannot be what answers.
+    /// Admin is the harder case, not a weaker one: the exposure check runs
+    /// first (`src/gateway/meta_mcp/mod.rs:1350`, ahead of the admin gate at
+    /// `:1365`), so the caller who would clear every remaining gate is the one
+    /// with the most to learn from a different answer — and still gets none. The
     /// criterion is the same one — indistinguishable from an absent tool, same
     /// code and same message — proved on the other of the two routes the
     /// ticket lists. The admin-gate half is not covered here and still owes a
