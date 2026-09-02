@@ -31,6 +31,7 @@ to wait on. Row 16 covers it.
 | 13 | `CONFIRM.1a` | the **existing** HTTP case `ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused` (`tests/mik_7215_acs.rs:630`) still refuses after the gate is moved to serve both transports, with one assertion added: the execution sentinel is untouched | integration | invariance probe | **not free** — HTTP already refuses; the red comes from moving the gate, so the probe is to move it wrongly and watch this go red |
 | 14 | `OBS.2` | a `tools/list` whose profile **excludes** at least one tool records the **effective filter decisions** — which filters ran and what each removed — and the record is stamped **before** the response is written | integration | content + ordering | free — the live record names filter *inputs* only, so it cannot carry a decision |
 | 15 | `OBS.1` | a `tools/call` over **HTTP** carrying no revision in either `_meta` or the header records `protocol_revision` = `absent` and `revision_source` = `none` — the exact strings, not any falsy value | integration | regression | **not free** — production already emits these literals, so the row passes today; probe required, see below |
+| 18 | `CONFIRM.1a` | a caller for whom `gateway_kill_server` is hidden by `meta_tool_exposure` calls it over HTTP and receives `-32601` / unknown tool — **not** `-32001` / requires confirmation | integration | disclosure | **red on arrival** — today's gate answers before the exposure check, so the hidden tool confirms its own existence |
 | 17 | `CONFIRM.1a` | a refused destructive call over HTTP leaves the caller's client-failure count unchanged, **and** an ordinary backend error on the same client still increments it | integration | regression + negative control | **red on arrival** — refusals do not reach the accounting tail today, so the exclusion does not exist |
 | 16 | `CONFIRM.1a` | a destructive `tools/call` over **stdio** from an **admin** caller naming `gateway_kill_server`, where no confirmation can be obtained, returns code `-32001` **and** a message that opens `Destructive action requires confirmation and none could be obtained:` **and** names the fixture's server verbatim **and** leaves the execution sentinel untouched | integration | fail-closed | **red on arrival** — the gate is HTTP-only; this is the acceptance test for wiring it |
 
@@ -737,9 +738,13 @@ The refusal therefore carries a type the tail can recognise, and the accounting 
 Not the message text and not the `-32001` code, both of which a backend could also produce: an
 internal marker on the response, set only by the confirmation gate.
 
-Its contract, because "an internal marker" is not one: a `bool` field on the internal response
-struct that the JSON-RPC serializer **skips**, so it never reaches a client and cannot be forged
-by a backend that learns to set it. The accounting tail reads that field; nothing else does.
+Its contract, because "an internal marker" is not one: a `bool` field on `JsonRpcResponse` carrying
+`#[serde(skip)]`, so it never reaches a client and cannot be forged by a backend that learns to
+set it. Explicitly **not** a stamp inside `error.data`: that is the adjacent pattern
+(`router/handlers.rs:845`), it is the one an implementer reaches for by imitation, and it puts
+the marker on the wire where a backend can set it and buy itself an accounting exclusion.
+`refusal_status` (`router/handlers.rs:1564`) already reads a refusal off the response, so the
+field has somewhere to live that is not the payload. The accounting tail reads that field; nothing else does.
 Both refusal branches carry it — the modern-HTTP elicit-then-refuse and the stdio
 `Unavailable` short-circuit — because both are the caller using the feature correctly.
 
@@ -758,7 +763,7 @@ something wrong".
 
 | threat | before | after | mitigation |
 |---|---|---|---|
-| **I**nformation disclosure — hidden tool confirmed by a distinguishable reply | HTTP's gate answers before the exposure check, so a hidden destructive tool is disclosed | the gate sits behind exposure by construction, on both transports | placement, not vigilance; row 13 probes it |
+| **I**nformation disclosure — hidden tool confirmed by a distinguishable reply | HTTP's gate answers before the exposure check, so a hidden destructive tool is disclosed | the gate sits behind exposure by construction, on both transports | placement, not vigilance; row 18 probes it |
 | **E**levation of privilege — stdio client kills a backend it was never authorised to | open: stdio is unconditionally admin and ungated | refused | the change itself; row 16 is the acceptance test |
 | **D**enial of service — refusals degrade a legitimate caller | n/a (refusals returned early) | introduced by the move | typed refusal excluded from failure accounting, above |
 | **T**ampering — a backend forges a confirmation refusal to look like the gate | possible by message text | unchanged by this design | the internal marker is set by the gate only and is not derived from backend output |
@@ -821,6 +826,11 @@ written down where the implementer is looking:
   can no longer state one, so the finding cannot be restated in either direction. An operator
   reading logs during an incident is the reader least able to check the claim, which is why the
   layer that cannot know must not be the layer that speaks.
+- `docs/DEPLOYMENT.md:739-750` — tells an operator that a stdio caller is treated as admin
+  because it spawned the process, and lists the four gateway-wide tools under what an
+  *anonymous HTTP* caller cannot reach. After this change the same four refuse over stdio as
+  well, for a different reason: nobody can be asked. An operator reading it would conclude the
+  local client still has them.
 - `destructive_confirmation.rs:5-30` — the module's own contract still tells callers to proceed
   when there is no session. It is the documentation of the behaviour this change exists to
   reverse, and it ships inside this change (§P4a), not after it.
@@ -834,6 +844,12 @@ written down where the implementer is looking:
   silently inherit a permissive channel. For the same reason there is **no `Default`** — a
   `Default` meaning *permit* is a fail-open one keystroke from production. Test helpers name it
   `allow_all_ctx` so the permission is legible at the call site.
+
+  Those helpers carry `Unavailable`, not `Elicit`. The name is about the *authorizer*; the
+  channel is a separate axis and the permissive setting on it is the fail-open one. A helper
+  handing out `Elicit` with a legacy policy would let every destructive call in every unit test
+  proceed unconfirmed, and would mask the `Unavailable` path that is the whole point of the
+  change. A test that needs to exercise elicitation asks for it by name.
 
 #### Verdicts
 
