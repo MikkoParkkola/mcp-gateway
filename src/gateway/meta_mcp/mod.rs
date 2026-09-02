@@ -173,6 +173,23 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
             crate::Error::Forbidden { status, .. } => Some(serde_json::json!({
                 crate::gateway::authz::HTTP_STATUS_DATA_KEY: status,
             })),
+            // A gateway-authored refusal may carry a recovery payload the
+            // client needs: MRTR.9 names the capabilities an input request
+            // would have required, which is the difference between a client
+            // that can declare them and retry and one that only sees prose.
+            // Exactly one key is forwarded, never the whole object, because
+            // `data` is a shared channel — `invoke_tool` puts a *backend's*
+            // error data into this same variant, so forwarding it wholesale
+            // is what would hand a backend the status field above.
+            crate::Error::JsonRpc {
+                data: Some(data), ..
+            } => data
+                .get(invoke::REQUIRED_CAPABILITIES_DATA_KEY)
+                .map(|capabilities| {
+                    serde_json::json!({
+                        invoke::REQUIRED_CAPABILITIES_DATA_KEY: capabilities,
+                    })
+                }),
             _ => None,
         };
     }

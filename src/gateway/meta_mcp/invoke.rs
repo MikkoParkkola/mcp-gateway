@@ -418,6 +418,13 @@ fn unbindable_continuation(server: &str, tool: &str) -> Error {
     }
 }
 
+/// The key under which a refusal names the capabilities the client would have
+/// had to declare. Shared with `error_response_preserving_status`, which
+/// forwards this key and only this key out of a gateway-authored error's
+/// `data` — a literal in both places would let the two drift apart silently,
+/// and the drift would be invisible because the field would simply be absent.
+pub(super) const REQUIRED_CAPABILITIES_DATA_KEY: &str = "requiredCapabilities";
+
 /// The refusal for an interim result naming a request type this client cannot
 /// be asked (MRTR.9).
 ///
@@ -439,7 +446,7 @@ fn undeclared_input_request(
                  '{capability}' capability the client did not declare",
                 refused.key
             ),
-            Some(json!({ "requiredCapabilities": [capability] })),
+            Some(json!({ REQUIRED_CAPABILITIES_DATA_KEY: [capability] })),
         ),
         None => (
             format!(

@@ -3416,6 +3416,47 @@ async fn an_undeclared_input_request_is_refused_at_the_gateway() {
     );
 }
 
+// The refusal's payload has to survive the response boundary, which is a
+// different question from whether the refusal builds one. `invoke_tool` hands
+// its error to `error_response_preserving_status`, and that function is the
+// sole author of `data` on the way out — so a payload built correctly upstream
+// is still lost unless the boundary forwards it. The two assertions below are
+// the two halves that must both hold and neither implies the other: the
+// client's recovery payload arrives, and the status key the gateway reserves
+// for itself does not ride along with it.
+#[tokio::test]
+async fn a_refusals_required_capabilities_survive_the_response_boundary() {
+    let meta = MetaMcp::new(backend_asking_for_elicitation());
+    let err = meta
+        .invoke_tool(
+            &book_flight(),
+            Some("session-1"),
+            &allow_all_ctx_declaring(&[]),
+        )
+        .await
+        .expect_err("a client that declared nothing must not be asked");
+
+    let response = error_response_preserving_status(RequestId::Number(1), &err);
+    let data = response
+        .error
+        .expect("a refusal must serialise as an error")
+        .data
+        .expect("the refusal names a capability, so its payload must reach the client");
+
+    assert_eq!(
+        data.get("requiredCapabilities"),
+        Some(&serde_json::json!(["elicitation"])),
+        "the client is told which capability to declare, not merely that it \
+         failed to declare one: {data}"
+    );
+    assert!(
+        data.get(crate::gateway::authz::HTTP_STATUS_DATA_KEY)
+            .is_none(),
+        "the boundary forwards the recovery key alone; the status key stays \
+         the gateway's to set: {data}"
+    );
+}
+
 // MRTR.2's refusal, which is the half a passing mint cannot demonstrate. A
 // caller the gateway cannot name would have to be bound to a fingerprint every
 // other unnameable caller also holds — which is not a binding — so the
