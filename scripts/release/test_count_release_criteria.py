@@ -277,12 +277,16 @@ def test_the_handshake_and_the_modern_path_keep_separate_version_lists():
     legacy = (root / "src/protocol/mod.rs").read_text()
     modern = (root / "src/protocol/meta.rs").read_text()
 
-    handshake = next(
-        line for line in legacy.splitlines() if "pub const SUPPORTED_VERSIONS" in line
-    )
-    stateless = next(
-        line for line in modern.splitlines() if "pub const MODERN_VERSIONS" in line
-    )
+    # The whole declaration, not the line the name appears on: rustfmt wraps a
+    # list once it crosses the width, and a line-scoped read of a wrapped
+    # constant sees only `&[` -- it would pass while carrying the string it
+    # exists to forbid.
+    def declaration(text, name):
+        start = text.index(f"pub const {name}")
+        return text[start : text.index("];", start) + 2]
+
+    handshake = declaration(legacy, "SUPPORTED_VERSIONS")
+    stateless = declaration(modern, "MODERN_VERSIONS")
     assert "2026-07-28" not in handshake, handshake
     assert "2026-07-28" in stateless, stateless
 
