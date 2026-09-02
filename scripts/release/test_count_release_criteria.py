@@ -296,15 +296,19 @@ def test_a_count_cell_that_is_not_a_number_is_reported_rather_than_skipped():
     ]
 
 
-def test_a_mistyped_criterion_id_is_refused_rather_than_read_as_a_real_one():
-    # Unanchored, `MRTR.1abc` matches as far as `MRTR.1a` and is counted as that
-    # criterion: a typo is silently attributed to a row that exists.
+def test_a_mistyped_criterion_id_is_reported_rather_than_read_as_a_real_one():
+    # Two ways to lose the row, and the anchor only closed the first. Unanchored,
+    # `MRTR.1abc` matches as far as `MRTR.1a` and is counted as that criterion.
+    # Anchored but merely skipped, the row vanishes from the accounting instead
+    # -- still silent, and a blocking criterion is what goes missing. A row whose
+    # id opens like a criterion id IS a criterion row; failing to parse makes it
+    # malformed, never absent.
     table = [
         "| id | criterion | method | blocking |",
         "| --- | --- | --- | --- |",
         "| MIK-7212.MRTR.1abc | mistyped | T | yes |",
     ]
-    assert counter.rows("\n".join(table)) == ([], [])
+    assert counter.rows("\n".join(table)) == ([], ["MIK-7212.MRTR.1abc"])
 
 
 def test_the_live_documents_agree_with_the_ledger():

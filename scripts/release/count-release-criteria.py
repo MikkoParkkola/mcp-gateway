@@ -24,6 +24,10 @@ ROLLUP = ROOT / "docs/requirements/RELEASE-4.0.0-blocking-rollup.md"
 # far as `MRTR.1a` and is counted as that criterion, so a mistyped row is
 # silently attributed to a real one rather than reported.
 ID = re.compile(r"^((?:MIK-\d+|NFR)\.[A-Z0-9]+\.\d+)([a-z]?)$")
+
+# The claim, separate from the parse. Anything opening like a criterion id
+# is one for the purpose of being counted or reported.
+ID_PREFIX = re.compile(r"^(?:MIK-\d+|NFR)\.")
 # The verification-method vocabulary: test, measurement, inspection, demonstration.
 METHOD = re.compile(r"^[TMID](, ?[TMID])*$")
 # The headline sentence this script owns. Nothing else in the file may state totals.
@@ -138,7 +142,17 @@ def rows(text):
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         # Four cells is what makes a criterion row. The group-summary tables near
         # the end carry three and would otherwise read as malformed criteria.
-        if len(cells) < 4 or not ID.match(cells[0]):
+        if len(cells) < 4:
+            continue
+        # What a criterion id OPENS with decides that the row is one, before
+        # asking whether it parses. Deciding on the full anchored match instead
+        # lets a typo fail the match and drop the row out of the accounting
+        # entirely -- the same silence the anchor was added to end, moved one
+        # step along. A row that claims to be a criterion and is not readable as
+        # one is malformed, never absent.
+        if not ID.match(cells[0]):
+            if ID_PREFIX.match(cells[0]):
+                malformed.append(cells[0])
             continue
         if cells[-1] not in ("yes", "no"):
             malformed.append(cells[0])
