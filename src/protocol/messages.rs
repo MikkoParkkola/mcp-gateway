@@ -57,8 +57,9 @@ pub struct JsonRpcResponse {
     /// Error (on failure)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
-    /// Internal marker: this response refuses a destructive action whose
-    /// confirmation could not be obtained.
+    /// Internal marker: this response refuses a destructive action, either
+    /// because its confirmation could not be obtained or because the operator
+    /// declined it.
     ///
     /// `#[serde(skip)]` in both directions: it is never written to the wire,
     /// and a wire key of this name can never set it. Read only by the

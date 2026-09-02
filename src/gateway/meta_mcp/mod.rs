@@ -1430,11 +1430,19 @@ impl MetaMcp {
                     )
                     .await;
                     if outcome == ConfirmationOutcome::Declined {
-                        return JsonRpcResponse::error(
+                        let mut response = JsonRpcResponse::error(
                             Some(id),
                             -32001,
                             format!("Operator declined: {action_desc}"),
                         );
+                        // A decline is the operator using the control, not the
+                        // client failing. Before this gate moved into the
+                        // dispatcher a decline returned earlier than the
+                        // accounting and was never counted; marking it keeps
+                        // that true, so exercising the safety control cannot
+                        // walk a caller toward a tripped breaker.
+                        response.confirmation_refusal = true;
+                        return response;
                     }
                     // Nobody could be asked. What that means depends on the era,
                     // and the policy was decided at the edge that knows which era
