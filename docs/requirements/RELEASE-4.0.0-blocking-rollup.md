@@ -61,23 +61,32 @@ the blocking rows and read as though it covered all of them.
 - `MIK-7215.CONTROL.3a` — scored blocking when `CONTROL.3` was split; the clause it carries is
   not held by the parent's evidence.
 
-## The four decisions this reduces to
+## The four decisions this reduced to — all four are now answered
 
-Everything above is engineering except these. They are operator calls, and no amount of
-test-writing settles them.
+Everything above is engineering except these. They were operator calls, and no amount of
+test-writing would have settled them. Three fell to the instruction to close the full scope;
+the fourth was ruled on directly. They are kept here because the answers are what the rest of
+this document is now written against, and because a question that disappears once answered
+reads later as a question nobody asked.
 
-1. **Does 4.0.0 ship the continuation envelope wired, or ship without it?** Fifteen criteria
-   hang on the answer. `server.modern_protocol` defaults to `false`, so no default install
-   reaches the modern path at all and an unwired envelope is consistent with what ships.
-2. **Does 4.0.0 ship era detection wired, or detect-only?** The design already resolved that
-   the gateway detects and does not speak the modern revision outbound. Wiring the detector is
-   still a separate yes.
-3. **Is `exposed_meta_tools` enforcement acceptable as a breaking change?** Our own release
-   notes call it breaking for operators who set the field. `NFR.COMPAT.3` forbids exactly that.
-   Either the enforcement is reverted, or the criterion is amended with the operator's consent.
-4. **Do the performance numbers gate the release?** `NFR.PERF.2` states its own consequence:
-   without a number the change does not ship. That is a Spark job, not a decision — but
-   whether it blocks is.
+1. **Does 4.0.0 ship the continuation envelope wired, or ship without it?** **Wired.** Fifteen
+   criteria hung on this. The operator ruled that 4.0.0 serves `2026-07-28` out of the box, so
+   `server.modern_protocol` defaults to true and every default install reaches the modern path.
+   That removes the *ship-without-it* answer outright: an unwired envelope behind a default-on
+   flag is a first-run defect, not an opt-in gap. The flip cannot land before the wiring.
+2. **Does 4.0.0 ship era detection wired, or detect-only?** **Wired**, by the same full-scope
+   instruction. The design's own resolution is unchanged — the gateway detects and does not
+   speak the modern revision outbound — so wiring the detector is the whole of the work.
+3. **Is `exposed_meta_tools` enforcement acceptable as a breaking change?** **Yes** — the
+   operator waived `NFR.COMPAT.3` on the record on 2026-09-02. The enforcement ships and the
+   criterion no longer blocks. What that waiver bought and cost is set out below.
+4. **Do the performance numbers gate the release?** **They are to be run**, which answers the
+   question the useful way: `NFR.PERF.2` states its own consequence — without a number the
+   change does not ship — and the full-scope instruction schedules the Spark job rather than
+   arguing about whether its absence blocks.
+
+Two decisions surfaced from the residue rows remain genuinely open, and they are set out under
+*Two more operator decisions* below.
 
 ## The release blocker that is not a criterion
 
@@ -117,18 +126,21 @@ a full-file write would have replaced 583 lines of a live document with 209.
 
 ### What the operator still has to decide
 
-Three of the four decisions this document listed are settled by the instruction to close the
+Three of the four decisions this document listed were settled by the instruction to close the
 full scope: wire the continuation envelope, wire era detection, run the performance numbers.
-The fourth is not, because both of its answers are "fix the gap":
+The fourth was not, because both of its answers were "fix the gap" — and it has since been
+answered directly:
 
 `NFR.COMPAT.3` forbids requiring an operator to edit configuration for existing behaviour to
 continue. `meta_mcp.exposed_meta_tools` was documented as an allow-list and had no effect
 outside tests; GH issue 449 made it real, and `gateway_search`/`gateway_execute` — previously
 reaching every backend tool regardless of the list — are now restricted by it. Either the
 enforcement ships and the criterion is amended in the open, or the enforcement is reverted and
-the gateway keeps shipping a field that claims a restriction it does not apply. **Amending a
-criterion needs the operator's recorded agreement and has not been given**, so the row stays
-blocking and is not to be closed by reinterpretation.
+the gateway keeps shipping a field that claims a restriction it does not apply. Amending a
+criterion needs the operator's recorded agreement, and on 2026-09-02 **it was given: the
+criterion is waived for this field**. The enforcement ships, the row leaves cluster F, and the
+release notes carry the break rather than the criterion swallowing it. The waiver is recorded
+for this field only — `NFR.COMPAT.3` still binds every other configuration surface.
 
 ### The count is checked, not asserted
 
@@ -168,14 +180,14 @@ a call site owned half by tracing and half by caching is the coupling that produ
 defect.
 
 `NFR.COMPAT.1` is listed under cluster F as an operator fact, and it is also a dependency the
-other two wirings run on. `SUPPORTED_VERSIONS` (`src/protocol/mod.rs:48`) does not name
+other two wirings run on. `SUPPORTED_VERSIONS` (`src/protocol/mod.rs`) does not name
 `2026-07-28`; `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) names it alone, and era-r4-repair's
 frozen scope declares adding it explicitly out.
 
 An earlier revision of this paragraph read that as a gap: wire both clusters, never negotiate
 the revision, unwiredness moved one level up. That is wrong, and the correction matters more
 than the claim did. The omission is deliberate and documented at the source
-(`src/protocol/mod.rs:38-47`): the 2026-07-28 lifecycle scopes `initialize` to revisions
+(the `SUPPORTED_VERSIONS` doc comment, `src/protocol/mod.rs`): the 2026-07-28 lifecycle scopes `initialize` to revisions
 `2025-11-25` and earlier, so listing the modern revision in `SUPPORTED_VERSIONS` would have a
 retired handshake negotiate a revision that has none, and a client would be told yes and then
 served 2025 semantics — silent, and worse than a refusal. The omission is permanent, not an
@@ -190,7 +202,7 @@ The gate is `server.modern_protocol`, and it defaults to **false** (`src/config/
 at `src/gateway/router/handlers.rs:221`, `:755-760`, `:967`.
 
 **The gate is that default, and this paragraph is where it is defined.** `SUPPORTED_VERSIONS`
-(`src/protocol/mod.rs:48`) is not a second half of it and must stay legacy-only. Checked against the
+(`src/protocol/mod.rs`) is not a second half of it and must stay legacy-only. Checked against the
 specification rather than reasoned from the constant's name: `initialize` belongs to "`2025-11-25`
 and earlier"
 ([lifecycle](https://modelcontextprotocol.io/specification/2026-07-28/basic/lifecycle)), and a
@@ -221,9 +233,9 @@ paths. `git add -A` is a claim about the whole tree, and on a shared tree that c
 
 ### Two more operator decisions, surfaced from the residue
 
-The four decisions above were derived from the clusters. The residue rows carry two
-more, and neither is settled by "close the full scope" — both answers to each are a
-defensible release.
+The four decisions above were derived from the clusters and are answered. The residue rows
+carry two more, and neither is settled by "close the full scope" — both answers to each are a
+defensible release. These two are the open ones.
 
 `MIK-7215.CONTROL.4` is not blocked on ownership. `SessionLifecycle::register` takes a
 closure, so registration lives at gateway startup and needs no edit to a firewall file.
@@ -241,21 +253,22 @@ downstream of cluster A: even under the generous reading, reachability depends o
 continuation-envelope wiring, so it cannot close before A does and is not an independent
 item on the critical path.
 
-### A fifth decision, from correcting the fourth
+### A fifth decision, from correcting the `NFR.COMPAT.1` paragraph
 
-The `NFR.COMPAT.1` paragraph above was published wrong and is now repaired. What the repair
-exposes is a decision that no cluster surfaced, because no criterion is phrased to ask it:
+That paragraph was published wrong and is now repaired. What the repair exposes is a decision
+that no cluster surfaced, because no criterion is phrased to ask it:
 **does 4.0.0 ship with `server.modern_protocol` defaulting to false?**
 
-Both answers are defensible and neither is an analysis result.
+Both answers were defensible and neither was an analysis result. The operator took the
+second; the first is recorded because it is what the second gave up.
 
 | answer | what it costs |
 |---|---|
-| leave it false | 4.0.0 ships the modern revision behind an opt-in flag. Every cluster A and C row can be met and no default install exercises them. The release notes must say so plainly, or the version number overpromises. |
-| flip it true | the default install serves `2026-07-28`. That is only honest once the modern path is served completely — which is exactly what clusters A and C are for, so the flip is a release-gating dependency on them, not an independent switch. |
+| ~~leave it false~~ | 4.0.0 ships the modern revision behind an opt-in flag. Every cluster A and C row can be met and no default install exercises them. The release notes must say so plainly, or the version number overpromises. |
+| **flip it true — taken** | the default install serves `2026-07-28`. That is only honest once the modern path is served completely — which is exactly what clusters A and C are for, so the flip is a release-gating dependency on them, not an independent switch. |
 
-The flag is not a gap and needs no ticket. It needs a sentence in the release notes under the
-first answer, and a gating dependency under the second.
+The flag is not a gap and needs no ticket. It needs a gating dependency on clusters A and C,
+which is what the taken answer buys.
 
 **Answered by the operator 2026-09-02: flip it true.** 4.0.0 serves `2026-07-28` out of the box.
 The second column is therefore the one that binds: the flip is a release-gating dependency on
