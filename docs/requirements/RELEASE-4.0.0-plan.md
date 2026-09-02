@@ -43,19 +43,30 @@ and that was invisible while the method lived only in the requirements document.
 
 Assessing the eleven unassessed rows was therefore item zero of this plan, and it is done. It
 paid for itself immediately: the sweep found that `docs/ARCHITECTURE.md:65` advertised a
-protocol revision the gateway does not serve — now corrected — and it found that the Meta-MCP surface's own
-published 17-tool scenario (`benchmarks/public_claims.json:4-6`) exceeds the 14-16 ceiling
-NFR.PERF.4 states — a criterion violated by the shipped configuration, not merely untested.
+protocol revision the gateway does not serve, now corrected.
 
-### Deferred: re-auditing the MRTR cluster's implemented-but-unwired split
+An earlier revision of this file also read the Meta-MCP surface's published 17-tool scenario
+(`benchmarks/public_claims.json:4-6`) as exceeding the 14-16 ceiling NFR.PERF.4 states, and
+called it a criterion violated by the shipped configuration. That is wrong and the row now says
+so: the seventeenth tool is `gateway_webhook_status` (`src/gateway/meta_mcp_tool_defs.rs:565`),
+which is only registered when webhooks are enabled. The default surface stays inside the
+ceiling and NFR.PERF.4 is affirmed. It left the blocking cluster it was in; what remains there
+is the dual-role matrix, which has never been run.
+
+### The MRTR implemented-but-unwired split, deferred here, has landed
 
 A reviewer asked for the MIK-7212 rows to be split by whether each clause is implemented and
 unwired or genuinely absent, on the ground that the two carry very different remaining work.
-That is right and it is not being done now. The cluster is being worked in another session, so
-an audit taken today would describe a tree that no longer exists by the time anyone read it.
-The split happens once that session's work lands, against the tree as it then stands. Recorded
-here rather than dropped, because a deferral nobody wrote down is indistinguishable from an
-oversight.
+An earlier revision of this file deferred that until the session working the cluster landed.
+It has, and the split is in the ledger: `MRTR.1-8` is eight criterion names carrying nineteen
+rows, and an UNWIRED clause is now scored apart from its absent sibling — `MIK-7212.8a` and
+`MIK-7212.8b` are the worked example. Read the cluster tables' criterion names as a key to
+where a row belongs, never as a count of rows.
+
+The split changed what the tests have to prove, which is the part a re-audit is for. MRTR.8's
+three existing cases (`tests/mik_7212_acs.rs:439`, `:457`) exercise `InFlight` and
+`ConsumedLedger` directly and pass today — which is precisely why 8a and 8b are UNWIRED rather
+than failing. The test plan now carries the wiring case that none of the three supplies.
 
 ### One thread that looked in flight and was not
 
@@ -154,6 +165,40 @@ The destructive-action confirmation gate must be reachable through the MRTR path
 client can actually confirm. CONFIRM.1 closed 2026-08-31; this is the other half and it cannot
 be built before cluster A lands.
 
+### I. The stdio dispatch path — NFR.OBS.1, NFR.OBS.2, MIK-7246.CONFIRM.1a, 3 criteria
+
+One wiring question answers all three rows. The gateway serves MCP over two transports and
+every one of these three controls lives in the HTTP router only: the two migration-telemetry
+records at `src/gateway/router/handlers.rs:720,994`, and the destructive-operation
+confirmation gate imported and called once at `:28` and `:1196-1231`. The stdio `tools/call`
+dispatcher (`src/gateway/server/mod.rs:1702-1720`) hands straight to
+`meta_mcp.handle_tools_call`, so over stdio the telemetry is absent and a destructive meta-tool
+runs with no confirmation sought and no refusal.
+
+CONFIRM.1a is the reason this cluster is not filed under telemetry. Two of the rows are a
+missing record; the third is a security control that one of two shipped transports does not
+apply. The HTTP half stays evidenced (`tests/mik_7215_acs.rs:630`) — this is a reachability
+gap, not a broken gate.
+
+Design first, and it is one design: where the shared dispatch seam belongs, whether stdio grows
+the same middleware or the gate moves below both routers, and what either does to an existing
+stdio deployment that has never been asked to confirm anything.
+
+### J. Residue from the ledger splits — 3 criteria
+
+`MIK-6704.IDENT.1a`, `MIK-6865.SCHEMA.1c` and `MIK-7215.CONTROL.3a` became blocking when their
+parents were split, and they are grouped only by that shared origin — nothing else connects
+them. Each is a clause the parent's evidence does not hold. IDENT.1a is the clearest: deriving
+authorization from the authenticated credential is implemented and consumed (`principal_of`,
+`src/gateway/auth.rs:38-43`) and all three IDENT.1 tests prove the negative clause instead,
+now scored as `IDENT.1b`. A test, not a mechanism.
+
+Sequenced last of the design-free work, and deliberately not merged into a cluster they do not
+belong to.
+
+The letters here are this file's own. The blocking rollup groups the same rows under its own
+scheme for its own purpose, and the two do not correspond; the criterion IDs are what join them.
+
 ## Order of work
 
 **Wave 0 — the NFR sweep.** Done on 2026-09-01: all 22 rows exist and all 22 are assessed
@@ -166,7 +211,7 @@ verify the continuation envelope and era detection are NOT in this wave — they
 clusters. This wave changes the size of every wave after it, which is why it runs first
 rather than last.
 
-**Wave 1 — designs only, no code, all parallel.** C, F, G, and the design-first half of B.
+**Wave 1 — designs only, no code, all parallel.** C, F, G, I, and the design-first half of B.
 Each is a §P1 note reviewed by two vendors before an edit. This is the wave that decides
 things, and it is the one most likely to be skipped under release pressure.
 
@@ -174,7 +219,10 @@ things, and it is the one most likely to be skipped under release pressure.
 heading stays so the wave numbering below does not silently shift.
 
 **Wave 3 — implementation of wave 1.** Plus D's HEADER.9 once C lands, and E's CONTROL.4,
-which depends on nothing and can move earlier if a slot opens.
+which depends on nothing and can move earlier if a slot opens. J's three rows are tests against
+mechanisms that already exist and can fill any slot in this wave; I's implementation lands here
+too, and its confirmation-gate half should not be the part that slips, because it is the only
+row in either cluster where the gap is a security control rather than a missing assertion.
 
 **Wave 4 — the two long poles.** Cluster A (in flight) and B's TASK.1. H follows A.
 
