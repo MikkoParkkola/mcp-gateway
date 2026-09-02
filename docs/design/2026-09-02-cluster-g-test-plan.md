@@ -5,10 +5,12 @@ tests get their own review as tests.
 
 ## Scope
 
-Covers `NFR.OBS.1` and `NFR.OBS.2` only. `MIK-7246.CONFIRM.1a` is **not** planned here: its
-behaviour on stdio is deferred to the operator (see the design note), and a test plan for a
-branch whose required behaviour is undecided would be a plan for whichever behaviour I
-happened to assume. It is added when the question is answered, not before.
+Covers all three cluster-G criteria: `NFR.OBS.1`, `NFR.OBS.2` and `MIK-7246.CONFIRM.1a`.
+
+An earlier revision of this section excluded `CONFIRM.1a` on the grounds that its stdio
+behaviour was waiting on the operator. That was wrong, and the reason is worth keeping: the
+criterion already specifies the behaviour (fail closed, refuse), so there was never a question
+to wait on. Rows 13 and 14 cover it.
 
 ## One row per criterion
 
@@ -27,6 +29,7 @@ happened to assume. It is added when the question is answered, not before.
 | 11 | `OBS.1` | a stdio batch **mixing** requests and notifications emits one record per element **and** returns responses only for the requests | integration | cardinality + boundary | half free — see below |
 | 12 | `OBS.1` | a stdio message arriving **before any `initialize`** emits a record whose `protocol_revision` and `revision_source` are both **absent** — not defaulted, not a sentinel | integration | boundary | free — nothing records it today, and it is the row that stops the absent case drifting into a constant |
 | 13 | `CONFIRM.1a` | a destructive `tools/call` over stdio, where no confirmation can be obtained, is **refused** — not executed | integration | fail-closed | free — the gate proceeds today when there is no session, and after this release there is never a session |
+| 14 | `CONFIRM.1a` | a destructive tool reached by an **internal caller** (playbook step, code-mode step) rather than by an inbound request, where no confirmation can be obtained, is likewise **refused** | integration | fail-closed | free — same gate, same missing session |
 
 Row 5 exists because both reviewers raised it independently in round 1: the design's "both
 callers" tables enumerate the *transports*, and the tool-policy precedent the design leans
@@ -77,7 +80,7 @@ and only one of them is honest.
 
 ## Can each case actually fail? (§P2 question 2)
 
-Rows 1, 2, 3, 5, 6, 9, 10, 12 and 13 fail for free: they assert a record that no code emits today, so
+Rows 1, 2, 3, 5, 6, 9, 10, 12, 13 and 14 fail for free: they assert a record that no code emits today, so
 writing them first produces a real red. Row 5 earns that word only because it was rewritten:
 as *does not add a second record* it was a negative assertion that passes at zero records — 
 the decoration class this section exists to catch, and a reviewer caught it here. As **exactly one** it fails at zero *and* at two, so the same content now carries its own red.
@@ -105,6 +108,13 @@ That half is a regression guard on existing behaviour and takes the same probe t
 the batch path emit an empty array unconditionally, and row 11 must go red on the response
 assertion while its record assertion stays green. Two halves that fail together would not tell
 me which one the row is measuring.
+
+**Row 14 is row 5's other half.** The design says a caller that is not a transport must have
+a stated answer for both concerns it touches — how many records it produces, and whether the
+confirmation gate applies to it. Row 5 answered the first and nothing answered the second, so
+a playbook step invoking a destructive tool could have slipped past a gate that an inbound
+request cannot. The two rows now bracket the same caller: exactly one record, and no execution
+without confirmation.
 
 **Row 13 needs no probe.** The criterion states the gate proceeds today when there is no
 session, and stdio after this release has no session, so a test asserting refusal fails against
@@ -179,7 +189,13 @@ particular the malformed case (row 3) must be a genuine malformed request throug
 shape classifier, not a hand-constructed `RequestShape::Malformed` — the ordering being
 pinned is *classifier, then record, then return*, and a hand-built shape skips the first two.
 
-## What this plan does not cover, stated
+## Three exclusions this plan claimed, all of them withdrawn
+
+Each entry below was written as something the plan deliberately left out. Review found all
+three were covered, coverable, or already answered elsewhere, and every one is now a row. They
+are kept rather than deleted because the pattern is the same in all three: an exclusion is
+cheap to write and reads as rigour, so it is the easiest place for an unexamined assumption to
+sit undisturbed. Nothing in this section is outside the plan.
 
 - **Batch requests — the N/A was WRONG and is withdrawn.** An earlier revision of this plan
   recorded batch as not-applicable on the strength of a search. `run_stdio` checks
@@ -197,7 +213,7 @@ pinned is *classifier, then record, then return*, and a hand-built shape skips t
   (`RELEASE-4.0.0-requirements.md:195`). That is a specified fail-closed behaviour, not a
   choice awaiting the operator. Deferring it treated a settled MUST as an open trade-off, which
   would have left a destructive tool callable over stdio without confirmation — and a stated
-  limit against a MUST is an unmet requirement, not an accepted risk. Row 13 covers it.
+  limit against a MUST is an unmet requirement, not an accepted risk. Rows 13 and 14 cover it.
 - Whether `protocol_revision` is *available* to report on stdio. Round 2 narrowed this: stdio
   establishes a revision at `initialize`, so rows 1–3 assert the **negotiated** revision with
   `revision_source` set to the handshake. The open part is only what a record carries for a

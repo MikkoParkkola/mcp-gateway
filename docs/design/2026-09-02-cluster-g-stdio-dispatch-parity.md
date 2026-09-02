@@ -231,4 +231,5 @@ question - the criterion has already decided that the safety is worth the break.
 
 **What this blocks, and what it does not.** It blocks nothing. `NFR.OBS.1` and `NFR.OBS.2` do not depend on it: both are records, neither asks anything of
 a client, and the corrected convergence points for them stand on their own. Those two
-proceed; the confirmation branch waits.
+proceed on their own footing. The confirmation branch proceeds with them: it is specified,
+not waiting, and the only thing it needs that they do not is a stdio path to the gate.
