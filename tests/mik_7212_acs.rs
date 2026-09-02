@@ -536,6 +536,20 @@ mod reverse {
             InputRequired::from_result(&json!({ "resultType": "input_required" })).is_none(),
             "an interim result with neither a question nor state is not an exchange"
         );
+
+        // A malformed `inputRequests` must not read as an absent one. The
+        // state-carrying case is the one that matters: without the distinction
+        // it becomes a state-only exchange, which is valid, and the malformed
+        // requests are never seen by the capability gate at all.
+        assert!(
+            InputRequired::from_result(&json!({
+                "resultType": "input_required",
+                "inputRequests": "not-an-object",
+                "requestState": "state-that-would-make-it-look-valid",
+            }))
+            .is_none(),
+            "a malformed inputRequests is a fault, not an absent field"
+        );
         assert!(
             InputRequired::from_result(&json!({ "resultType": "complete", "tools": [] })).is_none()
         );

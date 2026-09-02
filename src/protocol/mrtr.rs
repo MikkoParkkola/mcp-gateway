@@ -225,15 +225,23 @@ impl InputRequired {
         if result.get("resultType").and_then(Value::as_str)? != RESULT_TYPE_INPUT_REQUIRED {
             return None;
         }
-        let requests: Vec<(String, Value)> = result
-            .get("inputRequests")
-            .and_then(Value::as_object)
-            .map(|map| {
-                map.iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // Absence and malformed presence are different backend faults and must
+        // not collapse into the same empty map: a result carrying
+        // `"inputRequests": "surprise"` would otherwise be read as asking
+        // nothing, and a state-carrying one would then be relayed as a valid
+        // exchange without a single request ever passing the capability gate.
+        // Refusing to classify it leaves the result to travel back as the
+        // ordinary result it failed to be. Reporting an upstream fault
+        // distinctly is a separate open question about what a refusal tells a
+        // client, deliberately not answered here.
+        let requests: Vec<(String, Value)> = match result.get("inputRequests") {
+            None => Vec::new(),
+            Some(Value::Object(map)) => map
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            Some(_) => return None,
+        };
         let request_state = result
             .get("requestState")
             .and_then(Value::as_str)
