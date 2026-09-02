@@ -230,6 +230,39 @@ def test_a_row_named_only_in_the_notes_is_not_a_membership_claim():
     assert membership(CLAUSE_LEDGER, row) == []
 
 
+BOTH_BLOCKING = "\n".join(
+    [
+        "| MIK-7246.CONFIRM.1a | refuse | T | PARTIAL | stdio ungated | yes |",
+        "| MIK-7246.CONFIRM.1b | no warning | T | UNWIRED | none | yes |",
+    ]
+)
+
+
+def test_a_fully_qualified_parent_covering_its_clauses_is_not_read_as_two_tickets():
+    # The ambiguity check exists for an unqualified name binding across tickets.
+    # A fully qualified parent cannot be ambiguous -- it names its ticket -- so
+    # counting its clauses as owners blocks the one spelling that is unambiguous.
+    named = "| G | stdio | `MIK-7246.CONFIRM.1` | 2 | ungated |"
+    assert membership(BOTH_BLOCKING, named) == []
+
+
+def test_an_unterminated_backtick_span_is_reported_rather_than_ignored():
+    # `CACHE.4 never closes, so no token matches and the cluster names nothing.
+    # Against a declared count of zero that reads as a clean cluster, which is
+    # the failure the token scanner was written to prevent.
+    unterminated = ROLLUP + "\n| B | cache | `CACHE.4 | 0 | nothing yet |"
+    assert membership(LEDGER, unterminated) == [
+        "cluster B names `CACHE.4, which is not a criterion name"
+    ]
+
+
+def test_an_empty_backtick_span_is_reported_rather_than_ignored():
+    empty = ROLLUP + "\n| B | cache | `` | 0 | nothing yet |"
+    assert membership(LEDGER, empty) == [
+        "cluster B names ``, which is not a criterion name"
+    ]
+
+
 def test_the_live_documents_agree_with_the_ledger():
     criteria, _ = counter.rows(counter.STATUS.read_text())
     assert counter.rollup_membership(criteria, counter.ROLLUP.read_text()) == []

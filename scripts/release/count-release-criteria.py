@@ -231,11 +231,12 @@ def rollup_membership(criteria, text):
             # every clause under it, a named clause only itself. Matching a
             # clause against parents would let a met clause ride in on a
             # blocking sibling.
-            rows = [
-                full
+            matched = [
+                (full if name[-1].isalpha() else parent, full)
                 for parent, full in blocking
                 if _names(full if name[-1].isalpha() else parent, name)
             ]
+            rows = [full for _key, full in matched]
             if not rows:
                 problems.append(
                     f"cluster {cluster} names {name}, which no ledger row calls blocking"
@@ -245,7 +246,11 @@ def rollup_membership(criteria, text):
             # would still add up. No live name is ambiguous today; the check is
             # what keeps a second ticket reusing a component name from rewriting
             # a cluster's membership without saying so.
-            owners = {full.rsplit("." + name, 1)[0] for full in rows}
+            # The owner is what precedes the matched name, so a fully
+            # qualified name owns itself and cannot be ambiguous. Splitting the
+            # full row id instead would make each clause of a parent its own
+            # owner, and the one unambiguous spelling would be the one rejected.
+            owners = {key[: -len(name) - 1] for key, _full in matched}
             if len(owners) > 1:
                 problems.append(
                     f"cluster {cluster} names {name}, which matches rows under "
@@ -278,7 +283,7 @@ def _names(key, name):
 # leaves a cluster naming nothing, and the declared count then has to carry the
 # whole complaint -- which it cannot, because zero named rows against a declared
 # count of zero reads as a clean cluster.
-TOKEN = re.compile(r"`[^`]+`")
+TOKEN = re.compile(r"`[^`]*`?")
 
 
 def named_criteria(cell):
@@ -286,7 +291,9 @@ def named_criteria(cell):
 
     Returns the names and the tokens this parser could not read.
     """
-    unreadable = [tok for tok in TOKEN.findall(cell) if not NAMED.fullmatch(tok)]
+    unreadable = [
+        tok.strip() for tok in TOKEN.findall(cell) if not NAMED.fullmatch(tok)
+    ]
     names = []
     for match in NAMED.finditer(cell):
         head, end = match.group(1), match.group(2)
