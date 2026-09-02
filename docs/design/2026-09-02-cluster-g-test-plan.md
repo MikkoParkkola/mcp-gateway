@@ -28,8 +28,8 @@ to wait on. Row 13 covers it.
 | 10 | `OBS.1` | a stdio batch of **three** requests emits **exactly three** records, one per element, each carrying that element's own `method` | integration | cardinality | free — and it fails against the one-record-per-envelope shape a transport-entry record naturally takes |
 | 11 | `OBS.1` | a stdio batch **mixing** requests and notifications emits one record per element **and** returns responses only for the requests | integration | cardinality + boundary | half free — see below |
 | 12 | `OBS.1` | a stdio message arriving **before any `initialize`** emits a record whose `protocol_revision` and `revision_source` are both **absent** — not defaulted, not a sentinel | integration | boundary | free — nothing records it today, and it is the row that stops the absent case drifting into a constant |
-| 13 | `CONFIRM.1a` | a destructive `tools/call` over stdio naming a **registered, executable** target, where no confirmation can be obtained, returns the confirmation-refusal response **and** leaves the execution sentinel untouched | integration | fail-closed |
-| 14 | `OBS.2` | a `tools/list` whose profile **excludes** at least one tool records the **effective filter decisions** — which filters ran and what each removed — and the record is stamped **before** the response is written | integration | content + ordering | free — the live record names filter *inputs* only, so it cannot carry a decision | free — the gate proceeds today when there is no session, and after this release there is never a session |
+| 13 | `CONFIRM.1a` | a destructive `tools/call` over stdio naming a **registered, executable** target, where no confirmation can be obtained, returns the confirmation-refusal response **and** leaves the execution sentinel untouched | integration | fail-closed | free — the gate proceeds today when there is no session, and after this release there is never a session |
+| 14 | `OBS.2` | a `tools/list` whose profile **excludes** at least one tool records the **effective filter decisions** — which filters ran and what each removed — and the record is stamped **before** the response is written | integration | content + ordering | free — the live record names filter *inputs* only, so it cannot carry a decision |
 
 Row 5 exists because both reviewers raised it independently in round 1: the design's "both
 callers" tables enumerate the *transports*, and the tool-policy precedent the design leans
@@ -301,3 +301,27 @@ sit undisturbed. Nothing in this section is outside the plan.
   and a row is added for that shape once the design's question 1 is answered rather than
   assumed. Row 12 pins the absent case as a row of its own, so the decision is a test
   rather than a sentence in this document.
+
+## Round-5 findings and where each one went
+
+Two were mechanical and are fixed above: row 13's falsifier cell had been
+appended to row 14, leaving row 13 with five columns against a six-column
+header, and it is now back on its own row.
+
+The rest are recorded here rather than answered in another round. Each is a
+lead until verified at source, and three of them turn on the deferred
+record-relocation decision, which no amount of test-plan prose can settle.
+
+| finding | disposal |
+|---|---|
+| row 6 asserts `cache_scope_advertised = true`, but a scoped stdio system may be unable to negotiate the revision that makes it true | **open, and it is a source check, not a design question.** `is_modern` derives from `RequestShape::Modern` (`src/gateway/router/handlers.rs`), the served stdio path enters at `src/gateway/server/mod.rs:1698`, and nothing read so far shows whether that path can reach the modern shape. Until someone reads `handle_initialize`, row 6's expected value for this one field is unproven — the other four are unaffected |
+| row 6's oracle omits `filters_ran` / `filtered_out` although `OBS.2` covers every `tools/list` | **blocked on the deferral** — those fields do not exist on any path until the record moves. Reopens with it |
+| row 14 exercises one profile-filter scenario and defines no taxonomy for exposure, query, Code Mode, routing and isolation filters | **blocked on the deferral** — which filters exist as *named decisions* is exactly what relocating the record decides |
+| the deferral lets rows 6-8 proceed although a second record would change their exactly-one cardinality oracles | **accepted, and the deferral widens**: rows 6, 7 and 8 assert cardinality and defer with row 14. Rows 1-5 and 9-13 proceed |
+| row 13 names no concrete destructive target and no exact refusal code or message | **fix here, next increment.** Independent of the deferral and cheap: name an exposed target with a live sentinel backend, assert the exact code and message |
+
+The reviewer also read the *inputs versus decisions* section as a refusal to
+record decisions. It is the opposite — a statement that the live record carries
+inputs only, which is the gap the deferral exists to close. The section stands
+as written and this paragraph is the correction, because rewriting it would move
+text the next round would have to re-read for no change in meaning.
