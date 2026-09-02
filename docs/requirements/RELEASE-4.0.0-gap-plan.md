@@ -27,7 +27,7 @@ refused at the door.
 | Outbound era probing unwired | `EraCache::resolve_with`/`classify` implemented and tested, zero callers in `src/backend` or `src/transport` | outbound modern/legacy negotiation |
 | Tasks extension is dead code | `protocol::tasks::Task`/`TaskStatus` have no production call site; `tasks/get`/`tasks/update` fall through to method-not-found honestly | nothing — needs a keep/delete decision |
 | Header/result/error/cache/order criteria | six gaps found, six criteria confirmed clean | see requirements sweep |
-| Blocking criteria outside MRTR | 21, in tenancy, stateless confirmation, session expiry, log correlation, cache invalidation, error codes, tasks, extensions and discovery | increments 10-17; source rows in `RELEASE-4.0.0-audit-partial.md`, final counts in the sweep below |
+| Blocking criteria outside MRTR | tenancy, stateless confirmation, session expiry, log correlation, cache invalidation, error codes, tasks, extensions and discovery. The count is not quoted here — it moved twice while this row said otherwise | increments 10-17; source rows in `RELEASE-4.0.0-audit-partial.md`, live count from `scripts/release/count-release-criteria.py --check` |
 | Diff coverage under floor | 61 branch-touched files average 77.40% lines against an 80% Standard floor; mutation coverage unmeasured. Measured before increments 1 and 2a landed their tests, so it is a starting point, not the current number | DoD §4 |
 
 Test position, separately: six acceptance criteria have no case at any level, two cases cannot fail
@@ -48,8 +48,10 @@ Every criterion in `RELEASE-4.0.0-requirements.md` now has a row in
 `RELEASE-4.0.0-criteria-status.md`. That file's headline states the totals and
 `scripts/release/count-release-criteria.py --check` recounts them from its tables, so the number is
 not quoted a second time here — this section quoted `31 blocking` against a 77-row ledger and was
-still saying so at 99 rows. The audit's "at least eight outside MRTR" was a floor; the answer is 21. SUB.1's GET clause and SUB.3 came off the list on
-2026-08-31 when the `GET /mcp` era gate landed, taking the count from 33 to 31.
+still saying so at 99 rows. The audit's "at least eight outside MRTR" was a floor, and the
+figure that replaced it went stale in turn. SUB.1's GET clause and SUB.3 came off the list on
+2026-08-31 when the `GET /mcp` era gate landed; what they left behind is a ledger row count,
+not a number this file restates.
 
 | status | what it means | the work |
 |---|---|---|
@@ -82,7 +84,7 @@ blocking count includes them, which is exactly where work hides.
 | `ORDER.3` | the classification is on record, the remediation it prescribes is not | already counted as ORDER.2 |
 | `CONTROL.5` | every removed mechanism names a replacement; two replacements are not built | already counted as CONTROL.2 and .3 |
 
-Two of the four are already inside the 31. The other two are small. Neither is a reason to add a
+Two of the four are already counted as blocking rows in the ledger. The other two are small. Neither is a reason to add a
 status to the vocabulary: fix them and the qualifier goes away.
 
 Shared checkout, 2026-08-31: other sessions hold uncommitted work on MRTR
