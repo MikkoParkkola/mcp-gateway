@@ -714,3 +714,23 @@ The other three remain open and remain operator calls, not engineering: whether
 `exposed_meta_tools` enforcement ships as a breaking change, whether a dual-role compatibility
 matrix is required for 4.0.0, and whether the 17-tool scenario or the documented 14-16 ceiling is
 the number that moves.
+
+### A second cluster-F decision is now made
+
+`NFR.COMPAT.3` -- whether `exposed_meta_tools` enforcement ships as a breaking change -- asked of
+the operator on 2026-09-02, answered **enforce now and accept the break**. The alternatives put were
+a warn-in-4.0/enforce-in-4.1 deprecation, a second opt-in flag governing the first, and dropping the
+field outright.
+
+What it changes: the criterion is waived rather than met, and the ledger row now says so in those
+words. This is not the same as the requirement being satisfied, and writing it down as N/A without
+the reason would have hidden a real break behind a status code. An operator who set
+`exposed_meta_tools` and upgrades without editing anything will lose tools that used to answer.
+Two obligations transfer to the release in exchange: the break stays named in the release notes
+where `docs/release/v4.0.0-release-notes-DRAFT.md:38` already names it, and the upgrade path has to
+tell an operator *which* tools they will stop seeing -- a warning that a field is now enforced is
+useless without the list it now restricts.
+
+Two decisions remain open, and both are operator calls rather than engineering: whether a dual-role
+compatibility matrix is required for 4.0.0 (`NFR.COMPAT.4`), and whether the 17-tool scenario or the
+documented 14-16 ceiling is the number that moves (`NFR.PERF.4`).
