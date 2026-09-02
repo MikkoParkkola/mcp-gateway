@@ -234,17 +234,24 @@ directory. Named here so a reviewer can refuse it, rather than passing silently.
 | Does the repo already split a criterion into sub-rows? | `rg` over `docs/requirements/`, plus the counter's output | `MRTR.9a/10a/10b` exist; 95 criteria vs 100 rows | Q1's row-is-not-criterion is established practice here, not invented |
 | Is there precedent for a checked-in data file plus a drift check? | listed `scripts/` and `benchmarks/`; read `scripts/release/count-release-criteria.py` | Two precedents | Chose option (c) over hand-maintained markdown |
 | Can the axis set be read off requirement text? | token scan over all 95 criteria | 15 role / 12 transport / 4 revision | NO — this killed derivation as a mechanism, and per-row declaration fell to review for relocating the same judgement, leaving Q2's total product |
+| Must an evidence reference resolve to an EXECUTED test, or is an existing test name enough? (U-B) | asked of the operator, 2026-09-02 | EXISTENCE for 4.0.0 — a named test that exists and is WIRED (a production call site outside `tests/`, per DoD D7); the executed-run bar becomes a tracked follow-up, not a deferred intention | `--check` needs no CI-artefact access, so it runs on any machine and can go blocking inside this release. The weaker bar is stated as weaker: a named test that is skipped or quarantined still reads as evidence, and closing that is the follow-up's job |
 | Does the `NFR.COMPAT.4` role clause stay unqualified? (U-A) | asked of the operator, 2026-09-02, with the 15-of-95 number | YES — the criterion text is not edited, and a requirement with no client-role surface is exempted AT THE CELL with its reason | `NO-SURFACE-IN-ROLE` stays in the vocabulary. It also corrected this document: the branch table below had treated "criterion unqualified" and "no exemption code" as one branch, and they are separable |
 
 ## Open questions — deferred
 
 | id | question | owner | resolved by | when | if it resolves badly |
 |---|---|---|---|---|---|
-| U-B | Must an evidence reference resolve to an EXECUTED test (a green CI run id), or is an existing test name enough? | release owner | a decision on how much CI plumbing is in scope | before `--check` is wired blocking | If executed is required, the checker needs CI-artefact access and the gate slips to tag-time only |
 | U-C | Does `--check` block pre-tag on non-zero `EMPTY`? | release owner | confirmation of the proposal in Q5 | before `--check` is wired | Blocking from day one turns every PR red while the modern path is unbuilt |
 
-U-B and U-C block nothing in this document; they block WIRING the checker, which
-is not in scope here.
+U-C blocks nothing in this document; it blocks WIRING the checker, which is not
+in scope here.
+
+**The evidence bar is deliberately weaker than it should end up, and the gap is
+named rather than absorbed.** `--check` verifies that a cell's reference resolves
+to a test that EXISTS and is WIRED. It does not verify the test RAN or PASSED, so
+a skipped or quarantined test satisfies the checker. Nothing in this design
+pretends otherwise, and the ratchet numbers (Q5) do not conceal it: they count
+cells, not green runs.
 
 ## `NFR.COMPAT.4` — ruled on, 2026-09-02
 
