@@ -57,6 +57,14 @@ pub struct JsonRpcResponse {
     /// Error (on failure)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
+    /// Internal marker: this response refuses a destructive action whose
+    /// confirmation could not be obtained.
+    ///
+    /// `#[serde(skip)]` in both directions: it is never written to the wire,
+    /// and a wire key of this name can never set it. Read only by the
+    /// dispatcher, to keep a refusal out of client failure accounting.
+    #[serde(skip)]
+    pub confirmation_refusal: bool,
 }
 
 impl<'de> Deserialize<'de> for JsonRpcResponse {
@@ -86,6 +94,7 @@ impl<'de> Deserialize<'de> for JsonRpcResponse {
             id: shadow.id,
             result: shadow.result,
             error: shadow.error,
+            confirmation_refusal: false,
         })
     }
 }
@@ -99,6 +108,7 @@ impl JsonRpcResponse {
             id: Some(id),
             result: Some(result),
             error: None,
+            confirmation_refusal: false,
         }
     }
 
@@ -131,6 +141,7 @@ impl JsonRpcResponse {
                 message: message.into(),
                 data: None,
             }),
+            confirmation_refusal: false,
         }
     }
 
@@ -167,6 +178,7 @@ impl JsonRpcResponse {
                 message: message.into(),
                 data: Some(data),
             }),
+            confirmation_refusal: false,
         }
     }
 }

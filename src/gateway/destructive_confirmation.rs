@@ -105,6 +105,51 @@ impl ConfirmationPolicy {
     }
 }
 
+/// How a caller can be asked to confirm a destructive action.
+///
+/// Carried in the caller context so the gate lives at the dispatcher, where
+/// every transport passes, instead of on one transport's edge. A transport
+/// that has no way to reach an operator says so here; it does not get to skip
+/// the gate by not running the code that holds it.
+pub enum ConfirmationChannel<'a> {
+    /// An asker may exist. `proxy` reaches it; `policy` says what to do when
+    /// the ask fails. Constructed even when no session is present: "found no
+    /// session" is an outcome of asking, decided by `policy`, not a property
+    /// of the transport.
+    Elicit {
+        /// Proxy manager owning the elicitation channel.
+        proxy: &'a ProxyManager,
+        /// What to do when confirmation cannot be obtained.
+        policy: ConfirmationPolicy,
+    },
+    /// No asker can exist on this transport. The action is refused; nothing
+    /// is elicited.
+    Unavailable,
+}
+
+/// A human-readable description of the destructive action, for the operator
+/// prompt and for the refusal message.
+///
+/// Takes the tool's `arguments` object, not the enclosing request params: the
+/// enclosing object compiles just as well and silently yields the fallback
+/// text for every action.
+#[must_use]
+pub fn describe_destructive_action(tool_name: &str, arguments: &serde_json::Value) -> String {
+    match tool_name {
+        "gateway_kill_server" => {
+            let server = arguments
+                .get("server")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(UNKNOWN_SERVER);
+            format!("kill server '{server}'")
+        }
+        other => format!("execute destructive meta-tool '{other}'"),
+    }
+}
+
+/// Stand-in used when a destructive call names no target.
+const UNKNOWN_SERVER: &str = "<unknown>";
+
 /// The tools a `tools/list` says are destructive.
 ///
 /// Derived from the `destructiveHint` annotation rather than a match arm. The

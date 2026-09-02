@@ -1740,6 +1740,14 @@ impl Gateway {
                             agent_id: None,
                             grant_subject: None,
                             verified_identity: None,
+                            // stdio speaks to one process over two pipes and
+                            // has no elicitation channel: there is no operator
+                            // this transport can reach, so a destructive call
+                            // it cannot confirm is refused rather than asked
+                            // about. Not "found no session" -- no asker can
+                            // exist here at all.
+                            confirmation:
+                                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
                         },
                     )
                     .await

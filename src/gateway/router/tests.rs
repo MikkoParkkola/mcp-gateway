@@ -2381,6 +2381,7 @@ async fn run_step_with_identity(
         is_admin: client.admin,
         input_capabilities: &[],
         retry: &crate::protocol::mrtr::NO_RETRY,
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     };
     state
         .meta_mcp
@@ -2582,6 +2583,7 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         is_admin: false,
         input_capabilities: &[],
         retry: &crate::protocol::mrtr::NO_RETRY,
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     };
     let response = state
         .meta_mcp
@@ -2939,6 +2941,7 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         is_admin: false,
         input_capabilities: &[],
         retry: &crate::protocol::mrtr::NO_RETRY,
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     };
     let response = state
         .meta_mcp

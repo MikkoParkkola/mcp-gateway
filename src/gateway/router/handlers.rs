@@ -24,9 +24,6 @@ use super::helpers::{
     parse_elicitation_params, parse_request, parse_sampling_params,
 };
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::destructive_confirmation::{
-    ConfirmationOutcome, is_destructive_meta_tool, require_destructive_confirmation,
-};
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::streaming::create_sse_response;
@@ -1182,73 +1179,16 @@ pub(super) async fn meta_mcp_handler(
                 oauth_agent_identity.as_ref(),
             );
 
-            // Destructive meta-tool confirmation. NOT the control — the admin
-            // requirement is, and `gateway_kill_server`, the only tool carrying
-            // `destructiveHint: true`, is in the admin set. This is the prompt
-            // an honest client shows its user before proceeding.
-            //
-            // Deliberately not labelled OWASP ASI09 here. An earlier version
-            // was, and `destructive_confirmation`'s own header was corrected to
-            // say why: the citation reads as a control and invites over-trust in
-            // a prompt that a client may simply not support, in which case the
-            // action proceeds after a warning.
-            // Non-destructive tools and all backend tool calls skip this check.
-            if is_destructive_meta_tool(tool_name) {
-                let action_desc = describe_destructive_action(tool_name, params.as_ref());
-                let outcome = require_destructive_confirmation(
-                    &state.proxy_manager,
-                    &session_id,
-                    &action_desc,
-                )
-                .await;
-                if outcome == ConfirmationOutcome::Declined {
-                    return build_response(
-                        JsonRpcResponse::error(
-                            Some(id),
-                            -32001,
-                            format!("Operator declined: {action_desc}"),
-                        ),
-                        &session_id,
-                        StatusCode::OK,
-                    );
-                }
-                // Nobody could be asked. What that means depends on the era, and
-                // `ConfirmationPolicy` already says so — it was written for this
-                // decision and then never consulted, so every modern destructive
-                // call took the legacy answer.
-                //
-                // It matters most precisely here: this revision deletes sessions,
-                // so a modern call can never have one to elicit over, and
-                // "proceed with a warning" would be the outcome every single
-                // time. A gate that is open for everyone is not a gate.
-                if outcome == ConfirmationOutcome::Unsupported {
-                    let policy = if is_modern {
-                        crate::gateway::destructive_confirmation::ConfirmationPolicy::for_modern()
-                    } else {
-                        crate::gateway::destructive_confirmation::ConfirmationPolicy::for_legacy()
-                    };
-                    if policy.on_unconfirmable()
-                        == crate::gateway::destructive_confirmation::ConfirmationPolicy::REFUSE
-                    {
-                        warn!(
-                            tool = %tool_name,
-                            "refusing a destructive call that cannot be confirmed"
-                        );
-                        return build_response(
-                            JsonRpcResponse::error(
-                                Some(id),
-                                -32001,
-                                format!(
-                                    "Destructive action requires confirmation and none could be \
-                                     obtained: {action_desc}"
-                                ),
-                            ),
-                            &session_id,
-                            StatusCode::OK,
-                        );
-                    }
-                }
-            }
+            // Destructive-action confirmation is decided at the dispatcher,
+            // for every transport. What this edge owns is the one fact the
+            // dispatcher cannot see: which era the request was written
+            // against, and therefore what to do when nobody can be asked.
+            // Handed over finished, so the shape is read once, here.
+            let confirmation_policy = if is_modern {
+                crate::gateway::destructive_confirmation::ConfirmationPolicy::for_modern()
+            } else {
+                crate::gateway::destructive_confirmation::ConfirmationPolicy::for_legacy()
+            };
 
             // The same policy the pre-check above applied, handed to the
             // dispatch chokepoint so the shapes the pre-check cannot see — a
@@ -1283,6 +1223,16 @@ pub(super) async fn meta_mcp_handler(
                         is_admin: client.as_ref().is_some_and(|c| c.admin),
                         input_capabilities: &declared_capabilities,
                         retry: &retry,
+                        // Always `Elicit`, including when no session was
+                        // presented. HTTP can carry an asker; whether one
+                        // answered is what `policy` decides. Mapping a
+                        // sessionless request to `Unavailable` would refuse the
+                        // legacy caller this path deliberately still warns.
+                        confirmation:
+                            crate::gateway::destructive_confirmation::ConfirmationChannel::Elicit {
+                                proxy: &state.proxy_manager,
+                                policy: confirmation_policy,
+                            },
                     },
                 )
                 .await;
@@ -1422,7 +1372,14 @@ pub(super) async fn meta_mcp_handler(
     )
     .increment(1);
 
-    if let Some(ref client) = client {
+    // A confirmation refusal is the gate working, not the client
+    // misbehaving. It is excluded from BOTH arms, not just the failure one:
+    // `record_client_success` resets the consecutive-failure count, so
+    // treating a refusal as a success would clear a breaker the caller had
+    // genuinely tripped.
+    if let Some(ref client) = client
+        && !response.confirmation_refusal
+    {
         if response.error.is_some() {
             state.auth_config.record_client_failure(&client.name);
         } else {
@@ -1573,22 +1530,6 @@ pub(super) fn refusal_status(response: &JsonRpcResponse) -> Option<StatusCode> {
 }
 
 // ── destructive-confirmation helpers ─────────────────────────────────────────
-
-/// Build a human-readable description of the destructive action for the
-/// elicitation message.  Extracts the relevant argument(s) from `params`.
-fn describe_destructive_action(tool_name: &str, params: Option<&Value>) -> String {
-    match tool_name {
-        "gateway_kill_server" => {
-            let server = params
-                .and_then(|p| p.get("arguments"))
-                .and_then(|a| a.get("server"))
-                .and_then(Value::as_str)
-                .unwrap_or("<unknown>");
-            format!("kill server '{server}'")
-        }
-        other => format!("execute destructive meta-tool '{other}'"),
-    }
-}
 
 /// GET /metrics — Prometheus text exposition format scrape endpoint.
 ///
