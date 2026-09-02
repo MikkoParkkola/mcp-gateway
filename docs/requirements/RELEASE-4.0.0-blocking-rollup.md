@@ -24,13 +24,15 @@ stays the source of truth for status.
 | C | MIK-7272 revision surface | `ORDER.2`, `SUB.2` (own-stream clause), `SUB.4`, `EXT.1`, `OTEL.1`, `TASK.1` | 7 | five separate half-wirings: idempotency cache never enabled, extension set write-side absent, task methods advertised and not served, routing profile ignores modern mode |
 | D | MIK-7213 response-cache keying | `CACHE.3`, `CACHE.4` | 2 | designed in `docs/design/2026-08-31-cluster-f-response-cache-keying.md`, zero tests, decision table not referenced from `cacheable.rs` |
 | E | performance measurements | `NFR.PERF.1`, `NFR.PERF.2` | 2 | no run against 3.5.0 exists. A code read cannot substitute. **Spark only** — a Mac number is worse than no number |
-| F | compatibility and surface facts | `NFR.COMPAT.1`, `NFR.COMPAT.3`, `NFR.COMPAT.4` | 3 | each is a stated fact awaiting an operator decision, not code: the modern revision is not in `SUPPORTED_VERSIONS`; `exposed_meta_tools` enforcement is breaking; no dual-role matrix; the dual-role matrix has never been run. `NFR.PERF.4` was in this cluster until the 14-16 ceiling was affirmed and the 17th tool identified as `gateway_webhook_status` (`src/gateway/meta_mcp_tool_defs.rs:565`), which only appears when webhooks are enabled |
+| F | compatibility and surface facts | `NFR.COMPAT.1`, `NFR.COMPAT.4` | 2 | each is a stated fact awaiting an operator decision, not code: the modern revision is not in `SUPPORTED_VERSIONS`, and the dual-role matrix has never been run. `NFR.COMPAT.3` was in this cluster until the operator waived it on the record on 2026-09-02, which is why the count is two rather than three. `NFR.PERF.4` left it earlier and is now residue: affirming the 14-16 ceiling settled the number, not the mechanism that holds it. `NFR.PERF.4` was in this cluster until the 14-16 ceiling was affirmed and the 17th tool identified as `gateway_webhook_status` (`src/gateway/meta_mcp_tool_defs.rs:565`), which only appears when webhooks are enabled |
 | G | stdio dispatch path | `NFR.OBS.1`, `NFR.OBS.2`, `MIK-7246.CONFIRM.1a` | 3 | both records live in the HTTP router (`src/gateway/router/handlers.rs:720,994`) and both criteria say *per request* / *every* `tools/list`. The stdio dispatcher reaches neither, so one of the two transports the gateway serves MCP over is absent from the migration telemetry. `MIK-7246.CONFIRM.1a` is the same shape and not telemetry: the destructive-confirmation gate is imported and called once, in that same HTTP router (`src/gateway/router/handlers.rs:28,1196`), so a destructive meta-tool invoked over stdio executes with no confirmation sought. One wiring question — what the stdio dispatcher must do before it reaches `handle_tools_call` — answers all three |
-| — | residue | `HEADER.9`, `CONTROL.4`, `CONFIRM.2`, `NFR.SEC.1`, `NFR.SEC.6`, `MIK-6704.IDENT.1a`, `MIK-6865.SCHEMA.1c`, `MIK-7215.CONTROL.3a` | 9 | genuinely independent; see below |
+| — | residue | `HEADER.9`, `CONTROL.4`, `CONFIRM.2`, `NFR.SEC.1`, `NFR.SEC.6`, `NFR.PERF.4`, `MIK-6704.IDENT.1a`, `MIK-6865.SCHEMA.1c`, `MIK-7215.CONTROL.3a` | 10 | genuinely independent; see below |
 
-Cluster A is by far the largest of them. Wire the continuation envelope and the blocking
-count drops to thirty without a single new decision being made — though each of the
-twenty-two still needs its own evidence afterwards, exactly as the ledger says.
+Cluster A is by far the largest of them. Wiring the continuation envelope removes twenty-two
+blocking rows without a single new decision being made — though each of the twenty-two still
+needs its own evidence afterwards, exactly as the ledger says. The total it leaves behind is
+not quoted here: `scripts/release/count-release-criteria.py --check` derives it, and this
+document has already carried two counts that went stale against the ledger they describe.
 
 The `rows` column names PARENT criteria; the `count` counts LEDGER ROWS, and the two stopped
 matching once compound criteria began to be split. `MRTR.1-8` is eight names and nineteen rows.
