@@ -197,9 +197,11 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 | MIK-7246.CONFIRM.2 | The gate MUST be reachable through the MRTR path, so a modern client can confirm. | Depends on MIK-7212 | T, D |
 | MIK-7246.CONFIRM.3 | The governed tool set MUST derive from the `destructiveHint` annotation, not a hardcoded match on `gateway_kill_server`. | Ticket AC MIK.CONF.3 | T |
 | MIK-7116.TENANT.1 | The cross-tenant data-minimisation guard MUST key on the authenticated principal, not on a session. | `Mcp-Session-Id` is removed; the ticket's own design says "within one session" | T |
-| MIK-7215.CONTROL.1 | Anomaly scoring MUST key on the principal and MUST refuse — not score zero — when no key is available. Today it keys `session_id → last tool`, so under statelessness every request looks like a first request. | `src/security/firewall/anomaly.rs:41-88` | T |
+| MIK-7215.CONTROL.1a | Anomaly scoring MUST key on the principal. Today it keys `session_id → last tool`, so under statelessness every request looks like a first request. | `src/security/firewall/anomaly.rs:41-88` | T |
+| MIK-7215.CONTROL.1b | Anomaly scoring MUST refuse — not score zero — when no key is available. | `src/security/firewall/anomaly.rs:41-88` | T |
 | MIK-7215.CONTROL.2 | Firewall budgets MUST key on the principal over an explicit window. A per-session budget under statelessness is an unlimited budget. | `src/security/firewall/mod.rs:311-351` | T |
-| MIK-7215.CONTROL.3 | The transparency log MUST retain a correlation key across the removal of sessions; the OpenTelemetry trace identifier from `_meta` MUST be used where present. | `src/security/transparency_log.rs:224-240,578` | T |
+| MIK-7215.CONTROL.3a | The transparency log MUST retain a correlation key across the removal of sessions. | `src/security/transparency_log.rs:224-240,578` | T |
+| MIK-7215.CONTROL.3b | The OpenTelemetry trace identifier from `_meta` MUST be used as that key where present. | `src/security/transparency_log.rs:224-240,578` | T |
 | MIK-7215.CONTROL.4 | Every behaviour reclaimed by session-disconnect cleanup MUST be re-expressed as an expiry. There is no disconnect in a stateless transport, so nothing registered there fires. | `src/gateway/session_lifecycle.rs:46-54` | T, M |
 | MIK-7215.CONTROL.5 | No session-keyed behaviour may be removed before its row in the inventory names a replacement or states that none is needed. | Ticket stop-the-line; inventory in RFC-0061 | I |
 

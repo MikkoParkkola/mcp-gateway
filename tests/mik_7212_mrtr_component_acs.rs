@@ -873,3 +873,62 @@ async fn ac_mrtr_5d_a_handle_minted_by_another_process_is_refused() {
     // assertion would miss.
     assert_refused_by_the_continuation_guard(&response, "a foreign process's handle");
 }
+
+// ---------------------------------------------------------------------------
+// MRTR.8 — the bounded table is the gateway's, not just the type's
+// ---------------------------------------------------------------------------
+
+/// An exchange the gateway opened must occupy a slot in the bounded table.
+///
+/// Both bounds MRTR.8 names are already held at `unit` against the type, and
+/// held well: `tests/mik_7212_acs.rs:439` refuses at capacity rather than
+/// growing, and `:457` reclaims an abandoned exchange *and* asserts its slot
+/// comes back, which is the non-vacuous form the test plan asks for. Neither
+/// says anything about the gateway. Nothing in `src/` calls `InFlight::hold`
+/// — `ContinuationState` builds the table (`src/protocol/continuation.rs:767`)
+/// and exposes it (`:786`) to no production caller — so the request path never
+/// puts an entry there to bound. A table the gateway never fills is bounded
+/// the way an empty room is quiet.
+///
+/// This is the half no unit case can reach, and it is the whole of what MRTR.8
+/// still owes: the count bound and the lifetime bound are proved; their
+/// subject is not.
+#[tokio::test]
+async fn ac_mrtr_8_an_exchange_the_gateway_opened_occupies_a_slot() {
+    let state = app_state();
+    let (url, _received) = spawn_fixture_backend().await;
+    register_fixture_backend(&state, &url);
+
+    let (_status, response) = post(&state, &fresh_body(1, TOOL_INTERIM, &arguments())).await;
+
+    assert_eq!(
+        state.continuation.in_flight().len().await,
+        1,
+        "a backend that asked for input leaves an exchange open, and an open \
+         exchange must occupy a slot in the bounded table; the table holds \
+         nothing, and the gateway answered {response}"
+    );
+}
+
+/// The discriminator for the case above: a call that finished holds no slot.
+///
+/// Green today, and for the same reason everything about this table is green
+/// today — nothing is ever written to it. It earns its place once the table is
+/// wired: without it, an implementation that holds a slot for *every* call
+/// satisfies the positive above while leaking a slot per request, which is the
+/// exhaustion the bound exists to prevent.
+#[tokio::test]
+async fn ac_mrtr_8_a_call_that_finished_holds_no_slot() {
+    let state = app_state();
+    let (url, _received) = spawn_fixture_backend().await;
+    register_fixture_backend(&state, &url);
+
+    let (_status, response) = post(&state, &fresh_body(1, TOOL, &arguments())).await;
+
+    assert_eq!(
+        state.continuation.in_flight().len().await,
+        0,
+        "a call the backend answered outright opened no exchange, so it must \
+         hold no slot; the gateway answered {response}"
+    );
+}
