@@ -145,10 +145,13 @@ Verification codes: **T** automated test · **M** measurement · **I** inspectio
 
 | ID | Requirement | Source | Verify |
 |---|---|---|---|
-| MIK-7213.CACHE.1 | `ttlMs` and `cacheScope` MUST be returned on `tools/list`, `prompts/list`, `resources/list`, `resources/read` and `resources/templates/list`. | Spec §5 minor, SEP-2549 | T |
+| MIK-7213.CACHE.1a | `ttlMs` MUST be returned on `tools/list`, `prompts/list`, `resources/list`, `resources/read` and `resources/templates/list`. | Spec §5 minor, SEP-2549 | T |
+| MIK-7213.CACHE.1b | `cacheScope` MUST be returned on `tools/list`, `prompts/list`, `resources/list`, `resources/read` and `resources/templates/list`. | Spec §5 minor, SEP-2549 | T |
 | MIK-7213.CACHE.2 | A list response whose content depends on **any** authorization-derived input MUST carry `cacheScope: "private"`. Given two callers with different credentials, When each lists tools, Then neither may be served the other's cached response. | Spec: private = *"MUST NOT be shared across authorization contexts"* | T |
-| MIK-7213.CACHE.3 | `cacheScope: "public"` MUST be emitted only where the response is provably invariant across all authorization contexts. A decision table naming which endpoints may ever be public MUST exist and be referenced from the code that emits the field. | Ticket stop-the-line | T, I |
-| MIK-7213.CACHE.4 | Any shared cache the gateway keeps MUST be keyed on every request-derived input that varies the response — authorization binding, routing profile, Code Mode, preview query, cursor, backend, protocol revision — plus a policy epoch that invalidates on grant or profile change. A response varying on an unkeyed input MUST NOT be cached. | Defect class confirmed in review 2026-08-22 | T, I |
+| MIK-7213.CACHE.3a | `cacheScope: "public"` MUST be emitted only where the response is provably invariant across all authorization contexts. | Ticket stop-the-line | T, I |
+| MIK-7213.CACHE.3b | A decision table naming which endpoints may ever be public MUST exist and be referenced from the code that emits the field. | Ticket stop-the-line | T, I |
+| MIK-7213.CACHE.4a | Any shared cache the gateway keeps MUST be keyed on every request-derived input that varies the response — authorization binding, routing profile, Code Mode, preview query, cursor, backend, protocol revision. A response varying on an unkeyed input MUST NOT be cached. | Defect class confirmed in review 2026-08-22 | T, I |
+| MIK-7213.CACHE.4b | Any shared cache the gateway keeps MUST carry a policy epoch that invalidates it on a grant or profile change. | Defect class confirmed in review 2026-08-22 | T, I |
 | MIK-7272.ORDER.1 | `tools/list` MUST return tools in a deterministic order across requests when the underlying set has not changed. | Spec §3 minor | T |
 | MIK-7272.ORDER.2 | The tool set MUST NOT vary per connection, nor as a side effect of other requests on the connection. It MAY vary by the authorization presented on the request. | Spec, server/tools | T |
 | MIK-7272.ORDER.3 | Every existing list filter MUST be classified as authorization-derived (retained) or connection-derived (moved to per-request input, or disabled in modern mode). The session-keyed routing profile and the `spec-preview` promotion list are known connection-derived cases. | Verified at source 2026-08-29 — see RFC-0061 correction table | T, I |
