@@ -263,6 +263,14 @@ def test_an_empty_backtick_span_is_reported_rather_than_ignored():
     ]
 
 
+def test_a_cluster_whose_cell_names_nothing_at_all_is_reported():
+    # No backticks means no tokens, so neither the named nor the unreadable list
+    # has anything to say and a declared zero matches an empty membership. A
+    # cluster row that names no criterion is malformed however it is counted.
+    prose = ROLLUP + "\n| B | cache | nothing yet | 0 | nothing yet |"
+    assert membership(LEDGER, prose) == ["cluster B names no criteria"]
+
+
 def test_the_handshake_and_the_modern_path_keep_separate_version_lists():
     """The release gate is the `server.modern_protocol` default, and only that.
 

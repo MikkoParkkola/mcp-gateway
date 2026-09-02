@@ -224,6 +224,11 @@ def rollup_membership(criteria, text):
         cluster, declared = line.split("|")[1].strip(), int(match.group(1))
         members = []
         names, unreadable = named_criteria(line.split("|")[3])
+        # A cell holding no backticked span at all yields neither a name nor an
+        # unreadable token, so a declared zero would match an empty membership
+        # and the row would pass while naming nothing.
+        if not names and not unreadable:
+            problems.append(f"cluster {cluster} names no criteria")
         for token in unreadable:
             problems.append(f"cluster {cluster} names {token}, which is not a criterion name")
         for name in names:
