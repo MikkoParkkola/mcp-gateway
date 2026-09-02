@@ -34,8 +34,8 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use mcp_gateway::backend::BackendRegistry;
-use mcp_gateway::config::Config;
+use mcp_gateway::backend::{Backend, BackendRegistry};
+use mcp_gateway::config::{BackendConfig, Config, FailsafeConfig, TransportConfig};
 use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 use mcp_gateway::gateway::proxy::ProxyManager;
@@ -53,6 +53,9 @@ const BACKEND: &str = "backend";
 const TOOL: &str = "tool";
 /// The principal a handle is minted for. Opaque to the gateway — what matters
 /// is that the negative pair differs from it in exactly one field.
+/// The backend's own opaque state, sealed inside every handle minted here.
+/// A retry must deliver *this* to the backend — never the client's envelope.
+const SEALED_STATE: &str = "backend-opaque-state";
 const PRINCIPAL_A: &str = "fingerprint-a";
 const PRINCIPAL_B: &str = "fingerprint-b";
 
@@ -127,7 +130,7 @@ fn now_secs() -> u64 {
 fn mint_for(state: &Arc<AppState>, principal: &str, tool: &str, args: &Value) -> String {
     let payload = Payload::mint(
         BACKEND.to_string(),
-        Some("backend-opaque-state".to_string()),
+        Some(SEALED_STATE.to_string()),
         principal.to_string(),
         original_request_digest(BACKEND, tool, args),
         state.continuation.replica().to_string(),
@@ -322,7 +325,7 @@ async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
     let now = now_secs();
     let payload = Payload {
         backend_id: BACKEND.to_string(),
-        backend_request_state: Some("backend-opaque-state".to_string()),
+        backend_request_state: Some(SEALED_STATE.to_string()),
         principal_fingerprint: PRINCIPAL_A.to_string(),
         original_request_digest: original_request_digest(BACKEND, TOOL, &arguments()),
         origin_replica: state.continuation.replica().to_string(),
@@ -377,4 +380,215 @@ async fn ac_mrtr_5c_two_racing_redemptions_yield_exactly_one_success() {
         refused, 1,
         "exactly one of two racing redemptions must be refused, {refused} were: {left:?} {right:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The backend fixture — shared by every row that asserts on what *arrived*
+// ---------------------------------------------------------------------------
+//
+// MRTR.1 and MRTR.2 assert on what the backend received. Nothing arrives today,
+// because the retry is refused at the router. That means a fixture which never
+// worked would produce exactly the same red as a working fixture observing a
+// correct refusal — the two are indistinguishable without a control. So the
+// fixture carries its own: a *fresh* call must reach it and be recorded. Until
+// that control passes, no row asserting on arrival is honest evidence.
+
+/// Every `tools/call` params object the fixture backend received, in order.
+type Received = Arc<std::sync::Mutex<Vec<Value>>>;
+
+/// A loopback MCP server, and the record of what reached it.
+async fn spawn_fixture_backend() -> (String, Received) {
+    let received: Received = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = Arc::clone(&received);
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
+            let sink = Arc::clone(&sink);
+            async move { axum::Json(fixture_answer(&request, &sink)) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("the fixture backend must bind a loopback port");
+    let address = listener.local_addr().expect("the bound port must be known");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://{address}/"), received)
+}
+
+/// The fixture's whole protocol surface: enough to be discovered and called.
+fn fixture_answer(request: &Value, sink: &Received) -> Value {
+    let result = match request.get("method").and_then(Value::as_str) {
+        Some("initialize") => json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": "fixture", "version": "0" }
+        }),
+        Some("tools/list") => json!({
+            "tools": [ { "name": TOOL, "description": "d", "inputSchema": { "type": "object" } } ]
+        }),
+        Some("tools/call") => {
+            sink.lock()
+                .expect("the recorder is never poisoned")
+                .push(request.get("params").cloned().unwrap_or(Value::Null));
+            json!({ "content": [ { "type": "text", "text": "ok" } ] })
+        }
+        _ => json!({}),
+    };
+    json!({
+        "jsonrpc": "2.0",
+        "id": request.get("id").cloned().unwrap_or(Value::Null),
+        "result": result
+    })
+}
+
+/// Put the fixture behind the name every case in this file continues.
+fn register_fixture_backend(state: &Arc<AppState>, url: &str) {
+    let config = BackendConfig {
+        enabled: true,
+        transport: TransportConfig::Http {
+            http_url: url.to_string(),
+            streamable_http: true,
+            protocol_version: None,
+        },
+        ..BackendConfig::default()
+    };
+    let backend = Backend::new(
+        BACKEND,
+        config,
+        &FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    );
+    assert!(
+        state.backends.register(Arc::new(backend)),
+        "the fixture backend must register under a name nothing else holds"
+    );
+}
+
+/// A fresh call, carrying neither continuation field.
+///
+/// Routed through `gateway_invoke`. A backend tool is reachable from
+/// `tools/call` by its own name only when an operator has pinned it into the
+/// surfaced map (`src/gateway/meta_mcp/mod.rs:1371`); every other backend tool
+/// arrives this way. The criteria are about what the gateway forwards to a
+/// backend, not about which of the two exposures the operator chose, so the
+/// case takes the one that needs no configuration to exist.
+fn fresh_body(id: u64, tool: &str, args: &Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": {
+            "name": "gateway_invoke",
+            "arguments": { "server": BACKEND, "tool": tool, "arguments": args }
+        }
+    })
+}
+
+/// GIVEN the fixture backend, WHEN a fresh call is made, THEN it arrives.
+///
+/// Not an acceptance criterion — the control that makes MRTR.1 and MRTR.2
+/// readable. If this fails, every "the backend received nothing" assertion in
+/// this file is measuring the fixture rather than the gateway.
+#[tokio::test]
+async fn fixture_control_a_fresh_call_reaches_the_backend() {
+    let state = app_state();
+    let (url, received) = spawn_fixture_backend().await;
+    register_fixture_backend(&state, &url);
+
+    let (_status, response) = post(&state, &fresh_body(1, TOOL, &arguments())).await;
+
+    let calls = received.lock().expect("recorder").clone();
+    assert_eq!(
+        calls.len(),
+        1,
+        "a fresh call must reach the fixture backend, it recorded {calls:?}; the gateway answered {response}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MRTR.1 — a retry carries its continuation fields to the backend
+// ---------------------------------------------------------------------------
+
+/// A retry routed the way `fresh_body` routes, with the continuation fields
+/// as siblings of `name` — where the specification puts them, and where
+/// `RetryFields::from_params` reads them (`src/protocol/mrtr.rs:99-111`).
+fn retry_via_invoke(
+    id: u64,
+    tool: &str,
+    args: &Value,
+    handle: Option<&str>,
+    responses: Option<Value>,
+) -> Value {
+    let mut params = serde_json::Map::new();
+    params.insert("name".to_string(), json!("gateway_invoke"));
+    params.insert(
+        "arguments".to_string(),
+        json!({ "server": BACKEND, "tool": tool, "arguments": args }),
+    );
+    if let Some(handle) = handle {
+        params.insert("requestState".to_string(), json!(handle));
+    }
+    if let Some(responses) = responses {
+        params.insert("inputResponses".to_string(), responses);
+    }
+    json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params })
+}
+
+/// GIVEN a handle the gateway minted, WHEN a retry presents it in each of the
+/// three shapes a server may legitimately send back, THEN the backend receives
+/// the continuation the handle sealed — and nothing the client authored.
+///
+/// The fourth shape, neither field, is the fresh call: it is
+/// `fixture_control_a_fresh_call_reaches_the_backend`, which passes today and
+/// is what stops this row's red from being a broken fixture.
+///
+/// `requestState` is asserted to be the backend's own sealed state, not the
+/// handle presented. Echoing the client's envelope back to the backend would
+/// hand a server a value it never issued, which is the whole reason the
+/// gateway mints one (`src/protocol/continuation.rs:71`).
+#[tokio::test]
+async fn ac_mrtr_1_a_retry_reaches_the_backend_carrying_what_it_continued() {
+    let answers = json!({ "city": "Helsinki" });
+    let cases: [(&str, bool, Option<Value>); 3] = [
+        ("both fields", true, Some(answers.clone())),
+        ("responses only", false, Some(answers.clone())),
+        ("state only", true, None),
+    ];
+
+    for (index, (case, with_state, responses)) in cases.into_iter().enumerate() {
+        let state = app_state();
+        let (url, received) = spawn_fixture_backend().await;
+        register_fixture_backend(&state, &url);
+        let handle = mint_for(&state, PRINCIPAL_A, TOOL, &arguments());
+
+        let body = retry_via_invoke(
+            index as u64 + 1,
+            TOOL,
+            &arguments(),
+            with_state.then_some(handle.as_str()),
+            responses.clone(),
+        );
+        let (_status, response) = post(&state, &body).await;
+
+        let calls = received.lock().expect("recorder").clone();
+        assert_eq!(
+            calls.len(),
+            1,
+            "{case}: the retry must reach the backend, it recorded {calls:?}; \
+             the gateway answered {response}"
+        );
+        let arrived = &calls[0];
+        assert_eq!(
+            arrived.get("requestState").and_then(Value::as_str),
+            with_state.then_some(SEALED_STATE),
+            "{case}: the backend must receive the state it issued, not the client's handle"
+        );
+        assert_eq!(
+            arrived.get("inputResponses"),
+            responses.as_ref(),
+            "{case}: the answers must arrive verbatim, under the keys the server asked with"
+        );
+    }
 }
