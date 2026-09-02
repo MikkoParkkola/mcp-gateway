@@ -2756,10 +2756,34 @@ async fn the_refusal_does_not_name_the_allow_list() {
         )
         .await;
 
+    // Compared against the fallback the dispatcher actually produces, not
+    // against a transcription of it. A literal here asserts today's wording and
+    // goes red when the fallback is reworded -- which is the opposite of the
+    // property: what matters is that the two agree, never what they say. A name
+    // outside the governed set passes the exposure check (`is_exposed`,
+    // meta_mcp_tool_defs.rs:830) and reaches the fallback, so both answers come
+    // from one fixture and one dispatcher.
+    let fallback = exposure_only_invoke()
+        .handle_tools_call(
+            RequestId::Number(1),
+            "nobody_implemented_this",
+            json!({}),
+            None,
+            allow_all_ctx(),
+        )
+        .await;
+
     let error = response.error.expect("an unexposed meta-tool is refused");
+    let fallback_error = fallback
+        .error
+        .expect("a name nobody implemented is refused");
     assert_eq!(
-        error.message, "Unknown tool: gateway_list_tools",
-        "the refusal must be worded exactly like the fallback, with nothing appended"
+        error.message,
+        fallback_error
+            .message
+            .replace("nobody_implemented_this", "gateway_list_tools"),
+        "the refusal must be worded exactly like the fallback, with nothing \
+         appended and nothing missing: {error:?} vs {fallback_error:?}"
     );
 }
 
