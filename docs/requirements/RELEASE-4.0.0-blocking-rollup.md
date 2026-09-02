@@ -194,10 +194,10 @@ at `src/gateway/router/handlers.rs:221`, `:755-760`, `:967`.
 specification rather than reasoned from the constant's name: `initialize` belongs to "`2025-11-25`
 and earlier"
 ([lifecycle](https://modelcontextprotocol.io/specification/2026-07-28/basic/lifecycle)), and a
-modern client never sends it — the same page records that a modern client against a legacy server
-*fails* because "`initialize` is an unknown method". A dual-era server answers `initialize` only for
-legacy clients, and serves them the negotiated legacy revision. Listing `2026-07-28` there would
-have a retired handshake negotiate a revision that has no handshake.
+modern client states its revision in per-request `_meta` rather than negotiating one. The same
+page records that a dual-era server answers `initialize` for legacy clients and serves them the
+negotiated legacy revision. Listing `2026-07-28` there would have a retired handshake negotiate a
+revision that has no handshake.
 
 This has been concluded the wrong way twice — once in the release plan, once by a reviewer — so the
 reasoning is recorded here, not the conclusion alone. The two constants are separate on purpose:

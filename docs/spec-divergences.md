@@ -13,11 +13,12 @@ states it. Two entries. Search method below.
 `2024-11-05`. The `2026-07-28` revision is a specification-defined revision
 the gateway does not list there.
 
-**Reason (from the code):** listing `2026-07-28` would let `initialize`
-negotiate a revision the gateway cannot yet serve over the legacy handshake,
-so a client would be told yes and then served 2025 semantics — "a worse
-failure than refusing, because it is silent." The comment records that this
-omission ends "in the increment that makes it true."
+**Reason (from the specification):** the 2026-07-28 lifecycle scopes
+`initialize` to "`2025-11-25` and earlier", so the handshake negotiates legacy
+revisions only, and listing `2026-07-28` there would have it negotiate a
+revision that has no handshake. The omission is permanent, not an increment
+waiting to land: `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) carries the
+revision for the stateless path that serves it.
 
 **Scope note:** this is narrower than "2026-07-28 is unsupported." The
 revision is separately advertised in `server/discover`'s `supportedVersions`
