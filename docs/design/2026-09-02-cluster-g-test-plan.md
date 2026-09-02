@@ -10,7 +10,7 @@ Covers all three cluster-G criteria: `NFR.OBS.1`, `NFR.OBS.2` and `MIK-7246.CONF
 An earlier revision of this section excluded `CONFIRM.1a` on the grounds that its stdio
 behaviour was waiting on the operator. That was wrong, and the reason is worth keeping: the
 criterion already specifies the behaviour (fail closed, refuse), so there was never a question
-to wait on. Row 13 covers it.
+to wait on. Row 16 covers it.
 
 ## One row per criterion
 
@@ -31,7 +31,8 @@ to wait on. Row 13 covers it.
 | 13 | `CONFIRM.1a` | the **existing** HTTP case `ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused` (`tests/mik_7215_acs.rs:630`) still refuses after the gate is moved to serve both transports, with one assertion added: the execution sentinel is untouched | integration | invariance probe | **not free** — HTTP already refuses; the red comes from moving the gate, so the probe is to move it wrongly and watch this go red |
 | 14 | `OBS.2` | a `tools/list` whose profile **excludes** at least one tool records the **effective filter decisions** — which filters ran and what each removed — and the record is stamped **before** the response is written | integration | content + ordering | free — the live record names filter *inputs* only, so it cannot carry a decision |
 | 15 | `OBS.1` | a `tools/call` over **HTTP** carrying no revision in either `_meta` or the header records `protocol_revision` = `absent` and `revision_source` = `none` — the exact strings, not any falsy value | integration | regression | **not free** — production already emits these literals, so the row passes today; probe required, see below |
-| 16 | `CONFIRM.1a` | a destructive `tools/call` over **stdio** from an **admin** caller naming `gateway_kill_server`, where no confirmation can be obtained, returns code `-32001` **and** the message prefix `Destructive action requires confirmation and none could be obtained:` **and** leaves the execution sentinel untouched | integration | fail-closed | **red on arrival** — the gate is HTTP-only; this is the acceptance test for wiring it |
+| 17 | `CONFIRM.1a` | a refused destructive call over HTTP leaves the caller's client-failure count unchanged, **and** an ordinary backend error on the same client still increments it | integration | regression + negative control | **red on arrival** — refusals do not reach the accounting tail today, so the exclusion does not exist |
+| 16 | `CONFIRM.1a` | a destructive `tools/call` over **stdio** from an **admin** caller naming `gateway_kill_server`, where no confirmation can be obtained, returns code `-32001` **and** a message that opens `Destructive action requires confirmation and none could be obtained:` **and** names the fixture's server verbatim **and** leaves the execution sentinel untouched | integration | fail-closed | **red on arrival** — the gate is HTTP-only; this is the acceptance test for wiring it |
 
 Row 5 exists because both reviewers raised it independently in round 1: the design's "both
 callers" tables enumerate the *transports*, and the tool-policy precedent the design leans
@@ -340,7 +341,7 @@ sit undisturbed. Nothing in this section is outside the plan.
   (`RELEASE-4.0.0-requirements.md:195`). That is a specified fail-closed behaviour, not a
   choice awaiting the operator. Deferring it treated a settled MUST as an open trade-off, which
   would have left a destructive tool callable over stdio without confirmation — and a stated
-  limit against a MUST is an unmet requirement, not an accepted risk. Row 13 covers it.
+  limit against a MUST is an unmet requirement, not an accepted risk. Row 16 covers it.
 - Whether `protocol_revision` is *available* to report on stdio. Round 2 narrowed this: stdio
   establishes a revision at `initialize`, so rows 1–3 assert the **negotiated** revision with
   `revision_source` set to the handshake. The open part is only what a record carries for a
@@ -734,8 +735,18 @@ would degrade the caller's standing.
 
 The refusal therefore carries a type the tail can recognise, and the accounting excludes it.
 Not the message text and not the `-32001` code, both of which a backend could also produce: an
-internal marker on the response, set only by the confirmation gate. Request telemetry still
-counts it — this is about *reputation*, not visibility, and a refused destructive call is
+internal marker on the response, set only by the confirmation gate.
+
+Its contract, because "an internal marker" is not one: a `bool` field on the internal response
+struct that the JSON-RPC serializer **skips**, so it never reaches a client and cannot be forged
+by a backend that learns to set it. The accounting tail reads that field; nothing else does.
+Both refusal branches carry it — the modern-HTTP elicit-then-refuse and the stdio
+`Unavailable` short-circuit — because both are the caller using the feature correctly.
+
+Row 17 tests it, and tests the half that would otherwise rot silently: that an ordinary backend
+error still counts against the client. A test that only checks the exclusion passes just as well
+when the accounting has been switched off altogether. Request telemetry still
+counts the refusal — this is about *reputation*, not visibility, and a refused destructive call is
 exactly the kind of thing the metrics should show.
 
 This is worth stating as a general property of the move: siting a gate behind dispatch puts its
@@ -793,16 +804,31 @@ Two obligations that are not design decisions but will be silently skipped if th
 written down where the implementer is looking:
 
 - `destructive_confirmation.rs:200-225` — three `warn!` bodies say "proceeding without
-  confirmation" on the elicitation-declined, timed-out and delivery-failed paths. Under the new
-  policy those paths refuse, so the log lines would state the opposite of what happened. An
-  operator reading logs during an incident is the reader least able to check the claim.
+  confirmation" on the no-session, timed-out and delivery-failed paths. They are **already**
+  claiming an outcome they cannot know: all three sit inside the elicitation helper, which
+  returns `Unsupported` and leaves proceed-or-refuse to the policy that runs after it. Today
+  legacy proceeds, so the text is accidentally true for the path that dominates.
+
+  The obvious repair — rewrite them as refusals, since stdio now refuses — is **wrong**, and it
+  is worth recording why, because it was the first version of this obligation. Legacy HTTP still
+  proceeds under `for_legacy()`; a log line saying *refused* would be a lie on the one path
+  CONFIRM.1b exists to protect. Swapping which half of the traffic gets a false log is not a fix.
+
+  So the delivery-layer messages become **outcome-neutral** — they report what the delivery
+  layer actually observed (*no active session*, *confirmation timed out*, *delivery failed*) and
+  claim nothing about what happens next. Proceed-or-refuse wording is emitted by the caller,
+  after the policy has chosen. This is the elimination: a layer that does not know the outcome
+  can no longer state one, so the finding cannot be restated in either direction. An operator
+  reading logs during an incident is the reader least able to check the claim, which is why the
+  layer that cannot know must not be the layer that speaks.
 - `destructive_confirmation.rs:5-30` — the module's own contract still tells callers to proceed
   when there is no session. It is the documentation of the behaviour this change exists to
   reverse, and it ships inside this change (§P4a), not after it.
 - **Every** `MetaMcpCallerContext` construction site gets an explicit channel — not just the
   dispatcher tests' helper. Named, so the cascade is a work-list rather than a discovery:
   `allow_all_ctx`, `allow_all_ctx_named`, `allow_all_ctx_declaring`, `authz_tests.rs:ctx`,
-  `trace_correlation_tests.rs:ctx`, the `invoke.rs` tests and `router/tests.rs` each build the
+  `trace_correlation_tests.rs:ctx`, the direct literal at `meta_mcp/tests.rs:685`, the
+  `invoke.rs` tests and `router/tests.rs` each build the
   struct as a literal, so the field is a compile error at all of them until it is filled in.
   That is the desired failure: a new construction site cannot
   silently inherit a permissive channel. For the same reason there is **no `Default`** — a
@@ -831,3 +857,12 @@ Worth naming: these are the **second and third instances** of the class round 1 
 confirmation gate. That gate's instance is closed by construction here. Two more survive on the
 same path, which says the defect is not "someone ordered two checks wrongly" but that
 *disclosure-safety is not a property anything on this path enforces*. The ticket says so.
+
+**Deferred, with its reason recorded rather than left implicit.** Both reviewers have now asked
+twice for the accumulated round history to be separated from the current actionable design — a
+reader has to reconstruct which instruction is live, and that is exactly how five stale
+statements survived. It is the right change and it is not made mid-review: every finding since
+round 1 cites a line number in this file, and restructuring it between a review and its
+confirmation pass would silently invalidate the citations the next round is checked against.
+Disposal: **fix it in this change**, as the last edit before the design freezes, once no
+reviewer is holding a line reference into it.
