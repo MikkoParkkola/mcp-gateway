@@ -254,13 +254,14 @@ jobs:
         run: cargo test --test public_claims_validation
 
   release-criteria:
-    name: Release criteria ledger (report-only)
+    name: Release criteria ledger (report-only off a tag, blocking on one)
     runs-on: avrea-ubuntu-latest-4-vcpu
-    # Report-only here, blocking in release.yml at tag time. The ledger is a
-    # live working document: a row edited mid-flight must not block unrelated
-    # PRs, but a stale header count must not reach a tag. Same script both
-    # places — scripts/release/count-release-criteria.py.
-    continue-on-error: true
+    # The ledger is a live working document: a row edited mid-flight must not
+    # block unrelated PRs, but a stale header count must not reach a tag. On a
+    # tag this job blocks, and the container publish below depends on it —
+    # release.yml's copy cannot, because a workflow cannot gate another
+    # workflow's jobs. Same script everywhere: scripts/release/count-release-criteria.py.
+    continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test the counter (fail on parser regression)
@@ -304,7 +305,7 @@ jobs:
     # previously this job's needs: covered clippy/test/fmt/audit but not the
     # security jobs, so a red secrets-scan or leak-lint would not have
     # blocked ghcr.io publish.
-    needs: [check, test, fmt, audit, secrets-scan, secret-leak-lint, public-claims, public-repo-hygiene, service-template-smoke, usability-smoke, helm-chart-smoke, helm-oci-roundtrip, helm-supply-chain, helm-airgap]
+    needs: [check, test, fmt, audit, secrets-scan, secret-leak-lint, public-claims, public-repo-hygiene, service-template-smoke, usability-smoke, helm-chart-smoke, helm-oci-roundtrip, helm-supply-chain, helm-airgap, release-criteria]
     permissions:
       contents: read
       packages: write
@@ -338,9 +339,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Install cosign
-        # ponytail: floating major tag until pinned to a SHA (follow-up); the
-        # rest of this workflow is SHA-pinned per repo convention. cosign-release
-        # is pinned so flag behavior can't drift under a v3 default.
+        # cosign-release is pinned so flag behavior can't drift under a v3 default.
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
         with:
           cosign-release: v2.5.2

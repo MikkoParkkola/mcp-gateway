@@ -155,13 +155,18 @@ CACHE.3 (public scope only, with proof and a decision table) and CACHE.4 (shared
 on all eight response-varying inputs plus a policy epoch). Both are correctness-of-caching
 questions, independent of everything above, and safe to run in parallel.
 
-### G. Schema validity — MIK-6865.SCHEMA.1
+### G. Schema validity — closed, and the letter is retired
 
-Tool schemas must remain valid under JSON Schema 2020-12. Implemented and wired; the clause
-has no test. There is no validator in the dependency tree, so this is a dependency decision
-before it is a test: which crate, what it costs at startup, and whether validation runs at
-load time or in CI only. Supply-chain gate (DoD D30) applies. Design first; the criterion
-cannot be closed by a hand-rolled check.
+An earlier revision of this file carried a cluster here for `MIK-6865.SCHEMA.1`: schemas valid
+under JSON Schema 2020-12, no validator in the dependency tree, a crate decision before a test.
+That decision was taken and the test landed on 2026-09-01 — `tests/schema_2020_12_validity.rs`
+validates every emitted `inputSchema` against the meta-schema through the `jsonschema` crate,
+in both Traditional and Code Mode, with a falsifier proving the validator rejects an invalid
+schema. `SCHEMA.1` is not a row: the split scored it `1a`/`1b`/`1c`, and `1a` and `1b` are MET.
+What is left of MIK-6865 is `SCHEMA.1c`, the `$ref` and composition bounds, which is a test
+against the same emitted surface and sits in cluster J.
+
+The letter is retired rather than reused. A reused letter makes two different plans read alike.
 
 ### H. Confirmation gate reachability — MIK-7246.CONFIRM.2
 
@@ -172,17 +177,24 @@ be built before cluster A lands.
 ### I. The stdio dispatch path — NFR.OBS.1, NFR.OBS.2, MIK-7246.CONFIRM.1a, 3 criteria
 
 One wiring question answers all three rows. The gateway serves MCP over two transports and
-every one of these three controls lives in the HTTP router only: the two migration-telemetry
-records at `src/gateway/router/handlers.rs:720,994`, and the destructive-operation
-confirmation gate imported and called once at `:28` and `:1196-1231`. The stdio `tools/call`
-dispatcher (`src/gateway/server/mod.rs:1702-1720`) hands straight to
-`meta_mcp.handle_tools_call`, so over stdio the telemetry is absent and a destructive meta-tool
-runs with no confirmation sought and no refusal.
+every one of these three controls lives in the HTTP router only: both migration-telemetry
+records in `handlers.rs`, and `require_destructive_confirmation`, whose module
+`src/gateway/destructive_confirmation.rs` has exactly one consumer — searching `src/` for the
+module name returns `handlers.rs` and the `mod` declaration, nothing else. The stdio
+`tools/call` arm hands straight to `MetaMcp::handle_tools_call`, which does not reach the gate,
+so over stdio the telemetry is absent and a destructive meta-tool runs with no confirmation
+sought and no refusal.
 
 CONFIRM.1a is the reason this cluster is not filed under telemetry. Two of the rows are a
 missing record; the third is a security control that one of two shipped transports does not
-apply. The HTTP half stays evidenced (`tests/mik_7215_acs.rs:630`) — this is a reachability
-gap, not a broken gate.
+apply. The HTTP half stays evidenced — this is a reachability gap, not a broken gate.
+
+The design starts from an argument the code already makes. The stdio arm withholds admin
+capability on the ground that the client *spawned* the process and so already holds whatever
+the operator holds. That reasoning is sound for authorization and does not carry to
+confirmation: a confirmation gate asks whether a destructive act was *intended*, which is a
+question a fully privileged caller can still answer wrongly. The design must say so explicitly
+or it will be re-litigated at review.
 
 Design first, and it is one design: where the shared dispatch seam belongs, whether stdio grows
 the same middleware or the gate moves below both routers, and what either does to an existing
@@ -203,6 +215,28 @@ belong to.
 The letters here are this file's own. The blocking rollup groups the same rows under its own
 scheme for its own purpose, and the two do not correspond; the criterion IDs are what join them.
 
+### The fifteen blocking NFR rows are placed by wave, not by cluster
+
+The clusters above are ticket work. Not one NFR row appears in them, and the heading
+"Clusters, in dependency order" reads as though it covered everything — it covers 38 of the 53.
+An NFR row mostly verifies a property of a mechanism some cluster builds, so it cannot be
+scheduled independently of that cluster; the four that stand alone are the exceptions.
+
+| row | where it lands |
+|---|---|
+| SEC.2, SEC.3, SEC.4, PERF.3, OBS.4 | with cluster A — each verifies the continuation envelope, and none can be written against an unwired path |
+| OBS.3 | with cluster C — there is no era detection to observe until C lands |
+| OBS.1, OBS.2 | cluster I, above |
+| COMPAT.1 | with cluster B — the ABSENT clause is the modern revision in `SUPPORTED_VERSIONS`, which is B's work, not a separate task |
+| PERF.1, PERF.2 | wave 0, and still open: both need a measurement against 3.5.0 that no code read can substitute for |
+| PERF.4 | wave 1 — the operator's ruling left the ceiling standing and the counting mechanism undecided |
+| SEC.1 | wave 3 — twelve of fifteen controls carry a refusal test; two remain, and one is blocked on files another session owns |
+| SEC.6 | wave 3 — one test on the MIK-7262 early return, plus a ruling on whether an unlabelled fix counts as closed |
+| COMPAT.4 | last — the dual-role matrix grades every other row, so it is written once the rows it grades are settled |
+
+Nine of the fifteen therefore have no schedule of their own: they land when their cluster does,
+and a cluster is not done until they read MET. The other six are named in a wave above.
+
 ## Order of work
 
 **Wave 0 — the NFR sweep.** Done on 2026-09-01: all 22 rows exist and all 22 are assessed
@@ -215,7 +249,7 @@ verify the continuation envelope and era detection are NOT in this wave — they
 clusters. This wave changes the size of every wave after it, which is why it runs first
 rather than last.
 
-**Wave 1 — designs only, no code, all parallel.** C, F, G, I, the design-first half of B,
+**Wave 1 — designs only, no code, all parallel.** C, F, I, the design-first half of B,
 and NFR.PERF.4's counting decision, which the operator's ruling converted from a question
 about the ceiling into a question about the mechanism.
 Each is a §P1 note reviewed by two vendors before an edit. This is the wave that decides
@@ -293,11 +327,12 @@ used as a parse target on every read path, so a guard added in each transport wo
 other caller of `JsonRpcResponse` still able to swallow a request. Dispatch by message shape before
 parsing as a response, once, where all readers pass through.
 
-**2. SCHEMA.1 — what happens to a backend that publishes an invalid schema.** The criterion says
+**2. SCHEMA.1b — what happens to a backend that publishes an invalid schema.** The criterion says
 tool schemas MUST remain valid under JSON Schema 2020-12, unqualified, and the gateway republishes
 proxied backend schemas. Three postures: refuse the backend, publish and flag, or degrade the
-schema. Cluster G scoped backend-supplied schemas OUT, which leaves a stated limit against a MUST —
-an unmet requirement, not a design choice, until this is answered.
+schema. The row now reads MET on a test that enumerates the schemas `MetaMcp::handle_tools_list`
+emits — which scopes backend-supplied schemas OUT without saying so, and leaves a stated limit
+against a MUST. An unmet requirement in a MET row's clothing, until this is answered.
 
 **3. ~~Whether 2025-11-25 clients are still served.~~ RESOLVED against the code, and it moved the
 release gate.** The `tasks` capability types are dead, not a hazard: `ServerCapabilities.tasks` is
