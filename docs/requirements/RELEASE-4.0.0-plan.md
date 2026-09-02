@@ -171,8 +171,9 @@ The letter is retired rather than reused. A reused letter makes two different pl
 ### H. Confirmation gate reachability — MIK-7246.CONFIRM.2
 
 The destructive-action confirmation gate must be reachable through the MRTR path so a modern
-client can actually confirm. CONFIRM.1 closed 2026-08-31; this is the other half and it cannot
-be built before cluster A lands.
+client can actually confirm. CONFIRM.1b closed 2026-08-31 and CONFIRM.1a is still open on
+the stdio path; this is the other half of the pair and it cannot be built before cluster A
+lands.
 
 ### I. The stdio dispatch path — NFR.OBS.1, NFR.OBS.2, MIK-7246.CONFIRM.1a, 3 criteria
 
