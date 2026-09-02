@@ -708,11 +708,10 @@ Three things can run alongside it without waiting:
 Clusters C and D follow A, because both need a served modern request path to test against — the
 dependency section above already establishes that, and nothing since has changed it.
 
-### The first of cluster F's four decisions, stated as open
+### One of cluster F's four decisions is now made
 
-`NFR.COMPAT.1` — whether 4.0.0 serves the 2026 revision — has three answers and none has been
-given: serve it in this release, advertise-only, or drop the advertisement. It is the operator's
-call and is recorded here as open.
+`NFR.COMPAT.1` — whether 4.0.0 serves the 2026 revision — asked of the operator on 2026-09-02,
+answered **serve it in this release**, not advertise-only and not drop the advertisement.
 
 The question was put as "does the revision join `SUPPORTED_VERSIONS`", and that half was not the
 operator's to answer. Checked at the specification the same day: the 2026-07-28 lifecycle scopes
@@ -728,23 +727,21 @@ the work already done. It also settles the audits' central complaint — a revis
 `discover_document` and refused at the door — by closing the gap from the serving side instead of
 retracting the announcement.
 
-The others remain open and remain operator calls, not engineering: whether
+The other three remain open and remain operator calls, not engineering: whether
 `exposed_meta_tools` enforcement ships as a breaking change, whether a dual-role compatibility
 matrix is required for 4.0.0, and whether the 17-tool scenario or the documented 14-16 ceiling is
 the number that moves.
 
-### The second cluster-F decision, stated as open
+### A second cluster-F decision is now made
 
-`NFR.COMPAT.3` -- whether `exposed_meta_tools` enforcement ships as a breaking change -- has four
-answers and none has been given: a warn-in-4.0/enforce-in-4.1 deprecation, enforce now and accept
-the break, a second opt-in flag governing the first, or dropping the field outright. Only the third
-meets the criterion; the second waives it; the first and fourth defer or remove the conflict.
+`NFR.COMPAT.3` -- whether `exposed_meta_tools` enforcement ships as a breaking change -- asked of
+the operator on 2026-09-02, answered **enforce now and accept the break**. The alternatives put were
+a warn-in-4.0/enforce-in-4.1 deprecation, a second opt-in flag governing the first, and dropping the
+field outright.
 
-Why it cannot be inferred from the full-scope instruction: that instruction puts the enforcement in
-scope, which is a question about *what gets built*. Whether a backward-compatibility criterion is
-set aside is a question about *what an upgrading operator is owed*, and nothing about the first
-answers the second. Recording it as N/A without the reason would have hidden a real break behind a
-status code. An operator who set
+What it changes: the criterion is waived rather than met, and the ledger row now says so in those
+words. This is not the same as the requirement being satisfied, and writing it down as N/A without
+the reason would have hidden a real break behind a status code. An operator who set
 `exposed_meta_tools` and upgrades without editing anything will lose tools that used to answer.
 Two obligations transfer to the release in exchange: the break stays named in the release notes
 where `docs/release/v4.0.0-release-notes-DRAFT.md:38` already names it, and the upgrade path has to

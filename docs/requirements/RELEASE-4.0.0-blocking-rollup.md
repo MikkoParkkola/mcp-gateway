@@ -24,7 +24,7 @@ stays the source of truth for status.
 | C | MIK-7272 revision surface | `ORDER.2`, `SUB.2` (own-stream clause), `SUB.4`, `EXT.1`, `OTEL.1`, `TASK.1` | 7 | five separate half-wirings: idempotency cache never enabled, extension set write-side absent, task methods advertised and not served, routing profile ignores modern mode |
 | D | MIK-7213 response-cache keying | `CACHE.4` | 2 | the two clause rows `CACHE.4a` (key missing routing profile and protocol revision) and `CACHE.4b` (no policy epoch), designed in `docs/design/2026-08-31-cluster-f-response-cache-keying.md`. `CACHE.3` was in this cluster until both its clauses were met: the decision table is now read by the emitting code |
 | E | performance measurements | `NFR.PERF.1`, `NFR.PERF.2` | 2 | no run against 3.5.0 exists. A code read cannot substitute. **Spark only** — a Mac number is worse than no number |
-| F | compatibility and surface facts | `NFR.COMPAT.1`, `NFR.COMPAT.3`, `NFR.COMPAT.4` | 3 | `NFR.COMPAT.1` waits on an operator decision, not on code: whether 4.0.0 serves 2026-07-28 out of the box. Answering yes makes it a one-line flip of the `server.modern_protocol` default (`src/config/mod.rs:1174`), which then cannot land before cluster A wires the continuation path, since default-on turns every gap there into a first-run defect. Answering no meets the criterion only in the weaker sense that the revision is reachable behind an opt-in. `NFR.COMPAT.4` is still a stated fact awaiting work, not a decision: the dual-role matrix has never been run. `NFR.COMPAT.3` is still in this cluster and still blocking: it is an open operator decision, not a waived one. `NFR.PERF.4` left it earlier and is now residue: the ceiling was affirmed and the 17th tool identified as `gateway_webhook_status` (`src/gateway/meta_mcp_tool_defs.rs:565`), which only appears when webhooks are enabled — that settled the number, not the mechanism that holds it |
+| F | compatibility and surface facts | `NFR.COMPAT.1`, `NFR.COMPAT.4` | 2 | `NFR.COMPAT.1` is now a code change, not a decision: the operator ruled on 2026-09-02 that 4.0.0 serves 2026-07-28 out of the box, so `server.modern_protocol` must default to true — a one-line flip (`src/config/mod.rs:1174`) not yet made, and one that cannot land before cluster A wires the continuation path, since default-on turns every gap there into a first-run defect. `NFR.COMPAT.4` is still a stated fact awaiting work, not a decision: the dual-role matrix has never been run. `NFR.COMPAT.3` was in this cluster until the operator waived it on the record on 2026-09-02, which is why the count is two rather than three. `NFR.PERF.4` left it earlier and is now residue: the ceiling was affirmed and the 17th tool identified as `gateway_webhook_status` (`src/gateway/meta_mcp_tool_defs.rs:565`), which only appears when webhooks are enabled — that settled the number, not the mechanism that holds it |
 | G | stdio dispatch path | `NFR.OBS.1`, `NFR.OBS.2`, `MIK-7246.CONFIRM.1a` | 3 | both records live in the HTTP router (`src/gateway/router/handlers.rs:720,994`) and both criteria say *per request* / *every* `tools/list`. The stdio dispatcher reaches neither, so one of the two transports the gateway serves MCP over is absent from the migration telemetry. `MIK-7246.CONFIRM.1a` is the same shape and not telemetry: the destructive-confirmation gate is imported and called once, in that same HTTP router (`src/gateway/router/handlers.rs:28,1196`), so a destructive meta-tool invoked over stdio executes with no confirmation sought. One wiring question — what the stdio dispatcher must do before it reaches `handle_tools_call` — answers all three |
 | — | residue | `HEADER.9`, `CONTROL.4`, `CONFIRM.2`, `NFR.SEC.1`, `NFR.SEC.6`, `NFR.PERF.4`, `MIK-6704.IDENT.1a`, `MIK-6865.SCHEMA.1c`, `MIK-7215.CONTROL.3a` | 10 | genuinely independent; see below |
 
@@ -61,36 +61,25 @@ the blocking rows and read as though it covered all of them.
 - `MIK-7215.CONTROL.3a` — scored blocking when `CONTROL.3` was split; the clause it carries is
   not held by the parent's evidence.
 
-## The four decisions this reduced to — two answered, two open
+## The four decisions this reduced to — all four are now answered
 
-Everything above is engineering except these. They are operator calls, and no amount of
-test-writing settles them. Two fall to the instruction to close the full scope, which is a
-recorded instruction about what gets built. Two do not, because they are about what an
-upgrading operator is owed and what a default install ought to serve, and neither follows from
-a scope instruction. Those two are open and are put to the operator, not inferred.
+Everything above is engineering except these. They were operator calls, and no amount of
+test-writing would have settled them. Three fell to the instruction to close the full scope;
+the fourth was ruled on directly. They are kept here because the answers are what the rest of
+this document is now written against, and because a question that disappears once answered
+reads later as a question nobody asked.
 
-The distinction is the whole point of this section: an instruction to build everything answers
-*which work happens*. It does not answer *whether a compatibility promise may be broken* or
-*what a stock install serves*. Treating the first as settling the other two would put words in
-the operator's mouth, and a decision recorded that way reads later exactly like one that was
-actually taken.
-
-1. **Does 4.0.0 ship the continuation envelope wired, or ship without it?** **Wired**, by the
-   full-scope instruction, which puts the continuation work in scope on its own terms. Fifteen
-   criteria hang on this. It does *not* follow that `server.modern_protocol` defaults to true —
-   that is a separate operator decision, still open, set out under the fifth decision below. The
-   two interact one way only: if the default does flip, the wiring must land first, because an
-   unwired envelope behind a default-on flag is a first-run defect rather than an opt-in gap.
+1. **Does 4.0.0 ship the continuation envelope wired, or ship without it?** **Wired.** Fifteen
+   criteria hung on this. The operator ruled that 4.0.0 serves `2026-07-28` out of the box, so
+   `server.modern_protocol` defaults to true and every default install reaches the modern path.
+   That removes the *ship-without-it* answer outright: an unwired envelope behind a default-on
+   flag is a first-run defect, not an opt-in gap. The flip cannot land before the wiring.
 2. **Does 4.0.0 ship era detection wired, or detect-only?** **Wired**, by the same full-scope
    instruction. The design's own resolution is unchanged — the gateway detects and does not
    speak the modern revision outbound — so wiring the detector is the whole of the work.
-3. **Is `exposed_meta_tools` enforcement acceptable as a breaking change?** **Open — and it is
-   the operator's to answer.** The full-scope instruction puts the enforcement in scope; it does
-   not waive a backward-compatibility criterion, which is a different question. `NFR.COMPAT.3`
-   therefore still blocks. Owner: the operator. Resolved by: asking, with the four options set
-   out below. Trigger: before the release notes are finalised. If it resolves against shipping
-   the break, the enforcement moves behind a second opt-in flag and the criterion is met rather
-   than waived.
+3. **Is `exposed_meta_tools` enforcement acceptable as a breaking change?** **Yes** — the
+   operator waived `NFR.COMPAT.3` on the record on 2026-09-02. The enforcement ships and the
+   criterion no longer blocks. What that waiver bought and cost is set out below.
 4. **Do the performance numbers gate the release?** **They are to be run**, which answers the
    question the useful way: `NFR.PERF.2` states its own consequence — without a number the
    change does not ship — and the full-scope instruction schedules the Spark job rather than
@@ -148,10 +137,10 @@ outside tests; GH issue 449 made it real, and `gateway_search`/`gateway_execute`
 reaching every backend tool regardless of the list — are now restricted by it. Either the
 enforcement ships and the criterion is amended in the open, or the enforcement is reverted and
 the gateway keeps shipping a field that claims a restriction it does not apply. Amending a
-criterion needs the operator's recorded agreement, **and it has not been given**. Until it is,
-the row stays in cluster F and stays blocking. Four options exist and only the operator can pick
-one: warn in 4.0 and enforce in 4.1; enforce now and accept the break; hide enforcement behind a
-second opt-in flag, which meets the criterion rather than waiving it; or drop the field.
+criterion needs the operator's recorded agreement, and on 2026-09-02 **it was given: the
+criterion is waived for this field**. The enforcement ships, the row leaves cluster F, and the
+release notes carry the break rather than the criterion swallowing it. The waiver is recorded
+for this field only — `NFR.COMPAT.3` still binds every other configuration surface.
 
 ### The count is checked, not asserted
 
@@ -270,22 +259,21 @@ That paragraph was published wrong and is now repaired. What the repair exposes 
 that no cluster surfaced, because no criterion is phrased to ask it:
 **does 4.0.0 ship with `server.modern_protocol` defaulting to false?**
 
-Both answers are defensible and neither is an analysis result. This is the operator's call and
-it has not been made. Both are recorded because whichever is taken gives up the other.
+Both answers were defensible and neither was an analysis result. The operator took the
+second; the first is recorded because it is what the second gave up.
 
 | answer | what it costs |
 |---|---|
-| leave it false | 4.0.0 ships the modern revision behind an opt-in flag. Every cluster A and C row can be met and no default install exercises them. The release notes must say so plainly, or the version number overpromises. |
-| flip it true | the default install serves `2026-07-28`. That is only honest once the modern path is served completely — which is exactly what clusters A and C are for, so the flip is a release-gating dependency on them, not an independent switch. |
+| ~~leave it false~~ | 4.0.0 ships the modern revision behind an opt-in flag. Every cluster A and C row can be met and no default install exercises them. The release notes must say so plainly, or the version number overpromises. |
+| **flip it true — taken** | the default install serves `2026-07-28`. That is only honest once the modern path is served completely — which is exactly what clusters A and C are for, so the flip is a release-gating dependency on them, not an independent switch. |
 
-The flag is not a gap and needs no ticket. It needs an answer, and if the answer is *flip it*,
-a gating dependency on clusters A and C.
+The flag is not a gap and needs no ticket. It needs a gating dependency on clusters A and C,
+which is what the taken answer buys.
 
-**Open. Owner: the operator.** Resolved by asking, not by checking; nothing in the tree decides
-what a default install ought to serve. Trigger: before the release notes are finalised, and
-before any flip is written. If the answer is *flip it*, the flip lands last — after the
-continuation path is wired, because a default-on stateless path turns every remaining gap in it
-into a first-run
+**Answered by the operator 2026-09-02: flip it true.** 4.0.0 serves `2026-07-28` out of the box.
+The second column is therefore the one that binds: the flip is a release-gating dependency on
+clusters A and C, not an independent switch, and it lands last — after the continuation path is
+wired, because a default-on stateless path turns every remaining gap in it into a first-run
 defect rather than an opt-in one. Until the flip lands, `README.md:355` and the PR body stating
 `off by default` remain true and are not to be updated ahead of it.
 

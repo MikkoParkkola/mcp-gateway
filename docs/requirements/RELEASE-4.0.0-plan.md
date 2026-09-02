@@ -47,11 +47,9 @@ protocol revision the gateway does not serve, now corrected.
 
 It also found that the Meta-MCP surface's published 17-tool scenario
 (`benchmarks/public_claims.json:4-6`) exceeds the 14-16 ceiling NFR.PERF.4 states, with nothing
-clamping the count. Two answers are open and the choice is the operator's: hold the
-ceiling and stop the seventeenth counting, or widen the requirement to 14-17. Widening raises the
-ceiling to match whatever shipped and reverses a decision taken earlier, which is the argument
-against it; it is not an argument the analysis can settle on the operator's behalf. Recorded as
-open rather than assumed. The seventeenth is `gateway_webhook_status`
+clamping the count. The operator ruled on 2026-09-02: the ceiling stands and the seventeenth
+stops counting. The requirement is NOT widened to 14-17, which would raise the ceiling to match
+whatever shipped and reverse a locked decision. The seventeenth is `gateway_webhook_status`
 (`src/gateway/meta_mcp_tool_defs.rs:565`), pushed behind `webhooks_enabled`.
 
 NFR.PERF.4 stays blocking and stays ABSENT. What the ruling changed is its kind: it is no
