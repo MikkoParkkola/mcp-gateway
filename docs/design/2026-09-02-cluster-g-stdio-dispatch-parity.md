@@ -54,7 +54,7 @@ the three concerns.
 | concern | convergence point | both callers |
 |---|---|---|
 | destructive confirmation (`CONFIRM.1a`) | `MetaMcp::handle_tools_call` | `router/handlers.rs:1272`, `server/mod.rs:1715` |
-| `tools/list` record (`NFR.OBS.2`) | `MetaMcp::handle_tools_list_with_params` (`meta_mcp/mod.rs:1267`) | `server/mod.rs:1700` directly; HTTP via `handle_tools_list_with_url_override:1312` |
+| `tools/list` record (`NFR.OBS.2`) | **also not the dispatcher** — the same per-message transport entry as `OBS.1` | see below |
 | per-request record (`NFR.OBS.1`) | **not the dispatcher** — the per-message entry of each transport | see below |
 
 ### Why `NFR.OBS.1` cannot live in the dispatcher
@@ -80,6 +80,33 @@ same property the dispatcher was chosen for, at the layer where it is actually t
 This preserves the elimination test. After the move the finding — *a concern can be added
 to one transport and not the other* — is still not statable, because there is one function
 and both message loops go through it.
+
+### Why `NFR.OBS.2` cannot live in the dispatcher either
+
+Round 2 found this, and it is the round-1 error one layer down: a convergence point chosen
+without checking which return paths reach it.
+
+`handle_tools_list_with_url_override` (`meta_mcp/mod.rs:~1290-1312`) does **not** always
+delegate. When the Code Mode URL override applies it builds the result and returns it
+directly; only the no-override branch falls through to `handle_tools_list_with_params` at
+`:1312`, under a comment that says so — *"No override (or static config already handles it):
+follow normal path."* A record placed in `handle_tools_list_with_params` is therefore skipped
+for exactly the requests the override serves, and today's record at `handlers.rs:993` sits
+above both branches and catches them all. Placing it lower would **regress HTTP**, the same way
+placing `OBS.1` in the dispatcher would have.
+
+There is a second, independent reason, and it is the stronger one. The fields the record
+carries are **router-level facts that the dispatcher never receives**: `profile` comes from a
+request header, and `code_mode` is `state.meta_mcp.code_mode_enabled || code_mode_url_active`
+where the second disjunct is a property of the URL. A record emitted inside the meta-MCP layer
+could not report them without the router passing them down — which is the coupling the
+`MetaMcpCallerContext` comment already refuses for the confirmation dependency.
+
+So `OBS.2` collapses into `OBS.1`'s chokepoint rather than getting its own. One record-and-
+classify function at each transport's per-message entry emits the observed record for every
+method, and adds the `tools/list` fields when the method is `tools/list`. This is a smaller
+design than the one it replaces: **one** site, not two, and the finding — *a `tools/list`
+return path can bypass the record* — stops being statable rather than becoming guarded.
 
 ### This is the third instance of a pattern already solved here
 
@@ -125,7 +152,7 @@ stdio merely because no elicitation-capable client is attached.
 
 | # | question | form | resolves by |
 |---|---|---|---|
-| 1 | Does the stdio dispatcher have the fields `NFR.OBS.1`'s record requires — notably `protocol_revision`? Its `server/discover` comment states it "has no access to the running config" (`server/mod.rs:1688`), which may bound what it can honestly report. | checkable | read the record's field list at `handlers.rs:719-730` against what is in scope at `server/mod.rs:1683`; a field that is unavailable is omitted, never fabricated |
+| 1 | Does the stdio dispatcher have the fields `NFR.OBS.1`'s record requires — notably `protocol_revision`? Its `server/discover` comment states it "has no access to the running config" (`server/mod.rs:1688`), which may bound what it can honestly report. | checkable | read the record's field list at `handlers.rs:719-730` against what is in scope at `server/mod.rs:1683`. Round 2 corrected the fallback: stdio establishes a revision at `initialize`, so the answer is to **retain the negotiated revision** and record it with `revision_source` set to the handshake, not to omit the field. Omission was the wrong default — it would leave stdio unable to answer the one question the migration telemetry exists to ask. A field is omitted only if no handshake has occurred yet, and is never fabricated. If a field proves unreportable at all — the case this question exists to find — the answer is not a quiet omission that leaves the criterion half-met: it returns to the operator as a named gap, because a telemetry criterion that cannot answer its own question is an unmet requirement, not a partially-met one |
 | 2 | **RESOLVED — there is no stdio elicitation path at all.** The question asked whether the round-trip completes or deadlocks; both readings assumed a delivery mechanism exists. `rg` for `elicit` and `NotificationMultiplexer` outside tests returns `router/helpers.rs:134-152` (HTTP parsing) and `webhooks/mod.rs`, `streaming.rs` (HTTP delivery). `run_stdio` at `server/mod.rs:1495` touches none of them. So confirmation over stdio is not a wiring detail; it is a transport that does not exist. | checkable | done — see the revised residual below |
 | 3 | Is a per-request record on stdio one record per JSON-RPC message, or per session? "Per request" is unambiguous on HTTP and needs a stated reading here. | checkable | read `NFR.OBS.1` in `RELEASE-4.0.0-requirements.md`; if it does not distinguish, the reading is per JSON-RPC message and is recorded as a reading, not as the requirement |
 
@@ -133,14 +160,6 @@ Question 2 is the one that can change the design's shape. If the round-trip cann
 on stdio, the confirmation still moves to the chokepoint — but stdio always takes the
 "nobody could be asked" branch, and that outcome must then be *recorded* rather than
 inferred, because a silent always-proceed is indistinguishable from the defect being fixed.
-
-## Residual risk, stated
-
-Moving the confirmation to the chokepoint makes it apply on stdio, where `is_admin: true`
-means every caller is an admin. If a client does not support elicitation the action
-proceeds after a warning — the behaviour the HTTP comment already accepts. This note does
-not change that and does not claim `CONFIRM.1a` makes stdio safe. It makes stdio *equal*,
-which is what the criterion asks and all it asks.
 
 ## Test plan
 
