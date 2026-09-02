@@ -830,3 +830,53 @@ Recommendation, put to the operator and not yet answered: **status cluster only,
 The counter-argument is real and is the operator's to weigh: 4.0.0 already breaks this surface
 through `exposed_meta_tools` enforcement, and a surface that breaks once is cheaper for consumers
 than one that breaks twice.
+
+## 5. State on 2026-09-03 — cluster A reached its second step, and the review pair is down to one leg
+
+Three things moved in a day. None of them is implementation.
+
+### Cluster A is now at "failing tests", not at "designs done"
+
+`tests/mik_7212_mrtr_component_acs.rs` exists on `fix/mrtr2-continuation-handle` and holds 13
+component-level acceptance cases (`0b200023`, `8b6d771e`). Twelve are red. That is the prescribed
+state, not a regression: the sequence section above says test plan, then failing tests reviewed as
+tests, then implementation which is done when they pass. Reading those twelve as breakage is the
+misreading to guard against — they are the specification, asserted before the code exists.
+
+What this changes about the order: cluster A's remaining cost is now implementation against a
+written spec rather than implementation plus discovering what the spec is. Section 4 said the first
+step was not code. That step is taken.
+
+Two limits on the claim. The component tests exercise components, so passing them is necessary and
+not sufficient — `handlers.rs` still refuses every retry, and a dispatcher-level case is what
+proves the refusal is gone. And the file is another session's in-flight work; the count above is
+what the branch holds, not a promise about what it will hold.
+
+### The dual-vendor review pair has one working leg
+
+Section 4 records the pair as Grok plus Kimi until 2026-09-07, because the GPT reviewer is
+usage-limited. Grok is now returning HTTP 402 as well. For work this agent authors, `claude-review`
+is barred — that is the author reviewing the author — which leaves Kimi alone.
+
+This is not a code problem and it blocks code rows anyway. **No criterion can move to MET on review
+evidence while the pair cannot be assembled**, because the gate wants two independent vendors and
+one is not two. The rows it holds are every row whose remaining work is a verdict rather than an
+implementation, `CONFIRM.1a` among them.
+
+Two ways out, and the choice is the operator's: wait for the GPT limit to lift on 2026-09-07 and
+accept that verdict-blocked rows idle until then, or restore a second paid leg now. Nothing else in
+the plan changes either way — the implementation clusters keep running, they just cannot close.
+
+### `CONFIRM.1a` — the test now compares two refusals instead of transcribing one
+
+The stdio-refusal case asserted a literal error string, and the literal had gone stale against the
+wording the production path actually emits. It now calls the live fallback in the same test and
+asserts the two refusals agree, with the falsifier recorded: appending a marker at the hidden site
+breaks the comparison (`97ecabf4`). The row stays PARTIAL, held by the paragraph above and by
+nothing else.
+
+### What did not move
+
+Everything else. The ledger is unchanged, no blocking row flipped to MET, and section 4's ordering
+stands: cluster A first, with E (Spark measurement), B's consuming side and F's operator decisions
+running alongside; C and D after A, because they need a served modern request path to test against.
