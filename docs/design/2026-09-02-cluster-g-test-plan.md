@@ -21,7 +21,7 @@ to wait on. Rows 13 and 14 cover it.
 | 3 | `OBS.1` | a request declaring itself modern while omitting a required field emits a record **and then** returns `-32602` | integration | negative-path | free — and it pins the ordering, not just the presence |
 | 4 | `OBS.1` | the same three shapes over HTTP still emit exactly one record each | integration | regression | **not free** — see the honesty section |
 | 5 | `OBS.1` | **over stdio**, an inbound message whose handling reaches the meta-MCP layer a second time (playbook step, code-mode step) produces **exactly one** record | integration | exactly-once | free **because the transport is stdio** — `exactly one` fails at zero as well as at two |
-| 6 | `OBS.2` | a `tools/list` over stdio emits the `tools/list` record | integration | positive | free — stdio emits nothing today |
+| 6 | `OBS.2` | a `tools/list` over stdio emits **exactly one** `tools/list` record, carrying every field the oracle table names | integration | positive + cardinality | free — stdio emits nothing today |
 | 7 | `OBS.2` | a `tools/list` over HTTP still emits exactly one, not two, after the change | integration | regression | **not free** — see the honesty section |
 | 8 | `OBS.2` | a `tools/list` over HTTP **with the Code Mode URL override active** emits the record, carrying `code_mode` true | integration | regression | **not free** today, but free against the rejected design — see below |
 | 9 | `OBS.1` | a notification (no `id`, no response — `notifications/initialized`) over stdio emits exactly one record and carries no response-shaped field | integration | boundary | free — nothing records notifications today |
