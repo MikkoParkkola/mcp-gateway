@@ -837,8 +837,8 @@ Three things moved in a day. None of them is implementation.
 
 ### Cluster A is now at "failing tests", not at "designs done"
 
-`tests/mik_7212_mrtr_component_acs.rs` exists on `fix/mrtr2-continuation-handle` and holds 13
-component-level acceptance cases (`0b200023`, `8b6d771e`). Twelve are red. That is the prescribed
+`tests/mik_7212_mrtr_component_acs.rs` exists on `fix/mrtr2-continuation-handle` and holds 15
+component-level acceptance cases (`0b200023`, `8b6d771e`). Twelve are red, three green. That is the prescribed
 state, not a regression: the sequence section above says test plan, then failing tests reviewed as
 tests, then implementation which is done when they pass. Reading those twelve as breakage is the
 misreading to guard against — they are the specification, asserted before the code exists.
