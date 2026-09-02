@@ -30,6 +30,7 @@ to wait on. Row 13 covers it.
 | 12 | `OBS.1` | a stdio message arriving **before any `initialize`** emits a record whose `protocol_revision` and `revision_source` are both **absent** — not defaulted, not a sentinel | integration | boundary | free — nothing records it today, and it is the row that stops the absent case drifting into a constant |
 | 13 | `CONFIRM.1a` | a destructive `tools/call` over stdio naming a **registered, executable** target, where no confirmation can be obtained, returns the confirmation-refusal response **and** leaves the execution sentinel untouched | integration | fail-closed | free — the gate proceeds today when there is no session, and after this release there is never a session |
 | 14 | `OBS.2` | a `tools/list` whose profile **excludes** at least one tool records the **effective filter decisions** — which filters ran and what each removed — and the record is stamped **before** the response is written | integration | content + ordering | free — the live record names filter *inputs* only, so it cannot carry a decision |
+| 15 | `OBS.1` | a `tools/call` over **HTTP** carrying no revision in either `_meta` or the header records `protocol_revision` = `absent` and `revision_source` = `none` — the exact strings, not any falsy value | integration | boundary | free — no row pins the source on the no-revision path, so a constant would pass |
 
 Row 5 exists because both reviewers raised it independently in round 1: the design's "both
 callers" tables enumerate the *transports*, and the tool-policy precedent the design leans
@@ -325,3 +326,61 @@ record decisions. It is the opposite — a statement that the live record carrie
 inputs only, which is the gap the deferral exists to close. The section stands
 as written and this paragraph is the correction, because rewriting it would move
 text the next round would have to re-read for no change in meaning.
+
+## Round-6: the refusal oracle, read from source
+
+Both vendors named the same blocker — row 13 asserts a refusal without saying
+what a refusal *is*, so a rejection from anywhere upstream would satisfy it.
+The literals, read at source rather than described:
+
+| element | literal | source |
+|---|---|---|
+| target | `gateway_kill_server` | `FLOOR_TOOL_NAME`, `src/gateway/destructive_confirmation.rs:139` |
+| code | `-32001` | `src/gateway/router/handlers.rs:1239` |
+| message | `Destructive action requires confirmation and none could be obtained: {action_desc}` | same site, `:1241-1243` |
+| result | absent — the response is an error, not a result | `JsonRpcResponse::error` |
+
+Asserting the code alone is not enough. `-32001` is a gateway-wide error code and
+another refusal could carry it, so the case asserts the code **and** the message
+prefix **and** the untouched execution sentinel. Three together cannot be
+satisfied by an upstream rejection.
+
+### The refusal is conditional, and on the same unknown as row 6
+
+Reading the site turned up something neither vendor raised. The refusal branch
+fires only when the confirmation policy says `refuse`
+(`handlers.rs:1230-1232`), and the policy is chosen by `is_modern`:
+`for_modern()` yields `refuse`, `for_legacy()` yields `proceed-with-warning`
+(`destructive_confirmation.rs:88, 98`). A legacy caller is *not* refused — it
+proceeds with a warning, by an explicit design decision the source comments call
+out as deliberate.
+
+So row 13 over stdio asserts a refusal that only happens if the stdio path can
+negotiate the modern revision. That is the identical open question row 6 carries
+for `cache_scope_advertised`, and it reaches further than a single field: here it
+decides whether the case asserts refusal or proceed-with-warning — opposite
+outcomes, not a differing value.
+
+**Both rows therefore wait on one source check**: can the served stdio path
+(`src/gateway/server/mod.rs:1698` → `handle_initialize`) produce a
+`RequestShape::Modern`? Answer it once and rows 6 and 13 both resolve. Answer it
+`no`, and `CONFIRM.1a` is not satisfiable over stdio by this mechanism at all,
+which is a finding about the *criterion*, not about the test.
+
+### Row 12 asks for an absence production does not produce
+
+Row 12 requires `protocol_revision` and `revision_source` to be **absent** —
+"not defaulted, not a sentinel". The HTTP derivation at `handlers.rs:678-700`
+does the opposite: with nothing carrying a revision it records the literal
+strings `absent` and `none`. Those *are* sentinels.
+
+Row 12 as written would make stdio contradict HTTP for the same condition. The
+row is kept and its wording is wrong, so the resolution is stated rather than
+silently patched: **stdio matches the HTTP vocabulary** — `absent` and `none` as
+strings — and row 12's assertion becomes those literals. Row 15 pins the same
+pair on the HTTP side, which is what makes the two transports checkable against
+each other instead of each against its own prose.
+
+The vocabulary, complete, from `handlers.rs:678-700`: `revision_source` is one of
+`_meta`, `header`, `none`. A test asserting anything outside that set is
+asserting against a value production cannot emit.
