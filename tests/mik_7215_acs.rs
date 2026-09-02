@@ -798,11 +798,11 @@ mod http {
             Some(-32601),
             "a hidden meta-tool answers exactly as a name nobody implemented does: {body}"
         );
-        assert_eq!(
-            body.pointer("/error/message").and_then(Value::as_str),
-            Some("Unknown tool: gateway_kill_server"),
-            "the wording must match the unrecognised-name fallback verbatim, or the difference is itself the disclosure: {body}"
-        );
+        let hidden_message = body
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         assert!(
             body.get("result").is_none(),
             "a hidden tool must not run: {body}"
@@ -847,13 +847,28 @@ mod http {
             code,
             "a hidden tool and an unimplemented name must answer with the same code: {control_body}"
         );
+        let control_message = control_body
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        // `meta_mcp/mod.rs` commits to this in its own words: the hidden-tool
+        // refusal is "worded exactly like the unrecognised-tool fallback", built
+        // and returned through the same helper "so the two answers are
+        // byte-identical", because a message without the error type's prefix
+        // "was itself the disclosure". This does not propose that requirement --
+        // it checks an invariant the source already claims. Compared modulo the
+        // name so it holds whichever wording both paths settle on; pinning a
+        // literal would fail on a prefix change that disclosed nothing.
         assert_eq!(
-            control_body
-                .pointer("/error/message")
-                .and_then(Value::as_str),
-            Some("Unknown tool: row18_nobody_implemented_this"),
+            hidden_message.replace("gateway_kill_server", "row18_nobody_implemented_this"),
+            control_message,
+            "a hidden tool and an unimplemented name must be worded identically, or the difference is the disclosure: hidden={hidden_message}"
+        );
+        assert!(
+            control_message.ends_with("Unknown tool: row18_nobody_implemented_this"),
             "the control must itself reach the unrecognised-name fallback, or it \
-             agrees with the hidden tool for some other reason: {control_body}"
+             agrees with the hidden tool for some other reason: {control_message}"
         );
     }
 
