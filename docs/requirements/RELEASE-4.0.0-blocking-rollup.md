@@ -153,7 +153,7 @@ the row stays in cluster F and stays blocking. Four options exist and only the o
 one: warn in 4.0 and enforce in 4.1; enforce now and accept the break; hide enforcement behind a
 second opt-in flag, which meets the criterion rather than waiving it; or drop the field.
 
-### The seven open operator decisions, in one place
+### The five open operator decisions, in one place
 
 Put to the operator 2026-09-02 and unanswered at the time of writing. Each is deferred rather
 than assumed, with the four fields `development-process.md` §P1 requires of a deferred question.
@@ -168,13 +168,9 @@ or where a stated ceiling sits.
 | 3 | Does the `NFR.PERF.4` meta-tool ceiling stand at 14-16 with the seventeenth held behind `webhooks_enabled`, or widen to 14-17? | operator | asking | before the benchmark numbers are published | widening raises the ceiling to match whatever shipped, reversing an earlier decision. Recorded as the argument against, not as the answer. |
 | 4 | Does the `NFR.COMPAT.4` role clause stay unqualified, with no-client-role requirements exempted at the matrix cell? | operator | asking | before the conformance matrix is filled | qualifying the criterion lets whoever fills the matrix decide what it is graded on, in the same pass |
 | 5 | Do the conformance matrix sub-questions take this document's recommendations: evidence means an existing wired test, and `--check` reports without failing pull requests? | operator | asking | before `--check` is wired into CI | each recommendation carries its rejected alternatives in `docs/design/2026-09-02-conformance-matrix.md`, and none is load-bearing on the others |
-| 6 | Connection-invariance §4.1: do `gateway_set_profile` and `gateway_get_profile` leave the modern path outright, breaking a tool documented at `ARCHITECTURE.md:56`, or stay while the surfaced set is made invariant some other way? | operator | asking | before the cluster-B cases `S-02` to `S-06` are written; they cannot be specified without it | keeping the tools means finding another way to make the surfaced set connection-invariant, which `ORDER.2` still requires |
-| 7 | Connection-invariance §4.3: does v4.0.0 meet `SUB.2` as written, or is the criterion amended? | operator | asking | same trigger as decision 6 | meeting it as written keeps the §II.2 transport work and the §II.5 shared identity in this release, landing with the MRTR increment |
 
-Decisions 1 to 4 block their criterion rows and 6 and 7 block the cluster-B test cases. Decision 5
-blocks wiring the checker into CI, not the release. Decisions 6 and 7 were recorded as answered on
-2026-08-31 and were not; the withdrawal and its evidence are in
-`docs/design/2026-08-31-cluster-b-connection-invariance.md` §4.1 and §4.3. Work that does not turn on these proceeds; work whose correctness turns on an open
+Decisions 1 to 4 block their criterion rows. Decision 5 blocks wiring the checker into CI, not
+the release. Work that does not turn on these proceeds; work whose correctness turns on an open
 answer does not.
 
 ### The count is checked, not asserted
