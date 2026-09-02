@@ -88,9 +88,11 @@ wearing a label", `requirements.md:319`) applied per cell.
 - checker: `--check`, the same shape as `count-release-criteria.py`.
 
 The rendered file is checked in and not merely generated on demand because one
-of the two review legs is a Claude Code CLI run under `--safe-mode`, which
-cannot read the tree. The rendered markdown is what travels in review material.
-A data file alone is unreviewable by half the gate.
+of the two review legs always runs isolated from the tree — `grok-review` from
+an empty working directory for Claude-authored work, a Claude Code CLI run
+under `--safe-mode` for Grok-authored work. Either way that reviewer cannot
+render anything for itself, so the rendered markdown is what travels in the
+review material. A data file alone is unreviewable by half the gate.
 
 ### Q5 — how does it stay honest over time?
 
