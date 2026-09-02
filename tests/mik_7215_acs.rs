@@ -809,6 +809,124 @@ mod http {
         );
     }
 
+    /// MIK-7246.CONFIRM.1a — a confirmation refusal is the gate working, not the
+    /// caller misbehaving, so it is excluded from the caller's dispatch
+    /// accounting in BOTH directions.
+    ///
+    /// Both arms, not just the failure one: `record_client_success` resets the
+    /// consecutive-failure count, so booking a refusal as a success would clear
+    /// a breaker the caller had genuinely tripped. A test pinning one arm pins
+    /// half a rule, and the half it leaves open is the one that loses state.
+    ///
+    /// The count is read by TITRATION rather than by a getter, because
+    /// `ResolvedAuthConfig` exposes `client_circuit_state` and no accessor for
+    /// the current failure count (`src/gateway/auth.rs:272-304`). With the
+    /// threshold at two, how many further failures it takes to trip IS the
+    /// count, and the read-out discriminates all three implementations the plan
+    /// names: counted trips at the refusal (first assertion), erased needs two
+    /// more failures to trip (last assertion), excluded needs exactly one.
+    /// Deviation from the plan row's "threshold above two": that spelling needs
+    /// a production accessor this test would have to widen the API to get.
+    ///
+    /// The first request is not setup, it is the negative control. It proves
+    /// this client resolves and that the failure arm records over this exact
+    /// HTTP path — without it, a fixture where `client` never resolves would
+    /// pass every assertion below while pinning nothing.
+    #[tokio::test]
+    async fn ac_confirm_1a_a_refusal_is_excluded_from_both_accounting_arms() {
+        let auth = mcp_gateway::config::AuthConfig {
+            enabled: true,
+            bearer_token: None,
+            api_keys: vec![mcp_gateway::config::ApiKeyConfig {
+                key: "admin-key".to_string(),
+                name: "row17-client".to_string(),
+                rate_limit: 0,
+                backends: Vec::new(),
+                allowed_tools: None,
+                denied_tools: None,
+                admin: true,
+            }],
+            public_paths: Vec::new(),
+            client_circuit_breaker: Some(mcp_gateway::config::CircuitBreakerConfig {
+                enabled: true,
+                failure_threshold: 2,
+                success_threshold: 1,
+                reset_timeout: std::time::Duration::from_secs(60),
+            }),
+            single_user: false,
+        };
+        let state = state_with(true, auth);
+        let accounting = Arc::clone(&state.auth_config);
+
+        // Control: one genuine failure over this path, as this client.
+        let mut unknown = modern_tools_list(1701);
+        unknown["method"] = json!("row17/does-not-exist");
+        let (_, _, body) = post_mcp_authed(Arc::clone(&state), unknown, Some("admin-key")).await;
+        assert_eq!(
+            body.pointer("/error/code").and_then(Value::as_i64),
+            Some(-32601),
+            "the control must be an ordinary error, or it is not exercising the failure arm: {body}"
+        );
+        assert_eq!(
+            accounting.client_circuit_state("row17-client"),
+            Some(mcp_gateway::failsafe::CircuitState::Closed),
+            "one failure of two must leave the breaker closed, or the fixture's threshold is wrong"
+        );
+
+        // The refusal itself.
+        let (_, _, refusal) = post_mcp_authed(
+            Arc::clone(&state),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1702,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_kill_server",
+                    "arguments": { "server": "row17-sentinel" },
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                        "io.modelcontextprotocol/clientInfo": {
+                            "name": "ExampleClient", "version": "1.0.0"
+                        }
+                    }
+                }
+            }),
+            Some("admin-key"),
+        )
+        .await;
+        let message = refusal
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            message.contains("none could be obtained"),
+            "this row observes the unconfirmable branch; another -32001 exit proves nothing about it: {refusal}"
+        );
+        assert_eq!(
+            accounting.client_circuit_state("row17-client"),
+            Some(mcp_gateway::failsafe::CircuitState::Closed),
+            "a refusal counted as a failure takes the count to two and trips the breaker: {refusal}"
+        );
+
+        // One more genuine failure. It reaches two only if the refusal left the
+        // count at one -- a refusal booked as a SUCCESS would have reset it, and
+        // this failure would be the first of two rather than the second.
+        let mut unknown_again = modern_tools_list(1703);
+        unknown_again["method"] = json!("row17/does-not-exist");
+        let (_, _, body) =
+            post_mcp_authed(Arc::clone(&state), unknown_again, Some("admin-key")).await;
+        assert_eq!(
+            body.pointer("/error/code").and_then(Value::as_i64),
+            Some(-32601),
+            "{body}"
+        );
+        assert_eq!(
+            accounting.client_circuit_state("row17-client"),
+            Some(mcp_gateway::failsafe::CircuitState::Open),
+            "a refusal booked as a success reset the count, so this failure is the first of two, not the second"
+        );
+    }
 }
 
 // ===========================================================================
