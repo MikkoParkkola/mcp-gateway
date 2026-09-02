@@ -83,16 +83,45 @@ configuration the test already builds, is `<= 16`. Stated against the ceiling di
 against a pinned number, so it cannot drift with what ships. The existing equality assertion
 stays — the two answer different questions and both are wanted.
 
-## Open questions, each scheduled (§P1)
+## Open questions (§P1)
 
-| # | question | form | resolves by |
-|---|---|---|---|
-| 1 | Does any client workflow depend on `gateway_webhook_status` being enumerated, rather than discoverable? | checkable | grep the repo, README and capability docs for callers and documented usage; a documented workflow that names it changes the migration story, not the decision |
-| 2 | Is webhook status reachable through dynamic discovery once removed from the surface, or is enumeration currently its only route? | checkable | trace whether the underlying handler is registered anywhere but `meta_mcp_tool_defs.rs:565`; if enumeration is the only route, option A requires a discovery path first and that work belongs to this row |
-| 3 | Does removing an enumerated tool count as breaking, requiring the same treatment as the `exposed_meta_tools` change? | askable | the operator ruled `exposed_meta_tools` enforcement acceptable as a breaking change on 2026-09-02; whether this one rides that decision or needs its own is a call only they make, and it is asked before implementation, not after |
+Questions 1 and 2 are checkable and were run. Question 3 is askable and is open.
 
-Question 2 can change the shape: if enumeration is the only route to webhook status, option A
-is not a deletion but a move, and the move is the work.
+**1 — Does any client workflow depend on `gateway_webhook_status` being *enumerated*
+rather than merely callable?** — `rg -n "gateway_webhook_status" --hidden -g '!target' .` —
+eight hits, all internal: the builder (`meta_mcp_tool_defs.rs:242`), the conditional push
+(`:565`), the dispatch arm and fallback list (`meta_mcp/mod.rs:1404`, `:1425`), the registry
+wiring (`server/mod.rs:947`), four test assertions, and this release's own planning
+documents. No README, capability document or client-facing workflow names it. — **Changed
+nothing about the decision**, which is the useful answer: there is no documented usage to
+migrate, so there is no migration story to write.
+
+**2 — Is webhook status still reachable once removed from the enumerated surface, or is
+enumeration its only route?** — read `meta_mcp/mod.rs:1392-1435` — `handle_tools_call`
+dispatches on a `match tool_name` whose arm `"gateway_webhook_status" => self.webhook_status()`
+is written independently of the list built in `meta_mcp_tool_defs.rs`. Nothing on the call
+path consults the enumeration. — **Changed the shape of the work, and shrank it.** The note
+anticipated that option A might be a *move* needing a discovery path built first. It is not:
+deleting the push at `:565` leaves the tool callable by name on both transports. The 17th
+tool stops being shown to a model and stays available to anything that asks for it — the
+`server/discover` exemption's own principle, applied rather than declared.
+
+Two mechanical consequences belong to the implementation:
+
+- The name stays in the fallback list at `meta_mcp/mod.rs:1425`, which recognises meta-tool
+  names for error handling. A still-callable tool must stay recognised there, or a working
+  call starts reporting no such tool.
+- The surface is spelled in three places — the enumeration, the dispatch `match`, and that
+  fallback list. Only the first is model-facing and only the first changes. Worth stating
+  because the other two look like the surface and are not; the ceiling assertion must count
+  the enumeration or it measures the wrong list.
+
+**3 — Does removing an enumerated tool count as a breaking change, requiring the same
+treatment as `exposed_meta_tools`?** — *askable, open, asked before implementation.* The
+operator ruled `exposed_meta_tools` enforcement acceptable as breaking on 2026-09-02;
+whether this rides that decision or needs its own is theirs to make. Question 2 narrows the
+stake: the tool stays callable, so the break is confined to a client that enumerates and
+matches on the list rather than calling by name.
 
 ## Residual risk, stated
 
