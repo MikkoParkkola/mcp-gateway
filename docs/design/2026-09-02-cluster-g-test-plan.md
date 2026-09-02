@@ -31,9 +31,9 @@ to wait on. Row 16 covers it.
 | 13 | `CONFIRM.1a` | the **existing** HTTP case `ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused` (`tests/mik_7215_acs.rs:630`) still refuses after the gate is moved to serve both transports, with one assertion added: the execution sentinel is untouched | integration | invariance probe | **not free** — HTTP already refuses; the red comes from moving the gate, so the probe is to move it wrongly and watch this go red |
 | 14 | `OBS.2` | a `tools/list` whose profile **excludes** at least one tool records the **effective filter decisions** — which filters ran and what each removed — and the record is stamped **before** the response is written | integration | content + ordering | free — the live record names filter *inputs* only, so it cannot carry a decision |
 | 15 | `OBS.1` | a `tools/call` over **HTTP** carrying no revision in either `_meta` or the header records `protocol_revision` = `absent` and `revision_source` = `none` — the exact strings, not any falsy value | integration | regression | **not free** — production already emits these literals, so the row passes today; probe required, see below |
-| 19 | `CONFIRM.1a` | the JSON serialization of a refusal response contains **no** key naming the refusal marker at any depth, while an in-process assertion on the same value shows the marker set — the two halves together, because either alone passes trivially | unit | contract | **not free** — the field does not exist yet, so the row arrives red as a compile error rather than an assertion. It is the only thing that can go red if a later edit drops `#[serde(skip)]` or moves the marker into `error.data`, which is the pattern an implementer copies by imitation (`handlers.rs:845`) and the one that lets a backend forge its own accounting exclusion |
+| 19 | `CONFIRM.1a` | **differential, in both directions.** (a) Two refusal responses built through the gate's own refusal path, identical but for the marker, serialize **byte-identically**; (b) an in-process assertion on the marked one shows the marker set, so (a) is not passing because both are unmarked; (c) a response JSON carrying a key named for the marker deserializes with the flag **false**. | unit | contract | **not free** — the field does not exist yet, so the row arrives red as a compile error rather than an assertion, and a compile error is not a caught defect. What it catches once the field exists: (a) goes red if any edit puts the marker on the wire **under any key name, at any depth**, because it never names a key; (b) goes red if the refusal path stops setting the marker at all, which (a) alone would read as success; (c) goes red if `#[serde(skip)]` is weakened to `skip_serializing`, which leaves the marker settable *from* the wire — the forge this row exists to prevent |
 | 18 | `CONFIRM.1a` | an **authenticated admin** caller, for whom `gateway_kill_server` is nonetheless hidden by `meta_tool_exposure`, calls it over HTTP and receives `-32601` / unknown tool — **not** `-32001` / requires confirmation | integration | disclosure | **red on arrival** — today's gate answers before the exposure check, so the hidden tool confirms its own existence |
-| 17 | `CONFIRM.1a` | a client whose breaker already carries **one** recorded failure refuses a destructive call and still carries **exactly one** — asserted for both refusal branches, the explicit operator decline and the unconfirmable-channel short-circuit — **and** an ordinary backend error on the same client then takes it to two | integration | regression + negative control | **red on arrival via the unconfirmable-channel branch**, which does not exist yet. The decline arm passes today for a reason that disappears with this change: the HTTP gate returns at `handlers.rs:1205` and `:1237`, so a refusal never reaches the accounting tail at all. Moving the gate inside `handle_tools_call` puts refusals *on* that path, which is what makes the exclusion marker necessary rather than decorative — and the row then discriminates all three implementations of it: erased reads zero, excluded reads one, counted reads two |
+| 17 | `CONFIRM.1a` | an **HTTP** client whose breaker already carries **one** recorded failure refuses a destructive call and still carries **exactly one** — asserted for both *HTTP* refusal branches, the explicit operator decline and the unconfirmable-channel short-circuit — **and** an ordinary backend error on the same client then takes it to two | integration | regression + negative control | **red on arrival via the unconfirmable-channel branch**, which does not exist over HTTP yet. The decline arm passes today for a reason that disappears with this change: the gate returns at `handlers.rs:1205` and `:1237`, so a refusal never reaches the accounting tail at all. Moving the gate inside `handle_tools_call` puts refusals *on* that path, which is what makes the exclusion marker necessary rather than decorative — and the row then discriminates all three implementations of it: erased reads zero, excluded reads one, counted reads two |
 | 16 | `CONFIRM.1a` | a destructive `tools/call` over **stdio** from an **admin** caller naming `gateway_kill_server`, where no confirmation can be obtained, returns code `-32001` **and** a message that opens `Destructive action requires confirmation and none could be obtained:` **and** names the fixture's server verbatim **and** leaves the execution sentinel untouched | integration | fail-closed | **red on arrival** — the gate is HTTP-only; this is the acceptance test for wiring it |
 
 Row 5 exists because both reviewers raised it independently in round 1: the design's "both
@@ -662,9 +662,9 @@ different noun.
 params object. `handle_tools_call` has already destructured that; the arguments object is what is
 in scope. The moved function takes `arguments: &Value` and reads `["server"]` directly. Passing
 the outer params at the new call site would compile and silently produce the fallback description
-for every action — a wrong message on a security refusal. Row 16 catches it, because round 4
-changed that row to assert the fixture's server name verbatim rather than a message prefix; before
-that repair this mistake would have shipped silently.
+for every action — a wrong message on a security refusal. Row 16 catches it: that row asserts
+the fixture's server name verbatim, not a message prefix, which is the only form of the assertion
+that can tell a correct refusal from one naming the wrong server.
 
 #### What travels in the caller context
 
@@ -745,8 +745,14 @@ Its contract, because "an internal marker" is not one: a `bool` field on `JsonRp
 set it. Explicitly **not** a stamp inside `error.data`: that is the adjacent pattern
 (`router/handlers.rs:845`), it is the one an implementer reaches for by imitation, and it puts
 the marker on the wire where a backend can set it and buy itself an accounting exclusion.
-`refusal_status` (`router/handlers.rs:1564`) already reads a refusal off the response, so the
-field has somewhere to live that is not the payload. The accounting tail reads that field; nothing else does.
+`refusal_status` (`router/handlers.rs:1564`) already reads a refusal off the response — but it
+reads `error.data[HTTP_STATUS_DATA_KEY]`, a stamp that **is** on the wire. It is precedent for the
+pattern this change rejects, not for the one it adopts, and citing it as though it were the latter
+was wrong. It strengthens the case rather than weakening it: the one existing refusal signal is
+already visible to whoever receives the response, so adding a second wire-visible one — this time
+carrying an accounting consequence — is how a backend would come to hold the pen on its own
+breaker. The new marker is a `#[serde(skip)]` field on `JsonRpcResponse`, read by the accounting
+tail and by nothing else.
 
 **Excluded from both arms, not just the failure arm.** The tail is an `if`/`else`
 (`router/handlers.rs:1425-1430`): an error records a failure, anything else records a *success*,
@@ -757,8 +763,17 @@ free erasure of every failure accumulated before it. A client one step from trip
 could refuse a destructive call on purpose to clear its record. The marker must skip the whole
 `if`/`else`, leaving the breaker untouched in both directions. This is why the field is read at
 the tail and not by teaching `refusal_status` to answer a second question.
-Both refusal branches carry it — the modern-HTTP elicit-then-refuse and the stdio
-`Unavailable` short-circuit — because both are the caller using the feature correctly.
+Both refusal branches set the marker — the modern-HTTP elicit-then-refuse and the stdio
+`Unavailable` short-circuit — because both are the caller using the feature correctly. What the
+marker then *does* differs by channel, and the next paragraph is why.
+
+**Row 17 is HTTP-only, and that is a fact about the system rather than a narrowing of the
+row.** The accounting tail binds its client from an axum `Extension` (`router/handlers.rs:254`,
+`:257`), so it exists on the HTTP path alone. Stdio calls `meta_mcp.handle_tools_call` directly
+from `server/mod.rs:1715` and never enters that handler, so a stdio refusal has no authenticated
+client, no breaker, and nothing to be excluded from. The marker still matters over stdio for the
+other reason — the refusal is serialized to stdout — and that is row 19's job, not this row's. A
+stdio accounting assertion would be a test that cannot fail.
 
 Row 17 tests it from a **non-zero** starting count, and that is the whole point of the row
 rather than a detail of its fixture. From zero, "unchanged" and "reset to zero" are the same
