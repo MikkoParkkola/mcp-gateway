@@ -223,7 +223,10 @@ def rollup_membership(criteria, text):
         # each of those as a stray, which teaches the reader to ignore the check.
         cluster, declared = line.split("|")[1].strip(), int(match.group(1))
         members = []
-        for name in named_criteria(line.split("|")[3]):
+        names, unreadable = named_criteria(line.split("|")[3])
+        for token in unreadable:
+            problems.append(f"cluster {cluster} names {token}, which is not a criterion name")
+        for name in names:
             # Granularity decides which ledger key answers: a parent name covers
             # every clause under it, a named clause only itself. Matching a
             # clause against parents would let a met clause ride in on a
@@ -259,8 +262,20 @@ def _names(key, name):
     return key == name or key.endswith("." + name)
 
 
+# Every backtick-quoted token in a criteria cell. A token the criterion-name
+# pattern cannot read is REPORTED rather than skipped: a silently dropped token
+# leaves a cluster naming nothing, and the declared count then has to carry the
+# whole complaint -- which it cannot, because zero named rows against a declared
+# count of zero reads as a clean cluster.
+TOKEN = re.compile(r"`[^`]+`")
+
+
 def named_criteria(cell):
-    """The criteria a cluster's rows column names, with every range expanded."""
+    """The criteria a cluster's rows column names, with every range expanded.
+
+    Returns the names and the tokens this parser could not read.
+    """
+    unreadable = [tok for tok in TOKEN.findall(cell) if not NAMED.fullmatch(tok)]
     names = []
     for match in NAMED.finditer(cell):
         head, end = match.group(1), match.group(2)
@@ -278,7 +293,7 @@ def named_criteria(cell):
         names += [
             re.sub(r"\d+$", str(n), head) for n in range(int(start.group()), int(end) + 1)
         ]
-    return names
+    return names, unreadable
 
 
 def main():

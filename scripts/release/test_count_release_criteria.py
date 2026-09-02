@@ -159,7 +159,17 @@ def test_a_malformed_range_is_reported_rather_than_expanded_into_invented_names(
     # `MRTR.1a-3` is not a range: its head ends in a clause letter, so there is no
     # number to count from. Expanding it crashed the checker, which makes the
     # document unreadable instead of reporting what is wrong with it.
-    assert counter.named_criteria("`MRTR.1a-3`, `MRTR.8-3`") == ["MRTR.1a", "MRTR.8"]
+    assert counter.named_criteria("`MRTR.1a-3`, `MRTR.8-3`") == (["MRTR.1a", "MRTR.8"], [])
+
+
+def test_a_token_the_parser_cannot_read_is_reported_rather_than_dropped():
+    # `CACHE.4a-c` is neither a name nor a range. Dropping it leaves a cluster
+    # naming nothing, and a cluster naming nothing against a declared count of
+    # zero passes every other check in here.
+    unreadable = ROLLUP + "\n| B | cache | `CACHE.4a-c` | 0 | nothing yet |"
+    assert membership(LEDGER, unreadable) == [
+        "cluster B names `CACHE.4a-c`, which is not a criterion name"
+    ]
 
 
 def test_a_rollup_with_no_cluster_table_is_flagged_rather_than_read_as_zero():
