@@ -143,13 +143,34 @@ review material. A data file alone is unreviewable by half the gate.
 4. Headline numbers are owned by the script, never hand-decremented
    (constraint 5).
 
-**The ratchet needs two numbers, not one.** Totality (Q2) already removes the
+**The exemption vocabulary is CLOSED, and adding to it is a design event.**
+Totality (Q2) stopped the population being shrunk by judgement, and without this
+the same judgement simply moves up a level: mint a rule code, apply it to five
+hundred cells, and every check still passes — code present, witness present,
+`EMPTY` falls, `cells-in-scope` unchanged. The codes therefore live in this
+document, ratified with it, and `--check` REFUSES an unknown code rather than
+accepting any string. A new code is a change to what the release is graded on,
+which is exactly the kind of decision that should cost a review and not a commit.
+
+Three worked codes, enough to calibrate what a rule looks like:
+
+| code | applies when | witness |
+|---|---|---|
+| `NO-SURFACE-IN-ROLE` | the requirement has no manifestation in that role | the statement text, showing it constrains only the other role |
+| `TRANSPORT-LACKS-MECHANISM` | the transport has no mechanism the requirement could constrain | the transport's capability declaration |
+| `REVISION-PREDATES-STATEMENT` | the revision was frozen before the statement existed | the revision's `SUPPORTED_VERSIONS`/`MODERN_VERSIONS` entry and the statement's introducing change |
+
+A rule is a claim about a SET of cells, which is what makes the authoring burden
+sublinear in the product — and also what makes a wrong rule expensive, hence the
+ratification.
+
+**The ratchet needs three numbers, not one.** Totality (Q2) already removes the
 easy way to game it — `cells-in-scope` is now a pure function of the requirement
 ID set and the two axis-value constants, so no judgement made while filling the
 matrix can shrink it. What remains is the hard way: editing the requirements
 file, or the version constants, to change the inputs. That is a legitimate act
 which must not be silently indistinguishable from progress, so publish
-`cells-in-scope` and `EMPTY`
+`cells-in-scope`, `EMPTY` and `EXEMPT`
 separately. "EMPTY must never increase" alone is gameable by shrinking the
 population: amend a requirement, cells vanish, `EMPTY` falls, and the graph reads
 as progress. A fall in `cells-in-scope` is a scope move and needs a §P0 receipt;
