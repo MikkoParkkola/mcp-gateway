@@ -3509,3 +3509,78 @@ async fn an_unnameable_caller_is_not_offered_an_interim_exchange() {
         "the refusal must reuse the gateway's existing refusal code"
     );
 }
+
+// ── destructive_confirmation_gate ─────────────────────────────────────
+
+#[tokio::test]
+async fn an_unconfirmable_destructive_call_is_refused_and_marked() {
+    // GIVEN: a destructive call on a transport with nobody to ask
+    let ctx = allow_all_ctx();
+    // WHEN: the gate judges it
+    let refusal = super::destructive_confirmation_gate(
+        &RequestId::Number(1),
+        "gateway_kill_server",
+        &json!({"server": "brave"}),
+        None,
+        &ctx,
+    )
+    .await
+    .expect("a destructive call nobody can confirm is refused");
+
+    // THEN: refused with -32001, and the message names the action rather than
+    // stopping at the generic prefix. The prefix alone was what both HTTP-level
+    // assertions targeted, which let the describer degrade to its fallback
+    // without anything going red.
+    let error = refusal.error.expect("a refusal carries an error");
+    assert_eq!(error.code, -32001);
+    assert!(
+        error.message.contains("kill server 'brave'"),
+        "the refusal must say what was refused: {}",
+        error.message
+    );
+    // AND: marked, so the accounting tail does not book a working gate as a
+    // client failure.
+    assert!(
+        refusal.confirmation_refusal,
+        "a refusal is the gate working, not the caller failing"
+    );
+}
+
+#[tokio::test]
+async fn a_non_destructive_call_is_not_judged_by_this_gate() {
+    // GIVEN: the same unaskable transport, and a tool the gate does not govern
+    let ctx = allow_all_ctx();
+    // WHEN/THEN: the gate declines to answer at all, so `Unavailable` refuses
+    // destructive calls specifically rather than refusing everything -- which a
+    // test asserting only the refusal above cannot tell apart.
+    assert!(
+        super::destructive_confirmation_gate(
+            &RequestId::Number(1),
+            "gateway_list_servers",
+            &json!({}),
+            None,
+            &ctx,
+        )
+        .await
+        .is_none()
+    );
+}
+
+#[test]
+fn every_confirmation_refusal_is_marked_by_construction() {
+    // GIVEN: the operator-decline wording, the branch that needs a live
+    // elicitation session to reach and so has no end-to-end test here --
+    // building one proxy fixture to observe one boolean would be the heaviest
+    // thing in this file. What the branch owes is the marker, and the marker is
+    // no longer the branch's to remember.
+    let refusal = super::confirmation_refusal_response(
+        &RequestId::Number(7),
+        "Operator declined: kill server 'brave'".to_string(),
+    );
+    // THEN: code, message and marker all come from the one constructor both
+    // refusal branches return through, so neither can lose the marker alone.
+    let error = refusal.error.expect("a refusal carries an error");
+    assert_eq!(error.code, -32001);
+    assert_eq!(error.message, "Operator declined: kill server 'brave'");
+    assert!(refusal.confirmation_refusal);
+}

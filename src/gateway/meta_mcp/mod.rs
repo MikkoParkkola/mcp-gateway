@@ -1610,6 +1610,23 @@ mod trace_correlation_tests;
 /// citation reads as a control and invites over-trust in a prompt a
 /// client may simply not support.
 ///
+/// The one place a confirmation refusal is built.
+///
+/// Both refusal branches — nobody could be asked, and an operator who said no
+/// — must carry `confirmation_refusal`, and each used to set it for itself.
+/// Two sites owning one invariant is how one of them loses it in a later edit,
+/// and the loss is silent: the response still looks right on the wire, and the
+/// caller quietly starts accruing failures for a control working as designed.
+/// Making the marker a property of the constructor removes the way they can
+/// disagree rather than adding a check that they have not.
+fn confirmation_refusal_response(id: &RequestId, message: String) -> JsonRpcResponse {
+    let mut response = JsonRpcResponse::error(Some(id.clone()), -32001, message);
+    // The marker is internal and never reaches the wire; the accounting tail
+    // reads it to tell a refusal apart from a client failure.
+    response.confirmation_refusal = true;
+    response
+}
+
 /// Returns the refusal to send, or `None` when the call may proceed.
 async fn destructive_confirmation_gate(
     id: &RequestId,
@@ -1633,19 +1650,13 @@ async fn destructive_confirmation_gate(
             tool = %tool_name,
             "refusing a destructive call that cannot be confirmed"
         );
-        let mut response = JsonRpcResponse::error(
-            Some(id.clone()),
-            -32001,
+        confirmation_refusal_response(
+            id,
             format!(
                 "Destructive action requires confirmation and none could be obtained: \
                      {desc}"
             ),
-        );
-        // A refusal is the gate working, not the client failing. Marked
-        // so the caller's failure accounting skips it; the marker is
-        // internal and never reaches the wire.
-        response.confirmation_refusal = true;
-        response
+        )
     };
 
     match caller.confirmation {
@@ -1662,19 +1673,16 @@ async fn destructive_confirmation_gate(
             )
             .await;
             if outcome == ConfirmationOutcome::Declined {
-                let mut response = JsonRpcResponse::error(
-                    Some(id.clone()),
-                    -32001,
-                    format!("Operator declined: {action_desc}"),
-                );
                 // A decline is the operator using the control, not the
                 // client failing. Before this gate moved into the
                 // dispatcher a decline returned earlier than the
                 // accounting and was never counted; marking it keeps
                 // that true, so exercising the safety control cannot
                 // walk a caller toward a tripped breaker.
-                response.confirmation_refusal = true;
-                return Some(response);
+                return Some(confirmation_refusal_response(
+                    id,
+                    format!("Operator declined: {action_desc}"),
+                ));
             }
             // Nobody could be asked. What that means depends on the era,
             // and the policy was decided at the edge that knows which era
