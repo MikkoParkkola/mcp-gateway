@@ -178,13 +178,14 @@ lands.
 ### I. The stdio dispatch path — NFR.OBS.1, NFR.OBS.2, MIK-7246.CONFIRM.1a, 3 criteria
 
 One wiring question answers all three rows. The gateway serves MCP over two transports and
-every one of these three controls lives in the HTTP router only: both migration-telemetry
-records in `handlers.rs`, and `require_destructive_confirmation`, whose module
-`src/gateway/destructive_confirmation.rs` has exactly one consumer — searching `src/` for the
-module name returns `handlers.rs` and the `mod` declaration, nothing else. The stdio
-`tools/call` arm hands straight to `MetaMcp::handle_tools_call`, which does not reach the gate,
-so over stdio the telemetry is absent and a destructive meta-tool runs with no confirmation
-sought and no refusal.
+all three controls started in the HTTP router only: both migration-telemetry records in
+`handlers.rs`, and `require_destructive_confirmation`, whose module
+`src/gateway/destructive_confirmation.rs` had exactly one consumer. **CONFIRM.1a is answered
+in the tree and awaiting a green suite and a review**: the gate moved out of `handlers.rs`
+into `dispatch_single` (`src/gateway/server/mod.rs:1656`), which `run_stdio` (`:1495`) routes
+every request through, so stdio now refuses an unconfirmable destructive call with `-32001`
+before `MetaMcp::handle_tools_call` is reached. The two telemetry rows are unchanged: over
+stdio both migration records are still absent.
 
 CONFIRM.1a is the reason this cluster is not filed under telemetry. Two of the rows are a
 missing record; the third is a security control that one of two shipped transports does not
