@@ -31,8 +31,8 @@ to wait on. Row 16 covers it.
 | 13 | `CONFIRM.1a` | the **existing** HTTP case `ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused` (`tests/mik_7215_acs.rs:630`) still refuses after the gate is moved to serve both transports, with one assertion added: the execution sentinel is untouched | integration | invariance probe | **not free** — HTTP already refuses; the red comes from moving the gate, so the probe is to move it wrongly and watch this go red |
 | 14 | `OBS.2` | a `tools/list` whose profile **excludes** at least one tool records the **effective filter decisions** — which filters ran and what each removed — and the record is stamped **before** the response is written | integration | content + ordering | free — the live record names filter *inputs* only, so it cannot carry a decision |
 | 15 | `OBS.1` | a `tools/call` over **HTTP** carrying no revision in either `_meta` or the header records `protocol_revision` = `absent` and `revision_source` = `none` — the exact strings, not any falsy value | integration | regression | **not free** — production already emits these literals, so the row passes today; probe required, see below |
-| 18 | `CONFIRM.1a` | a caller for whom `gateway_kill_server` is hidden by `meta_tool_exposure` calls it over HTTP and receives `-32601` / unknown tool — **not** `-32001` / requires confirmation | integration | disclosure | **red on arrival** — today's gate answers before the exposure check, so the hidden tool confirms its own existence |
-| 17 | `CONFIRM.1a` | a refused destructive call over HTTP leaves the caller's client-failure count unchanged, **and** an ordinary backend error on the same client still increments it | integration | regression + negative control | **red on arrival** — refusals do not reach the accounting tail today, so the exclusion does not exist |
+| 18 | `CONFIRM.1a` | an **authenticated admin** caller, for whom `gateway_kill_server` is nonetheless hidden by `meta_tool_exposure`, calls it over HTTP and receives `-32601` / unknown tool — **not** `-32001` / requires confirmation | integration | disclosure | **red on arrival** — today's gate answers before the exposure check, so the hidden tool confirms its own existence |
+| 17 | `CONFIRM.1a` | a client whose breaker already carries **one** recorded failure refuses a destructive call and still carries **exactly one** — asserted for both refusal branches, the explicit operator decline and the unconfirmable-channel short-circuit — **and** an ordinary backend error on the same client then takes it to two | integration | regression + negative control | **red on arrival** — refusals do not reach the accounting tail today, so the exclusion does not exist |
 | 16 | `CONFIRM.1a` | a destructive `tools/call` over **stdio** from an **admin** caller naming `gateway_kill_server`, where no confirmation can be obtained, returns code `-32001` **and** a message that opens `Destructive action requires confirmation and none could be obtained:` **and** names the fixture's server verbatim **and** leaves the execution sentinel untouched | integration | fail-closed | **red on arrival** — the gate is HTTP-only; this is the acceptance test for wiring it |
 
 Row 5 exists because both reviewers raised it independently in round 1: the design's "both
@@ -218,7 +218,7 @@ the batch path emit an empty array unconditionally, and row 11 must go red on th
 assertion while its record assertion stays green. Two halves that fail together would not tell
 me which one the row is measuring.
 
-**Row 13 needs no probe.** The criterion states the gate proceeds today when there is no
+**Row 16 needs no probe.** The criterion states the gate proceeds today when there is no
 session, and stdio after this release has no session, so a test asserting refusal fails against
 current code. The red is the defect the criterion names, which is the strongest form of the
 free failure available.
@@ -745,10 +745,25 @@ set it. Explicitly **not** a stamp inside `error.data`: that is the adjacent pat
 the marker on the wire where a backend can set it and buy itself an accounting exclusion.
 `refusal_status` (`router/handlers.rs:1564`) already reads a refusal off the response, so the
 field has somewhere to live that is not the payload. The accounting tail reads that field; nothing else does.
+
+**Excluded from both arms, not just the failure arm.** The tail is an `if`/`else`
+(`router/handlers.rs:1425-1430`): an error records a failure, anything else records a *success*,
+and `record_client_success` calls `breaker.record_success()` (`auth.rs:285-289`), which **resets**
+the consecutive-failure count. So the obvious reading of "do not count a refusal as a failure" —
+drop it out of the error branch — hands the caller something strictly better than neutrality: a
+free erasure of every failure accumulated before it. A client one step from tripping its breaker
+could refuse a destructive call on purpose to clear its record. The marker must skip the whole
+`if`/`else`, leaving the breaker untouched in both directions. This is why the field is read at
+the tail and not by teaching `refusal_status` to answer a second question.
 Both refusal branches carry it — the modern-HTTP elicit-then-refuse and the stdio
 `Unavailable` short-circuit — because both are the caller using the feature correctly.
 
-Row 17 tests it, and tests the half that would otherwise rot silently: that an ordinary backend
+Row 17 tests it from a **non-zero** starting count, and that is the whole point of the row
+rather than a detail of its fixture. From zero, "unchanged" and "reset to zero" are the same
+observation, so the row would pass against the very defect above — the one that erases history —
+and pass again if refusals were being recorded as successes. Seeding one failure first makes the
+broken state impossible to construct: unchanged reads one, erased reads zero, counted reads two.
+It also tests the half that would otherwise rot silently: that an ordinary backend
 error still counts against the client. A test that only checks the exclusion passes just as well
 when the accounting has been switched off altogether. Request telemetry still
 counts the refusal — this is about *reputation*, not visibility, and a refused destructive call is
@@ -828,9 +843,13 @@ written down where the implementer is looking:
   layer that cannot know must not be the layer that speaks.
 - `docs/DEPLOYMENT.md:739-750` — tells an operator that a stdio caller is treated as admin
   because it spawned the process, and lists the four gateway-wide tools under what an
-  *anonymous HTTP* caller cannot reach. After this change the same four refuse over stdio as
-  well, for a different reason: nobody can be asked. An operator reading it would conclude the
-  local client still has them.
+  *anonymous HTTP* caller cannot reach. After this change **one of those four** —
+  `gateway_kill_server` — also refuses over stdio, for an unrelated reason: nobody can be asked.
+  `gateway_revive_server`, `gateway_reload_config` and `gateway_reload_capabilities` are
+  untouched, because the governed set is derived from the `destructive_hint` annotation and only
+  the kill switch carries it (`meta_mcp_tool_defs.rs:266`, plus the floor insert at
+  `destructive_confirmation.rs:139,161` naming the same tool). Saying "the four" here would trade
+  one wrong sentence for another and take three working tools away from the operator on paper.
 - `destructive_confirmation.rs:5-30` — the module's own contract still tells callers to proceed
   when there is no session. It is the documentation of the behaviour this change exists to
   reverse, and it ships inside this change (§P4a), not after it.
