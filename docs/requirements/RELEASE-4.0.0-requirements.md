@@ -210,7 +210,7 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 | NFR.COMPAT.1 | 2026-07-28, 2025-11-25 and 2025-06-18 MUST be served. 2025-03-26 and 2024-11-05 MUST NOT be dropped in this release — the telemetry that would justify dropping them has not been collected. | T |
 | NFR.COMPAT.2 | A client that worked against 3.5.0 MUST work against 4.0.0 with no configuration change. | T, D |
 | NFR.COMPAT.3 | An operator upgrading MUST NOT be required to edit configuration for existing behaviour to continue. | D |
-| NFR.COMPAT.4 | Every requirement above MUST be verified in each role — gateway-as-server and gateway-as-client — and on each transport, **that implements it**. A requirement with a manifestation in a role and verified only in the other is verified at half. Role and transport are two of the conformance matrix's axes (§9 acceptance 2); this row states the obligation, the matrix carries the evidence, and a cell that is N/A carries its reason per §9 acceptance 1. | T |
+| NFR.COMPAT.4 | Every requirement above MUST be verified in **both** roles — gateway-as-server and gateway-as-client — and on every transport that implements it. A requirement verified in one role is verified at half. Role and transport are two of the conformance matrix's axes (§9 acceptance 2); this row states the obligation and the matrix carries the evidence. | T |
 
 ### 4.2 Security
 

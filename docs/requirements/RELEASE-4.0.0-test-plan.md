@@ -391,7 +391,7 @@ row set before its code is written, not before the release ends.
 
 Two suites that no per-increment row set can express, because their subject is the interaction:
 
-- **Conformance matrix** — one row per normative statement in the 2026-07-28 changelog, crossed with role (server ‖ client), transport, revision, and outcome (positive ‖ negative). Requirement NFR.COMPAT.4 means each row is verified in both roles; a matrix filled in one role is half a matrix.
+- **Conformance matrix** — one row per normative statement, crossed with role (server ‖ client), transport, revision, and outcome (positive ‖ negative). Requirement NFR.COMPAT.4 means each row is verified in both roles; a matrix filled in one role is half a matrix. The population is every normative statement in the requirements, per §9 acceptance 2 — **not** only the statements the 2026-07-28 changelog introduces, which this line previously said. That narrowing would have dropped NFR.COMPAT.1 and NFR.COMPAT.2 from the matrix entirely: both are about revisions *older* than 2026-07-28, so neither is a statement the changelog contains, and backward compatibility in both roles is exactly where a missing cell costs most.
 - **Era-combination matrix** — all four client×backend era pairs, each with an elicitation in flight. U8 promoted from a one-off probe to a permanent suite, because the pairs are exactly what regresses silently.
 
 ## What would make this plan wrong

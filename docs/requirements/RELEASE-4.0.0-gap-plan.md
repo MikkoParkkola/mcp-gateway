@@ -735,28 +735,50 @@ Two decisions remain open, and both are operator calls rather than engineering: 
 compatibility matrix is required for 4.0.0 (`NFR.COMPAT.4`), and whether the 17-tool scenario or the
 documented 14-16 ceiling is the number that moves (`NFR.PERF.4`).
 
-### Cluster F's third decision was not a decision — 2026-09-02
+### Cluster F decision 3 — the criterion has a defect, and repairing it is the operator's call
 
 `NFR.COMPAT.4` was listed above as an operator call: *is a dual-role compatibility matrix required
-for 4.0.0?* Reading §9 of the requirements answers it without anyone deciding anything. Release
-acceptance condition 2 already requires "the conformance matrix — one row per normative statement,
-crossed with **role**, transport, revision and outcome" with no empty evidence cell. The matrix is
-required, it has been required since the requirements were written, and `NFR.COMPAT.4` was a second
-demand for the same artifact.
+for 4.0.0?* Half of that question is already answered and half is sharper than it was.
 
-That duplication was not the only defect. The criterion demanded verification in **both** roles
-without qualification, while qualifying transports with *that implements it* — so a server-only
-requirement could not satisfy it by any amount of work. Both are repaired in the requirements file:
-the role clause now carries the same qualifier, and the row points at the matrix rather than naming
-a parallel artifact. A role with no manifestation is an N/A with its reason, which acceptance
-condition 1 already provides for.
+**Answered, without a decision.** Release acceptance condition 2 already requires the conformance
+matrix — one row per normative statement, crossed with role, transport, revision and outcome, with
+no empty evidence cell. The matrix is required and has been since the requirements were written.
+`NFR.COMPAT.4` was naming a second artifact for evidence the matrix already carries, so the row now
+points at the matrix. That changes where evidence lives, not what is demanded.
 
-What remains ABSENT is the matrix itself, and that was never optional. The status row is unchanged
-in verdict and changed in meaning: `ABSENT` now names a missing artifact with an owner, not a
-missing definition.
+**Still open, and now named.** The criterion demands verification in **both** roles without
+qualification while qualifying transports with *that implements it*. A requirement with no
+client-role manifestation therefore cannot satisfy it by any amount of work — the criterion is
+undecidable for server-only requirements, and every one of them is scored against it.
 
-One decision therefore remains open in cluster F, not two: whether the 17-tool scenario or the
-documented 14-16 ceiling is the number that moves (`NFR.PERF.4`).
+The obvious repair is to qualify the role clause the same way. It was drafted and reverted before it
+shipped, for a reason worth stating: *who decides whether a requirement has a client-role
+manifestation?* The implementer does, in the same pass that fills the matrix. A gap that closes
+because the person filling the cell judged the role inapplicable is a gap closed by definition, and
+the operator asked for gaps fixed. Two candidate resolutions, and the operator picks:
+
+| option | what it costs | what it risks |
+|---|---|---|
+| qualify the role clause — *in each role that implements it* | one edit; server-only rows become decidable | self-graded scope: the implementer decides what has no client manifestation |
+| leave it absolute, and let §9 acceptance 1 carry N/A-with-reason at the matrix cell | no edit; the judgement moves to a cell a reviewer reads | the criterion stays literally unsatisfiable, so its status is argued rather than read |
+
+Recommendation: **the second.** The judgement cannot be removed — something must decide that
+`NFR.SEC.2` has no client-role half — but at the matrix cell it is written down with its reason and
+a reviewer sees it, whereas in the criterion it is exercised silently and leaves no trace. §9
+acceptance 1 already provides the mechanism, so this option adds nothing to maintain.
+
+What remains ABSENT either way is the matrix itself, and that was never optional.
+
+Cluster F therefore keeps two open operator calls, not one: this, and whether the 17-tool scenario
+or the documented 14-16 ceiling is the number that moves (`NFR.PERF.4`).
+
+**A second defect the same reading found.** The test plan defined the matrix as *one row per
+normative statement in the 2026-07-28 changelog*. Release acceptance 2 says *one row per normative
+statement*. The narrower population drops `NFR.COMPAT.1` and `NFR.COMPAT.2` — both are about
+revisions older than 2026-07-28, so neither is a statement the changelog contains — and those two
+rows are backward compatibility, where a missing role cell costs most. The test plan is corrected to
+the requirements' population. This one was a straightforward inconsistency between two documents, so
+it is repaired rather than raised.
 
 ### Meta-tool consolidation — analysed, and smaller than it looks
 
