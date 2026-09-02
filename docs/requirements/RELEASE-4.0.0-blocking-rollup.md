@@ -118,6 +118,35 @@ owner, and unowned work does not fail loudly. It simply never starts.
 | F compat and surface facts | 4 | the operator; three of the four are settled by "full scope", `NFR.COMPAT.3` is not |
 | — residue | 5 | `residue-r` takes four; `HEADER.9` belongs to the header increment |
 
+### Ownership status, 2026-09-02: named everywhere, in flight nowhere
+
+The table above is a list of assignments. It is not evidence that anyone is working, and today
+it is not describing work that is happening.
+
+| check | result |
+|---|---|
+| branches advanced in the last 24h | one — `fix/mrtr2-continuation-handle`, this note's own branch |
+| last commit on `main` | 2 days ago |
+| worktrees belonging to a named owner above | none |
+| blocking criteria closed since the table was written | zero — `count-release-criteria.py --check` still reports 53 |
+
+No branch, no worktree, no commit exists for `envelope-a`, `era-r4-repair`, `era-probe`,
+`surface-c`, `cache-34` or `perf-e`. Two agent worktrees do exist — `gap/meta-tool-exposure`
+(locked) and `gap/discover-schema` — and both belong to other work and last moved two days ago.
+
+**What this does and does not prove.** It does not prove nothing was done: an agent can do real
+work and hold all of it in its own context. It proves something worse is possible, which is that
+if such work exists it is *unpersisted*, and unpersisted work is indistinguishable from no work
+the moment the agent stops. The rollup's own diagnosis applies to itself: unowned work does not
+fail loudly, and neither does owned work whose owner has gone quiet. The failure looks identical
+from here — a table full of names and a criteria count that has not moved.
+
+**The correction is the same shape as the one this section already made for cluster A.** An
+owner is not a name in a table; it is a branch with commits on it. Until each cluster has one,
+treat the assignments above as *proposed* rather than *in progress*, and read the 53 as the
+number that will still be there tomorrow. The only cluster with anything landed is G, and what
+landed is a design note and a test plan — deliberately no code.
+
 One ownership rule makes the rest work: **one owner per file**. `src/protocol/era.rs`,
 `src/protocol/cacheable.rs` and `src/protocol/continuation.rs` each have exactly one, and a
 design that needs something from another owner's file is routed rather than edited. This is not
