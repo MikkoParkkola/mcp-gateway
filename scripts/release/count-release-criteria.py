@@ -156,7 +156,13 @@ def main():
     blocking = sum(1 for _, b in criteria if b == "yes")
     ids = {i for i, _ in criteria}
     requirements = REQUIREMENTS.read_text()
-    declared = set(re.findall(r"\|\s*((?:MIK-\d+|NFR)\.[A-Z0-9]+\.\d+)\s*\|", requirements))
+    # The suffix is part of the identifier here, unlike in `ID`, which folds
+    # `MRTR.9a` onto `MRTR.9` so a ledger sub-row counts against its parent.
+    # A requirement declaring `.1a` and `.1b` declares TWO criteria; reading
+    # them as one made every split invisible to this count.
+    declared = set(
+        re.findall(r"\|\s*((?:MIK-\d+|NFR)\.[A-Z0-9]+\.\d+[a-z]?)\s*\|", requirements)
+    )
     methods, unreadable = required_methods(requirements)
     if unreadable:
         print(f"unreadable verification method on: {', '.join(unreadable)}", file=sys.stderr)
