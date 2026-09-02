@@ -342,7 +342,7 @@ is what capability negotiation is for. Nothing mis-serves anyone and deleting th
 release needs.
 
 The audit found the real gap one level up, and the first reading of it was wrong. `SUPPORTED_VERSIONS`
-(`src/protocol/mod.rs:43`) lists four legacy revisions and omits `2026-07-28`, and this plan used to
+(`src/protocol/mod.rs:48`) lists four legacy revisions and omits `2026-07-28`, and this plan used to
 call adding the string the release gate. It is not: `initialize` is legacy-only in this revision
 ([lifecycle](https://modelcontextprotocol.io/specification/2026-07-28/basic/lifecycle) scopes the
 handshake to "`2025-11-25` and earlier"), so a modern client never negotiates through it and the

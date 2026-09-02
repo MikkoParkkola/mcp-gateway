@@ -612,7 +612,7 @@ reachable both before and after implementation replaces it: two backends in one 
 
 ### `NFR.COMPAT.1` has no owner, and it is a dependency rather than a neighbour
 
-`SUPPORTED_VERSIONS` (`src/protocol/mod.rs:43`) names four revisions and `2026-07-28` is not among
+`SUPPORTED_VERSIONS` (`src/protocol/mod.rs:48`) names four revisions and `2026-07-28` is not among
 them; `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) names it alone. `COMPAT.1` requires the modern
 revision be *served*. Two designs mention `SUPPORTED_VERSIONS` and both exclude it deliberately, so
 no increment owns the row — the omission is recorded in three places and closed in none. GPT's era
@@ -706,9 +706,15 @@ dependency section above already establishes that, and nothing since has changed
 
 ### One of cluster F's four decisions is now made
 
-`NFR.COMPAT.1` — whether the 2026 revision joins `SUPPORTED_VERSIONS` for 4.0.0 — asked of the
-operator on 2026-09-02, answered **serve it in this release**, not advertise-only and not drop the
-advertisement.
+`NFR.COMPAT.1` — whether 4.0.0 serves the 2026 revision — asked of the operator on 2026-09-02,
+answered **serve it in this release**, not advertise-only and not drop the advertisement.
+
+The question was put as "does the revision join `SUPPORTED_VERSIONS`", and that half was not the
+operator's to answer. Checked at the specification the same day: the 2026-07-28 lifecycle scopes
+`initialize` to "`2025-11-25` and earlier", so the constant stays legacy-only whatever the operator
+rules, and what the ruling settles is the `server.modern_protocol` default alone. The gate is
+defined once, in `docs/requirements/RELEASE-4.0.0-blocking-rollup.md` under "The two gates that are
+not rows".
 
 What it changes: cluster A moves onto the critical path for the whole release rather than being the
 largest of several parallel tracks. A served revision is one the continuation envelope has to

@@ -18,7 +18,7 @@ answer per backend — so DISCOVER.4 and DISCOVER.5 stop being UNWIRED. Both tra
 - the modern outbound request path (`_meta` envelopes, modern framing). That is
   MIK-7214.HEADER.9, currently ABSENT and blocking; this design builds nothing on it and,
   as of revision 2, reserves nothing for it either.
-- adding `2026-07-28` to `SUPPORTED_VERSIONS`. `src/protocol/mod.rs:38-42` states plainly the
+- adding `2026-07-28` to `SUPPORTED_VERSIONS`. `src/protocol/mod.rs:38-47` states plainly the
   revision is absent "until the modern request path exists… It is added in the increment that
   makes it true." This is not that increment.
 - A2A backends — `src/backend/lifecycle.rs:372-383` refuses them on this path outright ("must be

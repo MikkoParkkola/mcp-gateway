@@ -168,16 +168,18 @@ a call site owned half by tracing and half by caching is the coupling that produ
 defect.
 
 `NFR.COMPAT.1` is listed under cluster F as an operator fact, and it is also a dependency the
-other two wirings run on. `SUPPORTED_VERSIONS` (`src/protocol/mod.rs:43`) does not name
+other two wirings run on. `SUPPORTED_VERSIONS` (`src/protocol/mod.rs:48`) does not name
 `2026-07-28`; `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) names it alone, and era-r4-repair's
 frozen scope declares adding it explicitly out.
 
 An earlier revision of this paragraph read that as a gap: wire both clusters, never negotiate
 the revision, unwiredness moved one level up. That is wrong, and the correction matters more
 than the claim did. The omission is deliberate and documented at the source
-(`src/protocol/mod.rs:38-42`): listing `2026-07-28` in `SUPPORTED_VERSIONS` would make
-`initialize` negotiate a revision the gateway cannot yet serve, so a client would be told yes
-and then served 2025 semantics — silent, and worse than a refusal. `meta.rs:213-219` says the
+(`src/protocol/mod.rs:38-47`): the 2026-07-28 lifecycle scopes `initialize` to revisions
+`2025-11-25` and earlier, so listing the modern revision in `SUPPORTED_VERSIONS` would have a
+retired handshake negotiate a revision that has none, and a client would be told yes and then
+served 2025 semantics — silent, and worse than a refusal. The omission is permanent, not an
+increment waiting to land. `meta.rs:213-219` says the
 same from the other side, and `discover_document` (`src/gateway/meta_mcp/mod.rs:1063-1082`)
 already advertises `MODERN_VERSIONS` when the modern path is enabled, with a comment recording
 that omitting it once made enabling it unreachable. era-r4-repair was right to scope the
@@ -188,7 +190,7 @@ The gate is `server.modern_protocol`, and it defaults to **false** (`src/config/
 at `src/gateway/router/handlers.rs:221`, `:755-760`, `:967`.
 
 **The gate is that default, and this paragraph is where it is defined.** `SUPPORTED_VERSIONS`
-(`src/protocol/mod.rs:43`) is not a second half of it and must stay legacy-only. Checked against the
+(`src/protocol/mod.rs:48`) is not a second half of it and must stay legacy-only. Checked against the
 specification rather than reasoned from the constant's name: `initialize` belongs to "`2025-11-25`
 and earlier"
 ([lifecycle](https://modelcontextprotocol.io/specification/2026-07-28/basic/lifecycle)), and a
