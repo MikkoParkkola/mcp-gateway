@@ -8,7 +8,7 @@ stateless path, identity, all 17 MIK-7272 criteria (RESULT/ERROR/ORDER, then SUB
 the MIK-7246 destructive-confirmation gate, and the MIK-7217 discovery/era group. Every requirement ID
 in `RELEASE-4.0.0-requirements.md` now has a row, functional and non-functional alike.
 
-Coverage: 95 criteria, 100 rows, 66 met or non-blocking, 34 blocking.
+Coverage: 135 criteria, 139 rows, 92 met or non-blocking, 47 blocking.
 
 That line is the only place in this file that states totals, and it is not maintained by hand.
 `scripts/release/count-release-criteria.py --check` recounts the blocking column of every table
@@ -320,8 +320,10 @@ criteria they observe, and closing those does not close these — each still nee
 
 ## What this audit does not cover
 
-This file audits the 73 functional criteria and the requirements list 73, so every FUNCTIONAL
-requirement ID has a row. The coverage gap this section was written to record — 10 unexamined
+This file audits the 113 functional criteria and the requirements list 113, so every FUNCTIONAL
+requirement ID has a row. It carries one row more than that: `MIK-7212.MRTR.9a`, an obligation
+raised in the 2026-09-02 review and never written back into the requirements — the ledger is
+ahead of its own source of truth there, not behind. The coverage gap this section was written to record — 10 unexamined
 MIK-7272 criteria — was closed on 2026-08-31 and each of the 10 was re-verified against source on
 the same date.
 
@@ -334,9 +336,9 @@ this section.
 
 | Group | Criteria | Audited here |
 |---|---|---|
-| MIK-7272 (RESULT.1-2, ERROR.1-2, ORDER.1-3) | 7 of 17 | yes — see MIK-7272 section above |
-| MIK-7272 (EXT, OAUTH, OTEL, SUB, TASK) | 10 of 17 | yes, 2026-08-31 — see MIK-7272 section above (12 rows: SUB.1 and SUB.2 are recorded as two clause rows each; 7 MET, 3 UNWIRED, 2 ABSENT; 5 of the 10 criteria blocking, after SUB.1's GET clause and SUB.3 were closed on 2026-08-31 by the `GET /mcp` era gate) |
-| MIK-7217.DISCOVER | 7 | yes, 2026-08-31 — see MIK-7217 section above (5 MET, 2 UNWIRED/blocking) |
+| MIK-7272 (RESULT.1-2, ERROR.1-2, ORDER.1-3) | 9 of 21 | yes — see MIK-7272 section above |
+| MIK-7272 (EXT, OAUTH, OTEL, SUB, TASK) | 12 of 21 | yes, 2026-08-31 — see MIK-7272 section above (12 rows: SUB.1 and SUB.2 are recorded as two clause rows each; 7 MET, 3 UNWIRED, 2 ABSENT; 5 of the 12 blocking, after SUB.1's GET clause and SUB.3 were closed on 2026-08-31 by the `GET /mcp` era gate) |
+| MIK-7217.DISCOVER | 11 | yes, 2026-08-31 — see MIK-7217 section above (11 clause rows, 4 blocking) |
 | MIK-7246.CONFIRM | 3 | yes, 2026-08-31 — see MIK-7246 section above (3 MET as of 2026-08-31, CONFIRM.1 closed by an end-to-end test with a falsifier; 0 blocking) |
 | MIK-7214.HEADER.7-9 | 3 | yes, 2026-08-31 — see MIK-7213/7214 section above (HEADER.7 and .8 MET without caveat as of 2026-08-31; HEADER.9 ABSENT/blocking) |
 | MIK-7214.HEADER.5 | 1 | corrected twice on 2026-08-31: recorded ABSENT, revised to UNWIRED when `param_headers.rs` landed, back to ABSENT once its unwired outbound helpers were deleted rather than kept as dead API |
