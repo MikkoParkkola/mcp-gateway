@@ -24,7 +24,7 @@ criterion about *a value's shape* does not need a second process.
 |---|---|---|---|---|
 | MRTR.1 carry `inputResponses`/`requestState` on a retry | four shapes through the component path — both fields, responses-only, state-only, neither — each reaching the backend with exactly what it carried | component | table-driven positive + control | today it fails at the router refusal, which is the free failure §P2 wants |
 | MRTR.2 mint our own envelope, never forward the backend's | backend returns a `requestState` string; the value the client receives is not that string and verifies under our key | component | negative (anti-passthrough) | **not held — see "What self-QA found" below.** `ac_mrtr_2_*` asserts confidentiality against a hand-built `Keyring` token at `unit` level; no case drives the gateway path with a backend-supplied state |
-| MRTR.3 client-presented state is attacker-controlled | four presentations — unsigned, signed by a foreign key, truncated, and tampered-payload-with-valid-tag — each refused with a distinct reason | unit + component | negative, table-driven | each row constructs a value the verifier must reject; a verifier that returns `true` unconditionally fails all four |
+| MRTR.3 client-presented state is attacker-controlled | four presentations — unsigned, signed by a foreign key, truncated, and tampered-payload-with-valid-tag. At `unit`, each is refused with its own `ContinuationError` variant. At the wire, all four are refused with the *same* message, and a valid continuation must still be accepted | unit + component | negative table-driven + positive control | at `unit` the four variants differ, so a verifier collapsing them fails; at the wire they do not differ, so the positive control is the only thing separating a correct verifier from one that refuses everything |
 | MRTR.4 bound to principal + original request | a continuation minted for principal A and tool T is refused when presented by principal B, and when presented by A against tool U | component | negative pair | the two negatives differ in exactly one field from a positive that must still pass — the positive is what stops a blanket-refusal implementation passing |
 | MRTR.5 single-use + expiry, atomic, across replicas | (a) second redemption of the same handle is refused; (b) a handle past its deadline is refused; (c) two concurrent redemptions on the minting process yield exactly one success; (d) a handle minted by one process is refused by a second process with independent key material | (a)-(c) component; (d) integration | negative + concurrency | (c) fails on a non-atomic ledger; (d) fails if key material is ever shared or if refusal is silent rather than explicit |
 | MRTR.6 retry reaches the replica holding the exchange, or fails explicitly | a retry presented to a process that does not hold the exchange returns a named error and starts nothing — the accepted design refuses rather than routes, because the second process cannot open the envelope at all | integration | negative | the failure mode is *silently starting over*, which looks like success to any assertion that only checks for a 200 |
@@ -115,7 +115,17 @@ of nothing. MRTR.6 carried the same assumption and is corrected the same way.
 a retry may legitimately carry one; MRTR.9 tested `sampling` when the criterion covers every
 undeclared type. Both are now tables. Neither single case could fail on the shapes it omitted.
 
-One reviewer remark is recorded without action: the verdict line refers to an invalid oracle in
-MRTR.3, but no finding block was filed for it and the row's four presentations each construct a
-value a correct verifier must reject. Unverified at source, so it is neither fixed nor dismissed —
-it goes to the second leg when a second leg is available.
+**The reviewer's unfiled remark was right, and is now closed.** `gpt-review`'s verdict line
+referred to an invalid oracle in MRTR.3 without filing a finding block for it, so it was recorded
+unverified rather than acted on. It has since been verified at source. The row demanded four
+presentations "each refused with a distinct reason", and `client_message()` returns the constant
+`"continuation rejected"` for every variant (`src/protocol/continuation.rs:234-236`); the per-variant
+text exists only in `Display` (`:239-253`) and never reaches a client. So the oracle was
+unusable at the wire in both directions — four distinct reasons could never be observed, and four
+identical ones cannot fail against a verifier that refuses everything. The row is now split by
+level, and the wire half carries a positive control that does the discriminating.
+
+The collapse is treated as the specification, not a defect. A verifier that reports whether a
+forgery failed for want of a signature, a known key, or an intact tag tells an attacker which of
+those to fix next. If that reading is wrong it is a design question for the operator, not something
+a test should quietly assert around.
