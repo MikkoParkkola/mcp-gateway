@@ -69,6 +69,52 @@ def heading_counts(text):
     return bad
 
 
+SECTION_COUNT = re.compile(r"^#{1,6} .*?,\s*(\d+) of (\d+)\s*$")
+
+
+def section_counts(text):
+    """Section headings of the `<n> of <m>` shape, checked against their rows.
+
+    `heading_counts` admits this shape because it says what it counts. Saying
+    what it counts is not the same as being right about it, and nothing read
+    the numbers: one heading claimed `7 of 7` over eleven rows, hiding four
+    blocking criteria from anyone who trusted the title. That is the very
+    defect `heading_counts` exists to catch, surviving inside its exemption.
+
+    `<m>` is the section's criterion rows; `<n>` is those whose blocking cell
+    reads `no`. The ledger's own rule makes those the met-or-N/A ones, so the
+    heading and the table cannot disagree without one of them being wrong.
+    """
+    bad, heading, seen, clear = [], None, 0, 0
+
+    def close():
+        if heading and (clear, seen) != heading[1]:
+            bad.append(
+                f"{heading[0]} says {heading[1][0]} of {heading[1][1]}, its rows are {clear} of {seen}"
+            )
+
+    for line in text.splitlines():
+        if re.match(r"^#{1,6} ", line):
+            close()
+            found = SECTION_COUNT.match(line)
+            heading = (
+                (line.split(" — ")[0].strip("# "), (int(found.group(1)), int(found.group(2))))
+                if found
+                else None
+            )
+            seen = clear = 0
+            continue
+        if not line.startswith("| ") or line.startswith("| ---"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 4 or not ID.match(cells[0]) or cells[-1] not in ("yes", "no"):
+            continue
+        seen += 1
+        clear += cells[-1] == "no"
+    close()
+    return bad
+
+
 def rows(text):
     """Every criterion row: a table line whose last cell is exactly yes or no.
 
@@ -173,6 +219,7 @@ def main():
         print(f"unreadable verification method on: {', '.join(unreadable)}", file=sys.stderr)
         return 1
     mismatched = method_mismatches(text, methods)
+    stale_sections = section_counts(text)
     uncovered = sorted(declared - ids)
 
     totals = (len(declared), len(criteria), len(criteria) - blocking, blocking)
@@ -184,6 +231,8 @@ def main():
         print(f"requirement IDs with no row: {', '.join(uncovered)}", file=sys.stderr)
     if mismatched:
         print(f"NFR rows whose method disagrees with the requirement: {'; '.join(mismatched)}", file=sys.stderr)
+    if stale_sections:
+        print(f"section headings disagreeing with their own rows: {'; '.join(stale_sections)}", file=sys.stderr)
 
     if "--check" not in sys.argv:
         return 0
@@ -194,7 +243,7 @@ def main():
     if tuple(int(g) for g in found.groups()) != totals:
         print(f"headline says {found.group(0)!r}, the tables say the line above", file=sys.stderr)
         return 1
-    return 1 if uncovered or mismatched else 0
+    return 1 if uncovered or mismatched or stale_sections else 0
 
 
 if __name__ == "__main__":

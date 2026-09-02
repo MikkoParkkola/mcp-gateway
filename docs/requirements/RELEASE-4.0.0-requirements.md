@@ -193,7 +193,7 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 | ID | Requirement | Source | Verify |
 |---|---|---|---|
 | MIK-7246.CONFIRM.1a | The destructive-operation confirmation gate MUST refuse when it cannot obtain confirmation. Today it proceeds when elicitation is unsupported **or there is no session** — and after this release there is never a session. | `src/gateway/destructive_confirmation.rs:19-21` | T |
-| MIK-7246.CONFIRM.1b | The gate MUST NOT proceed on a warning. | `src/gateway/destructive_confirmation.rs:19-21` | T |
+| MIK-7246.CONFIRM.1b | The gate MUST NOT proceed on a warning **on the modern path**. The legacy path keeps `PROCEED_WITH_WARNING` deliberately, for callers this release does not govern; that asymmetry is intentional and is not a defect of this criterion. | `src/gateway/destructive_confirmation.rs:19-21` | T |
 | MIK-7246.CONFIRM.2 | The gate MUST be reachable through the MRTR path, so a modern client can confirm. | Depends on MIK-7212 | T, D |
 | MIK-7246.CONFIRM.3 | The governed tool set MUST derive from the `destructiveHint` annotation, not a hardcoded match on `gateway_kill_server`. | Ticket AC MIK.CONF.3 | T |
 | MIK-7116.TENANT.1 | The cross-tenant data-minimisation guard MUST key on the authenticated principal, not on a session. | `Mcp-Session-Id` is removed; the ticket's own design says "within one session" | T |
