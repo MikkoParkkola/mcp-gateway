@@ -137,10 +137,26 @@ No local branch, no remote branch, no worktree and no commit exists for `envelop
 `gap/meta-tool-exposure` (locked) and `gap/discover-schema` — and both belong to other work and
 last moved two days ago.
 
-**What was checked, and what was not.** Checked: local branches, remote-tracking refs, worktrees
-in both trees, and the main checkout's working tree. *Not* checked: whether the agent processes
-themselves are still alive. An owner could be running right now with everything still in its own
-context — which is the case the next paragraph is about, not a case this evidence excludes.
+**What was checked, and what was not — and the gap turned out to be the whole story.** Checked:
+local branches, remote-tracking refs, worktrees in both trees, and the main checkout's working
+tree. *Not* checked, at first: whether the agent processes themselves are still alive.
+
+**They are.** Three teammate agents are running against this repository right now, one of them
+writing cluster A's failing tests. So the git evidence above was accurate and its headline
+reading was wrong: this is not a plan with no work happening. It is a plan whose work is
+happening entirely in agent context and touching no disk. That is the more dangerous of the two,
+because it looks like progress from inside and like nothing at all from outside, and a context
+limit converts one into the other with no warning.
+
+Worse, from this session those agents are not addressable: `SendMessage` resolves neither their
+task identifiers nor the owner names this table assigns, and the spawn prompts are not
+recoverable from the compacted transcript. Work that cannot be reached cannot be asked to
+persist itself.
+
+**The rule this earns.** An owner is a branch with commits on it *and* a live process that can be
+reached. A dispatch that records only the name gives up both halves the moment the session that
+made it loses its context. Future dispatches record the agent identifier next to the owner name
+in this table, and every owner commits a WIP branch before doing anything else.
 
 The last row is a weaker check than it looks and is listed as what it is. A rollup row is marked
 met by a documentation act, so an owner could have landed working code and never touched this
