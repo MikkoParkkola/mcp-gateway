@@ -7,8 +7,10 @@ ruling reads as invented -- which is how eleven genuine decisions were once
 withdrawn. This reads the tool results, which is where the answers actually are.
 
 Reads a whole project directory by default. A decision may have been given in
-any session, so a ledger built from one transcript is silently partial: the
-single-file run returned 19 rows where the directory returns 24.
+any session, so a ledger built from one transcript is silently partial, and a
+partial ledger reads as an absence -- which is the failure this file exists to
+stop. Each row carries the answer's date, so a dated attribution in a design
+document can be checked against the row rather than against memory.
 """
 
 import argparse
@@ -30,9 +32,11 @@ RELEASE = re.compile(
 )
 
 
-def decisions(transcript: pathlib.Path, topic: re.Pattern) -> list[tuple[str, str]]:
+def decisions(
+    transcript: pathlib.Path, topic: re.Pattern
+) -> list[tuple[str, str, str]]:
     seen: set[str] = set()
-    rows: list[tuple[str, str]] = []
+    rows: list[tuple[str, str, str]] = []
     for line in transcript.read_text(errors="ignore").splitlines():
         if "Your questions have been answered" not in line:
             continue
@@ -40,6 +44,8 @@ def decisions(transcript: pathlib.Path, topic: re.Pattern) -> list[tuple[str, st
             entry = json.loads(line)
         except json.JSONDecodeError:
             continue
+        # The entry timestamp is when the operator answered.
+        date = str(entry.get("timestamp") or "")[:10] or "undated"
         for block in entry.get("message", {}).get("content") or []:
             if not isinstance(block, dict):
                 continue
@@ -56,7 +62,9 @@ def decisions(transcript: pathlib.Path, topic: re.Pattern) -> list[tuple[str, st
                     continue
                 seen.add(pair)
                 question, _, answer = pair.rpartition('"="')
-                rows.append((question.strip().strip('"'), answer.strip().strip('"')))
+                rows.append(
+                    (question.strip().strip('"'), answer.strip().strip('"'), date)
+                )
     return rows
 
 
@@ -83,20 +91,20 @@ def main() -> int:
         print(f"no such transcript: {args.transcript}", file=sys.stderr)
         return 2
     topic = re.compile(".") if args.all else RELEASE
-    rows: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    rows: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
     for source in sources:
         for row in decisions(source, topic):
             if row in seen:
                 continue
             seen.add(row)
             rows.append(row)
-    print("| # | question put to the operator | answer |")
-    print("|---|---|---|")
-    for index, (question, answer) in enumerate(rows, 1):
+    print("| # | date | question put to the operator | answer |")
+    print("|---|---|---|---|")
+    for index, (question, answer, date) in enumerate(rows, 1):
         q = question.replace("|", r"\|")
         a = answer.replace("|", r"\|")
-        print(f"| {index} | {q} | **{a}** |")
+        print(f"| {index} | {date} | {q} | **{a}** |")
     return 0
 
 
