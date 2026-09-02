@@ -760,7 +760,7 @@ mod http {
         // empty list exposes everything — and `gateway_kill_server` is absent.
         let state = state_with_exposure(true, auth, &["gateway_invoke".to_string()]);
         let (status, _session, body) = post_mcp_authed(
-            state,
+            Arc::clone(&state),
             json!({
                 "jsonrpc": "2.0",
                 "id": 18,
@@ -783,8 +783,9 @@ mod http {
 
         assert_eq!(
             status,
-            StatusCode::OK,
-            "JSON-RPC reports errors in the body: {body}"
+            StatusCode::NOT_FOUND,
+            "a hidden tool answers with the modern revision's not-found status, as any \
+             unimplemented name does (handlers.rs:1396-1410): {body}"
         );
         let code = body.pointer("/error/code").and_then(Value::as_i64);
         assert_ne!(
@@ -797,17 +798,62 @@ mod http {
             Some(-32601),
             "a hidden meta-tool answers exactly as a name nobody implemented does: {body}"
         );
-        let message = body
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        assert!(
-            message.contains("Unknown tool: gateway_kill_server"),
-            "the wording must match the unrecognised-name fallback verbatim, or the difference is itself the disclosure: {message}"
+        assert_eq!(
+            body.pointer("/error/message").and_then(Value::as_str),
+            Some("Unknown tool: gateway_kill_server"),
+            "the wording must match the unrecognised-name fallback verbatim, or the difference is itself the disclosure: {body}"
         );
         assert!(
             body.get("result").is_none(),
             "a hidden tool must not run: {body}"
+        );
+
+        // The row claims the hidden tool answers *exactly as* an unimplemented
+        // name does. Asserting one status and one code does not prove that --
+        // it proves this response's shape, and leaves "the same as what?"
+        // to the reader. So ask a name nobody implemented, on the same state,
+        // and compare. Same fixture, so this is a second request rather than a
+        // second row. Goes red if a later edit gives hidden tools any answer of
+        // their own: a distinct status, a distinct code, or a message that
+        // says "hidden" where the other says "Unknown tool".
+        let (control_status, _session, control_body) = post_mcp_authed(
+            state,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1801,
+                "method": "tools/call",
+                "params": {
+                    "name": "row18_nobody_implemented_this",
+                    "arguments": {},
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                        "io.modelcontextprotocol/clientInfo": {
+                            "name": "ExampleClient", "version": "1.0.0"
+                        }
+                    }
+                }
+            }),
+            Some("admin-key"),
+        )
+        .await;
+
+        assert_eq!(
+            control_status, status,
+            "a hidden tool and an unimplemented name must answer with the same status: {control_body}"
+        );
+        assert_eq!(
+            control_body.pointer("/error/code").and_then(Value::as_i64),
+            code,
+            "a hidden tool and an unimplemented name must answer with the same code: {control_body}"
+        );
+        assert_eq!(
+            control_body
+                .pointer("/error/message")
+                .and_then(Value::as_str),
+            Some("Unknown tool: row18_nobody_implemented_this"),
+            "the control must itself reach the unrecognised-name fallback, or it \
+             agrees with the hidden tool for some other reason: {control_body}"
         );
     }
 
