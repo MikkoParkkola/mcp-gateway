@@ -214,18 +214,15 @@ def method_mismatches(text, methods):
 # cluster name, the parent-criterion key, and the count of ledger rows.
 CLUSTER = re.compile(r"^\|\s*(?:[A-Z]|—)\s*\|[^|]*\|[^|]*\|\s*(\d+)\s*\|", re.MULTILINE)
 
-# What a cluster row LOOKS like, before asking whether it parses. A skip on
-# non-match is invisible: an invalid cluster letter or a non-numeric count
-# drops the row and its criteria out of the accounting entirely, and the
-# totals still balance because nothing knows the row was there. Four cells
-# and a short first cell separate these from criterion rows (whose ids run
-# far longer) and from the three-column group summaries.
-# The first cell is restricted to word characters and the em dash so that a
-# markdown header (`#`) and a separator (`---`) are not read as broken
-# cluster rows -- table furniture is not a defect.
-CLUSTER_SHAPE = re.compile(
-    r"^\|\s*([A-Za-z0-9\u2014]{1,3})\s*\|[^|]*\|[^|]*\|([^|]*)\|"
-)
+# What a cluster row IS, before asking whether it parses. A skip on non-match
+# is invisible: an invalid cluster id or a non-numeric count drops the row
+# and its criteria out of the accounting entirely, and the totals still
+# balance because nothing knows the row was there. COLUMN COUNT decides,
+# not the id's shape -- a shape test has to guess how wrong an id may be
+# and stays wrong for everything it did not imagine (`ABCD` and `A!` both
+# escaped a one-to-three-character guess). The cluster table is the only
+# five-column table in the rollup; the rest carry two or three.
+CLUSTER_CELLS = 5
 
 
 # A criterion key as a rollup cluster names it: optionally MIK-prefixed, and
@@ -251,12 +248,15 @@ def rollup_membership(criteria, text):
     for line in text.splitlines():
         match = CLUSTER.match(line)
         if not match:
-            shape = CLUSTER_SHAPE.match(line)
-            if shape:
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            # The table's own header carries the same five cells. It is the one
+            # row whose id column is the literal `#`, which no cluster uses.
+            header_or_rule = cells[0] in ("#", "") or line.startswith("|---")
+            if len(cells) == CLUSTER_CELLS and not header_or_rule:
                 problems.append(
-                    f"cluster row {shape.group(1).strip()!r} does not parse: "
+                    f"cluster row {cells[0]!r} does not parse: "
                     f"id must be a single capital or an em dash and the count cell "
-                    f"a bare number, not {shape.group(2).strip()!r}"
+                    f"a bare number, not {cells[3]!r}"
                 )
             continue
         saw_cluster = True

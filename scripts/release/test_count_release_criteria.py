@@ -288,6 +288,26 @@ def test_a_cluster_row_that_does_not_parse_is_reported_rather_than_skipped():
     ]
 
 
+def test_a_cluster_id_too_long_to_look_like_one_is_still_reported():
+    # The shape test that used to claim these rows accepted one to three
+    # non-space characters, so a four-letter id fell through it and the row
+    # vanished. Column count decides what a cluster row is; the id only decides
+    # whether it parses.
+    broken = ROLLUP + "\n| ABCD | cache | `MIK-7212.MRTR.1` | 1 | four letters |"
+    assert membership(LEDGER, broken) == [
+        "cluster row 'ABCD' does not parse: id must be a single capital or an em "
+        "dash and the count cell a bare number, not '1'"
+    ]
+
+
+def test_a_cluster_id_that_is_not_a_letter_at_all_is_reported():
+    broken = ROLLUP + "\n| A! | cache | `MIK-7212.MRTR.1` | 1 | punctuation |"
+    assert membership(LEDGER, broken) == [
+        "cluster row 'A!' does not parse: id must be a single capital or an em "
+        "dash and the count cell a bare number, not '1'"
+    ]
+
+
 def test_a_count_cell_that_is_not_a_number_is_reported_rather_than_skipped():
     broken = ROLLUP + "\n| B | cache | `MIK-7212.MRTR.1` | one | spelled out |"
     assert membership(LEDGER, broken) == [
