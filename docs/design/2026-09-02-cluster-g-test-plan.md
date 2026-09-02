@@ -669,12 +669,28 @@ they ask — they differ in whether asking is a thing that can happen at all:
 
 ```rust
 pub enum ConfirmationChannel<'a> {
-    /// An asker may exist. Elicit over the session, then apply the modern/legacy policy.
-    Elicit { proxy: &'a ProxyManager, shape: RequestShape },
+    /// An asker may exist. Elicit over the session, then apply the policy decided at the edge.
+    Elicit { proxy: &'a ProxyManager, policy: ConfirmationPolicy },
     /// No asker can exist on this transport. Refuse without calling out.
     Unavailable,
 }
 ```
+
+**`Elicit` carries the decided policy, not the `RequestShape` it came from.** The shape is
+classified at the HTTP edge by `classify_request(params.as_ref(), declared_version)`
+(`router/handlers.rs:670`), from the *whole* params object and the declared version. The
+dispatcher holds neither: it has the destructured `arguments`, which carry no `_meta`, and no
+version. Hand it a shape and the door is open for someone to re-derive one downstream — which
+would classify **every** modern call as legacy, so `for_legacy()` would warn where CONFIRM.1a
+requires a refusal. Handing over the finished `ConfirmationPolicy` closes it: there is nothing
+left to classify, so the misclassification cannot be written. It also keeps `handle_tools_call`
+free of a `RequestShape` dependency it does not have today.
+
+**HTTP always constructs `Elicit`** — including when `session_id` is empty. `Unavailable` means
+*this transport has no asker*, which is a property of stdio, not a runtime condition. Mapping a
+sessionless HTTP request onto `Unavailable` looks like an obvious shortcut and would refuse the
+legacy path CONFIRM.1b requires to keep warning. The variant names the transport's capability;
+whether a particular request finds a session is what the elicitation call itself answers.
 
 A trait would need one `async` method, so it would need `async_trait` or a boxed future in a
 struct the dispatcher passes by reference on every call — machinery for two variants that are
@@ -776,13 +792,19 @@ closes it is mechanical: **after any revision, re-read the whole file, not the e
 Two obligations that are not design decisions but will be silently skipped if they are not
 written down where the implementer is looking:
 
+- `destructive_confirmation.rs:200-225` — three `warn!` bodies say "proceeding without
+  confirmation" on the elicitation-declined, timed-out and delivery-failed paths. Under the new
+  policy those paths refuse, so the log lines would state the opposite of what happened. An
+  operator reading logs during an incident is the reader least able to check the claim.
 - `destructive_confirmation.rs:5-30` — the module's own contract still tells callers to proceed
   when there is no session. It is the documentation of the behaviour this change exists to
   reverse, and it ships inside this change (§P4a), not after it.
 - **Every** `MetaMcpCallerContext` construction site gets an explicit channel — not just the
-  dispatcher tests' helper. The router path, the authorization tests, the trace-correlation tests
-  and the invoke tests each build the struct as a literal, so the field is a compile error at all
-  of them until it is filled in. That is the desired failure: a new construction site cannot
+  dispatcher tests' helper. Named, so the cascade is a work-list rather than a discovery:
+  `allow_all_ctx`, `allow_all_ctx_named`, `allow_all_ctx_declaring`, `authz_tests.rs:ctx`,
+  `trace_correlation_tests.rs:ctx`, the `invoke.rs` tests and `router/tests.rs` each build the
+  struct as a literal, so the field is a compile error at all of them until it is filled in.
+  That is the desired failure: a new construction site cannot
   silently inherit a permissive channel. For the same reason there is **no `Default`** — a
   `Default` meaning *permit* is a fail-open one keystroke from production. Test helpers name it
   `allow_all_ctx` so the permission is legible at the call site.
