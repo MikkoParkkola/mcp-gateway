@@ -732,6 +732,10 @@ tell an operator *which* tools they will stop seeing -- a warning that a field i
 useless without the list it now restricts.
 
 Two decisions remain open, and both are operator calls rather than engineering: whether a dual-role
+**BOTH CLOSED 2026-09-02. Cluster F holds no open operator calls.** `NFR.COMPAT.4`: role clause stays
+unqualified, inapplicability recorded at the matrix cell. `NFR.PERF.4`: the 14-16 ceiling stands and
+`gateway_webhook_status` stops counting against it. Both become implementation work. Original framing kept below.
+
 compatibility matrix is required for 4.0.0 (`NFR.COMPAT.4`), and whether the 17-tool scenario or the
 documented 14-16 ceiling is the number that moves (`NFR.PERF.4`).
 

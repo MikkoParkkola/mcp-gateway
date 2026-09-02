@@ -153,8 +153,10 @@ Verification codes: **T** automated test · **M** measurement · **I** inspectio
 | MIK-7213.CACHE.4a | Any shared cache the gateway keeps MUST be keyed on every request-derived input that varies the response — authorization binding, routing profile, Code Mode, preview query, cursor, backend, protocol revision. A response varying on an unkeyed input MUST NOT be cached. | Defect class confirmed in review 2026-08-22 | T, I |
 | MIK-7213.CACHE.4b | Any shared cache the gateway keeps MUST carry a policy epoch that invalidates it on a grant or profile change. | Defect class confirmed in review 2026-08-22 | T, I |
 | MIK-7272.ORDER.1 | `tools/list` MUST return tools in a deterministic order across requests when the underlying set has not changed. | Spec §3 minor | T |
-| MIK-7272.ORDER.2 | The tool set MUST NOT vary per connection, nor as a side effect of other requests on the connection. It MAY vary by the authorization presented on the request. | Spec, server/tools | T |
-| MIK-7272.ORDER.3 | Every existing list filter MUST be classified as authorization-derived (retained) or connection-derived (moved to per-request input, or disabled in modern mode). The session-keyed routing profile and the `spec-preview` promotion list are known connection-derived cases. | Verified at source 2026-08-29 — see RFC-0061 correction table | T, I |
+| MIK-7272.ORDER.2a | The tool set MUST NOT vary per connection. It MAY vary by the authorization presented on the request. | Spec, server/tools | T |
+| MIK-7272.ORDER.2b | The tool set MUST NOT vary as a side effect of other requests on the connection. It MAY vary by the authorization presented on the request. | Spec, server/tools | T |
+| MIK-7272.ORDER.3a | Every existing list filter MUST be classified as authorization-derived or connection-derived. The session-keyed routing profile and the `spec-preview` promotion list are known connection-derived cases. | Verified at source 2026-08-29 — see RFC-0061 correction table | T, I |
+| MIK-7272.ORDER.3b | A filter classified as connection-derived MUST be moved to a per-request input, or disabled in modern mode; an authorization-derived filter is retained. | Verified at source 2026-08-29 — see RFC-0061 correction table | T, I |
 
 ### 3.6 Multi-round-trip requests, and the bridge
 
