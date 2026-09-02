@@ -8,7 +8,7 @@ stateless path, identity, all 17 MIK-7272 criteria (RESULT/ERROR/ORDER, then SUB
 the MIK-7246 destructive-confirmation gate, and the MIK-7217 discovery/era group. Every requirement ID
 in `RELEASE-4.0.0-requirements.md` now has a row, functional and non-functional alike.
 
-Coverage: 144 criteria, 145 rows, 96 met or non-blocking, 49 blocking.
+Coverage: 145 criteria, 146 rows, 96 met or non-blocking, 50 blocking.
 
 That line is the only place in this file that states totals, and it is not maintained by hand.
 `scripts/release/count-release-criteria.py --check` recounts the blocking column of every table
@@ -135,7 +135,8 @@ Note: this group's own subagent corrected two of the prior gap-plan's specific c
 
 | criterion ID | requirement (short) | status | evidence (file:line) | blocking |
 |---|---|---|---|---|
-| MIK-6704.IDENT.1 | authorization MUST derive from authenticated credential; `clientInfo` MUST NOT influence any authorization decision | MET | `src/protocol/meta.rs:117,271`; test `tests/mik_6704_acs.rs:138` | no |
+| MIK-6704.IDENT.1a | authorization MUST derive from the authenticated credential | UNTESTED | implemented and consumed, but nothing asserts the property. `AuthenticatedIdentity::principal` is a digest of the VALIDATED SECRET, not of the display name — `principal_of` (`src/gateway/auth.rs:38-43`) takes the first 12 hex of the SHA-256, set from the bearer token at `:209` and from the API key at `:224`, and from the OIDC client identity at `src/key_server/mod.rs:154`. The field's own doc comment (`src/gateway/auth.rs:344-352`) states the reason: two API keys may share an operator-chosen name, which would let them attach to each other's sessions. No test asserts any of it: `tests/auth_tests.rs` mentions `principal` only as `String::new()` in four fixtures (`:166,241,255,268`), and the three IDENT.1 tests in `tests/mik_6704_acs.rs` (`:30,:46,:138`) all prove the NEGATIVE clause, now scored as 1b. The parent row cited `protocol/meta.rs:117,271` — `classify_request` and a doc comment about declared capabilities — neither of which is about deriving authorization from a credential, so this half held a MET verdict on evidence for the other half | yes |
+| MIK-6704.IDENT.1b | `clientInfo` MUST NOT influence any authorization decision | MET | proved by absence, which is the right shape here — a positive test would have to enumerate every authorization path and would miss the one added next week. `ac_ident_1_no_code_outside_the_parser_reads_the_self_asserted_name` (`tests/mik_6704_acs.rs:138`) walks the source tree and fails on any read of `client_info_name` outside the parser that owns it (`src/protocol/meta.rs`). Supported by `ac_ident_1_client_info_is_carried_but_is_not_an_identity` (`:30`) and `ac_ident_1_two_callers_claiming_the_same_name_are_not_the_same_caller` (`:46`), which shows two requests asserting one name are indistinguishable, so the field cannot be what tells callers apart | no |
 | MIK-6704.IDENT.2 | `clientInfo`/`clientCapabilities` carried as diagnostic/negotiation context, labelled untrusted | MET | `src/protocol/meta.rs:271` `declares_capability`; tests `tests/mik_6704_acs.rs:63,89,107` | no |
 | MIK-6704.IDENT.3 | end-user identity MUST be propagatable to a backend via token exchange (RFC 8693) | MET | `src/identity_propagation/token_exchange.rs`, wired `src/gateway/server/mod.rs:1053-1061`; tests `token_exchange.rs:547,565,604,648` | no |
 | MIK-6704.IDENT.5 | where identity cannot be established, gateway MUST refuse rather than fall back to shared credential | MET | `src/identity_propagation/mod.rs:123-137` (`enum PropagationError`, no downgrade variant); tests `tests/mik_6704_acs.rs:194,207` | no |
@@ -332,7 +333,7 @@ criteria they observe, and closing those does not close these — each still nee
 
 ## What this audit does not cover
 
-This file audits the 122 functional criteria and the requirements list 122, so every FUNCTIONAL
+This file audits the 123 functional criteria and the requirements list 123, so every FUNCTIONAL
 requirement ID has a row. It carries one row more than that: `MIK-7212.MRTR.9a`, an obligation
 raised in the 2026-09-02 review and never written back into the requirements — the ledger is
 ahead of its own source of truth there, not behind. The coverage gap this section was written to record — 10 unexamined
