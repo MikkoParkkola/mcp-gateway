@@ -233,3 +233,58 @@ question - the criterion has already decided that the safety is worth the break.
 a client, and the corrected convergence points for them stand on their own. Those two
 proceed on their own footing. The confirmation branch proceeds with them: it is specified,
 not waiting, and the only thing it needs that they do not is a stdio path to the gate.
+
+## What `CONFIRM.1a` already has, and what it is actually missing (§P1)
+
+The resolution above settled *what the behaviour must be*. It did not ask *how much of it
+already exists*, and the answer changes the shape of the work: the refusal is built, on one
+transport, and the criterion's own wording no longer describes the code.
+
+The gate has exactly **one call site** in the whole tree — `src/gateway/router/handlers.rs:1196`,
+inside the HTTP router (V: `rg 'require_destructive_confirmation|is_destructive_meta_tool'`,
+2026-09-02). Everything below follows from that single fact.
+
+| the criterion says | the code does | evidence |
+|---|---|---|
+| the gate proceeds when there is no session | on the HTTP path it **already refuses** — `is_modern` selects `ConfirmationPolicy::for_modern()`, whose `on_unconfirmable()` is `REFUSE`, and the handler returns `-32001` | `handlers.rs:1226-1247` |
+| ... over stdio | a destructive `tools/call` arriving on stdio **never reaches the gate at all** — there is no call site in `src/gateway/server/` | the single-call-site search above |
+| ... for an internal caller | likewise ungated, see below | `authorization.rs:280-295` |
+
+**This narrows cluster G's confirmation work and it does not shrink it.** The HTTP repair is
+done and is not ours to redo. What remains is precisely the dispatch-parity problem this note
+already exists to solve: the stdio loop reimplements a slice of the router and inherits none of
+its gates. `CONFIRM.1a` is therefore not a fourth concern bolted onto cluster G — it is the
+same defect as `NFR.OBS.1` and `NFR.OBS.2`, in its third costume, and the elimination this note
+proposes closes all three or none.
+
+**Rows 13 and 14 are load-bearing, not regression tests.** A test written today against the
+stdio path fails because the behaviour is absent, not because a mutation was staged for it —
+which is the free failure §P2 asks for, and the reason to write them before the code.
+
+### A comment that overstates its own reach — fix it with row 14
+
+`handlers.rs:1252-1256` reads:
+
+> The same policy the pre-check above applied, handed to the dispatch chokepoint so the shapes
+> the pre-check cannot see — a playbook step, whose targets are not in the request — face it too.
+
+What is handed down is `RouterAuthorizer`, which holds `state`, `client`,
+`oauth_agent_identity`, `cert_identity` and `principal`, and implements `ToolAuthorizer` with a
+single `authorize` method (`src/gateway/router/authorization.rs:280-300`). It carries **no
+confirmation policy and makes no confirmation call**. Authorization reaches the chokepoint;
+confirmation does not.
+
+Read as written, the comment tells the next reader that a playbook step invoking a destructive
+tool already faces the gate. It does not. A stale comment is model input, not neutral prose,
+and this one asserts the exact safety property row 14 exists to establish. It is corrected in
+the same change that makes it true — not before, because a comment describing behaviour that
+does not yet exist is the defect we are removing, pointed the other way.
+
+### The existing test asserts the policy against itself
+
+`tests/mik_7215_controls_acs.rs:208` and `:222` assert
+`ConfirmationPolicy::for_modern().on_unconfirmable() == REFUSE` and the legacy counterpart.
+That is the policy's own constant compared with the policy's own constructor: it passes whether
+or not any caller consults it, which is how "written for this decision and then never consulted"
+survived to be discovered in the handler comment. Rows 13 and 14 assert the *behaviour at the
+boundary* instead, which is the only form of this test that can go red.
