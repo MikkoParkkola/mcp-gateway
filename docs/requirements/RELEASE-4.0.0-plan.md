@@ -351,10 +351,11 @@ a client declaring the pinned revision is answered `2025-11-25` at `initialize` 
 first clause is unmet.
 
 So the flip is a release gate with an order: it is the LAST commit, not an early one, and it is only
-truthful once the modern request path is complete. Note the two constants are read by different
-sites — `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) already contains `2026-07-28` and drives
-method availability on `POST /mcp`, while `SUPPORTED_VERSIONS` drives `initialize`. The modern path
-can therefore be fully working while `initialize` still denies it, which is exactly today's state.
+truthful once the modern request path is complete. It is also only half the gate — the constant
+governs `initialize`, while `server.modern_protocol` governs whether the path serves at all. Both
+halves, and why either alone is insufficient, are defined once in
+`docs/requirements/RELEASE-4.0.0-blocking-rollup.md` under "The two gates that are not rows".
+That paragraph is the definition; this one must not restate it.
 
 The interim behaviour is conforming, checked rather than assumed. Both 2025-06-18 and 2025-11-25
 carry identical version-negotiation text: "If the server supports the requested protocol version, it
