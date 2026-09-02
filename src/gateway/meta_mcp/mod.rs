@@ -1348,7 +1348,18 @@ impl MetaMcp {
         // an operator hiding a tool must not get a reply confirming it exists and
         // was deliberately withheld.
         if !self.meta_tool_exposure.is_exposed(tool_name) {
-            return JsonRpcResponse::error(Some(id), -32601, format!("Unknown tool: {tool_name}"));
+            // Built the same way the fallback below builds its no-suggestion
+            // form, and returned through the same helper, so the two answers
+            // are byte-identical. Constructing the response directly here
+            // produced a message without the error type's
+            // "JSON-RPC error -32601: " prefix, and that difference was itself
+            // the disclosure. The fallback's did-you-mean hint is deliberately
+            // not reached: a hidden tool name matches itself, so a suggestion
+            // would name the tool the allow-list is hiding.
+            return error_response_preserving_status(
+                id,
+                &crate::Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
+            );
         }
 
         // Admin gate for the meta-tools that change the gateway for every
