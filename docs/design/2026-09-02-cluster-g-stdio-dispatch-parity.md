@@ -194,29 +194,41 @@ confirmation code, which then has nobody to ask, on the transport where `is_admi
 means the admin check never says no either. Both controls would be nominally present and
 neither would be able to refuse anything.
 
-That leaves a decision the design cannot make for itself, and it is now the open question
-that blocks implementation: when confirmation cannot be sought on stdio, does the
-destructive call **proceed with a warning** (today's HTTP behaviour for a client without
-elicitation, and today's stdio behaviour by omission) or is it **refused**? GPT recommends
-refusal. Refusal is safer and is a behaviour change for anyone driving `gateway_kill_server`
-over stdio today. It is a question about what a user is owed, so it is the operator's,
-asked before implementation rather than after.
+That looked like a decision the design could not make for itself, and it was put to the
+operator as one. **It was not.** The criterion already states the answer:
 
-## DEFERRED — the stdio confirmation behaviour (§P1)
+> The destructive-operation confirmation gate MUST refuse when it cannot obtain confirmation.
+> Today it proceeds when elicitation is unsupported **or there is no session** - and after this
+> release there is never a session.
+> -- `docs/requirements/RELEASE-4.0.0-requirements.md:195`
 
-Put to the operator on 2026-09-02 with three options — refuse the call, proceed with a
-warning, or build a stdio elicitation transport. **No answer was given.** It is recorded
-deferred rather than decided, because what a user is owed when a destructive call cannot be
-confirmed is not a question this design may answer for itself.
+## RESOLVED - the stdio confirmation behaviour refuses (§P1)
 
 | field | value |
 |---|---|
-| owner | the operator; no ticket, this release's own decision list |
-| what would resolve it | the question above, re-put; it is a choice between three stated behaviours, not a check that can be run |
-| when | before any code implements `CONFIRM.1a` on stdio — the branch cannot be written without it |
-| what if it resolves badly | if the answer is *proceed with a warning*, `CONFIRM.1a` closes with stdio still unable to refuse anything, and that must be recorded as accepted residual risk on the criterion rather than presented as parity. If the answer is *build the transport*, the row leaves this cluster and becomes its own change with its own design |
+| question | when confirmation cannot be sought on stdio, does the destructive call proceed with a warning, or is it refused? |
+| how it was resolved | read at source - `RELEASE-4.0.0-requirements.md:195`, quoted above |
+| the answer | **refuse.** Fail closed. The criterion says MUST, and it names *no session* as one of the two conditions that must now trigger refusal rather than passage |
+| what it changed | the branch is specified rather than waiting; row 13 of the test plan asserts it; cluster G's scope grows by one implementable criterion |
 
-**What this blocks, and what it does not.** It blocks `MIK-7246.CONFIRM.1a` alone.
-`NFR.OBS.1` and `NFR.OBS.2` do not depend on it: both are records, neither asks anything of
+**The question should not have been asked, and one of its options was forbidden.** It was put
+to the operator with three choices, and *proceed with a warning* was among them - a behaviour
+the criterion explicitly forbids. Offering a forbidden option as a live choice is worse than
+asking an unnecessary question: had it been picked, the design would have carried an operator
+decision that contradicts the requirement, and the contradiction would have been invisible,
+because nobody re-reads a criterion after the operator has spoken. Both reviewers converged on
+this from opposite directions, and both were right. The check that closes it costs one file
+read, which is what the process asks for before an open question is escalated: it is
+*scheduled*, and a check that can be run is run before a question that must be waited on.
+
+**What remains genuinely open, and it is not blocking.** Refusal satisfies the criterion, so
+building a stdio elicitation transport - a way to *obtain* confirmation rather than to fail
+without it - is not required by this release and does not belong in this cluster. It stays
+available as a later change. What does need saying out loud is the consequence: refusal is a
+behaviour change for anyone driving a destructive tool such as `gateway_kill_server` over
+stdio today, and those calls will start failing closed. That is a release note, not a
+question - the criterion has already decided that the safety is worth the break.
+
+**What this blocks, and what it does not.** It blocks nothing. `NFR.OBS.1` and `NFR.OBS.2` do not depend on it: both are records, neither asks anything of
 a client, and the corrected convergence points for them stand on their own. Those two
 proceed; the confirmation branch waits.
