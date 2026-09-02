@@ -225,7 +225,7 @@ impl InputRequired {
         if result.get("resultType").and_then(Value::as_str)? != RESULT_TYPE_INPUT_REQUIRED {
             return None;
         }
-        let requests = result
+        let requests: Vec<(String, Value)> = result
             .get("inputRequests")
             .and_then(Value::as_object)
             .map(|map| {
@@ -234,12 +234,25 @@ impl InputRequired {
                     .collect()
             })
             .unwrap_or_default();
+        let request_state = result
+            .get("requestState")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        // An exchange with no question and no state can be advanced by nobody:
+        // the client has nothing to answer and the retry would carry nothing
+        // back to the backend. Classifying it as interim anyway mints a
+        // continuation that occupies the keyring until it expires and can
+        // never be redeemed. A state-only result is a different case and stays
+        // valid — the backend wants another turn without asking the user
+        // anything, which `ac_mrtr_7_a_state_only_interim_result_needs_no_client_round_trip`
+        // fixes as a requirement. Refusing here is what makes the unresumable
+        // shape unconstructible rather than a check every caller must repeat.
+        if requests.is_empty() && request_state.is_none() {
+            return None;
+        }
         Some(Self {
             requests,
-            request_state: result
-                .get("requestState")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            request_state,
         })
     }
 

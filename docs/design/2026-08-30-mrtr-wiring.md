@@ -583,3 +583,27 @@ no client can have declared". A fixture that omits `method` therefore never
 reaches the gate it was written to test. Fail-closed is right — a question no
 client could have declared cannot be answered — but the error names the input's
 type rather than its absence, which is what made it read as a fixture typo.
+
+### DE-7 — two decisions review forced, which this design had not made
+
+Both were raised as findings against the shipped continuation path and are recorded here because
+each changes observable behaviour rather than only its implementation.
+
+**A refusal's `data` now survives the response boundary, one key wide.** `error_response_preserving_status`
+wrote `data` unconditionally so that no backend could choose the gateway's HTTP status. That is the
+right property and it stays, but it also discarded the `requiredCapabilities` payload MRTR.9 builds,
+so a client was told it had failed to declare something without being told what. The boundary now
+forwards that single key out of a gateway-authored `JsonRpc` error and nothing else. Forwarding the
+whole object was rejected: `invoke_tool` puts a *backend's* error data into the same variant, so a
+blanket forward is exactly the hole the original code was defending. The residual is stated: a
+backend can populate `requiredCapabilities` on an error it already authored the code and message of,
+which misleads about capabilities but cannot reach the status field.
+
+**An interim result with neither a question nor state is no longer an exchange.** `InputRequired::from_result`
+accepted `{"resultType": "input_required"}` alone and returned a value the invoke path then minted a
+continuation for — a handle holding a keyring slot that no client could answer and no retry could
+carry anything back for, until it expired. It now returns `None` for that shape. The narrower guard
+matters: a *state-only* result, which asks the user nothing but wants another turn, is legitimate and
+is fixed as a requirement by `ac_mrtr_7_a_state_only_interim_result_needs_no_client_round_trip`. A
+first attempt at this guard refused that case too and the acceptance suite caught it, which is the
+argument for the criterion existing rather than the guard being written carefully.

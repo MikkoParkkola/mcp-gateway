@@ -525,6 +525,17 @@ mod reverse {
         // complete by the client rule — so a legacy backend's ordinary answer
         // must never be read as a question.
         assert!(InputRequired::from_result(&json!({ "tools": [] })).is_none());
+
+        // An exchange with no question and no state can be advanced by nobody,
+        // so classifying it as interim mints a handle that holds a keyring slot
+        // until it expires and can never be redeemed. The neighbouring
+        // `ac_mrtr_7_a_state_only_interim_result_needs_no_client_round_trip`
+        // fixes the case this must not catch: a state-only result is a real
+        // exchange the gateway advances without asking the client anything.
+        assert!(
+            InputRequired::from_result(&json!({ "resultType": "input_required" })).is_none(),
+            "an interim result with neither a question nor state is not an exchange"
+        );
         assert!(
             InputRequired::from_result(&json!({ "resultType": "complete", "tools": [] })).is_none()
         );
