@@ -219,8 +219,11 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 
 | ID | Requirement | Source | Verify |
 |---|---|---|---|
-| MIK-7272.SUB.1 | `subscriptions/listen` MUST replace the HTTP GET endpoint and `resources/subscribe`/`unsubscribe` on the modern path, with opt-in by notification type and notifications tagged `io.modelcontextprotocol/subscriptionId`. | Spec §4 major | T |
-| MIK-7272.SUB.2 | Request-scoped notifications (`notifications/progress`, `notifications/message`) MUST flow on the response stream of their own request, not on the subscription stream. | Spec §4 | T |
+| MIK-7272.SUB.1a | `subscriptions/listen` MUST replace the HTTP GET endpoint on the modern path. | Spec §4 major | T |
+| MIK-7272.SUB.1b | `subscriptions/listen` MUST replace `resources/subscribe`/`unsubscribe` on the modern path; both MUST be refused there. | Spec §4 major | T |
+| MIK-7272.SUB.1c | Subscriptions MUST be opt-in by notification type, and notifications MUST be tagged `io.modelcontextprotocol/subscriptionId`. | Spec §4 major | T |
+| MIK-7272.SUB.2a | Request-scoped notifications (`notifications/progress`, `notifications/message`) MUST NOT be delivered on the subscription stream. | Spec §4 | T |
+| MIK-7272.SUB.2b | Request-scoped notifications MUST flow on the response stream of their own request. | Spec §4 | T |
 | MIK-7272.SUB.3 | SSE resumability MUST be removed from the modern path: no `Last-Event-ID`, no event ids, no redelivery. | Spec §9 major | T |
 | MIK-7272.SUB.4 | Because a broken stream forces re-issue with a new request id, a side-effecting call MUST be protected by an idempotency key or routed through the tasks extension. | Spec §9; irreversible duplication otherwise | T |
 
