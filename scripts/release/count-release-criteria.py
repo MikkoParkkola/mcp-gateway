@@ -88,7 +88,8 @@ def rows(text):
         if cells[-1] not in ("yes", "no"):
             malformed.append(cells[0])
             continue
-        out.append((ID.match(cells[0]).group(1), cells[-1]))
+        found = ID.match(cells[0])
+        out.append((found.group(1), cells[-1], found.group(0)))
     return out, malformed
 
 
@@ -153,8 +154,12 @@ def main():
         print(f"malformed blocking column on: {', '.join(malformed)}", file=sys.stderr)
         return 1
 
-    blocking = sum(1 for _, b in criteria if b == "yes")
-    ids = {i for i, _ in criteria}
+    blocking = sum(1 for _, b, _s in criteria if b == "yes")
+    # Matched against `declared` WITH the suffix. Folding `MRTR.10a` onto
+    # `MRTR.10` here would report a requirement as covered by a row that
+    # gives a verdict on a different clause of it -- the substitution this
+    # whole exercise exists to stop.
+    ids = {s for _i, _b, s in criteria}
     requirements = REQUIREMENTS.read_text()
     # The suffix is part of the identifier here, unlike in `ID`, which folds
     # `MRTR.9a` onto `MRTR.9` so a ledger sub-row counts against its parent.
