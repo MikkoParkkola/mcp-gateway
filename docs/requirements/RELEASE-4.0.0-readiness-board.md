@@ -20,11 +20,11 @@ nobody intends to do it.
 | D | response-cache keying (MIK-7213) | 2 | yes — `2026-08-31-cluster-f-response-cache-keying.md` | yes — same stem, `-test-plan.md` | no | no | the test plan has never been through the dual-vendor gate |
 | E | performance measurement | 2 | n/a — this is a measurement, not a design | no | no | n/a | a run against 3.5.0 **on Spark**. A Mac number is worse than none |
 | F | compatibility facts | 2 | `NFR.COMPAT.4` only — `2026-09-02-conformance-matrix.md` | no | no | no | `NFR.COMPAT.1` is a one-line default flip that cannot land before cluster A merges |
-| G | stdio dispatch | 3 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | no | the gate itself: see the reviewer state below |
+| G | stdio dispatch | 3 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | **one red test, and it is on cluster A's branch** — `049ff885` added `stdio_observation` for row 1, and the stdio dispatcher reaches no record site, so it fails | the emit itself. Until a record site both dispatchers reach exists, that red test gates cluster A's merge under DoD §11, not just G's own rows |
 | — | residue | 10 | mixed | no | no | no | ten independent rows, each needing its own decision |
 
-53 blocking rows. **One cluster has code.** Six have no branch, no worktree and
-no commit — verified against `git worktree list` and `git branch`, which show
+53 blocking rows. **Two clusters have code, and both live on one branch.** Five
+have no branch, no worktree and no commit — verified against `git worktree list` and `git branch`, which show
 `fix/mrtr2-continuation-handle` (cluster A) plus two unrelated gap branches.
 
 ## The gate is the binding constraint, not the writing
@@ -72,7 +72,10 @@ is left without a next step.
 5. **Book the Spark run for E.** It depends on nothing and nobody has started it.
    `NFR.PERF.4` is residue rather than cluster E, and a separate cheaper fix:
    `benchmarks/public_claims.json:4-6` records 14/16/17 against a drifted README.
-6. **Close G's gate** now that the reviewer is reachable again.
+6. **Close G's gate** now that the reviewer is reachable again — but G's row-1
+   emit does not wait for it. A red test already sits on cluster A's branch, so the
+   emit is a step-1 obligation and the remaining seven stdio rows queue behind the
+   gate as planned.
 7. **Triage the residue as one pass.** Ten rows, each independent, each needing a
    decision rather than an increment — `HEADER.9` waits on B's per-backend era, so
    it cannot come first. One session, one line of disposition per row, and the ones
