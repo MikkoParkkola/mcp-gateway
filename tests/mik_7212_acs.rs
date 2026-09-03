@@ -26,6 +26,7 @@ fn payload() -> Payload {
         issued_at: 1_000,
         expires_at: 2_000,
         jti: "jti-1".to_string(),
+        hold_key: "exchange-1".to_string(),
     }
 }
 
@@ -763,6 +764,7 @@ mod hardening {
             issued_at: 1_000,
             expires_at: 2_000,
             jti: "jti-1".into(),
+            hold_key: "exchange-1".into(),
         }
     }
 
@@ -975,6 +977,7 @@ mod mint_budget {
             issued_at: 1_000,
             expires_at: 2_000,
             jti: "jti-1".into(),
+            hold_key: "exchange-1".into(),
         }
     }
 
@@ -1057,6 +1060,7 @@ mod envelope_size {
             issued_at: 1_000,
             expires_at: 2_000,
             jti: "jti-1".into(),
+            hold_key: "exchange-1".into(),
         }
     }
 

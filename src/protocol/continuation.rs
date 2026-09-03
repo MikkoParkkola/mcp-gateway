@@ -85,6 +85,16 @@ pub struct Payload {
     pub expires_at: u64,
     /// Unique id, so redemption can be made single-use.
     pub jti: String,
+    /// The [`InFlight`] key for the exchange this continuation continues.
+    ///
+    /// Sealed rather than derived, and carried rather than looked up: the table
+    /// is keyed by a name the gateway chose at mint, and without that name in
+    /// the envelope a redemption can only ask whether *some* exchange is open
+    /// for this backend. That is a weaker question than the criterion asks —
+    /// it answers yes for an honest concurrent exchange belonging to another
+    /// caller, so a retry whose own exchange has ended would be admitted on the
+    /// strength of a stranger's.
+    pub hold_key: String,
 }
 
 impl std::fmt::Debug for Payload {
@@ -100,6 +110,7 @@ impl std::fmt::Debug for Payload {
             .field("issued_at", &self.issued_at)
             .field("expires_at", &self.expires_at)
             .field("jti", &self.jti)
+            .field("hold_key", &self.hold_key)
             .finish()
     }
 }
@@ -115,6 +126,16 @@ impl std::fmt::Debug for Payload {
 /// Keys do not outlive the process, and neither does the ledger. Persistent
 /// keys arrive with the durable ledger (MIK-7312) and not before.
 const CONTINUATION_LIFETIME_SECS: u64 = 300;
+
+/// When a continuation minted at `now` dies.
+///
+/// One function because two things need the answer and they must agree: the
+/// envelope's own `expires_at`, and the deadline the reaper enforces on the
+/// exchange it continues. A hold that outlives its envelope is a slot nothing
+/// can release; one that dies first is an honest retry refused.
+const fn expiry_for(now: u64) -> u64 {
+    now.saturating_add(CONTINUATION_LIFETIME_SECS)
+}
 
 /// Wall-clock seconds since the Unix epoch — the unit `mint` and `open` measure
 /// `now` and `expires_at` in.
@@ -143,6 +164,7 @@ impl Payload {
         principal_fingerprint: String,
         original_request_digest: String,
         origin_replica: String,
+        hold_key: String,
         now: u64,
     ) -> Self {
         Self {
@@ -152,8 +174,9 @@ impl Payload {
             original_request_digest,
             origin_replica,
             issued_at: now,
-            expires_at: now.saturating_add(CONTINUATION_LIFETIME_SECS),
+            expires_at: expiry_for(now),
             jti: uuid::Uuid::new_v4().to_string(),
+            hold_key,
         }
     }
 
@@ -769,6 +792,39 @@ impl ContinuationState {
             in_flight: InFlight::new(&replica, IN_FLIGHT_CAPACITY),
             replica,
         }
+    }
+
+    /// Open an exchange on this replica and seal a continuation for it
+    /// (MRTR.8).
+    ///
+    /// The hold and the mint are one operation because the criterion is about
+    /// their agreement: an envelope naming an exchange nobody holds is
+    /// redeemable against nothing, and a held slot no envelope names is a leak
+    /// that only the reaper ever closes. Taking the slot first also puts the
+    /// capacity refusal before the mint, so a gateway at its limit declines the
+    /// question rather than answering it with a handle it cannot honour.
+    ///
+    /// `None` when the table is full. The caller turns that into the same
+    /// refusal it gives an unbindable caller: both are properties of this
+    /// gateway's state that a client can do nothing about.
+    pub async fn begin_exchange(
+        &self,
+        backend_id: String,
+        backend_request_state: Option<String>,
+        principal_fingerprint: String,
+        original_request_digest: String,
+        now: u64,
+    ) -> Option<Payload> {
+        let hold_key = self.in_flight.hold(&backend_id, expiry_for(now)).await?;
+        Some(Payload::mint(
+            backend_id,
+            backend_request_state,
+            principal_fingerprint,
+            original_request_digest,
+            self.replica.clone(),
+            hold_key,
+            now,
+        ))
     }
 
     /// The keys this process mints and opens with.

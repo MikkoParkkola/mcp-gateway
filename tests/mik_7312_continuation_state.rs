@@ -82,6 +82,7 @@ fn payload(jti: &str, origin: &str, expires_at: u64) -> Payload {
         issued_at: 1_000,
         expires_at,
         jti: jti.to_string(),
+        hold_key: format!("exchange-{jti}"),
     }
 }
 

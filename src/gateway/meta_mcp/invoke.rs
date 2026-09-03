@@ -365,11 +365,15 @@ fn json_is_populated(value: &Value) -> bool {
 /// `mrtr::principal_fingerprint` for which credential schemes are constructible
 /// today and why the others are not.
 ///
-/// A keyring refusal — budget exhausted, envelope too large — lands here too.
-/// The cause is logged and not returned, because the caller can act on neither:
-/// they are properties of this gateway's state, not of the request, and naming
-/// them tells a client how close the mint budget is to being spent.
-fn mint_continuation(
+/// A keyring refusal — budget exhausted, envelope too large — lands here too,
+/// and so does a full in-flight table. The cause is logged and not returned,
+/// because the caller can act on none of them: they are properties of this
+/// gateway's state, not of the request, and naming them tells a client how
+/// close the mint budget is to being spent.
+///
+/// The exchange is opened on this replica before the envelope is sealed, so the
+/// handle that goes out names a slot this process is holding (MRTR.8).
+async fn mint_continuation(
     continuation: &crate::protocol::continuation::ContinuationState,
     caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     server: &str,
@@ -377,14 +381,19 @@ fn mint_continuation(
     arguments: &Value,
     backend_request_state: Option<String>,
 ) -> Option<String> {
-    let payload = crate::protocol::continuation::Payload::mint(
-        server.to_string(),
-        backend_request_state,
-        crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)?,
-        crate::protocol::mrtr::original_request_digest(server, tool, arguments),
-        continuation.replica().to_string(),
-        crate::protocol::continuation::now_unix_secs(),
-    );
+    let Some(payload) = continuation
+        .begin_exchange(
+            server.to_string(),
+            backend_request_state,
+            crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)?,
+            crate::protocol::mrtr::original_request_digest(server, tool, arguments),
+            crate::protocol::continuation::now_unix_secs(),
+        )
+        .await
+    else {
+        warn!(server, tool, "No slot to hold this exchange open; refusing");
+        return None;
+    };
     match continuation.keyring().mint(&payload) {
         Ok(envelope) => Some(envelope),
         Err(error) => {
@@ -562,6 +571,26 @@ async fn redeem_retry(
             rejected_continuation(&error)
         })?;
 
+    // MRTR.6: the exchange this handle continues must still be open, here. The
+    // table is written only by this process's own mint, so a retry that reaches
+    // a replica which did not mint it asks a table that never knew the key —
+    // and one whose exchange has since ended asks a table that no longer does.
+    // Both answer `Gone`, and both must refuse rather than dispatch: dispatching
+    // would open a *second* exchange with a legacy backend, leaving the first
+    // hanging and asking the user the same question twice.
+    //
+    // Checked before the handle is spent. A retry the gateway cannot honour
+    // should not also burn the client's one redemption.
+    if continuation.in_flight().route(&payload.hold_key).await
+        == crate::protocol::continuation::Routing::Gone
+    {
+        warn!(
+            server,
+            tool, "Retry for an exchange this replica no longer holds"
+        );
+        return Err(rejected_continuation(&ContinuationError::NotAuthentic));
+    }
+
     if !continuation
         .ledger()
         .consume(&payload.jti, payload.expires_at, now)
@@ -576,6 +605,12 @@ async fn redeem_retry(
         );
         return Err(rejected_continuation(&ContinuationError::NotAuthentic));
     }
+
+    // The exchange ends here: this retry carries the answers it was waiting for.
+    // Releasing the slot is what keeps capacity a measure of exchanges still
+    // open rather than of every exchange ever started, and it is what makes the
+    // refusal above true of a handle redeemed twice.
+    continuation.in_flight().complete(&payload.hold_key).await;
 
     Ok(OutboundRetry {
         request_state: payload.backend_request_state,
@@ -1475,7 +1510,9 @@ impl MetaMcp {
                 tool,
                 &arguments,
                 interim.request_state,
-            ) else {
+            )
+            .await
+            else {
                 warn!(
                     server,
                     tool, trace_id, "Cannot mint a continuation for this caller; refusing"

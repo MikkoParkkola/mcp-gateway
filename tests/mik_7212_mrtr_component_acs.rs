@@ -871,6 +871,11 @@ fn mint_on_a_foreign_process(tool: &str, args: &Value) -> String {
         fingerprint_of(CALLER_A),
         original_request_digest(BACKEND, tool, args),
         foreign.replica().to_string(),
+        // The foreign process's table is not this one's, so no key sealed here
+        // could name an exchange this gateway holds. Named rather than empty:
+        // the refusal under test is the signature, and a payload that is
+        // implausible in a second way makes it ambiguous which guard fired.
+        format!("{BACKEND}:foreign-exchange"),
         now_secs(),
     );
     foreign
@@ -1000,22 +1005,18 @@ async fn ac_mrtr_5d_a_handle_minted_by_another_process_is_refused() {
 /// held well: `tests/mik_7212_acs.rs:439` refuses at capacity rather than
 /// growing, and `:457` reclaims an abandoned exchange *and* asserts its slot
 /// comes back, which is the non-vacuous form the test plan asks for. Neither
-/// says anything about the gateway. Nothing in `src/` calls `InFlight::hold`
-/// — `ContinuationState` builds the table (`src/protocol/continuation.rs:767`)
-/// and exposes it (`:786`) to no production caller — so the request path never
-/// puts an entry there to bound. A table the gateway never fills is bounded
-/// the way an empty room is quiet.
+/// says anything about the gateway: they drive the table directly, and the
+/// criterion is about the *request path* putting an entry in it. That half is
+/// what this case carries, and it is the half no unit case can reach.
 ///
-/// This is the half no unit case can reach, and it is the whole of what MRTR.8
-/// still owes: the count bound and the lifetime bound are proved; their
-/// subject is not.
+/// `ContinuationState::begin_exchange` is what makes it reachable — it takes
+/// the slot and seals its key into the handle in one step, so the count bound
+/// and the lifetime bound finally have a subject.
 ///
-/// Red today for two independent reasons, and it cannot yet tell them apart:
-/// nothing writes the table, *and* the mint refuses this caller for want of a
-/// principal (the answer in the message is the `-32003` refusal, not an
-/// interim result). The second reason clears with DE-6; the first needs the
-/// MRTR.7 bridge to exist. Stated here so a future reader does not read a
-/// green as proof of wiring when it may only prove a principal arrived.
+/// A green here says the interim path minted *and* held. It says nothing about
+/// the MRTR.7 bridge: the fixture backend returns an interim result of its own,
+/// where a legacy backend would need the bridge to produce one. Stated so a
+/// future reader does not read this green as proof of that.
 #[tokio::test]
 async fn ac_mrtr_8_an_exchange_the_gateway_opened_occupies_a_slot() {
     let state = app_state();
@@ -1035,11 +1036,11 @@ async fn ac_mrtr_8_an_exchange_the_gateway_opened_occupies_a_slot() {
 
 /// The discriminator for the case above: a call that finished holds no slot.
 ///
-/// Green today, and for the same reason everything about this table is green
-/// today — nothing is ever written to it. It earns its place once the table is
-/// wired: without it, an implementation that holds a slot for *every* call
-/// satisfies the positive above while leaking a slot per request, which is the
-/// exhaustion the bound exists to prevent.
+/// The table is written now, so this is no longer green by vacancy: it says the
+/// gateway holds a slot for an exchange that stayed open and for nothing else.
+/// Without it, an implementation that holds a slot for *every* call satisfies
+/// the positive above while leaking one per request, which is the exhaustion
+/// the bound exists to prevent.
 #[tokio::test]
 async fn ac_mrtr_8_a_call_that_finished_holds_no_slot() {
     let state = app_state();
@@ -1104,16 +1105,17 @@ async fn ac_mrtr_6_a_retry_at_another_replica_is_refused_and_opens_no_exchange()
     register_fixture_backend(&neighbour, &url);
     let args = arguments();
     let handle = mint_for(&origin, &received, CALLER_A, TOOL_INTERIM, &args).await;
-    // The exchange the origin is holding. Staged directly: no non-test caller
-    // writes to this table yet, and `Payload` carries no hold key, so "the hold
-    // for this handle" cannot be expressed — what can be is that the origin
-    // holds an exchange and still holds it afterwards.
+    // The exchange the origin is holding: the one its own mint opened, named by
+    // the hold key sealed inside this handle. Read rather than staged — a hold
+    // taken here would be a *second* exchange of the same shape, and the
+    // closing assertion would then pass against a gateway that ended the wrong
+    // one.
     let held = origin
         .continuation
-        .in_flight()
-        .hold(BACKEND, now_secs() + 60)
-        .await
-        .expect("the bounded table must admit one exchange");
+        .keyring()
+        .open(&handle, now_secs())
+        .expect("a handle the origin just minted must open")
+        .hold_key;
 
     // WHEN: the retry lands on B, as a round-robin balancer will send it.
     let (_status, response) = post(&neighbour, &retry_body(1, TOOL_INTERIM, &args, &handle)).await;
@@ -1157,8 +1159,8 @@ async fn ac_mrtr_6_a_retry_at_another_replica_is_refused_and_opens_no_exchange()
     );
     assert!(
         origin.continuation.in_flight().complete(&held).await,
-        "the origin must still hold *that* exchange, not merely one of the same \
-         shape"
+        "the origin must still hold the exchange *this handle names*, not merely \
+         one of the same shape"
     );
 }
 
@@ -1179,11 +1181,12 @@ async fn ac_mrtr_6_a_retry_at_another_replica_is_refused_and_opens_no_exchange()
 /// table that once held it can present. `complete` ends it rather than `reap`,
 /// so the case turns on the exchange being gone and not on deadline timing.
 ///
-/// The hold is staged directly because no non-test caller writes to the
-/// in-flight table yet, and because a handle carries no correlation to a hold
-/// key: `Payload` has no such field, so "the hold for *this* handle" is not
-/// constructible today. The strongest available statement is that this origin
-/// held an exchange against this backend and holds it no longer.
+/// The exchange that ends is the handle's own. `Payload::hold_key` names the
+/// in-flight entry the mint opened, so "the hold for *this* handle" is
+/// constructible and the case does not have to settle for the weaker statement
+/// that some exchange against this backend has ended. That weaker staging would
+/// pass against a gateway that admits a retry whenever *any* exchange for the
+/// backend is open — an honest concurrent one belonging to another caller.
 #[tokio::test]
 async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused() {
     // GIVEN: a handle this replica minted, and no exchange open for it.
@@ -1194,14 +1197,14 @@ async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused(
     let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &args).await;
     let held = state
         .continuation
-        .in_flight()
-        .hold(BACKEND, now_secs() + 60)
-        .await
-        .expect("the bounded table must admit one exchange");
+        .keyring()
+        .open(&handle, now_secs())
+        .expect("a handle this replica just minted must open")
+        .hold_key;
     assert!(
         state.continuation.in_flight().complete(&held).await,
-        "the staged exchange must be the one that ends, or the state under test \
-         is not the one this case names"
+        "the exchange that ends must be the one this handle names, or the state \
+         under test is not the one this case names"
     );
     assert_eq!(
         state.continuation.in_flight().len().await,
