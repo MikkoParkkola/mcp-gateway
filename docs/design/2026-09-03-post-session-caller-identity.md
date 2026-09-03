@@ -141,7 +141,7 @@ made it rare. Scheduled below rather than accepted silently.
 | is the reaper blocked on another module's ownership? | `rg SessionLifecycle` across `src/`, plus `register`'s signature at `src/gateway/session_lifecycle.rs:48` | zero production references; `register` takes a closure, so the firewall is called, not edited | removed "who owns it" as a design question; the remaining question is the clock |
 | does the repo have an established periodic-task shape, or is one being invented? | read `src/gateway/server/mod.rs:1372-1382` and `:1937-1942` | two live examples of spawn + interval + shutdown-select | chose a purpose-built task over reusing a timer, and fixed its shape |
 | is a principal always available to key on? | read the log's own caller fallback at `src/gateway/meta_mcp/invoke.rs:1806` | no — an unauthenticated call already falls back there | made "no principal, no deadline" an explicit case rather than an assumed one |
-| how long is a departed caller's per-principal state retained? | *askable, not checkable* — asked of the operator, relayed by the team lead on 2026-09-03; recommendation and reasoning below | **pending** | nothing yet. Nothing depending on the number is implemented: the reaper's TTL is a configured value, and the wiring increment reads it rather than embedding one |
+| how long is a departed caller's per-principal state retained? | *askable, not checkable* — asked of the operator, relayed by the team lead, answered 2026-09-03 | **300 seconds, sharing `PER_USER_IDLE_TTL` rather than a second constant** — the recommendation below, adopted as written | closed the deferral, so the wiring is no longer waiting on a number, and fixed which constant the reaper reads. It also bought a cost this design now carries rather than discovers: caller-identity lifetime is coupled to backend-slot lifetime, so if the two ever need to differ that is a code change, not a config edit. The operator chose that over a separately-named constant, on the grounds that two numbers answering one question is how one of them goes wrong |
 
 ### Deferred
 
@@ -182,7 +182,10 @@ implementation detail: it decides how long the gateway holds state belonging to 
 that has stopped calling. Wiring a value chosen while typing would make the criterion
 read as met while the number nobody agreed to is the one that ships.
 
-Recommendation: **300 seconds, matching `PER_USER_IDLE_TTL`, and configurable with it.**
+**Answered by the operator, 2026-09-03: 300 seconds, sharing `PER_USER_IDLE_TTL`.** The
+recommendation below was adopted as written; it is kept as the reasoning behind the
+answer, not as an open proposal.
+
 This gateway already answers "how long does a departed caller's state live" — 300 seconds
 for per-user backend slots, swept every 60 (`src/gateway/server/mod.rs:1988-1989`). A
 second, different number for the same question would mean a caller's backend slot and
@@ -203,3 +206,9 @@ inherits the refusal. And whatever knob is exposed must actually be read: `idle_
 parsed for releases while doing nothing and now sits in `retired_keys`
 (`src/config/mod.rs:540`). A TTL that configures nothing is worse than a constant,
 because a constant does not lie to the operator setting it.
+
+The cost the answer buys, stated here so the wiring inherits it rather than
+rediscovers it: sharing one constant couples caller-identity lifetime to backend-slot
+lifetime. Should the two ever need to differ, separating them is a code change, not a
+config edit. That was the operator's choice over a separately-named constant, on the
+grounds that two numbers answering one question is how one of them goes wrong.
