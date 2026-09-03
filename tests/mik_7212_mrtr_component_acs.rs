@@ -1035,9 +1035,23 @@ async fn ac_mrtr_6_a_retry_at_another_replica_is_refused_and_opens_no_exchange()
     let origin = app_state();
     let neighbour = app_state();
     let (url, received) = spawn_fixture_backend().await;
+    register_fixture_backend(&origin, &url);
     register_fixture_backend(&neighbour, &url);
     let args = arguments();
     let handle = mint_for(&origin, CALLER_A, TOOL_INTERIM, &args).await;
+    // The exchange the origin is holding. Staged directly: no non-test caller
+    // writes to this table yet, and `Payload` carries no hold key, so "the hold
+    // for this handle" cannot be expressed — what can be is that the origin
+    // holds an exchange and still holds it afterwards.
+    let held = origin
+        .continuation
+        .in_flight()
+        .hold(BACKEND, now_secs() + 60)
+        .await
+        .expect("the bounded table must admit one exchange");
+    // The origin's own mint reached the backend; only what the neighbour does
+    // with the handle is on trial here.
+    received.lock().expect("recorder").clear();
 
     // WHEN: the retry lands on B, as a round-robin balancer will send it.
     let (_status, response) = post(&neighbour, &retry_body(1, TOOL_INTERIM, &args, &handle)).await;
@@ -1065,6 +1079,16 @@ async fn ac_mrtr_6_a_retry_at_another_replica_is_refused_and_opens_no_exchange()
             .open(&handle, now_secs())
             .is_ok(),
         "the neighbour's refusal must not consume the handle the origin still owes"
+    );
+    assert_eq!(
+        origin.continuation.in_flight().len().await,
+        1,
+        "the neighbour's refusal must not end an exchange the origin is holding"
+    );
+    assert!(
+        origin.continuation.in_flight().complete(&held).await,
+        "the origin must still hold *that* exchange, not merely one of the same \
+         shape"
     );
 }
 
