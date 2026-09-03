@@ -40,8 +40,9 @@ owns the call".
 | OTEL.1 | `TraceContext` with `traceparent`/`tracestate`/`baggage`, and `to_meta()` | no non-test caller |
 | TASK.1 | `src/protocol/tasks.rs`, 111 lines of `Task`/`TaskStatus` types | zero consumers in `src/` |
 
-Read for a reviewer with no filesystem: five of these six are dead code in the literal compiler
-sense, and the sixth (ORDER.2) is live code doing the opposite of what the criterion requires.
+Read for a reviewer with no filesystem: four of these rows are dead code in the literal compiler
+sense (SUB.4, EXT.1, OTEL.1's outbound half, TASK.1). SUB.2b's machinery is live but reached only
+on subscription paths, and ORDER.2 is live code doing the opposite of what the criterion requires.
 
 ## Constraints, measured in this tree rather than assumed
 
@@ -147,16 +148,24 @@ building EXT.1 second would mean building a private negotiation path for tasks a
 it.
 
 **Deployment impact**: the initialize response grows keys. A client that rejects unknown fields in
-server capabilities would break, though such a client is already out of spec.
+server capabilities would break, though such a client is already out of spec. The *honour* half has
+no deployment impact today and that is a stated finding rather than an omission: no extension is
+currently exercised at all — `gateway_declares()` has no caller and TASK.1 is unbuilt — so there is
+no session in which the gateway is using an extension a client declined. The honour half is
+therefore a constraint on what TASK.1 may do, not a change to existing behaviour.
 
 ### OTEL.1 — trace context propagated through `_meta` across the gateway hop
 
-**Placement: the outbound hop, both routes.** `TraceContext` carries `traceparent`, `tracestate`
-and `baggage`, and `to_meta()` exists with no non-test caller. The wiring is one call at the point
-where the gateway builds the request it sends to a backend. That point is not single: the traced
-invoke path is one owner, and the direct backend route at `backend_handlers.rs:724` bypasses it.
-Naming the second owner is the whole decision here — otherwise this ships as "propagated except on
-the route nobody measured".
+**Placement: the outbound hop, both routes. The inbound half already has an owner on one route and
+none on the other.** `TraceContext` carries `traceparent`, `tracestate` and `baggage`. Inbound
+extraction exists on the meta route — `TraceContext::from_meta` is called at
+`src/gateway/meta_mcp/invoke.rs:1814` — and does not exist on the direct backend route. Outbound
+injection exists nowhere: `to_meta()` has no non-test caller. So the wiring is one call at the
+point where the gateway builds the request it sends to a backend, plus an extraction on the direct
+route to give that call something to propagate. That point is not single: the traced invoke path is
+one owner, and the direct backend route at `backend_handlers.rs:724` bypasses it. Naming the second
+owner is the whole decision here — otherwise this ships as "propagated except on the route nobody
+measured".
 
 Rejected: propagating at the transport layer, below the router. It would cover both routes with one
 edit, but the transport has no view of which hop is a backend tool call and which is the gateway's
@@ -196,7 +205,7 @@ that never negotiate the extension.
 | ORDER.2 independently | one producer, one parser, no dependency on the others |
 | SUB.4 before or with TASK.1 | TASK.1 changes SUB.4's derivation condition; shipping SUB.4's auto-derivation first is the failure the TASK.1 design names |
 | OTEL.1 independently | one call at the outbound hop, twice |
-| SUB.2b after the listen-stream design lands | it reuses that design's notification classification, not its registry |
+| SUB.2b after `NotificationKind::from_method` is reachable from the response path | it reuses that classification, not the subscriber registry; SUB.2a is already MET, so the classifier exists — the precondition is a caller on the response stream, which is checkable rather than a wait on a document |
 
 ## Unknowns
 
@@ -215,24 +224,27 @@ blocks nothing in this document; it blocks SUB.4's merge.
 
 ## Open for the operator
 
-Two questions. Neither is answered here, and neither is an engineering choice this design may make
-on its own.
+**One question, and one notification.** They are different things and the difference is deliberate:
+a question this design may not answer, and a decision it made on the requirement which the operator
+can overrule in a line.
 
-**1. ORDER.2 removes per-connection tool-surface variation on the modern path. Both axes, or only
-the session profile?** Recommendation: **both** — the codemode URL override is precisely a
-"list results vary per connection" mechanism, and leaving it means the criterion is not met while
-the row says it is. The cost is that a client using the query parameter to opt into Code Mode
-loses that ability on the modern path and must have it configured server-side instead. Answering
-"session profile only" is a legitimate scope narrowing, but it makes ORDER.2a MET(I) at best.
+**QUESTION — SUB.4's scope was decided by the team lead on 2026-08-31 while you were away: both the
+meta-MCP surface and the direct backend route are in scope, and protection is mandatory with no
+kill switch. Does that stand?** Recommendation: **let it stand.** The criterion says a re-issued
+side-effecting call MUST be protected; an operator switch makes that unverifiable in any deployment
+whose running configuration differs from the shipped default, and the direct route is a documented
+ingress that would otherwise ship unprotected. The cost is that operators get no way to turn the
+behaviour off if a client's retry pattern interacts badly with it, and the recovery is a release
+rather than a configuration change. This is the same record as the deferred unknown in the SUB.4
+section above — one answer settles both rows, and neither is closed without it.
 
-**2. SUB.4's tool-surface scope was decided by the team lead on 2026-08-31 while you were away —
-both the meta-MCP surface and the direct backend route are in scope, and protection is mandatory
-with no kill switch. Does that stand?** Recommendation: **let it stand.** The criterion says a
-re-issued side-effecting call MUST be protected; an operator switch makes that unverifiable in any
-deployment whose running configuration differs from the shipped default, and the direct route is a
-documented ingress that would otherwise ship unprotected. The cost is that operators get no way to
-turn the behaviour off if a client's retry pattern interacts badly with it, and the recovery is a
-release rather than a config change.
+**NOTIFICATION — ORDER.2 removes BOTH per-connection variation axes on the modern path, not just
+the session profile.** Decided here on the requirement rather than asked, because the criterion
+reads "list results MUST NOT vary per connection" and the codemode query override is exactly a
+per-connection variation; a design that kept it would be marking a row MET while the mechanism that
+falsifies it still runs. Recorded so it can be overruled, not so it can be confirmed. The cost, if
+overruled: a client using the query parameter to opt into Code Mode keeps that ability, and
+ORDER.2a becomes MET(I) at best — met by inference, with a live counter-example in the tree.
 
 ## Documents this change makes untrue
 
