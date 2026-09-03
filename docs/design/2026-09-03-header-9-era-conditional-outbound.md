@@ -52,39 +52,57 @@ under reverse-DNS keys — `io.modelcontextprotocol/protocolVersion` and
 `io.modelcontextprotocol/clientInfo` optional (`:46`). Sessions are gone with the
 handshake.
 
-The shape is four fields, not one, and the same inbound rules the gateway already enforces
-say what each of them is. `tests/mik_7214_acs.rs:109` is the normative anchor for the two
-this design first missed: "`Mcp-Name` is required for three methods, and for no others",
-alongside `Mcp-Method` on every modern frame (`tests/nfr_sec1_controls.rs:150-158`).
+The shape is four fields, not one. `HEADER.9a` says "the modern `_meta` envelope and the
+standard headers" — plural and unenumerated — so what counts as standard is settled
+elsewhere, not by this design's preference. `src/protocol/headers.rs` is that anchor, in
+shipped source rather than in a test: `:131` "`Mcp-Method`. Required on every modern
+request", `:36` "the methods that carry a name, and therefore require `Mcp-Name`", and `:47`
+"which body field `Mcp-Name` mirrors". The first draft of this design emitted only the
+version and `_meta`; both reviewers found the same two missing fields.
 
 | field | modern peer | where it comes from |
 |---|---|---|
 | `MCP-Protocol-Version` | **emitted**, `MODERN_VERSIONS[0]` | a constant, read once per request and used for both header and body (below) |
-| `Mcp-Method` | **emitted** | the JSON-RPC method. `HeaderMode::Request { method }` already carries it (`src/transport/http/mod.rs:206`), so this one is free |
-| `Mcp-Name` | **emitted for the three methods that require it** | a body field, not a header input — see the body-side note below |
+| `Mcp-Method` | **emitted** | the JSON-RPC method. `HeaderMode::Request { method }` carries it (`src/transport/http/mod.rs:206`); `Notify` does **not**, so that arm widens to `Notify { method }`. `Close` is an HTTP DELETE and needs none |
+| `Mcp-Name` | **emitted as a header, for the three methods that require it** | a header whose *value* is read from a body field (`params.name`, `params.uri`) per `headers.rs:47`. Sentinel-encoded where the value is not legal header bytes (`headers.rs:135`, HEADER.4). It is not a `_meta` key |
 | `params._meta` | **added** | the declaration the revision put in place of `initialize` |
-| `MCP-Session-Id` | **nothing to do** | see next paragraph — the omission this requirement asks for already holds by construction |
+| `MCP-Session-Id` | **omitted on `Request` and `Notify` when the era is `Modern`; kept on `Close`** | see next paragraph |
 
-**The session header needs no era branch, and adding one would be a defect.** The whole
-block is guarded by `if let Some(session_id) = session` (`:590`), and the map is only ever
-populated from a backend's own `mcp-session-id` response header (`:873`). A modern peer
-never mints one, so nothing is inserted and there is nothing to omit. Branching on era
-instead would be actively wrong: the era resolves *after* the handshake
-(`lifecycle.rs:375` initialises, `:232` resolves), so a backend that gave us a session and
-was then classified `Modern` would have its `Close` sent without the id it minted — an
-orphaned session, caused by the omission rule rather than prevented by it. The requirement
-is met by deleting the clause, not by writing it. Raised by the GPT reviewer as a
-lifecycle-mode finding; eliminated rather than patched, per the repair protocol's step 0.
+**The session header is omitted per mode, not per peer.** An earlier draft deleted the
+omission clause outright, on the reasoning that a modern peer never mints a session so
+nothing is ever inserted. That reasoning is wrong for the only modern peer this gateway can
+currently reach. The era resolves *after* the handshake (`lifecycle.rs:375` initialises,
+`:232` resolves), so a dual-era backend answers the legacy `initialize` first, its
+`mcp-session-id` response header lands in the map (`:873`), and every later call finds it
+there (`:590`) — including calls the gateway has by then classified `Modern`. Deleting the
+clause therefore sends a forbidden session header on exactly the path 9a is about.
+
+The orphan risk that motivated the deletion is real but narrower than the deletion was: it
+applies to `Close`, which must still terminate a session the backend minted, and to nothing
+else. So the rule splits by `HeaderMode` rather than by peer — omit on `Request` and
+`Notify` when `cached() == Some(Modern)`, keep on `Close` unconditionally. Both reviewers
+raised this; the GPT leg proposed a lifecycle-versus-ordinary mode and the Claude leg named
+the mode boundary exactly. `HeaderMode` already is that boundary, so no new mode is added.
 
 **A custom header can overwrite what this design emits. DESIGN EVENT (§P3): the design
 decides it may.** The user-supplied `self.headers` loop runs *after* everything above
 (`:607-616`) and uses `insert`, so a backend configured with an explicit
 `MCP-Protocol-Version` or `MCP-Session-Id` overrides or reinstates it on the modern path.
 This is a decision the design makes rather than a fact it reports, so it is named as one
-here: **the modern branch does not reserve, strip, or reject either name.** A custom header
-is an operator's deliberate instruction about one specific backend, and silently dropping it
-would make configuration lie. What 9a promises is that the *gateway* stops originating the
-header, not that the header becomes unreachable.
+here: **the modern branch does not reserve, strip, or reject either name, with one
+exception.** A custom header is an operator's deliberate instruction about one specific
+backend, and silently dropping it would make configuration lie. What 9a promises is that the
+*gateway* stops originating the header, not that the header becomes unreachable.
+
+The exception is `MCP-Protocol-Version`, and it is not a preference. On the modern path that
+value also appears in the body, so an override does not express an operator's intent about
+one header — it produces a frame whose header and `_meta` disagree, which this gateway's own
+inbound check rejects (`HeaderMismatch`). A configuration that cannot produce a valid request
+is not configuration worth honouring. **On the modern branch only, `MCP-Protocol-Version` is
+re-asserted from the same per-request read after the custom-header merge.** `MCP-Session-Id`
+is not: an operator who pins one gets one, because nothing in the body contradicts it. Both
+reviewers raised the override; the narrowing to the one header the body constrains is this
+design's, not theirs.
 
 The reviewer's proposed hardening — treat both names as case-insensitive reserved fields —
 is half already true and half declined. Already true: the loop parses into
@@ -100,10 +118,18 @@ disagree. **One era read and one version value per request, used for both.** The
 value is `MODERN_VERSIONS[0]` (`src/protocol/meta.rs:216`), a constant, *not* the string
 `protocol_version` holds. There is no negotiated 2026 string to derive from and there never
 will be, because `SUPPORTED_VERSIONS` excludes the revision permanently. 9b's requirement is
-that the value not come from the handshake; a constant meets it. The GPT reviewer's
-divergence objection is real in the general case and answered here by the single-source
-rule, not by the constant on its own: two independent reads of the same constant on either
-side of an era flip could still differ.
+that the value not come from the handshake; a constant meets it. The divergence objection is
+real in the general case and answered by the single-source rule, not by the constant on its
+own: two independent reads on either side of an era flip could still differ.
+
+**The mechanism, since a rule without one is a wish.** The body is assembled before
+`build_mcp_headers` runs, so the era must be read where the body is: once at the top of
+`request_with_headers` (`src/transport/http/mod.rs:968`) and `notify_with_headers` (`:1045`),
+which are the two outbound body-assembly owners on this transport. That single read shapes
+`_meta` and is passed into `build_mcp_headers` as the already-chosen value. The builder then
+writes what it is given rather than reading the era a second time. This is what the rejected
+alternative below was rejected *in favour of*: not an `Era` argument on every call site, one
+value on the two sites that assemble a body.
 
 ## Questions, and how they were settled
 
@@ -142,17 +168,20 @@ knowing about it. Moving header construction up to `Backend` — a much larger c
 would move the "single source of truth for all outgoing request headers" out of the
 transport that sends them.
 
-**The body half: `_meta` and `Mcp-Name`.** `build_mcp_headers` cannot reach `params`, so
-two of the four fields land wherever the outbound request body is assembled. The design's
-test plan must cover both halves or 9a is only half met. Named here rather than discovered
-in review. What goes in, exactly:
+**The body half: `_meta`, and the body field `Mcp-Name` reads.** `build_mcp_headers` cannot
+reach `params`, so this lands where the outbound request body is assembled — named, not left
+to the implementer: `request_with_headers` (`src/transport/http/mod.rs:968`) and
+`notify_with_headers` (`:1045`). Those two are the HTTP transport's owners and this design's
+whole scope; **stdio and websocket outbound `_meta` is OUT** (§P0 already scopes this design
+to `build_mcp_headers`' transport), deferred to whichever increment gives those transports an
+era at all — today they have none to read. The test plan must cover both halves or 9a is only
+half met. What goes in, exactly:
 
 | field | value | source |
 |---|---|---|
 | `io.modelcontextprotocol/protocolVersion` | the same `MODERN_VERSIONS[0]` read the header used | required (`meta.rs:42`) |
-| `io.modelcontextprotocol/clientCapabilities` | `{}` — an empty object | required (`meta.rs:44`); empty is the documented minimal shape (`meta.rs:12`), and the gateway declares nothing on a routed call. `meta.rs:63` warns specifically against copying an attacker-sized value, so a minimum is the safe value as well as the honest one |
+| `io.modelcontextprotocol/clientCapabilities` | `{}` — an empty object | required (`meta.rs:44`), and `{}` is what this gateway already declares outbound today: the legacy `initialize` body it sends carries `"capabilities": {}` (`src/transport/http/mod.rs:443`, `:478`). So the modern envelope declares neither more nor less than the handshake it replaces — no regression to name. `meta.rs:63` warns against copying an attacker-sized value, so a minimum is the safe value as well as the honest one |
 | `io.modelcontextprotocol/clientInfo` | omitted | optional (`meta.rs:46`); nothing to say |
-| `Mcp-Name` | the method-selected body field, for the three methods that require it | `tests/mik_7214_acs.rs:109` |
 
 Merge behaviour, for each shape `params` can take — the reviewer was right that leaving this
 implicit invites three different implementations:
@@ -201,9 +230,13 @@ carries it as a deferral.
 ## Next step
 
 Test plan (§P2), reviewed as a plan before any test is written. One row per clause: the
-emitted version value, `Mcp-Method` on a modern request, `Mcp-Name` on each of the three
-methods that require it and its absence on one that does not, the `_meta` body declaration
-with its three merge shapes, and the `None`-means-legacy default — the last of which must be
+emitted version value, `Mcp-Method` on a modern request **and on a modern notification**,
+`Mcp-Name` on each of the three methods that require it and its absence on one that does not,
+the `_meta` body declaration with its three merge shapes, the session header's three
+`HeaderMode` arms (absent on a modern `Request` and `Notify` whose backend minted a session
+during its legacy handshake, present on that backend's `Close`), the re-assertion of
+`MCP-Protocol-Version` over a custom header that tries to pin it, and the
+`None`-means-legacy default — the last of which must be
 written so it can fail, since "unchanged behaviour" is the assertion most easily satisfied by
 a fixture that never reached the code.
 

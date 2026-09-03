@@ -87,7 +87,8 @@ The three designs this triage calls for are `HEADER.9a`+`9b` (one mechanism, one
 `CONTROL.3a`+`CONTROL.4` (both blocked on what identifies a caller once sessions are
 gone), and `NFR.PERF.4` (unrelated to either). Of the three, two are now written:
 `docs/design/2026-09-03-post-session-caller-identity.md` and
-`docs/design/2026-09-02-perf4-meta-tool-ceiling.md`. `HEADER.9a`+`9b` has none.
+`docs/design/2026-09-02-perf4-meta-tool-ceiling.md`. The third is now written too:
+`docs/design/2026-09-03-header-9-era-conditional-outbound.md`.
 
 Pairing `CONTROL.3a` with `CONTROL.4` drew a review objection worth recording: 3a has a
 per-invocation id already in the tree, so the two rows are not one problem. The design
