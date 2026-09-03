@@ -555,6 +555,15 @@ impl MetaMcp {
         self
     }
 
+    /// Whether this gateway will confirm the named meta-tool exists.
+    ///
+    /// The router asks before its own admin pre-check, so an unexposed admin
+    /// tool is answered by the dispatcher's unrecognised-tool refusal rather
+    /// than by an admin refusal that confirms the tool is real.
+    pub(crate) fn exposes_meta_tool(&self, name: &str) -> bool {
+        self.meta_tool_exposure.is_exposed(name)
+    }
+
     /// Set the canonical response-projection rollout mode (MIK-5877).
     ///
     /// Defaults to [`crate::projection::ProjectionMode::Off`]. Set `on` to
@@ -1458,7 +1467,20 @@ impl MetaMcp {
                     "gateway_reload_config",
                     "gateway_reload_capabilities",
                 ];
-                let suggestion = did_you_mean(tool_name, META_TOOLS, 3, 3);
+                // The candidate pool is the EXPOSED set, not the static list.
+                // The early return above keeps a hidden tool's exact name from
+                // being confirmed; a near miss of that name reached here and
+                // the suggester, drawing from every meta-tool that exists,
+                // would answer with the name the allow-list is hiding. Filtering
+                // the pool removes the route -- there is no longer a spelling
+                // that makes this branch name an unexposed tool -- rather than
+                // wording the hint more carefully and leaving the route open.
+                let exposed: Vec<&str> = META_TOOLS
+                    .iter()
+                    .copied()
+                    .filter(|name| self.meta_tool_exposure.is_exposed(name))
+                    .collect();
+                let suggestion = did_you_mean(tool_name, &exposed, 3, 3);
                 let msg = match suggestion {
                     Some(hint) => format!("Unknown tool: {tool_name}. {hint}"),
                     None => format!("Unknown tool: {tool_name}"),

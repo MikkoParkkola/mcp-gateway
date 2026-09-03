@@ -1064,7 +1064,17 @@ pub(super) async fn meta_mcp_handler(
                 );
             }
 
-            if is_admin_meta_tool(tool_name)
+            // Exposure decides before admin does, here as well as in the
+            // dispatcher. The dispatcher orders these two correctly for its own
+            // callers, and this pre-check runs earlier still, so on the HTTP
+            // path an unexposed admin tool used to be answered by an admin
+            // refusal -- which confirms the tool exists to exactly the caller
+            // the allow-list hides it from, while stdio answered with the
+            // unrecognised-tool refusal. Declining to pre-check what we will
+            // not confirm leaves the dispatcher the single owner of that
+            // refusal instead of asking two sites to word one answer alike.
+            if state.meta_mcp.exposes_meta_tool(tool_name)
+                && is_admin_meta_tool(tool_name)
                 && let Err(e) = require_admin_tool_access(client.as_ref(), tool_name)
             {
                 return build_error_response(Some(id), e.code, e.message, &session_id, e.status);

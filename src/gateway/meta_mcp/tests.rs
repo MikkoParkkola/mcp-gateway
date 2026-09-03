@@ -3584,3 +3584,74 @@ fn every_confirmation_refusal_is_marked_by_construction() {
     assert_eq!(error.message, "Operator declined: kill server 'brave'");
     assert!(refusal.confirmation_refusal);
 }
+
+// ── hidden-tool disclosure via the sibling routes ────────────────────────
+
+/// A near miss of a hidden tool's name must not be answered with that name.
+///
+/// The exact-name route was closed by wording the hidden refusal like the
+/// unrecognised one. This is the route beside it: a caller who mistypes a
+/// hidden tool by one character falls through to the suggester, and a
+/// suggester drawing from every meta-tool that exists would answer with the
+/// name the allow-list is hiding. Both reviewers found this independently.
+#[tokio::test]
+async fn a_near_miss_of_a_hidden_tool_is_not_answered_with_its_name() {
+    // GIVEN: a gateway exposing one tool, hiding the destructive ones
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_exposed_meta_tools(&["gateway_search".to_string()]);
+    // WHEN: a caller mistypes a HIDDEN tool by one character
+    let response = meta
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_kill_serve",
+            json!({}),
+            None,
+            allow_all_ctx(),
+        )
+        .await;
+    // THEN: the refusal names neither the hidden tool nor any other hidden one
+    let message = response.error.expect("an unrecognised tool is refused").message;
+    assert!(
+        !message.contains("gateway_kill_server"),
+        "a suggestion must not name a tool the allow-list hides: {message}"
+    );
+    assert!(
+        !message.contains("gateway_revive_server"),
+        "nor any other hidden neighbour: {message}"
+    );
+}
+
+/// The suggester still helps when the near miss is of an EXPOSED tool.
+///
+/// Without this, filtering the pool to nothing would pass the test above while
+/// silently removing the feature -- the failure mode of every fix that works by
+/// deleting a capability.
+#[tokio::test]
+async fn a_near_miss_of_an_exposed_tool_still_gets_its_suggestion() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_exposed_meta_tools(&["gateway_search".to_string()]);
+    let response = meta
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_searh",
+            json!({}),
+            None,
+            allow_all_ctx(),
+        )
+        .await;
+    let message = response.error.expect("an unrecognised tool is refused").message;
+    assert!(
+        message.contains("gateway_search"),
+        "an exposed neighbour is still suggested: {message}"
+    );
+}
+
+/// The router asks this before its own admin pre-check.
+#[test]
+fn exposure_answers_for_a_hidden_admin_tool_before_admin_does() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
+        .with_exposed_meta_tools(&["gateway_search".to_string()]);
+    // THEN: the hidden admin tool is not confirmed, and the exposed one is
+    assert!(!meta.exposes_meta_tool("gateway_kill_server"));
+    assert!(meta.exposes_meta_tool("gateway_search"));
+}
