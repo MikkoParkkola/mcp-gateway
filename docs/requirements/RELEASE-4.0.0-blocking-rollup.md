@@ -22,7 +22,7 @@ is tracked in `RELEASE-4.0.0-readiness-board.md`. This section defines them.
 
 | # | cluster | rows | count | what is actually missing |
 |---|---|---|---|---|
-| A | MIK-7212 continuation envelope | `MRTR.1`, `MRTR.3-5`, `MRTR.7-8`, `MRTR.9`, `MRTR.10a`, `NFR.SEC.2`, `NFR.SEC.3`, `NFR.SEC.4`, `NFR.OBS.4`, `NFR.PERF.3` | 21 | nothing mints or opens a continuation on the live path. The type exists; no route reaches it |
+| A | MIK-7212 continuation envelope | `MRTR.1`, `MRTR.3`, `MRTR.7-8`, `MRTR.10a`, `NFR.SEC.2`, `NFR.SEC.3`, `NFR.SEC.4`, `NFR.OBS.4`, `NFR.PERF.3` | 14 | the envelope is minted, opened, bound and consumed on the tool-invoke path (`redeem_retry`, `src/gateway/meta_mcp/invoke.rs:529`, called at `:1301`). `MRTR.4-5` and `MRTR.9` left this cluster when that wiring landed; what remains is the observability and performance evidence over it |
 | B | MIK-7217 era detection | `DISCOVER.4`, `DISCOVER.5`, `NFR.OBS.3` | 5 | `src/protocol/era.rs` is fully built and called from nothing. Design: `docs/design/2026-08-31-discover-outbound-era-probe.md` |
 | C | MIK-7272 revision surface | `ORDER.2`, `SUB.2` (own-stream clause), `SUB.4`, `EXT.1`, `OTEL.1`, `TASK.1` | 7 | five separate half-wirings: idempotency cache never enabled, extension set write-side absent, task methods advertised and not served, routing profile ignores modern mode |
 | D | MIK-7213 response-cache keying | `CACHE.4` | 2 | the two clause rows `CACHE.4a` (key missing routing profile and protocol revision) and `CACHE.4b` (no policy epoch), designed in `docs/design/2026-08-31-cluster-f-response-cache-keying.md`. `CACHE.3` was in this cluster until both its clauses were met: the decision table is now read by the emitting code |
@@ -31,14 +31,17 @@ is tracked in `RELEASE-4.0.0-readiness-board.md`. This section defines them.
 | G | stdio dispatch path | `NFR.OBS.1`, `NFR.OBS.2`, `MIK-7246.CONFIRM.1a` | 3 | both records live in the HTTP router (`src/gateway/router/handlers.rs:720,994`) and both criteria say *per request* / *every* `tools/list`. The stdio dispatcher reaches neither, so one of the two transports the gateway serves MCP over is absent from the migration telemetry. `MIK-7246.CONFIRM.1a` was the same shape and is not telemetry, and it is the one row of the three **already answered in the tree**: the gate moved out of the HTTP router into `dispatch_single` (`src/gateway/server/mod.rs:1656`), which `run_stdio` (`:1495`) routes every request through, so a destructive meta-tool invoked over stdio is now refused with `-32001` instead of executing unconfirmed. It stays listed here until the suite, the lints and the dual-vendor review are green on that change. One wiring question — what the stdio dispatcher must do before it reaches `handle_tools_call` — answered all three; the two telemetry rows still need it done. The confirmation half is **specified, not open**: the criterion says the gate MUST refuse when it cannot obtain confirmation, so stdio fails closed. Design and test plan: `docs/design/2026-09-02-cluster-g-stdio-dispatch-parity.md` |
 | — | residue | `HEADER.9`, `CONTROL.4`, `CONFIRM.2`, `NFR.SEC.1`, `NFR.SEC.6`, `NFR.PERF.4`, `MIK-6704.IDENT.1a`, `MIK-6865.SCHEMA.1c`, `MIK-7215.CONTROL.3a` | 10 | genuinely independent; see below |
 
-Cluster A is by far the largest of them. Wiring the continuation envelope removes twenty-two
-blocking rows without a single new decision being made — though each of the twenty-two still
-needs its own evidence afterwards, exactly as the ledger says. The total it leaves behind is
+Cluster A is still the largest of them, at fourteen rows. It began at twenty-two: the wiring
+landed and `MRTR.4`, `MRTR.5` and `MRTR.9` left the cluster with their evidence recorded, which
+is what the shrinkage means. What is left needs no new decision either — each row needs its own
+evidence over a path that already exists. The total it leaves behind is
 not quoted here: `scripts/release/count-release-criteria.py --check` derives it, and this
 document has already carried two counts that went stale against the ledger they describe.
 
 The `rows` column names PARENT criteria; the `count` counts LEDGER ROWS, and the two stopped
-matching once compound criteria began to be split. `MRTR.3-5` is three names and ten rows, `MRTR.7-8` two names and four. `MRTR.6` left the cluster when it was met, which is why the range is written as two spans rather than one.
+matching once compound criteria began to be split. `MRTR.3` is one name and two rows, `MRTR.7-8`
+two names and four. `MRTR.4`, `MRTR.5`, `MRTR.6` and `MRTR.9` have all left the cluster
+as they were met, which is why what was once one span is now two single names and a pair.
 Read the names as a key to which cluster a row belongs to, never as its size. The counts here
 are derived from the ledger by prefix, not transcribed from a previous revision of this file:
 every blocking row lands in exactly one cluster and the seven totals sum to the ledger's, which
