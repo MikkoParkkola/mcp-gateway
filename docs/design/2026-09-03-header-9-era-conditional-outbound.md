@@ -67,9 +67,13 @@ version and `_meta`; both reviewers found the same two missing fields.
 | `Mcp-Name` | **emitted as a header, for the three methods that require it** | a header whose *value* is read from a body field (`params.name`, `params.uri`) per `headers.rs:47`. Sentinel-encoded where the value is not representable in ASCII, per `MIK-7214.HEADER.4a`
 (`docs/requirements/RELEASE-4.0.0-requirements.md:121`). The encoder is the inverse of
 `decode_header_value` (`headers.rs:79`) and **does not exist yet** — building it is part of
-this increment, and until it does HEADER.4a is vacuously met. It is not a `_meta` key |
+this increment, and until it does HEADER.4a is vacuously met. It is not a `_meta` key.
+Where the selected field is missing or not a string, the **header is omitted and the request
+goes out**: the field is the caller's content, not this gateway's assertion, and a peer that
+requires it is the right place to reject it. Contrast `_meta` below, which carries an
+assertion we owe the peer and therefore fails locally |
 | `params._meta` | **added** | the declaration the revision put in place of `initialize` |
-| `MCP-Session-Id` | **omitted on `Request` and `Notify` when the era is `Modern`; kept on `Close` and `Sse`** | see next paragraph. The `Sse` half is a **DESIGN EVENT (§P3)** — neither review decided it |
+| `MCP-Session-Id` | **omitted on `Request` and `Notify` when the era is `Modern`; kept on `Close`** | see next paragraph. `Sse` is not in this row: `build_mcp_headers` matches `HeaderMode::Sse => {}` (`mod.rs:600`) and `establish_sse_connection` passes `None` (`mod.rs:667-670`), so no session header is emitted there on any era and there is nothing for this design to omit or keep. An earlier draft raised it as a design event; source says there is no decision to make |
 
 **The session header is omitted per mode, not per peer.** An earlier draft deleted the
 omission clause outright, on the reasoning that a modern peer never mints a session so
@@ -82,11 +86,13 @@ clause therefore sends a forbidden session header on exactly the path 9a is abou
 
 The orphan risk that motivated the deletion is real but narrower than the deletion was: it
 applies to `Close`, which must still terminate a session the backend minted, and to nothing
-else — and to `Sse`, for the same reason: neither carries a JSON-RPC method, and the
-stream a dual-era backend serves is identified by the session it minted, so dropping the
-header there breaks continuity for exactly the backends the `Close` exception protects.
+else. `Sse` needs no exception because it has no session header to lose — `build_mcp_headers`
+matches `HeaderMode::Sse => {}` (`:600`) and `establish_sse_connection` passes `None`
+(`:667-670`), on every era, before and after this change. An earlier draft argued the `Close`
+case for `Sse` too and raised the result as a design event; reading the arm showed there was
+nothing to decide.
 So the rule splits by `HeaderMode` rather than by peer — omit on `Request` and `Notify`
-when `cached() == Some(Modern)`, keep on `Close` and `Sse` unconditionally. Both reviewers
+when `cached() == Some(Modern)`, keep on `Close` unconditionally. Both reviewers
 raised this; the GPT leg proposed a lifecycle-versus-ordinary mode and the Claude leg named
 the mode boundary exactly. `HeaderMode` already is that boundary, so no new mode is added.
 
@@ -105,7 +111,13 @@ value also appears in the body, so an override does not express an operator's in
 one header — it produces a frame whose header and `_meta` disagree, which this gateway's own
 inbound check rejects (`HeaderMismatch`). A configuration that cannot produce a valid request
 is not configuration worth honouring. **On the modern branch only, `MCP-Protocol-Version` is
-re-asserted from the same per-request read after the custom-header merge.** `MCP-Session-Id`
+re-asserted from the same per-request read after *both* custom-header merges.** There are two,
+and a re-assertion that sees only the first is the likeliest way to build this wrong: the
+static `self.headers` merge happens inside `build_mcp_headers` (`mod.rs:607-616`), but the
+per-request `extra_headers` merge happens in `send_request_with_headers` at `mod.rs:848`,
+*after* the builder has returned. The re-assertion therefore lives after `:848`, not inside
+the builder — which is also why `Close` and `Sse`, which call the builder directly and never
+reach `:848`, keep today's shape for these three headers. `MCP-Session-Id`
 is not: an operator who pins one gets one, because nothing in the body contradicts it. Both
 reviewers raised the override; the narrowing to the headers the body constrains is this
 design's, not theirs.
@@ -145,13 +157,22 @@ value on the two sites that assemble a body.
 
 **Those two sites, and no others — which is what keeps the handshake legacy.** `Request`
 headers are built in `send_request_with_headers` (`:830`), and that function also serves the
-bare `Transport::send_request` (`:816-817`), which is how `initialize` and the era probe go
-out. Putting the read there instead would modern-shape the handshake on any transport already
-classified `Modern` — a session recovery re-initialising, for instance — which is precisely
-the traffic the 2026 revision deleted `initialize` from. So the modern value arrives as an
+bare `Transport::send_request` (`:816-817`), which is how `initialize` goes out (`:451`,
+`:486`). Putting the read there instead would modern-shape the handshake on any transport
+already classified `Modern` — a session recovery re-initialising, for instance — which is
+precisely the traffic the 2026 revision deleted `initialize` from.
+
+The era probe is **not** in that set, and an earlier draft said it was. It goes out through
+`transport.request(DISCOVER_METHOD, None)` (`src/backend/era.rs:33`), which is
+`Transport::request` (`:957`) calling `request_with_headers` (`:958`) — one of the two sites
+that *do* read the era. It stays legacy for a different and stronger reason: at probe time the
+cache is unresolved by construction, so `cached()` returns `None`, and `None` selects today's
+shape. The probe cannot modern-shape itself, because the probe is what produces the value that
+would shape it. So the modern value arrives as an
 argument from `request_with_headers`/`notify_with_headers`; a caller that passes none gets
 today's shape. `Close` (`:1108`) and `Sse` (`:670`) call `build_mcp_headers` directly, pass no
-modern value for the same reason, and keep the session header they carry today. The Claude leg
+modern value for the same reason, and so emit today's headers: `Close` keeps the session
+header it carries, `Sse` continues to carry none. The Claude leg
 raised this against the repair and was right that the site matters; it named `Close` and `Sse`
 as callers of `send_request_with_headers`, which the source does not bear out — they have
 their own call sites — but the conclusion is unchanged.
@@ -175,6 +196,14 @@ is handed:
   `Mcp-Name` **as headers**, add `_meta` to the body from the same read, and **omit
   `MCP-Session-Id` on `Request` and `Notify`**.
 - `Some(Era::Legacy)` or `None` → today's behaviour, byte for byte.
+
+Three details of the modern branch live outside `build_mcp_headers` and are easy to lose by
+reading only the bullet above. The three header values are **re-asserted after the
+per-request `extra_headers` merge at `mod.rs:848`**, which is past the builder's return, so an
+implementation that writes them inside the builder is overridable by per-request configuration
+and fails half the pinning cases. `Mcp-Name` is **omitted, not defaulted**, when the body field
+its method selects is missing or not a string. And a **non-object `params` fails the call
+locally on this branch**, before any send — the only new failure this design introduces.
 
 An earlier revision of this section said the opposite of all three — that the builder reads
 `cached()` itself, that `Mcp-Name` travels in the body, and that nothing is removed because a
@@ -223,10 +252,20 @@ implicit invites three different implementations:
   **two** reverse-DNS keys this design writes — `protocolVersion` and `clientCapabilities` —
   overwrite whatever held them. `clientInfo` is neither inserted nor stripped: a caller that
   set one keeps it, and this design adds none.
-- **not an object** (array, scalar) → leave the request untouched and do not declare. There
-  is nowhere to put `_meta` without destroying the caller's params, and destroying them is
-  worse than an undeclared request. No such call exists on this path today; the rule is here
-  so the case is decided rather than discovered.
+- **not an object** (array, scalar) → **fail the call locally, before anything is sent.**
+  There is nowhere to put `_meta` without destroying the caller's params, and an undeclared
+  modern request is not the harmless fallback the first draft assumed: `_meta` is where
+  `clientCapabilities` is asserted, and a modern peer is required to reject a request that
+  omits it with `-32602` (`docs/requirements/RELEASE-4.0.0-requirements.md:104`, STATELESS.9b).
+  Sending anyway buys a round trip and the same failure, minus the explanation. Failing locally
+  is not a behaviour change for any input that works today, because the modern shaping path is
+  new — every call today takes the legacy branch, which this rule does not touch.
+
+  **DESIGN EVENT (§P3).** No review decided this. The first draft's leave-untouched rule was
+  written on the belief that no such caller existed, and the enumeration below shows one does.
+  It is named rather than absorbed silently because it introduces a local failure the design
+  did not previously have. It moves nothing in §P0's FOR or OUT, changes no acceptance
+  criterion, and adds no wire behaviour — the failure is strictly before the send.
 
 ## Composition with the era probe
 
@@ -244,17 +283,18 @@ composition already works in current code. It is not that claim — it is the sa
 this paragraph makes, at the same source line. Disposition: no change; the reviewer's
 BEFORE-DEPLOY gate is agreed and already recorded as the 08-31 increment's, not this one's.
 
-## Still open
+## Unknowns — resolved, none deferred
 
-One, opened by review. It does not block this design's own build.
-
-| field | |
-|---|---|
-| question | when the outbound modern body is assembled, is there a call path where `params` is a non-object? |
-| owner | this ticket, at §P2 test-plan time |
-| what resolves it | enumerate the callers of the outbound body assembly and read what each passes as `params` |
-| when | before the first test is written, since the answer decides whether the "not an object" row is a real case or a defensive one |
-| if it resolves badly | if such a path exists, the leave-untouched rule stands and the row becomes a real test rather than a documented impossibility. Either way the rule is already decided above, so nothing waits on the answer |
+**Is there a call path where the outbound `params` is a non-object?** — enumerated the callers
+of the outbound body assembly (`.request(`, `.request_with_headers(`, `.notify(` and
+`.notify_with_headers(` across `src/`) — **yes**. Most callers pass `None` or a literal
+object, but the gateway's own pass-through forwards the connected client's params unchanged
+(`src/gateway/router/backend_handlers.rs:814`, `src/gateway/meta_mcp/invoke.rs:2510`), typed
+`Option<Value>` and never narrowed to an object; JSON-RPC permits array params, so a client
+can produce one. — **changed the rule**: the leave-untouched disposition above was written for
+a case believed unreachable and would have sent an undeclared modern request on a reachable
+one. It is now a local failure, and the test plan's non-object `_meta` case is a real case
+rather than a defensive one.
 
 The question this design was expected to defer — emit or omit the protocol version — turned
 out checkable, is recorded above, and was confirmed by the team lead on 2026-09-03. Recorded
@@ -266,10 +306,10 @@ carries it as a deferral.
 Test plan (§P2), reviewed as a plan before any test is written. One row per clause: the
 emitted version value, `Mcp-Method` on a modern request **and on a modern notification**,
 `Mcp-Name` on each of the three methods that require it and its absence on one that does not,
-the `_meta` body declaration with its three merge shapes, the session header's three
+the `_meta` body declaration with its four merge shapes, the session header's three
 `HeaderMode` arms (absent on a modern `Request` and `Notify` whose backend minted a session
-during its legacy handshake, present on that backend's `Close`), the re-assertion of
-`MCP-Protocol-Version` over a custom header that tries to pin it, and the
+during its legacy handshake, present on that backend's `Close`), the re-assertion of all three
+constrained headers over custom values at **both** merge sites, and the
 `None`-means-legacy default — the last of which must be
 written so it can fail, since "unchanged behaviour" is the assertion most easily satisfied by
 a fixture that never reached the code.
@@ -280,3 +320,37 @@ point, and it is the difference between a plan that can fail and one that cannot
 afterwards (`:607-616`, `:618-624`). A test reading the builder result sees neither a custom
 header override nor a body/header divergence nor anything the body half does — the three
 failure modes this review actually found.
+
+## Canonical criteria — DoR and DoD, applicable only
+
+This increment is DOCS: a design and a test plan, no source change. Both canonical files
+cited by full path, per §P4.
+
+`rules-source/workflows/quality-gates-dor.md` — DOCS applicability is `G0`, `G4-G5`, `L1`,
+`O1-O3`:
+
+| gate | verdict |
+|---|---|
+| G0 biggest ROI | the design gates every later HEADER.9 commit; nothing in this milestone can be built ahead of it |
+| G4 requirements clear | `MIK-7214.HEADER.9a`, `9b` and `4a` quoted at source in `docs/requirements/RELEASE-4.0.0-requirements.md` |
+| G5 critic — real problem, minimum scope | the problem is at `src/transport/http/mod.rs:534`, unconditional today; §P0 names four carried exclusions |
+| L1 IP | no new dependency, no third-party text |
+| O1-O3 structure, clutter, naming | two files under `docs/design/`, named for their date and criterion, matching the directory's convention |
+
+`rules-source/workflows/quality-gates-dod.md` — DOCS applicability is `H1-H11`, `D7`, `D9`,
+`D14`, `D15`, `D24`:
+
+| gate | verdict |
+|---|---|
+| H1-H5 search, update, consolidate, location, naming | searched before creating; the requirement text is cited, never restated; the residue-triage entry is updated in place rather than duplicated |
+| H6-H11 orphans, redundancy, temp files, tracking | both files are referenced from the readiness board and from each other; no temp files; both tracked |
+| D7 wired | the design is consumed by the test plan, which is consumed by the implementation increment that follows |
+| D9 static | N/A — no source, no linter or type checker applies to Markdown here |
+| D14 documented | these files *are* the documentation; §P4a's question is whether they make any other document untrue, answered below |
+| D15 clean | the residue-triage deferral this design closed is removed there, not left contradicting |
+| D24 enforcement | N/A — a design document has nothing to enforce; the rules it decides are enforced by the test plan's cases, which is the next increment |
+
+**§P4a documentation delta.** `docs/requirements/RELEASE-4.0.0-residue-triage.md` carried the
+protocol-version question as an open deferral with a leading option; this design settled it,
+so that entry is updated in the same change. No other document is made untrue: the requirement
+text is unchanged, and the readiness board's row for HEADER.9 already points here.

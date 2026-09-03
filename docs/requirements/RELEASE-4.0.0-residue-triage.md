@@ -112,11 +112,13 @@ re-deriving them. Not a design — a design makes a decision, and none is made h
 | the inbound path already negotiates against it | `src/gateway/router/handlers.rs:175`, `:219`, `:572`, `:702` — so a negotiated modern value exists; the outbound builder simply cannot see it |
 | 2026-07-28 is deliberately absent from the handshake list | `SUPPORTED_VERSIONS` at `src/protocol/mod.rs:48` excludes it, pinned by the test at `:80`; `docs/design/2026-08-31-discover-outbound-era-probe.md` (rev 6) states it never joins that list and puts `HEADER.9` explicitly OUT |
 
-Leading option, unreviewed: share the same `Arc<EraCache>` down into `HttpTransport` so
-`build_mcp_headers` can read `cached()` and shape the request, with `None` meaning legacy
-— which matches `classify`'s positive-evidence rule rather than fighting it. Alternatives
-are threading an era argument through every call site, or moving header construction up
-to `Backend`.
+Settled, reviewed: `docs/design/2026-09-03-header-9-era-conditional-outbound.md` shares the
+same `Arc<EraCache>` down into `HttpTransport`, but the era is read at the two body-assembly
+sites (`request_with_headers`, `notify_with_headers`) and passed *into* `build_mcp_headers`
+rather than read there — which keeps the handshake and the era probe on today's shape. `None`
+means legacy, matching `classify`'s positive-evidence rule. The rejected alternatives were
+threading an era argument through every call site, and moving header construction up to
+`Backend`; both are recorded there with their reasons.
 
 One sub-question was open: for a Modern peer, is `MCP-Protocol-Version: 2026-07-28` emitted
 or is the header omitted? `MCP-Session-Id` must not be sent to a Modern peer either way.
