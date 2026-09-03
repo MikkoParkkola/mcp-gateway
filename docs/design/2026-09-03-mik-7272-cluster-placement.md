@@ -104,7 +104,16 @@ that states the constraint over its *objects*.
 | OTEL.1 | — | independent; its design already makes `src/protocol/trace.rs` the sole propagation owner. What becomes of the competing `src/tracing_context/` — deletion or isolation — is that design's own deferred question, which this order does not decide |
 
 **One ordering constraint survives review, not five.** That is the honest result: the cluster is
-less entangled than it looked, and each remaining row can land on its own schedule.
+less entangled than it looked, and every other row carries no order of its own.
+
+That is an order *within* the cluster, not a schedule. The operator settled the merge strategy as a
+sequence of per-cluster pull requests, so these seven rows land together in cluster C's, and the
+`EXT.1` constraint binds the commit series inside it rather than a release date. One constraint
+points outward: cluster F flips `server.modern_protocol` to true, and the rollup makes that flip
+"a gating dependency on clusters A and C, not an independent switch"
+(`docs/requirements/RELEASE-4.0.0-blocking-rollup.md:355`) — a default install that serves
+`2026-07-28` before this cluster serves it completely turns every gap here into a first-run defect.
+So **C lands before F**.
 
 ## Deployment impact, as a sum
 
