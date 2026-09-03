@@ -134,3 +134,56 @@ nothing. It was caught there because the row was being written; row 6's cases al
 existed and were never re-read against the correction. `Routing::Elsewhere` is a
 production variant, so the divergence is not confined to the test — but what happens to
 either is a decision, not an audit finding, and nothing here touches `src/`.
+
+## Disposition (orchestrator, 2026-09-03)
+
+Each finding was re-verified at source before disposal. Disposals follow
+`development-process.md` §P0: fix, fold into the design, record, or file.
+
+### Row 6 — ELIMINATE `Routing::Elsewhere`
+
+Confirmed, and by a second mechanism the audit did not reach.
+`InFlight::hold` (`src/protocol/continuation.rs:634`) inserts `self.replica` as
+the holder, so on any one table `holder == self.replica` always. `route`
+(`:653`) can only answer `Elsewhere` when a caller passes a `receiving_replica`
+that is not its own — which no replica does, because it is asking its own table.
+The other replica cannot substitute: `InFlight` is per process with no shared
+store, so gw-2 asking gw-2's table for a key gw-1 minted gets `Gone`. It cannot
+learn the holder from the envelope either, because the envelope is
+`NotAuthentic` under gw-2's key. The variant is unreachable twice over.
+
+`MIK-7212.MRTR.6` reads "reach the replica holding the exchange, **or fail
+explicitly**". The accepted design took the second arm and priced it at
+`docs/design/2026-08-30-shared-continuation-state.md:103-104`. The criterion
+survives the removal intact.
+
+Disposal: **fix it in this change** — delete the variant, the now-constant
+`receiving_replica` parameter, and `ac_mrtr_6_a_retry_landing_elsewhere_is_sent_to_the_holder`.
+Recorded here as a §P3 design event: implementation is deleting a production
+enum variant, which the design did not name. Elimination, not repair — after it,
+the finding cannot be restated.
+
+### Rows 5d, 6-level, 7a, 7b, 8b — one fact, not five
+
+Every one is a test sitting below its assigned level. The cause is the same in
+all five: **there is no component or integration to test at.** MRTR.5, .6, .7
+and .8 are all `UNWIRED` — `Keyring::mint`/`open`, `Bridge::to_legacy_client`
+and `InFlight` have no production caller, and `handlers.rs:873-889` refuses
+every retry before any of them is consulted.
+
+A same-process proxy is what an unwired mechanism admits of. The proxy conceding
+itself in its own doc comment is honest, not defective.
+
+Disposal: **fold into the design.** These are recorded as *owed on wiring*, not
+as gaps closable now. Writing more unit cases would raise the count while
+leaving the level mismatch exactly where it is — the failure mode the audit
+exists to catch. The order already stands: wire cluster A, then write the tests
+at the level the plan assigns.
+
+### Row 9a — the one real writable gap
+
+`MIK-7212.MRTR.9` is ABSENT with no mechanism anywhere, so a test written now
+fails for the right reason and is §P2 order rather than a retrofit. It is the
+only cluster-A test that can be written before wiring.
+
+Disposal: **fix it in this change** — assigned as a failing-test-first.
