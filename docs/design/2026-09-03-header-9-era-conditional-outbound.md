@@ -64,9 +64,12 @@ version and `_meta`; both reviewers found the same two missing fields.
 |---|---|---|
 | `MCP-Protocol-Version` | **emitted**, `MODERN_VERSIONS[0]` | a constant, read once per request and used for both header and body (below) |
 | `Mcp-Method` | **emitted** | the JSON-RPC method. `HeaderMode::Request { method }` carries it (`src/transport/http/mod.rs:206`); `Notify` does **not**, so that arm widens to `Notify { method }`. `Close` is an HTTP DELETE and needs none |
-| `Mcp-Name` | **emitted as a header, for the three methods that require it** | a header whose *value* is read from a body field (`params.name`, `params.uri`) per `headers.rs:47`. Sentinel-encoded where the value is not legal header bytes (`headers.rs:135`, HEADER.4). It is not a `_meta` key |
+| `Mcp-Name` | **emitted as a header, for the three methods that require it** | a header whose *value* is read from a body field (`params.name`, `params.uri`) per `headers.rs:47`. Sentinel-encoded where the value is not representable in ASCII, per `MIK-7214.HEADER.4a`
+(`docs/requirements/RELEASE-4.0.0-requirements.md:121`). The encoder is the inverse of
+`decode_header_value` (`headers.rs:79`) and **does not exist yet** — building it is part of
+this increment, and until it does HEADER.4a is vacuously met. It is not a `_meta` key |
 | `params._meta` | **added** | the declaration the revision put in place of `initialize` |
-| `MCP-Session-Id` | **omitted on `Request` and `Notify` when the era is `Modern`; kept on `Close` and `Sse`** | see next paragraph |
+| `MCP-Session-Id` | **omitted on `Request` and `Notify` when the era is `Modern`; kept on `Close` and `Sse`** | see next paragraph. The `Sse` half is a **DESIGN EVENT (§P3)** — neither review decided it |
 
 **The session header is omitted per mode, not per peer.** An earlier draft deleted the
 omission clause outright, on the reasoning that a modern peer never mints a session so
@@ -104,8 +107,14 @@ inbound check rejects (`HeaderMismatch`). A configuration that cannot produce a 
 is not configuration worth honouring. **On the modern branch only, `MCP-Protocol-Version` is
 re-asserted from the same per-request read after the custom-header merge.** `MCP-Session-Id`
 is not: an operator who pins one gets one, because nothing in the body contradicts it. Both
-reviewers raised the override; the narrowing to the one header the body constrains is this
+reviewers raised the override; the narrowing to the headers the body constrains is this
 design's, not theirs.
+
+`Mcp-Method` and `Mcp-Name` fall on the same side of that line as the version and are
+re-asserted with it: both mirror a body field the peer re-reads, so an override makes header
+and body disagree exactly as a pinned version does — `HeaderMismatch`, or worse, a call routed
+under the wrong name. The rule is therefore not "the version is special" but "a header the
+body constrains is re-asserted"; three headers meet it, `MCP-Session-Id` does not.
 
 The reviewer's proposed hardening — treat both names as case-insensitive reserved fields —
 is half already true and half declined. Already true: the loop parses into
@@ -134,6 +143,19 @@ writes what it is given rather than reading the era a second time. This is what 
 alternative below was rejected *in favour of*: not an `Era` argument on every call site, one
 value on the two sites that assemble a body.
 
+**Those two sites, and no others — which is what keeps the handshake legacy.** `Request`
+headers are built in `send_request_with_headers` (`:830`), and that function also serves the
+bare `Transport::send_request` (`:816-817`), which is how `initialize` and the era probe go
+out. Putting the read there instead would modern-shape the handshake on any transport already
+classified `Modern` — a session recovery re-initialising, for instance — which is precisely
+the traffic the 2026 revision deleted `initialize` from. So the modern value arrives as an
+argument from `request_with_headers`/`notify_with_headers`; a caller that passes none gets
+today's shape. `Close` (`:1108`) and `Sse` (`:670`) call `build_mcp_headers` directly, pass no
+modern value for the same reason, and keep the session header they carry today. The Claude leg
+raised this against the repair and was right that the site matters; it named `Close` and `Sse`
+as callers of `send_request_with_headers`, which the source does not bear out — they have
+their own call sites — but the conclusion is unchanged.
+
 ## Questions, and how they were settled
 
 | question | how it was settled | what came back | what it changed |
@@ -145,14 +167,21 @@ value on the two sites that assemble a body.
 
 ## What to build
 
-Share the backend's `Arc<EraCache>` into `HttpTransport`, and have `build_mcp_headers` read
-`cached().await`:
+Share the backend's `Arc<EraCache>` into `HttpTransport`. The era is read at the two
+body-assembly sites named above, never inside `build_mcp_headers`, which writes the value it
+is handed:
 
-- `Some(Era::Modern)` → read the era once, then emit `MCP-Protocol-Version:
-  MODERN_VERSIONS[0]` and `Mcp-Method`, and on the body side carry `_meta` and `Mcp-Name`
-  from that same read. Nothing is removed: the session header is already absent whenever the
-  peer is genuinely modern.
+- `Some(Era::Modern)` → emit `MCP-Protocol-Version: MODERN_VERSIONS[0]`, `Mcp-Method`, and
+  `Mcp-Name` **as headers**, add `_meta` to the body from the same read, and **omit
+  `MCP-Session-Id` on `Request` and `Notify`**.
 - `Some(Era::Legacy)` or `None` → today's behaviour, byte for byte.
+
+An earlier revision of this section said the opposite of all three — that the builder reads
+`cached()` itself, that `Mcp-Name` travels in the body, and that nothing is removed because a
+modern peer mints no session. The repairs above retracted each one and this section was left
+behind; the confirmation pass caught it. Recorded rather than silently corrected, because a
+repair that updates one section and not the one an implementer reads first is the failure
+mode, not an editing slip.
 
 **API surface (D28).** `new` and `new_with_oauth` are public and called from tests; widening
 both signatures is an API-surface change for a value only one caller can supply. Prefer a
@@ -184,14 +213,16 @@ half met. What goes in, exactly:
 |---|---|---|
 | `io.modelcontextprotocol/protocolVersion` | the same `MODERN_VERSIONS[0]` read the header used | required (`meta.rs:42`) |
 | `io.modelcontextprotocol/clientCapabilities` | `{}` — an empty object | required (`meta.rs:44`), and `{}` is what this gateway already declares outbound today: the legacy `initialize` body it sends carries `"capabilities": {}` (`src/transport/http/mod.rs:443`, `:478`). So the modern envelope declares neither more nor less than the handshake it replaces — no regression to name. `meta.rs:63` warns against copying an attacker-sized value, so a minimum is the safe value as well as the honest one |
-| `io.modelcontextprotocol/clientInfo` | omitted | optional (`meta.rs:46`); nothing to say |
+| `io.modelcontextprotocol/clientInfo` | omitted | optional (`meta.rs:46`). The Claude leg asked for it, on the symmetry with `clientCapabilities`; declined, because the two are not symmetric — `clientCapabilities` is *required* (`STATELESS.9b`, `-32602` if absent) while `clientInfo` is self-asserted and may not influence any decision (`IDENT.1b`). Emitting an optional untrusted field buys nothing 9a asks for |
 
 Merge behaviour, for each shape `params` can take — the reviewer was right that leaving this
 implicit invites three different implementations:
 
 - **absent** → create `params` as an object carrying only `_meta`.
 - **an object** → merge `_meta` in. An existing `_meta` object keeps its other keys; the
-  three reverse-DNS keys above are set by this design and overwrite whatever held them.
+  **two** reverse-DNS keys this design writes — `protocolVersion` and `clientCapabilities` —
+  overwrite whatever held them. `clientInfo` is neither inserted nor stripped: a caller that
+  set one keeps it, and this design adds none.
 - **not an object** (array, scalar) → leave the request untouched and do not declare. There
   is nowhere to put `_meta` without destroying the caller's params, and destroying them is
   worse than an undeclared request. No such call exists on this path today; the rule is here

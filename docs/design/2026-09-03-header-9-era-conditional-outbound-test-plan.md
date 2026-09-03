@@ -28,6 +28,14 @@ decisions the design had to make rather than behaviour it inherited.
 | `Modern`, `Close` | M | · | · | S | · |
 | `Modern`, `Sse` | M | · | · | S | · |
 
+**The two collapsed rows are run per `HeaderMode` arm, not once.** They read as
+one row because all four arms expect the same five values, but the session cell
+is where the new code puts a conditional that did not exist before: an
+implementation with the era test inverted loses the session header on
+`Legacy`/`Request` and passes every other cell in this matrix. That cell is the
+regression cell, and a row collapsed in the table but run once in code would be
+the only thing that misses it.
+
 Three cells carry a decision, not an inheritance:
 
 - **`Modern`/`Request`+`Notify` session cell is `·`, and `Close` is `S`.** The
@@ -51,13 +59,14 @@ five fields on the **captured wire request** — after the static and per-reques
 header merges (`:607-616`, `:618-624`), not on `build_mcp_headers`' return
 value, which is private and sees none of them.
 
-Beyond the matrix, four cases for the rules the matrix cannot express:
+Beyond the matrix, five cases for the rules the matrix cannot express:
 
 | case | asserts | can fail because |
 |---|---|---|
 | named-method coverage | `Mcp-Name` present for each of `tools/call`, `resources/read`, `prompts/get`, and absent for one method that is not | a per-method table, run against the production selector, not a hand-listed pair |
-| `_meta` merge shapes | absent `params` → object holding only `_meta`; object `params` → merged, foreign `_meta` keys kept, the three reverse-DNS keys overwritten; non-object `params` → untouched, no declaration | three distinct inputs with three distinct expected bodies; the third asserts the body is byte-identical to what went in |
+| `_meta` merge shapes | absent `params` → object holding only `_meta`; object `params` → merged, foreign `_meta` keys kept (`clientInfo` among them, neither inserted nor stripped), the two reverse-DNS keys this design writes overwritten; non-object `params` → untouched, no declaration | three distinct inputs with three distinct expected bodies; the third asserts the body is byte-identical to what went in |
 | version pinning | a backend configured with a custom `MCP-Protocol-Version` still sends `MODERN_VERSIONS[0]` on the modern path, and its body agrees | the custom header is set to a value the builder would never produce, so an implementation that skips the re-assertion emits it |
+| non-ASCII `Mcp-Name` (HEADER.4a) | a tool whose name is not representable in ASCII is emitted Base64-sentinel-wrapped, and `decode_header_value` round-trips it back to the original | the encoder does not exist yet, so this case fails on today's tree in one of two ways — illegal header bytes, or a silent mangle — and the round-trip assertion distinguishes them from a value that merely looks wrapped |
 | session pinning, the declined half | a backend configured with a custom `MCP-Session-Id` **does** send it on a modern `Request` | the design declines to strip it; a test asserting absence would pin the opposite of what was decided |
 
 ## What must be written so it can fail
