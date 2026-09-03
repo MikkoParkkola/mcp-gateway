@@ -20,6 +20,7 @@ STATUS = ROOT / "docs/requirements/RELEASE-4.0.0-criteria-status.md"
 REQUIREMENTS = ROOT / "docs/requirements/RELEASE-4.0.0-requirements.md"
 PLAN = ROOT / "docs/requirements/RELEASE-4.0.0-plan.md"
 ROLLUP = ROOT / "docs/requirements/RELEASE-4.0.0-blocking-rollup.md"
+BOARD = ROOT / "docs/requirements/RELEASE-4.0.0-readiness-board.md"
 # Anchored at BOTH ends. Unanchored, a typo carries: `MRTR.1abc` matches as
 # far as `MRTR.1a` and is counted as that criterion, so a mistyped row is
 # silently attributed to a real one rather than reported.
@@ -323,6 +324,49 @@ def rollup_membership(criteria, text):
     return problems
 
 
+def copied_counts(rollup_text, board_text):
+    """The rollup's cluster counts are derived; every other copy of them is not.
+
+    `rollup_membership` proves the rollup's own table against the ledger, which
+    leaves each cluster count true in exactly one file and transcribed in the
+    others. The readiness board carries the same eight numbers in its `rows`
+    column and the rollup's residue prose carries one bullet per residue name,
+    and both went stale against a table this script had already checked -- the
+    board's row count and a residue name with no bullet at all. A transcribed
+    number is only as good as whatever compares it to its source.
+    """
+    problems = []
+    source = {}
+    residue_names = []
+    for line in rollup_text.splitlines():
+        match = CLUSTER.match(line)
+        if not match:
+            continue
+        cells = line.split("|")
+        source[cells[1].strip()] = int(match.group(1))
+        if cells[1].strip() == "—":
+            residue_names = named_criteria(cells[3])[0]
+    for line in board_text.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 3 or cells[0] not in source or not cells[2].isdigit():
+            continue
+        if int(cells[2]) != source[cells[0]]:
+            problems.append(
+                f"readiness board says cluster {cells[0]} has {cells[2]} rows, "
+                f"the rollup derives {source[cells[0]]}"
+            )
+    # The bullets are the rollup's own prose, so the name it lists is the name
+    # the bullet must open with -- a bullet for a row the cluster cell does not
+    # name is a different defect and is left to the membership check.
+    bullets = set(re.findall(r"^- `([^`]+)`", rollup_text, re.MULTILINE))
+    for name in residue_names:
+        if not any(_names(b, name) for b in bullets):
+            problems.append(
+                f"residue names {name}, which no line in the rollup explains"
+            )
+    return problems
+
+
 def _names(key, name):
     return key == name or key.endswith("." + name)
 
@@ -405,6 +449,7 @@ def main():
     stale_sections = section_counts(text)
     rollup_text = ROLLUP.read_text()
     membership = rollup_membership(criteria, rollup_text)
+    membership += copied_counts(rollup_text, BOARD.read_text())
     uncovered = sorted(declared - ids)
 
     totals = (len(declared), len(criteria), len(criteria) - blocking, blocking)

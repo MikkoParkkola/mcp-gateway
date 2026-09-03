@@ -59,6 +59,9 @@ the blocking rows and read as though it covered all of them.
 - `NFR.SEC.1` — 14 controls enumerated in `docs/requirements/nfr-sec1-control-inventory.md`;
   nine carry a refusal test, five are recorded gaps. `each` is unmet until those five do.
 - `NFR.SEC.6` — the sweep exists; the row is a traceability question across MIK-7222/7246/7256.
+- `NFR.PERF.4` — the ceiling and the seventeenth tool are both settled (see cluster F above);
+  what is absent is the mechanism that holds the surface at the ceiling, which is a surface
+  decision rather than a measurement.
 - `MIK-6704.IDENT.1a` — deriving authorization from the authenticated credential is implemented
   and consumed (`principal_of`, `src/gateway/auth.rs:38-43`) and nothing asserts it. All three
   IDENT.1 tests prove the negative clause, now scored separately as `IDENT.1b`. A test, not a
