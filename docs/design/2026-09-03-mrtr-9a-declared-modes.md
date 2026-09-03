@@ -11,8 +11,9 @@
   in this revision, and inventing a general "capability sub-feature" mechanism to
   hold one of them is a design for a caller that does not exist.
 - `MRTR.9b`. A separate row with a separate criterion.
-- Every continuation variant of `DE-9` other than the one this change creates
-  (see *The DE-9 sub-decision* below).
+- Every `DE-9a` continuation variant. This change creates none; it adds no
+  new error code at all. `DE-9`'s payload *shape* is in scope, because the
+  refusal has to carry something (see *The DE-9 sub-decision* below).
 - The declaration path for anything other than `_meta`-carried
   `clientCapabilities` — the era probe and per-backend detection are cluster B.
 - Widening `RequestFields` to answer questions no consumer asks.
@@ -96,11 +97,13 @@ The specification fixes one normalization that must not be invented later:
 an empty `"elicitation": {}` is equivalent to `{"form": {}}`. A client that
 declares the capability and names no mode has declared **form**.
 
-**The same default binds the request side, and it binds at the comparison
-boundary.** An `elicitation/create` entry carrying no `params.mode` is a *form*
-request, not a modeless one. Without this stated, the natural reading of "refuse
-a request whose mode was not declared" refuses every request that omits the
-field — a compliant form-mode request from a form-only client, which is the
+**The gateway applies the same default to the request side.** This one is the
+gateway's decision, not a specification quotation: the passage above fixes the
+*declaration* side only, and the request schema is silent on an omitted
+`params.mode`. The reason to mirror it: an `elicitation/create` entry carrying
+no `params.mode` is a *form* request, not a modeless one. Without this, the
+natural reading of "refuse a request whose mode was not declared" refuses every
+request that omits the field — a compliant form-mode request from a form-only client, which is the
 exact case the second test in the tree exists to protect. Both sides normalize
 to the same value, once, at parse.
 
@@ -150,7 +153,12 @@ Both constraints then hold *by type* rather than by review:
   declaration, so it can never satisfy a request. A closed vocabulary is the
   feature here — an open one would let a caller declare the exact string a future
   gateway learns to honour.
-- `{}` normalizes to form at parse, once, so no consumer re-derives it.
+- `{}` normalizes to form at parse, once, so no consumer re-derives it — and
+  the default is keyed on the object being **syntactically empty**, applied
+  *before* unrecognised keys are dropped. Applied after, `{"telepathy": {}}`
+  would filter to empty and then acquire form, turning a declaration of nothing
+  the gateway understands into a declaration of form. That is requirement 2
+  inverted, and the ordering is what prevents it.
 
 **This closes a pre-existing amplification rather than avoiding a new one.**
 Today's `Vec<String>` is already caller-sized, on the same pre-admission path,
@@ -187,6 +195,27 @@ connection. The backend server that issued the elicitation never sees it, so no
 code carried there can tell it to retry. Distinguishing an outcome for a reader
 that does not exist is not a distinction.
 
+### The payload has to survive one more hop than the first draft accounted for
+
+Writing mode detail at `handlers.rs:790` is not enough, and the review caught
+this. `error_response_preserving_status` (`src/gateway/meta_mcp/mod.rs:179-200`)
+rebuilds the error and forwards **exactly one** key — `requiredCapabilities` —
+discarding everything else in `data`. Mode detail written upstream would be
+dropped before any client saw it, and every test that asserted it at the write
+site would still pass.
+
+The allowlist is deliberate and stays: the comment there records that `data` is
+a shared channel, and that `invoke_tool` puts a *backend's* error data into the
+same variant, so forwarding wholesale would let a backend choose the gateway's
+HTTP status. The change is therefore to add **one more gateway-owned key** to
+that allowlist, alongside the existing one — the same discipline, one entry
+wider. The plan's case 6 asserts the payload after this conversion, not before.
+
+The refusal **message** changes too. Today it reads *"client did not declare the
+'elicitation' capability"*, which is false for a client that declared
+elicitation and not the mode. A refusal that misstates its own reason sends the
+client to fix something that is not broken.
+
 What remains is `DE-9`'s actual question — what the payload carries — and the
 existing convention already answers it. The refusal keeps code `-32021` and the
 `requiredCapabilities` field it already sets, and gains structured detail in
@@ -211,8 +240,15 @@ declaration type is private to the gateway, `error.data` is additive to a code
 that already ships, and no new error code is introduced — which is the part
 that *would* have been sticky, since a code, once emitted, is a contract clients
 may come to depend on. Reverting is deleting the type and restoring the
-`Vec<String>`, at the cost of returning to today's blind gate. No migration, no
-persisted state, no wire format a peer could pin.
+`Vec<String>`, at the cost of returning to today's blind gate. No migration and
+no persisted state.
+
+One qualification, because the first draft overstated this. The added
+`error.data` fields **are** an observable contract — the design tells clients to
+read them instead of a new error code, which is the whole reason no new code is
+minted. A rollback must keep the field shape it shipped, or it breaks the
+clients that took the design at its word. Additive-and-stable is cheap to
+honour, and saying so here stops a later rollback discovering it.
 
 **Exit criteria.** `ac_mrtr_9a_a_url_mode_request_to_a_form_only_client_is_refused`
 is green on its own criterion assertion; `ac_mrtr_9a_a_form_mode_request_to_a_form_only_client_is_relayed`
