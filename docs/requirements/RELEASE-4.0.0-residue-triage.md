@@ -44,9 +44,9 @@ not resplit with it. The ten below are the ledger's.
 | `MIK-6865.SCHEMA.1c` | tool schemas MUST stay within the revision's `$ref` and composition bounds | the only `$ref` handling in the tree is OpenAPI import (`src/capability/openapi/refs.rs:75`), which resolves references inward; `tests/schema_2020_12_validity.rs` contains no `$ref`, `allOf`, `anyOf` or `oneOf` | an assertion over the emitted surface. Inbound resolution is a plausible reason no `$ref` survives outbound, and a plausible reason is not a verdict | TEST |
 | `MIK-7215.CONTROL.3a` | transparency log MUST retain a correlation key across the removal of sessions | `src/gateway/meta_mcp/invoke.rs:1812-1816` reads the `_meta` W3C trace id, falls back to `session_id`, then to a literal placeholder. After this release there is no session, so a caller sending no `_meta` trace id is logged under that placeholder | a decision on what supplies the key when the caller sends none. A per-invocation id is already minted at `src/gateway/meta_mcp/invoke.rs:767` (`trace::generate()`) and that chain does not consult it | DESIGN |
 | `MIK-7215.CONTROL.4` | session-lifecycle TTL-reaping owns cleanup previously done by disconnect | `SessionLifecycle::{register,track,reap}` (`src/gateway/session_lifecycle.rs:48`, `:107`, `:124`) is implemented and unit-tested (`tests/mik_7215_controls_acs.rs`, `mod lifecycle`); `rg SessionLifecycle` outside the module returns only doc comments in `src/security/firewall/**`. Nothing constructs, holds or drives it | what calls `reap` and on what clock, and what the TTL is. `docs/design/2026-09-01-residue-four-rows.md:73-121` establishes that ownership is not the blocker and names both questions without answering either | DESIGN |
-| `MIK-7246.CONFIRM.2` | gate MUST be reachable through the MRTR path, so a modern client can confirm | the confirmation path is `elicitation/create` over an SSE session (`src/gateway/proxy.rs:213-243`); `src/gateway/destructive_confirmation.rs:83-84` states that this revision deletes sessions, so a modern call has none to elicit over | whether an equivalent mechanism satisfies a criterion that names a specific one. `docs/design/2026-09-01-residue-four-rows.md:127-146` shows both readings are consistent with the tree, so no reading of code settles it | DECISION |
-| `NFR.SEC.1` | no 3.5.0 control becomes inoperative for a modern caller; each has a refusal test | 14 controls enumerated in `docs/requirements/nfr-sec1-control-inventory.md`; twelve carry a refusal test, eight of them new in `tests/nfr_sec1_controls.rs` (8 passed, 0 failed, 2026-09-01) | one test for row 2, agent JWT validity, which needs an agent registry and a signed token (`nfr-sec1-control-inventory.md:107`). Row 5, the client circuit breaker, refuses on a trip count and has no absent input to remove (`:108`); reclassifying it is the operator's call and it stays counted until made | TEST |
-| `NFR.SEC.6` | MIK-7249, MIK-7256, MIK-7262 and MIK-7222 closed in this release | 7222 has `tests/mik_7222_acs.rs`; 7256 is referenced across `src/config/env_overlay.rs` and `src/config_reload/mod.rs`; 7249 is fixed and asserted (`src/config_reload/mod.rs:279`, `:285`, test at `:346`); 7262's fix is the early return at `src/capability/definition/mod.rs:1150` | one test on that early return. Whether an unlabelled fix counts as "closed in this release" for traceability is a separate call, and not a code gap | TEST |
+| `MIK-7246.CONFIRM.2` | gate MUST be reachable through the MRTR path, so a modern client can confirm | the confirmation path is `elicitation/create` over an SSE session (`src/gateway/proxy.rs:213-243`); `src/gateway/destructive_confirmation.rs:83-84` states that this revision deletes sessions, so a modern call has none to elicit over | code, not a ruling. `docs/design/2026-09-01-residue-four-rows.md:127-146` treats "does an equivalent mechanism satisfy this?" as open, but the criterion names the MRTR path in its own text, so the requirement already answered it. Both readings — MRTR carrying `elicitation/create`, or a confirmation shaped for MRTR — are work, and both wait on cluster A. Raised by GPT-5.5 on 2026-09-03 and confirmed against the criterion at `docs/requirements/RELEASE-4.0.0-criteria-status.md:229` | CODE |
+| `NFR.SEC.1` | no 3.5.0 control becomes inoperative for a modern caller; each has a refusal test | 15 controls in `docs/requirements/nfr-sec1-control-inventory.md` — 14 enumerated plus a firewall gate the inventory records at `:99-101` as owned by another session and untested; thirteen carry a refusal test. `cargo test --test nfr_sec1_controls` = 10 passed, 0 failed (2026-09-03), covering controls 2, 3, 4, 6, 7, 8, 9, 11 and 13 — row 2 was closed since that inventory was written, by two tests reaching both refusal arms with an empty registry (`tests/nfr_sec1_controls.rs:434`, `:457`) | a test for the firewall gate, which waits on another session's files, and a ruling on row 5. The client circuit breaker refuses on a trip count and has no absent input to remove (`nfr-sec1-control-inventory.md:108`); that reads as N/A under the derivation rule, but reclassifying a row is the operator's call | TEST |
+| `NFR.SEC.6` | MIK-7249, MIK-7256, MIK-7262 and MIK-7222 closed in this release | 7222 has `tests/mik_7222_acs.rs`; 7256 is referenced across `src/config/env_overlay.rs` and `src/config_reload/mod.rs`; 7249 is fixed and asserted (`src/config_reload/mod.rs:279`, `:285`, test at `:346`). 7262 is **not** closed: the declaration check at `src/capability/definition/mod.rs:1150` returns the declared value, but two earlier short-circuits return `false` before it is reached — `if !mutating` (`:1129`) and the missing-`properties` `else` arm (`:1132-1139`) | a code fix, not a test. A capability declaring `registers_external_callback: true` that is GET-only, or whose input schema has no `properties` object, is still overruled by inference — which is the defect MIK-7262 names. Raised by GPT-5.5 on 2026-09-03 and confirmed at source | CODE |
 | `NFR.PERF.4` | Meta-MCP surface remains 14-16 tools; `server/discover` does not count against it | `benchmarks/public_claims.json:3-6` records `minimum: 14`, `readme_benchmark: 16`, `with_webhook_status: 17`. The 17th is `gateway_webhook_status`, pushed at `src/gateway/meta_mcp_tool_defs.rs:564-566` behind `webhooks_enabled`. Nothing clamps the count | how the 17th stops counting. The operator ruled on 2026-09-02 that the ceiling stands and the requirement is not widened; the mechanism holding it is unchosen | DESIGN |
 
 ## Bottom line
@@ -54,11 +54,30 @@ not resplit with it. The ten below are the ledger's.
 | class | rows |
 |---|---|
 | DESIGN | 5 — `HEADER.9a`, `HEADER.9b`, `CONTROL.3a`, `CONTROL.4`, `NFR.PERF.4` |
-| TEST | 4 — `IDENT.1a`, `SCHEMA.1c`, `NFR.SEC.1`, `NFR.SEC.6` |
-| DECISION | 1 — `CONFIRM.2` |
+| TEST | 3 — `IDENT.1a`, `SCHEMA.1c`, `NFR.SEC.1` |
+| CODE | 2 — `NFR.SEC.6`, `CONFIRM.2` |
+| DECISION | 0 |
 | MEASUREMENT | 0 |
 | COVERED | 0 |
 | UNKNOWN | 0 |
+
+`CODE` was not in the class set this triage started with, and `NFR.SEC.6` is why it
+exists. That row read as a missing test until GPT-5.5 asked whether the fix it cites is
+reachable. It is not, on two paths, and a class set with no room for "the fix is
+incomplete" would have pushed that answer into `TEST` — wrong in the direction that
+closes rows. Adding the class was cheaper than mislabelling the row.
+
+`DECISION` is now empty, and that is the same review's other correction. `CONFIRM.2` was
+held open as a question about whether an equivalent mechanism counts; the criterion names
+the MRTR path in its own text, so the requirement had already answered it and the row was
+never waiting on an operator.
+
+Three rows moved after this table was first written: `NFR.SEC.1`, because its last test
+landed mid-triage and `docs/requirements/nfr-sec1-control-inventory.md:107` has not
+caught up (that inventory belongs to another increment and is reported, not edited
+here); `NFR.SEC.6` and `CONFIRM.2`, because a reviewer's questions survived verification
+at source. All three moves are recorded rather than silently restated — a triage whose
+rows move without a trace is a snapshot pretending to be a ledger.
 
 No row is `MEASUREMENT`. The only measurement the residue touches is `NFR.PERF.4`'s tool
 count, and that number exists — `benchmarks/public_claims.json:3-6` records it. What is
@@ -72,4 +91,13 @@ residue; the residue is ten, and the six rows it does not reach are listed above
 
 The three designs this triage calls for are `HEADER.9a`+`9b` (one mechanism, one design),
 `CONTROL.3a`+`CONTROL.4` (both blocked on what identifies a caller once sessions are
-gone), and `NFR.PERF.4` (unrelated to either).
+gone), and `NFR.PERF.4` (unrelated to either). Of the three, two are now written:
+`docs/design/2026-09-03-post-session-caller-identity.md` and
+`docs/design/2026-09-02-perf4-meta-tool-ceiling.md`. `HEADER.9a`+`9b` has none.
+
+Pairing `CONTROL.3a` with `CONTROL.4` drew a review objection worth recording: 3a has a
+per-invocation id already in the tree, so the two rows are not one problem. The design
+agrees and answers them with **different** keys — per-invocation for the log, per-principal
+for the reaper. They travel together because they were blocked on the same unmade choice,
+not because they share an answer, and the design that separates them is the artifact that
+proves the pairing was worth making once.
