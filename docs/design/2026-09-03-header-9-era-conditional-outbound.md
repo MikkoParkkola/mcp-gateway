@@ -22,7 +22,8 @@ other peer carries exactly what it carries today.
 - the probe and discovery path. `docs/design/2026-08-31-discover-outbound-era-probe.md`
   owns it, including the probe's own header suppression (§3a there).
 - inbound classification. `classify_request` and the router's mirrored-header checks are
-  settled and this change does not touch them.
+  settled and this change does not touch them. Note that they are still the *source* of the
+  outbound requirement resolved below — out of scope to change, not out of scope to read.
 - any change to `Era`, `EraCache`, or when the probe runs. This design consumes the era; it
   does not decide it.
 
@@ -58,6 +59,22 @@ So the modern outbound shape is two decisions, not one, and they go opposite way
 | `MCP-Protocol-Version` | **emitted**, with `MODERN_VERSIONS[0]` | the revision mirrors the version in header and body; see the resolved question below |
 | `MCP-Session-Id` | **omitted entirely** | the revision deleted sessions. A session id sent to a peer that has none is at best ignored and at worst re-attached by an intermediary |
 
+`HeaderMode` has exactly four variants — `Sse`, `Request { method }`, `Notify`, `Close`
+(`src/transport/http/mod.rs:205-210`) — and the session header is inserted today on three of
+them: `Request` (`:595`), `Notify | Close` (`:598`), while `Sse` already omits it (`:600`).
+So "omitted entirely" changes observable behaviour on three arms and is a no-op on the
+fourth. The test plan must say which is which: an `Sse` row asserted naively passes
+identically before and after the change, which is a row that cannot fail.
+
+**A custom header can reinstate what this design omits.** The user-supplied `self.headers`
+loop runs *after* the session block (`:607-616`) and uses `insert`, so a backend configured
+with an explicit `MCP-Session-Id` header re-adds it on the modern path. Whether the modern
+branch must also strip it from the custom set is a decision this design makes explicitly:
+**it does not**. A custom header is an operator's deliberate instruction about a specific
+backend, and silently dropping it would make configuration lie. The omission this design
+promises is that the *gateway* stops originating the header, not that the header becomes
+unreachable. Named here so a reviewer does not read "omitted entirely" as stronger than it is.
+
 Plus the `_meta` declaration in `params`, which is what `HEADER.9a`'s "outbound modern
 `_meta`" clause names. `HEADER.9b` — "values derived from the negotiated envelope, not the
 legacy handshake version" — is then satisfied by construction: the emitted value is
@@ -81,7 +98,8 @@ Share the backend's `Arc<EraCache>` into `HttpTransport`, and have `build_mcp_he
 `cached().await`:
 
 - `Some(Era::Modern)` → emit `MCP-Protocol-Version: MODERN_VERSIONS[0]`, omit
-  `MCP-Session-Id` for every `HeaderMode`, and carry the `_meta` declaration in `params`.
+  `MCP-Session-Id` on every `HeaderMode` that carries it today, and carry the `_meta`
+  declaration in `params`.
 - `Some(Era::Legacy)` or `None` → today's behaviour, byte for byte.
 
 **API surface (D28).** `new` and `new_with_oauth` are public and called from tests; widening
@@ -121,7 +139,8 @@ that was routed as an operator decision.
 ## Next step
 
 Test plan (§P2), reviewed as a plan before any test is written. One row per clause: the
-emitted version value, the omitted session header across all four `HeaderMode` variants, the
-`_meta` body declaration, and the `None`-means-legacy default — the last of which must be
-written so it can fail, since "unchanged behaviour" is the assertion most easily satisfied by
-a fixture that never reached the code.
+emitted version value, the omitted session header on each of the three `HeaderMode` arms that
+carry it today (`Request`, `Notify`, `Close` — with `Sse` stated as a no-op rather than
+asserted as a pass), the `_meta` body declaration, and the `None`-means-legacy default — the
+last of which must be written so it can fail, since "unchanged behaviour" is the assertion
+most easily satisfied by a fixture that never reached the code.
