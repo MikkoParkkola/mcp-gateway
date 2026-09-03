@@ -106,8 +106,12 @@ is left without a next step.
    hardcode the MRTR work surfaced (`src/gateway/server/mod.rs:1748`) is named in
    the rollup's cluster G as a design input, not as a ninth criterion row.
 7. **Triage the residue as one pass.** No shared mechanism across them, most needing a
-   decision rather than an increment — `HEADER.9` waits on B's per-backend era, so
-   it cannot come first. One session, one line of disposition per row, and the ones
+   decision rather than an increment. `HEADER.9` no longer waits on B: per-backend era
+   classification has landed (`src/backend/era.rs:61`, resolved on the start path at
+   `src/backend/lifecycle.rs:232`), and what remains is that the outbound header builder
+   cannot see it — a gap inside the residue, not a dependency on another cluster. Its
+   design is committed (`9a296e78`) and its next step is a reviewed test plan. One
+   session, one line of disposition per row, and the ones
    that turn out to be code queue behind whichever cluster owns their file.
 
 Order is dependency, not preference: everything in cluster A waits on step 1, and
