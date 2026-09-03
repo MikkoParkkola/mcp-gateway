@@ -1790,8 +1790,8 @@ mod elicitation_mode_gate {
         assert!(
             interim.undeclared(declared).is_some(),
             "a url-mode elicitation must be refused to a client that declared form mode only; \
-             the declaration flattens to the capability NAME, so the mode substructure is \
-             discarded and this request passes the gate by construction"
+             a gate reading the capability name alone cannot see the mode substructure and \
+             relays this request"
         );
     }
 
@@ -1832,7 +1832,7 @@ mod elicitation_mode_gate {
 
 mod elicitation_mode_matrix {
     use mcp_gateway::protocol::meta::{Declared, classify_request};
-    use mcp_gateway::protocol::mrtr::InputRequired;
+    use mcp_gateway::protocol::mrtr::{InputRequired, Refusal};
     use serde_json::{Value, json};
 
     /// A declaration carrying `elicitation` set to whatever the row says, or
@@ -1874,16 +1874,40 @@ mod elicitation_mode_matrix {
     /// `true` where the table says `R`.
     fn assert_row(label: &str, declaration: Option<Value>, relays: [bool; 4]) {
         let declared = declaring(declaration);
+        // Whether the parse *accepted* a declaration of elicitation, which is
+        // not the same as the row's JSON carrying the key: the non-object row
+        // names it and declares nothing. That distinction decides which refusal
+        // is the right one below, so the table needs no fifth column to say it.
+        let names_elicitation = declared.has("elicitation");
         for (column, expected) in COLUMNS.iter().zip(relays) {
-            let refused = asking(*column).undeclared(declared).is_some();
+            let refusal = asking(*column)
+                .undeclared(declared)
+                .map(|entry| entry.reason);
             let requested = column.unwrap_or("an absent mode");
             assert_eq!(
-                !refused,
+                refusal.is_none(),
                 expected,
                 "row {label}, requested mode {requested}: the table says {}, the gate says {}",
                 if expected { "relay" } else { "refuse" },
-                if refused { "refuse" } else { "relay" },
+                if refusal.is_some() { "refuse" } else { "relay" },
             );
+            // A refusal for the wrong reason passes a relay/refuse check. It
+            // does not pass this one: a client that declared elicitation must
+            // never be told the capability is missing, and one that did not
+            // must never be answered about a mode it was never asked to name.
+            match refusal {
+                None => {}
+                Some(Refusal::Capability(name)) => assert!(
+                    !names_elicitation,
+                    "row {label}, requested mode {requested}: refused as capability \
+                     {name:?}, but this client declared elicitation"
+                ),
+                Some(other) => assert!(
+                    names_elicitation,
+                    "row {label}, requested mode {requested}: refused as {other:?}, but \
+                     this client never declared elicitation and the capability arm owns it"
+                ),
+            }
         }
     }
 

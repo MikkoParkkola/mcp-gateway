@@ -392,12 +392,13 @@ impl Declared {
 }
 
 impl RequestShape {
-    /// The capabilities this request declared, in declaration order.
+    /// The capabilities this request declared, as the gateway's own flags.
     ///
-    /// Empty for legacy and malformed shapes: neither carries a declaration to
-    /// read, and a capability the client did not mention was not declared.
+    /// `Declared::NONE` for legacy and malformed shapes: neither carries a
+    /// declaration to read, and a capability the client did not mention was not
+    /// declared.
     ///
-    /// The names travel rather than a single "may be asked for input" bit
+    /// The flags travel rather than a single "may be asked for input" bit
     /// because MRTR.9 refuses **per requested method** — a client that declared
     /// `elicitation` and not `sampling` may be sent one and not the other, and
     /// a boolean cannot tell those apart.

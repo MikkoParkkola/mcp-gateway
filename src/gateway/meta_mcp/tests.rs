@@ -3737,6 +3737,16 @@ fn exposure_answers_for_a_hidden_admin_tool_before_admin_does() {
 // ===========================================================================
 
 fn backend_asking_in_url_mode() -> Arc<BackendRegistry> {
+    backend_asking_with_elicitation_params(&json!({
+        "mode": "url",
+        "url": "https://backend.invalid/ui/set_api_key",
+        "message": "Please provide your API key to continue."
+    }))
+}
+
+/// A backend whose one interim request carries `params` verbatim, so a test can
+/// choose what the client is asked in.
+fn backend_asking_with_elicitation_params(params: &serde_json::Value) -> Arc<BackendRegistry> {
     use crate::backend::Backend;
     use crate::config::{BackendConfig, FailsafeConfig};
     use crate::transport::Transport;
@@ -3754,11 +3764,7 @@ fn backend_asking_in_url_mode() -> Arc<BackendRegistry> {
             "inputRequests": {
                 "api_key": {
                     "method": "elicitation/create",
-                    "params": {
-                        "mode": "url",
-                        "url": "https://backend.invalid/ui/set_api_key",
-                        "message": "Please provide your API key to continue."
-                    }
+                    "params": params
                 }
             },
             "requestState": "backend-opaque"
@@ -3767,6 +3773,67 @@ fn backend_asking_in_url_mode() -> Arc<BackendRegistry> {
     backend.set_transport_for_test(transport);
     let _ = registry.register(backend);
     registry
+}
+
+/// The caller's own mode string is the one thing a refusal must not repeat: it
+/// reaches the client verbatim, and the gateway names only modes it can render
+/// from its own vocabulary. Today that is a comment beside the write site; this
+/// pins it as behaviour.
+#[tokio::test]
+async fn an_unreadable_mode_is_refused_without_echoing_what_the_backend_sent() {
+    // Distinctive but inert: an injection-shaped string would also trip the
+    // content classifier, and this test would then pass for a reason that has
+    // nothing to do with the mode gate.
+    const BACKEND_MODE: &str = "mode-only-the-backend-knows";
+
+    let meta = MetaMcp::new(backend_asking_with_elicitation_params(&json!({
+        "mode": BACKEND_MODE,
+        "message": "Please provide your API key to continue."
+    })));
+    let err = meta
+        .invoke_tool(
+            &book_flight(),
+            Some("session-1"),
+            &allow_all_ctx_declaring(form_only_client()),
+        )
+        .await
+        .expect_err(
+            "a mode the gateway cannot read is a mode no client can have declared, so the \
+             request must not be relayed",
+        );
+
+    assert_eq!(
+        err.to_rpc_code(),
+        -32021,
+        "an unreadable mode is refused in the same class as any other undeclared request"
+    );
+
+    let message = err.to_string();
+    assert!(
+        !message.contains(BACKEND_MODE),
+        "the refused mode is the backend's string; repeating it puts backend-authored \
+         text in front of the client: {message}"
+    );
+    assert!(
+        !message.contains("'elicitation' capability"),
+        "this client declared elicitation; the refusal is about the mode: {message}"
+    );
+    assert!(
+        message.contains("does not recognise"),
+        "without this the test would pass on any refusal at all, including the \
+         capability refusal it is here to rule out: {message}"
+    );
+
+    let response = error_response_preserving_status(RequestId::Number(1), &err);
+    let data = response
+        .error
+        .expect("a refusal must serialise as an error")
+        .data;
+    assert!(
+        data.is_none(),
+        "there is nothing a client could add to its declaration to make an unreadable \
+         mode acceptable, so a payload here would only invite a retry: {data:?}"
+    );
 }
 
 /// A client that declared elicitation, in form mode and only form mode.
