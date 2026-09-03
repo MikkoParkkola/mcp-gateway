@@ -233,7 +233,9 @@ dropped with no observable refusal.
 The operator's framing was a binary — whether stdio grows a way to declare, or whether the
 absence becomes an explicit refusal. Neither is needed, because the premise under both is
 false. There is nothing to grow and nothing to refuse: both fields are in the params the
-stdio dispatcher already parses, and one of them is in a value it already builds.
+stdio dispatcher already parses — it holds them as `params` at `server/mod.rs:1679`, the
+line on which it passes them to `classify_and_observe` — and one of them is already inside
+the `RequestShape` that call returns and the dispatcher drops.
 
 ### Where the repair goes — the same convergence point, not a second copy
 
@@ -302,6 +304,32 @@ The remaining findings — internal callers of `handle_tools_call` being unenume
 double-counting risk for playbook and code-mode steps — are scheduled as a check before
 implementation, not answered here. Enumerating those callers is the first task of the test
 plan, since a caller that is not a transport must have a stated answer for both concerns.
+
+## Review round 2 — the MRTR row, two vendors, both SHIP-WITH-FIXES
+
+Reviewed 2026-09-03 by Codex/GPT (`~/.claude/bin/gpt-review`, 4 findings + 2 improvements)
+and by Kimi K3 (`~/.claude/bin/kimi-review`, 1 finding + 3 improvements), on the row's diff
+plus the three source excerpts inline, since the second reviewer cannot read the tree.
+
+**Both vendors independently found the same defect**, which is the round's strongest
+signal: the row as first written said the repair was to "build the retry the same way the
+HTTP path does", which is a second build-and-refuse site — the two-site pattern this note
+rejects in every other row. Section *Where the repair goes* is the answer, and it also
+carries GPT's requirement that a malformed field be refused **before** dispatch rather than
+carried past it.
+
+**The vendors disagreed about `input_capabilities`, and the source settled it against the
+note.** Kimi endorsed keeping it as a separate open question, on the reading that
+capabilities are negotiated once at `initialize`. GPT called the separation a false
+conclusion. GPT is right: `KEY_CLIENT_CAPABILITIES` at `meta.rs:45` is read out of
+`params._meta` at `meta.rs:187`, per request, and HTTP passes precisely that at
+`handlers.rs:1152`. Kimi was reasoning from the note's own preliminary framing, which had
+checked handshake retention — a true answer to the wrong question. Verified at source, not
+averaged. Open question 4 is therefore resolved rather than deferred, which also disposes
+of Kimi's only finding, that the deferral lacked an owner and a date.
+
+Kimi's remaining improvements: the load-bearing premise now carries its own line citations,
+and the completed checks are recorded inline in question 4's row.
 
 ## Residual risk, rewritten after review
 
