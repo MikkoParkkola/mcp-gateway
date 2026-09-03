@@ -277,9 +277,9 @@ fn error_message(response: &Value) -> Option<String> {
 /// `ContinuationError::client_message` (`src/protocol/continuation.rs:234-236`)
 /// answers "continuation rejected" for all seven variants, deliberately. So a
 /// case naming the expiry check is satisfied by the binding check refusing
-/// first. Discriminating them is DE-9's to decide — the deferred question of
-/// what a refusal answers under
-/// (`docs/design/2026-08-30-mrtr-wiring.md`, DE-8) — and it has an owner there.
+/// first. Discriminating them is DE-9a's to decide — one client sentence for
+/// seven causes, and what it costs a test
+/// (`docs/design/2026-08-30-mrtr-wiring.md:687`) — and it has an owner there.
 /// Recorded, not worked around: a substring hierarchy invented here would be a
 /// test asserting a vocabulary production never agreed to.
 fn assert_refused_by_the_continuation_guard(response: &Value, case: &str) {
