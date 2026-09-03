@@ -284,6 +284,28 @@ A lifetime is a trade-off, not a fact about the code, so it was **asked, not mea
   would have had to hold roughly three times as many live entries and MRTR.8's capacity row would
   have moved with it.
 
+One unknown is **deferred**, and nothing that depends on it may be implemented until it is not.
+
+*What issues a server-initiated request over the client's transport in the middle of a call?* MRTR.7a
+and MRTR.7b describe the gateway asking the caller for more input while a backend call is parked.
+The request-building half exists — `Bridge::to_legacy_client` (`src/protocol/mrtr.rs:186`) constructs
+the outbound form — and it has no caller, because there is no seam that hands a mid-call request back
+up the transport the caller arrived on. Test-plan row 308 marks both rows `**NOT YET**` for this
+reason. A test written today would have to invent the interface it claims to test, and a fixture that
+reimplements the production path is the failure mode this repository has already paid for twice.
+
+- **owner** — MIK-7212, wiring increment; not assigned to this change.
+- **what would resolve it** — a design for the mid-call server-initiated request seam, covering both
+  transports: whether stdio can carry one at all (DE-4 already says stdio callers cannot be asked for
+  more input), and what holds the parked call open on HTTP.
+- **when** — before any MRTR.7a or MRTR.7b implementation work starts. It does not block the rest of
+  MRTR: the refusal paths, the mint, and the response side are all reachable without it.
+- **if it resolves badly** — if no seam is affordable on either transport, MRTR.7a and 7b are cut
+  from the release rather than faked, and the criteria are restated as what the gateway refuses
+  rather than what it asks. That is a criteria change and needs the requester's agreement, so it is
+  named here rather than discovered at the end.
+
+
 ## Test plan
 
 Superseded. The sketch that stood here listed one row per behaviour before the plan existed; it has
