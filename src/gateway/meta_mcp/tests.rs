@@ -3390,6 +3390,14 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
 // occupies is `ac_mrtr_8_an_exchange_the_gateway_opened_occupies_a_slot`'s
 // property, in the opposite direction. Asserting "nothing anywhere" here would
 // contradict that row the day the hold is wired.
+//
+// Falsifier probe run 2026-09-03: staging a `ledger().consume(...)` between the
+// mint and the assertion turned it red on its own comparison (left 1, right 0),
+// and removing the stage turned it green again. That establishes the assertion
+// reads the ledger it names. It does NOT reproduce the production defect it
+// guards against — recording the jti at mint time would need `mint_continuation`
+// (`src/gateway/meta_mcp/invoke.rs:372`) to become async, an edit larger than the
+// defect, so the probe stages the effect rather than the cause.
 #[tokio::test]
 async fn a_continuation_that_is_never_retried_stores_nothing_gateway_side() {
     let meta = MetaMcp::new(backend_asking_for_elicitation());
