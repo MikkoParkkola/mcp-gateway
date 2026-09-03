@@ -158,7 +158,7 @@ impl MetaMcp {
             .filter(|backend| !self.meta_route_isolation_refused(backend))
             .cloned()
             .collect();
-        let timeout = self.prompts_fetch_timeout;
+        let timeout = self.prompts_resources_fetch_timeout;
         let results = join_all(backends.iter().map(|backend| async move {
             match tokio::time::timeout(timeout, backend.get_prompts_shared()).await {
                 Ok(Ok(prompts)) => Ok(prompts.as_ref().clone()),

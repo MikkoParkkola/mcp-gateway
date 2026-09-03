@@ -231,10 +231,10 @@ pub struct MetaMcp {
     /// Pre-built from `surfaced_tools` so `handle_tools_call` only pays one
     /// `HashMap` lookup instead of a linear scan on every call.
     pub(super) surfaced_tools_map: HashMap<String, String>,
-    /// Per-backend timeout for `prompts/list` aggregation.
-    pub(super) prompts_fetch_timeout: std::time::Duration,
-    /// Per-backend timeout for `resources/list` aggregation.
-    pub(super) resources_fetch_timeout: std::time::Duration,
+    /// Per-backend bound for `prompts/list` and `resources/list`
+    /// aggregation. Configurable via `meta_mcp.prompts_resources_fetch_timeout`
+    /// (default 10s); overridable per-instance for tests.
+    pub(super) prompts_resources_fetch_timeout: std::time::Duration,
     /// Session-scoped dynamically promoted tools (SEP-1862 / Phase 3).
     ///
     /// Keyed by session ID.  Each entry is a list of `"server:tool"` strings
@@ -395,8 +395,7 @@ impl MetaMcp {
             cost_registry: None,
             surfaced_tools: Vec::new(),
             surfaced_tools_map: HashMap::new(),
-            prompts_fetch_timeout: std::time::Duration::from_secs(10),
-            resources_fetch_timeout: std::time::Duration::from_secs(10),
+            prompts_resources_fetch_timeout: std::time::Duration::from_secs(10),
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
             session_state: SessionStateStore::new(),
@@ -482,17 +481,13 @@ impl MetaMcp {
         self
     }
 
-    /// Override the per-backend `prompts/list` fetch timeout (tests).
+    /// Override the per-backend `prompts/list` and `resources/list` fetch
+    /// timeout. The default comes from
+    /// `meta_mcp.prompts_resources_fetch_timeout` (10s); this lets tests run
+    /// with a shorter bound.
     #[must_use]
-    pub fn with_prompts_fetch_timeout(mut self, timeout: std::time::Duration) -> Self {
-        self.prompts_fetch_timeout = timeout;
-        self
-    }
-
-    /// Override the per-backend `resources/list` fetch timeout (tests).
-    #[must_use]
-    pub fn with_resources_fetch_timeout(mut self, timeout: std::time::Duration) -> Self {
-        self.resources_fetch_timeout = timeout;
+    pub fn with_prompts_resources_fetch_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.prompts_resources_fetch_timeout = timeout;
         self
     }
 

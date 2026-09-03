@@ -892,6 +892,16 @@ pub struct MetaMcpConfig {
     /// Tool cache TTL.
     #[serde(with = "humantime_serde")]
     pub cache_ttl: Duration,
+    /// Per-backend bound on how long `prompts/list` and `resources/list`
+    /// aggregation waits for a single backend before skipping it.
+    ///
+    /// The aggregate fetch runs all backends in parallel (see the meta-MCP
+    /// handlers), so this bounds the whole request by the slowest backend
+    /// rather than the sum of all backends. A backend that exceeds the bound —
+    /// slow OR hung — is skipped for that response; its prompts/resources
+    /// reappear once it recovers. Defaults to 10 seconds.
+    #[serde(default, with = "humantime_serde")]
+    pub prompts_resources_fetch_timeout: Duration,
     /// Backends to warm-start on gateway startup.
     #[serde(default)]
     pub warm_start: Vec<String>,
@@ -919,6 +929,7 @@ impl Default for MetaMcpConfig {
             enabled: true,
             cache_tools: true,
             cache_ttl: Duration::from_secs(300),
+            prompts_resources_fetch_timeout: Duration::from_secs(10),
             warm_start: Vec::new(),
             surfaced_tools: Vec::new(),
             projection_mode: crate::projection::ProjectionMode::default(),

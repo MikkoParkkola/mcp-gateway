@@ -22,7 +22,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
 
-use super::Transport;
+use super::{PendingRequestGuard, Transport};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
     is_version_mismatch_error, negotiate_best_version, parse_supported_versions_from_error,
@@ -490,20 +490,21 @@ impl Transport for StdioTransport {
         let message = serde_json::to_string(&request)?;
         let (tx, rx) = oneshot::channel();
         self.pending.insert(id.to_string(), tx);
+        // Removing the entry is the guard's job now: on the success path the
+        // reader task has already routed the response, on an internal timeout
+        // this block removes it explicitly, and on CANCELLATION (an outer
+        // timeout or task abort dropping this future mid-await) the guard's
+        // Drop removes it — without it a stranded entry would leak here for
+        // the transport's lifetime.
+        let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
 
-        if let Err(e) = self.write_message(&message).await {
-            self.pending.remove(&id.to_string());
-            return Err(e);
-        }
+        self.write_message(&message).await?;
 
         // Wait for response with timeout
         match tokio::time::timeout(self.request_timeout, rx).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
-            Err(_) => {
-                self.pending.remove(&id.to_string());
-                Err(Error::BackendTimeout("Request timed out".to_string()))
-            }
+            Err(_) => Err(Error::BackendTimeout("Request timed out".to_string())),
         }
     }
 

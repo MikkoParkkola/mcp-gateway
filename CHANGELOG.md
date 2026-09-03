@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surfaced as an "unknown message ID" error. Backends are now fetched in
   parallel and each fetch is bounded by a short timeout, so a slow or hung
   backend is skipped instead of blocking the list.
+- **The aggregation timeout is configurable** via
+  `meta_mcp.prompts_resources_fetch_timeout` (default `10s`). Operators with
+  unusually slow backends can raise it without a code change.
+- **A cancelled transport request no longer strands its `pending` entry.**
+  When an outer timeout drops an in-flight stdio or WebSocket request before
+  the transport's own request timeout fires, a RAII guard removes the entry
+  from the transport's `pending` map on drop, so a late response finds no
+  dangling sender and the map does not grow across reconnect loops.
 
 ## [3.5.0] - 2026-08-28
 

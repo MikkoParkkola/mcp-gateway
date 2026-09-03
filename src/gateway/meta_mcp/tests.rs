@@ -2466,7 +2466,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// applied before responding so a backend that "hangs" is one whose sleep
 /// exceeds the aggregation fetch timeout.
 struct MockMcpBackend {
-    name: String,
     /// The method this backend answers (`prompts/list` or `resources/list`).
     method: &'static str,
     /// JSON array to return for `method`.
@@ -2476,10 +2475,10 @@ struct MockMcpBackend {
 }
 
 async fn start_mock(backend: MockMcpBackend) -> String {
+    use axum::Json;
+    use axum::Router;
     use axum::extract::State;
     use axum::routing::post;
-    use axum::Router;
-    use axum::Json;
 
     #[derive(Clone)]
     struct S {
@@ -2567,15 +2566,12 @@ fn meta_with_backend(url: &str, timeout: Duration) -> MetaMcp {
     let registry = Arc::new(BackendRegistry::new());
     let _ = registry.register(backend);
 
-    MetaMcp::new(registry)
-        .with_prompts_fetch_timeout(timeout)
-        .with_resources_fetch_timeout(timeout)
+    MetaMcp::new(registry).with_prompts_resources_fetch_timeout(timeout)
 }
 
 #[tokio::test]
 async fn prompts_list_includes_backend_prompts() {
     let url = start_mock(MockMcpBackend {
-        name: "mock".to_string(),
         method: "prompts/list",
         payload: serde_json::json!([{ "name": "greet", "description": "say hi" }]),
         delay: Duration::ZERO,
@@ -2585,15 +2581,20 @@ async fn prompts_list_includes_backend_prompts() {
 
     let resp = meta.handle_prompts_list(RequestId::Number(1), None).await;
     let prompts = resp.result.unwrap()["prompts"].as_array().unwrap().clone();
-    let names: Vec<&str> = prompts.iter().map(|p| p["name"].as_str().unwrap()).collect();
-    assert!(names.contains(&"gateway/gateway-discover"), "meta prompts kept");
+    let names: Vec<&str> = prompts
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"gateway/gateway-discover"),
+        "meta prompts kept"
+    );
     assert!(names.contains(&"mock/greet"), "backend prompt namespaced");
 }
 
 #[tokio::test]
 async fn prompts_list_skips_hung_backend_within_timeout() {
     let url = start_mock(MockMcpBackend {
-        name: "mock".to_string(),
         method: "prompts/list",
         payload: serde_json::json!([]),
         delay: Duration::from_secs(60), // far beyond the 100ms test timeout
@@ -2605,7 +2606,11 @@ async fn prompts_list_skips_hung_backend_within_timeout() {
     let resp = meta.handle_prompts_list(RequestId::Number(1), None).await;
     let elapsed = start.elapsed();
 
-    assert!(resp.error.is_none(), "list still succeeds: {:?}", resp.error);
+    assert!(
+        resp.error.is_none(),
+        "list still succeeds: {:?}",
+        resp.error
+    );
     assert!(
         elapsed < Duration::from_secs(10),
         "must skip hung backend quickly, took {:?}",
@@ -2620,7 +2625,6 @@ async fn prompts_list_skips_hung_backend_within_timeout() {
 #[tokio::test]
 async fn resources_list_skips_hung_backend_within_timeout() {
     let url = start_mock(MockMcpBackend {
-        name: "mock".to_string(),
         method: "resources/list",
         payload: serde_json::json!([]),
         delay: Duration::from_secs(60),
@@ -2632,7 +2636,11 @@ async fn resources_list_skips_hung_backend_within_timeout() {
     let resp = meta.handle_resources_list(RequestId::Number(1), None).await;
     let elapsed = start.elapsed();
 
-    assert!(resp.error.is_none(), "list still succeeds: {:?}", resp.error);
+    assert!(
+        resp.error.is_none(),
+        "list still succeeds: {:?}",
+        resp.error
+    );
     assert!(
         elapsed < Duration::from_secs(10),
         "must skip hung backend quickly, took {:?}",
@@ -2643,7 +2651,6 @@ async fn resources_list_skips_hung_backend_within_timeout() {
 #[tokio::test]
 async fn resources_list_includes_backend_resources() {
     let url = start_mock(MockMcpBackend {
-        name: "mock".to_string(),
         method: "resources/list",
         payload: serde_json::json!([{ "uri": "mock://a", "name": "A" }]),
         delay: Duration::ZERO,
@@ -2652,7 +2659,90 @@ async fn resources_list_includes_backend_resources() {
     let meta = meta_with_backend(&url, Duration::from_secs(5));
 
     let resp = meta.handle_resources_list(RequestId::Number(1), None).await;
-    let resources = resp.result.unwrap()["resources"].as_array().unwrap().clone();
-    let uris: Vec<&str> = resources.iter().map(|r| r["uri"].as_str().unwrap()).collect();
+    let resources = resp.result.unwrap()["resources"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let uris: Vec<&str> = resources
+        .iter()
+        .map(|r| r["uri"].as_str().unwrap())
+        .collect();
     assert!(uris.contains(&"mock://a"), "backend resource included");
+}
+
+/// Fast + hung backends: the fast backend's prompts must be returned within a
+/// single aggregation timeout even though the hung backend never answers.
+#[tokio::test]
+async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
+    let fast = start_mock(MockMcpBackend {
+        method: "prompts/list",
+        payload: serde_json::json!([{ "name": "quick", "description": "fast" }]),
+        delay: Duration::ZERO,
+    })
+    .await;
+    let hung = start_mock(MockMcpBackend {
+        method: "prompts/list",
+        payload: serde_json::json!([]),
+        delay: Duration::from_secs(60),
+    })
+    .await;
+
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, TransportConfig};
+
+    let registry = Arc::new(BackendRegistry::new());
+    for (name, url) in [("fast", fast), ("hung", hung)] {
+        let config = BackendConfig {
+            description: String::new(),
+            enabled: true,
+            transport: TransportConfig::Http {
+                http_url: url,
+                streamable_http: true,
+                protocol_version: None,
+            },
+            stop_when_idle_for: None,
+            timeout: Duration::from_secs(5),
+            ..BackendConfig::default()
+        };
+        let backend = Arc::new(Backend::new(
+            name,
+            config,
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ));
+        let _ = registry.register(backend);
+    }
+
+    let meta = MetaMcp::new(registry).with_prompts_resources_fetch_timeout(Duration::from_secs(1));
+
+    let start = std::time::Instant::now();
+    let resp = meta.handle_prompts_list(RequestId::Number(1), None).await;
+    let elapsed = start.elapsed();
+
+    assert!(
+        resp.error.is_none(),
+        "list still succeeds: {:?}",
+        resp.error
+    );
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "fast result must return within a single timeout, took {:?}",
+        elapsed
+    );
+    // Both the gateway meta-prompts AND the fast backend's prompt are present;
+    // the hung backend was skipped within the bound.
+    let result = resp.result.unwrap();
+    let prompts = result["prompts"].as_array().unwrap();
+    let names: Vec<&str> = prompts
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"gateway/gateway-discover"),
+        "meta prompts kept"
+    );
+    assert!(
+        names.contains(&"fast/quick"),
+        "fast backend's prompt returned"
+    );
 }

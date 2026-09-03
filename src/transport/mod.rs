@@ -11,7 +11,9 @@ pub use self::stdio::StdioTransport;
 pub use self::websocket::McpFrame;
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use serde_json::Value;
+use tokio::sync::oneshot;
 
 use crate::{Result, protocol::JsonRpcResponse};
 
@@ -93,4 +95,42 @@ pub trait Transport: Send + Sync {
 
     /// Close the transport
     async fn close(&self) -> Result<()>;
+}
+
+/// RAII removal of a `pending` entry when its request future is dropped.
+///
+/// [`Transport::request`] implementations register a response `oneshot` sender
+/// in their `pending` map before writing the request, then await the response.
+/// The map entry is normally removed by the reader task when it routes the
+/// matching response, or by the transport's own request timeout. Neither fires
+/// when an OUTER timeout or task abort drops the in-flight request future
+/// first — the entry would otherwise leak in `pending` for the life of the
+/// transport, and a late response would find no matching sender.
+///
+/// The entry is meant to live exactly as long as the request does, so the guard
+/// removes it on drop. On the success path the reader has already removed the
+/// entry, making the removal a harmless no-op.
+pub(crate) struct PendingRequestGuard<'a> {
+    pending: &'a DashMap<String, oneshot::Sender<JsonRpcResponse>>,
+    key: String,
+}
+
+impl<'a> PendingRequestGuard<'a> {
+    /// Wrap a `pending` map entry so it is removed when the guard drops.
+    #[must_use]
+    pub(crate) fn new(
+        pending: &'a DashMap<String, oneshot::Sender<JsonRpcResponse>>,
+        key: &str,
+    ) -> Self {
+        Self {
+            pending,
+            key: key.to_string(),
+        }
+    }
+}
+
+impl Drop for PendingRequestGuard<'_> {
+    fn drop(&mut self) {
+        self.pending.remove(&self.key);
+    }
 }
