@@ -97,6 +97,17 @@ pub(super) const MAX_SEND_ATTEMPTS: u32 = 3;
 /// Health: a transport success (any HTTP status) records success; exhausting
 /// retries records a failure. The request is cloned per attempt; a
 /// non-cloneable body is sent once.
+/// Render an outbound transport error without the URL it was built from.
+///
+/// `reqwest::Error`'s `Display` appends `" for url (...)"` verbatim
+/// (`reqwest-0.13.4/src/error.rs:279-280`), and reqwest's own docs on
+/// [`reqwest::Error::without_url`] warn that the URL may carry a credential.
+/// Backend URLs here are operator-configured and a query-string API key is a
+/// common shape, so the raw error must never reach a log sink or a client.
+fn redact_url(e: reqwest::Error) -> reqwest::Error {
+    e.without_url()
+}
+
 pub(super) async fn send_with_retry(
     request: reqwest::RequestBuilder,
     label: &str,
@@ -115,7 +126,10 @@ pub(super) async fn send_with_retry(
                 }
                 Err(e) => {
                     health.record_failure();
-                    Err(Error::Transport(format!("{label} failed: {e}")))
+                    Err(Error::Transport(format!(
+                        "{label} failed: {}",
+                        redact_url(e)
+                    )))
                 }
             };
         };
@@ -126,6 +140,7 @@ pub(super) async fn send_with_retry(
             }
             Err(e) => {
                 let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
+                let e = redact_url(e);
                 if transient && attempt < MAX_SEND_ATTEMPTS {
                     tracing::warn!(
                         label = label,

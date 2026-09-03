@@ -942,3 +942,25 @@ async fn send_with_retry_does_not_retry_timeouts_when_not_idempotent() {
         "a non-idempotent timeout must NOT be retried (single attempt)"
     );
 }
+
+/// A backend URL carrying a query-string credential must not survive into the
+/// text of an outbound transport error.
+///
+/// Both assertions matter: the first pins what `reqwest` does on its own, so a
+/// future release that starts redacting turns this test red rather than leaving
+/// it passing vacuously; the second pins what `redact_url` adds.
+#[tokio::test]
+async fn redact_url_strips_a_credential_bearing_backend_url() {
+    let url = "http://127.0.0.1:1/spec?api_key=SECRET-QUERY-VALUE";
+    let raw = reqwest::Client::new().get(url).send().await.unwrap_err();
+
+    assert!(
+        raw.to_string().contains("SECRET-QUERY-VALUE"),
+        "reqwest no longer embeds the URL; redact_url may be obsolete: {raw}"
+    );
+    let redacted = super::redact_url(raw);
+    assert!(
+        !redacted.to_string().contains("SECRET-QUERY-VALUE"),
+        "credential survived redaction: {redacted}"
+    );
+}
