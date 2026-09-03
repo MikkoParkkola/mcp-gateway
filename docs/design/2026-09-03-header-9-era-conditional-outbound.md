@@ -111,16 +111,38 @@ value also appears in the body, so an override does not express an operator's in
 one header — it produces a frame whose header and `_meta` disagree, which this gateway's own
 inbound check rejects (`HeaderMismatch`). A configuration that cannot produce a valid request
 is not configuration worth honouring. **On the modern branch only, `MCP-Protocol-Version` is
-re-asserted from the same per-request read after *both* custom-header merges.** There are two,
-and a re-assertion that sees only the first is the likeliest way to build this wrong: the
-static `self.headers` merge happens inside `build_mcp_headers` (`mod.rs:607-616`), but the
-per-request `extra_headers` merge happens in `send_request_with_headers` at `mod.rs:848`,
-*after* the builder has returned. The re-assertion therefore lives after `:848`, not inside
-the builder — which is also why `Close` and `Sse`, which call the builder directly and never
-reach `:848`, keep today's shape for these three headers. `MCP-Session-Id`
-is not: an operator who pins one gets one, because nothing in the body contradicts it. Both
-reviewers raised the override; the narrowing to the headers the body constrains is this
-design's, not theirs.
+re-asserted from the same per-request read after *every* custom-header merge on the path being
+built.** The merges are not the same on both paths, and a design that named only the request
+path's would have left notifications unprotected:
+
+- **`Request`** has two. The static `self.headers` merge happens inside `build_mcp_headers`
+  (`mod.rs:607-616`); the per-request `extra_headers` merge happens in
+  `send_request_with_headers` at `mod.rs:846-854`, *after* the builder has returned. The
+  re-assertion therefore lives after that merge, not inside the builder.
+- **`Notify`** has one, and it is inside the builder. `notify_with_headers` calls
+  `build_mcp_headers` and posts the result directly (`mod.rs:1051-1053`) — there is no
+  `extra_headers` merge on this path at all. A re-assertion sited only in
+  `send_request_with_headers` never runs for a notification, so the static merge at
+  `:607-616` would win and `Modern`/`Notify` could not hold its version or method cell.
+  Notify gets its own finalisation, on the headers the builder returned, before the post.
+
+That is also why `Close` and `Sse`, which call the builder directly and pass no modern value,
+keep today's shape for these headers.
+
+`MCP-Session-Id` was exempted in an earlier revision — "an operator who pins one gets one,
+because nothing in the body contradicts it". **That was wrong against the requirement.**
+`MIK-7215.STATELESS.3a` is a prohibition, not a default:
+`docs/requirements/RELEASE-4.0.0-requirements.md:92` — "The gateway MUST NOT emit
+`Mcp-Session-Id` on the modern path." Not minting one is not enough; a statically configured
+one reaching a modern peer violates it just as squarely. So on `Modern`/`Request` and
+`Modern`/`Notify` the header is **removed** at the same finalisation point where the other
+three are re-asserted, whatever any merge put there. `Close` keeps it, because `Close` is not
+on the modern path. The rule is therefore not "a header the body constrains is re-asserted"
+but "the finalisation owns four headers on the modern path: three asserted, one removed" —
+and the operator-preference argument does not reach a MUST NOT.
+
+Both reviewers raised the override; the narrowing to the headers the body constrains was this
+design's, not theirs, and the session half of that narrowing is what the requirement retracted.
 
 `Mcp-Method` and `Mcp-Name` fall on the same side of that line as the version and are
 re-asserted with it: both mirror a body field the peer re-reads, so an override makes header
@@ -162,13 +184,55 @@ bare `Transport::send_request` (`:816-817`), which is how `initialize` goes out 
 already classified `Modern` — a session recovery re-initialising, for instance — which is
 precisely the traffic the 2026 revision deleted `initialize` from.
 
+**Named constraint: `initialize()` must not route through `request_with_headers`.** Today it
+does not, and the only thing recording that is an inline comment on the MIK-5982 session
+recovery — "`initialize()` calls `send_request` directly (not `request`), so this cannot
+recurse" (`mod.rs:996`). That comment is load-bearing for this design and was written for a
+different purpose: it exists to argue the recovery cannot loop, not to protect an era
+invariant that did not yet exist. Anyone re-routing `initialize()` through `request` later,
+for any unrelated reason, would silently modern-shape the recovery handshake against a peer
+whose era the handshake itself is supposed to establish, and no test would notice. Stated
+here as a constraint of this design and pinned by a matrix row, so the invariant survives an
+edit made for a reason that has nothing to do with eras.
+
 The era probe is **not** in that set, and an earlier draft said it was. It goes out through
 `transport.request(DISCOVER_METHOD, None)` (`src/backend/era.rs:33`), which is
 `Transport::request` (`:957`) calling `request_with_headers` (`:958`) — one of the two sites
-that *do* read the era. It stays legacy for a different and stronger reason: at probe time the
-cache is unresolved by construction, so `cached()` returns `None`, and `None` selects today's
-shape. The probe cannot modern-shape itself, because the probe is what produces the value that
-would shape it. So the modern value arrives as an
+that *do* read the era. **An earlier revision of this document said it stays legacy because
+`cached()` returns `None` at probe time. That is wrong, and the way it is wrong disables the
+whole mechanism.** `EraCache::resolve_with` holds the era mutex *across* the probe await
+(`src/protocol/era.rs:150-161`) — deliberately, so concurrent resolution serialises onto one
+probe — and `cached()` takes that same mutex (`:131`). Tokio's `Mutex` is not re-entrant, so
+the probe's own request, arriving at `request_with_headers`, would not read `None`: it would
+*await a guard its own call frame holds*. `PROBE_TIMEOUT` (2s) then cancels the probe,
+`classify(ProbeOutcome::NoAnswer)` answers `Legacy`, and `resolve_with` deliberately caches
+nothing. Every backend start would pay two seconds and no peer would ever resolve `Modern`.
+The mechanism would be inert in production while every test that primes the cache directly
+stayed green.
+
+**So the hot-path read is non-blocking: it must be unable to await the probe's guard.** The
+outbound sites read the era through a `try_lock`-shaped accessor and treat contention as
+`None`. That is not a workaround for the lock, it is the truthful answer: while a probe is in
+flight the era is *by definition* undetermined, and the probe's own request must be
+legacy-shaped. The two facts coincide, which is why this eliminates the finding rather than
+guarding against it — after the change the deadlock cannot be described, because no outbound
+read can block on the era mutex at all.
+
+`invalidate` rejected exactly this shape (`era.rs:140-143`: "under contention it would
+silently do nothing... a control that fails silently is worse than one that blocks briefly"),
+and that rejection does not reach here. `invalidate` is a **control**: contention makes it
+fail to do the thing it was called to do. `cached()` on the outbound path is an
+**observation**, and its contention answer — no era resolved yet — is true, not silent
+failure. The two calls need opposite shapes for the same reason.
+
+`EraCache` therefore gains one accessor this increment: a synchronous, non-blocking read
+alongside `cached()`. That is a public-surface addition (D28) on a type §P0 declares out of
+scope for *behavioural* change; adding a read that cannot block is not a change to what `Era`
+or `EraCache` mean, and this design does not touch `resolve_with`, `invalidate` or the
+classification rules. Flagged rather than assumed, because it is the one line of this design
+that reaches into a type the scope statement fences off.
+
+So the modern value arrives as an
 argument from `request_with_headers`/`notify_with_headers`; a caller that passes none gets
 today's shape. `Close` (`:1108`) and `Sse` (`:670`) call `build_mcp_headers` directly, pass no
 modern value for the same reason, and so emit today's headers: `Close` keeps the session
@@ -198,12 +262,21 @@ is handed:
 - `Some(Era::Legacy)` or `None` → today's behaviour, byte for byte.
 
 Three details of the modern branch live outside `build_mcp_headers` and are easy to lose by
-reading only the bullet above. The three header values are **re-asserted after the
-per-request `extra_headers` merge at `mod.rs:848`**, which is past the builder's return, so an
-implementation that writes them inside the builder is overridable by per-request configuration
-and fails half the pinning cases. `Mcp-Name` is **omitted, not defaulted**, when the body field
-its method selects is missing or not a string. And a **non-object `params` fails the call
-locally on this branch**, before any send — the only new failure this design introduces.
+reading only the bullet above. The finalisation is **per path, at the last writer on that
+path**: on `Request` that is after the per-request `extra_headers` merge (`mod.rs:846-854`),
+past the builder's return; on `Notify` there is no per-request merge at all, so it is after
+the builder returns and before the post (`mod.rs:1051-1053`). An implementation that writes
+the values inside the builder is overridable by per-request configuration on `Request`; one
+that finalises only in `send_request_with_headers` leaves `Notify` unshaped entirely. Second,
+a **malformed body fails the call locally on this branch, before any send** — three shapes,
+one rule: a non-object `params`, an object `params` whose `_meta` is not an object, and a
+named method whose name source (`params.name`, `params.uri`) is missing or not a string.
+Third, that third shape reverses an earlier decision to omit `Mcp-Name` and send anyway. The
+reversal is deliberate and its reason is consistency, not diagnostics: two adjacent
+malformed-body shapes with opposite dispositions is the split rule that produces the next
+defect, and a gateway that forwards a call it can already see is malformed spends a network
+round trip to learn what it knew. The cost is a new local failure on a path that previously
+had none, which is why it is named here rather than left to the implementation.
 
 An earlier revision of this section said the opposite of all three — that the builder reads
 `cached()` itself, that `Mcp-Name` travels in the body, and that nothing is removed because a
@@ -252,6 +325,14 @@ implicit invites three different implementations:
   **two** reverse-DNS keys this design writes — `protocolVersion` and `clientCapabilities` —
   overwrite whatever held them. `clientInfo` is neither inserted nor stripped: a caller that
   set one keeps it, and this design adds none.
+- **an object whose `_meta` is not an object** (null, scalar, array) → **fail the call
+  locally, before anything is sent**, on the same rule and for the same reason as a non-object
+  `params`. The reviewer was right that the shape was left undefined: three implementations
+  were available — overwrite the caller's value, nest under it, or send it unchanged — and
+  each is wrong differently. Overwriting destroys data the gateway does not own; sending it
+  unchanged emits a frame carrying no `clientCapabilities`, which a modern peer is required
+  to reject (`-32602`), turning a local diagnosable error into a remote one. Failing locally
+  is the only response that neither lies nor loses anything.
 - **not an object** (array, scalar) → **fail the call locally, before anything is sent.**
   There is nowhere to put `_meta` without destroying the caller's params, and an undeclared
   modern request is not the harmless fallback the first draft assumed: `_meta` is where
@@ -271,7 +352,8 @@ implicit invites three different implementations:
 
 Stated so the next reviewer does not have to find it. The probe issues its `server/discover`
 through `Transport::request` (`src/backend/era.rs:33`), so it goes through the same builder
-as everything else and sees `cached() == None` — no era resolved yet, by definition, since
+as everything else and reads the era through the non-blocking accessor above, which answers
+`None` under the probe's own contention — no era resolved yet, by definition, since
 the probe is what resolves it. It therefore takes the legacy shape and carries the legacy
 protocol header. That is the exact defect §3a of the 08-31 design eliminates. This design
 neither creates it nor fixes it: the two increments compose in that order, and the ordering
@@ -306,18 +388,29 @@ carries it as a deferral.
 Test plan (§P2), reviewed as a plan before any test is written. One row per clause: the
 emitted version value, `Mcp-Method` on a modern request **and on a modern notification**,
 `Mcp-Name` on each of the three methods that require it and its absence on one that does not,
-the `_meta` body declaration with its four merge shapes, the session header's three
+the `_meta` body declaration with its five merge shapes, the session header's three
 `HeaderMode` arms (absent on a modern `Request` and `Notify` whose backend minted a session
 during its legacy handshake, present on that backend's `Close`), the re-assertion of all three
-constrained headers over custom values at **both** merge sites, and the
+constrained headers over custom values at the last writer on **each** path, the outbound
+encoder over every row of the repository's own `SPEC_ENCODING_TABLE`, and the
 `None`-means-legacy default — the last of which must be
 written so it can fail, since "unchanged behaviour" is the assertion most easily satisfied by
 a fixture that never reached the code.
 
+Two rows carry the plan's weight and neither is about a value being wrong. **Production era
+wiring**: every other case primes the era cache as a fixture input, so all of them pass
+against a lifecycle that never attaches the cache to the transport — a green suite over a
+feature that never runs. **A read while the probe is in flight**: it asserts elapsed time as
+well as shape, because the blocking read this design rejects also answers legacy, two seconds
+later, and would satisfy a shape-only assertion.
+
 **Assert on the captured wire request, not on the builder's return value.** The reviewer's
 point, and it is the difference between a plan that can fail and one that cannot:
-`build_mcp_headers` is private and its output is merged with static and per-request headers
-afterwards (`:607-616`, `:618-624`). A test reading the builder result sees neither a custom
+`build_mcp_headers` is private and its output is merged with static headers inside itself
+(`:607-616`) and, on the `Request` path only, with per-request `extra_headers` afterwards
+(`:846-854`). An earlier draft cited `:618-624` for the second merge; that block is the
+ambient trace-id insert, and an implementer sent there would finalise before the merge that
+overrides. A test reading the builder result sees neither a custom
 header override nor a body/header divergence nor anything the body half does — the three
 failure modes this review actually found.
 
