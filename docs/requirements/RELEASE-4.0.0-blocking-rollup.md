@@ -22,7 +22,7 @@ is tracked in `RELEASE-4.0.0-readiness-board.md`. This section defines them.
 
 | # | cluster | rows | count | what is actually missing |
 |---|---|---|---|---|
-| A | MIK-7212 continuation envelope | `MRTR.1`, `MRTR.3-8`, `MRTR.9`, `MRTR.10a`, `NFR.SEC.2`, `NFR.SEC.3`, `NFR.SEC.4`, `NFR.OBS.4`, `NFR.PERF.3` | 22 | nothing mints or opens a continuation on the live path. The type exists; no route reaches it |
+| A | MIK-7212 continuation envelope | `MRTR.1`, `MRTR.3-5`, `MRTR.7-8`, `MRTR.9`, `MRTR.10a`, `NFR.SEC.2`, `NFR.SEC.3`, `NFR.SEC.4`, `NFR.OBS.4`, `NFR.PERF.3` | 21 | nothing mints or opens a continuation on the live path. The type exists; no route reaches it |
 | B | MIK-7217 era detection | `DISCOVER.4`, `DISCOVER.5`, `NFR.OBS.3` | 5 | `src/protocol/era.rs` is fully built and called from nothing. Design: `docs/design/2026-08-31-discover-outbound-era-probe.md` |
 | C | MIK-7272 revision surface | `ORDER.2`, `SUB.2` (own-stream clause), `SUB.4`, `EXT.1`, `OTEL.1`, `TASK.1` | 7 | five separate half-wirings: idempotency cache never enabled, extension set write-side absent, task methods advertised and not served, routing profile ignores modern mode |
 | D | MIK-7213 response-cache keying | `CACHE.4` | 2 | the two clause rows `CACHE.4a` (key missing routing profile and protocol revision) and `CACHE.4b` (no policy epoch), designed in `docs/design/2026-08-31-cluster-f-response-cache-keying.md`. `CACHE.3` was in this cluster until both its clauses were met: the decision table is now read by the emitting code |
@@ -38,7 +38,7 @@ not quoted here: `scripts/release/count-release-criteria.py --check` derives it,
 document has already carried two counts that went stale against the ledger they describe.
 
 The `rows` column names PARENT criteria; the `count` counts LEDGER ROWS, and the two stopped
-matching once compound criteria began to be split. `MRTR.3-8` is six names and thirteen rows.
+matching once compound criteria began to be split. `MRTR.3-5` is three names and ten rows, `MRTR.7-8` two names and four. `MRTR.6` left the cluster when it was met, which is why the range is written as two spans rather than one.
 Read the names as a key to which cluster a row belongs to, never as its size. The counts here
 are derived from the ledger by prefix, not transcribed from a previous revision of this file:
 every blocking row lands in exactly one cluster and the seven totals sum to the ledger's, which

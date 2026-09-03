@@ -1197,22 +1197,38 @@ async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused(
     register_fixture_backend(&state, &url);
     let args = arguments();
     let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &args).await;
-    let held = state
+    let payload = state
         .continuation
         .keyring()
         .open(&handle, now_secs())
-        .expect("a handle this replica just minted must open")
-        .hold_key;
+        .expect("a handle this replica just minted must open");
+    let held = payload.hold_key.clone();
     assert!(
         state.continuation.in_flight().complete(&held).await,
         "the exchange that ends must be the one this handle names, or the state \
          under test is not the one this case names"
     );
+    // A stranger's exchange, open on the same backend across the retry. Without
+    // it the table is empty, and *the exchange this handle continues is gone*
+    // and *no exchange is open at all* are the same assertion — so a gateway
+    // asking the weaker, backend-scoped question passes the very case that
+    // exists to catch it. With it, only a gateway that routes on the key this
+    // handle carries can refuse.
+    let stranger = state
+        .continuation
+        .in_flight()
+        .hold(&payload.backend_id, now_secs() + 60)
+        .await
+        .expect("the table has room for one honest concurrent exchange");
+    assert_ne!(
+        stranger, held,
+        "the stranger must be a second exchange, not the one just ended"
+    );
     assert_eq!(
         state.continuation.in_flight().len().await,
-        0,
-        "the exchange this handle continues must be gone before the retry, or \
-         the case is not the one it names"
+        1,
+        "the exchange this handle continues must be gone and a stranger's must \
+         remain, or the case is not the one it names"
     );
 
     // WHEN: the client retries on the replica that minted it.
