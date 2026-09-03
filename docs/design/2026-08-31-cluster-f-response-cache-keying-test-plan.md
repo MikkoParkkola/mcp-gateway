@@ -97,7 +97,9 @@ Decomposed against the design's eight-row verdict table
 (`2026-08-31-cluster-f-response-cache-keying.md` §L256-265). A single CACHE.4
 row is the trap the fixture doctrine above exists to refuse. The mapping is not
 1:1 and does not claim to be: each of the eight inputs has at least one row, the
-policy epoch has three (one per bump site), and two rows correspond to no input
+policy epoch has four — one per bump site (**4.f.1**-**4.f.3**) plus **4.g**, the
+revocation race, which is a policy-epoch row without being a bump site and is the
+row every hand-copied summary of this section has dropped — and two rows correspond to no input
 at all — **4.k** asserts a *bypass* rather than a key component, and **4.l.1 /
 4.l.2** test the framing that makes any component separable in the first place.
 
