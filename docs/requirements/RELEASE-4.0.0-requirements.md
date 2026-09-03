@@ -182,6 +182,7 @@ This is the release's hardest requirement and the one no other portfolio surface
 | MIK-7212.MRTR.8a | State held for an in-flight exchange MUST be bounded in count. | Spec: *"Servers MUST NOT assume that clients will fulfill…"* | T, M |
 | MIK-7212.MRTR.8b | State held for an in-flight exchange MUST be bounded in lifetime, and MUST be reclaimed when a client abandons a continuation — the expected case, since the spec permits a client never to retry. | Spec: *"Servers MUST NOT assume that clients will fulfill…"* | T, M |
 | MIK-7212.MRTR.9 | The gateway MUST NOT include an `inputRequest` of a type the client has not declared support for. | Spec: *"Servers MUST NOT send an inputRequests that the client has not declared support for"* | T |
+| MIK-7212.MRTR.9a | The gateway MUST NOT send an `elicitation/create` request in a **mode** the client has not declared. A client declaring `elicitation` in one mode has declared nothing about the other, so the capability name alone is not the permission. | Spec: *"Servers MUST NOT send an inputRequests that the client has not declared support for"*, read at the depth the request is written; raised in the 2026-09-02 review | T |
 | MIK-7212.MRTR.10a | Idempotency keys MUST include `inputResponses` and `requestState`. | `src/idempotency.rs:10` keys on `server:tool:hash(arguments)` | T |
 | MIK-7212.MRTR.10b | An `InputRequired` result MUST NOT be cached as a completed call. | `src/idempotency.rs:10` keys on `server:tool:hash(arguments)` | T |
 

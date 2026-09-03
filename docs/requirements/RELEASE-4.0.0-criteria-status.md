@@ -333,10 +333,10 @@ criteria they observe, and closing those does not close these — each still nee
 
 ## What this audit does not cover
 
-This file audits the 123 functional criteria and the requirements list 123, so every FUNCTIONAL
-requirement ID has a row. It carries one row more than that: `MIK-7212.MRTR.9a`, an obligation
-raised in the 2026-09-02 review and never written back into the requirements — the ledger is
-ahead of its own source of truth there, not behind. The coverage gap this section was written to record — 10 unexamined
+This file audits the 124 functional criteria and the requirements list 124, so every FUNCTIONAL
+requirement ID has a row. `MIK-7212.MRTR.9a` was the one exception — an obligation raised in the
+2026-09-02 review that the ledger carried while the requirements did not — and it has been written
+back (`docs/requirements/RELEASE-4.0.0-requirements.md:185`), so the two agree again. The coverage gap this section was written to record — 10 unexamined
 MIK-7272 criteria — was closed on 2026-08-31 and each of the 10 was re-verified against source on
 the same date.
 
