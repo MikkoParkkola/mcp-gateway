@@ -444,7 +444,7 @@ transport still opens with a legacy `initialize` handshake carrying `protocolVer
 (`mod.rs:430-452`), and `rg '_meta'` across `src/transport/` and `src/backend/` returns no JSON-key
 hit at all: outbound requests carry no `_meta` envelope. HEADER.1 requires the emitted header to
 equal `_meta.protocolVersion`, and outbound that field is not merely unset, it is unbuilt. The
-`MCP-Protocol-Version` header at `mod.rs:570` is emitted from the legacy-negotiated version. So 20
+`MCP-Protocol-Version` header at `build_mcp_headers` (`mod.rs:560`) is emitted from the legacy-negotiated version. So 20
 must first consume an outbound era negotiation and construct the modern envelope, then emit the new
 headers only on requests negotiated modern. Emission on a legacy peer is a regression, not a
 partial implementation.
