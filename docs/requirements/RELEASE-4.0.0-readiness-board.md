@@ -145,3 +145,17 @@ recorded as `MIK-7272.TASK.1.9`: filtering a task-scoped stream by notification 
 alone broadcasts every principal's task status to every listener. It must filter by the
 requested task ids **and** the authenticated owner. Owned by `TASK.1`'s own increment,
 not by the placement map that found it.
+
+## Cluster D's test file does not test the criterion it is named for
+
+`tests/mik_7213_acs.rs` exists, compiles and passes, and contains no case for
+`CACHE.4a` or `CACHE.4b`. A file named after a ticket reads as coverage of that
+ticket, which is why this was not noticed earlier — the name is doing work the
+contents do not.
+
+So D needs two artifacts, not one: the implementation, and a red test for each of
+`4a`/`4b` written before it. Do not repair the existing file into place around a
+finished implementation; a test written after the code agrees with the code.
+
+Recorded here so the next session does not rediscover it by reading the filename
+and believing it.
