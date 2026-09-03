@@ -24,7 +24,7 @@ use crate::hashing::{canonical_json, sha256_hex};
 use crate::idempotency::{GuardOutcome, IdempotencyReservation, derive_key, enforce};
 use crate::identity_grants::{GrantScope, GrantSubject, IdentityGrantRequest};
 use crate::playbook::PlaybookEngine;
-use crate::protocol::mrtr::InputRequired;
+use crate::protocol::mrtr::{InputRequired, Refusal};
 use crate::provider::Transform as _;
 use crate::provider::transforms::ResponseTransform;
 use crate::security::validate_tool_name;
@@ -620,27 +620,35 @@ async fn redeem_retry(
 
 /// The key under which a refusal names the capabilities the client would have
 /// had to declare. Shared with `error_response_preserving_status`, which
-/// forwards this key and only this key out of a gateway-authored error's
-/// `data` — a literal in both places would let the two drift apart silently,
-/// and the drift would be invisible because the field would simply be absent.
+/// forwards this key out of a gateway-authored error's `data` — a literal in
+/// both places would let the two drift apart silently, and the drift would be
+/// invisible because the field would simply be absent.
 pub(super) const REQUIRED_CAPABILITIES_DATA_KEY: &str = "requiredCapabilities";
+
+/// The key under which a mode refusal names the mode it refused, rendered from
+/// the gateway's own enum and never from the caller's string. Forwarded by the
+/// same allowlist and named here for the same reason: the write site, the
+/// allowlist and the test must not each pick their own spelling.
+pub(super) const UNSUPPORTED_ELICITATION_MODE_DATA_KEY: &str = "unsupportedElicitationMode";
 
 /// The refusal for an interim result naming a request type this client cannot
 /// be asked (MRTR.9).
 ///
 /// `-32021` with a `requiredCapabilities` payload is the router's existing
 /// answer to "the client did not declare that", reused here so one condition
-/// meets a client in one shape however the request reached it. An unrecognised
-/// method carries no payload: there is no capability name a client could add to
-/// its declaration to make the request acceptable, and naming one would invite
-/// exactly that.
+/// meets a client in one shape however the request reached it. The payload
+/// tracks what the client can actually do about it: a missing capability names
+/// itself, a missing *mode* names the mode instead (the capability is already
+/// declared), and neither an unrecognised method nor an unrecognised mode names
+/// anything at all — there is nothing a client could add to its declaration to
+/// make either acceptable, and naming something would invite exactly that.
 fn undeclared_input_request(
     server: &str,
     tool: &str,
     refused: &crate::protocol::mrtr::Undeclared<'_>,
 ) -> Error {
-    let (message, data) = match refused.capability {
-        Some(capability) => (
+    let (message, data) = match refused.reason {
+        Refusal::Capability(capability) => (
             format!(
                 "Tool '{tool}' on server '{server}' asked for input '{}', which needs the \
                  '{capability}' capability the client did not declare",
@@ -648,11 +656,32 @@ fn undeclared_input_request(
             ),
             Some(json!({ REQUIRED_CAPABILITIES_DATA_KEY: [capability] })),
         ),
-        None => (
+        Refusal::UnrecognisedMethod => (
             format!(
                 "Tool '{tool}' on server '{server}' asked for input '{}' of unrecognised type \
                  '{}', which no client can have declared",
                 refused.key, refused.method
+            ),
+            None,
+        ),
+        // No `requiredCapabilities`: this client *did* declare elicitation, and
+        // naming it again would send the client to add what it already has.
+        Refusal::Mode(mode) => (
+            format!(
+                "Tool '{tool}' on server '{server}' asked for input '{}' in elicitation mode \
+                 '{}', which the client did not declare",
+                refused.key,
+                mode.as_str()
+            ),
+            Some(json!({ UNSUPPORTED_ELICITATION_MODE_DATA_KEY: mode.as_str() })),
+        ),
+        // The refused mode is not echoed: it is the caller's string, and the
+        // gateway names only modes it can render from its own vocabulary.
+        Refusal::UnrecognisedMode => (
+            format!(
+                "Tool '{tool}' on server '{server}' asked for input '{}' in an elicitation mode \
+                 this gateway does not recognise",
+                refused.key
             ),
             None,
         ),
@@ -3768,7 +3797,7 @@ mod identity_propagation_enforcement_tests {
             agent_id: None,
             grant_subject: None,
             is_admin: false,
-            input_capabilities: &[],
+            input_capabilities: crate::protocol::meta::Declared::NONE,
             retry: &crate::protocol::mrtr::NO_RETRY,
             confirmation:
                 crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
@@ -3798,7 +3827,7 @@ mod identity_propagation_enforcement_tests {
             grant_subject: None,
             verified_identity: None,
             is_admin: false,
-            input_capabilities: &[],
+            input_capabilities: crate::protocol::meta::Declared::NONE,
             retry: &crate::protocol::mrtr::NO_RETRY,
             confirmation:
                 crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
@@ -3833,7 +3862,7 @@ mod identity_propagation_enforcement_tests {
             agent_id: None,
             grant_subject: None,
             is_admin: false,
-            input_capabilities: &[],
+            input_capabilities: crate::protocol::meta::Declared::NONE,
             retry: &crate::protocol::mrtr::NO_RETRY,
             confirmation:
                 crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,

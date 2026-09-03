@@ -32,7 +32,7 @@ fn allow_all_ctx_named<'a>(
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
-        input_capabilities: &[],
+        input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
     }
@@ -52,7 +52,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
-        input_capabilities: &[],
+        input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
     }
@@ -692,7 +692,7 @@ providers:
                     grant_subject: Some(subject),
                     verified_identity: None,
                     is_admin: false,
-                    input_capabilities: &[],
+                    input_capabilities: crate::protocol::meta::Declared::NONE,
                     retry: &crate::protocol::mrtr::NO_RETRY,
                     confirmation: ConfirmationChannel::Unavailable,
                 }
@@ -1243,7 +1243,7 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
             // a credential.
             MetaMcpCallerContext {
                 is_admin: true,
-                input_capabilities: &[],
+                input_capabilities: crate::protocol::meta::Declared::NONE,
                 retry: &crate::protocol::mrtr::NO_RETRY,
                 ..allow_all_ctx()
             },
@@ -2353,7 +2353,7 @@ auth:
     // the point: the guard is what differs, not the outcome.
     let admin_caller = MetaMcpCallerContext {
         is_admin: true,
-        input_capabilities: &[],
+        input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         ..allow_all_ctx()
     };
@@ -2450,7 +2450,7 @@ async fn global_meta_tool_reaches_an_admin_caller() {
             Some("sess-dispatcher-admin"),
             crate::gateway::meta_mcp::MetaMcpCallerContext {
                 is_admin: true,
-                input_capabilities: &[],
+                input_capabilities: crate::protocol::meta::Declared::NONE,
                 retry: &crate::protocol::mrtr::NO_RETRY,
                 ..allow_all_ctx()
             },
@@ -2848,9 +2848,8 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
     // to a principal the gateway can name, and an API key name is not one
     // (`principal_fingerprint` reads the OIDC identity alone) -- so `alice`
     // alone would exit on the unnameable-caller refusal (MRTR.2).
-    let declared = ["elicitation".to_string()];
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
-        input_capabilities: &declared,
+        input_capabilities: declaring(json!({"elicitation": {}})),
         verified_identity: Some(&NAMED_CALLER),
         ..allow_all_ctx_named(Some("alice"), Some("agent-1"))
     };
@@ -3258,6 +3257,23 @@ static NAMED_CALLER: std::sync::LazyLock<crate::key_server::oidc::VerifiedIdenti
         issuer: "https://idp.example.test".to_string(),
     });
 
+/// What a client declared, read through the production parser.
+///
+/// The `capabilities` argument is the `clientCapabilities` object exactly as a
+/// client would send it, so a test states a wire shape and never a parsed
+/// value — a fixture that built the flags directly would agree with itself
+/// about normalization the gate is supposed to own.
+fn declaring(capabilities: serde_json::Value) -> crate::protocol::meta::Declared {
+    let params = json!({
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": capabilities
+        }
+    });
+    crate::protocol::meta::classify_request(Some(&params), Some("2026-07-28"))
+        .declared_capabilities()
+}
+
 /// A caller context that permits everything and declares the given input
 /// capabilities.
 ///
@@ -3265,8 +3281,8 @@ static NAMED_CALLER: std::sync::LazyLock<crate::key_server::oidc::VerifiedIdenti
 /// every existing call site passes no declaration, and a widened signature
 /// would make each of them state a value it has no opinion about.
 fn allow_all_ctx_declaring(
-    declared: &[String],
-) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
+    declared: crate::protocol::meta::Declared,
+) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
         authorizer: &ALLOW_ALL,
         api_key_name: None,
@@ -3282,8 +3298,8 @@ fn allow_all_ctx_declaring(
 
 /// The same caller, unnameable: no API key, no agent, no verified identity.
 fn anonymous_ctx_declaring(
-    declared: &[String],
-) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
+    declared: crate::protocol::meta::Declared,
+) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
         verified_identity: None,
         ..allow_all_ctx_declaring(declared)
@@ -3336,12 +3352,12 @@ fn book_flight() -> serde_json::Value {
 #[tokio::test]
 async fn a_declared_input_request_passes_the_gateway_gate() {
     let meta = MetaMcp::new(backend_asking_for_elicitation());
-    let declared = vec!["elicitation".to_string()];
+
     let result = meta
         .invoke_tool(
             &book_flight(),
             Some("session-1"),
-            &allow_all_ctx_declaring(&declared),
+            &allow_all_ctx_declaring(declaring(json!({"elicitation": {}}))),
         )
         .await
         .expect("a declared capability must not be refused");
@@ -3401,12 +3417,12 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
 #[tokio::test]
 async fn a_continuation_that_is_never_retried_stores_nothing_gateway_side() {
     let meta = MetaMcp::new(backend_asking_for_elicitation());
-    let declared = vec!["elicitation".to_string()];
+
     let result = meta
         .invoke_tool(
             &book_flight(),
             Some("session-1"),
-            &allow_all_ctx_declaring(&declared),
+            &allow_all_ctx_declaring(declaring(json!({"elicitation": {}}))),
         )
         .await
         .expect("a declared capability must not be refused");
@@ -3445,7 +3461,7 @@ async fn a_refused_input_request_leaves_the_idempotency_key_retryable() {
         idempotency_key: Some("client-chosen-key".to_string()),
         ..Default::default()
     };
-    let mut ctx = allow_all_ctx_declaring(&[]);
+    let mut ctx = allow_all_ctx_declaring(crate::protocol::meta::Declared::NONE);
     ctx.retry = &retry;
 
     // The second attempt is the assertion. It stands for the client that read
@@ -3475,7 +3491,7 @@ async fn an_undeclared_input_request_is_refused_at_the_gateway() {
         .invoke_tool(
             &book_flight(),
             Some("session-1"),
-            &allow_all_ctx_declaring(&[]),
+            &allow_all_ctx_declaring(crate::protocol::meta::Declared::NONE),
         )
         .await
         .expect_err("a client that declared nothing must not be asked");
@@ -3508,7 +3524,7 @@ async fn a_refusals_required_capabilities_survive_the_response_boundary() {
         .invoke_tool(
             &book_flight(),
             Some("session-1"),
-            &allow_all_ctx_declaring(&[]),
+            &allow_all_ctx_declaring(crate::protocol::meta::Declared::NONE),
         )
         .await
         .expect_err("a client that declared nothing must not be asked");
@@ -3542,12 +3558,12 @@ async fn a_refusals_required_capabilities_survive_the_response_boundary() {
 #[tokio::test]
 async fn an_unnameable_caller_is_not_offered_an_interim_exchange() {
     let meta = MetaMcp::new(backend_asking_for_elicitation());
-    let declared = vec!["elicitation".to_string()];
+
     let err = meta
         .invoke_tool(
             &book_flight(),
             Some("session-1"),
-            &anonymous_ctx_declaring(&declared),
+            &anonymous_ctx_declaring(declaring(json!({"elicitation": {}}))),
         )
         .await
         .expect_err("a caller that cannot be bound must not be handed a continuation");

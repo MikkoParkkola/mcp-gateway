@@ -2379,7 +2379,7 @@ async fn run_step_with_identity(
         grant_subject: None,
         verified_identity: None,
         is_admin: client.admin,
-        input_capabilities: &[],
+        input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     };
@@ -2581,7 +2581,7 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
-        input_capabilities: &[],
+        input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     };
@@ -2939,7 +2939,7 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
-        input_capabilities: &[],
+        input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     };

@@ -22,6 +22,7 @@
 //! A modern client's elicitation never completed, and the confirmation gate on
 //! a destructive tool ran without the answer it exists to collect.
 
+use crate::protocol::meta::{Declared, ElicitationMode};
 use serde_json::Value;
 
 /// The `params._meta` key carrying a client's idempotency key.
@@ -287,25 +288,51 @@ impl InputRequired {
     /// be sent the one and not the other, and a whole-result verdict cannot
     /// tell those apart.
     ///
-    /// A method carrying no known capability is refused too. The declaration
-    /// vocabulary *is* the set of capability names, so a method outside it
-    /// cannot have been declared, and relaying a question the gateway cannot
-    /// classify asks the client for a permission it was never given the chance
-    /// to withhold.
+    /// A method carrying no recognised capability is refused too. The
+    /// declaration vocabulary *is* the gateway's own set, so a method outside
+    /// it cannot have been declared, and relaying a question the gateway
+    /// cannot classify asks the client for a permission it was never given the
+    /// chance to withhold.
+    ///
+    /// An elicitation mode is checked the same way and for the same reason: a
+    /// client that declared `elicitation` in one mode has declared nothing
+    /// about the other, and a declaration read one level shallower than the
+    /// request is written is a gate that cannot see what it is passing.
     #[must_use]
-    pub fn undeclared<'a>(&'a self, declared: &[String]) -> Option<Undeclared<'a>> {
+    pub fn undeclared<'a>(&'a self, declared: Declared) -> Option<Undeclared<'a>> {
         self.requests.iter().find_map(|(key, request)| {
             let method = request.get("method").and_then(Value::as_str).unwrap_or("");
-            let capability = crate::protocol::meta::required_capability(method);
-            match capability {
-                Some(name) if declared.iter().any(|declared| declared == name) => None,
-                _ => Some(Undeclared {
-                    key,
-                    method,
-                    capability,
-                }),
-            }
+            let reason = Self::refusal(method, request.get("params"), declared)?;
+            Some(Undeclared { key, method, reason })
         })
+    }
+
+    /// Why this one entry cannot be relayed, or `None` when it can.
+    ///
+    /// The mode arm runs *after* the capability arm because the two refusals
+    /// are answered differently: a client that never declared `elicitation`
+    /// can be told which capability to add, and one that declared it in a
+    /// single mode cannot — it already has the capability the first arm would
+    /// have named.
+    fn refusal(
+        method: &str,
+        params: Option<&Value>,
+        declared: Declared,
+    ) -> Option<Refusal> {
+        let Some(capability) = crate::protocol::meta::required_capability(method) else {
+            return Some(Refusal::UnrecognisedMethod);
+        };
+        if !declared.has(capability) {
+            return Some(Refusal::Capability(capability));
+        }
+        if method != "elicitation/create" {
+            return None;
+        }
+        match ElicitationMode::from_params(params) {
+            None => Some(Refusal::UnrecognisedMode),
+            Some(mode) if declared.has_elicitation_mode(mode) => None,
+            Some(mode) => Some(Refusal::Mode(mode)),
+        }
     }
 }
 
@@ -323,9 +350,26 @@ pub struct Undeclared<'a> {
     pub key: &'a str,
     /// The method the entry asked with. Empty when the entry carried none.
     pub method: &'a str,
-    /// The capability the client would have had to declare, when the method is
-    /// one this revision defines.
-    pub capability: Option<&'static str>,
+    /// Which of the four refusals this is.
+    pub reason: Refusal,
+}
+
+/// Why an entry cannot be put to this client.
+///
+/// Four cases rather than one string, because each meets the client
+/// differently: only the first names something the client could add to its
+/// declaration and retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// A capability this revision defines and the client did not declare.
+    Capability(&'static str),
+    /// A method the gateway cannot classify, so no capability can cover it.
+    UnrecognisedMethod,
+    /// An elicitation mode the gateway can service and the client did not
+    /// declare. The capability itself *was* declared.
+    Mode(ElicitationMode),
+    /// An elicitation `mode` value this gateway cannot read as a mode at all.
+    UnrecognisedMode,
 }
 
 /// The caller binding sealed into a continuation, or `None` when this caller

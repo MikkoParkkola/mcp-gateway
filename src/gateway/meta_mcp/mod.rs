@@ -38,6 +38,7 @@ use crate::idempotency::{IdempotencyCache, spawn_cleanup_task};
 use crate::identity_grants::{GrantSubject, LocalIdentityGrantStore};
 use crate::kill_switch::{CapabilityErrorBudgetConfig, ErrorBudgetConfig, KillSwitch};
 use crate::playbook::PlaybookEngine;
+use crate::protocol::meta::Declared;
 use crate::protocol::{JsonRpcResponse, LoggingLevel, RequestId, negotiate_version};
 use crate::ranking::SearchRanker;
 use crate::routing_profile::{ProfileRegistry, SessionProfileStore};
@@ -129,14 +130,16 @@ pub struct MetaMcpCallerContext<'a> {
     /// admin-only PARAMETERS cannot be gated by the tool-name allow-list in
     /// `router::authorization`, which only knows whole tools.
     pub is_admin: bool,
-    /// The capabilities this caller declared on **this** request.
+    /// What this caller declared on **this** request.
     ///
-    /// Names rather than a single "may be asked for input" bit, because MRTR.9
-    /// refuses per requested method: a client that declared `elicitation` and
-    /// not `sampling` may be sent one and not the other. On stdio there is no
-    /// per-request declaration to read, so the slice is empty — absent means
+    /// A parsed set rather than a single "may be asked for input" bit, because
+    /// MRTR.9 refuses per requested method and MRTR.9a per requested *mode*: a
+    /// client that declared `elicitation` and not `sampling` may be sent one
+    /// and not the other, and one that declared elicitation in form mode alone
+    /// may not be sent a url request. On stdio there is no per-request
+    /// declaration to read, so this is [`Declared::NONE`] — absent means
     /// absent, and a caller that declared nothing is never sent a continuation.
-    pub input_capabilities: &'a [String],
+    pub input_capabilities: Declared,
     /// How this caller can be asked to confirm a destructive action.
     ///
     /// A transport that has no way to reach an operator carries
@@ -181,22 +184,28 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
                 crate::gateway::authz::HTTP_STATUS_DATA_KEY: status,
             })),
             // A gateway-authored refusal may carry a recovery payload the
-            // client needs: MRTR.9 names the capabilities an input request
-            // would have required, which is the difference between a client
-            // that can declare them and retry and one that only sees prose.
-            // Exactly one key is forwarded, never the whole object, because
-            // `data` is a shared channel — `invoke_tool` puts a *backend's*
-            // error data into this same variant, so forwarding it wholesale
-            // is what would hand a backend the status field above.
+            // client needs: MRTR.9 names the capability an input request would
+            // have required and MRTR.9a the mode, which is the difference
+            // between a client that can fix its declaration and retry and one
+            // that only sees prose. Named keys are forwarded, never the whole
+            // object, because `data` is a shared channel — `invoke_tool` puts a
+            // *backend's* error data into this same variant, so forwarding it
+            // wholesale is what would hand a backend the status field above.
             crate::Error::JsonRpc {
                 data: Some(data), ..
-            } => data
-                .get(invoke::REQUIRED_CAPABILITIES_DATA_KEY)
-                .map(|capabilities| {
-                    serde_json::json!({
-                        invoke::REQUIRED_CAPABILITIES_DATA_KEY: capabilities,
-                    })
-                }),
+            } => {
+                let forwarded: serde_json::Map<String, serde_json::Value> = [
+                    invoke::REQUIRED_CAPABILITIES_DATA_KEY,
+                    invoke::UNSUPPORTED_ELICITATION_MODE_DATA_KEY,
+                ]
+                .into_iter()
+                .filter_map(|key| Some((key.to_string(), data.get(key)?.clone())))
+                .collect();
+                // `None` rather than an empty object, so a backend error
+                // carrying none of these keys leaves `data` absent exactly as
+                // it did when one key was forwarded.
+                (!forwarded.is_empty()).then(|| serde_json::Value::Object(forwarded))
+            }
             _ => None,
         };
     }

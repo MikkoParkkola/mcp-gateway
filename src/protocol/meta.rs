@@ -67,7 +67,7 @@ pub struct RequestFields {
     /// A null value is not a declaration: the specification's rule is that a
     /// server may not rely on what was not declared, and explicitly-absent is
     /// still absent.
-    pub declared_capabilities: Vec<String>,
+    pub declared_capabilities: Declared,
     /// The client's self-reported name, for logs and displays.
     ///
     /// **Never an authorization input.** The specification says clients *SHOULD
@@ -184,11 +184,7 @@ pub fn classify_request(params: Option<&Value>, header_version: Option<&str>) ->
 
     RequestShape::Modern(Box::new(RequestFields {
         protocol_version: protocol_version.to_string(),
-        declared_capabilities: capabilities
-            .iter()
-            .filter(|(_, value)| !value.is_null())
-            .map(|(name, _)| name.clone())
-            .collect(),
+        declared_capabilities: Declared::parse(capabilities),
         client_info_name: meta
             .get(KEY_CLIENT_INFO)
             .and_then(|i| i.get("name"))
@@ -262,6 +258,136 @@ pub fn required_capability(method: &str) -> Option<&'static str> {
     }
 }
 
+/// The elicitation modes this gateway can service, as its own closed set.
+///
+/// A mode is not a caller string. The specification names the modes, the
+/// gateway implements the ones it can relay, and anything outside that set is
+/// refused rather than carried — which is what keeps a declaration bounded by
+/// the gateway's vocabulary instead of the caller's input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElicitationMode {
+    /// The default: a structured form the client renders.
+    Form,
+    /// A URL the client opens out of band.
+    Url,
+}
+
+impl ElicitationMode {
+    /// How the gateway renders this mode, for a refusal payload.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Form => "form",
+            Self::Url => "url",
+        }
+    }
+
+    /// The mode an `elicitation/create` request asks in, or `None` when the
+    /// value is one this gateway cannot service.
+    ///
+    /// An omitted `mode` is form because the specification's request table says
+    /// so — the entry reads *"Optional for form mode (defaults to `"form"` if
+    /// omitted)"*. An explicit `null` resolves the same way: `Option` cannot
+    /// distinguish the two, the specification draws no distinction between
+    /// them, and so neither does the gateway.
+    #[must_use]
+    pub fn from_params(params: Option<&Value>) -> Option<Self> {
+        match params.and_then(|p| p.get("mode")) {
+            None | Some(Value::Null) => Some(Self::Form),
+            Some(Value::String(mode)) => match mode.as_str() {
+                "form" => Some(Self::Form),
+                "url" => Some(Self::Url),
+                _ => None,
+            },
+            Some(_) => None,
+        }
+    }
+}
+
+/// What a client declared, as a fixed set of flags this gateway owns.
+///
+/// Heapless and `Copy` on purpose. The declaration arrives inside `_meta` on a
+/// path that runs before anything has decided the request is wanted, so the
+/// parse must not retain a caller-sized allocation — a declaration of ten
+/// thousand keys reduces to these five bits and the rest is dropped where it
+/// was read. Every consumer asks a closed question, and a closed question does
+/// not need the caller's strings to answer it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Declared {
+    sampling: bool,
+    elicitation: bool,
+    roots: bool,
+    elicitation_form: bool,
+    elicitation_url: bool,
+}
+
+impl Declared {
+    /// A client that declared nothing — the answer for every legacy and
+    /// malformed shape, which carry no declaration to read.
+    pub const NONE: Self = Self {
+        sampling: false,
+        elicitation: false,
+        roots: false,
+        elicitation_form: false,
+        elicitation_url: false,
+    };
+
+    /// Whether a capability was declared by name.
+    ///
+    /// Names outside the gateway's set answer `false` rather than looking the
+    /// caller's key up: a capability this build cannot service was not
+    /// declared to it, whatever the client wrote.
+    #[must_use]
+    pub fn has(self, capability: &str) -> bool {
+        match capability {
+            "sampling" => self.sampling,
+            "elicitation" => self.elicitation,
+            "roots" => self.roots,
+            _ => false,
+        }
+    }
+
+    /// Whether an elicitation mode was declared.
+    #[must_use]
+    pub fn has_elicitation_mode(self, mode: ElicitationMode) -> bool {
+        match mode {
+            ElicitationMode::Form => self.elicitation_form,
+            ElicitationMode::Url => self.elicitation_url,
+        }
+    }
+
+    /// Read a declaration out of a `clientCapabilities` object.
+    ///
+    /// Only an object-valued key declares. The specification writes a declared
+    /// capability as an object, an explicitly-null one is still absent, and a
+    /// string or a number names no mode at all — so none of them may reach a
+    /// consumer as a declaration of something the client can be sent.
+    fn parse(capabilities: &serde_json::Map<String, Value>) -> Self {
+        let elicitation = capabilities.get("elicitation").and_then(Value::as_object);
+        // An empty object is the specification's own way of declaring a
+        // capability with no options, and elicitation's option-less shape is
+        // the form mode. Applied here, before unrecognised keys are dropped, so
+        // that a declaration of nothing but unrecognised modes stays a
+        // declaration of no mode rather than picking this default up on the
+        // way out.
+        let (declares_form, declares_url) = match elicitation {
+            Some(modes) if modes.is_empty() => (true, false),
+            Some(modes) => (
+                modes.get("form").is_some_and(Value::is_object),
+                modes.get("url").is_some_and(Value::is_object),
+            ),
+            None => (false, false),
+        };
+        Self {
+            sampling: capabilities.get("sampling").is_some_and(Value::is_object),
+            elicitation: elicitation.is_some(),
+            roots: capabilities.get("roots").is_some_and(Value::is_object),
+            elicitation_form: declares_form,
+            elicitation_url: declares_url,
+        }
+    }
+}
+
 impl RequestShape {
     /// The capabilities this request declared, in declaration order.
     ///
@@ -273,10 +399,10 @@ impl RequestShape {
     /// `elicitation` and not `sampling` may be sent one and not the other, and
     /// a boolean cannot tell those apart.
     #[must_use]
-    pub fn declared_capabilities(&self) -> &[String] {
+    pub fn declared_capabilities(&self) -> Declared {
         match self {
-            RequestShape::Modern(f) => &f.declared_capabilities,
-            _ => &[],
+            RequestShape::Modern(f) => f.declared_capabilities,
+            _ => Declared::NONE,
         }
     }
 }
@@ -289,7 +415,7 @@ impl RequestFields {
     /// capability the client did not mention was not declared.
     #[must_use]
     pub fn declares_capability(&self, name: &str) -> bool {
-        self.declared_capabilities.iter().any(|n| n == name)
+        self.declared_capabilities.has(name)
     }
 }
 
@@ -386,7 +512,7 @@ pub fn classify_and_observe(
 
 #[cfg(test)]
 mod declared_capabilities_tests {
-    use super::{RequestShape, classify_request};
+    use super::{Declared, RequestShape, classify_request};
     use serde_json::json;
 
     fn modern_params(caps: &serde_json::Value) -> serde_json::Value {
@@ -406,7 +532,7 @@ mod declared_capabilities_tests {
             matches!(shape, RequestShape::Modern(_)),
             "fixture must be modern"
         );
-        assert_eq!(shape.declared_capabilities(), ["elicitation".to_string()]);
+        assert!(shape.declared_capabilities().has("elicitation"));
     }
 
     #[test]
@@ -416,7 +542,7 @@ mod declared_capabilities_tests {
             matches!(shape, RequestShape::Modern(_)),
             "fixture must be modern"
         );
-        assert!(shape.declared_capabilities().is_empty());
+        assert_eq!(shape.declared_capabilities(), Declared::NONE);
     }
 
     #[test]
@@ -426,7 +552,7 @@ mod declared_capabilities_tests {
         for cap in ["sampling", "roots"] {
             let shape =
                 classify_request(Some(&modern_params(&json!({cap: {}}))), Some("2026-07-28"));
-            assert_eq!(shape.declared_capabilities(), [cap.to_string()], "{cap}");
+            assert!(shape.declared_capabilities().has(cap), "{cap}");
         }
     }
 
@@ -439,7 +565,7 @@ mod declared_capabilities_tests {
         let shape = RequestShape::Malformed {
             missing: vec!["protocolVersion"],
         };
-        assert!(shape.declared_capabilities().is_empty());
+        assert_eq!(shape.declared_capabilities(), Declared::NONE);
     }
 
     #[test]
@@ -449,6 +575,6 @@ mod declared_capabilities_tests {
             matches!(shape, RequestShape::Legacy),
             "fixture must be legacy"
         );
-        assert!(shape.declared_capabilities().is_empty());
+        assert_eq!(shape.declared_capabilities(), Declared::NONE);
     }
 }

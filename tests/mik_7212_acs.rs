@@ -1577,8 +1577,9 @@ fn ac_mrtr_10_the_two_fields_cannot_be_transposed() {
 // ===========================================================================
 
 mod capability_gate {
-    use mcp_gateway::protocol::mrtr::InputRequired;
-    use serde_json::json;
+    use mcp_gateway::protocol::meta::{Declared, classify_request};
+    use mcp_gateway::protocol::mrtr::{InputRequired, Refusal};
+    use serde_json::{Value, json};
 
     fn interim(requests: &serde_json::Value) -> InputRequired {
         InputRequired::from_result(&json!({
@@ -1589,8 +1590,18 @@ mod capability_gate {
         .expect("a well-formed interim result")
     }
 
-    fn declared(names: &[&str]) -> Vec<String> {
-        names.iter().map(|name| (*name).to_string()).collect()
+    fn declared(names: &[&str]) -> Declared {
+        let capabilities: serde_json::Map<String, Value> = names
+            .iter()
+            .map(|name| ((*name).to_string(), json!({})))
+            .collect();
+        let params = json!({
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": capabilities
+            }
+        });
+        classify_request(Some(&params), Some("2026-07-28")).declared_capabilities()
     }
 
     #[test]
@@ -1603,7 +1614,7 @@ mod capability_gate {
         // THEN nothing is refused: the gate must not block the exchange it
         // exists to make safe.
         assert!(
-            interim.undeclared(&declared(&["elicitation"])).is_none(),
+            interim.undeclared(declared(&["elicitation"])).is_none(),
             "a declared capability must be relayable"
         );
     }
@@ -1616,11 +1627,11 @@ mod capability_gate {
             "draft": { "method": "sampling/createMessage", "params": {} }
         }));
         let refused = interim
-            .undeclared(&declared(&["elicitation"]))
+            .undeclared(declared(&["elicitation"]))
             .expect("sampling was never declared");
         // THEN the refusal names the capability the client would have had to
         // declare, so the client can act on it rather than guess.
-        assert_eq!(refused.capability, Some("sampling"));
+        assert_eq!(refused.reason, Refusal::Capability("sampling"));
         assert_eq!(refused.key, "draft");
     }
 
@@ -1634,10 +1645,10 @@ mod capability_gate {
         // THEN the undeclared entry is found whichever position it holds — a
         // check that stopped at the first entry would pass this result.
         let refused = interim
-            .undeclared(&declared(&["elicitation"]))
+            .undeclared(declared(&["elicitation"]))
             .expect("the sampling entry must still be caught");
         assert_eq!(refused.key, "draft");
-        assert_eq!(refused.capability, Some("sampling"));
+        assert_eq!(refused.reason, Refusal::Capability("sampling"));
     }
 
     #[test]
@@ -1648,11 +1659,12 @@ mod capability_gate {
             "odd": { "method": "vendor/askSomething", "params": {} }
         }));
         let refused = interim
-            .undeclared(&declared(&["elicitation", "sampling", "roots"]))
+            .undeclared(declared(&["elicitation", "sampling", "roots"]))
             .expect("an unclassifiable request must not be relayed");
         assert_eq!(refused.method, "vendor/askSomething");
         assert_eq!(
-            refused.capability, None,
+            refused.reason,
+            Refusal::UnrecognisedMethod,
             "no capability may be named, or the client is told to declare one that does not exist"
         );
     }
@@ -1663,7 +1675,7 @@ mod capability_gate {
         let interim = interim(&json!({ "nameless": { "params": {} } }));
         assert!(
             interim
-                .undeclared(&declared(&["elicitation", "sampling", "roots"]))
+                .undeclared(declared(&["elicitation", "sampling", "roots"]))
                 .is_some(),
             "an entry with no method must be refused, not skipped"
         );
@@ -1675,7 +1687,7 @@ mod capability_gate {
             "confirm": { "method": "elicitation/create", "params": {} }
         }));
         assert!(
-            interim.undeclared(&[]).is_some(),
+            interim.undeclared(Declared::NONE).is_some(),
             "an empty declaration permits no question at all"
         );
     }
@@ -1721,12 +1733,12 @@ mod capability_gate {
 // ===========================================================================
 
 mod elicitation_mode_gate {
-    use mcp_gateway::protocol::meta::classify_request;
+    use mcp_gateway::protocol::meta::{Declared, ElicitationMode, classify_request};
     use mcp_gateway::protocol::mrtr::InputRequired;
     use serde_json::{Value, json};
 
     /// What the client declared, read the way production reads it.
-    fn form_only_client() -> Vec<String> {
+    fn form_only_client() -> Declared {
         let params = json!({
             "_meta": {
                 "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -1736,12 +1748,16 @@ mod elicitation_mode_gate {
             }
         });
         let shape = classify_request(Some(&params), Some("2026-07-28"));
-        let declared = shape.declared_capabilities().to_vec();
-        assert_eq!(
-            declared,
-            ["elicitation".to_string()],
+        let declared = shape.declared_capabilities();
+        assert!(
+            declared.has("elicitation"),
             "the fixture must reach the gate as a client that DID declare elicitation, \
              or the refusal below would be MRTR.9's and prove nothing about modes"
+        );
+        assert!(
+            declared.has_elicitation_mode(ElicitationMode::Form)
+                && !declared.has_elicitation_mode(ElicitationMode::Url),
+            "the fixture must declare form and only form, or the url refusal below is vacuous"
         );
         declared
     }
@@ -1772,7 +1788,7 @@ mod elicitation_mode_gate {
         }));
         // THEN the gateway must refuse rather than relay it.
         assert!(
-            interim.undeclared(&declared).is_some(),
+            interim.undeclared(declared).is_some(),
             "a url-mode elicitation must be refused to a client that declared form mode only; \
              the declaration flattens to the capability NAME, so the mode substructure is \
              discarded and this request passes the gate by construction"
@@ -1794,7 +1810,7 @@ mod elicitation_mode_gate {
             }
         }));
         assert!(
-            interim.undeclared(&declared).is_none(),
+            interim.undeclared(declared).is_none(),
             "a form-mode elicitation is exactly what this client declared, and must be relayed"
         );
     }
