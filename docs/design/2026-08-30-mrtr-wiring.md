@@ -94,6 +94,11 @@ the call fails as unsupported rather than minting a token any anonymous caller c
 shared fingerprint for all anonymous callers would satisfy `redeemable_by` while binding nothing,
 which is the failure mode this row exists to prevent.
 
+Three of those four rows are target state. Only the agent scheme is constructible as built: the API
+key is not retained past validation and the client certificate's DER is dropped before the caller
+context exists, so both callers are refused rather than bound weakly
+(`src/protocol/mrtr.rs:331-350`). What that costs a test is in DE-9a.
+
 **`original_request_digest`** is `SHA-256` over `tool_name` + `\x00` + the **canonical** JSON of the
 call's `arguments`, using the same canonicalisation `src/idempotency.rs` already applies for its
 auto-generated key. It must be recomputable from the retry, so it is computed over the *original*
@@ -673,12 +678,23 @@ mechanism it names* has nothing to assert on but that one sentence, so an unrela
 `NotAuthentic` — a handle minted for another principal, a request carrying no credential —
 satisfies the same assertion. The refusal is honest to the client and opaque to the suite. Three
 cases in `tests/mik_7212_mrtr_component_acs.rs` were written against it and could not tell the two
-apart; the repair removed the *other* half of that ambiguity, by taking the handle from the
-production mint path so the principal always matches, and left this half standing.
+apart. The *other* half of that ambiguity is a test defect and is being repaired: a handle taken
+from the production mint path always matches its principal, so `NotAuthentic` stops being a
+standing alternative explanation for every refusal. This half survives that repair.
+
+Removing the other half is not free, and the price is worth recording. `principal_fingerprint`
+(`src/protocol/mrtr.rs:331-350`) can bind only the verified-agent scheme: an API key is not
+retained past validation and a client certificate's DER is dropped before the caller context is
+built, so callers presenting either are refused rather than bound weakly. A test needing a
+redeemable handle therefore needs an OIDC-verified caller, which over HTTP means a delegated
+bearer (`src/gateway/auth.rs:930-941`) with a key server, a JWKS-verifiable token and a matching
+policy rule. The component cases reach the mint path in-crate instead, where that identity can be
+supplied directly.
 
 Not repaired here, for DE-9's reason exactly: an operator-visible discriminator on a refusal is an
 observable contract change, and this refusal path is already being rewritten once by the mode
-gate. It travels with `MRTR.9a` and DE-9, and the three cases carry a comment pointing here.
+gate. It travels with `MRTR.9a` and DE-9, and the three cases are to carry a comment pointing
+here.
 
 ### DE-10 — both post-dispatch gates ask what the backend claimed, not what the gateway could parse
 
