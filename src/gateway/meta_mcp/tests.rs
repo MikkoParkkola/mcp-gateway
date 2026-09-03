@@ -3610,7 +3610,10 @@ async fn a_near_miss_of_a_hidden_tool_is_not_answered_with_its_name() {
         )
         .await;
     // THEN: the refusal names neither the hidden tool nor any other hidden one
-    let message = response.error.expect("an unrecognised tool is refused").message;
+    let message = response
+        .error
+        .expect("an unrecognised tool is refused")
+        .message;
     assert!(
         !message.contains("gateway_kill_server"),
         "a suggestion must not name a tool the allow-list hides: {message}"
@@ -3639,7 +3642,10 @@ async fn a_near_miss_of_an_exposed_tool_still_gets_its_suggestion() {
             allow_all_ctx(),
         )
         .await;
-    let message = response.error.expect("an unrecognised tool is refused").message;
+    let message = response
+        .error
+        .expect("an unrecognised tool is refused")
+        .message;
     assert!(
         message.contains("gateway_search"),
         "an exposed neighbour is still suggested: {message}"
