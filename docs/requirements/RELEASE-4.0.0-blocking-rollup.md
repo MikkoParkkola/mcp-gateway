@@ -26,7 +26,7 @@ is tracked in `RELEASE-4.0.0-readiness-board.md`. This section defines them.
 | B | MIK-7217 era detection | `DISCOVER.4`, `DISCOVER.5`, `NFR.OBS.3` | 5 | `src/protocol/era.rs` is fully built and called from nothing. Design: `docs/design/2026-08-31-discover-outbound-era-probe.md` |
 | C | MIK-7272 revision surface | `ORDER.2`, `SUB.2` (own-stream clause), `SUB.4`, `EXT.1`, `OTEL.1`, `TASK.1` | 7 | five separate half-wirings: idempotency cache never enabled, extension set write-side absent, task methods advertised and not served, routing profile ignores modern mode |
 | D | MIK-7213 response-cache keying | `CACHE.4` | 2 | the two clause rows `CACHE.4a` (key missing routing profile and protocol revision) and `CACHE.4b` (no policy epoch), designed in `docs/design/2026-08-31-cluster-f-response-cache-keying.md`. `CACHE.3` was in this cluster until both its clauses were met: the decision table is now read by the emitting code |
-| E | performance measurements | `NFR.PERF.1`, `NFR.PERF.2` | 2 | no run against 3.5.0 exists. A code read cannot substitute. **Spark only** — a Mac number is worse than no number |
+| E | performance measurements | `NFR.PERF.1` | 1 | the run exists as of 2026-09-03: `v3.5.0` (`32f135a6`) against `5c29494a`, one clone and one criterion session on `spark`, recorded in `RELEASE-4.0.0-performance.md`. It closed `NFR.PERF.2`, which leaves this cluster. What it did not produce is a P50 or a P99: criterion measures in-process component work, so there is no wire, no backend and no queue and therefore no latency distribution. No shared case regressed past 10% on either estimator and the largest movement in the set is a 67% improvement, which is why the row is PARTIAL rather than ABSENT — but the two estimators the clause names still have no value, and only an end-to-end comparison against a 3.5.0 binary produces them |
 | F | compatibility and surface facts | `NFR.COMPAT.1`, `NFR.COMPAT.4` | 2 | `NFR.COMPAT.1` is now a code change, not a decision: the operator ruled on 2026-09-02 that 4.0.0 serves 2026-07-28 out of the box, so `server.modern_protocol` must default to true — a one-line flip (`src/config/mod.rs:1174`) not yet made, and one that cannot land before cluster A wires the continuation path, since default-on turns every gap there into a first-run defect. `NFR.COMPAT.4` is still a stated fact awaiting work, not a decision: the dual-role matrix has never been run. `NFR.COMPAT.3` was in this cluster until the operator waived it on the record on 2026-09-02, which is why the count is two rather than three. `NFR.PERF.4` left it earlier and is now residue: the ceiling was affirmed and the 17th tool identified as `gateway_webhook_status` (`src/gateway/meta_mcp_tool_defs.rs:565`), which only appears when webhooks are enabled — that settled the number, not the mechanism that holds it |
 | G | stdio dispatch path | `NFR.OBS.1`, `NFR.OBS.2`, `MIK-7246.CONFIRM.1a` | 3 | both records live in the HTTP router (`src/gateway/router/handlers.rs:720,994`) and both criteria say *per request* / *every* `tools/list`. The stdio dispatcher reaches neither, so one of the two transports the gateway serves MCP over is absent from the migration telemetry. `MIK-7246.CONFIRM.1a` was the same shape and is not telemetry, and it is the one row of the three **already answered in the tree**: the gate moved out of the HTTP router into `dispatch_single` (`src/gateway/server/mod.rs:1656`), which `run_stdio` (`:1495`) routes every request through, so a destructive meta-tool invoked over stdio is now refused with `-32001` instead of executing unconfirmed. It stays listed here until the suite, the lints and the dual-vendor review are green on that change. One wiring question — what the stdio dispatcher must do before it reaches `handle_tools_call` — answered all three; the two telemetry rows still need it done. The confirmation half is **specified, not open**: the criterion says the gate MUST refuse when it cannot obtain confirmation, so stdio fails closed. Design and test plan: `docs/design/2026-09-02-cluster-g-stdio-dispatch-parity.md` |
 | — | residue | `HEADER.9`, `CONTROL.4`, `CONFIRM.2`, `NFR.SEC.1`, `NFR.SEC.6`, `NFR.PERF.4`, `MIK-6704.IDENT.1a`, `MIK-6865.SCHEMA.1c`, `MIK-7215.CONTROL.3a` | 10 | genuinely independent; see below |
@@ -83,10 +83,11 @@ reads later as a question nobody asked.
 3. **Is `exposed_meta_tools` enforcement acceptable as a breaking change?** **Yes** — the
    operator waived `NFR.COMPAT.3` on the record on 2026-09-02. The enforcement ships and the
    criterion no longer blocks. What that waiver bought and cost is set out below.
-4. **Do the performance numbers gate the release?** **They are to be run**, which answers the
-   question the useful way: `NFR.PERF.2` states its own consequence — without a number the
-   change does not ship — and the full-scope instruction schedules the Spark job rather than
-   arguing about whether its absence blocks.
+4. **Do the performance numbers gate the release?** **They were run** on 2026-09-03, which
+   answers the question the useful way: `NFR.PERF.2` states its own consequence — without a
+   number the change does not ship — and the full-scope instruction scheduled the Spark job
+   rather than arguing about whether its absence blocks. The job closed `NFR.PERF.2` and left
+   `NFR.PERF.1` PARTIAL for want of a P50 and a P99 the harness cannot produce.
 
 Two decisions surfaced from the residue rows remain genuinely open, and they are set out under
 *Two more operator decisions* below.
@@ -117,7 +118,7 @@ owner, and unowned work does not fail loudly. It simply never starts.
 | B era detection | 3 | `era-r4-repair` owns `src/protocol/era.rs`; `era-probe` owns `tests/mik_7217_era_probe_acs.rs`, held |
 | C MIK-7272 revision surface | 6 | `surface-c`, design first |
 | D response-cache keying | 2 | `cache-34` |
-| E performance vs 3.5.0 | 2 | `perf-e`, Spark only |
+| E performance vs 3.5.0 | 1 | run on `spark` 2026-09-03; `NFR.PERF.2` closed, `NFR.PERF.1` needs an end-to-end harness that does not exist |
 | F compat and surface facts | 4 | the operator; three of the four are settled by "full scope", `NFR.COMPAT.3` is not |
 | — residue | 5 | `residue-r` takes four; `HEADER.9` belongs to the header increment |
 
@@ -133,7 +134,7 @@ it is not describing work that is happening.
 | worktrees belonging to a named owner above | none |
 | remote-tracking branches for a named owner | none — every `origin/*` ref but this note's own is 2 days old |
 | uncommitted work in the main checkout | one file, `CLAUDE.md`, unrelated to any cluster |
-| rollup rows marked met since the table was written | zero — `count-release-criteria.py --check` still reports 53 |
+| rollup rows marked met since the table was written | zero — `count-release-criteria.py --check` reported 53 when this table was written; it reports 52 since the Spark run closed `NFR.PERF.2` on 2026-09-03 |
 
 No local branch, no remote branch, no worktree and no commit exists for `envelope-a`,
 `era-r4-repair`, `era-probe`, `surface-c`, `cache-34` or `perf-e`. Two agent worktrees do exist —
@@ -174,7 +175,7 @@ from here — a table full of names and a criteria count that has not moved.
 
 **The correction is the same shape as the one this section already made for cluster A.** An
 owner is not a name in a table; it is a branch with commits on it. Until each cluster has one,
-treat the assignments above as *proposed* rather than *in progress*, and read the 53 as the
+treat the assignments above as *proposed* rather than *in progress*, and read the 52 as the
 number that will still be there tomorrow. The only cluster with anything landed is G, and what
 landed is a design note and a test plan — deliberately no code.
 

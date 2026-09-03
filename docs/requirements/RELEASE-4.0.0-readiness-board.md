@@ -18,12 +18,12 @@ nobody intends to do it.
 | B | era detection (MIK-7217) | 5 | partial — `2026-08-31-discover-outbound-era-probe.md` covers `DISCOVER.4`; **`NFR.OBS.3` appears in no design document** | no | no | no | a design that covers all five rows, not four |
 | C | revision surface (MIK-7272) | 7 | scattered across five files (`sub-4-idempotency-wiring`, `sub-1-3-get-mcp-era-gate`, `task-1-tasks-extension`, `cluster-b-*`) | no | no | no | five half-wirings with no single owner and no plan that reads as one change |
 | D | response-cache keying (MIK-7213) | 2 | yes — `2026-08-31-cluster-f-response-cache-keying.md` | yes — same stem, `-test-plan.md` | no | no | the test plan has never been through the dual-vendor gate |
-| E | performance measurement | 2 | n/a — this is a measurement, not a design | no | no | n/a | a run against 3.5.0 **on Spark**. A Mac number is worse than none |
+| E | performance measurement | 1 | n/a — this is a measurement, not a design | n/a | n/a | n/a | **run on Spark 2026-09-03**, `32f135a6` against `5c29494a`, recorded in `RELEASE-4.0.0-performance.md`. `NFR.PERF.2` is MET. `NFR.PERF.1` stays open as PARTIAL: no shared case regressed near either budget, but criterion measures in-process component work, so the P50 and P99 the clause names have no value. Closing it needs an end-to-end client-to-backend comparison against a 3.5.0 binary, which exists at no version of this repository |
 | F | compatibility facts | 2 | `NFR.COMPAT.4` only — `2026-09-02-conformance-matrix.md` | no | no | no | `NFR.COMPAT.1` is a one-line default flip that cannot land before cluster A merges |
 | G | stdio dispatch | 3 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | **row 1 done** — `d306c7e8` put the record site on the path both dispatchers take; `cargo test --lib stdio_observation` gives 2 passed, 0 failed, verified at `4b522687` | the remaining two rows, which queue behind the gate as planned, plus a third the MRTR work surfaced: `src/gateway/server/mod.rs:1748` hardcodes `retry: &NO_RETRY`, so a stdio client can never present a retry at all. Same defect class as cluster A's prefix exemption — a whole category of callers silently dropped — and it belongs to G's design, not to A's change. Cluster A's branch no longer carries a red test from G |
 | — | residue | 10 | mixed | no | no | no | ten independent rows, each needing its own decision |
 
-53 blocking rows. **Two clusters have code, and both live on one branch.** Five
+52 blocking rows. **Two clusters have code, and both live on one branch.** Five
 have no branch, no worktree and no commit — verified against `git worktree list` and `git branch`, which show
 `fix/mrtr2-continuation-handle` (cluster A) plus two unrelated gap branches.
 
@@ -73,9 +73,17 @@ is left without a next step.
 4. **Give B and C a design each.** B needs `NFR.OBS.3` covered — that row is
    cluster B's, verifying `DISCOVER.4-5`, and the era detector is what makes it
    observable. C needs its five half-wirings written as one change with one owner.
-5. **Book the Spark run for E.** It depends on nothing and nobody has started it.
-   `NFR.PERF.4` is residue rather than cluster E, and a separate cheaper fix:
-   `benchmarks/public_claims.json:4-6` records 14/16/17 against a drifted README.
+5. **Cluster E is measured.** Spark run 2026-09-03, `v3.5.0` (`32f135a6`) against `5c29494a`,
+   one clone and one criterion session; results and verdicts in `RELEASE-4.0.0-performance.md`.
+   `NFR.PERF.2` is MET — header-first routing did not ship, which is the row's own remedy.
+   `NFR.PERF.1` is PARTIAL: nothing regressed near either budget, and the harness produces
+   neither of the two estimators the clause names, which is stated there rather than papered over.
+   `NFR.PERF.4` is residue rather than cluster E, and **there is no documentation drift**:
+   `cargo test --test public_claims_validation` is 8 passed / 0 failed at `5c29494a`, and
+   `canonical_meta_tool_counts_match_live_runtime` computes 14/16/17 from a live `MetaMcp`,
+   so `benchmarks/public_claims.json:4-6` and `README.md:264` both match the code. What remains
+   on that row is the 17th tool against the 14-16 ceiling, which is a surface decision, not a
+   stale number.
 6. **Close G's gate** now that the reviewer is reachable again — but G's row-1
    emit does not wait for it. A red test already sits on cluster A's branch, so the
    emit is a step-1 obligation and the remaining seven stdio rows queue behind the

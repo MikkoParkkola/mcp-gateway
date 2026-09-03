@@ -31,9 +31,13 @@ and `cargo audit` each exited zero, and the secret scan is clean in both halves 
 clean over 400 files. `#![deny(unsafe_code)]` holds at `src/lib.rs:1`. NFR.SEC.6 names four
 tickets as closed in this release and two of them, MIK-7249 and MIK-7262, have no reference
 anywhere under `src/` or `tests/`.
-NFR.PERF.1-2 require a measurement against 3.5.0 that has never been run, and a measurement is
-not something a code read can substitute for. NFR.PERF.2 states its own consequence: without a
-number, header-first routing does not ship.
+NFR.PERF.1-2 required a measurement against 3.5.0 that no code read could substitute for, and
+it was run on 2026-09-03 — `v3.5.0` (`32f135a6`) against `5c29494a` on `spark`, recorded in
+`RELEASE-4.0.0-performance.md`. NFR.PERF.2 is MET by its own consequence: header-first routing
+did not ship, and the numbers show the most it could have saved is about 1.2% of a per-call
+composite. NFR.PERF.1 is PARTIAL, not MET: nothing regressed near either budget, but criterion
+measures in-process component work and produces no P50 and no P99, which is what the clause
+names.
 
 Each NFR row now also carries the verification method its requirement states — T, M, I or D —
 and `scripts/release/count-release-criteria.py` refuses when a row's letter disagrees with the
@@ -227,7 +231,7 @@ scheme for its own purpose, and the two do not correspond; the criterion IDs are
 ### The fifteen blocking NFR rows are placed by wave, not by cluster
 
 The clusters above are ticket work. Not one NFR row appears in them, and the heading
-"Clusters, in dependency order" reads as though it covered everything — it covers 38 of the 53.
+"Clusters, in dependency order" reads as though it covered everything — it covers 37 of the 52.
 An NFR row mostly verifies a property of a mechanism some cluster builds, so it cannot be
 scheduled independently of that cluster; the four that stand alone are the exceptions.
 
@@ -237,7 +241,7 @@ scheduled independently of that cluster; the four that stand alone are the excep
 | OBS.3 | with cluster C — there is no era detection to observe until C lands |
 | OBS.1, OBS.2 | cluster I, above |
 | COMPAT.1 | with cluster B — the ABSENT clause is the modern revision being served at all, which the `server.modern_protocol` default gates and B's work unblocks, not a separate task |
-| PERF.1, PERF.2 | wave 0, and still open: both need a measurement against 3.5.0 that no code read can substitute for |
+| PERF.1, PERF.2 | wave 0, measured 2026-09-03 on `spark`. PERF.2 is MET; PERF.1 stays open as PARTIAL — the harness yields no P50 or P99, and only an end-to-end comparison against a 3.5.0 binary does |
 | PERF.4 | wave 1 — the operator's ruling left the ceiling standing and the counting mechanism undecided |
 | SEC.1 | wave 3 — twelve of fifteen controls carry a refusal test; two remain, and one is blocked on files another session owns |
 | SEC.6 | wave 3 — one test on the MIK-7262 early return, plus a ruling on whether an unlabelled fix counts as closed |
@@ -252,8 +256,9 @@ and a cluster is not done until they read MET. The other six are named in a wave
 against the verification method the requirements table names for each. NFR.SEC.5's four
 command gates were run and it is met; NFR.SEC.6 remains open on MIK-7249 and MIK-7262, which
 have no reference anywhere in `src/` or `tests/`.
-Alongside them, NFR.PERF.1-2 are recorded ABSENT rather than unassessed: they need a
-latency measurement against 3.5.0, and no read of the source can close either. The six that
+Alongside them, NFR.PERF.1-2 were recorded ABSENT rather than unassessed, because they needed a
+latency measurement against 3.5.0 that no read of the source could close. That run happened on
+2026-09-03 and moved PERF.2 to MET and PERF.1 to PARTIAL; see `RELEASE-4.0.0-performance.md`. The six that
 verify the continuation envelope and era detection are NOT in this wave — they follow their
 clusters. This wave changes the size of every wave after it, which is why it runs first
 rather than last.
