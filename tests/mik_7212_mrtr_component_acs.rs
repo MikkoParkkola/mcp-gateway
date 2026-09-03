@@ -1078,9 +1078,18 @@ async fn ac_mrtr_6_a_retry_at_another_replica_is_refused_and_opens_no_exchange()
 /// the gateway opens a second exchange with a legacy backend, which is exactly
 /// what the criterion names.
 ///
-/// The table is left empty deliberately — that is what "the exchange is gone"
-/// is. Staging a hold and then reaping it would test the same state by a longer
-/// route, and would make the case depend on reap timing it does not care about.
+/// The exchange is staged and then ended, never merely absent. An empty table
+/// is the *never existed* state, and a gateway that refuses every exchange it
+/// does not recognise satisfies that without one ever having existed — the
+/// criterion is about an exchange this origin **no longer** holds, which only a
+/// table that once held it can present. `complete` ends it rather than `reap`,
+/// so the case turns on the exchange being gone and not on deadline timing.
+///
+/// The hold is staged directly because no non-test caller writes to the
+/// in-flight table yet, and because a handle carries no correlation to a hold
+/// key: `Payload` has no such field, so "the hold for *this* handle" is not
+/// constructible today. The strongest available statement is that this origin
+/// held an exchange against this backend and holds it no longer.
 #[tokio::test]
 async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused() {
     // GIVEN: a handle this replica minted, and no exchange open for it.
@@ -1089,6 +1098,17 @@ async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused(
     register_fixture_backend(&state, &url);
     let args = arguments();
     let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &args).await;
+    let held = state
+        .continuation
+        .in_flight()
+        .hold(BACKEND, now_secs() + 60)
+        .await
+        .expect("the bounded table must admit one exchange");
+    assert!(
+        state.continuation.in_flight().complete(&held).await,
+        "the staged exchange must be the one that ends, or the state under test \
+         is not the one this case names"
+    );
     assert_eq!(
         state.continuation.in_flight().len().await,
         0,
