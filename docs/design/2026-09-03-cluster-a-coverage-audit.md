@@ -163,6 +163,14 @@ Recorded here as a §P3 design event: implementation is deleting a production
 enum variant, which the design did not name. Elimination, not repair — after it,
 the finding cannot be restated.
 
+Landed in `6e744936`, with one deviation from the disposal above: the test was
+**replaced** rather than deleted. Deleting it alone would have left MRTR.6's
+cross-replica clause with no coverage — the surviving `Gone` test uses a key
+that was never minted, which is a different case. Its replacement,
+`ac_mrtr_6_a_retry_landing_on_another_replica_fails_explicitly`, stages two
+tables and asserts both halves: the foreign retry is refused, and the minting
+replica still holds the exchange afterwards.
+
 ### Rows 5d, 6-level, 7a, 7b, 8b — one fact, not five
 
 Every one is a test sitting below its assigned level. The cause is the same in
