@@ -1370,9 +1370,19 @@ impl MetaMcp {
     /// // presented is not trusted by being routed: it is checked against the
     /// // digest sealed in that same envelope before anything dispatches.
     /// //
-    /// // Meta-tools are left alone. A retry may equally arrive wrapped in
-    /// // `gateway_invoke`, which already carries its own server and tool and
-    /// // needs no envelope to be routed.
+    /// // Two meta-tools are left alone, and only two. `gateway_invoke` and
+    /// // `gateway_execute` carry their own server and tool and route into
+    /// // `invoke_tool`, where `redeem_retry` opens the same envelope: a retry
+    /// // wrapped in either reaches the guard by its ordinary path, so routing
+    /// // it from here would only open it twice.
+    /// //
+    /// // Every other meta-tool is answered by the gateway itself and never
+    /// // enters that scope. Exempting the whole `gateway_` prefix therefore
+    /// // let a retry naming one — `gateway_list_servers`, say — run as a fresh
+    /// // call with its continuation never examined, which is the repeat the
+    /// // envelope exists to prevent (MIK-7215). Such a retry is routed like
+    /// // any other: the envelope names a backend, the presented name is not
+    /// // that backend's tool, and the digest check refuses it downstream.
     async fn route_retry_to_origin_backend(
         &self,
         id: RequestId,
@@ -1381,7 +1391,7 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Option<JsonRpcResponse> {
-        if tool_name.starts_with("gateway_") {
+        if matches!(tool_name, "gateway_invoke" | "gateway_execute") {
             return None;
         }
         let server_name = match invoke::retry_origin_backend(&self.continuation, caller.retry)? {
