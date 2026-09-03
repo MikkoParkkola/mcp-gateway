@@ -31,12 +31,13 @@ implementer cannot tell which one binds.
 | TASK.1 | `docs/design/2026-08-31-task-1-tasks-extension.md` | decided |
 
 Every one of the seven is therefore designed, by **four** design documents — the count of documents
-is smaller than the count of rows because two of them each own two rows. **What was genuinely
-missing is not placement — it is the cross-row view**, and that is all this document now contains:
-the decisions that only appear when the four designs are read together, the order they have to land
-in, and the deployment impact none of them can state alone because it is the sum of the others.
+is smaller than the count of rows because one of them owns three rows and another owns two.
+**What was genuinely missing is not placement — it is the cross-row view**, and that is all this
+document now contains: the decisions that only appear when the four designs are read together,
+the one ordering constraint that survives review, and the deployment impact none of them can state
+alone because it is the sum of the others.
 
-## Three cross-row facts, none of which a single-row design can state
+## Three cross-row checks — two facts and one refutation
 
 **1. Re-issue safety has one owner, and TASK.1 already named it.** *When the tasks extension is
 negotiated on a request, the task store owns re-issue safety; the idempotency cache is neither
@@ -44,7 +45,7 @@ consulted nor written for that call* (TASK.1 design §4). One structure decides;
 disagree because it is not asked.
 
 That rule survives a change underneath it, and the change is only visible across the two documents
-and the tree. TASK.1 §4 argues the rule from a live defect — `resolve_idempotency_key` auto-derives
+and the tree. TASK.1 §4 argues the rule from a live defect — `resolve_idempotency_key`, a name that appears nowhere in `src/`, auto-derives
 a key for any keyless call, so a task-augmented call would get one. **That premise no longer holds
 in this tree.** `idempotency_key_for` (`src/gateway/meta_mcp/support.rs:35-45`) takes the client key
 and nothing else — *"there is no other source. A call without one is not protected"* — and SUB.4's
@@ -100,7 +101,7 @@ that states the constraint over its *objects*.
 | SUB.4 | — | independent. An earlier revision ordered it against TASK.1 on the automatic key derivation; that derivation is already gone from the tree, so the constraint had no subject |
 | SUB.2b | — | independent of TASK.1. The task-scoped stream is a `subscriptions/listen` stream, which SUB.2's shipped design owns; SUB.2b is request-scoped routing on response streams |
 | ORDER.2 | — | independent; its own design closes every writer of the session profile |
-| OTEL.1 | — | independent; its design already makes `src/protocol/trace.rs` the sole owner and deletes the competing implementation |
+| OTEL.1 | — | independent; its design already makes `src/protocol/trace.rs` the sole propagation owner. What becomes of the competing `src/tracing_context/` — deletion or isolation — is that design's own deferred question, which this order does not decide |
 
 **One ordering constraint survives review, not five.** That is the honest result: the cluster is
 less entangled than it looked, and each remaining row can land on its own schedule.
@@ -115,7 +116,8 @@ Each design states its own impact. Three things are only visible across all four
    every era**"* (`…connection-invariance.md:169`). An earlier revision of this section called this
    modern-path-only; it is not, and that makes it the one **breaking** change in the cluster. A
    deployment that today varies tools per session or per connection loses that capability outright,
-   in a single release, on every path, and `gateway_set_profile` stops being honoured. It belongs in
+   in a single release, on every path: both `gateway_set_profile` and `gateway_get_profile`
+   (`src/gateway/meta_mcp_tool_defs.rs:379`) go with the mechanism they read and write. It belongs in
    the release note as a removal, not as a conformance fix.
 2. **Clients see two new things on the wire; backends see a third.** New keys in the initialize
    response (EXT.1) and notification frames on response streams that previously carried only a
@@ -126,13 +128,27 @@ Each design states its own impact. Three things are only visible across all four
 3. **Two of the seven change nothing until a client opts in.** SUB.4 protects only calls that carry
    a key; TASK.1 serves methods only when the extension is negotiated. Neither is a migration.
 
-**Only SUB.2b is era-gated.** ORDER.2 is not, by the operator's own choice of option (b) above.
-EXT.1 is not either, and that is decided rather than unknown: `build_initialize_result`
-(`src/gateway/meta_mcp_helpers.rs:145-166`) takes the negotiated version only to echo it and
-branches on nothing, both entry points share it, and the owning design rejected the discover-only
-option precisely because it would leave *"a legacy client blind to an extension the gateway
-supports"*. A legacy-era client will receive `"extensions": {}`. That is the intended behaviour, and
-the release note should say so rather than implying the cluster is a modern-path affair.
+**Two rows are era-gated, and they are gated on opposite sides of the same handshake.** ORDER.2 is
+not one of them, by the operator's own choice of option (b) above. EXT.1 is not either, and that is
+decided rather than unknown: `build_initialize_result` (`src/gateway/meta_mcp_helpers.rs:145-166`)
+takes the negotiated version only to echo it and branches on nothing, both entry points share it,
+and the owning design rejected the discover-only option precisely because it would leave *"a legacy
+client blind to an extension the gateway supports"*. A legacy-era client will receive
+`"extensions": {}`. TASK.1, in contrast, **is** era-gated, at the router rather than the
+declaration: its `MIK-7272.TASK.1.5` requires that *"a 2025-era peer calling `tasks/cancel` is
+refused `-32601` by the era gate"*. SUB.2b's own design states no era exposure at all, and this map
+does not invent one for it.
+
+**That pairing is itself a cross-row constraint.** The
+extensions map is unconditional; the task methods are refused by era. So a Tasks entry added to that
+shared builder without an era condition tells a legacy client about an extension whose every method
+it will then be refused — the declaration and the refusal disagree about the same peer. The entry
+belongs to TASK.1's increment, which is already ordered after EXT.1, and it is the reason that
+ordering exists rather than a second one: EXT.1 builds the map, TASK.1 fills it, and TASK.1 owns the
+condition on its own row. This document makes no placement — the work sits where it already sat.
+What was only visible across the two designs is that the condition has to exist at all.
+
+The release note should say so rather than implying the cluster is a modern-path affair.
 
 ## Unknowns
 
@@ -155,8 +171,9 @@ Deferred — **none**. This document held one deferred unknown after round 2, th
 own resolver was a single file read, so round 3 ran it rather than scheduling it. An unknown whose
 check costs less than its four fields should be answered, not deferred.
 
-Other deferred unknowns are held by the owning designs — SUB.4's TTL and window questions, OTEL.1's
-numeric bounds, and the disposal of `src/tracing_context/`. This document adds none of those and
+Other deferred unknowns are held by the owning designs — OTEL.1's numeric bounds and the disposal
+of `src/tracing_context/`. SUB.4 has none: its design says *"Nothing is deferred"* (`:184`) and
+resolves the TTL question at `:66`. This document adds none of those and
 closes none of them.
 
 ## Open for the operator
@@ -191,8 +208,24 @@ are visible together:
 |---|---|---|
 | `2026-08-31-sub-4-idempotency-wiring.md:161-169` | body prose says the direct route takes an `Idempotency-Key` header; the decision at `:154-155`/`:178` says `_meta` on both routes | SUB.4's increment |
 | `2026-08-31-cluster-b-capability-and-trace-metadata.md:404-408` | direct-route trace propagation listed out of scope *until 4.4.3 is answered*; it is answered | OTEL.1's increment |
-| `2026-08-31-task-1-tasks-extension.md` §4 | argues its rule from an automatic key derivation the tree no longer has | TASK.1's increment |
+| `2026-08-31-task-1-tasks-extension.md:64`, `:228` | argues its rule from an automatic key derivation the tree no longer has | TASK.1's increment |
 
 Each is a sentence inside a document that increment already opens. When each row lands, its
 criteria-status row and release-plan entry become untrue and ship updated inside that change, per
 §P4a.
+
+## Carried findings — raised in review, owned elsewhere
+
+The final review raised three defects that live inside TASK.1's design rather than in this map.
+Repairing another design's decision is outside what this document declared itself for, so they are
+recorded rather than fixed, and none of them changes an ownership row above.
+
+| finding | why it is not repaired here |
+|---|---|
+| a task-scoped stream that filters only by notification kind would still broadcast every task's status to every listener — the filter has to be by requested `taskIds` **and** by the authenticated owner | this is the substance of `MIK-7272.TASK.1.9`, which TASK.1 already owns; it strengthens that criterion rather than moving it |
+| the notification is spelled `notifications/tasks/status` throughout TASK.1's design; one reviewer reads the pinned model as `notifications/tasks` | a wire-name conflict is settled against the spec text by the increment that writes the constant, not by a citation map |
+| the OTEL.1 direct route may already forward `_meta` unchanged, which would make new injection there a duplicate rather than a fix | source-checkable in one read by OTEL.1's increment; this document's own claim about that route is the stale out-of-scope entry recorded above, not the injection design |
+
+These are residual risk, stated so the next reader of this cluster meets them once. A fourth round
+of review on this map would not close them — it would only re-raise findings whose owners are three
+other documents.
