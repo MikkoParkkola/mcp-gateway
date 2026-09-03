@@ -880,3 +880,34 @@ nothing else.
 Everything else. The ledger is unchanged, no blocking row flipped to MET, and section 4's ordering
 stands: cluster A first, with E (Spark measurement), B's consuming side and F's operator decisions
 running alongside; C and D after A, because they need a served modern request path to test against.
+
+### Later the same day — cluster G is green, and the reviewer diagnosis above is weaker than it reads
+
+Three corrections and one piece of progress, all after the sections above were written.
+
+The destructive-confirmation gate for cluster G is code-complete on this branch. The check moved out
+of the `tools/call` arm into `destructive_confirmation_gate` (`mod.rs:1614`), so stdio and HTTP reach
+one call site and `router/handlers.rs` lost its 115-line copy; an operator decline no longer counts
+toward failure accounting; the refusal marker never reaches the wire; and both refusal paths build
+through a single `confirmation_refusal_response` constructor, which makes the marker a property of
+construction rather than of remembering to set it. Gates at `ec1c0c2a`: `cargo test --lib` 3882
+passed, `cargo test --test mik_7215_acs` 25 passed, `clippy -D warnings` and `fmt --check` both
+clean. This is a slice of cluster D, not a cluster, and it closes no blocking row on its own.
+
+The claim that the GPT leg is dead is not supported by the probe that produced it. That probe piped
+the reviewer into `tail`, so `timeout 180` bounded the wrong process; the command ran 149 minutes and
+returned nothing, which is a harness failure and not a vendor verdict. The usage limit may well still
+be in force — the point is that the evidence cited above does not establish it, and an unpiped probe
+is what will. Until one runs, treat the leg as unknown rather than as down.
+
+`the_refusal_does_not_name_the_allow_list` was recorded as unable to discriminate between the
+prefixed and unprefixed refusal wording. It discriminates. A `--lib` capture from earlier in the
+series shows it failing on `JSON-RPC error -32601: ...` against the bare fallback text, and passing
+once construction routed through the shared helper. The falsifier arrived in the ordinary course of
+the work rather than from a staged probe, which is worth more than the probe would have been.
+
+The delivery chain has not started. The branch holds 160 commits that exist on one disk and nowhere
+else, and PR #473's head is those 160 commits behind, so the green CI on that pull request certifies
+work nobody is proposing to ship. Every blocking row could flip to MET tomorrow and the release would
+still be at step one of five. Pushing is the operator's call; recording that it has not happened is
+not.
