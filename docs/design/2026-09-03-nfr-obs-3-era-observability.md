@@ -37,7 +37,7 @@ quoted here as the thing being audited, **cited not authored**:
 | `era_probe` | `backend`, `outcome` ∈ {`modern`, `legacy`, `no_answer`}, `duration_ms`, `trigger` ∈ {`start`, `reprobe`} |
 | `era_cache` | `backend`, `hit` ∈ {`true`, `false`} |
 | `era_invalidated` | `backend`, `reason` ∈ {`restart`, `trigger`} |
-| `era_probe_discarded` | `backend` |
+| `era_probe_discarded` | `backend` (amended below: the probe record, minus `error_code`) |
 
 OBS.3's job is to check that set against the criterion's three clauses. Two of the three are already
 answered; one is not.
@@ -123,12 +123,13 @@ The criterion's third clause is ambiguous between "when it **was** re-probed" an
 be**". The second reading has no answer by construction: re-probe is trigger-driven, fired by a
 contradiction (`src/backend/era.rs:92-101`), never scheduled. There is no future time to report.
 
-Rather than record the ambiguity as an operator question, this design serves the three facts that do
-exist, which makes the question unstatable:
+Rather than record the ambiguity as an operator question, this design serves the two facts that do
+exist, plus a floor the era design states and nothing yet enforces — which is what makes the question
+unstatable:
 
 1. **when it last happened** — the timestamp of the most recent probe;
 2. **why** — whether that probe was a `start` or a `reprobe`;
-3. **not before** — the era design imposes "at most one re-probe per 30s" per backend
+3. **not before** *(conditional — see below; the floor is stated by the era design and enforced by nothing yet)* — the era design imposes "at most one re-probe per 30s" per backend
    (`2026-08-31-discover-outbound-era-probe.md:609-610`, reusing `max_gap`,
    `src/gateway/server/warmstart.rs:47`). The anchor is the completion of the last probe, so the
    earliest a re-probe can follow is `era_probed_at + 30s`.
@@ -186,8 +187,32 @@ code already decides: `resolve_with` classifies, then stores the era only when t
 `NoAnswer` (`src/protocol/era.rs:163-171`). Both events hang off that one branch — the taken side
 commits a classification, the untaken side discards a `NoAnswer`. The era design's `commit_if` is a
 name from that document, not from the code; this design targets the seam that exists. It is plain data behind a non-async lock, never held across an await, so
-`status()` reads it directly and `cached_era()` reads `.era` from it. The async `EraCache` stops
-being the owner of the classification and becomes the thing that serialises probing.
+`status()` reads it directly. The async `EraCache` stops being the owner of the classification and
+becomes the thing that serialises probing.
+**Invalidation must not erase the observation, and does not have to.** The two states are separate on
+purpose: the async `Mutex<Option<Era>>` shipped today keeps exactly its current job — the gate that
+decides whether a probe runs and serialises concurrent resolution — and the `EraObservation` behind
+the sync lock is replaced after **every completed probe** — both sides of that branch. The gate takes
+only answered classifications; the observation takes the answer *and* the silence, which is what makes
+the `no_answer` rows expressible at all: a probe that came back with nothing still moves
+`era_probed_at` and sets `era_evidence` to `no_answer` while `era_source` stays `assumed`. Writing the
+observation only where the gate commits would erase exactly the state this criterion exists to expose.
+`invalidate()` clears the gate; it never touches the observation. That is what makes the transition table's *unchanged until the re-probe commits* row
+true by construction rather than by a promise, and it is why no forced-resolution operation is needed:
+the existing `invalidate()` + `resolve_with()` pair (`src/backend/era.rs:99-101`) already produces it.
+
+The cost of the split is that **the two readers must not be crossed**, and one of them is subtle:
+
+| reader | reads | why not the other |
+|---|---|---|
+| the request path | the gate, via `resolve_with` | it must probe again after an invalidation, which is the point of clearing the gate |
+| the contradiction guard (`src/backend/era.rs:92`) | the gate, via `cached_era` | reading the observation would keep answering `Legacy` through the stale window and re-spawn a probe on every subsequent error |
+| the operator read | the observation | it must show the last thing the peer actually said, including while a re-probe is in flight |
+
+So `cached_era` stays a gate read and the operator read is a new accessor on the observation. Wiring
+`cached_era` to the observation would be a one-line change that silently converts a contradiction
+storm into a probe storm; naming it here is what stops that.
+
 
 ### The fields
 
@@ -196,7 +221,7 @@ being the owner of the classification and becomes the thing that serialises prob
 | `era` | `modern` \| `legacy` — **what the request path will act on**, which always has an answer: an unclassified backend is treated as legacy (`src/protocol/era.rs:164-167`) |
 | `era_source` | `probed` \| `assumed` — whether `era` came from a classification or from that default. The `NFR.OBS.1` `revision_source` pattern (`src/protocol/meta.rs:507-512`) |
 | `era_evidence` | how the last probe ended, from the closed set below |
-| `era_probed_at` | completion time of the last probe; absent only when never probed |
+| `era_probed_at` | completion time of the last probe, serialised as RFC 3339 UTC with second precision; absent only when never probed. Wall clock, because it is for a human reading a status; any future rate-limit arithmetic uses a monotonic instant and never this field |
 | `era_probe_trigger` | `start` \| `reprobe` — which kind that last probe was; absent only when never probed |
 
 `era_source` is what makes "never probed" and "probed and got silence" distinguishable, and both are
@@ -212,11 +237,11 @@ is fixed here. One variant per route in `classify` (`src/protocol/era.rs:61-96`)
 |---|---|
 | `never_probed` | no probe has completed |
 | `discover_modern` | a `server/discover` document naming a modern revision → `Modern` |
-| `discover_2025_only` | a document naming only 2025 revisions → `Legacy`, and the dual-era migrating peer |
+| `discover_not_modern` | a discovery document that named no revision we can speak → `Legacy`. Deliberately wider than "a 2025-only peer": `names_a_modern_version` treats a malformed document, an empty list, and a 2024-only list identically (`src/protocol/era.rs:183` and its doc comment), so an evidence value promising to separate them would be a label the probe cannot support |
 | `modern_error_code` | `UNSUPPORTED_PROTOCOL_VERSION`, `HEADER_MISMATCH` or `MISSING_REQUIRED_CLIENT_CAPABILITY` → `Modern` |
 | `method_not_found` | `-32601` → `Legacy`, the honest legacy answer |
 | `other_error` | any other error code → `Legacy`, the sloppy one |
-| `no_answer` | the probe deadline expired → nothing cached |
+| `no_answer` | no usable answer came back — the deadline expired, the transport failed, or the result did not parse. `probe` folds all three into `ProbeOutcome::NoAnswer` (`src/backend/era.rs:32-46`) before any evidence could be derived, so this variant is honest about the collapse instead of implying a timeout |
 
 Seven values, no raw error code among them. **One enum, both readers**: `era_probe.evidence` and
 `era_evidence` on the operator read render the same `EraEvidence`, so the event stream and the live
@@ -238,10 +263,20 @@ so a reader never has to reconcile two partial statements of it.
 | `duration_ms` | integer | always |
 | `trigger` | `start` \| `reprobe` | always |
 
+Every value in this document is written as it serialises: `snake_case`, lower case, in both the event
+stream and the operator read. The enum's Rust spelling is `PascalCase` and its `serde` rename is
+`snake_case`; the fixtures assert the wire form, never the Rust one.
+
 `evidence` is the closed classification; `error_code` is the raw text behind it, on the event only.
 Absent everywhere else, and never a metric label.
 
-### Every transition
+`era_probe_discarded` takes the same `outcome`, `evidence`, `duration_ms` and `trigger` fields — the
+whole record minus `error_code`, so a discarded probe can be lined up against the one that won. It is the one event in the set
+that today says only *that* something was thrown away; under a criterion asking **by what evidence**,
+an event recording no evidence is the gap the criterion names. Fields on an event, so no cardinality
+follows.
+
+### The load-bearing transitions
 
 | from | event | `era` | `era_source` | `era_evidence` | `era_probed_at` | `era_probe_trigger` |
 |---|---|---|---|---|---|---|
@@ -252,10 +287,24 @@ Absent everywhere else, and never a metric label.
 | contradiction fires | `era_invalidated` | unchanged until the re-probe commits | | | | |
 | re-probe → modern code | `era_probe` | `modern` | `probed` | `modern_error_code` | set | `reprobe` |
 | re-probe → deadline | `era_probe` | `legacy` | `assumed` | `no_answer` | set | `reprobe` |
-| backend restarts | `era_invalidated` (`reason=restart`) | `legacy` | `assumed` | `never_probed` | cleared | cleared |
+| backend restarts † | `era_invalidated` (`reason=restart`) | `legacy` | `assumed` | `never_probed` | cleared | cleared |
 | stale outcome discarded | `era_probe_discarded` | unchanged | unchanged | unchanged | unchanged | unchanged |
 
-Two rows carry the whole design: a `no_answer` re-probe moves `era_source` back to `assumed` while
+† **Unreachable today, and this ticket does not wire it.** `invalidate()` has exactly one caller —
+the contradiction re-probe at `src/backend/era.rs:100`. No restart path clears the era, and nothing
+rejects a probe that commits against a transport the restart already replaced, so a restarted backend
+keeps its predecessor's classification. That is a defect in the era implementation, not in its
+observability: OBS.3 gives an operator the timestamp and trigger that make it *partially* visible — an
+`era_probed_at` older than a restart the operator already knows about is the tell, and the read
+carries no restart time or transport generation of its own, so that comparison is only available to
+someone who restarted the backend deliberately. It is a diagnostic aid, not a detector; claiming more
+would be the overclaim this document is auditing others for. What OBS.3 does settle is the row the
+fix must satisfy. Repairing it means an identity-checked restart path, which is era-design work outside this
+criterion's scope and is recorded here as its dependency, not deferred into silence.
+
+These are the rows where something can go wrong, not the full cross-product: the remaining
+start/re-probe × evidence combinations follow the same three columns mechanically, and the fixture
+covers them case-for-case. Two rows carry the whole design: a `no_answer` re-probe moves `era_source` back to `assumed` while
 leaving `era_probed_at` set, and a discarded outcome changes nothing at all. Both are directly
 testable.
 
@@ -307,15 +356,21 @@ wiring. **That was wrong**, and it is worth recording why: the claim came from
 `criteria-status.md:326`, which still says both are unwired. They landed in `bb3727a2`. The tree, not
 the status table, is the source.
 
+Correcting that line is part of this ticket, not a follow-up: `criteria-status.md:326` is edited in
+the same change that emits the events, because a design that flags a false statement twice and leaves
+it standing has documented a defect instead of fixing one.
+
 So the whole of OBS.3 is buildable and testable today:
 
 - the emission is a change to code that exists and runs;
 - the tests extend `tests/mik_7217_era_probe_acs.rs`, which already drives a real backend start
   against a fixture peer (`backend.ensure_started()` at `:153`, `:173`, `:213`, `:316`, `:341`) and
   already drives four of the seven routes — `discover_modern`, `method_not_found`, the contradiction
-  re-probe, and `no_answer`. The three it does not (`discover_2025_only`, `modern_error_code`,
+  re-probe, and `no_answer`. The three it does not (`discover_not_modern`, `modern_error_code`,
   `other_error`) are new fixture rows this ticket adds, one per evidence value, so the table above is
-  covered case-for-case rather than by assertion;
+  covered case-for-case rather than by assertion — each asserting `error_code` exactly as the table's
+  *present* column states, its **absence** on the discover and `no_answer` routes included, since a
+  conditional field is only a contract if the negative case is asserted;
 - a test asserting an `era_probe` record fails today on a **missing assertion**, not a missing
   symbol — the probe runs, it is simply silent. §P2's free failure is available.
 
@@ -331,8 +386,8 @@ That bounds what the events will *show* in this release. It does not gate buildi
 |---|---|---|
 | is there a fixture that starts a backend, so era events can be asserted at their real seam? | **resolved** | `tests/mik_7217_era_probe_acs.rs` — 360 lines, five tests calling `backend.ensure_started()` against a fixture peer, covering the modern-doc, `-32601`, contradiction-re-probe and never-answered routes. Changed the plan completely: OBS.3 writes no new harness, it adds a capturing subscriber to this one. An earlier search missed the file and concluded the opposite. |
 | is the collector convention reusable outside the router tests? | **resolved** | `src/gateway/server/mod.rs:3058` filters on `mcp_gateway::observed`, and its self-test at `:3110-3132` proves the collector sees a record emitted in its own scope, independent of any request. Reusable; this is what makes Finding 2's single-target rule verifiable at all. |
-| does the era design's `era_invalidated.reason=trigger` correspond to a real path? | **resolved** | yes — `src/backend/era.rs:92-101`: a contradicting error code invalidates and re-resolves. The `restart` reason is the pool entry being replaced. Both reasons are real; the event table needs no amendment there. |
-| does `EraObservation` behind a sync lock disturb the era design's locking argument? | **deferred** — owner: this ticket's implementation; resolved by: re-reading `:490-515`, which reasons about `commit_if` holding the era lock for a pointer comparison and a write, and confirming a second non-async lock taken inside that critical section cannot invert with it; when: before the observation write lands; if it resolves badly: the observation is written *after* `commit_if` returns rather than inside it, which loses atomicity between cache and observation for one instant and is acceptable for a read-only surface. Nothing depending on it is implemented. |
+| does the era design's `era_invalidated.reason=trigger` correspond to a real path? | **resolved** | yes — `src/backend/era.rs:92-101`: a contradicting error code invalidates and re-resolves. The `restart` reason is **not**: replacing a pool entry clears nothing and emits nothing, because `invalidate()` has that single caller. So one of the two reasons is wired and one is contract-only, which is what the restart row's footnote records. The event table still needs no amendment — the gap is an emitter, not a field. |
+| does `EraObservation` behind a sync lock disturb the era design's locking argument? | **deferred** — owner: this ticket's implementation; resolved by: re-reading `:490-515`, which reasons about `commit_if` holding the era lock for a pointer comparison and a write — the shipped counterpart being the store branch inside `resolve_with` (`src/protocol/era.rs:163-171`), and confirming a second non-async lock taken inside that critical section cannot invert with it; when: before the observation write lands; if it resolves badly: the observation is written *after* `commit_if` returns rather than inside it, which loses atomicity between cache and observation for one instant and is acceptable for a read-only surface. Nothing depending on it is implemented. |
 | do the three modern error codes need separating on the operator read? | **deferred** — owner: this ticket; resolved by: observation once the events emit, or by asking the operator; when: after one release with the events live; if it resolves badly: `modern_error_code` widens into three variants, which is additive. |
 
 ## Answered by the operator, 2026-09-03
