@@ -118,6 +118,16 @@ row now mints on one process and asserts explicit refusal on another. Left as dr
 would have passed against a design nobody agreed to build, and its passing would have been evidence
 of nothing. MRTR.6 carried the same assumption and is corrected the same way.
 
+**MRTR.5(c) named a race without naming how it is forced.** "Two concurrent redemptions yield
+exactly one success" is not something a `join!` of two futures can prove. `#[tokio::test]` builds a
+current-thread runtime, so the two redemptions may simply run one after the other, and a ledger with
+no atomic compare-and-set then passes because the interleaving that breaks it never happened. The
+row forces the race instead of hoping for it: both redemptions run as spawned tasks under
+`flavor = "multi_thread"`, each awaiting a shared barrier released immediately before the ledger
+write, and the race repeats so that one lucky ordering is not the whole result. A case whose failure
+depends on the scheduler's mood cannot be made to fail on demand, which is the property the plan
+review exists to check.
+
 **Two rows were single cases where the criterion is plural.** MRTR.1 tested both-fields-present when
 a retry may legitimately carry one; MRTR.9 tested `sampling` when the criterion covers every
 undeclared type. Both are now tables. Neither single case could fail on the shapes it omitted.
