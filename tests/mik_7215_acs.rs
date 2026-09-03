@@ -432,14 +432,17 @@ mod http {
     }
 
     #[tokio::test]
-    async fn a_well_formed_retry_is_refused_while_forwarding_is_unwired() {
+    async fn a_well_formed_retry_naming_a_meta_tool_is_refused_before_dispatch() {
         // Adversarial review, 2026-08-30, confirmed at source: a malformed
         // retry was refused with -32602, but a well-formed one was logged at
         // debug and then dispatched as a fresh `tools/call`. For a destructive
         // tool that repeats whatever the first attempt already did — the exact
         // outcome the malformed branch exists to prevent, and the outcome the
-        // comment above it claims cannot happen. Until continuation unsealing
-        // is wired, both shapes fail closed.
+        // comment above it claims cannot happen. `route_retry_to_origin_backend`
+        // exempted the whole `gateway_` prefix, so a retry naming any meta-tool
+        // bypassed the continuation guard; the exemption now covers only the two
+        // tools that carry their own server and tool and open the envelope
+        // themselves. Both shapes fail closed.
         let (status, _, body) = post_mcp(json!({
             "jsonrpc": "2.0",
             "id": 9,
@@ -457,10 +460,14 @@ mod http {
 
         assert_eq!(
             status,
-            StatusCode::BAD_REQUEST,
-            "a retry that cannot be forwarded must fail visibly: {body}"
+            StatusCode::OK,
+            "an application denial rides in the JSON-RPC envelope: {body}"
         );
         assert_eq!(body["error"]["code"], -32602, "{body}");
+        assert!(
+            body.get("result").is_none(),
+            "a refused retry must not serve the tool: {body}"
+        );
     }
 
     #[tokio::test]
