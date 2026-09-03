@@ -23,7 +23,7 @@ criterion about *a value's shape* does not need a second process.
 | criterion | the case that proves it | level | type | can it fail? |
 |---|---|---|---|---|
 | MRTR.1 carry `inputResponses`/`requestState` on a retry | four shapes through the component path — both fields, responses-only, state-only, neither — each reaching the backend with exactly what it carried | component | table-driven positive + control | today it fails at the router refusal, which is the free failure §P2 wants |
-| MRTR.2 mint our own envelope, never forward the backend's | backend returns a `requestState` string; the value the client receives is not that string and verifies under our key | component | negative (anti-passthrough) | **not held — see "What self-QA found" below.** `ac_mrtr_2_*` asserts confidentiality against a hand-built `Keyring` token at `unit` level; no case drives the gateway path with a backend-supplied state |
+| MRTR.2 mint our own envelope, never forward the backend's | backend returns a `requestState` string; the value the client receives is not that string, verifies under our key, and **opens to an envelope carrying the backend's state** — the last clause is what stops a validly-signed empty envelope satisfying the row, which the first two alone permit | component | negative (anti-passthrough) | **not held — see "What self-QA found" below.** `ac_mrtr_2_*` asserts confidentiality against a hand-built `Keyring` token at `unit` level; no case drives the gateway path with a backend-supplied state |
 | MRTR.3 client-presented state is attacker-controlled | four presentations — unsigned, signed by a foreign key, truncated, and tampered-payload-with-valid-tag. At `unit`, each is refused with its own `ContinuationError` variant. At the wire, all four are refused with the *same* message, and a valid continuation must still be accepted | unit + component | negative table-driven + positive control | at `unit` the four variants differ, so a verifier collapsing them fails; at the wire they do not differ, so the positive control is the only thing separating a correct verifier from one that refuses everything |
 | MRTR.4 bound to principal + original request | a continuation minted for principal A and tool T is refused when presented by principal B, and when presented by A against tool U | component | negative pair | the two negatives differ in exactly one field from a positive that must still pass — the positive is what stops a blanket-refusal implementation passing |
 | MRTR.5 single-use + expiry, atomic, across replicas | (a) second redemption of the same handle is refused; (b) a handle past its deadline is refused; (c) two concurrent redemptions on the minting process yield exactly one success; (d) a handle minted by one process is refused by a second process with independent key material | (a)-(c) component; (d) integration | negative + concurrency | (c) fails on a non-atomic ledger; (d) fails if key material is ever shared or if refusal is silent rather than explicit |
@@ -47,6 +47,13 @@ The criterion is about what the *gateway* does when a *backend* hands it a state
 that path — searching every test for a backend-supplied state returns only JSON-shape fixtures. A
 passthrough regression in the gateway would leave all of `ac_mrtr_2_*` green. The row moves from
 held to a case still to write, which makes the cluster ten cases rather than nine.
+
+That case must assert **containment**, not only difference and validity. "Not the
+backend's string, and verifies under our key" is satisfied by an envelope that carries
+nothing at all, and a gateway that dropped the backend's state on the floor would mint
+exactly such an envelope and pass. The assertion is that opening the minted token under
+our key yields the backend's state — difference and validity are then properties of a
+token that also does its job, rather than the whole of the requirement.
 
 **MRTR.10b was understated.** The cited test asserts only that a classifier tells `input_required`
 from `complete` — true, and not the criterion. The criterion is held elsewhere and better:
