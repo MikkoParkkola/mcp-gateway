@@ -357,13 +357,24 @@ derived from unverifiable rows. That is a cheap pass over recorded rows, not new
 engineering, and it comes before the remaining clusters because every cluster
 still to land will otherwise record its evidence the same way.
 
-**A re-derivation is itself a measurement, so it states its run count.** The gate is
-demonstrably non-deterministic — `~/mcp-rel-4-gates.log` recorded `test_rc=101` at
-`2b1f2690` and two later runs of the same binary were green — so a single green run
-re-derives nothing. Each re-derived row records how many runs it rests on. **A row
-whose test is known flaky has no evidence at any run count** until the flake is
-closed: a green run of an intermittent test is a coin, not an observation, and
-averaging coins does not produce a criterion.
+**A re-derivation is itself a measurement, so it states its run count.** The suite
+has been demonstrably non-deterministic: `OBS.1` failed 2 of 8 full runs at
+`2b1f2690`, transcript in `audit-notes/2026-09-04-obs1-flake-transcript.md`. Each
+re-derived row records how many runs it rests on, against this threshold:
+
+- **No recorded non-determinism for that test: one clean run at the exact head**, after
+  a verified red at the earlier revision. The red is what carries the weight; a second
+  green adds nothing a deterministic test can fail to provide.
+- **A test with a recorded flake: the flake is closed first, then twelve consecutive
+  clean full-suite runs.** Twelve is not a ritual — at the 25% rate actually measured
+  here it puts a surviving flake at `0.75^12 = 0.0317`, under 5%. A test with a
+  different measured rate takes the run count that reaches the same bar.
+- **A row whose test is known flaky and unclosed has no evidence at any run count.** A
+  green run of an intermittent test is a coin, and averaging coins does not produce a
+  criterion.
+
+**Each disposition line names an owner** — a cluster, an agent, or a ticket. "Whoever
+picks it up" is how the ten residue rows went a release without one.
 
 1. **Re-derive the recorded rows.** For every row currently MET, name the test, the
    revision at which it was observed red, and the number of runs behind the green.
@@ -372,14 +383,28 @@ averaging coins does not produce a criterion.
    not after it** — `NFR.SEC.2/3/4`, `NFR.OBS.4`, `NFR.PERF.3` and `MRTR.1/3/7/8/10a`
    are the first rows that will be recorded under the new rule, and recording them
    under the old one is the defect this step exists to stop repeating.
-2. **Fix the four known rows.** G row 1 is **measured flaky at 2 failures in 8
-   full-suite runs (25%) at `2b1f2690`**, and the assertion has been made diagnostic
-   (`1b13b255`) so the next red says whether the capture was empty — the tracing
-   harness — or carried records without `protocol_revision` — the record site or an
-   early return in the dispatcher. Until that discriminates, OBS.1 is open on a
-   product defect, not quarantined as a harness artifact. C's `EXT.1` needs the
-   `extensions` field before any test of it can be honest; D needs its two cases
-   written; the matrix needs the observation column.
+2. **Fix the four known rows.** Owners in brackets.
+   - **G row 1 is closed [cluster G].** The diagnostic assertion (`1b13b255`) said
+     `0 record(s) captured` on both failures — the capture, not the record site — and
+     the cause was `tracing`'s process-wide callsite-interest cache: a sibling test
+     reaching the emit site with no subscriber caches the callsite as `never` and every
+     later capture is skipped. `b6836a02` keeps it interested; 12 of 12 clean full-suite
+     runs. Diagnosed and eliminated, so §4's quarantine-or-serialise path does not
+     arise — it is the route for a flake left open, and this one is not. Transcript:
+     `audit-notes/2026-09-04-obs1-flake-transcript.md`.
+   - **C's `EXT.1` needs the `extensions` field on `ServerCapabilities` [cluster C].**
+     That is a protocol-surface change, not a step-2 patch: it lands under cluster C's
+     own gates — DoR `C14` protocol-first (schema and version before implementation)
+     and DoD `D2` compatibility — and this step only records that the row cannot be
+     honest until it does. `TASK.1` records the same blocker from the other side.
+   - **D needs its two cases written [cluster D]**, and the matrix needs the
+     observation column [cluster C, with the conformance matrix].
+   - **`a_shared_extension_is_negotiated` needs its oracle [cluster C, with `EXT.1`].**
+     Both vendors reached it independently: `src/protocol/extensions.rs:169` negotiates
+     a set with itself, so a `negotiate` ignoring its peer argument passes all three
+     cases. AC: an empty gateway set against a peer holding the recognised Tasks
+     extension MUST negotiate to empty. It was named in this document and scheduled
+     nowhere, which is the absent-row failure this section exists to stop.
 3. **Then the outstanding clusters**, in the dependency order already recorded: B
    and C code, D code, the residue's `HEADER.9` — whose design is CONFIRMED unable
    to activate (`resolve_with` holds the era mutex across the probe await,
