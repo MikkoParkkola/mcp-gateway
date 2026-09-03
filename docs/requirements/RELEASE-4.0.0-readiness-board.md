@@ -127,7 +127,7 @@ than what was approved and it is user-visible, so it is not an engineering call.
 |---|---|
 | owner | the operator; put to them 2026-09-03, no answer yet |
 | what would resolve it | the answer itself — an asked question, not a checkable one. No inspection of the tree settles what the product should do for a 2025-era client |
-| when | before `ORDER.2a`/`ORDER.2b` are implemented; nothing else in cluster C waits on it |
+| when | before cluster C's PR opens. No other C row waits on it row-wise, but C ships as one PR (`RELEASE-4.0.0-plan.md:383`) and F waits on C, so an unanswered question holds the default flip and the release behind it |
 | what if it resolves badly | narrow to the modern path only. `ORDER.2` is a 2026-protocol conformance criterion, so meeting it on the modern path alone still closes the row; the cost is an era branch and a connection-invariance property that holds on one path of two |
 
 Recommendation on record: **remove it for every era.** One behaviour, the mechanism
@@ -135,9 +135,11 @@ leaves the tree, and no era condition survives for a later change to get wrong �
 elimination the repair protocol prefers over a patch, taken at the major version where
 a break is cheapest. It needs a migration note either way.
 
-`ORDER.2a` and `ORDER.2b` are the only rows that depend on this. The other five —
-`EXT.1`, `OTEL.1`, `TASK.1`, `SUB.4`, `SUB.2b` — do not, and `EXT.1` is the one to
-start on: the `extensions` field it needs on `ServerCapabilities`
+`ORDER.2a` and `ORDER.2b` are the only rows that depend on this. That is a row-level
+statement and it is weaker than it sounds: cluster C ships as a single PR, so the two
+rows carry the other five with them, and cluster F's default flip waits on C. The other
+five — `EXT.1`, `OTEL.1`, `TASK.1`, `SUB.4`, `SUB.2b` — can be built while the question
+is open, and `EXT.1` is the one to start on: the `extensions` field it needs on `ServerCapabilities`
 (`src/protocol/types.rs:232`) is also `TASK.1`'s blocker from the other side.
 
 `TASK.1` additionally carries an unrepaired cross-principal leak, raised CRITICAL and
