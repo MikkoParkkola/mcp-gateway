@@ -3002,4 +3002,163 @@ mod tests {
         );
         handle.abort();
     }
+    // ── MIK-7212 OBS.1: the observation record on the stdio path ───────────
+    //
+    // Both record sites live in the HTTP handler (`router/handlers.rs:716` for
+    // the revision, `:990` for the tools/list surface). `dispatch_single` is
+    // what the stdio read loop calls and it passes neither, so a stdio session
+    // is observed by nothing. This module pins that gap as a failing assertion
+    // rather than describing it in prose: a criterion nobody can run is a
+    // criterion nobody checks.
+    //
+    // RED ON ARRIVAL, deliberately. The repair is to emit the record from a
+    // place both dispatchers reach; adding the emit is not this change's job.
+    mod stdio_observation {
+        use super::*;
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+        use tracing::field::{Field, Visit};
+        use tracing_subscriber::Registry;
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
+        type Record = HashMap<String, String>;
+
+        #[derive(Default)]
+        struct Fields(Record);
+
+        impl Visit for Fields {
+            fn record_str(&mut self, field: &Field, value: &str) {
+                self.0.insert(field.name().to_string(), value.to_string());
+            }
+
+            fn record_bool(&mut self, field: &Field, value: bool) {
+                self.0.insert(field.name().to_string(), value.to_string());
+            }
+
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                self.0
+                    .insert(field.name().to_string(), format!("{value:?}"));
+            }
+        }
+
+        struct Collector(Arc<Mutex<Vec<Record>>>);
+
+        impl<S: tracing::Subscriber> Layer<S> for Collector {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                if event.metadata().target() != "mcp_gateway::observed" {
+                    return;
+                }
+                let mut fields = Fields::default();
+                event.record(&mut fields);
+                self.0.lock().expect("collector lock").push(fields.0);
+            }
+        }
+
+        /// A field value with any `Debug` quoting removed, so a record written
+        /// through `record_str` and one written through `record_debug` compare
+        /// the same. The test is about which revision was observed, not about
+        /// which `Visit` method the emit site happened to reach.
+        fn value<'a>(record: &'a Record, name: &str) -> &'a str {
+            record.get(name).map_or("", |v| v.trim_matches('"'))
+        }
+
+        /// Runs one request through the real stdio dispatcher under a scoped
+        /// subscriber and returns every `mcp_gateway::observed` record it
+        /// emitted.
+        ///
+        /// Scoped, not global: `with_default` is thread-local and a
+        /// current-thread runtime polls on this thread, so the capture needs no
+        /// process-wide lock and cannot collide with a sibling test.
+        fn records_for(request: &serde_json::Value) -> Vec<Record> {
+            let captured = Arc::new(Mutex::new(Vec::new()));
+            let subscriber = Registry::default()
+                .with(Collector(Arc::clone(&captured)))
+                .with(tracing::level_filters::LevelFilter::DEBUG);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a current-thread runtime");
+            tracing::subscriber::with_default(subscriber, || {
+                runtime.block_on(async {
+                    let meta = test_meta_mcp();
+                    Gateway::dispatch_single(
+                        &meta,
+                        &test_tool_policy(),
+                        &test_mtls_policy(),
+                        request,
+                        "stdio-session",
+                    )
+                    .await
+                });
+            });
+            captured.lock().expect("collector lock").clone()
+        }
+
+        // The capture's own proof. Without it, "no records" is
+        // indistinguishable from "the collector never saw anything", and the
+        // red row below would be pinning a broken fixture instead of a real
+        // gap. Emits the same target the handler emits and asserts it lands.
+        #[test]
+        fn the_capture_sees_a_record_emitted_under_it() {
+            let captured = Arc::new(Mutex::new(Vec::new()));
+            let subscriber = Registry::default()
+                .with(Collector(Arc::clone(&captured)))
+                .with(tracing::level_filters::LevelFilter::DEBUG);
+            tracing::subscriber::with_default(subscriber, || {
+                tracing::info!(
+                    target: "mcp_gateway::observed",
+                    protocol_revision = "2026-07-28",
+                    revision_source = "_meta",
+                    "protocol revision observed"
+                );
+            });
+
+            let records = captured.lock().expect("collector lock").clone();
+            let record = records
+                .iter()
+                .find(|record| record.contains_key("protocol_revision"))
+                .expect("the collector must see a record emitted in its scope");
+            assert_eq!(value(record, "protocol_revision"), "2026-07-28");
+            assert_eq!(value(record, "revision_source"), "_meta");
+        }
+
+        // OBS.1, row 1. A modern stdio request carries its revision in `_meta`,
+        // so the record must name both the revision and the place it came from.
+        // `revision_source` has exactly three values -- `_meta`, `header`,
+        // `none` -- and stdio has no headers, so `_meta` is the only one a
+        // well-formed modern stdio request can produce.
+        #[test]
+        fn ac_obs_1_stdio_records_the_revision_and_that_meta_carried_it() {
+            let records = records_for(&json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "ping",
+                "params": {
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {}
+                    }
+                }
+            }));
+
+            let revision = records
+                .iter()
+                .find(|record| record.contains_key("protocol_revision"))
+                .expect(
+                    "a stdio request must be observed: no record site is reached \
+                     from the stdio dispatcher, so this session is invisible",
+                );
+            assert_eq!(
+                value(revision, "protocol_revision"),
+                "2026-07-28",
+                "the record must carry the revision the request declared"
+            );
+            assert_eq!(
+                value(revision, "revision_source"),
+                "_meta",
+                "stdio has no headers, so a modern request's revision can only \
+                 have come from `_meta`"
+            );
+        }
+    }
 }
