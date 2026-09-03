@@ -152,7 +152,7 @@ alone broadcasts every principal's task status to every listener. It must filter
 requested task ids **and** the authenticated owner. Owned by `TASK.1`'s own increment,
 not by the placement map that found it.
 
-## Cluster D covers one row of CACHE.4 and declares the rest uncovered
+## Cluster D covers one plan row of CACHE.4a and declares the rest uncovered
 
 `tests/mik_7213_acs.rs:363-367` carries a header naming exactly what it covers — test
 plan row `4.b` — and enumerating what it does not: backend pair `4.a`, behavioural
@@ -163,10 +163,20 @@ identities do not collide, and carries two controls: a determinism assertion, so
 cannot pass on a key that is merely different every time, and `key(None) == key(None)`,
 so unidentified callers are not split into a key that can never hit. It can go red.
 
-An earlier revision of this section said the file "contains no case for `CACHE.4a` or
-`CACHE.4b`". The `4.b` half was false and is corrected here; verified at source
-2026-09-03, and `ac_cache_4_two_principals_do_not_share_an_entry` is the only
-`CACHE.4` case in the tree.
+**The plan-row numbering and the criterion suffixes are different namespaces, and
+conflating them reversed this section once already.** Test-plan rows `4.a`-`4.f` all sit
+under criterion `MIK-7213.CACHE.4a` (keyed on every response-varying input); rows
+`4.f.1`-`4.f.3` are the ones that would carry `MIK-7213.CACHE.4b` (the policy epoch).
+So the covered row `4.b` is a row *inside* `CACHE.4a`, and it makes that criterion
+PARTIAL — matching `RELEASE-4.0.0-criteria-status.md:79`, which records the same
+falsification. `CACHE.4b` has **no case at all** (`criteria-status.md:80`, ABSENT: no
+policy epoch participates in `ResponseCache::response_key`).
+
+A revision dated 2026-09-03 claimed the reverse — that a prior "no case for `CACHE.4b`"
+statement was false — and that claim was itself wrong, verified at source 2026-09-04
+against both the requirements table (`RELEASE-4.0.0-requirements.md:153-154`) and the
+test file's own header. `ac_cache_4_two_principals_do_not_share_an_entry` is the only
+`CACHE.4` case in the tree, and it is a `CACHE.4a` case.
 
 D's real gap is `4.a` and `4.c`-`4.f`, and it is a **declared** gap — enumerated in a
 comment, visible to anyone opening the file, producing no false coverage signal. That
@@ -297,7 +307,7 @@ different means, and they are one defect:
 | where | what the evidence named | why it could not fail |
 |---|---|---|
 | C, `EXT.1` | four `ac_ext_1_*` cases, `tests/mik_7272_exploit_acs.rs:18-60` | they call `gateway_declares()`; the criterion is about the `extensions` field on `ServerCapabilities` (`src/protocol/types.rs:231-253`), which has no such field. The tests exercise a helper beneath the subject |
-| D, `CACHE.4a` | `tests/mik_7213_acs.rs` | the file contains no case for it. `CACHE.4b` is **not** in this row: its principal-key case exists, as this document already establishes above, and stating *neither* here contradicted that correction two sections earlier |
+| D, `CACHE.4b` | `tests/mik_7213_acs.rs` | the file contains no case for it — the policy epoch (plan rows `4.f.1`-`4.f.3`) is unimplemented and unkeyed. `CACHE.4a` is **not** in this row: one of its plan rows (`4.b`, authorization binding) has a falsified case, which makes it PARTIAL rather than uncovered |
 | G, `OBS.1` row 1 | `cargo test --lib stdio_observation`, 2 passed at `4b522687` | module-scoped, and the test is flaky under parallelism — one full `--lib` run on that binary fails it, two others pass |
 | the matrix itself | `matrix_has_no_empty_cells`, `tests/mik_7272_conformance.rs:183` | it asserts a cell is *non-empty*. Not that the named test exists; not that it asserts the criterion |
 
