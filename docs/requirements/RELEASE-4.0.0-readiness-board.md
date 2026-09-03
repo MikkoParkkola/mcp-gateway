@@ -336,11 +336,27 @@ until they are re-derived. That is a cheap pass over recorded rows, not new
 engineering, and it comes before the remaining clusters because every cluster
 still to land will otherwise record its evidence the same way.
 
-1. **Re-derive the recorded rows.** For every row currently MET, name the test and
-   the revision at which it was observed red. No observation on record -> the row
-   returns to open. This is the pass that tells us the real blocking count.
-2. **Fix the four known rows.** G row 1 needs its mechanism diagnosed (isolated
-   green / in-suite red is a live probe, not a conclusion); C's `EXT.1` needs the
+**A re-derivation is itself a measurement, so it states its run count.** The gate is
+demonstrably non-deterministic — `~/mcp-rel-4-gates.log` recorded `test_rc=101` at
+`2b1f2690` and two later runs of the same binary were green — so a single green run
+re-derives nothing. Each re-derived row records how many runs it rests on. **A row
+whose test is known flaky has no evidence at any run count** until the flake is
+closed: a green run of an intermittent test is a coin, not an observation, and
+averaging coins does not produce a criterion.
+
+1. **Re-derive the recorded rows.** For every row currently MET, name the test, the
+   revision at which it was observed red, and the number of runs behind the green.
+   No observation on record -> the row returns to open. This is the pass that tells
+   us the real blocking count. **Cluster A's nine evidence rows belong in this step,
+   not after it** — `NFR.SEC.2/3/4`, `NFR.OBS.4`, `NFR.PERF.3` and `MRTR.1/3/7/8/10a`
+   are the first rows that will be recorded under the new rule, and recording them
+   under the old one is the defect this step exists to stop repeating.
+2. **Fix the four known rows.** G row 1 is **measured flaky at 2 failures in 8
+   full-suite runs (25%) at `2b1f2690`**, and the assertion has been made diagnostic
+   (`1b13b255`) so the next red says whether the capture was empty — the tracing
+   harness — or carried records without `protocol_revision` — the record site or an
+   early return in the dispatcher. Until that discriminates, OBS.1 is open on a
+   product defect, not quarantined as a harness artifact. C's `EXT.1` needs the
    `extensions` field before any test of it can be honest; D needs its two cases
    written; the matrix needs the observation column.
 3. **Then the outstanding clusters**, in the dependency order already recorded: B
@@ -348,3 +364,32 @@ still to land will otherwise record its evidence the same way.
    to activate (`resolve_with` holds the era mutex across the probe await,
    `src/protocol/era.rs:150-161`) and needs an elimination and a fresh round, not a
    patch — and `NFR.COMPAT.1` last, since the default flip cannot precede A and C.
+
+### Three blocking items the order above did not carry
+
+They are listed apart because each was absent, not deprioritised, and an absent row
+is the failure mode this whole section is about.
+
+**`NFR.PERF.1` is deferred, with the four fields a deferral owes.** It has sat as
+PARTIAL against an end-to-end 3.5.0 comparison that exists at no version of this
+repository, which is a residual-risk paragraph, and §P1 says that is not a state.
+Owner: cluster E. What resolves it: build the client-to-backend harness against the
+3.5.0 tag and measure P50/P99, or rewrite the criterion to name the component work
+the current harness actually produces. When: before the tag, after cluster A merges,
+since the path it would measure is A's. If it resolves badly — the 3.5.0 harness
+cannot be built, or the comparison regresses — the criterion is rewritten to the
+component estimator with the change recorded, rather than being carried as PARTIAL
+into the release.
+
+**The residue is ten rows and only `HEADER.9` had a step.** The triage
+(`591194c2`, `RELEASE-4.0.0-residue-triage.md`) split them DESIGN 5 / TEST 3 / CODE 2.
+`CONTROL.3a` and `CONTROL.4` are designed and reviewed (`7159cdfd`, nine findings
+repaired) and need test plans; the reaper TTL that blocked `CONTROL.4` is ruled at
+300s sharing `PER_USER_IDLE_TTL`. `NFR.PERF.4` is a surface decision — the 17th meta
+tool against the documented 14-16 ceiling — not a measurement. The three TEST rows
+queue behind whichever cluster owns their file. Each remaining row gets one line of
+disposition in the same pass as step 1; a row with no line is open, not silent.
+
+**Cluster F's second row.** `NFR.COMPAT.4` has a design
+(`2026-09-02-conformance-matrix.md`) and no test plan, and it does not wait on A or C
+the way `NFR.COMPAT.1` does. It can start whenever someone picks it up.
