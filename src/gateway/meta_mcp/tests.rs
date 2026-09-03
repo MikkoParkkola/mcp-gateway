@@ -3378,6 +3378,46 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
         .expect("the envelope must be bound to this caller and this request");
 }
 
+// MRTR.8, plan row 309. Abandonment costs nothing *because minting stores
+// nothing*, so this asserts on the collection a mint could wrongly touch,
+// taken after a mint that demonstrably happened. Opening the envelope is what
+// makes the emptiness mean something: an empty ledger is also what a build
+// that minted nothing at all looks like.
+//
+// The ledger and not `in_flight`: a mint and an opened exchange are distinct
+// events, and this one call is both. `ConsumedLedger` records *spent* tokens,
+// so an unretried mint must leave it empty; the in-flight slot the same call
+// occupies is `ac_mrtr_8_an_exchange_the_gateway_opened_occupies_a_slot`'s
+// property, in the opposite direction. Asserting "nothing anywhere" here would
+// contradict that row the day the hold is wired.
+#[tokio::test]
+async fn a_continuation_that_is_never_retried_stores_nothing_gateway_side() {
+    let meta = MetaMcp::new(backend_asking_for_elicitation());
+    let declared = vec!["elicitation".to_string()];
+    let result = meta
+        .invoke_tool(
+            &book_flight(),
+            Some("session-1"),
+            &allow_all_ctx_declaring(&declared),
+        )
+        .await
+        .expect("a declared capability must not be refused");
+    let state = result["requestState"]
+        .as_str()
+        .expect("an interim result must carry a requestState");
+    meta.continuation()
+        .keyring()
+        .open(state, crate::protocol::continuation::now_unix_secs())
+        .expect("the mint must have happened, or the emptiness below proves nothing");
+
+    assert_eq!(
+        meta.continuation().ledger().len().await,
+        0,
+        "a continuation nobody retried must not be recorded as spent; the \
+         ledger holds redeemed tokens, and minting one is not redeeming it"
+    );
+}
+
 // The third thing that must not survive the refusal: the idempotency key.
 // After dispatch the gateway settles the key as completed so that a
 // post-dispatch gate cannot readmit a retry that would repeat the side effect.
