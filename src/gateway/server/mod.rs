@@ -3080,6 +3080,21 @@ mod tests {
         /// current-thread runtime polls on this thread, so the capture needs no
         /// process-wide lock and cannot collide with a sibling test.
         fn records_for(request: &serde_json::Value) -> Vec<Record> {
+            // `tracing` caches each callsite's interest process-wide. A sibling
+            // test that reaches the emit site while no subscriber is installed
+            // caches `never`, and every later capture on every thread is then
+            // skipped -- measured at 2 failures in 8 full-suite runs before this
+            // line existed. A global subscriber that is interested keeps the
+            // cached interest at `sometimes`, so the thread-local subscriber
+            // below decides each event. Interest, not delivery: this one
+            // discards, `with_default` still owns what the test sees.
+            static INTEREST: std::sync::Once = std::sync::Once::new();
+            INTEREST.call_once(|| {
+                let _ = tracing::subscriber::set_global_default(
+                    Registry::default().with(tracing::level_filters::LevelFilter::DEBUG),
+                );
+            });
+
             let captured = Arc::new(Mutex::new(Vec::new()));
             let subscriber = Registry::default()
                 .with(Collector(Arc::clone(&captured)))
