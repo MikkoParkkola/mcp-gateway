@@ -158,7 +158,7 @@ not by the placement map that found it.
 
 ## Cluster D covers one plan row of CACHE.4a and declares the rest uncovered
 
-`tests/mik_7213_acs.rs:363-367` carries a header naming exactly what it covers — test
+The `MIK-7213.CACHE.4` header in `tests/mik_7213_acs.rs` names exactly what it covers — test
 plan row `4.b` — and stating that every other CACHE.4 row is uncovered, pointing at
 the plan rather than copying the list. It copied it until 2026-09-04, and the copy
 dropped `4.g` twice. `ac_cache_4_two_principals_do_not_share_an_entry` (:371) calls

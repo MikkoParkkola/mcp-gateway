@@ -363,8 +363,8 @@ fn ac_cache_3_every_cacheable_method_has_an_assessed_row() {
 // ===========================================================================
 // MIK-7213.CACHE.4 — one row per response-varying input.
 // Test plan row 4.b (auth binding) is the only CACHE.4 row covered here. Every
-// other row of the plan's CACHE.4 section -- 4.a and 4.c through 4.o, plus the
-// whole 5.x series -- is uncovered by this file and is not claimed otherwise.
+// other row of the plan's CACHE.4 section is uncovered by this file and is not
+// claimed otherwise.
 // The plan is the authority for that list and names each row's criterion in its
 // own first column: docs/design/2026-08-31-cluster-f-response-cache-keying-test-plan.md.
 // Do not re-enumerate the rows here. A hand-copied list drifted twice, and both
