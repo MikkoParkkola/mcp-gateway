@@ -32,7 +32,7 @@
 //!
 //! ## This file is RED on purpose, and may not merge alone
 //!
-//! 14 of the 19 cases fail today, all on the same cause: the retry route
+//! 15 of the 19 cases fail today, all on the same cause: the retry route
 //! answers every presentation with the blanket `-32602` above, so no guard is
 //! ever reached. They were written before the wiring so their first failure is
 //! free — a case written afterwards is drafted against code its author has
@@ -455,11 +455,10 @@ async fn ac_mrtr_5a_a_handle_is_refused_on_its_second_redemption() {
 /// guard, which would leave this case green in a build with no deadline check at
 /// all. Deriving the fields makes that drift unconstructible.
 ///
-/// The `jti` is the one derived field that must not be inherited. `mint_for`
-/// left its jti with an exchange still open, so re-presenting it would stage a
-/// second defect — a replay — and a build that refused replays before deadlines
-/// would answer this case without ever reading `expires_at`. A fresh jti leaves
-/// the deadline as the only thing wrong with the handle.
+/// The `jti` is inherited with the rest. It is unconsumed and its exchange is
+/// still open, which is what a legitimate retry carries — presenting it is a
+/// first presentation, not a replay, so it stages no second defect for a guard
+/// to refuse ahead of the deadline.
 ///
 /// `assert_refused_by_the_continuation_guard` cannot name the reason: every
 /// `ContinuationError` variant renders to one client sentence by design
@@ -482,7 +481,6 @@ async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
     let expired = Payload {
         issued_at: now - 7200,
         expires_at: now - 3600,
-        jti: "a-handle-nobody-has-presented".to_string(),
         ..minted
     };
     let handle = state
