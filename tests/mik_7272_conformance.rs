@@ -180,10 +180,19 @@ const MINOR: &[Row] = &[
         requirement: "MIK-7272.EXT.1",
         role: Role::Both,
         transport: Transport::Any,
-        evidence: &[
-            "mik_7272_exploit_acs::ac_ext_1_the_gateway_declares_its_extensions",
-            "mik_7272_exploit_acs::ac_ext_1_an_unsupported_extension_reverts_to_core_behaviour",
-        ],
+        // Deliberately empty, and this row is therefore red. The two tests
+        // named here until now exercised `ExtensionSet` negotiation and never
+        // the `extensions` field on serialised capabilities, which is what this
+        // statement is about — so the cell asserted coverage that did not
+        // exist, and the assertion below could not tell, because it checks that
+        // a string was written and not that the string names a test.
+        //
+        // The honest evidence is E1-E5 of
+        // `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`.
+        // Naming them before they exist would keep the suite green while
+        // pointing at nothing, which is the same defect with a later date on
+        // it. Cluster B closes this cell when it writes them.
+        evidence: &[],
     },
     Row {
         statement: "2. OpenTelemetry trace context propagation through _meta",

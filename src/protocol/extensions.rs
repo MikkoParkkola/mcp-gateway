@@ -56,6 +56,11 @@ impl ExtensionSet {
     /// required fields and the shape of the failure payload, and advertising the
     /// identifier before that is fixed would break a client that trusted it. Wire this
     /// up as part of MIK-7311, not before.
+    ///
+    /// It is therefore uncalled *and* untested on purpose — a guard holding the
+    /// identifier's shape until the behaviour behind it exists, not dead code
+    /// left behind. The test that once called it went to MIK-7311 with the rest
+    /// of the tasks extension.
     #[must_use]
     pub fn gateway_declares() -> Self {
         Self {
@@ -113,5 +118,69 @@ impl ExtensionSet {
                 .filter(|extension| peer.contains(*extension))
                 .collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // These came from `tests/mik_7272_exploit_acs.rs`, where they sat under a
+    // `MIK-7272.EXT.1` banner they could not honour: EXT.1 is about the
+    // `extensions` field on serialised `ServerCapabilities`, which this module
+    // never touches. They are unit tests of negotiation and always were. The
+    // banner was the defect, not the assertions.
+    //
+    // EXT.1's own evidence is cases E1-E5 of
+    // `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`,
+    // which are red on HEAD by design. Nothing here is expected to fail today.
+    //
+    // Both sides are built through `from_capabilities` on purpose. Using
+    // `gateway_declares` for the gateway side would pin these to a static list
+    // that MIK-7311 changes, and would test policy where the subject is
+    // mechanism.
+
+    fn peer(capabilities: Value) -> ExtensionSet {
+        ExtensionSet::from_capabilities(&capabilities)
+    }
+
+    #[test]
+    fn an_extension_the_peer_does_not_support_is_not_negotiated() {
+        // The specification: if one party supports an extension and the other
+        // does not, the supporting party MUST either revert to core behaviour
+        // or reject the request. Reverting is the choice here — rejecting would
+        // refuse a conforming client for declining something optional.
+        let client = peer(json!({ "extensions": {} }));
+        assert!(!client.contains(Extension::Tasks));
+
+        let gateway = peer(json!({
+            "extensions": { "io.modelcontextprotocol/tasks": {} }
+        }));
+        assert!(
+            gateway.negotiate(&client).is_empty(),
+            "an extension the client does not support is not used on that request"
+        );
+    }
+
+    #[test]
+    fn a_shared_extension_is_negotiated() {
+        let both = json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } });
+        let negotiated = peer(both.clone()).negotiate(&peer(both));
+        assert!(negotiated.contains(Extension::Tasks));
+    }
+
+    #[test]
+    fn an_extension_only_the_peer_has_is_not_acquired() {
+        // Negotiation is an intersection, not a union. A peer declaring
+        // something this gateway cannot do must not make the gateway claim it,
+        // and an identifier we do not know is dropped on the way in.
+        let client = peer(json!({ "extensions": { "com.example/not-ours": {} } }));
+        assert!(client.is_empty());
+
+        let gateway = peer(json!({
+            "extensions": { "io.modelcontextprotocol/tasks": {} }
+        }));
+        assert!(gateway.negotiate(&client).is_empty());
     }
 }
