@@ -376,3 +376,36 @@ rather than the mode axis, and the conversion it removes is three arms of a
 match with no caller string in it. Recorded as an observation rather than a
 ticket: the disposal a finding earns when it is worth remembering and nobody
 must act.
+
+### Implementation review
+
+One dual-vendor round on the implementation diff (`ccf56e9f~1..216579e4`, source
+and tests only). Codex/GPT returned SHIP-WITH-FIXES on one finding; Kimi
+returned SHIP, finding the gate fail-closed and its tests unable to pass with
+the gate broken.
+
+**Closed at source — an explicit `null` mode was said to bypass the gate.** The
+finding reads `mode: null` as slipping past a closed gate. It does not. The
+spec's request table makes `mode` *"Optional for form mode (defaults to `form`
+if omitted)"*, `Option<&Value>` cannot distinguish an absent key from a null
+one, and the spec draws no distinction between them either — so a null mode is
+a form-mode request, and a form-mode request is still gated on the client's
+form flag. A client that declared only `url` refuses it. The finding's stated
+impact — reaching clients that never declared support — does not hold, so the
+finding closes without a repair. The second vendor found no defect on that
+path.
+
+**Observation — the router's capability wiring has no direct test.** Raised as
+an improvement against `handlers.rs`, where the declared flags are read into the
+caller context. The wiring predates this change: the diff touches those two
+lines type-only, and no test named that handler before it either. Out of §P0
+scope, recorded here rather than filed — the gap is real, nobody must act on it
+today, and a ticket would cost a human's attention forever for a line this
+paragraph already carries.
+
+**Applied — two coverage findings.** The matrix now asserts *which* refusal each
+row lands in rather than only that one occurred, and the unrecognised-mode arm
+gained an end-to-end test pinning that the backend's own mode string never
+reaches the client. Both were places a test could have passed for the wrong
+reason. Verified by falsifier probe: disarming the gate fails the new test on
+its own assertion, and restoring it passes.
