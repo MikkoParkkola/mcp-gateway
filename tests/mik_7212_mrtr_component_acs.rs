@@ -266,9 +266,12 @@ fn error_message(response: &Value) -> Option<String> {
 
 /// THEN: the continuation guard refused this handle.
 ///
-/// Asserted on the guard's own sentence, not on the fact of a refusal. The
-/// blanket refusal at `handlers.rs:1051-1067` answers every retry, so
-/// `is_err()` would pass today against a build that never looks at the handle.
+/// Asserted on the guard's own sentence, not on the fact of a refusal. An
+/// `is_err()` assertion is satisfied by any build that refuses every retry
+/// without ever reading the handle — the blanket refusal these cases were
+/// written against, retired in `a69e2bc5`. Naming the sentence is what makes a
+/// pass mean the guard ran, and a blanket refusal is exactly the thing that
+/// gets reintroduced by accident.
 ///
 /// It cannot say *which* guard refused, and no assertion here can:
 /// `ContinuationError::client_message` (`src/protocol/continuation.rs:234-236`)
@@ -646,12 +649,11 @@ async fn fixture_control_a_fresh_call_reaches_the_backend() {
 /// declined to dispatch. This one can, because it is the only case where the
 /// retry route is expected to arrive.
 ///
-/// **Expected RED until the retry route is wired.** Today `handlers.rs`
-/// answers every retry with the blanket `-32602 "retry forwarding is not
-/// available on this build"`, so the recorder stays empty. That red is the
-/// point: when it turns green the other cases' empty recorders start carrying
-/// information, and until it does they are marked as vacuous rather than
-/// mistaken for evidence.
+/// This was RED until `a69e2bc5` wired the retry route — `handlers.rs` answered
+/// every retry with a blanket `-32602` and the recorder never filled. Green is
+/// what licenses the rest: while this case fails, every "the backend received
+/// nothing" assertion in the file is vacuous rather than evidence, so a
+/// regression here silently empties the others of meaning.
 #[tokio::test]
 async fn fixture_control_a_valid_retry_reaches_the_backend() {
     let (state, received) = state_with_fixture().await;
