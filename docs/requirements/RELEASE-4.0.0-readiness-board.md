@@ -226,11 +226,42 @@ the green tick both say covered while nothing declares the gap.
 
 The discriminating check is cheap and mechanical, and is what cleared cluster D: for
 each criterion, name the observable the criterion is about, then confirm some test
-touches *that* rather than a helper beneath it. Worth running over the other clusters —
-but on one instance, not on a count of two.
+touches *that* rather than a helper beneath it.
 
-The four `ac_ext_1_*` cases cite `RELEASE-4.0.0-test-plan.md` §"Increment 10" in their
-own header, so the repair belongs to whoever owns that plan.
+Running it one level up found the second instance, and it is the more consequential of
+the two. `tests/mik_7272_conformance.rs:177-186` carries a `MINOR` row for
+`MIK-7272.EXT.1` whose evidence cell names exactly the two `ac_ext_1_*` cases above —
+the ones that do not exercise the criterion. So the row is already false, before anyone
+touches it. The cell's type is `&'static [&'static str]`: nothing resolves a name to a
+test function, and the file's own assertion (`:298-303`) filters on
+`row.evidence.is_empty()`, which requires only that a name was *written*. A manifest
+that checks for the presence of a string cannot tell a citation from a typo, and cannot
+tell either from a test that exists and proves something else. Deleting or relocating
+those two cases leaves both strings passing while pointing at an address that no longer
+exists.
+
+That matters beyond one row because four release documents cite this file as the
+conformance evidence — `RELEASE-4.0.0-gap-plan.md`, `-criteria-status.md`,
+`-dod-check.md` and `-cluster-c-readiness.md`. The chain is: a criterion is marked met
+because the manifest cites a test, and the manifest cites a test because a string was
+typed into an array. At no point does anything read the test.
+
+So the class has two forms, and the check that finds them differs. The first form is a
+test that runs and asserts the wrong observable — found by reading tests as tests. The
+second is a citation nobody dereferences — found by resolving every evidence string to
+the function it names and reading that function against its criterion. The second check
+has not been run over the remaining rows of that manifest; until it is, no row in it is
+evidence of anything, including the rows that are almost certainly fine.
+
+Disposal of the four `ac_ext_1_*` cases is assigned. They are the only coverage
+`negotiate()`, `from_capabilities()` and `contains()` have — `src/protocol/extensions.rs`
+is 117 lines with zero `#[test]` — so the answer is to move them into the module as unit
+tests and drop the criterion header that is the actual defect, not to delete them. The
+red-on-HEAD cases for EXT.1 already exist as E1-E5 in
+`docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md` §3, which
+has been through dual review; writing more would duplicate them. `MINOR` row 1's
+evidence cell has no honest value until those are written, and blanking it fails the
+file's own assertion by design.
 
 ## PR #473 is the wrong shape for the merge strategy already chosen
 
