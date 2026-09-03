@@ -78,7 +78,7 @@ than failing. The test plan now carries the wiring case that none of the three s
 
 ### One thread that looked in flight and was not
 
-The cluster-C era-detection design is written: `docs/design/2026-08-31-discover-outbound-era-probe.md`.
+The era-detection design (MIK-7217, rollup cluster B) is written: `docs/design/2026-08-31-discover-outbound-era-probe.md`.
 An earlier revision of this file recorded it as never started, because the subagent briefed to
 write it died on an output ceiling and a task ID that stops resolving was read as evidence the
 work stopped. The NFR sweep briefed alongside it had also returned. Neither absence was real.
@@ -88,6 +88,27 @@ recorded as MISSING, not as passed: the Codex run produced no verdict line and t
 reviewer stopped inside its own preamble. A verdict scraped from the body of a review whose
 subject is verdict-keeping is exactly the failure the verdict-authority rule exists to prevent,
 so nothing is claimed for it here.
+
+## The gap the ledger cannot count: none of this has been delivered
+
+Every criterion in `RELEASE-4.0.0-criteria-status.md` is a statement about the code. None of
+them is a statement about where the code lives. At the time of writing the branch is 816 commits
+ahead of `main`, PR #473 is open, and 16 commits sit on this disk and nowhere else
+(`git rev-list --count HEAD --not --remotes`). All 44 blocking rows could turn green and the
+release would still not exist, because the delivery chain in
+`rules-source/workflows/quality-gates-dod.md` stops at step 1.
+
+Two consequences the cluster plan below does not otherwise reach.
+
+An 816-commit pull request is not reviewable as one unit, and the second-opinion gate is a
+review of the change, not of the diff statistics. Whether the release lands as one merge or as a
+sequence of them is an operator decision that has not been made, and it decides how much of the
+work below can proceed in parallel.
+
+`NFR.COMPAT.1` — flipping `server.modern_protocol` to true at `src/config/mod.rs:1174` — is the
+point at which unmerged stops being bookkeeping. Until it flips, every gap in the revision
+surface is dormant. After it flips, each one is a first-run defect for anyone who upgrades. That
+row must therefore be the last thing to land, not merely a late one.
 
 ## The shape of the problem
 
