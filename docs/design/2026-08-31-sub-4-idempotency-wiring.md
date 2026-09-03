@@ -181,10 +181,10 @@ otherwise.
 | What capacity bound, and what happens at the bound? | CHECKED `src/config/features/cache.rs:12` and `src/cache.rs:185-204`: bound 10_000, policy evict-oldest. CHANGED: take the number, reject the policy, fail closed. | RESOLVED |
 | Does a configured backend timeout exceed `IN_FLIGHT_TIMEOUT`? | CHECKED. Per-backend `timeout` defaults to 30s (`src/config/mod.rs:1383`), enforced at `src/transport/http/mod.rs:305`; the server's `request_timeout` is also 30s (`src/config/mod.rs:1178`). CHANGED: P7 is out of reach at defaults and reachable only by configuration, so its fix shrinks to a config-load validation. | RESOLVED |
 
-Nothing is deferred. One question is asked and unanswered; the assumption standing in for it is
-labelled as an assumption everywhere it is used, and no code lands until it is confirmed. That row
-is blocked, not deferred - deferral would need the four fields the process demands, and the honest
-position is that it is simply waiting on a person.
+Nothing is deferred, and nothing is open. Every row above is RESOLVED; the first was answered on
+2026-08-31 and the code it gated is unblocked. A paragraph here used to record the state before that
+answer arrived, and read as a live block on a row the table calls settled. It is deleted rather than
+amended, because a reader who reached it first stopped there.
 
 ## Test plan
 
