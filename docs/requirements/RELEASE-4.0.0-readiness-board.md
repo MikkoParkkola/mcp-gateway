@@ -297,7 +297,7 @@ different means, and they are one defect:
 | where | what the evidence named | why it could not fail |
 |---|---|---|
 | C, `EXT.1` | four `ac_ext_1_*` cases, `tests/mik_7272_exploit_acs.rs:18-60` | they call `gateway_declares()`; the criterion is about the `extensions` field on `ServerCapabilities` (`src/protocol/types.rs:231-253`), which has no such field. The tests exercise a helper beneath the subject |
-| D, `CACHE.4a`/`CACHE.4b` | `tests/mik_7213_acs.rs` | the file contains no case for either criterion |
+| D, `CACHE.4a` | `tests/mik_7213_acs.rs` | the file contains no case for it. `CACHE.4b` is **not** in this row: its principal-key case exists, as this document already establishes above, and stating *neither* here contradicted that correction two sections earlier |
 | G, `OBS.1` row 1 | `cargo test --lib stdio_observation`, 2 passed at `4b522687` | module-scoped, and the test is flaky under parallelism — one full `--lib` run on that binary fails it, two others pass |
 | the matrix itself | `matrix_has_no_empty_cells`, `tests/mik_7272_conformance.rs:183` | it asserts a cell is *non-empty*. Not that the named test exists; not that it asserts the criterion |
 
@@ -349,9 +349,11 @@ holding the recognised Tasks extension must negotiate to empty.
 
 ### What this changes about the order of work
 
-The blocking count does not move; the confidence in it does. Rows recorded MET on
-evidence of this shape are unverified, not met, and the release cannot be assessed
-until they are re-derived. That is a cheap pass over recorded rows, not new
+**The blocking count is provisional until step 1 runs.** Rows recorded MET on
+evidence of this shape are unverified, not met, so the count can only rise, and by
+an amount this document cannot state in advance — that is what step 1 is for. No new
+engineering is implied; the release simply cannot be assessed against a number
+derived from unverifiable rows. That is a cheap pass over recorded rows, not new
 engineering, and it comes before the remaining clusters because every cluster
 still to land will otherwise record its evidence the same way.
 
