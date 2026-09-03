@@ -23,7 +23,7 @@ to do it.
 | D | response-cache keying (MIK-7213) | 2 | yes — `2026-08-31-cluster-f-response-cache-keying.md` | yes — same stem, `-test-plan.md` | **yes, 2026-09-03** — both legs `process_status: ok`, both SHIP-WITH-FIXES (codex-default 14:36:33Z, Kimi-K3 14:43:16Z) | no | **implementation, which has not started.** Nine findings were raised, verified at source and repaired in `c9aba700`; both vendors converged on one class — an authorization denial bypassed, or unproven, on a cached hit. The confirmation round found three defects the repair itself introduced (a stale row count, a duplicated row identifier, two rows missing a column), repaired in `acd7ba2a`. Kimi confirmed all nine closed; GPT's confirmation leg is `ERROR` on a vendor outage and sits under the finder-unavailability clock, which does not reopen a gate both vendors passed |
 | E | performance measurement | 1 | n/a — this is a measurement, not a design | n/a | n/a | n/a | **run on Spark 2026-09-03**, `32f135a6` against `5c29494a`, recorded in `RELEASE-4.0.0-performance.md`. `NFR.PERF.2` is MET. `NFR.PERF.1` stays open as PARTIAL: no shared case regressed near either budget, but criterion measures in-process component work, so the P50 and P99 the clause names have no value. Closing it needs an end-to-end client-to-backend comparison against a 3.5.0 binary, which exists at no version of this repository |
 | F | compatibility facts | 2 | `NFR.COMPAT.4` only — `2026-09-02-conformance-matrix.md` | no | no | no | `NFR.COMPAT.1` is a one-line default flip that cannot land before **both** cluster A and cluster C merge — default-on turns every unwired gap in the revision surface into a first-run defect, exactly as it does for the continuation path |
-| G | stdio dispatch | 3 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | **row 1 done** — `d306c7e8` put the record site on the path both dispatchers take; `cargo test --lib stdio_observation` gives 2 passed, 0 failed, verified at `4b522687` | the remaining two rows, which queue behind the gate as planned, plus a third the MRTR work surfaced: `src/gateway/server/mod.rs:1748` hardcodes `retry: &NO_RETRY`, so a stdio client can never present a retry at all. Same defect class as cluster A's prefix exemption — a whole category of callers silently dropped — and it belongs to G's design, not to A's change. Cluster A's branch no longer carries a red test from G |
+| G | stdio dispatch | 3 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | **row 1 REOPENED 2026-09-03** — `d306c7e8` put the record site on the path, but the evidence behind it cannot see the defect it is supposed to exclude. `cargo test --lib stdio_observation` gives 2 passed **in isolation**; the same binary on the same machine running `cargo test --lib` gives `3897 passed; 1 failed`, and the one failure is `ac_obs_1_stdio_records_the_revision_and_that_meta_carried_it` panicking on its own message — *no record site is reached from the stdio dispatcher*. The test is **flaky under parallelism**, not order-dependent: the same binary gives `--test-threads=1` green, a repeat parallel run green, and one parallel run red. A module-scoped run cannot observe that, so the row has no evidence — and no single green run can supply it, whatever the mechanism turns out to be | the remaining two rows, which queue behind the gate as planned, plus a third the MRTR work surfaced: `src/gateway/server/mod.rs:1748` hardcodes `retry: &NO_RETRY`, so a stdio client can never present a retry at all. Same defect class as cluster A's prefix exemption — a whole category of callers silently dropped — and it belongs to G's design, not to A's change. Cluster A's branch no longer carries a red test from G |
 | — | residue | 10 | **triaged `591194c2`** into DESIGN 5 / TEST 3 / CODE 2 (`RELEASE-4.0.0-residue-triage.md`); `CONTROL.3a`+`CONTROL.4` designed in `7159cdfd` | no | **yes** for the caller-identity design — both legs SHIP-WITH-FIXES, 9 findings repaired | no | `HEADER.9a/9b` is **designed and owned** — `2026-09-03-header-9-era-conditional-outbound.md`, owner `design-residue`, on `fix/mrtr2-continuation-handle` (unpushed, parent `20ff255f`). Round 3 was declared VOID under §PA when a commit moved the tree mid-read; the re-run at `11e9b613` is valid and both legs are SHIP-WITH-FIXES. It does not close: a CONFIRMED HIGH says the mechanism cannot activate — `resolve_with` holds the era mutex across the probe await (`src/protocol/era.rs:150-161`) while the probe's own request reaches `request_with_headers`, which is where the design puts its `cached()` read, so the probe blocks on its own guard, times out at 2s and resolves Legacy forever. The repair is an elimination and a fresh round, not a patch. Still true and still worth stating: the `mrtr-9a-*` agents own **MRTR.9a**, a different criterion. The reaper TTL that blocked `CONTROL.4` is ruled: 300s, sharing `PER_USER_IDLE_TTL` (`src/gateway/server/mod.rs:1988`) rather than a second retention number |
 
 The `rows` column sums to the ledger's blocking count, which
@@ -287,3 +287,64 @@ So the gate is right and the branch is too big. Deciding what to do about #473 i
 operator's, and it is on the release critical path because nothing pushes until it is
 settled. Recorded here rather than filed: the decision is one a human makes, and a ticket
 would only restate this paragraph.
+
+## The release's real blocker is the evidence rule, not any one cluster
+
+Four rows in three clusters were recorded MET or covered on evidence that could
+not have caught the thing the criterion forbids. They were found separately, by
+different means, and they are one defect:
+
+| where | what the evidence named | why it could not fail |
+|---|---|---|
+| C, `EXT.1` | four `ac_ext_1_*` cases, `tests/mik_7272_exploit_acs.rs:18-60` | they call `gateway_declares()`; the criterion is about the `extensions` field on `ServerCapabilities` (`src/protocol/types.rs:231-253`), which has no such field. The tests exercise a helper beneath the subject |
+| D, `CACHE.4a`/`CACHE.4b` | `tests/mik_7213_acs.rs` | the file contains no case for either criterion |
+| G, `OBS.1` row 1 | `cargo test --lib stdio_observation`, 2 passed at `4b522687` | module-scoped, and the test is flaky under parallelism — one full `--lib` run on that binary fails it, two others pass |
+| the matrix itself | `matrix_has_no_empty_cells`, `tests/mik_7272_conformance.rs:183` | it asserts a cell is *non-empty*. Not that the named test exists; not that it asserts the criterion |
+
+Both vendors reached the fourth row independently on 2026-09-03 (`process_status:
+ok`, identical 10176-byte material, both SHIP-WITH-FIXES). GPT rates it HIGH and
+CERTAIN: *EXT.1 can remain untested while the release gate appears purposeful.*
+Kimi reaches the same place from the other side: *a requirement can claim coverage
+from miscited or nonexistent tests and stay green — the exact failure this change
+found by hand.*
+
+**Making evidence strings resolve to real test names is a patch, and both vendors
+proposed it.** Apply the repair-protocol test — after the fix, can the finding
+still be stated? Yes: a test that exists, compiles and passes while asserting
+nothing about its criterion satisfies a name-resolution check exactly as well as a
+real one. Three of the four rows above would have survived it. Only the D row,
+where the named test is simply absent, would have been caught.
+
+What eliminates it is the rule `development-process.md` §P2 already states and
+this release has not been applying: **a criterion's evidence is a test that has
+been observed to fail for that criterion.** The row carries the observation, not
+the name — the revision the defect was present at, and the assertion that fired.
+A row whose test has never been seen red is a row with no evidence, and that is
+checkable by a person and, later, by the matrix.
+
+Also raised by both, and separable: `a_shared_extension_is_negotiated`
+(`src/protocol/extensions.rs:169`) negotiates a set with itself, so a `negotiate`
+that ignored its peer argument entirely would still pass all three cases. The
+oracle both vendors propose is the same one — an empty gateway set against a peer
+holding the recognised Tasks extension must negotiate to empty.
+
+### What this changes about the order of work
+
+The blocking count does not move; the confidence in it does. Rows recorded MET on
+evidence of this shape are unverified, not met, and the release cannot be assessed
+until they are re-derived. That is a cheap pass over recorded rows, not new
+engineering, and it comes before the remaining clusters because every cluster
+still to land will otherwise record its evidence the same way.
+
+1. **Re-derive the recorded rows.** For every row currently MET, name the test and
+   the revision at which it was observed red. No observation on record -> the row
+   returns to open. This is the pass that tells us the real blocking count.
+2. **Fix the four known rows.** G row 1 needs its mechanism diagnosed (isolated
+   green / in-suite red is a live probe, not a conclusion); C's `EXT.1` needs the
+   `extensions` field before any test of it can be honest; D needs its two cases
+   written; the matrix needs the observation column.
+3. **Then the outstanding clusters**, in the dependency order already recorded: B
+   and C code, D code, the residue's `HEADER.9` — whose design is CONFIRMED unable
+   to activate (`resolve_with` holds the era mutex across the probe await,
+   `src/protocol/era.rs:150-161`) and needs an elimination and a fresh round, not a
+   patch — and `NFR.COMPAT.1` last, since the default flip cannot precede A and C.
