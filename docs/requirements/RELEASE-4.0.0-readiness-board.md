@@ -9,23 +9,27 @@ restated from those two — where a cell needs a reason it names the file that
 carries it.
 
 Verified 2026-09-03 against the worktree at `fix/mrtr2-continuation-handle`
-(`4b522687`). A cell reading **no** means a search found nothing, not that
+(`2c133842`). A cell reading **no** means a search found nothing, not that
 nobody intends to do it.
 
 | # | cluster | rows | design | test plan | plan reviewed | code | the one thing blocking |
 |---|---|---|---|---|---|---|---|
-| A | continuation envelope (MIK-7212) | 22 | yes — `2026-08-30-mrtr-wiring.md`, `2026-08-30-shared-continuation-state.md`, `2026-09-01-continuation-telemetry.md` | yes — `2026-09-02-mrtr-test-plan.md` | yes | **partial** — the route is wired as of `a69e2bc5`; `cargo test --test mik_7212_mrtr_component_acs` gives **18 passed, 0 failed**, from 15 red | two rows, neither a regression. `MRTR.9a` is unimplemented rather than broken — a client's declaration flattens to the capability *name*, so the mode substructure is discarded and a url-mode request passes the gate by construction. And the HTTP dispatcher never reaches the continuation guard the MCP path now uses, so `mik_7215_acs::http::a_well_formed_retry_…` serves a well-formed retry as a fresh `tools/call`; repair in flight, routing both dispatchers through one guard rather than adding a second refusal |
+| A | continuation envelope (MIK-7212) | 22 | yes — `2026-08-30-mrtr-wiring.md`, `2026-08-30-shared-continuation-state.md`, `2026-09-01-continuation-telemetry.md` | yes — `2026-09-02-mrtr-test-plan.md` | yes | **partial** — the route is wired as of `a69e2bc5`; `cargo test --test mik_7212_mrtr_component_acs` gives **18 passed, 0 failed**, from 15 red | two rows, neither a regression. `MRTR.9a` is unimplemented rather than broken — a client's declaration flattens to the capability *name*, so the mode substructure is discarded and a url-mode request passes the gate by construction. And `mik_7215_acs::http::a_well_formed_retry_…` served a well-formed retry as a fresh `tools/call`. The cause was **not** an HTTP-only path — both dispatchers already reach `handle_tools_call`. `route_retry_to_origin_backend` exempted the whole `gateway_` prefix, so a retry naming any meta-tool was routed as a fresh call with its continuation never opened; narrowed to the two that carry their own server and tool. Repair in flight |
 | B | era detection (MIK-7217) | 5 | partial — `2026-08-31-discover-outbound-era-probe.md` covers `DISCOVER.4`; **`NFR.OBS.3` appears in no design document** | no | no | no | a design that covers all five rows, not four |
 | C | revision surface (MIK-7272) | 7 | scattered across five files (`sub-4-idempotency-wiring`, `sub-1-3-get-mcp-era-gate`, `task-1-tasks-extension`, `cluster-b-*`) | no | no | no | five half-wirings with no single owner and no plan that reads as one change |
 | D | response-cache keying (MIK-7213) | 2 | yes — `2026-08-31-cluster-f-response-cache-keying.md` | yes — same stem, `-test-plan.md` | no | no | the test plan has never been through the dual-vendor gate |
 | E | performance measurement | 2 | n/a — this is a measurement, not a design | no | no | n/a | a run against 3.5.0 **on Spark**. A Mac number is worse than none |
 | F | compatibility facts | 2 | `NFR.COMPAT.4` only — `2026-09-02-conformance-matrix.md` | no | no | no | `NFR.COMPAT.1` is a one-line default flip that cannot land before cluster A merges |
-| G | stdio dispatch | 3 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | **row 1 done** — `d306c7e8` put the record site on the path both dispatchers take; `cargo test --lib stdio_observation` gives 2 passed, 0 failed, verified at `4b522687` | the remaining two rows, which queue behind the gate as planned. Cluster A's branch no longer carries a red test from G |
+| G | stdio dispatch | 3 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | **row 1 done** — `d306c7e8` put the record site on the path both dispatchers take; `cargo test --lib stdio_observation` gives 2 passed, 0 failed, verified at `4b522687` | the remaining two rows, which queue behind the gate as planned, plus a third the MRTR work surfaced: `src/gateway/server/mod.rs:1748` hardcodes `retry: &NO_RETRY`, so a stdio client can never present a retry at all. Same defect class as cluster A's prefix exemption — a whole category of callers silently dropped — and it belongs to G's design, not to A's change. Cluster A's branch no longer carries a red test from G |
 | — | residue | 10 | mixed | no | no | no | ten independent rows, each needing its own decision |
 
 53 blocking rows. **Two clusters have code, and both live on one branch.** Five
 have no branch, no worktree and no commit — verified against `git worktree list` and `git branch`, which show
 `fix/mrtr2-continuation-handle` (cluster A) plus two unrelated gap branches.
+
+**Recorded, not filed.** Every gateway-authored `Error::JsonRpc` reaches the client with its code twice — `error_response_preserving_status` builds the message from `error.to_string()`, which already prefixes `JSON-RPC error -32602:`. Cosmetic, pre-existing, and a repair touches every error message in the gateway, so it is an observation rather than a ticket.
+
+**Refusal framing is deliberate.** A malformed retry is refused at the HTTP boundary with 400 (`handlers.rs:973-982`); a well-formed one this gateway will not redeem is refused with a JSON-RPC `-32602` at 200. Different layers, not a disagreement: the first says *this is not a request*, the second says *this request is denied*. Only `Error::Forbidden` carries an HTTP status, by the design `error_response_preserving_status:163-166` states in its own doc.
 
 ## The gate is the binding constraint, not the writing
 
