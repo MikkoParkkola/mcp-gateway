@@ -3154,10 +3154,21 @@ mod tests {
             let revision = records
                 .iter()
                 .find(|record| record.contains_key("protocol_revision"))
-                .expect(
-                    "a stdio request must be observed: no record site is reached \
-                     from the stdio dispatcher, so this session is invisible",
-                );
+                .unwrap_or_else(|| {
+                    // Two different defects reach this line and the message has to
+                    // tell them apart: an empty capture is the tracing harness never
+                    // delivering, a non-empty one without the key is the record site
+                    // itself omitting the field or the dispatcher returning early.
+                    let keys: Vec<Vec<&String>> =
+                        records.iter().map(|record| record.keys().collect()).collect();
+                    panic!(
+                        "a stdio request must be observed: {} record(s) captured, \
+                         keys {:?}. Empty => the tracing capture never delivered; \
+                         non-empty => the record site ran without `protocol_revision`",
+                        records.len(),
+                        keys,
+                    )
+                });
             assert_eq!(
                 value(revision, "protocol_revision"),
                 "2026-07-28",
