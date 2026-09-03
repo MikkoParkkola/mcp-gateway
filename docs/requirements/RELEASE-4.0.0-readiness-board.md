@@ -43,26 +43,39 @@ Every vendor failed for its own reason on the same day, and the wrapper defect
 made the primary reviewer look like a fourth outage. That is the honest state of
 the gate; per §PA a nonzero exit is `ERROR`, never a scraped verdict.
 
-## What the next session does, in order
+## Readiness order — every cluster, none dropped
 
-1. **Wire the retry-forwarding route** at `src/gateway/router/handlers.rs:1048-1065`.
-   This is the single highest-leverage increment in the release: it is one route,
-   and it is the stated cause of **18 of the 53 blocking rows** — the whole `MRTR`
-   set, `NFR.SEC.2/3/4` (nothing mints or opens on the live path, so the eight
-   named security fixtures have nothing to exercise), `NFR.OBS.3/4` (no detection
-   to observe, no counters to emit) and `NFR.PERF.3` (no in-flight state to soak).
-   It also turns 15 red cluster-A cases green, and it **deletes** the pinned-count
-   header section in `tests/mik_7212_mrtr_component_acs.rs`, whose scaffolding
-   describes only the pre-wiring tree.
+The queue is `RELEASE-4.0.0-execution-plan.md`, whose item 1 is already this
+wiring increment. What follows is the readiness view of the same order: where
+each of the seven clusters and the residue enters it, so that no group of rows
+is left without a next step.
+
+1. **Wire the retry-forwarding route** at `src/gateway/router/handlers.rs:1048-1065`
+   — the location the execution plan's item 1 does not name. One route, and the
+   stated cause of **all 22 rows of cluster A**: the whole `MRTR` set,
+   `NFR.SEC.2/3/4` (nothing mints or opens on the live path, so the eight named
+   security fixtures have nothing to exercise), `NFR.OBS.4` (no counters to emit)
+   and `NFR.PERF.3` (no in-flight state to soak). It also turns 15 red cluster-A
+   cases green, and it **deletes** the pinned-count header section in
+   `tests/mik_7212_mrtr_component_acs.rs`, whose scaffolding describes only the
+   pre-wiring tree.
 2. **Then land cluster A.** Open the PR, run the gates at the head that will be
    tagged. Merging before step 1 ships 22 rows that the code still refuses.
-3. **Give B and C a design each.** B needs `NFR.OBS.3` covered; C needs its five
-   half-wirings written as one change with one owner.
-4. **Book the Spark run for E.** It depends on nothing and nobody has started it.
-   `NFR.PERF.4` is a separate, cheaper fix: `benchmarks/public_claims.json:4-6`
-   records 14/16/17 against a README that has drifted.
-5. **Close G's gate** now that the reviewer is reachable again.
+3. **Put D through the gate.** Cluster D is the cheapest pair of rows on the
+   board: design and test plan both exist and neither has been reviewed. It needs
+   a dual-vendor pass and the implementation that follows, and it waits on nothing.
+4. **Give B and C a design each.** B needs `NFR.OBS.3` covered — that row is
+   cluster B's, verifying `DISCOVER.4-5`, and the era detector is what makes it
+   observable. C needs its five half-wirings written as one change with one owner.
+5. **Book the Spark run for E.** It depends on nothing and nobody has started it.
+   `NFR.PERF.4` is residue rather than cluster E, and a separate cheaper fix:
+   `benchmarks/public_claims.json:4-6` records 14/16/17 against a drifted README.
+6. **Close G's gate** now that the reviewer is reachable again.
+7. **Triage the residue as one pass.** Ten rows, each independent, each needing a
+   decision rather than an increment — `HEADER.9` waits on B's per-backend era, so
+   it cannot come first. One session, one line of disposition per row, and the ones
+   that turn out to be code queue behind whichever cluster owns their file.
 
-Order is dependency, not preference: everything in cluster A waits on step 1, F
-waits on A, and E waits on nothing at all, which is why it should not be last in
-practice. Steps 1 and 4 are independent and can run at the same time.
+Order is dependency, not preference: everything in cluster A waits on step 1 and
+F waits on A, while steps 3, 5 and 7 wait on nothing at all. Steps 1, 3 and 5 are
+independent and can run at the same time.

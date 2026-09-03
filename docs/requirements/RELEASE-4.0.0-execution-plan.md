@@ -222,6 +222,12 @@ Sixteen of the thirty-three blocking criteria are UNWIRED, and eight of those si
 `§2 WIRED` and `D7` in the DoD, and `§11` stop-the-line. Item 1 closes eight criteria in one
 increment. Nothing else in this plan has that ratio, which is why it stays first.
 
+The increment is one route: `src/gateway/router/handlers.rs:1048-1065`, which answers every
+well-formed retry with *"retry forwarding is not available on this build"*. Counted as ledger
+rows rather than parent criteria, and with the `NFR.SEC` and `NFR.OBS`/`NFR.PERF` rows whose
+evidence cells read *"same envelope"*, the same increment is the stated cause of all twenty-two
+rows of cluster A in `RELEASE-4.0.0-blocking-rollup.md`, which is where that expansion is defined.
+
 ### Three things this plan still does not know
 
 - ~~MIK-7217.DISCOVER, unswept~~ — **swept 2026-08-31, 5 MET and 2 blocking**, raising the count
