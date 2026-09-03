@@ -252,6 +252,16 @@ fn error_message(response: &Value) -> Option<String> {
 /// Asserted on the guard's own sentence, not on the fact of a refusal. The
 /// blanket refusal at `handlers.rs:1051-1067` answers every retry, so
 /// `is_err()` would pass today against a build that never looks at the handle.
+///
+/// It cannot say *which* guard refused, and no assertion here can:
+/// `ContinuationError::client_message` (`src/protocol/continuation.rs:234-236`)
+/// answers "continuation rejected" for all seven variants, deliberately. So a
+/// case naming the expiry check is satisfied by the binding check refusing
+/// first. Discriminating them is DE-9's to decide — the deferred question of
+/// what a refusal answers under
+/// (`docs/design/2026-08-30-mrtr-wiring.md`, DE-8) — and it has an owner there.
+/// Recorded, not worked around: a substring hierarchy invented here would be a
+/// test asserting a vocabulary production never agreed to.
 fn assert_refused_by_the_continuation_guard(response: &Value, case: &str) {
     let message = error_message(response)
         .unwrap_or_else(|| panic!("{case}: the retry must be refused, and it was answered"));
@@ -602,6 +612,41 @@ async fn fixture_control_a_fresh_call_reaches_the_backend() {
         calls.len(),
         1,
         "a fresh call must reach the fixture backend, it recorded {calls:?}; the gateway answered {response}"
+    );
+}
+
+/// GIVEN a handle this gateway minted, WHEN it is presented on the retry
+/// route, THEN the retry reaches the backend.
+///
+/// Not an acceptance criterion — the control that makes every "the backend
+/// received nothing" assertion in this file mean something. The control above
+/// drives `gateway_invoke`, a different route: a retry route that cannot
+/// dispatch *at all* satisfies each of those assertions vacuously, and no
+/// assertion in the file can tell that apart from a refusal that correctly
+/// declined to dispatch. This one can, because it is the only case where the
+/// retry route is expected to arrive.
+///
+/// **Expected RED until the retry route is wired.** Today `handlers.rs`
+/// answers every retry with the blanket `-32602 "retry forwarding is not
+/// available on this build"`, so the recorder stays empty. That red is the
+/// point: when it turns green the other cases' empty recorders start carrying
+/// information, and until it does they are marked as vacuous rather than
+/// mistaken for evidence.
+#[tokio::test]
+async fn fixture_control_a_valid_retry_reaches_the_backend() {
+    let (state, received) = state_with_fixture().await;
+    let args = arguments();
+    let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &args).await;
+    received.lock().expect("recorder").clear();
+
+    let (_status, response) = post(&state, &retry_body(1, TOOL_INTERIM, &args, &handle)).await;
+
+    let calls = received.lock().expect("recorder").clone();
+    assert_eq!(
+        calls.len(),
+        1,
+        "a retry the gateway itself minted, presented unaltered, must reach the \
+         fixture backend; it recorded {calls:?} and the gateway answered {response}"
     );
 }
 
@@ -1013,10 +1058,11 @@ async fn ac_mrtr_8_a_call_that_finished_holds_no_slot() {
 // Can these fail for the wrong reason? Today, yes in one direction and it is
 // stated rather than hidden: the recorder is empty because *nothing* dispatches,
 // so the "no backend call" half passes vacuously and the red comes from the
-// vocabulary half. `fixture_control_a_fresh_call_reaches_the_backend` is what
-// stops that vacuity being permanent — it proves the recorder can record, so
-// when forwarding is wired an empty recorder means a refusal that dispatched
-// nothing rather than a fixture that never worked.
+// vocabulary half. `fixture_control_a_valid_retry_reaches_the_backend` is what
+// stops that vacuity being permanent — it is the same route these cases drive,
+// so once it is green an empty recorder here means a refusal that dispatched
+// nothing rather than a route that cannot dispatch at all. The fresh-call
+// control proves only that the recorder records.
 
 /// GIVEN an exchange one replica holds, WHEN the retry arrives at a different
 /// replica, THEN that replica refuses it and opens nothing with the backend.
