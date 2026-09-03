@@ -143,7 +143,7 @@ const MAJOR: &[Row] = &[
         evidence: &[
             "mik_7212_acs::retry::ac_mrtr_1_a_retry_carries_its_inputs_and_state",
             "mik_7212_acs::ac_mrtr_2_a_minted_envelope_round_trips",
-            "mik_7212_acs::inflight::ac_mrtr_6_a_retry_landing_elsewhere_is_sent_to_the_holder",
+            "mik_7212_acs::inflight::ac_mrtr_6_a_retry_landing_on_another_replica_fails_explicitly",
             "mik_7212_acs::reverse::ac_mrtr_7_a_legacy_client_is_asked_the_way_it_expects",
         ],
     },
