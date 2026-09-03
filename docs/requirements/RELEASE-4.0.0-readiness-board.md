@@ -189,3 +189,33 @@ increment splits cleanly:
 
 That ordering is the same one the placement map arrived at from the other direction,
 for an independent reason, which is some comfort that it is right.
+
+## Two clusters have tests that cannot fail for the criterion they are named for
+
+Cluster D's gap was recorded above as a missing case. Cluster C has the same defect in
+its other form, and together they are a class rather than two accidents.
+
+All four `ac_ext_1_*` cases in `tests/mik_7272_exploit_acs.rs:18-60` call
+`ExtensionSet::gateway_declares()` directly. None constructs or serializes a
+`ServerCapabilities`. But `EXT.1`'s subject is the `extensions` field on the wire, and
+`ServerCapabilities` (`src/protocol/types.rs:231-253`) cannot carry that field at all —
+it has `completions`, `experimental`, `logging`, `prompts`, `resources`, `tasks`,
+`tools`, and nothing else. That absence is precisely what a real `EXT.1` test would trip
+over today. Two of the four go further and assert the post-`TASK.1` world:
+`ac_ext_1_the_gateway_declares_its_extensions` asserts the declared set contains
+`Tasks`, and `ac_ext_1_a_shared_extension_is_negotiated` asserts the gateway negotiates
+it. Both are green with zero production wiring and stay green through `EXT.1`'s entire
+increment.
+
+So the class is: **a test file named for a criterion, exercising a mechanism the
+criterion does not turn on.** D's version omits the case; C's version asserts a
+mechanism in isolation. Both pass, both read as coverage, and neither can go red for
+the increment it belongs to — the §P2 Q2 failure, twice, in two clusters, found only by
+reading the tests as tests rather than counting them.
+
+Worth assuming a third instance exists. The check is cheap and mechanical: for each
+criterion, name the observable the criterion is about, then confirm some test touches
+*that* rather than a helper beneath it.
+
+The four `ac_ext_1_*` cases cite `RELEASE-4.0.0-test-plan.md` §"Increment 10" in their
+own header, so the repair belongs to whoever owns that plan.
