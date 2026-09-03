@@ -1664,3 +1664,122 @@ mod capability_gate {
         );
     }
 }
+
+// ===========================================================================
+// MRTR.9a — the gateway MUST NOT relay an elicitation request in a MODE the
+// client has not declared support for.
+//
+// Distinct from MRTR.9, which is per capability NAME and is met. The
+// declaration is a substructure, not a name: a client says
+// `{"elicitation": {"form": {}}}` and means "form, and not url". The spec is
+// explicit that both halves exist —
+//
+//   "Clients declaring the `elicitation` capability MUST support at least one
+//    mode (`form` or `url`)."
+//   "Servers MUST NOT send elicitation requests with modes that are not
+//    supported by the client."
+//     — https://modelcontextprotocol.io/specification/2026-07-28/client/elicitation#capabilities
+//
+// and it pins both wire shapes this fixture uses, so neither is the test's
+// invention: the declaration `{"elicitation": {"form": {}, "url": {}}}`, and
+// the request `{"mode": "url", "url": ..., "message": ...}` inside
+// `InputRequiredResult.inputRequests` (spec §"URL Mode Elicitation Requests":
+// such a request "MUST specify `mode: \"url\"`, a `message`", and a `url`).
+// An omitted `mode` "defaults to `\"form\"`", which is what makes the positive
+// control below a legal form-mode request. The URL's own host is the only
+// invented value and it is not load-bearing — the gate never dereferences it,
+// and the spec's own illustration uses a reserved documentation domain this
+// repository's tooling refuses to carry.
+//
+// LEVEL, stated because it is a concession. The obligation is discharged on
+// the live invoke path, where `interim.undeclared(caller.input_capabilities)`
+// refuses before the relay (`src/gateway/meta_mcp/invoke.rs`). This case joins
+// the two production halves — `classify_request` reading the declaration, and
+// `undeclared` judging the request — by hand, because the code that joins them
+// is in `src/`, and `src/` is out of scope for this change. Both halves are
+// production code and neither is stubbed; only the wiring between them is the
+// test's.
+//
+// DE-9 is untouched: these assert THAT a request is refused, never under which
+// error code. The code is the deferred decision, and it is not this test's.
+// ===========================================================================
+
+mod elicitation_mode_gate {
+    use mcp_gateway::protocol::meta::classify_request;
+    use mcp_gateway::protocol::mrtr::InputRequired;
+    use serde_json::{Value, json};
+
+    /// What the client declared, read the way production reads it.
+    fn form_only_client() -> Vec<String> {
+        let params = json!({
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {
+                    "elicitation": { "form": {} }
+                }
+            }
+        });
+        let shape = classify_request(Some(&params), Some("2026-07-28"));
+        let declared = shape.declared_capabilities().to_vec();
+        assert_eq!(
+            declared,
+            ["elicitation".to_string()],
+            "the fixture must reach the gate as a client that DID declare elicitation, \
+             or the refusal below would be MRTR.9's and prove nothing about modes"
+        );
+        declared
+    }
+
+    fn interim(requests: &Value) -> InputRequired {
+        InputRequired::from_result(&json!({
+            "resultType": "input_required",
+            "inputRequests": requests,
+            "requestState": "backend-opaque"
+        }))
+        .expect("a well-formed interim result")
+    }
+
+    #[test]
+    fn ac_mrtr_9a_a_url_mode_request_to_a_form_only_client_is_refused() {
+        // GIVEN a client that declared elicitation in form mode only
+        let declared = form_only_client();
+        // WHEN the backend asks it to navigate to a URL — a mode it did not declare
+        let interim = interim(&json!({
+            "api_key": {
+                "method": "elicitation/create",
+                "params": {
+                    "mode": "url",
+                    "url": "https://backend.invalid/ui/set_api_key",
+                    "message": "Please provide your API key to continue."
+                }
+            }
+        }));
+        // THEN the gateway must refuse rather than relay it.
+        assert!(
+            interim.undeclared(&declared).is_some(),
+            "a url-mode elicitation must be refused to a client that declared form mode only; \
+             the declaration flattens to the capability NAME, so the mode substructure is \
+             discarded and this request passes the gate by construction"
+        );
+    }
+
+    #[test]
+    fn ac_mrtr_9a_a_form_mode_request_to_a_form_only_client_is_relayed() {
+        // The control. Without it, refusing every elicitation satisfies the case
+        // above — and that is a gate no client could ever use.
+        let declared = form_only_client();
+        let interim = interim(&json!({
+            "seat": {
+                "method": "elicitation/create",
+                "params": {
+                    "mode": "form",
+                    "message": "Window or aisle?"
+                }
+            }
+        }));
+        assert!(
+            interim.undeclared(&declared).is_none(),
+            "a form-mode elicitation is exactly what this client declared, and must be relayed"
+        );
+    }
+}
