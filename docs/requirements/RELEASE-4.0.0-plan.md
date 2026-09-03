@@ -282,6 +282,20 @@ plus five and not nine plus six.
 
 ## Order of work
 
+**Gate — re-derive the recorded rows. Nothing in the waves below lands before it.**
+Four MET rows were found resting on evidence that could not have failed, and the
+evidence rule that replaces the old one is stated once, in
+`RELEASE-4.0.0-readiness-board.md` under "What this changes about the order of work":
+a row's evidence is an observation the criterion could have come out the other way,
+in the form its own `Verify` column asks for. Every currently-MET row is re-derived
+against it, and a row with no observation on record returns to open. The pass is
+cheap and it changes the blocking count, which is why implementation and landing
+queue behind it rather than beside it — a cluster landing first records its evidence
+under the rule that produced the defect. Cluster A's nine evidence rows are inside
+this gate, not after it. The board carries the rule, the run-count threshold, the
+owners and the per-row dispositions; this file carries only its position in the
+order, which is first.
+
 **Wave 0 — the NFR sweep.** Done on 2026-09-01: all 22 rows exist and all 22 are assessed
 against the verification method the requirements table names for each. NFR.SEC.5's four
 command gates were run and it is met; NFR.SEC.6 remains open on MIK-7249 and MIK-7262, which

@@ -376,6 +376,12 @@ re-derived row records how many runs it rests on, against this threshold:
 **Each disposition line names an owner** — a cluster, an agent, or a ticket. "Whoever
 picks it up" is how the ten residue rows went a release without one.
 
+The three steps below are **dispositions, not a second work queue**. The order of
+work has one home, `RELEASE-4.0.0-plan.md` under "Order of work", and the
+re-derivation gate is recorded there as preceding every wave. What follows is what
+each step means — the rule, the threshold, the owners — which is this file's job and
+not that one's.
+
 1. **Re-derive the recorded rows.** For every row currently MET, name the test, the
    revision at which it was observed red, and the number of runs behind the green.
    No observation on record -> the row returns to open. This is the pass that tells
