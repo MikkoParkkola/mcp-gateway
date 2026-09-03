@@ -180,10 +180,32 @@ leaving the level mismatch exactly where it is — the failure mode the audit
 exists to catch. The order already stands: wire cluster A, then write the tests
 at the level the plan assigns.
 
-### Row 9a — the one real writable gap
+### Row 9a — writable, but it opens a deferred design decision
 
-`MIK-7212.MRTR.9` is ABSENT with no mechanism anywhere, so a test written now
-fails for the right reason and is §P2 order rather than a retrofit. It is the
-only cluster-A test that can be written before wiring.
+Correction to the first version of this section, which called MRTR.9 "ABSENT
+with no mechanism anywhere". That was read off a stale
+`docs/requirements/audit-notes/criteria-mrtr.md`, and it is false in both
+halves. `MIK-7212.MRTR.9` — the per-*type* refusal — is **MET**, closed by
+`e1713f64`, with six protocol cases and three end-to-end cases behind it. Six
+`ac_mrtr_9_*` tests exist at `tests/mik_7212_acs.rs:1555-1670`.
 
-Disposal: **fix it in this change** — assigned as a failing-test-first.
+The gap is `MIK-7212.MRTR.9a`, the per-*mode* obligation, and it is already a
+tracked ABSENT row with its analysis written. It is a specification MUST —
+"Servers MUST NOT send elicitation requests with modes that are not supported
+by the client". The existing gate cannot express it by construction:
+`RequestShape::declared_capabilities` (`src/protocol/meta.rs:264-280`) flattens
+the wire declaration to capability *names*, so the `{ "form": {}, "url": {} }`
+substructure is discarded at parse time and a URL-mode request relayed to a
+form-only client passes.
+
+So a test is owed and can be written now — it fails for the right reason,
+against a MUST, in test-first order. But closing the row is a change across
+three files that **carries DE-9**, the deferred decision on which error code an
+unrecognised method refuses under. That is an observable contract change, and
+`docs/design/2026-08-30-mrtr-wiring.md` DE-8 records why it was split out
+rather than patched into this change.
+
+Disposal: **fix it in this change** for the test — a failing test pins the
+requirement and costs nothing if DE-9 lands differently. The *implementation*
+stays deferred behind DE-9, which is an unknown with an owner, not one to
+resolve inside a test-coverage repair.
