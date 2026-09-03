@@ -312,6 +312,9 @@ impl ElicitationMode {
 /// thousand keys reduces to these five bits and the rest is dropped where it
 /// was read. Every consumer asks a closed question, and a closed question does
 /// not need the caller's strings to answer it.
+// Five bools rather than a set of strings is the whole point: the parse must not
+// retain a caller-sized allocation, and every consumer asks a closed question.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Declared {
     sampling: bool,
@@ -590,7 +593,7 @@ mod declared_parse_boundary_tests {
     use super::{Declared, ElicitationMode, classify_request};
     use serde_json::{Value, json};
 
-    fn declaring(capabilities: Value) -> Declared {
+    fn declaring(capabilities: &Value) -> Declared {
         let params = json!({
             "_meta": {
                 "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -627,7 +630,7 @@ mod declared_parse_boundary_tests {
         modes.insert("form".to_string(), json!({}));
         capabilities.insert("elicitation".to_string(), Value::Object(modes));
 
-        let declared = declaring(Value::Object(capabilities));
+        let declared = declaring(&Value::Object(capabilities));
         assert_eq!(
             declared,
             Declared {
@@ -646,14 +649,14 @@ mod declared_parse_boundary_tests {
     #[test]
     fn a_non_object_value_declares_neither_a_capability_nor_a_mode() {
         for value in [json!(null), json!("form"), json!(7), json!([])] {
-            let declared = declaring(json!({ "elicitation": value }));
+            let declared = declaring(&json!({ "elicitation": value }));
             assert_eq!(
                 declared,
                 Declared::NONE,
                 "elicitation set to {value} names no mode, so it declares nothing"
             );
 
-            let declared = declaring(json!({ "elicitation": { "form": value } }));
+            let declared = declaring(&json!({ "elicitation": { "form": value } }));
             assert!(
                 !declared.has_elicitation_mode(ElicitationMode::Form),
                 "a form key set to {value} is not a declaration of form mode"
@@ -665,7 +668,7 @@ mod declared_parse_boundary_tests {
     /// the rule cannot be implemented as "empty objects only".
     #[test]
     fn a_populated_mode_object_still_declares_that_mode() {
-        let declared = declaring(json!({ "elicitation": { "form": { "maxLength": 40 } } }));
+        let declared = declaring(&json!({ "elicitation": { "form": { "maxLength": 40 } } }));
         assert!(declared.has_elicitation_mode(ElicitationMode::Form));
         assert!(!declared.has_elicitation_mode(ElicitationMode::Url));
     }

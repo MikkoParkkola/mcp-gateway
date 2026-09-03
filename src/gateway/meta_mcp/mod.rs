@@ -204,7 +204,7 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
                 // `None` rather than an empty object, so a backend error
                 // carrying none of these keys leaves `data` absent exactly as
                 // it did when one key was forwarded.
-                (!forwarded.is_empty()).then(|| serde_json::Value::Object(forwarded))
+                (!forwarded.is_empty()).then_some(serde_json::Value::Object(forwarded))
             }
             _ => None,
         };

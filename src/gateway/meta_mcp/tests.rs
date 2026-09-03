@@ -2849,7 +2849,7 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
     // (`principal_fingerprint` reads the OIDC identity alone) -- so `alice`
     // alone would exit on the unnameable-caller refusal (MRTR.2).
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
-        input_capabilities: declaring(json!({"elicitation": {}})),
+        input_capabilities: declaring(&json!({"elicitation": {}})),
         verified_identity: Some(&NAMED_CALLER),
         ..allow_all_ctx_named(Some("alice"), Some("agent-1"))
     };
@@ -3263,7 +3263,7 @@ static NAMED_CALLER: std::sync::LazyLock<crate::key_server::oidc::VerifiedIdenti
 /// client would send it, so a test states a wire shape and never a parsed
 /// value — a fixture that built the flags directly would agree with itself
 /// about normalization the gate is supposed to own.
-fn declaring(capabilities: serde_json::Value) -> crate::protocol::meta::Declared {
+fn declaring(capabilities: &serde_json::Value) -> crate::protocol::meta::Declared {
     let params = json!({
         "_meta": {
             "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -3357,7 +3357,7 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
         .invoke_tool(
             &book_flight(),
             Some("session-1"),
-            &allow_all_ctx_declaring(declaring(json!({"elicitation": {}}))),
+            &allow_all_ctx_declaring(declaring(&json!({"elicitation": {}}))),
         )
         .await
         .expect("a declared capability must not be refused");
@@ -3422,7 +3422,7 @@ async fn a_continuation_that_is_never_retried_stores_nothing_gateway_side() {
         .invoke_tool(
             &book_flight(),
             Some("session-1"),
-            &allow_all_ctx_declaring(declaring(json!({"elicitation": {}}))),
+            &allow_all_ctx_declaring(declaring(&json!({"elicitation": {}}))),
         )
         .await
         .expect("a declared capability must not be refused");
@@ -3563,7 +3563,7 @@ async fn an_unnameable_caller_is_not_offered_an_interim_exchange() {
         .invoke_tool(
             &book_flight(),
             Some("session-1"),
-            &anonymous_ctx_declaring(declaring(json!({"elicitation": {}}))),
+            &anonymous_ctx_declaring(declaring(&json!({"elicitation": {}}))),
         )
         .await
         .expect_err("a caller that cannot be bound must not be handed a continuation");
@@ -3724,4 +3724,116 @@ fn exposure_answers_for_a_hidden_admin_tool_before_admin_does() {
     // THEN: the hidden admin tool is not confirmed, and the exposed one is
     assert!(!meta.exposes_meta_tool("gateway_kill_server"));
     assert!(meta.exposes_meta_tool("gateway_search"));
+}
+
+// ===========================================================================
+// MIK-7212.MRTR.9a — the refusal a client actually receives.
+//
+// A mode refusal and a capability refusal reach the client through the same
+// boundary and must not read the same. The client here DID declare
+// elicitation, so repeating that capability back to it would be a recovery
+// instruction it has already followed — which is why the payload carries the
+// mode instead, and why the message may not claim the capability was missing.
+// ===========================================================================
+
+fn backend_asking_in_url_mode() -> Arc<BackendRegistry> {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::transport::Transport;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "booking",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let transport: Arc<dyn Transport> = Arc::new(ToolCallTestTransport {
+        result: json!({
+            "resultType": "input_required",
+            "inputRequests": {
+                "api_key": {
+                    "method": "elicitation/create",
+                    "params": {
+                        "mode": "url",
+                        "url": "https://backend.invalid/ui/set_api_key",
+                        "message": "Please provide your API key to continue."
+                    }
+                }
+            },
+            "requestState": "backend-opaque"
+        }),
+    });
+    backend.set_transport_for_test(transport);
+    let _ = registry.register(backend);
+    registry
+}
+
+/// A client that declared elicitation, in form mode and only form mode.
+fn form_only_client() -> crate::protocol::meta::Declared {
+    declaring(&json!({ "elicitation": { "form": {} } }))
+}
+
+#[tokio::test]
+async fn a_mode_refusal_carries_the_mode_and_not_a_capability_the_client_already_declared() {
+    let meta = MetaMcp::new(backend_asking_in_url_mode());
+    let err = meta
+        .invoke_tool(
+            &book_flight(),
+            Some("session-1"),
+            &allow_all_ctx_declaring(form_only_client()),
+        )
+        .await
+        .expect_err("a url-mode request to a form-only client must not be relayed");
+
+    assert_eq!(
+        err.to_rpc_code(),
+        -32021,
+        "a mode refusal reuses the undeclared code; it is the same class of refusal"
+    );
+
+    let response = error_response_preserving_status(RequestId::Number(1), &err);
+    let data = response
+        .error
+        .expect("a refusal must serialise as an error")
+        .data
+        .expect("the refusal names the mode, so its payload must reach the client");
+
+    assert_eq!(
+        data.get(super::invoke::UNSUPPORTED_ELICITATION_MODE_DATA_KEY),
+        Some(&json!("url")),
+        "the client is told which MODE it was asked in, which is the only thing it \
+         could act on here: {data}"
+    );
+    assert!(
+        data.get(super::invoke::REQUIRED_CAPABILITIES_DATA_KEY)
+            .is_none(),
+        "this client declared elicitation; naming it again is a false recovery \
+         instruction, not a hint: {data}"
+    );
+}
+
+#[tokio::test]
+async fn a_mode_refusal_does_not_claim_the_capability_was_undeclared() {
+    let meta = MetaMcp::new(backend_asking_in_url_mode());
+    let err = meta
+        .invoke_tool(
+            &book_flight(),
+            Some("session-1"),
+            &allow_all_ctx_declaring(form_only_client()),
+        )
+        .await
+        .expect_err("a url-mode request to a form-only client must not be relayed");
+
+    let message = err.to_string();
+    assert!(
+        !message.contains("'elicitation' capability"),
+        "the client declared that capability; saying otherwise is false and sends it \
+         to fix something that is not broken: {message}"
+    );
+    assert!(
+        message.contains("url"),
+        "the message must name the mode that was refused, or the client cannot tell \
+         which of its modes the backend wanted: {message}"
+    );
 }

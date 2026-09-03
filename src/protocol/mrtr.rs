@@ -299,11 +299,15 @@ impl InputRequired {
     /// about the other, and a declaration read one level shallower than the
     /// request is written is a gate that cannot see what it is passing.
     #[must_use]
-    pub fn undeclared<'a>(&'a self, declared: Declared) -> Option<Undeclared<'a>> {
+    pub fn undeclared(&self, declared: Declared) -> Option<Undeclared<'_>> {
         self.requests.iter().find_map(|(key, request)| {
             let method = request.get("method").and_then(Value::as_str).unwrap_or("");
             let reason = Self::refusal(method, request.get("params"), declared)?;
-            Some(Undeclared { key, method, reason })
+            Some(Undeclared {
+                key,
+                method,
+                reason,
+            })
         })
     }
 
@@ -314,11 +318,7 @@ impl InputRequired {
     /// can be told which capability to add, and one that declared it in a
     /// single mode cannot — it already has the capability the first arm would
     /// have named.
-    fn refusal(
-        method: &str,
-        params: Option<&Value>,
-        declared: Declared,
-    ) -> Option<Refusal> {
+    fn refusal(method: &str, params: Option<&Value>, declared: Declared) -> Option<Refusal> {
         let Some(capability) = crate::protocol::meta::required_capability(method) else {
             return Some(Refusal::UnrecognisedMethod);
         };
