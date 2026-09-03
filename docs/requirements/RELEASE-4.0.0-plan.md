@@ -57,7 +57,7 @@ whatever shipped and reverse a locked decision. The seventeenth is `gateway_webh
 (`src/gateway/meta_mcp_tool_defs.rs:565`), pushed behind `webhooks_enabled`.
 
 NFR.PERF.4 stays blocking and stays ABSENT. What the ruling changed is its kind: it is no
-longer an open operator call, so it left cluster F of the blocking rollup, and *how* the
+longer an open operator call, so it left the compatibility cluster of the blocking rollup, and *how* the
 seventeenth stops counting is an unmade engineering decision — a §P1 design event like the
 rest of wave 1, not an edit.
 
@@ -98,19 +98,24 @@ edit. Every one of those decisions is a §P1 design event and none of them is an
 
 ## Clusters, in dependency order
 
-### A. MRTR continuation state — MIK-7212, 10 criteria — CRITICAL PATH
+### MRTR continuation envelope — MIK-7212 (rollup cluster A)
 
 MRTR.1 through MRTR.10a: sealed continuation envelopes minted by the gateway, principal and
 request binding, single-use with expiry holding across replicas, replica affinity on retry,
 the modern-to-legacy `InputRequiredResult` bridge, bounded in-flight state, and never sending
-an `inputRequest` type the client has not declared. Eight UNWIRED, two ABSENT (MRTR.9, the
-declared-type check; MRTR.10a, the idempotency-key contents).
+an `inputRequest` type the client has not declared.
 
-Largest cluster, deepest security surface, and it gates two other clusters. In flight in
-another session (`src/protocol/continuation.rs`, `tests/mik_7212_acs.rs`).
-Blocks: cluster H, and MRTR.10a feeds cluster B's SUB.4 key contents.
+The mechanism is built. `redeem_retry` (`src/gateway/meta_mcp/invoke.rs:529`) is called from the
+tool-invoke path at `:1301`, and MRTR.4, MRTR.5, MRTR.6 and MRTR.9 are met with their call sites
+and tests recorded. MRTR.9a was the last of them: a client's declaration no longer flattens to
+the capability *name*, so a mode it never declared is refused instead of passing by construction.
+What is left is fourteen rows of EVIDENCE over that path — recorded runs for MRTR.1/3/7/8/10a
+and the five NFR rows that verify the envelope — not mechanism. Still the deepest security
+surface in the release, and still the cluster whose evidence is easiest to fake by re-running
+a test that was already green.
+Blocks: CONFIRM.2, and MRTR.10a feeds MIK-7272's SUB.4 key contents.
 
-### B. MCP 2026 protocol semantics — MIK-7272, 6 criteria
+### Revision surface — MIK-7272 (rollup cluster C)
 
 The small self-contained half of this cluster has landed. What remains splits two ways:
 
@@ -132,34 +137,34 @@ The small self-contained half of this cluster has landed. What remains splits tw
   EXT.1 (declare the gateway's own extensions through server capabilities),
   OTEL.1 (`traceparent`/`tracestate`/`baggage` through `_meta`).
 - **Whole feature**: TASK.1, the `io.modelcontextprotocol/tasks` extension for long-running
-  backend calls. Largest single item outside cluster A. It is also SUB.4's alternative
+  backend calls. Largest single item outside MRTR. It is also SUB.4's alternative
   branch, so a decision to build it changes SUB.4's scope.
 
-### C. Backend era detection — MIK-7217, 2 criteria
+### Era detection — MIK-7217 (rollup cluster B)
 
 DISCOVER.4 (detect a backend's protocol era by probing, never by trusting a version string)
 and DISCOVER.5 (cache the detected era per backend, re-probe when a cached assumption fails).
 DISCOVER.1-3 are met; one coherent design covers what is left.
-Blocks: cluster D's HEADER.9, which is conditioned on what the peer negotiated.
+Blocks: HEADER.9, which is conditioned on what the peer negotiated.
 
-### D. Header forwarding — MIK-7214, 1 criterion
+### Header forwarding — MIK-7214.HEADER.9 (rollup residue)
 
 HEADER.9 alone: outbound requests carry the modern `_meta` envelope and the standard headers,
-and only where the peer negotiated them. Cannot be finished before cluster C.
+and only where the peer negotiated them. Cannot be finished before era detection.
 
-### E. Principal-keyed security — MIK-7215, 1 criterion
+### Principal-keyed security — MIK-7215.CONTROL.4 (rollup residue)
 
 CONTROL.4: session-lifecycle TTL reaping owns the cleanup that disconnect used to do.
 TENANT.1, CONTROL.2 and CONTROL.3 closed — the theme they shared, that session identity was
 the wrong key, is settled everywhere except reaping.
 
-### F. Response-cache keying — MIK-7213, 2 criteria
+### Response-cache keying — MIK-7213 (rollup cluster D)
 
 CACHE.3 (public scope only, with proof and a decision table) and CACHE.4 (shared cache keyed
 on all eight response-varying inputs plus a policy epoch). Both are correctness-of-caching
 questions, independent of everything above, and safe to run in parallel.
 
-### G. Schema validity — closed, and the letter is retired
+### Schema validity — closed
 
 An earlier revision of this file carried a cluster here for `MIK-6865.SCHEMA.1`: schemas valid
 under JSON Schema 2020-12, no validator in the dependency tree, a crate decision before a test.
@@ -168,18 +173,18 @@ validates every emitted `inputSchema` against the meta-schema through the `jsons
 in both Traditional and Code Mode, with a falsifier proving the validator rejects an invalid
 schema. `SCHEMA.1` is not a row: the split scored it `1a`/`1b`/`1c`, and `1a` and `1b` are MET.
 What is left of MIK-6865 is `SCHEMA.1c`, the `$ref` and composition bounds, which is a test
-against the same emitted surface and sits in cluster J.
+against the same emitted surface and sits in the ledger-split residue.
 
 The letter is retired rather than reused. A reused letter makes two different plans read alike.
 
-### H. Confirmation gate reachability — MIK-7246.CONFIRM.2
+### Confirmation-gate reachability — MIK-7246.CONFIRM.2 (rollup residue)
 
 The destructive-action confirmation gate must be reachable through the MRTR path so a modern
 client can actually confirm. CONFIRM.1b closed 2026-08-31 and CONFIRM.1a is answered in the
-working tree (see cluster I below); this is the other half of the pair and it cannot be
-built before cluster A lands.
+working tree (see the stdio dispatch path below); this is the other half of the pair and it
+cannot be built before MRTR lands.
 
-### I. The stdio dispatch path — NFR.OBS.1, NFR.OBS.2, MIK-7246.CONFIRM.1a, 3 criteria
+### Stdio dispatch path — NFR.OBS.1, NFR.OBS.2, MIK-7246.CONFIRM.1a (rollup cluster G)
 
 One wiring question answers all three rows. The gateway serves MCP over two transports and
 all three controls started in the HTTP router only: both migration-telemetry records in
@@ -213,7 +218,7 @@ Design first, and it is one design: where the shared dispatch seam belongs, whet
 the same middleware or the gate moves below both routers, and what either does to an existing
 stdio deployment that has never been asked to confirm anything.
 
-### J. Residue from the ledger splits — 3 criteria
+### Residue from the ledger splits (rollup residue)
 
 `MIK-6704.IDENT.1a`, `MIK-6865.SCHEMA.1c` and `MIK-7215.CONTROL.3a` became blocking when their
 parents were split, and they are grouped only by that shared origin — nothing else connects
@@ -237,10 +242,10 @@ scheduled independently of that cluster; the four that stand alone are the excep
 
 | row | where it lands |
 |---|---|
-| SEC.2, SEC.3, SEC.4, PERF.3, OBS.4 | with cluster A — each verifies the continuation envelope, and none can be written against an unwired path |
-| OBS.3 | with cluster C — there is no era detection to observe until C lands |
-| OBS.1, OBS.2 | cluster I, above |
-| COMPAT.1 | with cluster B — the ABSENT clause is the modern revision being served at all, which the `server.modern_protocol` default gates and B's work unblocks, not a separate task |
+| SEC.2, SEC.3, SEC.4, PERF.3, OBS.4 | with MRTR — each verifies the continuation envelope, and none can be written against an unwired path |
+| OBS.3 | with era detection — there is nothing to observe until it lands |
+| OBS.1, OBS.2 | the stdio dispatch path, above |
+| COMPAT.1 | with MIK-7272 — the ABSENT clause is the modern revision being served at all, which the `server.modern_protocol` default gates and B's work unblocks, not a separate task |
 | PERF.1, PERF.2 | wave 0, measured 2026-09-03 on `spark`. PERF.2 is MET; PERF.1 stays open as PARTIAL — the harness yields no P50 or P99, and only an end-to-end comparison against a 3.5.0 binary does |
 | PERF.4 | wave 1 — the operator's ruling left the ceiling standing and the counting mechanism undecided |
 | SEC.1 | wave 3 — twelve of fifteen controls carry a refusal test; two remain, and one is blocked on files another session owns |
@@ -272,16 +277,37 @@ things, and it is the one most likely to be skipped under release pressure.
 **Wave 2 — cleared.** ERROR.2, RESULT.2 and HEADER.5 are met. Nothing is queued here; the
 heading stays so the wave numbering below does not silently shift.
 
-**Wave 3 — implementation of wave 1.** Plus D's HEADER.9 once C lands, and E's CONTROL.4,
-which depends on nothing and can move earlier if a slot opens. J's three rows are tests against
-mechanisms that already exist and can fill any slot in this wave; I's implementation lands here
-too, and its confirmation-gate half should not be the part that slips, because it is the only
-row in either cluster where the gap is a security control rather than a missing assertion.
+**Wave 3 — implementation behind a reviewed design.** Response-cache keying (MIK-7213) is the
+only cluster whose design *and* test plan have both cleared dual review — 2026-09-03, both legs
+`process_status: ok`, both SHIP-WITH-FIXES — so it is the one item here that can start on code
+today. HEADER.9 follows era detection; CONTROL.4 depends on nothing and can move earlier if a
+slot opens. The ledger-split residue is tests against mechanisms that already exist and fills
+any slot. The stdio dispatch path lands here too, and its confirmation-gate half should not be
+the part that slips: it is the only row in the set where the gap is a security control rather
+than a missing assertion.
 
-**Wave 4 — the two long poles.** Cluster A (in flight) and B's TASK.1. H follows A.
+**Wave 4 — the long pole is now MIK-7272, not MRTR.** The continuation envelope is wired,
+redeemed on the tool-invoke path and green (`redeem_retry`, `src/gateway/meta_mcp/invoke.rs:529`,
+called at `:1301`; 18 + 25 passing at `b5d4ce7f`). Its fourteen remaining rows are EVIDENCE over
+a path that exists — recorded runs and the five NFR rows that verify it — not mechanism, which
+is why they can be produced alongside other work rather than gating it. CONFIRM.2 follows it.
+What is left with no design, no test plan and no code is the revision surface (MIK-7272, seven
+rows, five separate half-wirings) and era detection's `NFR.OBS.3`. Those are the schedule now.
 
-Clusters A and E are owned by other sessions. Coordinate before touching
-`src/protocol/continuation.rs`, `src/security/firewall/`, or their test files.
+**Wave 5 — the two measurements.** `NFR.PERF.1` needs a P50 and a P99 that the component
+session on `spark` could not produce: no wire, no backend, no queue, therefore no latency
+distribution. Only an end-to-end comparison against a 3.5.0 binary closes it. `NFR.COMPAT.4`
+needs the dual-role matrix run. Neither turns on any other cluster, and neither can be
+satisfied by reading source, which is why they are last and why they must not be discovered
+last.
+
+**The one-line flip that is not a one-line change.** `NFR.COMPAT.1` is `server.modern_protocol`
+defaulting to true (`src/config/mod.rs:1174`). The operator ruled on it 2026-09-02. It cannot
+land before the revision surface does, because default-on turns every gap there into a
+first-run defect rather than an opt-in one.
+
+Ownership: `src/protocol/continuation.rs`, `src/security/firewall/` and their test files are
+touched by other sessions. Coordinate before editing them.
 
 ## Open for the operator
 
@@ -309,13 +335,13 @@ against a MUST is an unmet requirement, and here the MUST is the protocol's, not
 The work is smaller than "rewrite the transports". Revision 2026-07-28 **removed** server-to-client
 requests from the stream entirely — "the server **MUST NOT** send independent JSON-RPC *requests* on
 this stream", with sampling, elicitation and list-roots now embedded in an `InputRequiredResult`
-(the MRTR pattern, cluster A). So no bidirectional request routing is needed on the response stream:
+(the MRTR pattern). So no bidirectional request routing is needed on the response stream:
 read to the final response instead of stopping at the first event, and stop discarding id-less
 messages. Two reads and a routing rule, not a redesign.
 
 It also **eliminates** SUB.2's routing design rather than patching it. Correlation is by the stream,
 which is scoped one-to-one to the request that opened it — there is no request key to route by, and
-building one would invent a mechanism the protocol already provides. Cluster B's design must drop
+building one would invent a mechanism the protocol already provides. MIK-7272's design must drop
 that clause, not shrink it.
 
 Both follow-on questions were checked on 2026-08-31 and only one of them was a worry.
@@ -477,12 +503,12 @@ this branch, and a wrong author line costs less than a rebase underneath four of
   so the shared machinery cannot reach it whatever the scope decision says. The assumption had been
   carried through three designs unread. What is still open is narrower and is item 4 above: whether
   that route deserves its own instrumentation, and whether CACHE.1-4 are HTTP-only.
-- If the era cache should be keyed per pool slot rather than per backend name, cluster C's
+- If the era cache should be keyed per pool slot rather than per backend name, era detection's
   DISCOVER.5 changes by one field, one lookup and one section. It is keyed per backend NAME on the
   team lead's call, provisional and not operator-confirmed: era is a property of the peer process,
   and every slot of one named backend dials the same command or URL, so per-slot keying means one
   probe per user slot against the same remote. The named residual is that one slot's mis-detection
   reaches its siblings; DISCOVER.5's re-probe half is what pays for it, and per-slot has no
   equivalent.
-- If cluster A slips, H slips with it and MRTR.10a's key contents stay open, which leaves
+- If MRTR slips, CONFIRM.2 slips with it and MRTR.10a's key contents stay open, which leaves
   SUB.4 implementable but not fully specified.
