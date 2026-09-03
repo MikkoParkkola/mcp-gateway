@@ -152,19 +152,28 @@ alone broadcasts every principal's task status to every listener. It must filter
 requested task ids **and** the authenticated owner. Owned by `TASK.1`'s own increment,
 not by the placement map that found it.
 
-## Cluster D's test file does not test the criterion it is named for
+## Cluster D covers one row of CACHE.4 and declares the rest uncovered
 
-`tests/mik_7213_acs.rs` exists, compiles and passes, and contains no case for
-`CACHE.4a` or `CACHE.4b`. A file named after a ticket reads as coverage of that
-ticket, which is why this was not noticed earlier — the name is doing work the
-contents do not.
+`tests/mik_7213_acs.rs:363-367` carries a header naming exactly what it covers — test
+plan row `4.b` — and enumerating what it does not: backend pair `4.a`, behavioural
+identity `4.c`, routing profile `4.d`, protocol revision `4.e`, policy epoch
+`4.f.1`-`4.f.3`. `ac_cache_4_two_principals_do_not_share_an_entry` (:371) calls
+`ResponseCache::response_key` — production, not a helper — asserts two authorization
+identities do not collide, and carries two controls: a determinism assertion, so it
+cannot pass on a key that is merely different every time, and `key(None) == key(None)`,
+so unidentified callers are not split into a key that can never hit. It can go red.
 
-So D needs two artifacts, not one: the implementation, and a red test for each of
-`4a`/`4b` written before it. Do not repair the existing file into place around a
-finished implementation; a test written after the code agrees with the code.
+An earlier revision of this section said the file "contains no case for `CACHE.4a` or
+`CACHE.4b`". The `4.b` half was false and is corrected here; verified at source
+2026-09-03, and `ac_cache_4_two_principals_do_not_share_an_entry` is the only
+`CACHE.4` case in the tree.
 
-Recorded here so the next session does not rediscover it by reading the filename
-and believing it.
+D's real gap is `4.a` and `4.c`-`4.f`, and it is a **declared** gap — enumerated in a
+comment, visible to anyone opening the file, producing no false coverage signal. That
+is what §P2 asks for: an empty evidence cell that reads as the finding. Those rows
+still need a red test written before the implementation, because a test written after
+the code agrees with the code. The file's own header is the model for how to record
+what a test does not reach.
 
 ## EXT.1 must not declare the extension it currently knows about
 
@@ -190,10 +199,12 @@ increment splits cleanly:
 That ordering is the same one the placement map arrived at from the other direction,
 for an independent reason, which is some comfort that it is right.
 
-## Two clusters have tests that cannot fail for the criterion they are named for
+## Cluster C has tests that cannot fail for the criterion they are named for
 
-Cluster D's gap was recorded above as a missing case. Cluster C has the same defect in
-its other form, and together they are a class rather than two accidents.
+Recorded first as a two-cluster class alongside cluster D. That was wrong: D's gap is
+declared in its own file header and produces no false coverage signal, which is the
+behaviour we want more of, not an instance of the defect. Merging the two inverted the
+sign on the honest one. The class stands at n=1, and the case below is it.
 
 All four `ac_ext_1_*` cases in `tests/mik_7272_exploit_acs.rs:18-60` call
 `ExtensionSet::gateway_declares()` directly. None constructs or serializes a
@@ -207,15 +218,16 @@ over today. Two of the four go further and assert the post-`TASK.1` world:
 it. Both are green with zero production wiring and stay green through `EXT.1`'s entire
 increment.
 
-So the class is: **a test file named for a criterion, exercising a mechanism the
-criterion does not turn on.** D's version omits the case; C's version asserts a
-mechanism in isolation. Both pass, both read as coverage, and neither can go red for
-the increment it belongs to — the §P2 Q2 failure, twice, in two clusters, found only by
-reading the tests as tests rather than counting them.
+So the defect is: **a test file named for a criterion, exercising a mechanism the
+criterion does not turn on.** It passes, it reads as coverage, and it cannot go red for
+the increment it belongs to — the §P2 Q2 failure, found only by reading the tests as
+tests rather than counting them. What makes it the silent form is that the filename and
+the green tick both say covered while nothing declares the gap.
 
-Worth assuming a third instance exists. The check is cheap and mechanical: for each
-criterion, name the observable the criterion is about, then confirm some test touches
-*that* rather than a helper beneath it.
+The discriminating check is cheap and mechanical, and is what cleared cluster D: for
+each criterion, name the observable the criterion is about, then confirm some test
+touches *that* rather than a helper beneath it. Worth running over the other clusters —
+but on one instance, not on a count of two.
 
 The four `ac_ext_1_*` cases cite `RELEASE-4.0.0-test-plan.md` §"Increment 10" in their
 own header, so the repair belongs to whoever owns that plan.

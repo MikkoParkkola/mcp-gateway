@@ -59,11 +59,12 @@ five fields on the **captured wire request** — after the static and per-reques
 header merges (`:607-616`, `:618-624`), not on `build_mcp_headers`' return
 value, which is private and sees none of them.
 
-Beyond the matrix, five cases for the rules the matrix cannot express:
+Beyond the matrix, six cases for the rules the matrix cannot express:
 
 | case | asserts | can fail because |
 |---|---|---|
 | named-method coverage | `Mcp-Name` present for each of `tools/call`, `resources/read`, `prompts/get`, and absent for one method that is not | a per-method table, run against the production selector, not a hand-listed pair |
+| `Mcp-Name` mirrors the body | the header's **value** equals the body field the method selects — `params.name` for `tools/call` and `prompts/get`, `params.uri` for `resources/read` (`headers.rs:47`) — asserted per method against a body whose field is set to a value the builder could not invent | a presence assertion passes against a header carrying any string, including one read from the wrong field; each method's fixture uses a distinct sentinel value, so a builder that reads `params.name` for `resources/read` sends the other method's value and the case fails on the comparison rather than on absence |
 | `_meta` merge shapes | absent `params` → object holding only `_meta`; object `params` → merged, foreign `_meta` keys kept (`clientInfo` among them, neither inserted nor stripped), the two reverse-DNS keys this design writes overwritten; non-object `params` → untouched, no declaration | three distinct inputs with three distinct expected bodies; the third asserts the body is byte-identical to what went in |
 | version pinning | a backend configured with a custom `MCP-Protocol-Version` still sends `MODERN_VERSIONS[0]` on the modern path, and its body agrees | the custom header is set to a value the builder would never produce, so an implementation that skips the re-assertion emits it |
 | non-ASCII `Mcp-Name` (HEADER.4a) | a tool whose name is not representable in ASCII is emitted Base64-sentinel-wrapped, and `decode_header_value` round-trips it back to the original | the encoder does not exist yet, so this case fails on today's tree in one of two ways — illegal header bytes, or a silent mangle — and the round-trip assertion distinguishes them from a value that merely looks wrapped |
