@@ -109,6 +109,10 @@ fn default_routing_profile() -> String {
     "default".to_string()
 }
 
+fn default_prompts_resources_fetch_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct EnvFileConfig {
@@ -900,7 +904,10 @@ pub struct MetaMcpConfig {
     /// rather than the sum of all backends. A backend that exceeds the bound —
     /// slow OR hung — is skipped for that response; its prompts/resources
     /// reappear once it recovers. Defaults to 10 seconds.
-    #[serde(default, with = "humantime_serde")]
+    #[serde(
+        default = "default_prompts_resources_fetch_timeout",
+        with = "humantime_serde"
+    )]
     pub prompts_resources_fetch_timeout: Duration,
     /// Backends to warm-start on gateway startup.
     #[serde(default)]

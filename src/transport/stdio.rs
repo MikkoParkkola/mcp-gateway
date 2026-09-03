@@ -569,6 +569,22 @@ mod tests {
     #[cfg(unix)]
     const EXPLICIT_BACKEND_ENV: &str = "MCP_GATEWAY_TEST_EXPLICIT_BACKEND";
 
+    #[test]
+    fn pending_request_guard_removes_entry_on_drop() {
+        let pending: dashmap::DashMap<String, oneshot::Sender<crate::protocol::JsonRpcResponse>> =
+            dashmap::DashMap::new();
+        let (tx, _rx) = oneshot::channel::<crate::protocol::JsonRpcResponse>();
+        pending.insert("7".to_string(), tx);
+        assert_eq!(pending.len(), 1);
+
+        {
+            let _guard = PendingRequestGuard::new(&pending, "7");
+            assert_eq!(pending.len(), 1, "entry present while guard alive");
+        }
+
+        assert!(pending.is_empty(), "guard drop removes the entry");
+    }
+
     fn make_transport(cmd: &str) -> Arc<StdioTransport> {
         StdioTransport::new(
             cmd,
@@ -740,6 +756,77 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Transport(message)) if message == "Not connected"));
         assert!(t.pending.is_empty());
+    }
+
+    /// Dropping an in-flight `request()` future must not strand its `pending`
+    /// entry. This is the exact cancellation path the aggregation timeout in
+    /// `meta_mcp` exercises: an outer `tokio::time::timeout` (or a task abort)
+    /// drops the request future BEFORE the transport's own request timeout
+    /// fires, so neither the reader task nor the internal timeout removes the
+    /// entry — the RAII `PendingRequestGuard` must. A real child that answers
+    /// `initialize` but never answers `prompts/list` holds the request open so
+    /// the drop happens mid-await.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancelled_request_does_not_strand_pending_entry() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let server = workspace.path().join("server.sh");
+        std::fs::write(
+            &server,
+            r#"while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            printf '%s
+' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'
+            ;;
+        # deliberately answer NOTHING for prompts/list — holds the request open
+    esac
+done
+"#,
+        )
+        .expect("write server");
+
+        let transport = StdioTransport::new(
+            "sh server.sh",
+            HashMap::new(),
+            Some(workspace.path().to_string_lossy().into_owned()),
+            std::time::Duration::from_secs(30), // far beyond the test's abort
+            None,
+        );
+        transport.start().await.expect("start");
+
+        // Run the request on its own task so aborting it is a real cancellation
+        // (an outer `tokio::time::timeout` / task abort dropping the future
+        // mid-await) rather than a test-only `drop` of a pinned future.
+        let request_transport = transport.clone();
+        let request_task =
+            tokio::spawn(async move { request_transport.request("prompts/list", None).await });
+
+        // Wait for the request to register in `pending` — the write has happened
+        // and the child is holding the request open unanswered.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if !transport.pending.is_empty() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "precondition: request registered in pending while the child holds it open"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        // Abort the task mid-await. The child never answers, so the internal 30s
+        // timeout has not fired — the guard's Drop is what must remove the entry.
+        request_task.abort();
+        let _ = request_task.await; // reaps the handle once the task is dropped
+
+        assert!(
+            transport.pending.is_empty(),
+            "a cancelled in-flight request must not strand its pending entry"
+        );
+
+        transport.close().await.expect("close");
     }
 
     #[test]
