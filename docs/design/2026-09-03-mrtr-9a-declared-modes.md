@@ -97,10 +97,14 @@ The specification fixes one normalization that must not be invented later:
 an empty `"elicitation": {}` is equivalent to `{"form": {}}`. A client that
 declares the capability and names no mode has declared **form**.
 
-**The gateway applies the same default to the request side.** This one is the
-gateway's decision, not a specification quotation: the passage above fixes the
-*declaration* side only, and the request schema is silent on an omitted
-`params.mode`. The reason to mirror it: an `elicitation/create` entry carrying
+**The same default binds the request side, and the specification fixes that
+one too.** An earlier draft called it the gateway's own decision, on the reading
+that the passage above covers only the declaration side. It does — but a second
+passage covers the request side, and the review that questioned the attribution
+was right to. The request-parameter table for `elicitation/create` reads
+*"`mode` … Optional for form mode (defaults to `"form"` if omitted)"*
+(<https://modelcontextprotocol.io/specification/2026-07-28/client/elicitation>).
+Both defaults are normative and neither is ours to change. An `elicitation/create` entry carrying
 no `params.mode` is a *form* request, not a modeless one. Without this, the
 natural reading of "refuse a request whose mode was not declared" refuses every
 request that omits the field — a compliant form-mode request from a form-only client, which is the
@@ -167,7 +171,7 @@ object to a flat list of names — not to a bounded one. Fixing it here is in
 scope because this change rewrites that exact field; it is not a tidy-up of
 neighbouring code.
 
-Cost, stated: three sites change shape (`RequestFields`, the accessor, the two
+Cost, stated: four sites change shape (`RequestFields`, the accessor, the two
 `handlers.rs` consumers at `:693` and `:1152`), and one type crosses from
 `meta.rs` into `mrtr.rs`'s signature.
 
@@ -209,7 +213,11 @@ a shared channel, and that `invoke_tool` puts a *backend's* error data into the
 same variant, so forwarding wholesale would let a backend choose the gateway's
 HTTP status. The change is therefore to add **one more gateway-owned key** to
 that allowlist, alongside the existing one — the same discipline, one entry
-wider. The plan's case 6 asserts the payload after this conversion, not before.
+wider. The key is named here so that the write site, the allowlist and the test
+cannot each pick their own: **`unsupportedElicitationMode`**, a constant beside
+`REQUIRED_CAPABILITIES_DATA_KEY` (`src/gateway/meta_mcp/invoke.rs:626`), whose
+value is the refused mode as the gateway's own enum renders it — never the
+caller's string. The plan's case 6 asserts the payload after this conversion, not before.
 
 The refusal **message** changes too. Today it reads *"client did not declare the
 'elicitation' capability"*, which is false for a client that declared
@@ -266,7 +274,7 @@ adopted, so there is nothing to attribute.
 
 ## Unknowns
 
-Both **resolved**; per §P1 each records the answer, not the plan to get one.
+All four **resolved**; per §P1 each records the answer, not the plan to get one.
 
 - *Is the red case genuinely red, or is it ignored/absent?* — ran
   `cargo test --test mik_7212_acs ac_mrtr_9a` — **1 passed, 1 failed**, the
@@ -279,5 +287,12 @@ Both **resolved**; per §P1 each records the answer, not the plan to get one.
 - *Is a null-valued mode a declaration?* — read `meta.rs:67-69` — no; the
   existing rule already answers it — **changed:** nothing, and saying so is the
   point: the rule generalizes one level down without amendment.
+
+- *Is the request-side omitted-mode default ours or the specification's?* —
+  fetched the elicitation specification page and read its request-parameter
+  table — the entry reads *"Optional for form mode (defaults to `"form"` if
+  omitted)"*, so the rule is normative — **changed:** reversed this document's
+  attribution of that default, and with it the reversibility argument: a
+  gateway policy could be revisited, a MUST cannot.
 
 **Deferred:** none. Nothing in this change waits on an open question.
