@@ -113,3 +113,35 @@ is left without a next step.
 Order is dependency, not preference: everything in cluster A waits on step 1, and
 F waits on A **and** C, which is why the default flip is the last thing to land.
 Steps 3, 5 and 7 wait on nothing at all, so steps 1, 3 and 5 can run at the same time.
+
+## One question is open, and it is the operator's
+
+`ORDER.2` removes per-session routing profiles — the mechanism where a client sets a
+filter on its connection and later listings come back narrowed. The operator approved
+removing it from the modern path. The cluster-placement work reads the option under
+consideration as removing it for **every** protocol era, which also deletes
+`gateway_set_profile` and `gateway_get_profile` for 2025-era clients. That is wider
+than what was approved and it is user-visible, so it is not an engineering call.
+
+| field | |
+|---|---|
+| owner | the operator; put to them 2026-09-03, no answer yet |
+| what would resolve it | the answer itself — an asked question, not a checkable one. No inspection of the tree settles what the product should do for a 2025-era client |
+| when | before `ORDER.2a`/`ORDER.2b` are implemented; nothing else in cluster C waits on it |
+| what if it resolves badly | narrow to the modern path only. `ORDER.2` is a 2026-protocol conformance criterion, so meeting it on the modern path alone still closes the row; the cost is an era branch and a connection-invariance property that holds on one path of two |
+
+Recommendation on record: **remove it for every era.** One behaviour, the mechanism
+leaves the tree, and no era condition survives for a later change to get wrong — the
+elimination the repair protocol prefers over a patch, taken at the major version where
+a break is cheapest. It needs a migration note either way.
+
+`ORDER.2a` and `ORDER.2b` are the only rows that depend on this. The other five —
+`EXT.1`, `OTEL.1`, `TASK.1`, `SUB.4`, `SUB.2b` — do not, and `EXT.1` is the one to
+start on: the `extensions` field it needs on `ServerCapabilities`
+(`src/protocol/types.rs:232`) is also `TASK.1`'s blocker from the other side.
+
+`TASK.1` additionally carries an unrepaired cross-principal leak, raised CRITICAL and
+recorded as `MIK-7272.TASK.1.9`: filtering a task-scoped stream by notification kind
+alone broadcasts every principal's task status to every listener. It must filter by the
+requested task ids **and** the authenticated owner. Owned by `TASK.1`'s own increment,
+not by the placement map that found it.
