@@ -355,3 +355,24 @@ behaviour, unchanged by this row and not worsened by it.
 Nothing in this change depends on that answer: the mode gate refuses a mode the
 client did not declare, which is a capability question, and it never
 reclassifies a method.
+
+## Review record
+
+Three dual-vendor rounds on this document and its sibling test plan. Round 1
+found a missing matrix row that changed what the plan covers; round 2 found
+repairs that had moved a defect rather than removed it; round 3 found only
+residue from round 2's repairs — a phrase to delete, a count to reconcile, a
+cell to name. Finding count stayed flat while severity collapsed, which is the
+signal the process document names: a round that only tightens edges is
+polishing a protocol that should be code. Design review closes here; the next
+verdict is taken on the implementation.
+
+**Declined — a typed return from `required_capability`.** Both rounds raised it
+as an improvement: the function answers with one of three `&'static str`
+values, and this change converts those back into set members, so a fourth
+capability would compile silently rather than fail. Real, and out of scope per
+§P0 — it changes a signature this change only reads, on the capability axis
+rather than the mode axis, and the conversion it removes is three arms of a
+match with no caller string in it. Recorded as an observation rather than a
+ticket: the disposal a finding earns when it is worth remembering and nobody
+must act.
