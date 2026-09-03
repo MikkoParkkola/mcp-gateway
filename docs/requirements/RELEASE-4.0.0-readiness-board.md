@@ -315,12 +315,31 @@ nothing about its criterion satisfies a name-resolution check exactly as well as
 real one. Three of the four rows above would have survived it. Only the D row,
 where the named test is simply absent, would have been caught.
 
-What eliminates it is the rule `development-process.md` §P2 already states and
-this release has not been applying: **a criterion's evidence is a test that has
-been observed to fail for that criterion.** The row carries the observation, not
-the name — the revision the defect was present at, and the assertion that fired.
-A row whose test has never been seen red is a row with no evidence, and that is
-checkable by a person and, later, by the matrix.
+What eliminates it is a rule about **observation**, not about names: a row's
+evidence is an observation that the criterion could have come out the other way.
+The row carries the observation; the test name is a pointer to it.
+
+**The observation that counts is the one the criterion's own `Verify` column asks
+for.** `RELEASE-4.0.0-requirements.md` declares a method per criterion — `T` test,
+`M` measurement, `I` inspection, `D` documentation — and a universal red-test rule
+would fail every non-`T` row by construction, which is a defect in the rule rather
+than in the row. Of the criteria carrying a method, 12 are `T`, 3 `M`, 4 `I`, 1 `D`.
+
+| method | what the row records | what makes it falsifiable |
+|---|---|---|
+| `T` | the revision the test was observed **red**, the assertion that fired, the revision it is **green** at, and the run count behind the green | the red. `development-process.md` §P2: a test written first "fails because the implementation does not exist — that failure is free and real"; for a test retrofitted to existing code it prescribes the falsifier probe, restoring pre-fix content and showing the test "must FAIL, on the assertion you expect" |
+| `M` | the command, the revision, the numbers, and the budget or baseline compared against | a stated threshold the measurement could have missed. A number with no threshold is a reading, not evidence |
+| `I` | what was inspected, at which revision, and the property checked | a counter-example the inspection would have found. `NFR.PERF.4`'s ceiling is 14–16 tools: a count of 17 is the counter-example |
+| `D` | the document, the revision, and the claim it carries | the claim being absent or contradicted elsewhere |
+
+Two consequences the rows above depend on. **A green alone re-derives nothing** — a
+`T` row names both revisions or it is unverified, because a test passing today is
+consistent with a test that has never been able to fail. And **editing an evidence
+test invalidates its recorded red**: the assertion that fired at the old revision is
+no longer the assertion the row rests on, so the row owes a fresh red or a falsifier
+probe before it may be re-marked MET. `1b13b255` edited `OBS.1`'s assertion, and that
+row's transcript (`audit-notes/2026-09-04-obs1-flake-transcript.md`) records what it
+may claim under this rule and why.
 
 Also raised by both, and separable: `a_shared_extension_is_negotiated`
 (`src/protocol/extensions.rs:169`) negotiates a set with itself, so a `negotiate`
