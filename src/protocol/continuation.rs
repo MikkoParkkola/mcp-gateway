@@ -579,11 +579,6 @@ impl ConsumedLedger {
 pub enum Routing {
     /// This replica holds the exchange.
     Here,
-    /// Another replica holds it, and the retry belongs there.
-    Elsewhere {
-        /// The replica that holds the open request.
-        replica: String,
-    },
     /// Nobody holds it: evicted, expired, or the holder is gone.
     Gone,
 }
@@ -599,8 +594,9 @@ pub enum Routing {
 ///
 /// The open RPC lives on exactly one replica, and a stateless client's retry
 /// may land on any of them — which is why `origin_replica` travels inside the
-/// sealed envelope. A retry that arrives in the wrong place is **routed**, and
-/// one whose holder is gone **fails explicitly**. Starting a second exchange
+/// sealed envelope. A retry that arrives anywhere but the minting replica
+/// **fails explicitly**; there is no affinity to send it home with. Starting a
+/// second exchange
 /// instead would leave the first hanging and ask the user the same question
 /// twice; for a destructive tool, the second answer would authorise a call the
 /// first one already authorised.
@@ -641,7 +637,16 @@ impl InFlight {
         Some(key)
     }
 
-    /// Where a retry for `key` belongs, given the replica that received it.
+    /// Whether this replica still holds the exchange for `key`.
+    ///
+    /// There is no third answer. The holder recorded in the table is always
+    /// this replica, because `hold` is the only thing that writes one, so a
+    /// retry that reaches the wrong process asks a table that never knew the
+    /// key and is told `Gone`. That is the design's own bargain
+    /// (`docs/design/2026-08-30-shared-continuation-state.md:116`): the
+    /// cross-replica guarantee holds cryptographically, with no shared store
+    /// and **no affinity**, and MRTR.6's second arm — fail explicitly — is
+    /// what serves the criterion.
     ///
     /// Waits for the lock rather than answering under contention. `Gone` means
     /// the exchange no longer exists and a caller acts on it by failing the
@@ -650,13 +655,10 @@ impl InFlight {
     /// this table exists to prevent. The wait is bounded by the map operations
     /// the other holders are performing, all of which are O(1) or a retain over
     /// a table with a capacity.
-    pub async fn route(&self, key: &str, receiving_replica: &str) -> Routing {
+    pub async fn route(&self, key: &str) -> Routing {
         let held = self.held.lock().await;
         match held.get(key) {
-            Some((holder, _)) if holder == receiving_replica => Routing::Here,
-            Some((holder, _)) => Routing::Elsewhere {
-                replica: holder.clone(),
-            },
+            Some(_) => Routing::Here,
             None => Routing::Gone,
         }
     }

@@ -401,26 +401,41 @@ mod inflight {
         let table = InFlight::new("gw-1", 100);
         let key = table.hold("weather", 2_000).await.expect("capacity");
 
-        assert!(matches!(table.route(&key, "gw-1").await, Routing::Here));
+        assert!(matches!(table.route(&key).await, Routing::Here));
     }
 
     #[tokio::test]
-    async fn ac_mrtr_6_a_retry_landing_elsewhere_is_sent_to_the_holder() {
-        // Not started afresh. Beginning a second exchange would leave the first
-        // one hanging on another replica and ask the user the same question
-        // twice — and for a destructive tool, the second answer would authorise
-        // a call the first one already authorised.
-        // gw-1 holds the open request; the retry lands on gw-2.
-        let table = InFlight::new("gw-1", 100);
-        let key = table.hold("weather", 2_000).await.expect("capacity");
+    async fn ac_mrtr_6_a_retry_landing_on_another_replica_fails_explicitly() {
+        // MRTR.6 offers two arms — reach the replica holding the exchange, OR
+        // fail explicitly — and the accepted design took the second: the
+        // cross-replica guarantee holds cryptographically, with no shared store
+        // and no affinity. This is that arm, at the boundary where it matters.
+        //
+        // Not started afresh, which is the outcome the criterion forbids:
+        // beginning a second exchange would leave the first hanging on another
+        // replica and ask the user the same question twice — and for a
+        // destructive tool, the second answer would authorise a call the first
+        // one already authorised. `Gone` is a refusal the client can act on.
+        //
+        // Two tables, because that is what two replicas are: `InFlight` is per
+        // process with no shared store. A single table cannot stage this — it
+        // would have to be asked about a key it minted itself, which is the
+        // same-replica case one test up.
+        let minting = InFlight::new("gw-1", 100);
+        let receiving = InFlight::new("gw-2", 100);
+        let key = minting.hold("weather", 2_000).await.expect("capacity");
 
-        match table.route(&key, "gw-2").await {
-            Routing::Elsewhere { replica } => assert_eq!(
-                replica, "gw-1",
-                "the retry belongs where the exchange is held, not where it arrived"
-            ),
-            other => panic!("a retry for another replica must be routed there, got {other:?}"),
-        }
+        assert!(
+            matches!(receiving.route(&key).await, Routing::Gone),
+            "a retry for an exchange another replica holds is refused, never restarted"
+        );
+        // AND the exchange is still open where it was minted: the refusal above
+        // must be the receiving replica not knowing, never the exchange having
+        // been consumed or invalidated by the attempt.
+        assert!(
+            matches!(minting.route(&key).await, Routing::Here),
+            "the minting replica still holds the exchange after a foreign retry"
+        );
     }
 
     #[tokio::test]
@@ -429,10 +444,7 @@ mod inflight {
         // the honest answer is a refusal the client can act on — never a silent
         // second exchange.
         let table = InFlight::new("gw-1", 100);
-        assert!(matches!(
-            table.route("no-such-key", "gw-1").await,
-            Routing::Gone
-        ));
+        assert!(matches!(table.route("no-such-key").await, Routing::Gone));
     }
 
     #[tokio::test]
@@ -460,7 +472,7 @@ mod inflight {
 
         table.reap(1_001).await;
         assert!(
-            matches!(table.route(&key, "gw-1").await, Routing::Gone),
+            matches!(table.route(&key).await, Routing::Gone),
             "an abandoned exchange must not hold its slot forever"
         );
         assert!(
@@ -908,7 +920,7 @@ mod hardening {
         assert!(table.complete(&key).await);
 
         assert!(
-            matches!(table.route(&key, "gw-1").await, Routing::Gone),
+            matches!(table.route(&key).await, Routing::Gone),
             "a retry against a finished exchange must fail explicitly"
         );
     }
@@ -941,7 +953,7 @@ mod hardening {
         };
         for _ in 0..500 {
             assert!(
-                matches!(table.route(&key, "gw-1").await, Routing::Here),
+                matches!(table.route(&key).await, Routing::Here),
                 "a held exchange must route to its holder even under contention"
             );
             tokio::task::yield_now().await;

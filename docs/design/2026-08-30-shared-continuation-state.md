@@ -210,7 +210,38 @@ extracted when the forwarder exists and has a shape to fit.
    operator can tell a continuation that cannot be authenticated here from a replay attempt. It
    deliberately does **not** name the replica that could have served it: nothing outside the sealed
    envelope can make that claim without being forgeable.
-4. **A single-replica deployment is no longer a documented requirement** of the modern protocol
+4. **`Routing::Elsewhere` is deleted rather than left unreachable**, and `InFlight::route`
+   loses its `receiving_replica` parameter with it. Recorded here because the design did not name
+   it: the deletion of a production enum variant is a decision this document had not made, and an
+   unnamed decision reaches no review.
+
+   It is unreachable by two independent mechanisms, either of which alone is sufficient.
+   `InFlight::hold` (`src/protocol/continuation.rs:634`) is the only writer of a holder, and it
+   writes `self.replica`, so within one table the holder is always that replica — the parameter
+   could only ever be handed the value it was compared against. And `InFlight` is per process with
+   no shared store, so a second replica asking its own table for a key it never minted is told
+   `Gone`, and cannot learn the holder from the sealed envelope either, because that envelope is
+   `NotAuthentic` under its key (decision 2).
+
+   The variant *is* affinity, which is precisely what this design gave up: the cross-replica
+   guarantee holds "cryptographically, with no shared store, no new dependency and **no affinity**",
+   and the price is stated above — a retry against a round-robin service is refused on every replica
+   but the minting one. `MIK-7212.MRTR.6` offers two arms, "reach the replica holding the exchange,
+   **or fail explicitly**"; this design took the second, and the criterion survives the deletion
+   served by the `Gone` path.
+
+   This is an elimination, not a repair. After it the finding cannot be restated: there is no
+   variant to be unreachable, and no parameter whose only legal argument is the field beside it.
+   The test that asserted the variant worked is replaced by one asserting what actually happens at
+   the two-replica boundary — a foreign retry is refused, *and* the minting replica still holds the
+   exchange afterwards, so the refusal is the receiver not knowing rather than the attempt having
+   consumed it.
+
+   Note left standing, deliberately: the holder string is still stored in the table and is now read
+   by nothing. Removing it would cascade into `self.replica` and is a wider change than this one
+   declared. Recorded as an observation, not filed.
+
+5. **A single-replica deployment is no longer a documented requirement** of the modern protocol
    path. `docs/DEPLOYMENT.md:125-142` is rewritten in this change to say what now holds — which is
    that a retry is *refused* unless it lands on the minting process, not that multi-replica is now
    free. An operator reading the second thing would file every origin-miss refusal as a regression.
