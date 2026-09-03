@@ -17,7 +17,7 @@ nobody intends to do it.
 | A | continuation envelope (MIK-7212) | 22 | yes — `2026-08-30-mrtr-wiring.md`, `2026-08-30-shared-continuation-state.md`, `2026-09-01-continuation-telemetry.md` | yes — `2026-09-02-mrtr-test-plan.md` | yes | **partial** — the route is wired as of `a69e2bc5`; `cargo test --test mik_7212_mrtr_component_acs` gives **18 passed, 0 failed**, from 15 red | two rows. `MRTR.6` is green on a **weaker assertion than the criterion states**: a continuation `Payload` carries no correlation to an in-flight hold key, so "the exchange *this handle* continues is gone" cannot be expressed, and the strongest available check is "no exchange exists at all". The test passes; it agrees with the code rather than the requirement, which is the failure a plan review exists to catch. Needs a design before the row can be claimed. `MRTR.9a` is unimplemented rather than broken — a client's declaration flattens to the capability *name*, so the mode substructure is discarded and a url-mode request passes the gate by construction. And `mik_7215_acs::http::a_well_formed_retry_…` served a well-formed retry as a fresh `tools/call`. The cause was **not** an HTTP-only path — both dispatchers already reach `handle_tools_call`. `route_retry_to_origin_backend` exempted the whole `gateway_` prefix, so a retry naming any meta-tool was routed as a fresh call with its continuation never opened; narrowed to the two that carry their own server and tool (`965fdf3a`). The test asserted **400**; a well-formed retry this gateway will not redeem is an application denial, so it is `-32602` at **200**, and the assertion moved to the layer that issues it (`5c29494a`). `cargo test --test mik_7215_acs` gives **25 passed, 0 failed**, and the component suite is unmoved at **18 passed, 0 failed** — both verified at `5c29494a` |
 | B | era detection (MIK-7217) | 5 | partial — `2026-08-31-discover-outbound-era-probe.md` covers `DISCOVER.4`; **`NFR.OBS.3` appears in no design document** | no | no | no | a design that covers all five rows, not four |
 | C | revision surface (MIK-7272) | 7 | scattered across five files (`sub-4-idempotency-wiring`, `sub-1-3-get-mcp-era-gate`, `task-1-tasks-extension`, `cluster-b-*`) | no | no | no | five half-wirings with no single owner and no plan that reads as one change |
-| D | response-cache keying (MIK-7213) | 2 | yes — `2026-08-31-cluster-f-response-cache-keying.md` | yes — same stem, `-test-plan.md` | no | no | the test plan has never been through the dual-vendor gate |
+| D | response-cache keying (MIK-7213) | 2 | yes — `2026-08-31-cluster-f-response-cache-keying.md` | yes — same stem, `-test-plan.md` | **yes, 2026-09-03** — both legs `process_status: ok`, both SHIP-WITH-FIXES (codex-default 14:36:33Z, Kimi-K3 14:43:16Z) | no | **implementation, which has not started.** Nine findings were raised, verified at source and repaired in `c9aba700`; both vendors converged on one class — an authorization denial bypassed, or unproven, on a cached hit. The confirmation round found three defects the repair itself introduced (a stale row count, a duplicated row identifier, two rows missing a column), repaired in `acd7ba2a`. Kimi confirmed all nine closed; GPT's confirmation leg is `ERROR` on a vendor outage and sits under the finder-unavailability clock, which does not reopen a gate both vendors passed |
 | E | performance measurement | 1 | n/a — this is a measurement, not a design | n/a | n/a | n/a | **run on Spark 2026-09-03**, `32f135a6` against `5c29494a`, recorded in `RELEASE-4.0.0-performance.md`. `NFR.PERF.2` is MET. `NFR.PERF.1` stays open as PARTIAL: no shared case regressed near either budget, but criterion measures in-process component work, so the P50 and P99 the clause names have no value. Closing it needs an end-to-end client-to-backend comparison against a 3.5.0 binary, which exists at no version of this repository |
 | F | compatibility facts | 2 | `NFR.COMPAT.4` only — `2026-09-02-conformance-matrix.md` | no | no | no | `NFR.COMPAT.1` is a one-line default flip that cannot land before cluster A merges |
 | G | stdio dispatch | 3 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | **row 1 done** — `d306c7e8` put the record site on the path both dispatchers take; `cargo test --lib stdio_observation` gives 2 passed, 0 failed, verified at `4b522687` | the remaining two rows, which queue behind the gate as planned, plus a third the MRTR work surfaced: `src/gateway/server/mod.rs:1748` hardcodes `retry: &NO_RETRY`, so a stdio client can never present a retry at all. Same defect class as cluster A's prefix exemption — a whole category of callers silently dropped — and it belongs to G's design, not to A's change. Cluster A's branch no longer carries a red test from G |
@@ -38,13 +38,15 @@ is no longer the document. Reviewer state, 2026-09-02:
 
 | vendor | state | why |
 |---|---|---|
-| Codex / GPT | **was hard-down all afternoon** | `codex` 0.151.0 refuses every directory as untrusted under `--ephemeral`, because ephemeral discards the persisted trust list. Fixed in `~/.claude/bin/gpt-review` by adding `--skip-git-repo-check`; the read-only sandbox already bounds the blast radius |
+| Codex / GPT | **works, then a separate outage** | the `--ephemeral` trust defect is fixed in `~/.claude/bin/gpt-review` with `--skip-git-repo-check`. A distinct failure appeared 2026-09-03: `404` at both `wss://` and `https://chatgpt.com/backend-api/codex/responses` across five reconnects each, on two attempts twelve minutes apart. Vendor-side, not the wrapper — and the wrapper still exits 0 with the error in its body, which is exactly why §PA reads the ledger row and never the text |
 | Grok | ERROR | xAI balance exhausted (HTTP 402) |
 | GLM-5.3 | ERROR | `finish_reason='length'` on three consecutive attempts — the Flash distillation cannot hold a 26 KB payload |
-| Kimi K3 | ERROR | returns prose with no parseable verdict line |
+| Kimi K3 | **works** | the entry above was stale. Two runs on 2026-09-03 returned parseable `VERDICT:` lines and wrote `process_status: ok` rows. Kimi is the second leg for Claude-authored work, since `grok-review` is unpaid and `claude-review` would be the author reviewing the author |
 
-Every vendor failed for its own reason on the same day, and the wrapper defect
-made the primary reviewer look like a fourth outage. That is the honest state of
+Every vendor failed for its own reason on that day, and the wrapper defect
+made the primary reviewer look like a fourth outage. Two of those four entries have
+since been falsified by running them — a reviewer recorded as broken stays recorded as
+broken until somebody retries it, and cluster D's gate was waiting on one of them. That is the honest state of
 the gate; per §PA a nonzero exit is `ERROR`, never a scraped verdict.
 
 ## Readiness order — every cluster, none dropped
@@ -67,9 +69,12 @@ is left without a next step.
    and `ac_mrtr_6` in particular is the `NFR.SEC` shape rather than a loose end.
 2. **Then land cluster A.** Open the PR, run the gates at the head that will be
    tagged. Merging before step 1 ships 22 rows that the code still refuses.
-3. **Put D through the gate.** Cluster D is the cheapest pair of rows on the
-   board: design and test plan both exist and neither has been reviewed. It needs
-   a dual-vendor pass and the implementation that follows, and it waits on nothing.
+3. **D is through the gate; what remains is the code.** Both legs ran on
+   2026-09-03 and both returned SHIP-WITH-FIXES; the findings are repaired in
+   `c9aba700` and `acd7ba2a`. The two rows still need the implementation the plan
+   describes, and that waits on nothing. The gate turned out not to be the
+   expensive part — a stale reviewer-state table was, because it recorded two
+   working vendors as broken and nobody retried them.
 4. **Give B and C a design each.** B needs `NFR.OBS.3` covered — that row is
    cluster B's, verifying `DISCOVER.4-5`, and the era detector is what makes it
    observable. C needs its five half-wirings written as one change with one owner.
