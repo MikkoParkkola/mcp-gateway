@@ -98,7 +98,7 @@ them is a statement about where the code lives. The branch is hundreds of commit
 `main`, PR #473 is open, and commits sit on this disk and nowhere else. The two numbers move
 with every commit, so they are not copied here — read them with
 `git rev-list --count main..HEAD` and `git rev-list --count HEAD --not --remotes`, the second of
-which must reach zero before step 1 of the delivery chain is satisfied. All 44 blocking rows
+which must reach zero before step 1 of the delivery chain is satisfied. Every blocking row
 could turn green and the release would still not exist, because the delivery chain in
 `rules-source/workflows/quality-gates-dod.md` stops at step 1.
 
@@ -134,7 +134,7 @@ The mechanism is built. `redeem_retry` (`src/gateway/meta_mcp/invoke.rs:529`) is
 tool-invoke path at `:1301`, and MRTR.4, MRTR.5, MRTR.6 and MRTR.9 are met with their call sites
 and tests recorded. MRTR.9a was the last of them: a client's declaration no longer flattens to
 the capability *name*, so a mode it never declared is refused instead of passing by construction.
-What is left is fourteen rows of EVIDENCE over that path — recorded runs for MRTR.1/3/7/8/10a
+What is left is EVIDENCE over that path — recorded runs for MRTR.1/3/7/8/10a
 and the five NFR rows that verify the envelope — not mechanism. Still the deepest security
 surface in the release, and still the cluster whose evidence is easiest to fake by re-running
 a test that was already green.
@@ -255,10 +255,11 @@ now scored as `IDENT.1b`. A test, not a mechanism.
 Sequenced last of the design-free work, and deliberately not merged into a cluster they do not
 belong to.
 
-### The fourteen blocking NFR rows are placed by wave, not by cluster
+### The blocking NFR rows are placed by wave, not by cluster
 
 The clusters above are ticket work. Not one NFR row appears in them, and the heading
-"Clusters, in dependency order" reads as though it covered everything — it covers 30 of the 44.
+"Clusters, in dependency order" reads as though it covered everything. It covers the ticket rows alone; the NFR rows are
+placed by wave in the table below.
 An NFR row mostly verifies a property of a mechanism some cluster builds, so it cannot be
 scheduled independently of that cluster; the five that stand alone are the exceptions.
 
@@ -323,7 +324,7 @@ because it consumes the era the detection produces.
 
 **Wave 4 — the long pole is now MIK-7272, not MRTR.** The continuation envelope is wired,
 redeemed on the tool-invoke path and green (`redeem_retry`, `src/gateway/meta_mcp/invoke.rs:529`,
-called at `:1301`; 18 + 25 passing at `b5d4ce7f`). Its fourteen remaining rows are EVIDENCE over
+called at `:1301`; 18 + 25 passing at `b5d4ce7f`). Its remaining rows are EVIDENCE over
 a path that exists — recorded runs and the five NFR rows that verify it — not mechanism, which
 is why they can be produced alongside other work rather than gating it. CONFIRM.2 follows it.
 What is left with no design, no test plan and no code is the revision surface (MIK-7272, seven
