@@ -117,14 +117,24 @@ Leading option, unreviewed: share the same `Arc<EraCache>` down into `HttpTransp
 are threading an era argument through every call site, or moving header construction up
 to `Backend`.
 
-One sub-question is open and is spec-checkable, not askable: for a Modern peer, is
-`MCP-Protocol-Version: 2026-07-28` emitted or is the header omitted? `MCP-Session-Id`
-must not be sent to a Modern peer either way. **Deferred, not assumed** — the probe design was read for it and does not settle it: it fixes only that the legacy handshake runs regardless and permanently, because `SUPPORTED_VERSIONS` will never carry a 2026 revision (`docs/design/2026-08-31-discover-outbound-era-probe.md:145-147`), which constrains the handshake channel and says nothing about what a modern-shaped request emits.
+One sub-question was open: for a Modern peer, is `MCP-Protocol-Version: 2026-07-28` emitted
+or is the header omitted? `MCP-Session-Id` must not be sent to a Modern peer either way.
+Recorded here as deferred, on the reading that only the external revision text could settle
+it. **RESOLVED 2026-09-03, and not by that route** — the answer was already in this tree, in
+the gateway's own inbound path, and the deferral's fallback ("revision unobtainable → emit
+and pin it as an assumption") turned out to reach the right answer for the wrong reason. It
+is a fact now, not an assumption.
 
-
-| deferred field | value |
+| checkable | |
 |---|---|
-| owner | the `HEADER.9a`/`9b` design increment — this is the decision that design exists to make, not a blocker on starting it |
-| what would resolve it | read the 2026-07-28 revision text on whether a modern request carries `MCP-Protocol-Version`; it is not in this tree, so the check is a fetch, not a `rg` |
-| when | at design time, before any header-shaping code is written |
-| what if it resolves badly | revision unobtainable → emit `2026-07-28` (the truthful value for a request the gateway shaped as modern), record it as an assumption, and pin it with a test so a later reading of the spec fails loudly instead of silently disagreeing |
+| question | for a Modern peer, is `MCP-Protocol-Version` emitted or omitted? |
+| what was read | `src/protocol/meta.rs:99-104` (the doc comment on `classify_request`) and `src/gateway/router/handlers.rs:552-568` |
+| what came back | the revision uses **mirrored headers**. `classify_request` reads body *and* header "because a request that declares itself modern in one and says nothing in the other is the exact split this revision's mirrored headers exist to close" (`meta.rs:99-104`), and the router "refuses a modern request that omits `MCP-Protocol-Version`, so every modern request that survives carries it" (`handlers.rs:555-556`) |
+| what it changed | removed the omit option outright. Omitting it outbound would have the gateway send modern requests its own inbound path refuses — an asymmetry with a citation, not a preference. The emitted value is `MODERN_VERSIONS[0]` (`src/protocol/meta.rs:216`), a constant, which is also what satisfies `HEADER.9b`'s "not derived from the legacy handshake version" |
+
+Confirmed by the team lead 2026-09-03, who re-read both anchors at source before answering.
+The question had been routed as askable because no rule deciding it had been found; finding
+the rule moved it to checkable. Which form applies turns on whether the answer depends on
+what the product should *do* or on what the system already *requires* — this is the second.
+
+Design: `docs/design/2026-09-03-header-9-era-conditional-outbound.md`.

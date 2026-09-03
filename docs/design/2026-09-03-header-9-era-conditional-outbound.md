@@ -87,7 +87,7 @@ that the value not come from the handshake; a constant meets it.
 
 | question | how it was settled | what came back | what it changed |
 |---|---|---|---|
-| for a Modern peer, is `MCP-Protocol-Version` emitted or omitted? | *raised as askable; turned out checkable* — read `src/protocol/meta.rs:99-104` and `src/gateway/router/handlers.rs:552-568` | the revision uses **mirrored headers**: the gateway's own inbound path "refuses a modern request that omits `MCP-Protocol-Version`, so every modern request that survives carries it" (`handlers.rs:556`), and classifies on header **and** body precisely so the two cannot disagree (`meta.rs:99-104`) | removed the omit option. Omitting it outbound would have the gateway send modern requests it would itself reject inbound — an asymmetry with a citation, not a preference. Pending the lead's confirmation, since it was routed as an operator question before the mirroring rule was found |
+| for a Modern peer, is `MCP-Protocol-Version` emitted or omitted? | *raised as askable; turned out checkable* — read `src/protocol/meta.rs:99-104` and `src/gateway/router/handlers.rs:552-568` | the revision uses **mirrored headers**: the gateway's own inbound path "refuses a modern request that omits `MCP-Protocol-Version`, so every modern request that survives carries it" (`handlers.rs:556`), and classifies on header **and** body precisely so the two cannot disagree (`meta.rs:99-104`) | removed the omit option. Omitting it outbound would have the gateway send modern requests it would itself reject inbound — an asymmetry with a citation, not a preference. Confirmed by the team lead 2026-09-03, who re-read both anchors at source; the routing chose the question's FORM, not the answer, and finding the rule moved it from askable to checkable |
 | is the era known when the handshake runs? | read the construction path: `lifecycle.rs:360` constructs, `:375` calls `initialize()`, `resolve_era` runs later at `:232` via `reconcile_after_start` | no — and permanently not, because the probe is issued through the transport after it is up | forced the era read to be **per request**, not at construction. `build_mcp_headers` is already `async` and `cached()` is `async`, so the read costs nothing structural |
 | is an era always available? | `cached()` returns `Option<Era>` (`src/protocol/era.rs:130`) | no — `None` before the probe resolves, and on any backend that never probes | made `None` an explicit case rather than an assumed one: **`None` maps to the legacy shape**, which is `classify`'s own positive-evidence rule (`era.rs:57`) rather than a second policy invented here |
 | does the era cache reach the transport today? | read `HttpTransport::new`/`new_with_oauth` (`src/transport/http/mod.rs:266`, `:280`) and the call site (`src/backend/lifecycle.rs:360`) | it does not, but `self.era` is in scope at the call site — the `Arc` exists exactly where the transport is built | made the plumbing a three-line change rather than a mechanism, and named the API-surface cost below |
@@ -132,9 +132,10 @@ of what the probe carries.
 
 ## Still open
 
-Nothing deferred. The one question this design was expected to defer turned out checkable
-and is recorded above, pending the lead's confirmation that a finding may close a question
-that was routed as an operator decision.
+Nothing deferred. The one question this design was expected to defer turned out checkable,
+is recorded above, and was confirmed by the team lead on 2026-09-03. Recorded in checkable
+form in `docs/requirements/RELEASE-4.0.0-residue-triage.md`, which no longer carries it as a
+deferral.
 
 ## Next step
 
