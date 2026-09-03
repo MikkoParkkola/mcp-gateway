@@ -911,3 +911,38 @@ else, and PR #473's head is those 160 commits behind, so the green CI on that pu
 work nobody is proposing to ship. Every blocking row could flip to MET tomorrow and the release would
 still be at step one of five. Pushing is the operator's call; recording that it has not happened is
 not.
+
+### Operator ruling 2026-09-03 — the modern revision is served by default, and the mechanism is negotiation
+
+Asked whether `server.modern_protocol` should default on or off, the operator answered neither: the
+gateway serves the latest protocol revision by default, and downgrades to the highest revision the
+client can work with. That is version negotiation, and it dissolves most of the question it was
+asked in answer to.
+
+It matters because the objection to defaulting on was that existing deployments change behaviour on
+upgrade. Under negotiation they do not. A client that speaks `2025-06-18` announces it in
+`initialize` and is answered at `2025-06-18`; nothing it sends is refused for being old. The default
+moves for clients that can use the move and stays put for clients that cannot, which is the property
+a bare default flip could not offer.
+
+Two requirements are affected and both need their rows revised.
+
+`NFR.OBS.5` reads "behind a flag, default off, revertible without a downgrade" and is one of six MET
+rows, proved by `tests/nfr_obs5_flag.rs` with each clause probed by fixture inversion. The
+"default off" clause is retired by this ruling. This is the retirement of a requirement rather than
+of a mechanism, so it is recorded here with the operator's own words above it rather than folded in
+quietly. The other two clauses survive untouched: the flag remains as an operator escape hatch, and
+revertibility without a downgrade is independent of which position the flag defaults to. Keeping the
+flag at all is an engineering call, not something the ruling settled — it is worth keeping because
+the revertibility clause has nothing else to hang on. The row moves from MET to unmet until the
+rewritten test is re-probed, and losing a MET row is the honest cost of the change.
+
+`NFR.COMPAT.1` has an ABSENT clause, `2026-07-28` served, because `SUPPORTED_VERSIONS` does not list
+the revision. Negotiation cannot select a revision the server does not advertise, so that clause is
+now on the critical path rather than beside it: it is the precondition for the ruling, not a
+parallel piece of work.
+
+What this does not settle: how the downgrade behaves when a client announces a revision the gateway
+has never heard of, above or below its range, and whether `server/discover` advertises the full
+supported list or only the negotiated one. Both are answerable from the specification rather than
+from the operator, and neither is assumed here.
