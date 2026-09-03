@@ -1200,11 +1200,11 @@ pub(super) async fn meta_mcp_handler(
                 crate::gateway::destructive_confirmation::ConfirmationPolicy::for_legacy()
             };
 
-            // The same policy the pre-check above applied, handed to the
-            // dispatch chokepoint so the shapes the pre-check cannot see — a
-            // playbook step, whose targets are not in the request — face it
-            // too. Constructed concretely rather than taken as a parameter, so
-            // the weaker stdio authorizer cannot reach the network path.
+            // Authorization is handed to the dispatch chokepoint rather than
+            // applied here, so the shapes an edge cannot see — a playbook
+            // step, whose targets are not in the request — face it too.
+            // Constructed concretely rather than taken as a parameter, so the
+            // weaker stdio authorizer cannot reach the network path.
             let router_authorizer = RouterAuthorizer {
                 state: state.as_ref(),
                 client: client.as_ref(),

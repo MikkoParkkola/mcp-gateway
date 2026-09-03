@@ -246,7 +246,7 @@ pub async fn require_destructive_confirmation(
             warn!(
                 action = action_desc,
                 "Destructive meta-tool invoked without active SSE session; \
-                 proceeding without human confirmation"
+                 no operator could be asked"
             );
             ConfirmationOutcome::Unsupported
         }
@@ -254,8 +254,7 @@ pub async fn require_destructive_confirmation(
             warn!(
                 action = action_desc,
                 timeout_secs = d.as_secs(),
-                "Elicitation confirmation timed out; proceeding without confirmation \
-                "
+                "Elicitation confirmation timed out; no operator answer was obtained"
             );
             ConfirmationOutcome::Unsupported
         }
@@ -263,8 +262,7 @@ pub async fn require_destructive_confirmation(
             warn!(
                 action = action_desc,
                 error = %e,
-                "Elicitation delivery failed; proceeding without confirmation \
-                "
+                "Elicitation delivery failed; no operator could be asked"
             );
             ConfirmationOutcome::Unsupported
         }
