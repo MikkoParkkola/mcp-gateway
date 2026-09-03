@@ -22,9 +22,9 @@ to do it.
 | C | revision surface (MIK-7272) | 7 | scattered across five files (`sub-4-idempotency-wiring`, `sub-1-3-get-mcp-era-gate`, `task-1-tasks-extension`, `cluster-b-*`) | no | no | no | five half-wirings with no single owner and no plan that reads as one change |
 | D | response-cache keying (MIK-7213) | 2 | yes — `2026-08-31-cluster-f-response-cache-keying.md` | yes — same stem, `-test-plan.md` | **yes, 2026-09-03** — both legs `process_status: ok`, both SHIP-WITH-FIXES (codex-default 14:36:33Z, Kimi-K3 14:43:16Z) | no | **implementation, which has not started.** Nine findings were raised, verified at source and repaired in `c9aba700`; both vendors converged on one class — an authorization denial bypassed, or unproven, on a cached hit. The confirmation round found three defects the repair itself introduced (a stale row count, a duplicated row identifier, two rows missing a column), repaired in `acd7ba2a`. Kimi confirmed all nine closed; GPT's confirmation leg is `ERROR` on a vendor outage and sits under the finder-unavailability clock, which does not reopen a gate both vendors passed |
 | E | performance measurement | 1 | n/a — this is a measurement, not a design | n/a | n/a | n/a | **run on Spark 2026-09-03**, `32f135a6` against `5c29494a`, recorded in `RELEASE-4.0.0-performance.md`. `NFR.PERF.2` is MET. `NFR.PERF.1` stays open as PARTIAL: no shared case regressed near either budget, but criterion measures in-process component work, so the P50 and P99 the clause names have no value. Closing it needs an end-to-end client-to-backend comparison against a 3.5.0 binary, which exists at no version of this repository |
-| F | compatibility facts | 2 | `NFR.COMPAT.4` only — `2026-09-02-conformance-matrix.md` | no | no | no | `NFR.COMPAT.1` is a one-line default flip that cannot land before cluster A merges |
+| F | compatibility facts | 2 | `NFR.COMPAT.4` only — `2026-09-02-conformance-matrix.md` | no | no | no | `NFR.COMPAT.1` is a one-line default flip that cannot land before **both** cluster A and cluster C merge — default-on turns every unwired gap in the revision surface into a first-run defect, exactly as it does for the continuation path |
 | G | stdio dispatch | 3 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | **row 1 done** — `d306c7e8` put the record site on the path both dispatchers take; `cargo test --lib stdio_observation` gives 2 passed, 0 failed, verified at `4b522687` | the remaining two rows, which queue behind the gate as planned, plus a third the MRTR work surfaced: `src/gateway/server/mod.rs:1748` hardcodes `retry: &NO_RETRY`, so a stdio client can never present a retry at all. Same defect class as cluster A's prefix exemption — a whole category of callers silently dropped — and it belongs to G's design, not to A's change. Cluster A's branch no longer carries a red test from G |
-| — | residue | 10 | mixed | no | no | no | ten independent rows, each needing its own decision |
+| — | residue | 10 | mixed | no | no | no | ten rows with no shared mechanism. Most need a decision rather than an increment; `HEADER.9` waits on B's per-backend era and `NFR.PERF.4` needs the ceiling mechanism, so they are ordered work, not free choices |
 
 44 blocking rows — the `rows` column sums to the ledger's count, which
 `scripts/release/count-release-criteria.py --check` verifies against the status
@@ -64,7 +64,7 @@ is left without a next step.
 1. **Close the three cases the wiring left red.** The route itself landed in
    `a69e2bc5` at `src/gateway/router/handlers.rs:1048-1065` — the location the
    execution plan's item 1 does not name — and it was the stated cause of
-   **all 22 rows of cluster A**: the whole `MRTR` set,
+   **all 22 rows cluster A then had**: the whole `MRTR` set,
    `NFR.SEC.2/3/4` (until the live path minted and opened a continuation, the
    eight named security fixtures had nothing to exercise), `NFR.OBS.4` (no
    counters to emit) and `NFR.PERF.3` (no in-flight state to soak). It turned 15
@@ -74,7 +74,7 @@ is left without a next step.
    was the `NFR.SEC` shape rather than a loose end — carries the criterion it
    names since `a89f21c8`. `MRTR.6` is met; the cluster stands at 14 rows, as this file's own cluster-A row and the rollup both record.
 2. **Then land cluster A.** Open the PR, run the gates at the head that will be
-   tagged. Merging before step 1 ships 22 rows that the code still refuses.
+   tagged. Merging before step 1 ships rows the code still refuses.
 3. **D is through the gate; what remains is the code.** Both legs ran on
    2026-09-03 and both returned SHIP-WITH-FIXES; the findings are repaired in
    `c9aba700` and `acd7ba2a`. The two rows still need the implementation the plan
@@ -101,11 +101,11 @@ is left without a next step.
    remaining two rows queue behind the gate as planned, and the `NO_RETRY`
    hardcode the MRTR work surfaced (`src/gateway/server/mod.rs:1748`) is named in
    the rollup's cluster G as a design input, not as a ninth criterion row.
-7. **Triage the residue as one pass.** Ten rows, each independent, each needing a
+7. **Triage the residue as one pass.** Ten rows with no shared mechanism, most needing a
    decision rather than an increment — `HEADER.9` waits on B's per-backend era, so
    it cannot come first. One session, one line of disposition per row, and the ones
    that turn out to be code queue behind whichever cluster owns their file.
 
-Order is dependency, not preference: everything in cluster A waits on step 1 and
-F waits on A, while steps 3, 5 and 7 wait on nothing at all. Steps 1, 3 and 5 are
-independent and can run at the same time.
+Order is dependency, not preference: everything in cluster A waits on step 1, and
+F waits on A **and** C, which is why the default flip is the last thing to land.
+Steps 3, 5 and 7 wait on nothing at all, so steps 1, 3 and 5 can run at the same time.

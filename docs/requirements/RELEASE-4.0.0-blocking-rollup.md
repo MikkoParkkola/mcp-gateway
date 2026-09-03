@@ -115,15 +115,20 @@ The clusters above describe the work. This section says who is doing it, because
 kept reopening was not analysis — it was that twelve of the blocking rows had no
 owner, and unowned work does not fail loudly. It simply never starts.
 
-| cluster | rows | owner |
-|---|---|---|
-| A continuation envelope | 15 | `envelope-a`, design first. **Was assigned to a concurrent session on commit archaeology and that was wrong** — `src/protocol/continuation.rs` has not moved in 16 hours and the last substantive cluster-A commit is `149e553a`, 24 hours old. The largest cluster was unowned while this table said otherwise. |
-| B era detection | 3 | `era-r4-repair` owns `src/protocol/era.rs`; `era-probe` owns `tests/mik_7217_era_probe_acs.rs`, held |
-| C MIK-7272 revision surface | 6 | `surface-c`, design first |
-| D response-cache keying | 2 | `cache-34` |
-| E performance vs 3.5.0 | 1 | run on `spark` 2026-09-03; `NFR.PERF.2` closed, `NFR.PERF.1` needs an end-to-end harness that does not exist |
-| F compat and surface facts | 4 | the operator; three of the four are settled by "full scope", `NFR.COMPAT.3` is not |
-| — residue | 5 | `residue-r` takes four; `HEADER.9` belongs to the header increment |
+The row counts are deliberately **not** repeated here — the cluster table above
+carries them and this snapshot drifted from it within a day. One column, one job:
+who owns the work.
+
+| cluster | owner |
+|---|---|
+| A continuation envelope | `envelope-a`, design first. **Was assigned to a concurrent session on commit archaeology and that was wrong** — `src/protocol/continuation.rs` has not moved in 16 hours and the last substantive cluster-A commit is `149e553a`, 24 hours old. The largest cluster was unowned while this table said otherwise. |
+| B era detection | `era-r4-repair` owns `src/protocol/era.rs`; `era-probe` owns `tests/mik_7217_era_probe_acs.rs`, held |
+| C MIK-7272 revision surface | `surface-c`, design first |
+| D response-cache keying | `cache-34` |
+| E performance vs 3.5.0 | run on `spark` 2026-09-03; `NFR.PERF.2` closed, `NFR.PERF.1` needs an end-to-end harness that does not exist |
+| F compat and surface facts | the operator settled the surface questions on 2026-09-02: `NFR.COMPAT.1` became a code change and `NFR.COMPAT.3` was waived on the record. What is left is work, not a decision — the default flip and the dual-role matrix |
+| G stdio dispatch path | unowned. Row 1 landed in `d306c7e8`; the two telemetry rows have no branch and no agent |
+| — residue | `residue-r` takes the decision rows; `HEADER.9` belongs to the header increment and waits on B |
 
 ### Ownership status, 2026-09-02: named everywhere, in flight nowhere
 
@@ -241,9 +246,10 @@ when they are skipped:
 | dual-vendor review of the accumulated production diff | this session, by default | its material is the diff, not any design document; every cluster could pass its own review and this would still be owed |
 | `ratify`, then the push | **the operator, at a terminal** | a ratification stamp is minted by a human running `ratify`; no agent can produce one |
 
-The second is the shortest item on the whole list and the only one nobody else can do. Thirty-one
-commits are unbacked work until it happens: they exist on one disk, no reviewer can fetch them,
-and a disk failure loses them without trace.
+The second is the shortest item on the whole list and the only one nobody else can do. Every
+commit `git rev-list --count HEAD --not --remotes` reports is unbacked work until it happens: it
+exists on one disk, no reviewer can fetch it, and a disk failure loses it without trace. The number
+is not copied here for the same reason the plan does not copy it — it moves with every commit.
 
 One file has two owners, and the ownership rule above did not catch it. The direct route
 `POST /mcp/{name}` bypasses `invoke_tool_traced` (`src/gateway/backend_handlers.rs:724`) and

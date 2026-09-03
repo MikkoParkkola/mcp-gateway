@@ -274,8 +274,10 @@ scheduled independently of that cluster; the four that stand alone are the excep
 | SEC.6 | wave 3 — one test on the MIK-7262 early return, plus a ruling on whether an unlabelled fix counts as closed |
 | COMPAT.4 | last — the dual-role matrix grades every other row, so it is written once the rows it grades are settled |
 
-Nine of the fifteen therefore have no schedule of their own: they land when their cluster does,
-and a cluster is not done until they read MET. The other six are named in a wave above.
+Nine of the fourteen therefore have no schedule of their own: they land when their cluster does,
+and a cluster is not done until they read MET. The other five are named in a wave above.
+`NFR.PERF.2` was the sixth until the Spark run closed it, which is why this partition is nine
+plus five and not nine plus six.
 
 ## Order of work
 
