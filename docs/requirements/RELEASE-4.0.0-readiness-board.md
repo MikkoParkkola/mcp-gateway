@@ -219,3 +219,28 @@ criterion, name the observable the criterion is about, then confirm some test to
 
 The four `ac_ext_1_*` cases cite `RELEASE-4.0.0-test-plan.md` §"Increment 10" in their
 own header, so the repair belongs to whoever owns that plan.
+
+## PR #473 is the wrong shape for the merge strategy already chosen
+
+`ORDER.2`'s recorded answer is a sequence of per-cluster PRs, cluster A first. The branch
+this work sits on has one open PR against `main` — **#473**, `feat(protocol): v4.0.0
+multi-round tool result readiness`, opened 2026-09-01 — carrying the whole release effort.
+Against `origin/HEAD` that is **213 files and 55,661 insertions**; 57 commits are still
+unpushed, and against the branch's own upstream those are 28 files and 3,006 insertions.
+
+That size is a verdict-integrity problem, not a preference. A reviewer handed 55K
+insertions dies partway through and exits nonzero, and a nonzero exit is precisely when a
+verdict scraped from surviving prose looks like a real one — §PA, arriving by a side door.
+
+It is not fixable by pointing the tooling somewhere narrower. `bin/review --base` defaults
+to `origin/HEAD` (`:398`, `:437`) and can be narrowed per increment, which is correct and
+costs nothing. The ratification gate cannot: `hooks/PreToolUse/ratification-gate.py:882-919`
+pins the base to `origin/HEAD` and takes the merge-base from it (`:2091`), because the stamp
+certifies *the diff that would merge*. #473 merges to `main`, so the merging diff really is
+213 files. Overriding `RATIFY_DIFF_BASE` to the branch tip would mint a stamp over a diff
+that is not the one landing — defeating the gate rather than configuring it.
+
+So the gate is right and the branch is too big. Deciding what to do about #473 is the
+operator's, and it is on the release critical path because nothing pushes until it is
+settled. Recorded here rather than filed: the decision is one a human makes, and a ticket
+would only restate this paragraph.
