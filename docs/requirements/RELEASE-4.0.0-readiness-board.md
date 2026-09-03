@@ -159,3 +159,27 @@ finished implementation; a test written after the code agrees with the code.
 
 Recorded here so the next session does not rediscover it by reading the filename
 and believing it.
+
+## EXT.1 must not declare the extension it currently knows about
+
+`ExtensionSet::gateway_declares()` (`src/protocol/extensions.rs:60`) returns a set
+containing `io.modelcontextprotocol/tasks`, and its own doc comment says advertising
+that identifier before the task model is fixed "would break a client that trusted it"
+— the model is short of the extension specification by two statuses, two required
+fields and the shape of the failure payload.
+
+So wiring `EXT.1` by calling `gateway_declares()` into the capabilities response
+would ship the exact bug the function's author wrote a paragraph to prevent. The
+disabled call is a guard, not an oversight.
+
+`EXT.1` asks for the `extensions` field to be declared and for a client that does not
+support an extension to be honoured. It does not ask for `tasks` specifically. So the
+increment splits cleanly:
+
+- wire the `extensions` field onto `ServerCapabilities` (`src/protocol/types.rs:232`,
+  which has no such field today) and run the negotiation on the way in
+- the gateway's declared set excludes `tasks` until `TASK.1` lands; `TASK.1`'s own
+  increment adds it, in the same change that makes it true
+
+That ordering is the same one the placement map arrived at from the other direction,
+for an independent reason, which is some comfort that it is right.
