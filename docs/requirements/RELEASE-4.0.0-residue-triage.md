@@ -16,23 +16,17 @@ Coverage: 146 criteria, 146 rows, 102 met or non-blocking, 44 blocking.
 
 Every row in `docs/requirements/RELEASE-4.0.0-criteria-status.md` whose blocking cell
 reads `yes` was enumerated, then the seven clusters named in
-`docs/requirements/RELEASE-4.0.0-blocking-rollup.md` were subtracted by membership:
+`docs/requirements/RELEASE-4.0.0-blocking-rollup.md` were subtracted by membership. That
+rollup's cluster table is the checked copy: `rollup_membership`
+(`scripts/release/count-release-criteria.py:234-244`) derives each cluster's rows from the
+ledger and fails the run when a declared count, a listed name, or an unlisted blocking row
+disagrees. It is not restated here. The script does not read this file, so a second table
+of the same counts would be a copy nothing maintains — the mechanism `24f8b91e` and
+`2bf64e6f` removed from the plan and the status document for drifting three times.
 
-| cluster | rows | count |
-|---|---|---|
-| A MIK-7212 continuation envelope | `MRTR.1a/1b/3a/3b/7a/7b/8a/8b/10a`, `NFR.SEC.2/3/4`, `NFR.OBS.4`, `NFR.PERF.3` | 14 |
-| B MIK-7217 era detection | `DISCOVER.4a/4b/5a/5b`, `NFR.OBS.3` | 5 |
-| C MIK-7272 revision surface | `ORDER.2a/2b`, `SUB.2b`, `SUB.4`, `EXT.1`, `OTEL.1`, `TASK.1` | 7 |
-| D MIK-7213 response-cache keying | `CACHE.4a/4b` | 2 |
-| E performance measurement | `NFR.PERF.1` | 1 |
-| F compatibility and surface facts | `NFR.COMPAT.1`, `NFR.COMPAT.4` | 2 |
-| G stdio dispatch path | `NFR.OBS.1`, `NFR.OBS.2`, `MIK-7246.CONFIRM.1a` | 3 |
-| **residue** | below | **10** |
-
-34 clustered + 10 residue = 44, the script's blocking total. Ten matches the rollup's
-residue count. The rollup's prose list under *The residue, one line each* names nine,
-because `MIK-7214.HEADER.9` was split into `9a` and `9b` in the ledger and the prose was
-not resplit with it. The ten below are the ledger's.
+What is left after the subtraction is the ten below. The rollup's prose list under *The
+residue, one line each* names nine, because `MIK-7214.HEADER.9` was split into `9a` and
+`9b` in the ledger and the prose was not resplit with it. The ten below are the ledger's.
 
 ## The ten
 
