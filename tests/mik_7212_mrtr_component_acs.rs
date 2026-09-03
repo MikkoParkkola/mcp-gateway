@@ -11,12 +11,14 @@
 //!
 //! ## What these assert, and why it is not "a refusal happened"
 //!
-//! Every well-formed retry is refused today at
-//! `src/gateway/router/handlers.rs:1051-1067` with `-32602 "retry forwarding is
-//! not available on this build"` — before any binding, ledger or deadline is
-//! consulted. A case asserting only that a retry was refused is green today for
-//! a reason that has nothing to do with its criterion, and stays green when the
-//! criterion is later broken.
+//! Every well-formed retry used to be refused at
+//! `src/gateway/router/handlers.rs` with `-32602 "retry forwarding is not
+//! available on this build"` — before any binding, ledger or deadline was
+//! consulted. A case asserting only that a retry was refused was green then for
+//! a reason that had nothing to do with its criterion, and would have stayed
+//! green when the criterion was later broken. That placeholder is gone now that
+//! the route is wired, but the shape of these cases is what it left behind and
+//! is worth keeping: a blanket refusal can be reintroduced by accident.
 //!
 //! So each negative asserts the refusal is in the *continuation* vocabulary —
 //! `ContinuationError::client_message()`, the sentence the guard answers with —
@@ -286,48 +288,23 @@ fn assert_refused_by_the_continuation_guard(response: &Value, case: &str) {
     );
 }
 
-/// The sentence the build-time refusal raises, copied from production.
-///
-/// It is a bare literal on both sides — production raises it inline
-/// (`src/gateway/router/handlers.rs:1064`) and nothing but this constant ties
-/// the two together. The coupling matters because the assertion using it is
-/// *negated*: reword the production message and `contains` stops matching, the
-/// negation becomes true, and the control goes green having stopped checking
-/// the thing it exists to check. Making it a compile error needs a `pub const`
-/// in production, which is a `src/` edit this test-first batch does not take.
-/// `production_still_raises_the_retry_unavailable_sentence` is the substitute:
-/// it turns the drift into a red test instead of a silent pass.
-const RETRY_UNAVAILABLE: &str = "retry forwarding is not available";
-
-/// CONTROL, not an acceptance criterion: the literal above still exists in
-/// production. Red the moment someone rewords the refusal, which is the moment
-/// `assert_not_refused_by_the_continuation_guard` would otherwise go vacuous.
-#[test]
-fn production_still_raises_the_retry_unavailable_sentence() {
-    let handlers = include_str!("../src/gateway/router/handlers.rs");
-    assert!(
-        handlers.contains(RETRY_UNAVAILABLE),
-        "production no longer raises {RETRY_UNAVAILABLE:?} — the negated assertion in \
-         assert_not_refused_by_the_continuation_guard is now vacuous. Re-point both at the \
-         new sentence, or promote it to a shared `pub const`."
-    );
-}
-
 /// THEN: the continuation guard did not refuse this handle.
 ///
 /// The positive control of each pair. It says nothing about whether the call
 /// then succeeded — no backend is registered, so it will not — only that the
 /// handle was not what stopped it. Without this half, an implementation that
 /// refuses every retry passes every negative in this file.
+///
+/// One assertion covers every refusal the guard can raise, not just the
+/// `Malformed` one it is spelled with: `ContinuationError::client_message`
+/// returns the same sentence for every variant on purpose
+/// (`src/protocol/continuation.rs:234`), so naming a variant here selects a
+/// spelling, never a subset.
 fn assert_not_refused_by_the_continuation_guard(response: &Value, case: &str) {
     if let Some(message) = error_message(response) {
         assert!(
             !message.contains(ContinuationError::Malformed.client_message()),
             "{case}: a valid handle must not be refused, got {message:?}"
-        );
-        assert!(
-            !message.contains(RETRY_UNAVAILABLE),
-            "{case}: a valid handle must reach the backend dispatch, got {message:?}"
         );
     }
 }
