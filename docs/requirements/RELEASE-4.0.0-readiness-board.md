@@ -168,10 +168,15 @@ cannot pass on a key that is merely different every time, and `key(None) == key(
 so unidentified callers are not split into a key that can never hit. It can go red.
 
 **The plan-row numbering and the criterion suffixes are different namespaces, and
-conflating them reversed this section once already.** Test-plan rows `4.a`-`4.f` all sit
-under criterion `MIK-7213.CACHE.4a` (keyed on every response-varying input); rows
-`4.f.1`-`4.f.3` are the ones that would carry `MIK-7213.CACHE.4b` (the policy epoch).
-So the covered row `4.b` is a row *inside* `CACHE.4a`, and it makes that criterion
+conflating them reversed this section once already.** The plan does not number its rows
+by criterion suffix at all — it names the criterion in each row's **first column**, and
+that label is the authority, not the row letter. Four rows read `CACHE.4 · policy epoch`
+and therefore serve `MIK-7213.CACHE.4b`: `4.f.1`, `4.f.2`, `4.f.3` and **`4.g`** (the
+revocation race, plan `:117`). A row *range* cannot express this — `4.a`-`4.f` reads as
+containing `4.f.1`-`4.f.3`, which are `CACHE.4b`, and it silently drops `4.g`. The one
+row this board asserts anything about is `4.b`, whose column reads `CACHE.4 · auth
+binding` and which therefore sits under `MIK-7213.CACHE.4a` (keyed on every
+response-varying input). It makes that criterion
 PARTIAL — matching `RELEASE-4.0.0-criteria-status.md:79`, which records the same
 falsification. `CACHE.4b` has **no case at all** (`criteria-status.md:80`, ABSENT: no
 policy epoch participates in `ResponseCache::response_key`).
