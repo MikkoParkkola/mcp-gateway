@@ -657,6 +657,29 @@ declaration that cannot help. It is not repaired here because changing a refusal
 an observable contract change and belongs with the mode gate above, which rewrites this same
 refusal path; doing it twice would mean reviewing it twice. It travels with `MRTR.9a`.
 
+### DE-9a — one client sentence for seven causes, and what it costs a test
+
+Found by the 2026-09-03 test review of the MRTR component cases, and recorded here rather than
+repaired because it lands on the same refusal contract DE-9 defers.
+
+`ContinuationError::client_message` (`src/protocol/continuation.rs:234-236`) answers
+`"continuation rejected"` for every one of the seven variants, and the comment above it argues
+the case: the variants distinguish causes so an *operator* can act on them, a client can act on
+none of them, and naming which key id or wire version was refused would let a caller map the live
+keyring one probe at a time. That reasoning is sound and this section does not dispute it.
+
+What it costs is visible only from a test. A case that means to prove a retry was refused *by the
+mechanism it names* has nothing to assert on but that one sentence, so an unrelated
+`NotAuthentic` — a handle minted for another principal, a request carrying no credential —
+satisfies the same assertion. The refusal is honest to the client and opaque to the suite. Three
+cases in `tests/mik_7212_mrtr_component_acs.rs` were written against it and could not tell the two
+apart; the repair removed the *other* half of that ambiguity, by taking the handle from the
+production mint path so the principal always matches, and left this half standing.
+
+Not repaired here, for DE-9's reason exactly: an operator-visible discriminator on a refusal is an
+observable contract change, and this refusal path is already being rewritten once by the mode
+gate. It travels with `MRTR.9a` and DE-9, and the three cases carry a comment pointing here.
+
 ### DE-10 — both post-dispatch gates ask what the backend claimed, not what the gateway could parse
 
 Raised by the second leg of the 2026-09-02 review, as two findings one layer apart, and repaired
