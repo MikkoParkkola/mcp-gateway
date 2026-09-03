@@ -66,7 +66,7 @@ version and `_meta`; both reviewers found the same two missing fields.
 | `Mcp-Method` | **emitted** | the JSON-RPC method. `HeaderMode::Request { method }` carries it (`src/transport/http/mod.rs:206`); `Notify` does **not**, so that arm widens to `Notify { method }`. `Close` is an HTTP DELETE and needs none |
 | `Mcp-Name` | **emitted as a header, for the three methods that require it** | a header whose *value* is read from a body field (`params.name`, `params.uri`) per `headers.rs:47`. Sentinel-encoded where the value is not legal header bytes (`headers.rs:135`, HEADER.4). It is not a `_meta` key |
 | `params._meta` | **added** | the declaration the revision put in place of `initialize` |
-| `MCP-Session-Id` | **omitted on `Request` and `Notify` when the era is `Modern`; kept on `Close`** | see next paragraph |
+| `MCP-Session-Id` | **omitted on `Request` and `Notify` when the era is `Modern`; kept on `Close` and `Sse`** | see next paragraph |
 
 **The session header is omitted per mode, not per peer.** An earlier draft deleted the
 omission clause outright, on the reasoning that a modern peer never mints a session so
@@ -79,8 +79,11 @@ clause therefore sends a forbidden session header on exactly the path 9a is abou
 
 The orphan risk that motivated the deletion is real but narrower than the deletion was: it
 applies to `Close`, which must still terminate a session the backend minted, and to nothing
-else. So the rule splits by `HeaderMode` rather than by peer — omit on `Request` and
-`Notify` when `cached() == Some(Modern)`, keep on `Close` unconditionally. Both reviewers
+else — and to `Sse`, for the same reason: neither carries a JSON-RPC method, and the
+stream a dual-era backend serves is identified by the session it minted, so dropping the
+header there breaks continuity for exactly the backends the `Close` exception protects.
+So the rule splits by `HeaderMode` rather than by peer — omit on `Request` and `Notify`
+when `cached() == Some(Modern)`, keep on `Close` and `Sse` unconditionally. Both reviewers
 raised this; the GPT leg proposed a lifecycle-versus-ordinary mode and the Claude leg named
 the mode boundary exactly. `HeaderMode` already is that boundary, so no new mode is added.
 
