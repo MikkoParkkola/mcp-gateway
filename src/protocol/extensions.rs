@@ -141,20 +141,16 @@ mod tests {
     // that MIK-7311 changes, and would test policy where the subject is
     // mechanism.
 
-    fn peer(capabilities: Value) -> ExtensionSet {
-        ExtensionSet::from_capabilities(&capabilities)
-    }
-
     #[test]
     fn an_extension_the_peer_does_not_support_is_not_negotiated() {
         // The specification: if one party supports an extension and the other
         // does not, the supporting party MUST either revert to core behaviour
         // or reject the request. Reverting is the choice here — rejecting would
         // refuse a conforming client for declining something optional.
-        let client = peer(json!({ "extensions": {} }));
+        let client = ExtensionSet::from_capabilities(&json!({ "extensions": {} }));
         assert!(!client.contains(Extension::Tasks));
 
-        let gateway = peer(json!({
+        let gateway = ExtensionSet::from_capabilities(&json!({
             "extensions": { "io.modelcontextprotocol/tasks": {} }
         }));
         assert!(
@@ -165,9 +161,10 @@ mod tests {
 
     #[test]
     fn a_shared_extension_is_negotiated() {
-        let both = json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } });
-        let negotiated = peer(both.clone()).negotiate(&peer(both));
-        assert!(negotiated.contains(Extension::Tasks));
+        let both = ExtensionSet::from_capabilities(&json!({
+            "extensions": { "io.modelcontextprotocol/tasks": {} }
+        }));
+        assert!(both.negotiate(&both).contains(Extension::Tasks));
     }
 
     #[test]
@@ -175,10 +172,12 @@ mod tests {
         // Negotiation is an intersection, not a union. A peer declaring
         // something this gateway cannot do must not make the gateway claim it,
         // and an identifier we do not know is dropped on the way in.
-        let client = peer(json!({ "extensions": { "com.example/not-ours": {} } }));
+        let client = ExtensionSet::from_capabilities(
+            &json!({ "extensions": { "com.example/not-ours": {} } }),
+        );
         assert!(client.is_empty());
 
-        let gateway = peer(json!({
+        let gateway = ExtensionSet::from_capabilities(&json!({
             "extensions": { "io.modelcontextprotocol/tasks": {} }
         }));
         assert!(gateway.negotiate(&client).is_empty());

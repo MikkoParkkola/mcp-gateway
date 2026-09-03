@@ -117,3 +117,32 @@ declined-half pinning case so a regression there cannot pass silently.
 
 No integration or E2E case: the criterion is about what leaves the transport, and
 a captured wire request is where that is observable without a live backend.
+
+## The two questions a plan review must answer (§P2)
+
+**Q1 — does every acceptance criterion have a case, or a stated reason it has none?** Yes,
+and the criterion-to-case table above is the answer in artifact form rather than in prose, so
+an empty cell is visible to a reader who did not write it. Four criteria, four rows, none
+empty. `HEADER.4a` is included even though it is not this increment's headline criterion,
+because the encoder it needs does not exist yet and a plan that omitted it would let the
+implementation ship with the criterion vacuously met. One behaviour — the `MCP-Session-Id`
+column — belongs to no criterion and is stated as such rather than dropped.
+
+**Q2 — can each named case actually fail?** Every row carries its own "can fail because"
+column, which is where that is argued case by case. Three of them are worth naming here
+because they are the ones a careless fixture would defeat:
+
+- The `None`-means-legacy row asserts positively, because "unchanged behaviour" is satisfied
+  by a transport that never ran. It fails if the legacy protocol header is missing its
+  handshake value, not merely if a modern header is absent.
+- `Mcp-Name` mirrors the body compares the header's **value** against a per-method sentinel,
+  so a builder reading the wrong body field fails on the comparison. A presence assertion
+  would pass against any string.
+- The pinning cases set each custom value to something the builder cannot produce, at both
+  merge sites. An implementation that re-asserts inside `build_mcp_headers` passes the static
+  half and fails the per-request half — three assertions, not zero, which is what makes the
+  wrong site visible rather than merely unproven.
+
+No case in this plan is staged so that its fixture makes its own assertion true; the closest
+risk is the `Modern` rows, whose era cache is a fixture input, and they are constrained to
+prime through `EraCache::resolve_with` for that reason.
