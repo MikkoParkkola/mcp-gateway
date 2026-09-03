@@ -101,3 +101,29 @@ agrees and answers them with **different** keys — per-invocation for the log, 
 for the reaper. They travel together because they were blocked on the same unmade choice,
 not because they share an answer, and the design that separates them is the artifact that
 proves the pairing was worth making once.
+
+## What the `HEADER.9a`/`9b` design will need
+
+Pinned at source on 2026-09-03 so the next increment starts from facts rather than
+re-deriving them. Not a design — a design makes a decision, and none is made here.
+
+| fact | where |
+|---|---|
+| one outbound header builder, by its own doc comment | `build_mcp_headers`, `src/transport/http/mod.rs:534`; version inserted at `:570`, `MCP-Session-Id` at `:598` and `:608`, all unconditional |
+| the value it writes comes from the legacy handshake | `protocol_version: RwLock<Option<String>>` at `:200`, written at `:469` from `negotiate_protocol_version` (`:644`), read at `:539-543` defaulting to `PROTOCOL_VERSION` |
+| its only external callers are tests | `src/transport/http/tests.rs:382, 423, 456, 487, 512, 529, 621, 635, 646` |
+| era classification has landed and is per-backend | `Era::{Modern, Legacy}` at `src/protocol/era.rs:22-26`, `classify` at `:61` ("Modern requires positive evidence", `:57`), `EraCache` at `:115` with `cached()` at `:130` returning `Option<Era>`; `Backend::cached_era` at `src/backend/era.rs:61`, resolved on the start path at `src/backend/lifecycle.rs:232`, field at `src/backend/mod.rs:58` |
+| a modern revision constant exists in production, not only in tests | `MODERN_VERSIONS = ["2026-07-28"]` at `src/protocol/meta.rs:216`, with `declares_modern_era` at `:207` deliberately broader (any `2026-` prefix, `:202-207`) |
+| the inbound path already negotiates against it | `src/gateway/router/handlers.rs:175`, `:219`, `:572`, `:702` — so a negotiated modern value exists; the outbound builder simply cannot see it |
+| 2026-07-28 is deliberately absent from the handshake list | `SUPPORTED_VERSIONS` at `src/protocol/mod.rs:48` excludes it, pinned by the test at `:80`; `docs/design/2026-08-31-discover-outbound-era-probe.md` (rev 6) states it never joins that list and puts `HEADER.9` explicitly OUT |
+
+Leading option, unreviewed: share the same `Arc<EraCache>` down into `HttpTransport` so
+`build_mcp_headers` can read `cached()` and shape the request, with `None` meaning legacy
+— which matches `classify`'s positive-evidence rule rather than fighting it. Alternatives
+are threading an era argument through every call site, or moving header construction up
+to `Backend`.
+
+One sub-question is open and is spec-checkable, not askable: for a Modern peer, is
+`MCP-Protocol-Version: 2026-07-28` emitted or is the header omitted? `MCP-Session-Id`
+must not be sent to a Modern peer either way. Read the revision before writing the
+design, or schedule it with the four deferred fields.
