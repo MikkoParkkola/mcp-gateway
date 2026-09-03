@@ -324,7 +324,7 @@ def rollup_membership(criteria, text):
     return problems
 
 
-def copied_counts(rollup_text, board_text):
+def copied_counts(rollup_text, board_text, ledger):
     """The rollup's cluster counts are derived; every other copy of them is not.
 
     `rollup_membership` proves the rollup's own table against the ledger, which
@@ -346,21 +346,43 @@ def copied_counts(rollup_text, board_text):
         source[cells[1].strip()] = int(match.group(1))
         if cells[1].strip() == "—":
             residue_names = named_criteria(cells[3])[0]
+    seen = set()
     for line in board_text.splitlines():
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 3 or cells[0] not in source or not cells[2].isdigit():
+        if len(cells) < 3 or cells[0] not in source:
             continue
-        if int(cells[2]) != source[cells[0]]:
+        seen.add(cells[0])
+        # Skipping a cell that will not parse is how this check would pass a
+        # board whose count had been replaced by prose. An unreadable count is
+        # a disagreement, not an absence of one.
+        if not cells[2].isdigit():
+            problems.append(
+                f"readiness board states cluster {cells[0]}'s row count as "
+                f"{cells[2]!r}, which is not a number"
+            )
+        elif int(cells[2]) != source[cells[0]]:
             problems.append(
                 f"readiness board says cluster {cells[0]} has {cells[2]} rows, "
                 f"the rollup derives {source[cells[0]]}"
             )
+    # A cluster the board never mentions is the failure the per-row comparison
+    # cannot see: it agrees with every row it finds, and finds nothing.
+    for cluster in sorted(set(source) - seen):
+        problems.append(f"readiness board has no row for cluster {cluster}")
     # The bullets are the rollup's own prose, so the name it lists is the name
     # the bullet must open with -- a bullet for a row the cluster cell does not
     # name is a different defect and is left to the membership check.
     bullets = set(re.findall(r"^- `([^`]+)`", rollup_text, re.MULTILINE))
     for name in residue_names:
-        if not any(_names(b, name) for b in bullets):
+        # Both sides resolve against the ledger before they are compared. A bare
+        # suffix match lets an invented `MIK-9999.HEADER.9` stand in for the
+        # residue's `HEADER.9`, so the wrong criterion answers for the right one.
+        explained = [
+            b
+            for b in bullets
+            if _names(b, name) and any(_names(full, b) for full in ledger)
+        ]
+        if not explained:
             problems.append(
                 f"residue names {name}, which no line in the rollup explains"
             )
@@ -449,7 +471,15 @@ def main():
     stale_sections = section_counts(text)
     rollup_text = ROLLUP.read_text()
     membership = rollup_membership(criteria, rollup_text)
-    membership += copied_counts(rollup_text, BOARD.read_text())
+    membership += copied_counts(
+        rollup_text,
+        BOARD.read_text(),
+        # Both spellings of every blocking row. A rollup line may name the
+        # parent (`HEADER.9`, whose only rows are `.9a` and `.9b`) or the
+        # suffixed row itself (`IDENT.1a`), and either is a real criterion.
+        {p for p, b, _s in criteria if b == "yes"}
+        | {s for _p, b, s in criteria if b == "yes"},
+    )
     uncovered = sorted(declared - ids)
 
     totals = (len(declared), len(criteria), len(criteria) - blocking, blocking)

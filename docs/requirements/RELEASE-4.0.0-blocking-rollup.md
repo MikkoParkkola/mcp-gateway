@@ -8,7 +8,7 @@ The ledger (`RELEASE-4.0.0-criteria-status.md`) carries the counts; run
 Whatever the blocking count is on the day, it is not that many decisions. The ledger's own
 evidence cells say so — `NFR.SEC.2`, `.3`, `.4`, `NFR.OBS.4` and `NFR.PERF.3` all read
 "same envelope", and `NFR.OBS.3` reads "verifies MIK-7217.DISCOVER.4-5". Grouping on those
-clauses collapses them into **seven clusters and one residue**, of which five are unbuilt
+clauses collapses them into **the clusters tabled below and one residue**, of which five are unbuilt
 mechanisms and two are measurements nobody has run.
 
 This document exists so the shape of the remaining work survives outside one session's
@@ -31,7 +31,8 @@ is tracked in `RELEASE-4.0.0-readiness-board.md`. This section defines them.
 | G | stdio dispatch path | `NFR.OBS.1`, `NFR.OBS.2`, `MIK-7246.CONFIRM.1a` | 3 | both records live in the HTTP router (`src/gateway/router/handlers.rs:720,994`) and both criteria say *per request* / *every* `tools/list`. The stdio dispatcher reaches neither, so one of the two transports the gateway serves MCP over is absent from the migration telemetry. `MIK-7246.CONFIRM.1a` was the same shape and is not telemetry, and it is the one row of the three **already answered in the tree**: the gate moved out of the HTTP router into `dispatch_single` (`src/gateway/server/mod.rs:1656`), which `run_stdio` (`:1495`) routes every request through, so a destructive meta-tool invoked over stdio is now refused with `-32001` instead of executing unconfirmed. It stays listed here until the suite, the lints and the dual-vendor review are green on that change. One wiring question — what the stdio dispatcher must do before it reaches `handle_tools_call` — answered all three; the two telemetry rows still need it done. The confirmation half is **specified, not open**: the criterion says the gate MUST refuse when it cannot obtain confirmation, so stdio fails closed. Design and test plan: `docs/design/2026-09-02-cluster-g-stdio-dispatch-parity.md`. A third gap of the same shape sits in this cluster's design rather than in a fourth row: `src/gateway/server/mod.rs:1748` hardcodes `retry: &NO_RETRY`, so a stdio client can never present a continuation at all. It has no criterion of its own — no requirement names it — so it is a design input here, not a blocking row, and the count stays 3 |
 | — | residue | `HEADER.9`, `CONTROL.4`, `CONFIRM.2`, `NFR.SEC.1`, `NFR.SEC.6`, `NFR.PERF.4`, `MIK-6704.IDENT.1a`, `MIK-6865.SCHEMA.1c`, `MIK-7215.CONTROL.3a` | 10 | no shared mechanism, but not all free: `HEADER.9` waits on B's per-backend era and `CONFIRM.2` on A's continuation path. See below |
 
-Cluster A is still the largest of them, at fourteen rows. It began at twenty-two: the wiring
+Cluster A is still the largest of them; its own row above carries the count. It began at
+twenty-two: the wiring
 landed and `MRTR.4`, `MRTR.5` and `MRTR.9` left the cluster with their evidence recorded, which
 is what the shrinkage means. What is left needs no new decision either — each row needs its own
 evidence over a path that already exists. The total it leaves behind is
