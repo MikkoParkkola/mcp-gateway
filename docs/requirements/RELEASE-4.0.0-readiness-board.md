@@ -9,18 +9,18 @@ restated from those two — where a cell needs a reason it names the file that
 carries it.
 
 Verified 2026-09-03 against the worktree at `fix/mrtr2-continuation-handle`
-(`a69e2bc5`). A cell reading **no** means a search found nothing, not that
+(`4b522687`). A cell reading **no** means a search found nothing, not that
 nobody intends to do it.
 
 | # | cluster | rows | design | test plan | plan reviewed | code | the one thing blocking |
 |---|---|---|---|---|---|---|---|
-| A | continuation envelope (MIK-7212) | 22 | yes — `2026-08-30-mrtr-wiring.md`, `2026-08-30-shared-continuation-state.md`, `2026-09-01-continuation-telemetry.md` | yes — `2026-09-02-mrtr-test-plan.md` | yes | **partial** — the route is wired as of `a69e2bc5`; `cargo test --test mik_7212_mrtr_component_acs` gives **16 passed, 3 failed**, down from 15 red | three cases, one of them a regression. `ac_mrtr_6` forwards a retry whose exchange the origin no longer holds — the blanket refusal made that shape safe by accident, and wiring removed the accident. `ac_mrtr_8` opens an exchange without booking its slot, so the bound is not a bound. The third is the control at `tests/mik_7212_mrtr_component_acs.rs:305`, red by design once production stops emitting the refusal sentence, and it leaves the negated assertion at :329 vacuously green until both are re-pointed |
+| A | continuation envelope (MIK-7212) | 22 | yes — `2026-08-30-mrtr-wiring.md`, `2026-08-30-shared-continuation-state.md`, `2026-09-01-continuation-telemetry.md` | yes — `2026-09-02-mrtr-test-plan.md` | yes | **partial** — the route is wired as of `a69e2bc5`; `cargo test --test mik_7212_mrtr_component_acs` gives **18 passed, 0 failed**, from 15 red | two rows, neither a regression. `MRTR.9a` is unimplemented rather than broken — a client's declaration flattens to the capability *name*, so the mode substructure is discarded and a url-mode request passes the gate by construction. And the HTTP dispatcher never reaches the continuation guard the MCP path now uses, so `mik_7215_acs::http::a_well_formed_retry_…` serves a well-formed retry as a fresh `tools/call`; repair in flight, routing both dispatchers through one guard rather than adding a second refusal |
 | B | era detection (MIK-7217) | 5 | partial — `2026-08-31-discover-outbound-era-probe.md` covers `DISCOVER.4`; **`NFR.OBS.3` appears in no design document** | no | no | no | a design that covers all five rows, not four |
 | C | revision surface (MIK-7272) | 7 | scattered across five files (`sub-4-idempotency-wiring`, `sub-1-3-get-mcp-era-gate`, `task-1-tasks-extension`, `cluster-b-*`) | no | no | no | five half-wirings with no single owner and no plan that reads as one change |
 | D | response-cache keying (MIK-7213) | 2 | yes — `2026-08-31-cluster-f-response-cache-keying.md` | yes — same stem, `-test-plan.md` | no | no | the test plan has never been through the dual-vendor gate |
 | E | performance measurement | 2 | n/a — this is a measurement, not a design | no | no | n/a | a run against 3.5.0 **on Spark**. A Mac number is worse than none |
 | F | compatibility facts | 2 | `NFR.COMPAT.4` only — `2026-09-02-conformance-matrix.md` | no | no | no | `NFR.COMPAT.1` is a one-line default flip that cannot land before cluster A merges |
-| G | stdio dispatch | 3 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | **one red test, and it is on cluster A's branch** — `049ff885` added `stdio_observation` for row 1, and the stdio dispatcher reaches no record site, so it fails | the emit itself. Until a record site both dispatchers reach exists, that red test gates cluster A's merge under DoD §11, not just G's own rows |
+| G | stdio dispatch | 3 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | **row 1 done** — `d306c7e8` put the record site on the path both dispatchers take; `cargo test --lib stdio_observation` gives 2 passed, 0 failed, verified at `4b522687` | the remaining two rows, which queue behind the gate as planned. Cluster A's branch no longer carries a red test from G |
 | — | residue | 10 | mixed | no | no | no | ten independent rows, each needing its own decision |
 
 53 blocking rows. **Two clusters have code, and both live on one branch.** Five
