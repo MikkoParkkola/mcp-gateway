@@ -109,11 +109,11 @@ re-deriving them. Not a design — a design makes a decision, and none is made h
 
 | fact | where |
 |---|---|
-| one outbound header builder, by its own doc comment | `build_mcp_headers`, `src/transport/http/mod.rs:534`; version inserted at `:570`, `MCP-Session-Id` at `:598` and `:608`, all unconditional |
+| one outbound header builder, by its own doc comment | `build_mcp_headers`, `src/transport/http/mod.rs:534`; version inserted at `:560`, `MCP-Session-Id` at `:595` and `:598`, all unconditional (re-verified at source 2026-09-03; the probe design and the triage ledger both cite `:570`/`:605`, which have drifted — read the symbol, not the line) |
 | the value it writes comes from the legacy handshake | `protocol_version: RwLock<Option<String>>` at `:200`, written at `:469` from `negotiate_protocol_version` (`:644`), read at `:539-543` defaulting to `PROTOCOL_VERSION` |
 | its only external callers are tests | `src/transport/http/tests.rs:382, 423, 456, 487, 512, 529, 621, 635, 646` |
 | era classification has landed and is per-backend | `Era::{Modern, Legacy}` at `src/protocol/era.rs:22-26`, `classify` at `:61` ("Modern requires positive evidence", `:57`), `EraCache` at `:115` with `cached()` at `:130` returning `Option<Era>`; `Backend::cached_era` at `src/backend/era.rs:61`, resolved on the start path at `src/backend/lifecycle.rs:232`, field at `src/backend/mod.rs:58` |
-| a modern revision constant exists in production, not only in tests | `MODERN_VERSIONS = ["2026-07-28"]` at `src/protocol/meta.rs:216`, with `declares_modern_era` at `:207` deliberately broader (any `2026-` prefix, `:202-207`) |
+| a modern revision constant exists in production, not only in tests | `MODERN_VERSIONS = ["2026-07-28"]` at `src/protocol/meta.rs:216`, with `declares_modern_era` at `:206` deliberately broader (any `2026-` prefix, `:202-207`) |
 | the inbound path already negotiates against it | `src/gateway/router/handlers.rs:175`, `:219`, `:572`, `:702` — so a negotiated modern value exists; the outbound builder simply cannot see it |
 | 2026-07-28 is deliberately absent from the handshake list | `SUPPORTED_VERSIONS` at `src/protocol/mod.rs:48` excludes it, pinned by the test at `:80`; `docs/design/2026-08-31-discover-outbound-era-probe.md` (rev 6) states it never joins that list and puts `HEADER.9` explicitly OUT |
 
@@ -125,5 +125,12 @@ to `Backend`.
 
 One sub-question is open and is spec-checkable, not askable: for a Modern peer, is
 `MCP-Protocol-Version: 2026-07-28` emitted or is the header omitted? `MCP-Session-Id`
-must not be sent to a Modern peer either way. Read the revision before writing the
-design, or schedule it with the four deferred fields.
+must not be sent to a Modern peer either way. **Deferred, not assumed** — the probe design was read for it and does not settle it: it fixes only that the legacy handshake runs regardless and permanently, because `SUPPORTED_VERSIONS` will never carry a 2026 revision (`docs/design/2026-08-31-discover-outbound-era-probe.md:145-147`), which constrains the handshake channel and says nothing about what a modern-shaped request emits.
+
+
+| deferred field | value |
+|---|---|
+| owner | the `HEADER.9a`/`9b` design increment — this is the decision that design exists to make, not a blocker on starting it |
+| what would resolve it | read the 2026-07-28 revision text on whether a modern request carries `MCP-Protocol-Version`; it is not in this tree, so the check is a fetch, not a `rg` |
+| when | at design time, before any header-shaping code is written |
+| what if it resolves badly | revision unobtainable → emit `2026-07-28` (the truthful value for a request the gateway shaped as modern), record it as an assumption, and pin it with a test so a later reading of the spec fails loudly instead of silently disagreeing |
