@@ -8,13 +8,13 @@ actually along*, which is the only thing this file is for. Nothing here is
 restated from those two — where a cell needs a reason it names the file that
 carries it.
 
-Verified 2026-09-02 against the worktree at `fix/mrtr2-continuation-handle`
-(`97203e10`). A cell reading **no** means a search found nothing, not that
+Verified 2026-09-03 against the worktree at `fix/mrtr2-continuation-handle`
+(`69faf515`). A cell reading **no** means a search found nothing, not that
 nobody intends to do it.
 
 | # | cluster | rows | design | test plan | plan reviewed | code | the one thing blocking |
 |---|---|---|---|---|---|---|---|
-| A | continuation envelope (MIK-7212) | 22 | yes — `2026-08-30-mrtr-wiring.md`, `2026-08-30-shared-continuation-state.md`, `2026-09-01-continuation-telemetry.md` | yes — `2026-09-02-mrtr-test-plan.md` | yes | **yes** — 85 files, +13,532/−623 vs `main` on this branch | the branch is unmerged and unreviewed: no PR, so none of the 22 rows can be claimed |
+| A | continuation envelope (MIK-7212) | 22 | yes — `2026-08-30-mrtr-wiring.md`, `2026-08-30-shared-continuation-state.md`, `2026-09-01-continuation-telemetry.md` | yes — `2026-09-02-mrtr-test-plan.md` | yes | **partial** — 85 files, +13,532/−623 vs `main`; the envelope, keyring, ledger and 19 component cases exist, the route that uses them does not | `src/gateway/router/handlers.rs:1048-1065` still answers every retry with *"retry forwarding is not available on this build"*. 15 of the 19 cases are red on that one cause, and no PR can make a row true that the code refuses |
 | B | era detection (MIK-7217) | 5 | partial — `2026-08-31-discover-outbound-era-probe.md` covers `DISCOVER.4`; **`NFR.OBS.3` appears in no design document** | no | no | no | a design that covers all five rows, not four |
 | C | revision surface (MIK-7272) | 7 | scattered across five files (`sub-4-idempotency-wiring`, `sub-1-3-get-mcp-era-gate`, `task-1-tasks-extension`, `cluster-b-*`) | no | no | no | five half-wirings with no single owner and no plan that reads as one change |
 | D | response-cache keying (MIK-7213) | 2 | yes — `2026-08-31-cluster-f-response-cache-keying.md` | yes — same stem, `-test-plan.md` | no | no | the test plan has never been through the dual-vendor gate |
@@ -45,12 +45,24 @@ the gate; per §PA a nonzero exit is `ERROR`, never a scraped verdict.
 
 ## What the next session does, in order
 
-1. **Land cluster A.** It is the only cluster with code and it blocks F. Open
-   the PR, run the gates at the head that will be tagged.
-2. **Give B and C a design each.** B needs `NFR.OBS.3` covered; C needs its five
+1. **Wire the retry-forwarding route** at `src/gateway/router/handlers.rs:1048-1065`.
+   This is the single highest-leverage increment in the release: it is one route,
+   and it is the stated cause of **18 of the 53 blocking rows** — the whole `MRTR`
+   set, `NFR.SEC.2/3/4` (nothing mints or opens on the live path, so the eight
+   named security fixtures have nothing to exercise), `NFR.OBS.3/4` (no detection
+   to observe, no counters to emit) and `NFR.PERF.3` (no in-flight state to soak).
+   It also turns 15 red cluster-A cases green, and it **deletes** the pinned-count
+   header section in `tests/mik_7212_mrtr_component_acs.rs`, whose scaffolding
+   describes only the pre-wiring tree.
+2. **Then land cluster A.** Open the PR, run the gates at the head that will be
+   tagged. Merging before step 1 ships 22 rows that the code still refuses.
+3. **Give B and C a design each.** B needs `NFR.OBS.3` covered; C needs its five
    half-wirings written as one change with one owner.
-3. **Book the Spark run for E.** It depends on nothing and nobody has started it.
-4. **Close G's gate** now that the reviewer is reachable again.
+4. **Book the Spark run for E.** It depends on nothing and nobody has started it.
+   `NFR.PERF.4` is a separate, cheaper fix: `benchmarks/public_claims.json:4-6`
+   records 14/16/17 against a README that has drifted.
+5. **Close G's gate** now that the reviewer is reachable again.
 
-Order is dependency, not preference: F waits on A, and E waits on nothing at
-all, which is why it should not be last in practice.
+Order is dependency, not preference: everything in cluster A waits on step 1, F
+waits on A, and E waits on nothing at all, which is why it should not be last in
+practice. Steps 1 and 4 are independent and can run at the same time.
