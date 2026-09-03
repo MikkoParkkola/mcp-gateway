@@ -95,7 +95,7 @@ The house already has the pattern. `NFR.OBS.1` records `protocol_revision` **and
 cache scope. Era detection is the one classification in this release that records the value alone.
 
 **Delta:** `era_probe` gains an `evidence` field, a closed set naming which signal produced the
-outcome (the discover result, or the specific error code encountered). It is a per-backend label like
+outcome, and — only on the error routes — an `error_code` field carrying the raw code beside it. It is a per-backend label like
 the rest and adds no cardinality dimension the era design has not already reasoned about — the error
 code appears as a *field on an event*, never as a metric label, which is the distinction that section
 exists to protect (`:620-624`).
@@ -132,6 +132,13 @@ exist, which makes the question unstatable:
    (`2026-08-31-discover-outbound-era-probe.md:609-610`, reusing `max_gap`,
    `src/gateway/server/warmstart.rs:47`). The anchor is the completion of the last probe, so the
    earliest a re-probe can follow is `era_probed_at + 30s`.
+
+Point 3 is a floor the era design states and the shipped code does not yet enforce: `src/backend/era.rs`
+carries a 2 s probe timeout (`:26`) and no re-probe rate limit, and `EraCache::invalidate` (`src/protocol/era.rs:144`)
+exists but is called from no restart path. OBS.3 **observes what is there** — it reports the timestamp and the
+trigger, from which an operator can see whether a floor is being respected, and it does not implement one. Where
+this design's transition table names a `restart` invalidation, that row is unreachable until that path is wired;
+the table is the contract, not a claim about today's coverage.
 
 Point 3 is a floor, never a schedule. A field named `next_probe_at` would be a lie;
 `probe_not_before` would be true but is not stored — it is derivable from a field the reader already
@@ -174,9 +181,11 @@ struct EraObservation {
 }
 ```
 
-Held in a `std::sync::RwLock` on the same entry the era lock guards today, written at the point
-`commit_if` commits (`2026-08-31-discover-outbound-era-probe.md:453`) and at the point a `NoAnswer`
-outcome is discarded. It is plain data behind a non-async lock, never held across an await, so
+Held in a `std::sync::RwLock` on the same entry the era lock guards today, written where the shipped
+code already decides: `resolve_with` classifies, then stores the era only when the outcome is not
+`NoAnswer` (`src/protocol/era.rs:163-171`). Both events hang off that one branch — the taken side
+commits a classification, the untaken side discards a `NoAnswer`. The era design's `commit_if` is a
+name from that document, not from the code; this design targets the seam that exists. It is plain data behind a non-async lock, never held across an await, so
 `status()` reads it directly and `cached_era()` reads `.era` from it. The async `EraCache` stops
 being the owner of the classification and becomes the thing that serialises probing.
 
@@ -211,10 +220,26 @@ is fixed here. One variant per route in `classify` (`src/protocol/era.rs:61-96`)
 
 Seven values, no raw error code among them. **One enum, both readers**: `era_probe.evidence` and
 `era_evidence` on the operator read render the same `EraEvidence`, so the event stream and the live
-read cannot drift into two vocabularies for one route. The specific error code, where it is wanted
-for debugging, rides the `era_probe` **event** as a separate optional field; it does not enter the
-operator read and never becomes a metric label. Whether the three modern codes ever need separating on the read is the
+read cannot drift into two vocabularies for one route (the raw code rides the event's `error_code`
+field, specified below). Whether the three modern codes ever need separating on the read is the
 one thing genuinely deferred, and widening a variant into three is additive.
+
+### The amended `era_probe`, in one place
+
+The cited table above is what the era design specifies. This is what it becomes — the whole record,
+so a reader never has to reconcile two partial statements of it.
+
+| field | type | present |
+|---|---|---|
+| `backend` | string | always |
+| `outcome` | `modern` \| `legacy` \| `no_answer` | always |
+| `evidence` | `EraEvidence` (the seven above, minus `never_probed`, which no probe can produce) | always |
+| `error_code` | string | only when `evidence` ∈ {`method_not_found`, `modern_error_code`, `other_error`} — the raw code, for debugging |
+| `duration_ms` | integer | always |
+| `trigger` | `start` \| `reprobe` | always |
+
+`evidence` is the closed classification; `error_code` is the raw text behind it, on the event only.
+Absent everywhere else, and never a metric label.
 
 ### Every transition
 
@@ -233,6 +258,25 @@ one thing genuinely deferred, and widening a variant into three is additive.
 Two rows carry the whole design: a `no_answer` re-probe moves `era_source` back to `assumed` while
 leaving `era_probed_at` set, and a discarded outcome changes nothing at all. Both are directly
 testable.
+
+**What the operator actually sees.** Three `gateway_list_servers` entries, abridged to the era fields:
+
+```jsonc
+// never probed — the default state, and the one an operator most often misreads
+{ "name": "acme", "era": "legacy", "era_source": "assumed", "era_evidence": "never_probed" }
+
+// probed, answered, modern
+{ "name": "acme", "era": "modern", "era_source": "probed", "era_evidence": "discover_modern",
+  "era_probed_at": "2026-09-03T09:14:22Z", "era_probe_trigger": "start" }
+
+// probed, said nothing — treated as legacy, remembered as an assumption
+{ "name": "acme", "era": "legacy", "era_source": "assumed", "era_evidence": "no_answer",
+  "era_probed_at": "2026-09-03T09:14:24Z", "era_probe_trigger": "start" }
+```
+
+The first and third read `legacy` / `assumed` alike and are different situations: one has never been
+asked, the other was asked and did not answer. `era_evidence` and the presence of `era_probed_at` are
+what separate them, which is the whole reason both fields exist.
 
 **Why the `no_answer` rows cannot misreport.** `classify` answers `Legacy` for silence, but the cache
 stores nothing (`src/protocol/era.rs:163-171`) — treat it as legacy now, do not remember it, or a
@@ -268,7 +312,10 @@ So the whole of OBS.3 is buildable and testable today:
 - the emission is a change to code that exists and runs;
 - the tests extend `tests/mik_7217_era_probe_acs.rs`, which already drives a real backend start
   against a fixture peer (`backend.ensure_started()` at `:153`, `:173`, `:213`, `:316`, `:341`) and
-  already produces every route in the `EraEvidence` table above;
+  already drives four of the seven routes — `discover_modern`, `method_not_found`, the contradiction
+  re-probe, and `no_answer`. The three it does not (`discover_2025_only`, `modern_error_code`,
+  `other_error`) are new fixture rows this ticket adds, one per evidence value, so the table above is
+  covered case-for-case rather than by assertion;
 - a test asserting an `era_probe` record fails today on a **missing assertion**, not a missing
   symbol — the probe runs, it is simply silent. §P2's free failure is available.
 

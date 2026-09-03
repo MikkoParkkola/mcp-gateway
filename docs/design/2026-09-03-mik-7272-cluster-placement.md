@@ -15,7 +15,7 @@ already marked MET.
 ## What this document is, after review round 2
 
 It was commissioned on the premise that no design exists for this cluster. That premise is false
-for **five of the seven rows**, and the correction is the document: a first draft made independent
+for **all seven rows**, and the correction is the document: a first draft made independent
 placement decisions for ORDER.2, SUB.2b, EXT.1 and OTEL.1, and two of those contradicted reviewed
 designs that had already chosen differently. Those sections are removed rather than repaired —
 elimination, not a patch, because a second copy of a decision drifts from the first and an
