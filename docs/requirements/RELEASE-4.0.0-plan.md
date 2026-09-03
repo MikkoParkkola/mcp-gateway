@@ -255,10 +255,10 @@ now scored as `IDENT.1b`. A test, not a mechanism.
 Sequenced last of the design-free work, and deliberately not merged into a cluster they do not
 belong to.
 
-### The fifteen blocking NFR rows are placed by wave, not by cluster
+### The fourteen blocking NFR rows are placed by wave, not by cluster
 
 The clusters above are ticket work. Not one NFR row appears in them, and the heading
-"Clusters, in dependency order" reads as though it covered everything — it covers 37 of the 52.
+"Clusters, in dependency order" reads as though it covered everything — it covers 30 of the 44.
 An NFR row mostly verifies a property of a mechanism some cluster builds, so it cannot be
 scheduled independently of that cluster; the four that stand alone are the exceptions.
 
@@ -267,7 +267,7 @@ scheduled independently of that cluster; the four that stand alone are the excep
 | SEC.2, SEC.3, SEC.4, PERF.3, OBS.4 | with MRTR — each verifies the continuation envelope, and none can be written against an unwired path |
 | OBS.3 | with era detection — there is nothing to observe until it lands |
 | OBS.1, OBS.2 | the stdio dispatch path, above |
-| COMPAT.1 | with MIK-7272 — the ABSENT clause is the modern revision being served at all, which the `server.modern_protocol` default gates and B's work unblocks, not a separate task |
+| COMPAT.1 | with MIK-7272 — the ABSENT clause is the modern revision being served at all, which the `server.modern_protocol` default gates and the revision surface (MIK-7272, rollup cluster C) unblocks, not a separate task |
 | PERF.1, PERF.2 | wave 0, measured 2026-09-03 on `spark`. PERF.2 is MET; PERF.1 stays open as PARTIAL — the harness yields no P50 or P99, and only an end-to-end comparison against a 3.5.0 binary does |
 | PERF.4 | wave 1 — the operator's ruling left the ceiling standing and the counting mechanism undecided |
 | SEC.1 | wave 3 — twelve of fifteen controls carry a refusal test; two remain, and one is blocked on files another session owns |
@@ -366,7 +366,7 @@ touched by other sessions. Coordinate before editing them.
 
 ## Open for the operator
 
-Four decisions are the requester's, not the team lead's, and are recorded here rather than in the
+Five decisions are the requester's, not the team lead's, and are recorded here rather than in the
 design that raised each one so they survive a session boundary. None blocks the work that does not
 turn on it. Each names what changes either way, so an answer costs a sentence.
 
@@ -377,6 +377,7 @@ running anything, which is why none has a command against it.
 | open decision | resolves by | when it must be asked | if it resolves badly, or not at all |
 |---|---|---|---|
 | 2. SCHEMA.1b posture on an invalid backend schema | operator picks refuse, publish-and-flag, or degrade | before the revision-surface design (Wave 1) freezes its scope | fall back to publish-and-flag, the least destructive of the three, and record it as provisional in the design |
+| 5. whether v4.0.0 lands as one merge or a sequence of them | operator picks one merge, or an ordered series with a named split point | before cluster A's PR is prepared for merge, because the answer decides how much of Waves 2-3 can proceed in parallel | fall back to a sequence — cluster A first, then each later cluster on its own PR — which is reversible into one merge and is the only option reviewable at this diff size |
 | 4. what the direct `POST /mcp/{name}` route needs | operator says whether it gets its own instrumentation, and whether CACHE.1-4 are HTTP-only | before response-cache keying (MIK-7213) starts code in Wave 3 | scope CACHE.1-4 to the traced route only and leave the direct route uninstrumented, which is today's behaviour and reversible |
 
 The two resolved items below stay in the section because their *scheduling* consequences are

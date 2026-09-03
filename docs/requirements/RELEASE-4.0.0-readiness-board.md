@@ -26,7 +26,9 @@ to do it.
 | G | stdio dispatch | 3 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | **row 1 done** — `d306c7e8` put the record site on the path both dispatchers take; `cargo test --lib stdio_observation` gives 2 passed, 0 failed, verified at `4b522687` | the remaining two rows, which queue behind the gate as planned, plus a third the MRTR work surfaced: `src/gateway/server/mod.rs:1748` hardcodes `retry: &NO_RETRY`, so a stdio client can never present a retry at all. Same defect class as cluster A's prefix exemption — a whole category of callers silently dropped — and it belongs to G's design, not to A's change. Cluster A's branch no longer carries a red test from G |
 | — | residue | 10 | mixed | no | no | no | ten independent rows, each needing its own decision |
 
-51 blocking rows. **Two clusters have code, and both live on one branch.** Five
+44 blocking rows — the `rows` column sums to the ledger's count, which
+`scripts/release/count-release-criteria.py --check` verifies against the status
+doc's own tables. **Two clusters have code, and both live on one branch.** Five
 have no branch, no worktree and no commit — verified against `git worktree list` and `git branch`, which show
 `fix/mrtr2-continuation-handle` (cluster A) plus two unrelated gap branches.
 
@@ -70,7 +72,7 @@ is left without a next step.
    `tests/mik_7212_mrtr_component_acs.rs`, which described only the pre-wiring
    tree. The suite is now **18 passed, 0 failed**, and `ac_mrtr_6` — the case that
    was the `NFR.SEC` shape rather than a loose end — carries the criterion it
-   names since `a89f21c8`. `MRTR.6` is met; the cluster stands at 21 rows.
+   names since `a89f21c8`. `MRTR.6` is met; the cluster stands at 14 rows, as this file's own cluster-A row and the rollup both record.
 2. **Then land cluster A.** Open the PR, run the gates at the head that will be
    tagged. Merging before step 1 ships 22 rows that the code still refuses.
 3. **D is through the gate; what remains is the code.** Both legs ran on
@@ -93,10 +95,12 @@ is left without a next step.
    so `benchmarks/public_claims.json:4-6` and `README.md:264` both match the code. What remains
    on that row is the 17th tool against the 14-16 ceiling, which is a surface decision, not a
    stale number.
-6. **Close G's gate** now that the reviewer is reachable again — but G's row-1
-   emit does not wait for it. A red test already sits on cluster A's branch, so the
-   emit is a step-1 obligation and the remaining seven stdio rows queue behind the
-   gate as planned.
+6. **Close G's gate** now that the reviewer is reachable again. Row 1's emit is
+   done — `d306c7e8`, verified at `4b522687` — so it is no longer a step-1
+   obligation and cluster A's branch no longer carries a red test from G. The
+   remaining two rows queue behind the gate as planned, and the `NO_RETRY`
+   hardcode the MRTR work surfaced (`src/gateway/server/mod.rs:1748`) is named in
+   the rollup's cluster G as a design input, not as a ninth criterion row.
 7. **Triage the residue as one pass.** Ten rows, each independent, each needing a
    decision rather than an increment — `HEADER.9` waits on B's per-backend era, so
    it cannot come first. One session, one line of disposition per row, and the ones
