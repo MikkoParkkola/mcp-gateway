@@ -1,12 +1,12 @@
-# Cluster G — one transport is missing three things the other has
+# Cluster G — one transport is missing four things the other has
 
 §P1 design note. No code. Reviewed by two vendors before an edit.
 
 ## FOR / OUT (§P0)
 
-**FOR:** closing `NFR.OBS.1`, `NFR.OBS.2` and `MIK-7246.CONFIRM.1a`, all three of which
-are the same defect wearing three hats: a concern implemented in the HTTP router that the
-stdio dispatcher never reaches.
+**FOR:** closing `NFR.OBS.1`, `NFR.OBS.2`, `MIK-7246.CONFIRM.1a` and the MRTR per-call
+fields, all four of which are the same defect wearing four hats: a concern implemented in
+the HTTP router that the stdio dispatcher never reaches.
 
 **OUT:**
 
@@ -17,6 +17,14 @@ stdio dispatcher never reaches.
   recorded rationale (`src/gateway/server/mod.rs:1722`). This note *uses* that decision;
   it does not reopen it. See the residual at the end.
 - Any third transport. A2A does not dispatch `tools/call` through this path.
+
+### Scope move, 2026-09-03 — the MRTR per-call fields folded into FOR
+
+MRTR was not in the original FOR. It enters after the freeze, on the operator's
+instruction to design this row here rather than in a note of its own, because it converges
+on the point `NFR.OBS.1` already needs and splitting it would design that point twice. The
+surface gains one row; nothing leaves OUT. Section *The stdio context declares two absences
+and both are false* is the row.
 
 ### Scope move, 2026-09-03 — one hidden-tool disclosure route folded into FOR
 
@@ -51,6 +59,7 @@ Two call sites reach the same meta-MCP layer:
 | per-request observed record (`NFR.OBS.1`) | `src/gateway/router/handlers.rs:719` | absent |
 | `tools/list` observed record (`NFR.OBS.2`) | `src/gateway/router/handlers.rs:993` | absent |
 | destructive confirmation (`MIK-7246.CONFIRM.1a`) | `src/gateway/router/handlers.rs:1196` | absent |
+| retry fields (`MRTR`) | `src/gateway/router/handlers.rs:972` | hardcoded `NO_RETRY` at `src/gateway/server/mod.rs:1748` |
 
 Both telemetry criteria say *per request* and *every* `tools/list`, unqualified by
 transport. The gateway serves MCP over two transports, so one of the two is missing from
@@ -60,10 +69,15 @@ announced to anyone.
 ## Why the obvious fix is the wrong one
 
 The blocking rollup frames this as *"one wiring question — what the stdio dispatcher must
-do before it reaches `handle_tools_call`"*. That framing prescribes the patch: add three
-things to the stdio dispatcher. It closes all three rows and leaves the defect fully
+do before it reaches `handle_tools_call`"*. That framing prescribes the patch: add four
+things to the stdio dispatcher. It closes all four rows and leaves the defect fully
 describable — *a concern can be added to one transport and not the other*, which is how the
-gateway arrived here. A fourth concern, or a third transport, reintroduces it at full cost.
+gateway arrived here. A further concern, or a third transport, reintroduces it at full cost.
+
+That is not a hypothetical. This note said it about a fourth concern while it had three,
+and the fourth arrived during its own review: MRTR, already built on HTTP, already absent
+on stdio, found by reading one comment. The patch would have been written three times and
+would be being written a fourth.
 
 Per the repair protocol, elimination is the default on an architecture finding, and the
 test is whether the finding can still be stated afterwards. Under the patch, it can.
@@ -71,15 +85,16 @@ test is whether the finding can still be stated afterwards. Under the patch, it 
 ## What eliminates it
 
 Move each concern to the point the two transports **already** converge on — but that is
-not one point for all three, and the first version of this note got that wrong. Review
+not one point for all four, and the first version of this note got that wrong. Review
 round 1 established that `handle_tools_call` is the convergence point for exactly one of
-the three concerns.
+them.
 
 | concern | convergence point | both callers |
 |---|---|---|
 | destructive confirmation (`CONFIRM.1a`) | `MetaMcp::handle_tools_call` | `router/handlers.rs:1272`, `server/mod.rs:1715` |
 | `tools/list` record (`NFR.OBS.2`) | **also not the dispatcher** — the same per-message transport entry as `OBS.1` | see below |
 | per-request record (`NFR.OBS.1`) | **not the dispatcher** — the per-message entry of each transport | see below |
+| MRTR per-call fields | **not the dispatcher** — the same per-message entry, which is the last place whole `params` is in scope | see below |
 
 ### Why `NFR.OBS.1` cannot live in the dispatcher
 
@@ -132,7 +147,7 @@ method, and adds the `tools/list` fields when the method is `tools/list`. This i
 design than the one it replaces: **one** site, not two, and the finding — *a `tools/list`
 return path can bypass the record* — stops being statable rather than becoming guarded.
 
-### This is the third instance of a pattern already solved here
+### This is a pattern already solved here
 
 The tool policy was in exactly this state and was fixed exactly this way. Its own comment,
 at `src/gateway/server/mod.rs:1707`, records the before and after:
@@ -172,6 +187,83 @@ Two mechanical consequences: the confirmation moves with identical semantics on 
 transports, and the "nobody could be asked" branch must not silently become "proceed" on
 stdio merely because no elicitation-capable client is attached.
 
+## The stdio context declares two absences and both are false
+
+The stdio caller context hardcodes two empty fields under a single comment
+(`server/mod.rs:1745-1748`):
+
+> stdio carries no per-request capability declaration to read, and absent means absent.
+
+Neither half survives contact with the code, and the second is the one this row was opened
+for.
+
+**`retry` is not a declaration at all.** It is read from the call's own params:
+`RetryFields::from_params` takes `Option<&Value>` and reads `inputResponses` and
+`requestState` from plain params and `idempotency_key` from `params._meta`. The HTTP path
+builds it at `handlers.rs:972` from params alone — no header, no session, no transport
+state. stdio has params. `mrtr.rs` says so itself, of the idempotency key (V —
+`mrtr.rs:60-63` and `handlers.rs:972`, independent of each other):
+
+> `_meta` and not an argument: an argument of that name would collide with a backend
+> parameter and would be forwarded upstream. Spec-native, and it reaches a stdio client,
+> which an HTTP header cannot.
+
+So the defect is not that stdio's retry support is incomplete. **A stdio client can never
+present a retry at all — not refused, silently absent.** Its `inputResponses` are dropped,
+its `requestState` is dropped, and its idempotency key is dropped, which is the case
+`mrtr.rs` names as *the duplicate the client asked to be spared*.
+
+**`input_capabilities` is per-request too**, and this note's first draft got it wrong by
+checking the wrong thing. Asking whether `run_stdio` retains anything from `initialize`
+answers a handshake question; the modern shape does not use the handshake. `classify` reads
+`io.modelcontextprotocol/clientCapabilities` out of `params._meta` — `KEY_CLIENT_CAPABILITIES`
+at `meta.rs:45`, consumed into `declared_capabilities` at `meta.rs:187` — and the HTTP path
+feeds exactly that value in at `handlers.rs:1152`. Nothing in that chain is HTTP-specific
+(V — `meta.rs:187` and `handlers.rs:1152`). The stdio dispatcher already **computes** the
+same `RequestShape` at `server/mod.rs:1679` and discards the return value. It is not that
+stdio cannot read the declaration; it reads it and throws it away.
+
+The `malformed` channel is unreachable by the same construction. `RetryFields` carries the
+fields that were present and unusable "so a caller can refuse", written against the
+incident where a malformed `requestState` vanished and one side effect became two. On
+stdio nothing is ever read, so nothing can be named unusable, so no refusal can be
+produced — the same shape as the tool-policy gap above: a whole category of callers
+dropped with no observable refusal.
+
+The operator's framing was a binary — whether stdio grows a way to declare, or whether the
+absence becomes an explicit refusal. Neither is needed, because the premise under both is
+false. There is nothing to grow and nothing to refuse: both fields are in the params the
+stdio dispatcher already parses, and one of them is in a value it already builds.
+
+### Where the repair goes — the same convergence point, not a second copy
+
+This is the second comment in this cluster whose reach is overstated; the other is
+`handlers.rs:1252-1256`, below. Same failure, different site: a comment true of one thing
+read as covering a second, and nothing in the type system objecting.
+
+Building `RetryFields` at the stdio call site would be transport-local wiring, which is the
+pattern this note rejects everywhere else and would leave the finding statable the moment a
+third caller appears. The convergence point is the one `NFR.OBS.1` already needs: the
+record-and-classify function at each transport's per-message entry, which is the last place
+the whole `params` object is in scope and which both transports already call. It returns a
+`RequestShape`; stdio's defect is that it ignores the return. Retry rides the same single
+parse.
+
+Two consequences follow and both are requirements, not preferences:
+
+- The caller context is constructed from that return value on both transports. Neither can
+  dispatch a `tools/call` with `retry` or `input_capabilities` defaulted, because the
+  defaults stop being reachable.
+- A malformed field is refused **before** dispatch, on both transports. `RetryFields`
+  exists to name unusable fields so a caller can refuse; a design that carries them past
+  the dispatch boundary reproduces the incident the type was written for.
+
+The code change lands after this row is reviewed, not alongside it. The test plan (§P2,
+separate document) gains the cases this creates: absent retry fields on stdio, each retry
+field present and honoured on stdio, each malformed field refused pre-dispatch on stdio,
+and a declared capability on stdio reaching the caller context. The falsifier for each is
+the same as the note's others — the old stdio path decides differently on the same fixture.
+
 ## Open questions, each scheduled (§P1)
 
 | # | question | form | resolves by |
@@ -179,6 +271,7 @@ stdio merely because no elicitation-capable client is attached.
 | 1 | Does the stdio dispatcher have the fields `NFR.OBS.1`'s record requires — notably `protocol_revision`? Its `server/discover` comment states it "has no access to the running config" (`server/mod.rs:1688`), which may bound what it can honestly report. | checkable | read the record's field list at `handlers.rs:719-730` against what is in scope at `server/mod.rs:1683`. Round 2 corrected the fallback: stdio establishes a revision at `initialize`, so the answer is to **retain the negotiated revision** and record it with `revision_source` set to the handshake, not to omit the field. Omission was the wrong default — it would leave stdio unable to answer the one question the migration telemetry exists to ask. A field is omitted only if no handshake has occurred yet, and is never fabricated. If a field proves unreportable at all — the case this question exists to find — the answer is not a quiet omission that leaves the criterion half-met: it returns to the operator as a named gap, because a telemetry criterion that cannot answer its own question is an unmet requirement, not a partially-met one |
 | 2 | **RESOLVED — there is no stdio elicitation path at all.** The question asked whether the round-trip completes or deadlocks; both readings assumed a delivery mechanism exists. `rg` for `elicit` and `NotificationMultiplexer` outside tests returns `router/helpers.rs:134-152` (HTTP parsing) and `webhooks/mod.rs`, `streaming.rs` (HTTP delivery). `run_stdio` at `server/mod.rs:1495` touches none of them. So confirmation over stdio is not a wiring detail; it is a transport that does not exist. | checkable | done — see the revised residual below |
 | 3 | Is a per-request record on stdio one record per JSON-RPC message, or per session? "Per request" is unambiguous on HTTP and needs a stated reading here. | checkable | read `NFR.OBS.1` in `RELEASE-4.0.0-requirements.md`; if it does not distinguish, the reading is per JSON-RPC message and is recorded as a reading, not as the requirement |
+| 4 | **RESOLVED — yes, and for the same reason.** The question was whether `input_capabilities: &[]` is honest on stdio. The first check asked whether `run_stdio` retains anything from `initialize` (it does not: `server/mod.rs:1708` forwards and stores nothing) — but that is a handshake question, and the modern shape declares per request. `classify` reads `io.modelcontextprotocol/clientCapabilities` from `params._meta` (`meta.rs:45`, `meta.rs:187`) and HTTP passes it at `handlers.rs:1152`; stdio computes the same shape at `server/mod.rs:1679` and discards it. Both hardcoded absences are false, and they take the same repair. | checkable | done — folded into the section above |
 
 Question 2 is the one that can change the design's shape. If the round-trip cannot complete
 on stdio, the confirmation still moves to the chokepoint — but stdio always takes the
@@ -286,8 +379,8 @@ inside the HTTP router (V: `rg 'require_destructive_confirmation|is_destructive_
 done and is not ours to redo. What remains is precisely the dispatch-parity problem this note
 already exists to solve: the stdio loop reimplements a slice of the router and inherits none of
 its gates. `CONFIRM.1a` is therefore not a fourth concern bolted onto cluster G — it is the
-same defect as `NFR.OBS.1` and `NFR.OBS.2`, in its third costume, and the elimination this note
-proposes closes all three or none.
+same defect as `NFR.OBS.1` and `NFR.OBS.2` in its third costume, MRTR is it in its fourth, and
+the elimination this note proposes closes all four or none.
 
 **Row 13 is load-bearing, not a regression test.** A test written today against the
 stdio path fails because the behaviour is absent, not because a mutation was staged for it —
