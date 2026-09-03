@@ -212,6 +212,48 @@ at `:589-593`. The admin gate carries `!caller_is_admin` and
 callers the current dispatch path still checks, which is a privilege regression
 wearing the costume of a faithful mirror.
 
+### A bump published before its mutation is worse than no bump
+
+Every epoch increment must be **released after** the mutation it describes is
+visible, and every reader must take its snapshot with an acquire load. Stated
+because the reverse interleaving is the default one gets by writing the bump
+first: a reader that observes the new epoch while the old policy is still the
+one in effect builds a *fresh* key over *stale* state and caches the result
+under it. The stale body then survives every later read, because the epoch that
+would have invalidated it has already been consumed. A missing bump serves one
+stale response; a mis-ordered bump installs one.
+
+This binds at each of the three bump sites, not once globally, and each carries
+a case asserting the opposite interleaving cannot be observed — the test plan's
+4.f.1/4.f.2/4.f.3 rows are where that lands.
+
+### Three escapees, not one — and the same elimination closes all three
+
+Revision 4 named the rule correctly and then applied it to a single predicate.
+That gap is this revision's finding, raised independently by both vendors: the
+document enumerates `enforce_identity_grants` (`invoke.rs:1842`),
+`validate_personal_capability_identity` and `validate_oauth_isolation`
+(`backend.rs:401-406`) as living below a cache read, moves the first, and states
+the invariant as though all three had moved. Verified at source: both remaining
+validators run inside `CapabilityBackend::execute`, immediately after that
+function's own `self.get(name)` — a **third** by-name lookup of the same
+capability, on top of the chokepoint's and `dispatch_to_backend`'s.
+
+They are not a second case needing a second mechanism. Their inputs are the
+capability definition and the execution context, both of which the chokepoint
+already holds, and the multi-user flag, which is an atomic load. Carrying one
+immutable authorized definition through dispatch — already this design's chosen
+elimination — removes the third lookup and makes the chokepoint the only place
+any of the three can run. Moving grants alone would leave the finding stateable
+in its original words against a different function, which is the test §P0's
+repair protocol sets for an elimination.
+
+The invariant is therefore stated once, over the whole class: **no authorization
+predicate may live below a cache read**, enforced by there being exactly one
+resolution of the definition and exactly one place predicates run against it.
+A fourth predicate added later inherits the ordering by construction rather than
+by remembering to move it.
+
 ### The safety argument, now two claims instead of one
 
 A reviewer who remembers revision 2 will read this as a weakening. It is not;
@@ -219,7 +261,7 @@ it is a split, and both halves are load-bearing.
 
 | claim | what it covers | why it holds |
 |---|---|---|
-| **gate ordering** | every authorization gate runs before every cache read | the chokepoint's own stated invariant, with the one escapee returned to it |
+| **gate ordering** | every authorization gate runs before every cache read | the chokepoint's own stated invariant, with all three escapees returned to it |
 | **response-varying keying** | the key carries every input that varies the *body* | the key's actual job; a missing input is a correctness bug, bounded and testable |
 
 This is what makes the finding class unstateable rather than merely shorter. A
