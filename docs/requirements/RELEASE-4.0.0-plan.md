@@ -214,8 +214,8 @@ cannot be built before MRTR lands.
 One wiring question answers all three rows. The gateway serves MCP over two transports and
 all three controls started in the HTTP router only: both migration-telemetry records in
 `handlers.rs`, and `require_destructive_confirmation`, whose module
-`src/gateway/destructive_confirmation.rs` had exactly one consumer. **CONFIRM.1a is answered
-in the working tree and awaiting a commit, a green suite and a review**: the gate moved out
+`src/gateway/destructive_confirmation.rs` had exactly one consumer. **CONFIRM.1a is answered in code and committed** (`b9cfa3d0`, with its
+test in the follow-up), and what remains on it is the review, not the work: the gate moved out
 of `handlers.rs` into `dispatch_single` (`src/gateway/server/mod.rs:1656`), which `run_stdio`
 (`:1495`) routes every request through. The mechanism is not a check that runs ahead of
 `MetaMcp::handle_tools_call` — it is the confirmation channel the dispatcher hands that call.
@@ -260,7 +260,7 @@ belong to.
 The clusters above are ticket work. Not one NFR row appears in them, and the heading
 "Clusters, in dependency order" reads as though it covered everything — it covers 30 of the 44.
 An NFR row mostly verifies a property of a mechanism some cluster builds, so it cannot be
-scheduled independently of that cluster; the four that stand alone are the exceptions.
+scheduled independently of that cluster; the five that stand alone are the exceptions.
 
 | row | where it lands |
 |---|---|
@@ -379,7 +379,7 @@ running anything, which is why none has a command against it.
 | open decision | resolves by | when it must be asked | if it resolves badly, or not at all |
 |---|---|---|---|
 | 2. SCHEMA.1b posture on an invalid backend schema | operator picks refuse, publish-and-flag, or degrade | before the revision-surface design (Wave 1) freezes its scope | fall back to publish-and-flag, the least destructive of the three, and record it as provisional in the design |
-| 5. whether v4.0.0 lands as one merge or a sequence of them | operator picks one merge, or an ordered series with a named split point | before cluster A's PR is prepared for merge, because the answer decides how much of Waves 2-3 can proceed in parallel | fall back to a sequence — cluster A first, then each later cluster on its own PR — which is reversible into one merge and is the only option reviewable at this diff size |
+| 5. whether v4.0.0 lands as one merge or a sequence of them | **answered 2026-09-03: a sequence of per-cluster PRs.** Cluster A first, then each later cluster on its own PR; cluster F's default flip lands after both A and C | resolved | — |
 | 4. what the direct `POST /mcp/{name}` route needs | operator says whether it gets its own instrumentation, and whether CACHE.1-4 are HTTP-only | before response-cache keying (MIK-7213) starts code in Wave 3 | scope CACHE.1-4 to the traced route only and leave the direct route uninstrumented, which is today's behaviour and reversible |
 
 The two resolved items below stay in the section because their *scheduling* consequences are

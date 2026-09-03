@@ -56,8 +56,9 @@ the gate; per §PA a nonzero exit is `ERROR`, never a scraped verdict.
 
 ## Readiness order — every cluster, none dropped
 
-The queue is `RELEASE-4.0.0-execution-plan.md`, whose item 1 is already this
-wiring increment. What follows is the readiness view of the same order: where
+The queue is `RELEASE-4.0.0-plan.md` under "Order of work"; the execution plan says of
+itself that it is superseded and is read here only as the historical record of how item 1 —
+this wiring increment — was framed. What follows is the readiness view of that order: where
 each of the seven clusters and the residue enters it, so that no group of rows
 is left without a next step.
 
