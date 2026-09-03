@@ -96,6 +96,18 @@ The specification fixes one normalization that must not be invented later:
 an empty `"elicitation": {}` is equivalent to `{"form": {}}`. A client that
 declares the capability and names no mode has declared **form**.
 
+**The same default binds the request side, and it binds at the comparison
+boundary.** An `elicitation/create` entry carrying no `params.mode` is a *form*
+request, not a modeless one. Without this stated, the natural reading of "refuse
+a request whose mode was not declared" refuses every request that omits the
+field — a compliant form-mode request from a form-only client, which is the
+exact case the second test in the tree exists to protect. Both sides normalize
+to the same value, once, at parse.
+
+Mode keys match **exactly and case-sensitively**, against a lowercase
+vocabulary. Anything else is a per-call-site normalization rule, and multiple
+sites deriving it independently is the failure option A was rejected for.
+
 ## Options
 
 ### A — keep `Vec<String>`, store joined names
@@ -105,28 +117,47 @@ Append `"elicitation/form"` alongside or instead of `"elicitation"`.
 **Rejected.** It reintroduces a parse at every read site: `declares_capability`
 and `required_capability` both compare whole strings, so each of the three
 call sites would have to learn a separator convention, and a site that forgets
-it silently reverts to today's blind behaviour. It also cannot express *the
-client declared a mode this build does not know*, which is the case where
-refusing is mandatory.
+it silently reverts to today's blind behaviour. Its second problem is the reverse of what it looks like: raw
+strings store an unrecognised mode *verbatim*, which lets a caller pre-declare
+the exact string a later build learns to honour. Filtering that needs the closed
+vocabulary of option B — at which point A is B carrying a separator convention.
 
-### B — a bounded declaration struct with a closed mode vocabulary *(chosen)*
+### B — a fixed gateway-owned set, with no caller string retained at all *(chosen)*
 
-Replace the `Vec<String>` element with a small fixed-size record: the capability
-name, plus a set of modes drawn from a **closed vocabulary the gateway owns**.
-Both constraints above hold, and hold *by type* rather than by review:
+Replace the `Vec<String>` with a **fixed-size set the gateway owns end to end**:
+the three capabilities `required_capability` can name, and for elicitation the
+modes it can honour. Nothing caller-supplied survives the parse — an unrecognised
+capability key and an unrecognised mode key are both dropped there, which is the
+same disposal a null already gets.
 
-- Size is bounded by the vocabulary, not by the request. A client sending ten
-  thousand mode keys yields at most the vocabulary's worth of set bits; the rest
-  are dropped at parse, which is the same disposal a null already gets.
-- An unrecognised mode is **not** a declaration, so it can never satisfy a
-  request. This is requirement 2 applied one level down, and it is the reason a
-  closed vocabulary is a feature rather than a limitation: an open one would let
-  an attacker declare the exact string a future gateway learns to honour.
+This is stronger than the first draft of this option, which kept the vector and
+closed only the mode vocabulary. That version did not deliver the size bound it
+claimed: a caller sending ten thousand capability keys still got ten thousand
+records allocated pre-admission. Closing the mode vocabulary while leaving the
+outer collection caller-sized would have moved the amplification, not removed it.
+
+The stronger form is available because **no consumer ever asks about a
+caller-supplied name.** Verified at source: `declares_capability` is called at
+exactly one site (`src/gateway/router/handlers.rs:781`) and its argument is the
+return of `required_capability`, which answers with one of three `&'static str`;
+`InputRequired::undeclared` does the same. A set that can represent only those
+three is not a restriction on any question the code asks.
+
+Both constraints then hold *by type* rather than by review:
+
+- Size is fixed by the gateway. No request can enlarge it.
+- Absent stays absent, one level down: an unrecognised mode is not a
+  declaration, so it can never satisfy a request. A closed vocabulary is the
+  feature here — an open one would let a caller declare the exact string a future
+  gateway learns to honour.
 - `{}` normalizes to form at parse, once, so no consumer re-derives it.
 
-The comparison the gate performs stays a membership test — the shape it tests
-gains a dimension, and the question "was this capability declared" is answered by
-the same call for the two capabilities that have no modes.
+**This closes a pre-existing amplification rather than avoiding a new one.**
+Today's `Vec<String>` is already caller-sized, on the same pre-admission path,
+and the comment at `meta.rs:61-65` records that risk being reduced from a deep
+object to a flat list of names — not to a bounded one. Fixing it here is in
+scope because this change rewrites that exact field; it is not a tidy-up of
+neighbouring code.
 
 Cost, stated: three sites change shape (`RequestFields`, the accessor, the two
 `handlers.rs` consumers at `:693` and `:1152`), and one type crosses from
@@ -142,20 +173,60 @@ amplification for a field lookup.
 
 ## The DE-9 sub-decision
 
-Binding decision 8 puts the `DE-9` error-code scope with this row, so it is
-settled here rather than deferred.
+Binding decision 8 puts the `DE-9` error-code scope with this row. `DE-9` is the
+**payload shape of an unrecognised-method error** (wiring design `:663`). Its
+seven continuation variants are `DE-9a` (`:687`), a separate sub-decision this
+change does not touch — `MRTR.9a` is not a continuation redemption at all.
 
-`DE-9`'s seven continuation variants were collapsed onto one code because their
-outcome is *identical*: the caller is told the continuation cannot be redeemed,
-and which of the seven ways it failed changes nothing the caller can act on.
+**This change adds no new error code.** An earlier draft argued for one on the
+grounds that a mode refusal is actionable where a capability refusal is
+terminal: the server could retry in a mode the client did declare. That
+justification is false, and the refusal path says so. `handlers.rs:783` returns
+the refusal to the **client**, as a `JsonRpcResponse::error` on the client's own
+connection. The backend server that issued the elicitation never sees it, so no
+code carried there can tell it to retry. Distinguishing an outcome for a reader
+that does not exist is not a distinction.
 
-**That collapse does not extend to mode refusal, and the reason is the
-difference in what the caller can do about it.** A mode refusal is not one
-outcome: *you asked for a mode this client does not have* is actionable — the
-server can retry in a mode the client did declare — while *you asked for a
-capability this client does not have* is terminal. Collapsing them would tell a
-server to give up where it could have succeeded. So the mode refusal carries its
-own code, and this is the only `DE-9` variant this change adds.
+What remains is `DE-9`'s actual question — what the payload carries — and the
+existing convention already answers it. The refusal keeps code `-32021` and the
+`requiredCapabilities` field it already sets, and gains structured detail in
+`error.data`: the mode requested and the modes declared. A client that wants to
+distinguish *mode* from *capability* reads a field; nothing has to learn a new
+code, and nothing in the error vocabulary becomes a contract this change is
+stuck supporting.
+
+## Risks, reversibility, exit criteria, prior art
+
+**Risk — vocabulary drift.** The specification adds a mode the gateway's set
+does not carry, and the gateway refuses it until updated. This is the closed
+vocabulary working as designed rather than a defect, but it is an interop lag
+and it is stated: a new mode is a code change, not a config one. Accepted
+knowingly; the alternative is honouring strings the gateway cannot service.
+
+**Risk — the struct crosses a module boundary.** `meta.rs` now owns a type
+`mrtr.rs` names in a signature. Contained: one type, one direction, no cycle.
+
+**Reversibility — one-way door: none.** Everything here is internal. The
+declaration type is private to the gateway, `error.data` is additive to a code
+that already ships, and no new error code is introduced — which is the part
+that *would* have been sticky, since a code, once emitted, is a contract clients
+may come to depend on. Reverting is deleting the type and restoring the
+`Vec<String>`, at the cost of returning to today's blind gate. No migration, no
+persisted state, no wire format a peer could pin.
+
+**Exit criteria.** `ac_mrtr_9a_a_url_mode_request_to_a_form_only_client_is_refused`
+is green on its own criterion assertion; `ac_mrtr_9a_a_form_mode_request_to_a_form_only_client_is_relayed`
+stays green; no other `DE-9a` variant is added; `cargo fmt --check` and
+`cargo clippy --all-targets -- -D warnings` clean. Anything beyond that is a
+different row.
+
+**Prior art.** In-tree: this is the same shape as `required_capability`'s
+`&'static str` answers — a closed gateway-owned vocabulary, already the
+established way this codebase refuses to let a caller name its own key. Outside
+the tree, the specification's own capability negotiation is the prior art the
+design follows rather than invents: a server may rely only on what was declared,
+which is the rule this change extends one level down. No external mechanism was
+adopted, so there is nothing to attribute.
 
 ## Unknowns
 
