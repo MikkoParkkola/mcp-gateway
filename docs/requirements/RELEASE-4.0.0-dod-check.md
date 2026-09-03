@@ -7,6 +7,280 @@ Gates were **run**, not asserted. Where a verdict is N/A it carries its reason, 
 without one is a skipped gate wearing a label. Where a gate was run against an *earlier* commit than
 the head, that is said in the same line rather than rounded up.
 
+
+---
+
+# DoD re-check at `c3083368` — 2026-09-03
+
+**Head**: `c3083368` (`docs(criteria): record the row-6 elimination and the row-9a red test`) ·
+**Merge-base with `main`**: `2ff8fedc` · **Branch**: `fix/mrtr2-continuation-handle` ·
+**SSOT**: `rules-source/workflows/quality-gates-dod.md` (cited by full path deliberately — two
+copies of that file exist on disk and have drifted; the bare filename resolves to the stale one)
+
+The 2026-08-30 assessment below this section stands as the record **at `edfd020a`**, and covers
+§3, §4, §5, §8 and §12 only. This section is the full-gate re-check: every gate in the SSOT gets a
+row, because a gate absent from the table is the failure this table exists to prevent.
+
+## How this was measured, and what that costs
+
+The shared worktree was **not clean** at measurement time: `tests/mik_7212_mrtr_component_acs.rs`
+carried 159 uncommitted insertions belonging to a concurrent session, and those insertions do not
+compile (`E0061` at `:1010`, one argument supplied to a two-argument `open`). A gate run there
+measures that session's in-flight edit, not `c3083368`. Every cargo gate below was therefore run in
+a **detached worktree checked out at `c3083368`** (`/Users/mikko/github/.worktrees/dod-c3083368`,
+`git status --porcelain` empty), so the verdicts belong to the commit and not to whatever the shared
+tree happened to hold. The uncommitted file is reported, not touched.
+
+Verdicts use four words, and the distinction between the last two is the point:
+
+| verdict | means |
+|---|---|
+| **PASS** / **FAIL** | the gate was run and this is what came back |
+| **N/A** | the gate does not apply, with the reason stated |
+| **NOT EVALUATED** | the gate applies and was not run, with the reason stated |
+| **OUTSTANDING** | satisfiable only by an act the operator has withheld (push, PR, merge) |
+
+An N/A without a reason is a skipped gate wearing a label; a NOT EVALUATED folded into N/A is the
+same lie one column to the left.
+
+## H1–H11 — file hygiene
+
+| gate | verdict | evidence |
+|---|---|---|
+| H1 SEARCH FIRST | PASS | `ls docs/requirements/` before writing; found this file and extended it |
+| H2 UPDATE > CREATE | PASS | this section appended to `RELEASE-4.0.0-dod-check.md`; no new file |
+| H3 CONSOLIDATE | PASS | gate definitions cited by path, never restated here |
+| H4 RIGHT LOCATION | PASS | `docs/requirements/`, beside the requirements and test plan it checks |
+| H5 NAMING | PASS | existing filename unchanged |
+| H6 no orphans | PARTIAL | `clippy --all-targets --all-features -- -D warnings` promotes rustc's `dead_code`, so a clean run is evidence of no crate-internal orphan. `dead_code` does **not** fire on `pub` items reachable from the library surface, so orphans there are NOT EVALUATED — no per-symbol reachability sweep was run over 85 changed `src/` files |
+| H7 no redundant docs | NOT EVALUATED | 65 documentation files changed against the merge-base; no de-duplication sweep was run, and reading them for overlap is outside this task's FOR |
+| H8 no temp files | PASS, with a reported exception | measurement worktree `git status --porcelain` empty. `target/` in the shared worktree is dirty and is **not mine to clean** — a concurrent session is mid-build in it (LOOP-CLEAN) |
+| H9 no duplicate functions | NOT EVALUATED | no duplication detector was run; `clippy` does not answer this |
+| H10 dir conventions | PASS | evidence document under `docs/requirements/` with its siblings |
+| H11 untracked tracked-or-ignored | PASS at the commit | `git status --porcelain` empty in the worktree at `c3083368`. In the shared tree one **tracked** file is modified and belongs to another session — reported, not cleaned |
+
+## Verdict of this re-check
+
+**Nothing here changes the 2026-08-30 conclusion; it puts a number on the rest of the gate set.**
+The static gates are genuinely clean at `c3083368` — formatter, clippy-as-SAST with
+`--all-targets --all-features -- -D warnings`, secret scan, and `cargo audit` all pass, the last
+with one yanked-crate warning that is not an advisory. The suite is **4,859 passing, 14 failing**,
+and thirteen of the fourteen are acceptance tests deliberately written ahead of unfinished
+multi-round-trip work. The fourteenth is a genuine loose end: a conformance check that cites a test
+deleted at `6e744936`.
+
+The larger finding is not any single red cell. It is that **21 applicable gates were never run**,
+and until this table existed they were invisible rather than open. Coverage and mutation carry
+figures from `edfd020a` and were not re-measured. Nine gates need a deployed system. Six need an
+analysis pass nobody has done on this branch. One — **T1c**, post-quantum readiness — is flagged
+unanswered rather than guessed, because a wrong N/A there is the exact hole the gate exists to
+close. And the dual-vendor review gate is unmet for a reason outside the code: the second vendor
+returns `402 Payment Required`.
+
+Four more are outstanding because the operator has withheld the acts that would satisfy them. Those
+are recorded as outstanding, not scored as failures.
+
+## §1–§13
+
+| gate | verdict | evidence |
+|---|---|---|
+| §1 Intent & Impact | PARTIAL | acceptance criteria are tracked per row in `docs/requirements/RELEASE-4.0.0-criteria-status.md`: **114 MET, 1 NOT MET, 9 N/A**. The one NOT MET is `NFR.OBS.5`, revised by operator ruling on 2026-09-03 and recorded in `RELEASE-4.0.0-gap-plan.md`. The consolidated DoD comment §1 requires on the tracking issue has **not** been posted — see OUTSTANDING below |
+| §2 Code Quality | MIXED, each part measured separately | **markers**: 0 occurrences of the two forbidden markers across `src/**/*.rs` (`rg -c`). **unsafe**: `#![deny(unsafe_code)]` at `src/lib.rs:24`. **LOC ceiling**: N/A at branch scope — the ≤800-line gate governs a *change*, and this is a release branch of **751 commits** carrying +25,977/−708 lines under `src` and `tests`; per-commit compliance was not measured, and saying the branch fails an 800-line gate would be scoring the wrong unit. **WIRED**: see H6 |
+| §3 Static Checks | PASS | `cargo fmt --check` → exit 0, zero bytes of output. `cargo clippy --all-targets --all-features -- -D warnings` → exit 0, **zero** lines beginning `warning`/`error`. Secret scan over the full 204-file diff `2ff8fedc..c3083368` for PEM blocks, `sk-ant-`, `AKIA…`, `ghp_…`, `xox[baprs]-` → **0 matches** |
+| §4 Testing | see the dedicated block below | |
+| §5 Change Safety | NOT EVALUATED | the no-drop check needs a coverage run on both sides of the merge-base; coverage was not re-measured at this head (see §4) |
+| §6 Regression | OBSERVED, not gate-measured | the branch's practice is visible — criteria rows carry falsifier probes, and this session's own row 9a landed as a **red** test at `tests/mik_7212_acs.rs:1770` with a green control before any fix. That is evidence of the practice on the rows inspected, not a sweep proving every fix on 751 commits arrived test-first |
+| §7 Documentation | PASS | 65 documentation files changed against the merge-base (+23,549 lines), including `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md` and `docs/spec-divergences.md` |
+| §8 Security & Compliance | PARTIAL | **SCA**: `cargo audit` — result recorded below. **SAST**: `cargo clippy … -D warnings` clean (the SSOT's §3 matrix names clippy as the Rust SAST leg). **Control inventory**: `docs/requirements/nfr-sec1-control-inventory.md` exists on this branch. **STRIDE / DAST / privacy / licensing** NOT EVALUATED — none was run in this task, and asserting them from the presence of a document is the failure mode this table is built against |
+| §9 Ops | NOT EVALUATED | feature-flag, alert and rollback verification needs the deployment surface; nothing was exercised |
+| §10 Performance | MEASURED EARLIER, not re-run | `docs/requirements/RELEASE-4.0.0-performance.md` records NFR.PERF.1/2 measured 2026-08-29 via `benches/gateway_benchmarks.rs` (criterion, 100 samples, `modern_request_path`) against 3.5.0. Not re-run at `c3083368`; cited as of that date, not as fresh |
+| §11 Stop-the-Line | OUTSTANDING BY INSTRUCTION | the "not integrated" trigger fires — unpushed, no PR, unmerged. The operator has instructed that nothing be pushed and no PR opened, so this is a deliberate outstanding state, not a gate failure. No other §11 trigger fires from what was measured: CI not consulted (no PR), no security regression found, no data regression observed |
+| §12 Peer Review | PARTIAL — one vendor only | the dual gate needs two independent frontier models. The second leg is **dead**: `API error (status 402 Payment Required): Grok Build usage balance exhausted`. One leg cannot ratify, and `~/.claude/bin/ratify` refuses without both, so this gate is honestly unmet at this head rather than half-credited |
+| §13 Retro & Backlog | OUTSTANDING | the retro comment attaches to a PR, and no PR exists |
+
+## §4 / D1 — the test suite, measured
+
+`cargo test --all-features --no-fail-fast` at `c3083368` in the clean worktree — **exit 101**:
+
+```
+63 test-result lines · 4,859 passed · 14 failed · 23 ignored
+```
+
+**The 14 failures are not a green table rounded up, and they are also not regressions.** They fall
+in three binaries, and **all three files are branch-new** — `git cat-file -e 2ff8fedc:<path>` fails
+for each of `tests/mik_7212_acs.rs`, `tests/mik_7212_mrtr_component_acs.rs` and
+`tests/mik_7272_conformance.rs`. A test that does not exist on the merge-base cannot be a
+regression from it, so the base-reproduction question is answered by construction rather than by a
+second full build:
+
+| binary | failing | what it is |
+|---|---|---|
+| `mik_7212_mrtr_component_acs` | 12 | the multi-round-trip acceptance criteria, written first against work that is not implemented — `ac_mrtr_1`, `_2`, `_3` ×2, `_4` ×3, `_5a`–`_5d`, `_8`. This is the RED half of red-green, and the 2026-08-30 verdict below already names retry forwarding as the unfinished core path (MIK-7325) |
+| `mik_7212_acs` | 1 | `ac_mrtr_9a_a_url_mode_request_to_a_form_only_client_is_refused`, red at `:1770` with a green control — written this session, deliberately red, independently re-run and confirmed by the team lead |
+| `mik_7272_conformance` | 1 | `every_cited_test_exists` — **a real finding, not a deliberate red.** The conformance evidence for "Multi Round-Trip Requests replace server-initiated requests" cites `mik_7212_acs::inflight::ac_mrtr_6_a_retry_landing_elsewhere_is_sent_to_the_holder`, and that test no longer exists: row 6's routing variant was deleted at `6e744936`. The elimination did not carry its citation with it. Reported, not repaired — repair is outside this task's FOR |
+
+So §4's "100% pass" is **FAIL at this head**, and the honest reading is that 13 of the 14 are the
+suite doing its job and the fourteenth is a dangling reference left by a deletion.
+
+**Coverage**: NOT RE-RUN. The 2026-08-30 assessment below measured it **at `edfd020a`** and found it
+**below the floor**. That number is cited as of that commit, not carried forward as fresh.
+**Mutation ≥75% on new code**: NOT RE-RUN. Measured at `edfd020a` on `src/protocol`, where it
+passed; no figure exists for the rest of the changed surface.
+**23 ignored** tests were counted, not classified, at this head.
+
+## §8 / D30 — dependency audit, measured
+
+`cargo audit` at `c3083368` — **exit 0**, 1,239 advisories loaded, 453 crate dependencies scanned:
+
+```
+0 vulnerabilities
+1 warning: chacha20 0.10.0 — yanked
+    chacha20 0.10.0 <- rand 0.10.2 <- {uuid 1.26.0, tungstenite 0.30.0, mcp-gateway 4.0.0}
+```
+
+A **yanked** crate is not an advisory: nothing says this version is vulnerable, only that its
+publisher withdrew it from the registry. It reaches the tree transitively through `rand 0.10.2`,
+which `mcp-gateway` depends on directly and which `uuid` and `tungstenite` also pull. The SSOT's
+blocking condition is `HIGH SCA = BLOCK`; there is no HIGH here and no advisory at all, so this is
+recorded as a **warning to clear on the next `rand` bump**, not as a gate failure.
+
+## D1–D30, D13a–d, T1c
+
+| gate | verdict | evidence |
+|---|---|---|
+| D1 TESTED | see §4 block | |
+| D2 COMPATIBLE | PASS by version contract | `Cargo.toml` moves `3.5.0` → `4.0.0`; a major bump is where breaking change is permitted, and `commands/upgrade/` carries the post-upgrade migration framework. The migrations themselves were not executed here |
+| D3 MEASURED | PARTIAL | performance measured 2026-08-29 (§10). No before/after ROI figure for the branch as a whole; marked **I**, one source |
+| D4 DRY | NOT EVALUATED | no duplication sweep run — same reason as H9 |
+| D5 CONTRACTS | NOT EVALUATED | interface stability across 85 changed `src/` files was not diffed symbol-by-symbol |
+| D6 E2E | PARTIAL | the suite includes HTTP and stdio integration binaries exercised in the run below; no separate user-journey E2E pass was staged |
+| D7 WIRED | PARTIAL | as H6: `-D warnings` clean covers crate-internal reachability; `pub` surface NOT EVALUATED |
+| D8 OBSERVABLE | NOT EVALUATED | `src/metrics.rs`, `src/tracing_context/` and `src/stats.rs` exist, but presence is not emission — no metric or trace was observed being produced |
+| D9 STATIC | PASS | §3: linter 0, formatter clean, clippy-as-SAST 0. Type checking is the Rust compiler and it succeeded |
+| D10 0-BUG | PARTIAL | 0 forbidden markers in `src/`. Known-open items are recorded in `RELEASE-4.0.0-blocking-rollup.md` and the 2026-08-30 section below, which lists six open findings — so "0 known" is **not** true at this head and the table says so |
+| D11 OPTIMIZED | PARTIAL | criterion benchmark harness exists and was run 2026-08-29; not profiled or re-tuned at this head |
+| D12 REVIEWED | PARTIAL | as §12 — one vendor reachable, one dead |
+| D13 TRACKED | PASS | all work committed; branch commits reference `MIK-6729`, `MIK-7246`, `MIK-7256`, and the criteria doc keys every row to a `MIK-…` acceptance-criterion ID |
+| D13a ISSUE-CLOSED | CORRECTLY NOT DONE | the gate forbids closing before D18 merge, and nothing is merged. Compliance here *is* the open state |
+| D13b EFFORT-LOGGED | NOT EVALUATED | not checked in Linear during this task |
+| D13c DEPS-UNBLOCKED | NOT EVALUATED | dependent-issue state not checked |
+| D13d LABELED | NOT EVALUATED | issue labels not checked |
+| D14 DOCUMENTED | PASS | §7 |
+| D15 CLEAN | PASS, with the reported exception | H6–H11; the one dirty file belongs to another session |
+| D16 TELEMETRY (savings) | N/A | `emit_elite_savings()` is a claude-elite performance-telemetry hook, not a surface this Rust gateway has; no performance claim in this release is routed through it |
+| D17 LEARNINGS | NOT EVALUATED | hebb is offline this session (`mcp_timeout`), so no durable learning could be written; recorded rather than silently skipped |
+| D18 MERGED | OUTSTANDING BY INSTRUCTION | delivery chain step 1 (pushed) onward are all unsatisfied by operator instruction. Recorded as deliberately outstanding, not as failure |
+| D19 BACKUP | N/A | nothing is being deployed to production in this task |
+| D20 ROLLBACK | NOT EVALUATED | the release carries a revision-downgrade path (`NFR.OBS.5`, revised 2026-09-03), but no rollback procedure was exercised |
+| D21 CANARY | NOT EVALUATED | no gradual-rollout mechanism exercised |
+| D22 TELEMETRY (structured) | NOT EVALUATED | as D8 |
+| D23 ALERTING | NOT EVALUATED | as D9/ops; no alert routing inspected |
+| D24 ENFORCEMENT | PASS in part | the numerical claims gate is real: `benchmarks/public_claims.json` with a CI drift check, per the repository's own `CLAUDE.md`. Whether every gate in this table is CI-enforced was not audited — most are not |
+| D25 SESSION | N/A | no agent session-persistence surface is changed by this branch |
+| D26 SEC-MONITOR | NOT EVALUATED | security-channel separation and immutable logging not inspected |
+| D27 COUPLING | PASS | direct dependencies in `Cargo.toml` go **109 → 110**; the single addition is `jsonschema 0.52.1` with `default-features = false`. The ceiling is +2. No cycle check was run |
+| D28 API-SURFACE | NOT EVALUATED | public symbol counts per module were not taken |
+| D29 DEBT-TRAJ | NOT EVALUATED | no complexity measurement before/after; the SSOT names `cargo clippy` + a dependency graph for Rust, and only the first half was run |
+| D30 SUPPLY-CHAIN | PARTIAL | `Cargo.lock` pins **451** checksums, so lock hashes are pinned. `cargo audit` result recorded below. One new dependency added (D27) and it was **not** separately audited beyond what `cargo audit` covers |
+| T1c PQC-READINESS | NOT EVALUATED | the branch touches `src/mtls/`, `src/key_server/` and `src/attestation/`; whether this release introduces a *new* key agreement or signature primitive — which is what triggers the gate — was not determined. Flagged rather than guessed, because a wrong N/A here is exactly the harvest-now-decrypt-later hole the gate exists for |
+
+## B1–B4 — Agent Stack Bets
+
+| bet | verdict | evidence |
+|---|---|---|
+| B1 IDENT | PARTIAL | `src/attestation/`, `src/identity_grants.rs` and `src/identity_propagation/` are the platform-owned attribution surface and this branch changes them; no per-action attribution audit was run |
+| B2 MEM | N/A | this release is a protocol/router change with no agent-memory surface; hebb is the owner and is untouched |
+| B3 DURABLE | NOT EVALUATED | `src/scheduler/`, `src/idempotency.rs` and the continuation/resume machinery exist and are the durable surface, but no simulated disconnect-and-resume check was run at this head |
+| B4 PLATFORM | PASS | the change reuses the gateway's own primitives — capability system, meta-MCP surface, transport layer — rather than adding parallel plumbing; `mcp-gateway` **is** the Bet-4 platform |
+
+## The gates that were not evaluated, gathered in one place
+
+Scattered through a table, an un-run gate reads as a footnote. Gathered, it is the shape of the
+gap. **Twenty-one** applicable gates were not run, in four groups:
+
+- **Needs a coverage or mutation run** (long, and the shared tree was busy): §4 coverage, §4
+  mutation, §5, D1's coverage half.
+- **Needs a deployed or running system**: §9, D8, D19, D20, D21, D22, D23, D26, B3.
+- **Needs an analysis pass nobody has run on this branch**: H7, H9, D4, D5, D28, D29, and the
+  `pub`-surface half of H6/D7.
+- **Needs a Linear query**: D13b, D13c, D13d.
+
+One gate is flagged rather than answered: **T1c**. Deciding it needs a determination of whether the
+branch introduces a new key-agreement or signature primitive, and a guessed N/A there is precisely
+the failure the gate is written to catch.
+
+Two gates are unmet for a reason outside this branch: **§12/D12**, because the second review vendor
+returns `402 Payment Required` and one leg cannot ratify; **D17**, because hebb is offline.
+
+## What is outstanding by instruction, not by failure
+
+The operator has instructed that nothing be pushed and no pull request be opened. That makes the
+following unsatisfiable *by design* at this head, and they are recorded as outstanding rather than
+scored as failures: **D18** (the whole five-step delivery chain), **§11**'s "not integrated"
+trigger, **§13** (a retro attaches to a PR), and the §1 requirement that the DoD verdict be posted
+as an issue comment. **D13a** is the inverse — the gate forbids closing the issue before merge, so
+the open state *is* compliance.
+
+## Every command that produced a verdict above
+
+Run in `/Users/mikko/github/.worktrees/dod-c3083368`, a detached worktree at `c3083368` with an
+empty `git status --porcelain`, for the reason given at the top of this section:
+
+```
+cargo fmt --check                                         # exit 0, no output
+cargo clippy --all-targets --all-features -- -D warnings  # exit 0, zero warning/error lines
+cargo test --all-features --no-fail-fast                  # see the §4 block
+cargo audit                                               # see the §4 block
+```
+
+Run in the branch worktree, read-only:
+
+```
+git status --porcelain
+git diff --stat  2ff8fedc..c3083368
+git diff --numstat 2ff8fedc..c3083368 -- src tests
+git rev-list --count 2ff8fedc..c3083368
+git diff 2ff8fedc..c3083368 | rg -c '<secret patterns>'   # 0 matches
+rg -c '<forbidden markers>' --glob 'src/**/*.rs'          # 0 files
+rg -n 'deny\(unsafe_code\)' src/lib.rs                    # src/lib.rs:24
+rg -c '^checksum = ' Cargo.lock                           # 451
+rg -o '<verdict words>' docs/requirements/RELEASE-4.0.0-criteria-status.md | sort | uniq -c
+```
+
+## Reported, not repaired
+
+Three things were found and deliberately left alone, because this task measures and does not fix:
+
+1. `tests/mik_7212_mrtr_component_acs.rs` in the shared worktree carries **159 uncommitted
+   insertions that do not compile** — `E0061` at `:1010`, one argument passed to the two-argument
+   `ContinuationKeyring::open` defined at `src/protocol/continuation.rs:423`. This is a concurrent
+   session's in-flight work. It is why every gate above was run elsewhere, and under LOOP-CLEAN it
+   is reported rather than touched.
+2. `target/` in the shared worktree is dirty. H8 assigns build-artifact cleanup to the change that
+   made them; these are not mine and a concurrent build is using them.
+3. Commit `aecced48` may not compile in isolation. That costs bisectability, not the correctness of
+   `c3083368`, and it is noted here rather than chased.
+### What changed between measurement and this commit
+
+The measurement above is fixed at `c3083368`. While it was running, the concurrent session
+committed twice on top of it, and two of the three items just reported were resolved by those
+commits rather than by me:
+
+- `4cdf6958` — `test(cluster-a): the retry that must not open a second exchange` lands the 159
+  uncommitted insertions that would not compile. Item 1 above is therefore **closed**, and the
+  reason the gates were run in a separate worktree stands as the record of why it mattered.
+- `983ed081` — `test(conformance): repoint MRTR.6 evidence at the surviving test` closes the
+  `every_cited_test_exists` failure found in §4 above: the citation now names a test that exists.
+
+Neither commit was re-measured. Saying "13 of 14 failures remain" at `983ed081` would be an
+inference, and the point of this table is that inferences do not get cells. The two gates whose
+verdicts those commits would move — §4 and §3's clippy leg — are **stale by two commits** as of this
+writing, and the next re-check should start there.
+
+
+---
+
+# The 2026-08-30 assessment, at `edfd020a` — unchanged below this line
 ## Verdict, first
 
 **The 2025 path is done and shippable. The 2026 core path is not finished: retry forwarding is
