@@ -258,7 +258,11 @@ Two consequences follow and both are requirements, not preferences:
   defaults stop being reachable.
 - A malformed field is refused **before** dispatch, on both transports. `RetryFields`
   exists to name unusable fields so a caller can refuse; a design that carries them past
-  the dispatch boundary reproduces the incident the type was written for.
+  the dispatch boundary reproduces the incident the type was written for. This refusal is
+  orthogonal to the `is_admin: true` grant this note holds OUT: refusing a field the caller
+  sent in an unusable shape is input validation, not an authorization decision, and it
+  declines the same field for an admin and a non-admin alike. Nothing here reopens the
+  grant.
 
 The code change lands after this row is reviewed, not alongside it. The test plan (§P2,
 separate document) gains the cases this creates: absent retry fields on stdio, each retry
