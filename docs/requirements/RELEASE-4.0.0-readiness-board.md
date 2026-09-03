@@ -419,13 +419,23 @@ is the failure mode this whole section is about.
 **`NFR.PERF.1` is deferred, with the four fields a deferral owes.** It has sat as
 PARTIAL against an end-to-end 3.5.0 comparison that exists at no version of this
 repository, which is a residual-risk paragraph, and §P1 says that is not a state.
-Owner: cluster E. What resolves it: build the client-to-backend harness against the
-3.5.0 tag and measure P50/P99, or rewrite the criterion to name the component work
-the current harness actually produces. When: before the tag, after cluster A merges,
-since the path it would measure is A's. If it resolves badly — the 3.5.0 harness
-cannot be built, or the comparison regresses — the criterion is rewritten to the
-component estimator with the change recorded, rather than being carried as PARTIAL
-into the release.
+Owner: `perf-e2e`, an agent to be dispatched, with MIK-7213's performance work as its
+handoff trigger — "cluster E" names a row in this table, not anybody accountable, and
+that is how this row spent a release unowned. What resolves it: build the
+client-to-backend harness against the 3.5.0 tag and measure P50 and P99, which is the
+only thing that resolves it. When: before the tag, after cluster A merges, since the
+path it would measure is A's.
+
+If it resolves badly, **the criterion stays open and blocks the tag**. `NFR.PERF.1` is
+an `M` row with a stated threshold — 5% at P50, 10% at P99 — and a measurement that
+misses a threshold is the criterion working, not the criterion being wrong. Rewriting
+it to whatever the current harness can produce would be changing the obligation to fit
+the result. Repair-protocol step 0 permits eliminating a *mechanism* freely and a
+*requirement* only with the requester's recorded agreement, before the fact. So the
+fallback is not a rewrite: it is **an operator decision, requested with the measurement
+in hand**, recorded in `RELEASE-4.0.0-operator-decisions.md` — ship with the regression
+named, hold the tag, or restate the criterion. None of the three is this document's to
+take.
 
 **The residue is ten rows and only `HEADER.9` had a step.** The triage
 (`591194c2`, `RELEASE-4.0.0-residue-triage.md`) split them DESIGN 5 / TEST 3 / CODE 2.
@@ -438,4 +448,15 @@ disposition in the same pass as step 1; a row with no line is open, not silent.
 
 **Cluster F's second row.** `NFR.COMPAT.4` has a design
 (`2026-09-02-conformance-matrix.md`) and no test plan, and it does not wait on A or C
-the way `NFR.COMPAT.1` does. It can start whenever someone picks it up.
+the way `NFR.COMPAT.1` does. Owner: `surface-c`, which already owns the conformance
+matrix the criterion is about; trigger: immediately, since it blocks on nothing.
+
+**Three residue rows that are code, not documents.** They sit outside the triage's
+DESIGN/TEST/CODE split above because each needs its own scheduling sentence rather
+than a queue position. `NFR.SEC.6` — the four open security defects MIK-7249,
+MIK-7256, MIK-7262 and MIK-7222 — depends on no cluster and starts now [owner:
+`sec-defects`]. `CONFIRM.2` follows cluster A, since the confirmation path it binds is
+the one A wires [owner: cluster A]. `NFR.SEC.1` needs both a test and an operator
+ruling on which 3.5.0 controls are in scope; the ruling is requested first, because the
+test's population depends on the answer [owner: `sec-controls`, blocked on the
+operator].
