@@ -29,30 +29,6 @@
 //! observable at the wire. A component case cannot separate "wrong principal"
 //! from "expired"; the unit cases in `mik_7212_acs.rs` do that, and these prove
 //! the guard is reached at all.
-//!
-//! ## This file is RED on purpose, and may not merge alone
-//!
-//! 15 of the 19 cases fail today, all on the same cause: the retry route
-//! answers every presentation with the blanket `-32602` above, so no guard is
-//! ever reached. They were written before the wiring so their first failure is
-//! free — a case written afterwards is drafted against code its author has
-//! already convinced themselves is correct.
-//!
-//! They are NOT `#[ignore]`d. An ignored test is one nobody runs and nobody
-//! un-ignores, and the point of writing these first is lost the moment they
-//! stop being consulted. The cost is the honest one: **this file merges with
-//! the wiring increment or after it, never before**, because on `main` alone
-//! it is a red suite with no path to green.
-//!
-//! The number is what separates "expected red" from "regression": 15 failing,
-//! 4 passing, and `fixture_control_a_valid_retry_reaches_the_backend` among
-//! the failures. A different count means something other than the missing
-//! route is wrong, and the delta is where to look.
-//!
-//! The count is scaffolding for exactly one state of the tree. **The increment
-//! that wires the retry route deletes this whole section**, because once the
-//! route exists the expected count is zero failures and a pinned 15 becomes a
-//! false alarm that outlives what it described.
 
 use std::sync::Arc;
 

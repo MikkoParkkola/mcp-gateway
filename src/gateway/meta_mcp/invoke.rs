@@ -418,6 +418,171 @@ fn unbindable_continuation(server: &str, tool: &str) -> Error {
     }
 }
 
+/// What a retry sends the backend beside `arguments` (MRTR.1).
+///
+/// A second type rather than reusing [`crate::protocol::mrtr::RetryFields`].
+/// That one is inbound and attacker-controlled, and its `request_state` is this
+/// gateway's own envelope; what goes upstream is the state the *backend*
+/// issued, unsealed from inside it. One struct for both directions is how a
+/// client-supplied string reaches a backend as if the gateway had issued it.
+#[derive(Debug, Default)]
+struct OutboundRetry {
+    /// The backend's own opaque state, or `None` when it issued none.
+    request_state: Option<String>,
+    /// The client's answers, verbatim.
+    input_responses: Option<Value>,
+}
+
+impl OutboundRetry {
+    /// Add whatever this retry carries beside `name` and `arguments`.
+    ///
+    /// Beside, never inside: the specification makes both fields siblings of
+    /// `arguments`, so a tool whose own argument is called `requestState` keeps
+    /// it, and a backend reads ours where it is looking for it.
+    ///
+    /// An absent field is left absent rather than sent empty. A backend is
+    /// entitled to read the presence of `requestState` as meaning something,
+    /// and a server that issued no state never sent one to echo.
+    fn apply(&self, params: &mut Value) {
+        let Some(object) = params.as_object_mut() else {
+            return;
+        };
+        if let Some(state) = &self.request_state {
+            object.insert("requestState".to_string(), json!(state));
+        }
+        if let Some(responses) = &self.input_responses {
+            object.insert("inputResponses".to_string(), responses.clone());
+        }
+    }
+}
+
+/// The refusal for a continuation this gateway will not redeem (MRTR.3).
+///
+/// One sentence for every cause, taken from [`ContinuationError`] itself rather
+/// than written here: a caller able to tell a forged tag from a spent handle
+/// from a passed deadline can map the keyring one probe at a time, and can do
+/// nothing differently with any of them. The cause reaches the operator through
+/// the log, where it can be acted on.
+fn rejected_continuation(reason: &crate::protocol::continuation::ContinuationError) -> Error {
+    Error::JsonRpc {
+        code: -32602,
+        message: reason.client_message().to_string(),
+        data: None,
+    }
+}
+
+/// Which backend holds the exchange a retry continues (MRTR.6).
+///
+/// `None` when the call carries no continuation at all — an ordinary call,
+/// routed by its name like any other. `Some` otherwise, because a retry names
+/// the *backend* tool it continues, and a backend tool is reachable by its own
+/// name only where an operator surfaced it: routing a retry by name would
+/// refuse every honest one on a tool nobody pinned. The route therefore comes
+/// from the envelope this gateway minted, which is the one value in a retry a
+/// client cannot author.
+///
+/// Only the route comes from here. The presented name and arguments are still
+/// checked against the digest sealed inside the same envelope, downstream in
+/// [`redeem_retry`] — that check, not this one, is what refuses a handle
+/// replayed against another tool.
+pub(super) fn retry_origin_backend(
+    continuation: &crate::protocol::continuation::ContinuationState,
+    retry: &crate::protocol::mrtr::RetryFields,
+) -> Option<Result<String>> {
+    let token = retry.request_state.as_deref()?;
+    let now = crate::protocol::continuation::now_unix_secs();
+    Some(
+        continuation
+            .keyring()
+            .open(token, now)
+            .map(|payload| payload.backend_id)
+            .map_err(|error| {
+                warn!(%error, "Continuation refused before routing");
+                rejected_continuation(&error)
+            }),
+    )
+}
+
+/// Open the continuation a retry presents and recover what the backend gets
+/// (MRTR.1, MRTR.3-5).
+///
+/// Not a retry — neither field present — yields an empty [`OutboundRetry`], and
+/// the call proceeds as the fresh one it is.
+///
+/// Answers with no envelope are carried, not refused: the specification lets a
+/// server ask for input without state of its own, so there is nothing to open
+/// and nothing a binding check could be performed against.
+///
+/// The continuation is spent the moment it opens, before the dispatch it
+/// authorises. Spending it on success instead would leave it redeemable again
+/// to anyone who can make a dispatch fail, which is the replay this ledger
+/// exists to close.
+async fn redeem_retry(
+    continuation: &crate::protocol::continuation::ContinuationState,
+    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    server: &str,
+    tool: &str,
+    arguments: &Value,
+) -> Result<OutboundRetry> {
+    use crate::protocol::continuation::ContinuationError;
+
+    let input_responses = caller.retry.input_responses.clone();
+    let Some(token) = caller.retry.request_state.as_deref() else {
+        return Ok(OutboundRetry {
+            request_state: None,
+            input_responses,
+        });
+    };
+
+    let now = crate::protocol::continuation::now_unix_secs();
+    let payload = continuation.keyring().open(token, now).map_err(|error| {
+        warn!(server, tool, %error, "Continuation refused");
+        rejected_continuation(&error)
+    })?;
+
+    // The same fingerprint the mint bound to, derived the same way. A caller the
+    // gateway cannot name cannot match one it could: `principal_fingerprint`
+    // returns `None` for exactly the credential schemes no continuation is ever
+    // minted for, so there is no handle here for such a caller to hold.
+    let Some(fingerprint) = crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)
+    else {
+        warn!(
+            server,
+            tool, "Retry from a caller no continuation can be bound to"
+        );
+        return Err(rejected_continuation(&ContinuationError::NotAuthentic));
+    };
+    payload
+        .redeemable_by(
+            &fingerprint,
+            &crate::protocol::mrtr::original_request_digest(server, tool, arguments),
+        )
+        .map_err(|error| {
+            warn!(server, tool, %error, "Continuation not redeemable by this caller");
+            rejected_continuation(&error)
+        })?;
+
+    if !continuation
+        .ledger()
+        .consume(&payload.jti, payload.expires_at, now)
+        .await
+    {
+        // Already spent, or the ledger is full and refuses rather than forgets.
+        // One answer for both: a client can act on neither, and telling them
+        // apart reports whether another caller has just redeemed a handle.
+        warn!(
+            server,
+            tool, "Continuation already spent or ledger at capacity"
+        );
+        return Err(rejected_continuation(&ContinuationError::NotAuthentic));
+    }
+
+    Ok(OutboundRetry {
+        request_state: payload.backend_request_state,
+        input_responses,
+    })
+}
+
 /// The key under which a refusal names the capabilities the client would have
 /// had to declare. Shared with `error_response_preserving_status`, which
 /// forwards this key and only this key out of a gateway-authored error's
@@ -1063,12 +1228,34 @@ impl MetaMcp {
                 })
             });
 
+        // MRTR.1: a retry's answers and the backend's own state go out beside
+        // `arguments`. Redeemed here rather than at the router, because this is
+        // the only scope holding all five values the mint sealed — the backend
+        // server and tool, its argument object, the caller's identity, and the
+        // handle itself.
+        let outbound_retry =
+            match redeem_retry(&self.continuation, caller, server, tool, &arguments).await {
+                Ok(retry) => retry,
+                Err(error) => {
+                    // Refused before the backend was reached, so it has not
+                    // acted: the key is released rather than settled. Settling
+                    // one here would answer an honest retry, made after a fresh
+                    // question, with a sentence naming a side effect nothing
+                    // performed.
+                    if let Some(reservation) = idem_reservation.as_mut() {
+                        reservation.release();
+                    }
+                    return Err(error);
+                }
+            };
+
         let dispatch_start = Instant::now();
         let dispatch_result = self
             .dispatch_to_backend(
                 server,
                 tool,
                 arguments.clone(),
+                &outbound_retry,
                 prompt_cache_key.as_deref(),
                 want_full,
                 session_id,
@@ -2118,6 +2305,9 @@ impl MetaMcp {
         server: &str,
         tool: &str,
         arguments: Value,
+        // What a multi-round-trip retry carries beside `arguments` (MRTR.1).
+        // Empty for a fresh call, which is every call that is not a retry.
+        outbound_retry: &OutboundRetry,
         prompt_cache_key: Option<&str>,
         want_full: bool,
         session_id: Option<&str>,
@@ -2236,10 +2426,11 @@ impl MetaMcp {
 
         // Build request params, injecting cache key into _meta when present.
         let base_params = json!({ "name": tool, "arguments": arguments });
-        let params = match prompt_cache_key {
+        let mut params = match prompt_cache_key {
             Some(key) => inject_cache_key(Some(base_params), key),
             None => base_params,
         };
+        outbound_retry.apply(&mut params);
 
         // End-user identity propagation (MIK-6704 / ADR-007) and per-identity
         // upstream session partitioning (MIK-6784). The per-user credential was

@@ -1328,6 +1328,109 @@ impl MetaMcp {
         self.handle_tools_list_with_params(id, params, session_id)
     }
 
+    /// Route a call that names a backend tool directly, or `None` when the
+    /// name belongs to the meta-tool surface.
+    ///
+    /// Two ways a backend tool answers to its own name: an operator surfaced
+    /// it, or the call is a retry whose origin the sealed envelope names.
+    async fn route_direct_backend_call(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: &Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> Option<JsonRpcResponse> {
+        if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
+            let server_name = server_name.clone();
+            return Some(
+                self.invoke_named_backend_tool(
+                    id,
+                    &server_name,
+                    tool_name,
+                    arguments.clone(),
+                    session_id,
+                    caller,
+                )
+                .await,
+            );
+        }
+        self.route_retry_to_origin_backend(id, tool_name, arguments, session_id, caller)
+            .await
+    }
+
+    /// Route a retry to the backend that opened the exchange, or `None` when
+    /// the call is not a retry this gateway minted a continuation for.
+    ///
+    /// // A retry names the backend tool it continues, not `gateway_invoke`,
+    /// // and a backend tool answers to its own name only where an operator
+    /// // surfaced it. Routing this by name would refuse every honest retry on
+    /// // an unpinned tool with the -32601 fallback below, so the backend comes
+    /// // from the envelope the gateway itself minted. The name the client
+    /// // presented is not trusted by being routed: it is checked against the
+    /// // digest sealed in that same envelope before anything dispatches.
+    /// //
+    /// // Meta-tools are left alone. A retry may equally arrive wrapped in
+    /// // `gateway_invoke`, which already carries its own server and tool and
+    /// // needs no envelope to be routed.
+    async fn route_retry_to_origin_backend(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: &Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> Option<JsonRpcResponse> {
+        if tool_name.starts_with("gateway_") {
+            return None;
+        }
+        let server_name = match invoke::retry_origin_backend(&self.continuation, caller.retry)? {
+            Ok(server) => server,
+            Err(error) => return Some(error_response_preserving_status(id, &error)),
+        };
+        Some(
+            self.invoke_named_backend_tool(
+                id,
+                &server_name,
+                tool_name,
+                arguments.clone(),
+                session_id,
+                caller,
+            )
+            .await,
+        )
+    }
+
+    /// Dispatch a backend tool the client named directly, returning the
+    /// backend's own result envelope untouched.
+    ///
+    /// `invoke_tool` already returns a complete MCP tools/call result
+    /// (`{content, structuredContent?, isError}`) with output-schema
+    /// enforcement applied. A tool called by its own name is a first-class
+    /// tool to the client, so that envelope is returned verbatim: re-wrapping
+    /// it via `wrap_tool_success` would stringify the whole envelope into a
+    /// text block and drop `structuredContent`, which spec-compliant clients
+    /// such as Open `WebUI` require when a tool advertises an `outputSchema`.
+    async fn invoke_named_backend_tool(
+        &self,
+        id: RequestId,
+        server_name: &str,
+        tool_name: &str,
+        arguments: Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> JsonRpcResponse {
+        let invoke_args = json!({
+            "server": server_name,
+            "tool": tool_name,
+            "arguments": arguments,
+        });
+        match self.invoke_tool(&invoke_args, session_id, caller).await {
+            Ok(content) => JsonRpcResponse::success_serialized(id, content),
+            Err(e) => error_response_preserving_status(id, &e),
+        }
+    }
+
     /// Handle `tools/call` — dispatch to the appropriate handler.
     ///
     /// Surfaced tool calls are intercepted before the meta-tool match arm and
@@ -1400,26 +1503,14 @@ impl MetaMcp {
             return response;
         }
 
-        // T2.4: Check surfaced tools BEFORE the meta-tool match.
-        if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
-            let invoke_args = json!({
-                "server": server_name,
-                "tool": tool_name,
-                "arguments": arguments,
-            });
-            let result = self.invoke_tool(&invoke_args, session_id, &caller).await;
-            return match result {
-                // `invoke_tool` already returns a complete MCP tools/call result
-                // envelope ({content, structuredContent?, isError}) with output-
-                // schema enforcement applied. A surfaced tool is called by the
-                // client as a first-class tool, so the envelope must be returned
-                // verbatim — re-wrapping via `wrap_tool_success` would stringify
-                // the whole envelope into a text block and drop `structuredContent`
-                // (which spec-compliant clients such as Open WebUI require when the
-                // tool advertises an `outputSchema`).
-                Ok(content) => JsonRpcResponse::success_serialized(id, content),
-                Err(e) => error_response_preserving_status(id, &e),
-            };
+        // T2.4: a call naming a backend tool directly — because an operator
+        // surfaced it, or because it is a retry of an exchange this gateway
+        // opened — is routed BEFORE the meta-tool match.
+        if let Some(response) = self
+            .route_direct_backend_call(id.clone(), tool_name, &arguments, session_id, &caller)
+            .await
+        {
+            return response;
         }
 
         let result = match tool_name {

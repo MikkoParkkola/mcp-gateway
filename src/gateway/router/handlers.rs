@@ -1010,28 +1010,17 @@ pub(super) async fn meta_mcp_handler(
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
 
             // A multi-round-trip retry carries `inputResponses` and
-            // `requestState` as siblings of `name` and `arguments`, and the
-            // extraction that returned only the pair dropped both in silence
-            // (MIK-7212). They are extracted here so the drop is visible.
+            // `requestState` as siblings of `name` and `arguments` (MIK-7212).
+            // They are read here and travel to the invoke funnel on the caller
+            // context, which is the only scope that can act on them: redeeming
+            // the continuation reproduces the digest sealed at mint time, and
+            // that digest is over the *backend's* server, tool and argument
+            // object. Here `tool_name` is the gateway-facing name and
+            // `arguments` the wrapper carrying them, so a binding check
+            // attempted at this site would refuse every honest retry.
             //
-            // They are NOT forwarded yet, and that is a decision rather than an
-            // omission. The first attempt merged them into the `arguments`
-            // object, which is wrong twice over:
-            //
-            //  * the specification makes them siblings of `arguments`, not
-            //    members of it, so a backend reads them nowhere — and a tool
-            //    with an argument of either name has it silently overwritten;
-            //  * `requestState` there is the CLIENT's envelope. This gateway
-            //    mints its own and seals the backend's state inside it exactly
-            //    so a client's copy is never handed onward. Forwarding it
-            //    verbatim defeats the module written to prevent it.
-            //
-            // Forwarding correctly means opening the envelope, checking its
-            // caller binding and single-use, and sending the *backend's* state
-            // as the sibling — which needs the keyring reachable from request
-            // state and a retry parameter threaded to `dispatch_to_backend`.
-            // Neither exists. Until they do, a retry is not forwarded at all,
-            // which fails visibly rather than corrupting a call.
+            // What cannot wait is the malformed shape, refused below before
+            // anything dispatches.
             let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
             if retry.is_malformed() {
                 // Neither a usable retry nor a fresh call. Running it as a fresh
@@ -1045,25 +1034,6 @@ pub(super) async fn meta_mcp_handler(
                     StatusCode::BAD_REQUEST,
                 );
             }
-            if retry.is_retry() {
-                // Well-formed, and still unforwardable: unsealing the
-                // continuation is not wired. Dispatching it as a fresh call
-                // would repeat whatever the first attempt already did, which is
-                // precisely what the malformed branch above refuses. One
-                // answer for both shapes, until forwarding exists.
-                debug!(
-                    tool = %tool_name,
-                    "MRTR retry received; forwarding is not wired (continuation unsealing absent)"
-                );
-                return build_error_response(
-                    Some(id),
-                    -32602,
-                    "retry forwarding is not available on this build".to_string(),
-                    &session_id,
-                    StatusCode::BAD_REQUEST,
-                );
-            }
-
             // Exposure decides before admin does, here as well as in the
             // dispatcher. The dispatcher orders these two correctly for its own
             // callers, and this pre-check runs earlier still, so on the HTTP
