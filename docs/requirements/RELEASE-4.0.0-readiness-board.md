@@ -159,9 +159,9 @@ not by the placement map that found it.
 ## Cluster D covers one plan row of CACHE.4a and declares the rest uncovered
 
 `tests/mik_7213_acs.rs:363-367` carries a header naming exactly what it covers — test
-plan row `4.b` — and enumerating what it does not: backend pair `4.a`, behavioural
-identity `4.c`, routing profile `4.d`, protocol revision `4.e`, policy epoch
-`4.f.1`-`4.f.3`. `ac_cache_4_two_principals_do_not_share_an_entry` (:371) calls
+plan row `4.b` — and stating that every other CACHE.4 row is uncovered, pointing at
+the plan rather than copying the list. It copied it until 2026-09-04, and the copy
+dropped `4.g` twice. `ac_cache_4_two_principals_do_not_share_an_entry` (:371) calls
 `ResponseCache::response_key` — production, not a helper — asserts two authorization
 identities do not collide, and carries two controls: a determinism assertion, so it
 cannot pass on a key that is merely different every time, and `key(None) == key(None)`,
@@ -187,7 +187,7 @@ against both the requirements table (`RELEASE-4.0.0-requirements.md:153-154`) an
 test file's own header. `ac_cache_4_two_principals_do_not_share_an_entry` is the only
 `CACHE.4` case in the tree, and it is a `CACHE.4a` case.
 
-D's real gap is `4.a` and `4.c`-`4.f`, and it is a **declared** gap — enumerated in a
+D's real gap is every CACHE.4 plan row but `4.b`, and it is a **declared** gap — stated in a
 comment, visible to anyone opening the file, producing no false coverage signal. That
 is what §P2 asks for: an empty evidence cell that reads as the finding. Those rows
 still need a red test written before the implementation, because a test written after
@@ -316,7 +316,7 @@ different means, and they are one defect:
 | where | what the evidence named | why it could not fail |
 |---|---|---|
 | C, `EXT.1` | four `ac_ext_1_*` cases, `tests/mik_7272_exploit_acs.rs:18-60` | they call `gateway_declares()`; the criterion is about the `extensions` field on `ServerCapabilities` (`src/protocol/types.rs:231-253`), which has no such field. The tests exercise a helper beneath the subject |
-| D, `CACHE.4b` | `tests/mik_7213_acs.rs` | the file contains no case for it — the policy epoch (plan rows `4.f.1`-`4.f.3`) is unimplemented and unkeyed. `CACHE.4a` is **not** in this row: one of its plan rows (`4.b`, authorization binding) has a falsified case, which makes it PARTIAL rather than uncovered |
+| D, `CACHE.4b` | `tests/mik_7213_acs.rs` | the file contains no case for it — the policy epoch (plan rows `4.f.1`-`4.f.3` **and `4.g`**, the revocation race) is unimplemented and unkeyed. `CACHE.4a` is **not** in this row: one of its plan rows (`4.b`, authorization binding) has a falsified case, which makes it PARTIAL rather than uncovered |
 | G, `OBS.1` row 1 | `cargo test --lib stdio_observation`, 2 passed at `4b522687` | module-scoped, and the test is flaky under parallelism — one full `--lib` run on that binary fails it, two others pass |
 | the matrix itself | `matrix_has_no_empty_cells`, `tests/mik_7272_conformance.rs:183` | it asserts a cell is *non-empty*. Not that the named test exists; not that it asserts the criterion |
 
