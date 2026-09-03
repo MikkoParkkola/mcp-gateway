@@ -664,62 +664,10 @@ pub(super) async fn meta_mcp_handler(
     // request to interpret; it is one to refuse, and the mirrored-header check
     // below refuses it. The value is read once, above the session decision, so
     // the two readings cannot disagree.
-    let shape = crate::protocol::meta::classify_request(params.as_ref(), declared_version);
-
-    // NFR.OBS.1. The revision this request is written against, and which of the
-    // two places carried it. A record naming only the revision cannot tell a
-    // stateless `_meta` declaration from a session's handshake, and the two are
-    // served by different code paths — which is the whole reason to record it.
-    // Emitted above the malformed early return, so every request that reaches
-    // the handler is recorded and not only the well-formed ones.
-    let (protocol_revision, revision_source) = match shape {
-        crate::protocol::meta::RequestShape::Modern(ref fields) => {
-            (fields.protocol_version.as_str(), "_meta")
-        }
-        // Declared itself modern and then omitted a required field. The
-        // revision may still be readable, and it may be readable from either
-        // place, so both are consulted and the record names the one that
-        // carried it. Reading only the header attributed a body-declared
-        // caller to `absent`, and labelled a header-only declaration `_meta`;
-        // each is a wrong answer about a request that was refused, which is
-        // exactly the population this record exists to explain.
-        crate::protocol::meta::RequestShape::Malformed { .. } => {
-            match params
-                .as_ref()
-                .and_then(|p| p.get("_meta"))
-                .and_then(|m| m.get(crate::protocol::meta::KEY_PROTOCOL_VERSION))
-                .and_then(serde_json::Value::as_str)
-            {
-                Some(version) => (version, "_meta"),
-                None => match declared_version {
-                    Some(version) => (version, "header"),
-                    None => ("absent", "none"),
-                },
-            }
-        }
-        // A legacy revision is settled once at `initialize` and echoed on every
-        // later request in the header, so both readings below report the same
-        // handshake rather than a second source.
-        crate::protocol::meta::RequestShape::Legacy => match declared_version.or_else(|| {
-            params
-                .as_ref()
-                .and_then(|p| p.get("protocolVersion"))
-                .and_then(serde_json::Value::as_str)
-        }) {
-            Some(version) => (version, "handshake"),
-            None => ("absent", "none"),
-        },
-    };
-    // Both request-sourced fields are bounded before they are written. A
-    // revision is a short dated token and a method is a short name; anything
-    // longer is neither, and the record says so rather than repeating it.
-    info!(
-        target: "mcp_gateway::observed",
-        method = bounded_for_log(&method),
-        protocol_revision = bounded_for_log(protocol_revision),
-        revision_source,
-        "protocol revision observed"
-    );
+    // NFR.OBS.1 is recorded by the classifier itself, so the HTTP and stdio
+    // dispatchers cannot drift apart on what a request declared.
+    let shape =
+        crate::protocol::meta::classify_and_observe(&method, params.as_ref(), declared_version);
     if let crate::protocol::meta::RequestShape::Malformed { ref missing } = shape {
         // Declared itself modern and then omitted a required field. The
         // specification is specific about both halves of the answer: -32602,
@@ -1414,26 +1362,6 @@ const CACHEABLE_METHODS: &[&str] = &[
     "resources/read",
     "resources/templates/list",
 ];
-
-/// The longest protocol revision this gateway will repeat into its own log.
-/// `2026-07-28` is ten characters; the bound is generous enough that no real
-/// revision reaches it and small enough that a hostile one cannot fill a disk.
-const MAX_LOGGED_FIELD_LEN: usize = 64;
-
-/// Bounds a request-sourced string before it reaches an observation record.
-///
-/// Every field on the NFR.OBS.1 record arrives from the request and the body
-/// limit is megabytes, so writing any of them verbatim lets one caller choose
-/// how much operator disk a single request consumes. Applied per field rather
-/// than per value so a field added later inherits the bound instead of
-/// reintroducing the hole beside the fields that carry it.
-fn bounded_for_log(value: &str) -> &str {
-    if value.len() > MAX_LOGGED_FIELD_LEN {
-        "oversized"
-    } else {
-        value
-    }
-}
 
 /// How long a client may consider a list fresh. A freshness hint, not a
 /// promise: `listChanged` notifications remain the authority on change, and

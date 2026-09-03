@@ -1668,6 +1668,16 @@ impl Gateway {
             Err(response) => return Some(response.to_value_lossy()),
         };
 
+        // NFR.OBS.1. Recorded here, above every early return below, so a
+        // stdio session is observed on the same terms an HTTP one is. Stdio
+        // carries no headers, so the transport declares no revision and a
+        // modern request can only have sourced its own from `_meta`.
+        //
+        // The shape is not consumed yet: stdio's method dispatch predates the
+        // revision split and this change does not move it. Recording is what
+        // was missing, and recording is what this adds.
+        crate::protocol::meta::classify_and_observe(&method, params.as_ref(), None);
+
         // Notifications have no id — send no response
         if method.starts_with("notifications/") {
             debug!(notification = %method, "stdio: notification (no response)");

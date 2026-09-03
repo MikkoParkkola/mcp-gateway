@@ -37,6 +37,7 @@
 //! become a broken 2026 client.
 
 use serde_json::Value;
+use tracing::info;
 
 /// `_meta` key: the protocol version a request is written against. Required.
 pub const KEY_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
@@ -290,6 +291,97 @@ impl RequestFields {
     pub fn declares_capability(&self, name: &str) -> bool {
         self.declared_capabilities.iter().any(|n| n == name)
     }
+}
+
+/// The longest protocol revision this gateway will repeat into its own log.
+/// `2026-07-28` is ten characters; the bound is generous enough that no real
+/// revision reaches it and small enough that a hostile one cannot fill a disk.
+const MAX_LOGGED_FIELD_LEN: usize = 64;
+
+/// Bounds a request-sourced string before it reaches an observation record.
+///
+/// Every field on the NFR.OBS.1 record arrives from the request and the body
+/// limit is megabytes, so writing any of them verbatim lets one caller choose
+/// how much operator disk a single request consumes. Applied per field rather
+/// than per value so a field added later inherits the bound instead of
+/// reintroducing the hole beside the fields that carry it.
+fn bounded_for_log(value: &str) -> &str {
+    if value.len() > MAX_LOGGED_FIELD_LEN {
+        "oversized"
+    } else {
+        value
+    }
+}
+
+/// Classifies a request and records what revision it declared, in one place.
+///
+/// NFR.OBS.1. The revision this request is written against, and which of the
+/// places carried it. A record naming only the revision cannot tell a stateless
+/// `_meta` declaration from a session's handshake, and the two are served by
+/// different code paths -- which is the whole reason to record it.
+///
+/// Classification and the record live together because they are one fact read
+/// once. Kept apart, the record sat inside the HTTP handler while the stdio
+/// dispatcher classified nothing, so a stdio session was observed by nothing at
+/// all; a second copy beside the stdio dispatcher would have restored the
+/// symptom's shape and left the two free to disagree. Callers that need the
+/// shape take it from the return value rather than re-deriving it.
+///
+/// `header_version` is the transport's own declaration where a transport has
+/// one. Stdio has no headers, so it passes `None` and a modern request there
+/// can only be sourced to `_meta`.
+///
+/// Emitted above any early return the caller makes, so every request that
+/// reaches a dispatcher is recorded and not only the well-formed ones.
+pub fn classify_and_observe(
+    method: &str,
+    params: Option<&Value>,
+    header_version: Option<&str>,
+) -> RequestShape {
+    let shape = classify_request(params, header_version);
+    let (protocol_revision, revision_source) = match &shape {
+        RequestShape::Modern(fields) => (fields.protocol_version.as_str(), "_meta"),
+        // Declared itself modern and then omitted a required field. The
+        // revision may still be readable, and it may be readable from either
+        // place, so both are consulted and the record names the one that
+        // carried it. Reading only the header attributed a body-declared
+        // caller to `absent`, and labelled a header-only declaration `_meta`;
+        // each is a wrong answer about a request that was refused, which is
+        // exactly the population this record exists to explain.
+        RequestShape::Malformed { .. } => match params
+            .and_then(|p| p.get("_meta"))
+            .and_then(|m| m.get(KEY_PROTOCOL_VERSION))
+            .and_then(Value::as_str)
+        {
+            Some(version) => (version, "_meta"),
+            None => match header_version {
+                Some(version) => (version, "header"),
+                None => ("absent", "none"),
+            },
+        },
+        // A legacy revision is settled once at `initialize` and echoed on every
+        // later request in the header, so both readings below report the same
+        // handshake rather than a second source.
+        RequestShape::Legacy => match header_version.or_else(|| {
+            params
+                .and_then(|p| p.get("protocolVersion"))
+                .and_then(Value::as_str)
+        }) {
+            Some(version) => (version, "handshake"),
+            None => ("absent", "none"),
+        },
+    };
+    // Both request-sourced fields are bounded before they are written. A
+    // revision is a short dated token and a method is a short name; anything
+    // longer is neither, and the record says so rather than repeating it.
+    info!(
+        target: "mcp_gateway::observed",
+        method = bounded_for_log(method),
+        protocol_revision = bounded_for_log(protocol_revision),
+        revision_source,
+        "protocol revision observed"
+    );
+    shape
 }
 
 #[cfg(test)]
