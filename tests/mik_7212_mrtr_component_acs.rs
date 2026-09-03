@@ -44,8 +44,8 @@
 //! the wiring increment or after it, never before**, because on `main` alone
 //! it is a red suite with no path to green.
 //!
-//! The number is what separates "expected red" from "regression": 14 failing,
-//! 5 passing, and `fixture_control_a_valid_retry_reaches_the_backend` among
+//! The number is what separates "expected red" from "regression": 15 failing,
+//! 4 passing, and `fixture_control_a_valid_retry_reaches_the_backend` among
 //! the failures. A different count means something other than the missing
 //! route is wrong, and the delta is where to look.
 
@@ -439,32 +439,40 @@ async fn ac_mrtr_5a_a_handle_is_refused_on_its_second_redemption() {
 /// GIVEN a handle whose deadline has passed, WHEN it is presented,
 /// THEN it is refused.
 ///
-/// The payload is built field by field rather than through `Payload::mint`,
-/// which derives `expires_at` from the clock and so cannot be asked for a
-/// deadline in the past. Every other field is what `mint_for` would produce,
-/// including the gateway's own request digest.
+/// The deadline is the only thing this case may stage. `Payload::mint` derives
+/// `expires_at` from the clock and cannot be asked for a past one, so the
+/// payload is re-minted with two timestamps moved — and every other field is
+/// taken from a real production mint rather than rebuilt by hand.
+///
+/// Hand-building all eight fields is what this avoids, and the avoidance is not
+/// stylistic: a hand-written `original_request_digest` silently drifted from the
+/// tool the retry posts, and a digest mismatch is refused by the *binding*
+/// guard, which would leave this case green in a build with no deadline check at
+/// all. Deriving the fields makes that drift unconstructible.
 #[tokio::test]
 async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
-    let state = app_state();
+    let (state, received) = state_with_fixture().await;
+    let args = arguments();
+    let live = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &args).await;
     let now = now_secs();
-    let payload = Payload {
-        backend_id: BACKEND.to_string(),
-        backend_request_state: Some(SEALED_STATE.to_string()),
-        principal_fingerprint: fingerprint_of(CALLER_A),
-        original_request_digest: original_request_digest(BACKEND, TOOL, &arguments()),
-        origin_replica: state.continuation.replica().to_string(),
+    let minted = state
+        .continuation
+        .keyring()
+        .open(&live, now)
+        .expect("a handle the gateway just minted must open");
+
+    let expired = Payload {
         issued_at: now - 7200,
         expires_at: now - 3600,
-        jti: "expired-handle".to_string(),
+        ..minted
     };
     let handle = state
         .continuation
         .keyring()
-        .mint(&payload)
+        .mint(&expired)
         .expect("the production keyring must mint an expired payload too");
 
-    let (_status, response) =
-        post(&state, &retry_body(1, TOOL_INTERIM, &arguments(), &handle)).await;
+    let (_status, response) = post(&state, &retry_body(1, TOOL_INTERIM, &args, &handle)).await;
 
     assert_refused_by_the_continuation_guard(&response, "handle one hour past its deadline");
 }
@@ -741,7 +749,7 @@ async fn ac_mrtr_1_a_retry_reaches_the_backend_carrying_what_it_continued() {
 
         let body = retry_via_invoke(
             index as u64 + 1,
-            TOOL,
+            TOOL_INTERIM,
             &arguments(),
             with_state.then_some(handle.as_str()),
             responses.clone(),
@@ -1145,15 +1153,23 @@ async fn ac_mrtr_6_a_retry_at_another_replica_is_refused_and_opens_no_exchange()
          the fixture backend recorded {calls:?}"
     );
 
-    // AND: the origin still holds it. Asserted through the origin's own keyring
-    // rather than a flag this test sets, so it fails if the neighbour's refusal
-    // reached across and spent it.
+    // AND: the origin still holds it, in both senses. `open` answers only
+    // authenticity — it verifies the seal and the deadline and never consults
+    // the ledger — so on its own it would stay green through exactly the
+    // cross-replica consumption this case exists to forbid. The ledger is what
+    // says unspent; `open` is here so that an empty ledger cannot be satisfied
+    // by a handle that was never real.
     assert!(
         origin
             .continuation
             .keyring()
             .open(&handle, now_secs())
             .is_ok(),
+        "the handle must still be authentic, or what follows proves nothing"
+    );
+    assert_eq!(
+        origin.continuation.ledger().len().await,
+        0,
         "the neighbour's refusal must not consume the handle the origin still owes"
     );
     assert_eq!(
