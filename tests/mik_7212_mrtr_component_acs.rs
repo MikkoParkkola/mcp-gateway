@@ -41,9 +41,10 @@ use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair}
 use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::NotificationMultiplexer;
 use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+use mcp_gateway::key_server::oidc::VerifiedIdentity;
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 use mcp_gateway::protocol::continuation::{ContinuationError, ContinuationState, Payload};
-use mcp_gateway::protocol::mrtr::original_request_digest;
+use mcp_gateway::protocol::mrtr::{original_request_digest, principal_fingerprint};
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -58,8 +59,12 @@ const TOOL_INTERIM: &str = "tool-interim";
 /// The backend's own opaque state, sealed inside every handle minted here.
 /// A retry must deliver *this* to the backend — never the client's envelope.
 const SEALED_STATE: &str = "backend-opaque-state";
-const PRINCIPAL_A: &str = "fingerprint-a";
-const PRINCIPAL_B: &str = "fingerprint-b";
+/// Two callers the gateway can actually identify.
+///
+/// Subjects, not fingerprints: the fingerprint is derived by production from
+/// the identity the request carries, and this file never computes one.
+const CALLER_A: &str = "alice";
+const CALLER_B: &str = "bob";
 
 /// One gateway process, built the way `serve` builds it.
 ///
@@ -75,9 +80,16 @@ fn app_state() -> Arc<AppState> {
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
     let agent_registry = Arc::new(AgentRegistry::new());
+    // One continuation state, taken from the meta-MCP instance exactly as
+    // `serve` takes it (`src/gateway/server/mod.rs:1175`). Constructing a
+    // second one here would give the mint path and this file's assertions
+    // different key material, and every genuine envelope would read as a
+    // forgery.
+    let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
+    let continuation = meta_mcp.continuation();
     Arc::new(AppState {
         env: None,
-        meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
+        meta_mcp,
         backends,
         meta_mcp_enabled: true,
         multiplexer,
@@ -106,7 +118,7 @@ fn app_state() -> Arc<AppState> {
         subscriptions: Arc::new(
             mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
         ),
-        continuation: Arc::new(ContinuationState::new()),
+        continuation,
     })
 }
 
@@ -122,27 +134,58 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
-/// A handle the *gateway* minted, for this principal and this original call.
+/// The identity a request carries, as the OIDC layer would have left it.
 ///
-/// The request binding comes from `mrtr::original_request_digest` — the
-/// gateway's own derivation — rather than a digest this file recomputes. A
-/// fixture that re-derived the binding by the same rule as the implementation
-/// would agree with whatever the implementation did, which is the failure mode
-/// the test plan is written against.
-fn mint_for(state: &Arc<AppState>, principal: &str, tool: &str, args: &Value) -> String {
-    let payload = Payload::mint(
-        BACKEND.to_string(),
-        Some(SEALED_STATE.to_string()),
-        principal.to_string(),
-        original_request_digest(BACKEND, tool, args),
-        state.continuation.replica().to_string(),
-        now_secs(),
-    );
-    state
-        .continuation
-        .keyring()
-        .mint(&payload)
-        .expect("the production keyring must mint")
+/// Inserted as a request extension, which is where `handlers.rs:477` reads it
+/// from; auth is disabled in this `AppState`, so no middleware overwrites it
+/// (the same seam `src/gateway/router/tests.rs:1179` uses).
+fn caller(subject: &str) -> VerifiedIdentity {
+    VerifiedIdentity {
+        subject: subject.to_string(),
+        email: format!("{subject}@corp"),
+        name: None,
+        groups: Vec::new(),
+        issuer: "https://idp".to_string(),
+    }
+}
+
+/// The fingerprint production derives for `subject`.
+///
+/// Called, not reimplemented: the rule stays in `principal_fingerprint`, so a
+/// hand-built payload that must match a real caller cannot drift from it.
+fn fingerprint_of(subject: &str) -> String {
+    principal_fingerprint(Some(&caller(subject))).expect("a verified identity has a fingerprint")
+}
+
+/// A handle obtained the way a client obtains one: the gateway minted it.
+///
+/// Nothing here recomputes a binding. The caller's principal fingerprint and
+/// the original-request digest are both derived inside `mint_continuation`
+/// (`src/gateway/meta_mcp/invoke.rs:372-394`) from the request this helper
+/// posts. A fixture that re-derived either by the same rule as the
+/// implementation would agree with whatever the implementation did, which is
+/// the failure mode the test plan is written against.
+///
+/// `tool` must be one the fixture backend answers with an interim exchange —
+/// a final answer mints nothing, which is the production contract, not a
+/// fixture limitation.
+async fn mint_for(state: &Arc<AppState>, subject: &str, tool: &str, args: &Value) -> String {
+    let (_status, response) = post_as(state, &fresh_body(1, tool, args), subject).await;
+    handle_the_client_received(state, &response).unwrap_or_else(|| {
+        panic!("the gateway must mint a continuation for an interim exchange, answered {response}")
+    })
+}
+
+/// An `AppState` with the fixture backend already behind `BACKEND`.
+///
+/// Every case that needs a minted handle needs a backend to mint against, now
+/// that the handle comes from the production path rather than a hand-built
+/// payload.
+async fn state_with_fixture() -> (Arc<AppState>, Received) {
+    let state = app_state();
+    let (url, received) = spawn_fixture_backend().await;
+    register_fixture_backend(&state, &url);
+    (state, received)
 }
 
 /// A retry presented on the wire: `requestState` and `inputResponses` are
@@ -162,12 +205,25 @@ fn retry_body(id: u64, tool: &str, args: &Value, handle: &str) -> Value {
 }
 
 async fn post(state: &Arc<AppState>, body: &Value) -> (StatusCode, Value) {
-    let request = Request::builder()
+    post_as(state, body, CALLER_A).await
+}
+
+/// The same request, made by a named caller.
+///
+/// Every request in this file carries an identity. An unauthenticated caller
+/// resolves to the empty string (`src/gateway/router/handlers.rs:154-161`),
+/// which is not an identity and which the controls keyed on it refuse — so a
+/// retry posted without one can never be dispatched however correct the
+/// wiring is, and every positive control would be permanently red for a
+/// reason that has nothing to do with continuations.
+async fn post_as(state: &Arc<AppState>, body: &Value, subject: &str) -> (StatusCode, Value) {
+    let mut request = Request::builder()
         .method("POST")
         .uri("/mcp")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(body).expect("body")))
         .expect("request");
+    request.extensions_mut().insert(caller(subject));
     let response = create_router(Arc::clone(state))
         .oneshot(request)
         .await
@@ -255,36 +311,30 @@ fn assert_not_refused_by_the_continuation_guard(response: &Value, case: &str) {
 // MRTR.4 — a continuation is bound to its principal and its original request
 // ---------------------------------------------------------------------------
 //
-// STOP, recorded per the "write down why" rule rather than faked.
-//
-// The negative half of the principal pair is expressible; the *positive* half
-// is not, and the same gap makes the tool pair's control provisional.
+// Both halves are expressible, because the handle comes from the production
+// mint path and the request carries an identity.
 //
 // `mrtr::principal_fingerprint` (`src/protocol/mrtr.rs:357-365`) takes an
-// `Option<&VerifiedIdentity>` and returns `None` without one. This `AppState`
-// carries no OIDC identity, so a test cannot construct the value the gateway
-// would compute for its own caller, and therefore cannot mint a handle whose
-// principal *matches* that caller. What the gateway should use as the
-// principal of an API-key-only caller is undecided in the code, not merely
-// unwired.
+// `Option<&VerifiedIdentity>`, and the gateway reads that identity off the
+// request extension (`src/gateway/router/handlers.rs:477`). So the negative is
+// a handle minted while `CALLER_B` held the request and presented while
+// `CALLER_A` does, and the positive is the same caller both times — neither
+// side asserting a principal this file invented.
 //
-// The negatives below survive that gap: `PRINCIPAL_A` and `PRINCIPAL_B` are
-// plain words, and `principal_fingerprint` returns SHA-256 hex, so neither can
-// ever equal a computed fingerprint whatever the decision turns out to be. The
-// positive control cannot: it asserts a handle is *not* refused, and once
-// forwarding is wired that assertion's fate depends on the undecided value.
-// It is written anyway, and it is red today on its own assertion, but it must
-// be revisited when the principal question is answered — a control whose
-// correctness depends on an open design question is not yet a control.
+// What remains undecided is the principal of an API-key-only caller: the key
+// is not retained past validation (`src/protocol/mrtr.rs:331-364`), so the
+// verified-agent scheme is the only constructible one today. These cases do
+// not depend on that answer.
 
 /// GIVEN a handle minted for one principal, WHEN another presents it,
 /// THEN the continuation guard refuses it.
 #[tokio::test]
 async fn ac_mrtr_4_a_handle_minted_for_one_principal_is_refused_for_another() {
-    let state = app_state();
-    let handle = mint_for(&state, PRINCIPAL_B, TOOL, &arguments());
+    let (state, _received) = state_with_fixture().await;
+    let handle = mint_for(&state, CALLER_B, TOOL_INTERIM, &arguments()).await;
 
-    let (_status, response) = post(&state, &retry_body(1, TOOL, &arguments(), &handle)).await;
+    let (_status, response) =
+        post(&state, &retry_body(1, TOOL_INTERIM, &arguments(), &handle)).await;
 
     assert_refused_by_the_continuation_guard(&response, "handle minted for a different principal");
 }
@@ -293,8 +343,8 @@ async fn ac_mrtr_4_a_handle_minted_for_one_principal_is_refused_for_another() {
 /// THEN the continuation guard refuses it.
 #[tokio::test]
 async fn ac_mrtr_4_a_handle_minted_for_one_tool_is_refused_for_another() {
-    let state = app_state();
-    let handle = mint_for(&state, PRINCIPAL_A, TOOL, &arguments());
+    let (state, _received) = state_with_fixture().await;
+    let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &arguments()).await;
 
     let (_status, response) =
         post(&state, &retry_body(1, "other-tool", &arguments(), &handle)).await;
@@ -310,10 +360,11 @@ async fn ac_mrtr_4_a_handle_minted_for_one_tool_is_refused_for_another() {
 /// is provisional.
 #[tokio::test]
 async fn ac_mrtr_4_the_handle_it_was_minted_for_is_not_refused() {
-    let state = app_state();
-    let handle = mint_for(&state, PRINCIPAL_A, TOOL, &arguments());
+    let (state, _received) = state_with_fixture().await;
+    let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &arguments()).await;
 
-    let (_status, response) = post(&state, &retry_body(1, TOOL, &arguments(), &handle)).await;
+    let (_status, response) =
+        post(&state, &retry_body(1, TOOL_INTERIM, &arguments(), &handle)).await;
 
     assert_not_refused_by_the_continuation_guard(&response, "the handle's own request");
 }
@@ -330,9 +381,9 @@ async fn ac_mrtr_4_the_handle_it_was_minted_for_is_not_refused() {
 /// redemption was *not* refused.
 #[tokio::test]
 async fn ac_mrtr_5a_a_handle_is_refused_on_its_second_redemption() {
-    let state = app_state();
-    let handle = mint_for(&state, PRINCIPAL_A, TOOL, &arguments());
-    let body = retry_body(1, TOOL, &arguments(), &handle);
+    let (state, _received) = state_with_fixture().await;
+    let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &arguments()).await;
+    let body = retry_body(1, TOOL_INTERIM, &arguments(), &handle);
 
     let (_status, first) = post(&state, &body).await;
     let (_status, second) = post(&state, &body).await;
@@ -355,7 +406,7 @@ async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
     let payload = Payload {
         backend_id: BACKEND.to_string(),
         backend_request_state: Some(SEALED_STATE.to_string()),
-        principal_fingerprint: PRINCIPAL_A.to_string(),
+        principal_fingerprint: fingerprint_of(CALLER_A),
         original_request_digest: original_request_digest(BACKEND, TOOL, &arguments()),
         origin_replica: state.continuation.replica().to_string(),
         issued_at: now - 7200,
@@ -368,7 +419,8 @@ async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
         .mint(&payload)
         .expect("the production keyring must mint an expired payload too");
 
-    let (_status, response) = post(&state, &retry_body(1, TOOL, &arguments(), &handle)).await;
+    let (_status, response) =
+        post(&state, &retry_body(1, TOOL_INTERIM, &arguments(), &handle)).await;
 
     assert_refused_by_the_continuation_guard(&response, "handle one hour past its deadline");
 }
@@ -382,9 +434,9 @@ async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
 /// may order the two either way.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ac_mrtr_5c_two_racing_redemptions_yield_exactly_one_success() {
-    let state = app_state();
-    let handle = mint_for(&state, PRINCIPAL_A, TOOL, &arguments());
-    let body = retry_body(1, TOOL, &arguments(), &handle);
+    let (state, _received) = state_with_fixture().await;
+    let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &arguments()).await;
+    let body = retry_body(1, TOOL_INTERIM, &arguments(), &handle);
 
     let (left, right) = {
         let (a, b) = (Arc::clone(&state), Arc::clone(&state));
@@ -607,7 +659,7 @@ async fn ac_mrtr_1_a_retry_reaches_the_backend_carrying_what_it_continued() {
         let state = app_state();
         let (url, received) = spawn_fixture_backend().await;
         register_fixture_backend(&state, &url);
-        let handle = mint_for(&state, PRINCIPAL_A, TOOL, &arguments());
+        let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &arguments()).await;
 
         let body = retry_via_invoke(
             index as u64 + 1,
@@ -752,7 +804,7 @@ fn mint_on_a_foreign_process(tool: &str, args: &Value) -> String {
     let payload = Payload::mint(
         BACKEND.to_string(),
         Some(SEALED_STATE.to_string()),
-        PRINCIPAL_A.to_string(),
+        fingerprint_of(CALLER_A),
         original_request_digest(BACKEND, tool, args),
         foreign.replica().to_string(),
         now_secs(),
@@ -777,16 +829,16 @@ fn tamper(handle: &str) -> String {
 #[tokio::test]
 async fn ac_mrtr_3_every_forged_presentation_is_refused_by_the_continuation_guard() {
     // GIVEN: a genuine handle, and four ways a client can present something else.
-    let state = app_state();
+    let (state, _received) = state_with_fixture().await;
     let args = arguments();
-    let genuine = mint_for(&state, PRINCIPAL_A, TOOL, &args);
+    let genuine = mint_for(&state, CALLER_A, TOOL_INTERIM, &args).await;
 
     let presentations = [
         (
             "in the clear, with no envelope at all",
             json!({
                 "backend": BACKEND,
-                "principal": PRINCIPAL_A,
+                "principal": fingerprint_of(CALLER_A),
                 "backend_request_state": SEALED_STATE
             })
             .to_string(),
@@ -829,12 +881,12 @@ async fn ac_mrtr_3_every_forged_presentation_is_refused_by_the_continuation_guar
 #[tokio::test]
 async fn ac_mrtr_3_a_genuine_handle_is_still_accepted() {
     // GIVEN: the handle this gateway minted, for this principal and this call.
-    let state = app_state();
+    let (state, _received) = state_with_fixture().await;
     let args = arguments();
-    let genuine = mint_for(&state, PRINCIPAL_A, TOOL, &args);
+    let genuine = mint_for(&state, CALLER_A, TOOL_INTERIM, &args).await;
 
     // WHEN: presented unaltered.
-    let (_, response) = post(&state, &retry_body(1, TOOL, &args, &genuine)).await;
+    let (_, response) = post(&state, &retry_body(1, TOOL_INTERIM, &args, &genuine)).await;
 
     // THEN: the guard did not stop it. Without this half, refusing every
     // presentation passes all four negatives above.
@@ -985,10 +1037,10 @@ async fn ac_mrtr_6_a_retry_at_another_replica_is_refused_and_opens_no_exchange()
     let (url, received) = spawn_fixture_backend().await;
     register_fixture_backend(&neighbour, &url);
     let args = arguments();
-    let handle = mint_for(&origin, PRINCIPAL_A, TOOL, &args);
+    let handle = mint_for(&origin, CALLER_A, TOOL_INTERIM, &args).await;
 
     // WHEN: the retry lands on B, as a round-robin balancer will send it.
-    let (_status, response) = post(&neighbour, &retry_body(1, TOOL, &args, &handle)).await;
+    let (_status, response) = post(&neighbour, &retry_body(1, TOOL_INTERIM, &args, &handle)).await;
 
     // THEN: refused in the continuation vocabulary — an explicit failure, which
     // is the arm this design took.
@@ -1036,7 +1088,7 @@ async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused(
     let (url, received) = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);
     let args = arguments();
-    let handle = mint_for(&state, PRINCIPAL_A, TOOL, &args);
+    let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &args).await;
     assert_eq!(
         state.continuation.in_flight().len().await,
         0,
@@ -1045,7 +1097,7 @@ async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused(
     );
 
     // WHEN: the client retries on the replica that minted it.
-    let (_status, response) = post(&state, &retry_body(1, TOOL, &args, &handle)).await;
+    let (_status, response) = post(&state, &retry_body(1, TOOL_INTERIM, &args, &handle)).await;
 
     // THEN: refused, and nothing was opened. The backend assertion carries the
     // criterion; the vocabulary assertion only says which guard answered.
@@ -1085,12 +1137,12 @@ async fn ac_mrtr_5d_one_handle_retried_at_two_replicas_yields_one_backend_call()
     register_fixture_backend(&origin, &origin_url);
     register_fixture_backend(&neighbour, &neighbour_url);
     let args = arguments();
-    let handle = mint_for(&origin, PRINCIPAL_A, TOOL, &args);
+    let handle = mint_for(&origin, CALLER_A, TOOL_INTERIM, &args).await;
 
     // WHEN: both land together. `join` rather than sequential posts, so a
     // check-then-insert ledger has the window it needs to be wrong in.
-    let here = retry_body(1, TOOL, &args, &handle);
-    let there = retry_body(2, TOOL, &args, &handle);
+    let here = retry_body(1, TOOL_INTERIM, &args, &handle);
+    let there = retry_body(2, TOOL_INTERIM, &args, &handle);
     let (_a, _b) = tokio::join!(post(&origin, &here), post(&neighbour, &there));
 
     let total = origin_calls.lock().expect("recorder").len()
