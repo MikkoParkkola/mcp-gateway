@@ -143,9 +143,10 @@ does not invent one for it.
 extensions map is unconditional; the task methods are refused by era. So a Tasks entry added to that
 shared builder without an era condition tells a legacy client about an extension whose every method
 it will then be refused — the declaration and the refusal disagree about the same peer. The entry
-belongs to TASK.1's increment, which is already ordered after EXT.1, and it is the reason that
-ordering exists rather than a second one: EXT.1 builds the map, TASK.1 fills it, and TASK.1 owns the
-condition on its own row. This document makes no placement — the work sits where it already sat.
+belongs to TASK.1's increment, which is already ordered after EXT.1. Two reasons, one order: the
+order table gives the build-sequencing one — TASK.1 needs the negotiated set — and this pairing is a
+second, independent of it. EXT.1 builds the map, TASK.1 fills it, and TASK.1 owns the condition on
+its own row. This document makes no placement — the work sits where it already sat.
 What was only visible across the two designs is that the condition has to exist at all.
 
 The release note should say so rather than implying the cluster is a modern-path affair.
