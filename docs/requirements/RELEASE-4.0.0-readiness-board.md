@@ -3,7 +3,9 @@
 One row per cluster, one question per column: **what has to happen next, and who
 does it.** The cluster definitions, criterion lists and the reasons each row is
 open live in `RELEASE-4.0.0-blocking-rollup.md`; the ordered work queue lives in
-`RELEASE-4.0.0-execution-plan.md`. Neither answers *how far is each cluster
+`RELEASE-4.0.0-plan.md` under "Order of work". (`RELEASE-4.0.0-execution-plan.md`
+says of itself that it is a superseded historical record and the authority for
+nothing; it is not a work queue.) Neither answers *how far is each cluster
 actually along*, which is the only thing this file is for. Nothing here is
 restated from those two — where a cell needs a reason it names the file that
 carries it.

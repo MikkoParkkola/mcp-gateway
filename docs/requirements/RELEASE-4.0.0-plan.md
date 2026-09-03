@@ -21,8 +21,10 @@ without an assessment no longer are.
 
 Of the blocking NFRs, six are not independent work: NFR.SEC.2-4, NFR.OBS.4 and NFR.PERF.3
 all verify the MIK-7212 continuation envelope, and NFR.OBS.3 verifies MIK-7217 era detection.
-Both are unwired, so those rows cannot close before the clusters below — and closing a cluster
-does not close them either, since each still needs its own evidence.
+The two are at different stages: the continuation envelope is wired and green, so its five rows
+need recorded evidence over a path that exists; era detection is unwired, so NFR.OBS.3 cannot
+close before the mechanism does. Closing a cluster does not close its NFR rows either, since each
+still needs its own evidence.
 
 Two are known without a sweep. NFR.SEC.5 is now met: all four of its command gates were run on
 this worktree on 2026-09-01 — `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`
@@ -92,15 +94,17 @@ so nothing is claimed for it here.
 ## The gap the ledger cannot count: none of this has been delivered
 
 Every criterion in `RELEASE-4.0.0-criteria-status.md` is a statement about the code. None of
-them is a statement about where the code lives. At the time of writing the branch is 816 commits
-ahead of `main`, PR #473 is open, and 16 commits sit on this disk and nowhere else
-(`git rev-list --count HEAD --not --remotes`). All 44 blocking rows could turn green and the
-release would still not exist, because the delivery chain in
+them is a statement about where the code lives. The branch is hundreds of commits ahead of
+`main`, PR #473 is open, and commits sit on this disk and nowhere else. The two numbers move
+with every commit, so they are not copied here — read them with
+`git rev-list --count main..HEAD` and `git rev-list --count HEAD --not --remotes`, the second of
+which must reach zero before step 1 of the delivery chain is satisfied. All 44 blocking rows
+could turn green and the release would still not exist, because the delivery chain in
 `rules-source/workflows/quality-gates-dod.md` stops at step 1.
 
 Two consequences the cluster plan below does not otherwise reach.
 
-An 816-commit pull request is not reviewable as one unit, and the second-opinion gate is a
+A pull request of this size is not reviewable as one unit, and the second-opinion gate is a
 review of the change, not of the diff statistics. Whether the release lands as one merge or as a
 sequence of them is an operator decision that has not been made, and it decides how much of the
 work below can proceed in parallel.
@@ -251,9 +255,6 @@ now scored as `IDENT.1b`. A test, not a mechanism.
 Sequenced last of the design-free work, and deliberately not merged into a cluster they do not
 belong to.
 
-The letters here are this file's own. The blocking rollup groups the same rows under its own
-scheme for its own purpose, and the two do not correspond; the criterion IDs are what join them.
-
 ### The fifteen blocking NFR rows are placed by wave, not by cluster
 
 The clusters above are ticket work. Not one NFR row appears in them, and the heading
@@ -289,9 +290,13 @@ verify the continuation envelope and era detection are NOT in this wave — they
 clusters. This wave changes the size of every wave after it, which is why it runs first
 rather than last.
 
-**Wave 1 — designs only, no code, all parallel.** C, F, I, the design-first half of B,
-and NFR.PERF.4's counting decision, which the operator's ruling converted from a question
-about the ceiling into a question about the mechanism.
+**Wave 1 — designs only, no code, all parallel.** The revision surface (MIK-7272, rollup
+cluster C), the design half of era detection (MIK-7217, rollup cluster B, including the
+`NFR.OBS.3` observability question no design doc covered), NFR.PERF.4's counting decision —
+which the operator's ruling converted from a question about the ceiling into a question about
+the mechanism — and every rollup-residue row the triage in
+`RELEASE-4.0.0-residue-triage.md` classifies as needing a design rather than a test or a
+measurement.
 Each is a §P1 note reviewed by two vendors before an edit. This is the wave that decides
 things, and it is the one most likely to be skipped under release pressure.
 
@@ -306,6 +311,13 @@ slot opens. The ledger-split residue is tests against mechanisms that already ex
 any slot. The stdio dispatch path lands here too, and its confirmation-gate half should not be
 the part that slips: it is the only row in the set where the gap is a security control rather
 than a missing assertion.
+
+Two implementations belong to this wave that Wave 1 only designs. Era detection (MIK-7217,
+rollup cluster B) has five blocking rows and no code: its design covers `DISCOVER.4` alone, so
+the wave carries the probe, the cache and the re-probe half of `DISCOVER.5`, and `NFR.OBS.3`'s
+observability follows the mechanism it observes. NFR.PERF.4's counting change lands here too,
+behind its reviewed design and never before it. `HEADER.9` is sequenced after era detection
+because it consumes the era the detection produces.
 
 **Wave 4 — the long pole is now MIK-7272, not MRTR.** The continuation envelope is wired,
 redeemed on the tool-invoke path and green (`redeem_retry`, `src/gateway/meta_mcp/invoke.rs:529`,
@@ -327,6 +339,28 @@ defaulting to true (`src/config/mod.rs:1174`). The operator ruled on it 2026-09-
 land before the revision surface does, because default-on turns every gap there into a
 first-run defect rather than an opt-in one.
 
+**Wave 6 — delivery, which is not a formality and is not implied by a green ledger.** The five
+steps in `rules-source/workflows/quality-gates-dod.md` run in order and each is separately
+checkable: push the branch until `git rev-list --count HEAD --not --remotes` reports zero;
+confirm PR #473 contains every one of those commits (`gh pr view 473 --json state,headRefName,commits`);
+post the DoD verdicts and the AC pass/fail table as an issue comment; clear the dual-vendor
+review at the final head with CI green; merge, verified by content on `main` rather than by
+commit count, because this repository squash-merges. Only then the release itself: tag, publish
+to crates.io, and refresh the distribution surfaces the README claims — Homebrew, npm, the
+container images, and the tool-count badges that `benchmarks/public_claims.json` gates. A plan
+that stops at a passing DoD check produces a green branch, not a release.
+
+**Exit criteria — when to stop rather than continue.** Stated as events, not dates, because
+nothing here is estimated. *Kill:* if `NFR.PERF.1`'s end-to-end comparison shows a regression
+past the criterion's own 5% P50 or 10% P99 bound, the release does not ship on that head and the
+regression becomes the work. *Pivot:* if any cluster's design does not converge within the
+bound in `rules-source/workflows/development-process.md` — stuckness, not a round count — the
+response is the §P0 disposal table, not another round: cut the mechanism, narrow the change with
+the operator's recorded agreement, or accept the open findings as recorded residual risk.
+*Escalate:* an operator decision in the section below that is still unanswered when the wave
+depending on it would otherwise start goes back to the operator as a blocking question, and that
+wave does not start on an assumed answer.
+
 Ownership: `src/protocol/continuation.rs`, `src/security/firewall/` and their test files are
 touched by other sessions. Coordinate before editing them.
 
@@ -335,6 +369,18 @@ touched by other sessions. Coordinate before editing them.
 Four decisions are the requester's, not the team lead's, and are recorded here rather than in the
 design that raised each one so they survive a session boundary. None blocks the work that does not
 turn on it. Each names what changes either way, so an answer costs a sentence.
+
+Scheduled per §P1 rather than described: every one of them is *deferred*, the owner is the
+operator in all cases, and the resolving action is the question being asked — none is settled by
+running anything, which is why none has a command against it.
+
+| open decision | resolves by | when it must be asked | if it resolves badly, or not at all |
+|---|---|---|---|
+| 2. SCHEMA.1b posture on an invalid backend schema | operator picks refuse, publish-and-flag, or degrade | before the revision-surface design (Wave 1) freezes its scope | fall back to publish-and-flag, the least destructive of the three, and record it as provisional in the design |
+| 4. what the direct `POST /mcp/{name}` route needs | operator says whether it gets its own instrumentation, and whether CACHE.1-4 are HTTP-only | before response-cache keying (MIK-7213) starts code in Wave 3 | scope CACHE.1-4 to the traced route only and leave the direct route uninstrumented, which is today's behaviour and reversible |
+
+The two resolved items below stay in the section because their *scheduling* consequences are
+still live; they are not open questions.
 
 **1. SUB.2's second clause — RESOLVED against amending it; what remains is scheduling.** The
 question was put to the operator on 2026-08-31 and came back as a question: what does the standard
@@ -514,6 +560,16 @@ together, and re-read `git log -1 --format=%H -- <your path>` afterwards rather 
 this branch, and a wrong author line costs less than a rebase underneath four of them.
 
 ## What would make this plan wrong
+
+Two assumptions are still live. Ranked by impact times uncertainty, the era-cache keying comes
+first: it is unconfirmed by the operator, it is a property of a mechanism nobody has built yet,
+and being wrong about it rewrites a design rather than reschedules a wave. The MRTR-slip
+assumption ranks second — high certainty, and its consequence is a schedule change, not a
+redesign. The cheapest falsifier for the first is a read, not a build: whether two pool slots of
+one named backend can ever dial different commands or URLs is answerable from the pool
+construction in `src/provider/` before any era-detection code exists. If they can, per-name
+keying is wrong and the design changes by one field before it is implemented; if they cannot,
+the residual below is the whole risk and it is paid for by the re-probe half.
 
 - ~~If TASK.1 is dropped from v4.0.0, SUB.4 loses its alternative branch.~~ CLOSED: the operator
   directed the full scope on 2026-08-31, so TASK.1 ships in v4.0.0 and SUB.4 keeps both routes.
