@@ -48,6 +48,11 @@
 //! 4 passing, and `fixture_control_a_valid_retry_reaches_the_backend` among
 //! the failures. A different count means something other than the missing
 //! route is wrong, and the delta is where to look.
+//!
+//! The count is scaffolding for exactly one state of the tree. **The increment
+//! that wires the retry route deletes this whole section**, because once the
+//! route exists the expected count is zero failures and a pinned 15 becomes a
+//! false alarm that outlives what it described.
 
 use std::sync::Arc;
 
@@ -449,6 +454,19 @@ async fn ac_mrtr_5a_a_handle_is_refused_on_its_second_redemption() {
 /// tool the retry posts, and a digest mismatch is refused by the *binding*
 /// guard, which would leave this case green in a build with no deadline check at
 /// all. Deriving the fields makes that drift unconstructible.
+///
+/// The `jti` is the one derived field that must not be inherited. `mint_for`
+/// left its jti with an exchange still open, so re-presenting it would stage a
+/// second defect — a replay — and a build that refused replays before deadlines
+/// would answer this case without ever reading `expires_at`. A fresh jti leaves
+/// the deadline as the only thing wrong with the handle.
+///
+/// `assert_refused_by_the_continuation_guard` cannot name the reason: every
+/// `ContinuationError` variant renders to one client sentence by design
+/// (`src/protocol/continuation.rs:224-236`, deferred as DE-9a), so the route
+/// assertion proves the refusal came from this guard and nothing finer. The
+/// `keyring().open` assertion below is what names expiry, at the one place the
+/// distinction survives.
 #[tokio::test]
 async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
     let (state, received) = state_with_fixture().await;
@@ -464,6 +482,7 @@ async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
     let expired = Payload {
         issued_at: now - 7200,
         expires_at: now - 3600,
+        jti: "a-handle-nobody-has-presented".to_string(),
         ..minted
     };
     let handle = state
@@ -471,6 +490,14 @@ async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
         .keyring()
         .mint(&expired)
         .expect("the production keyring must mint an expired payload too");
+    assert!(
+        matches!(
+            state.continuation.keyring().open(&handle, now),
+            Err(ContinuationError::Expired)
+        ),
+        "the deadline must be this handle's only defect, or the refusal below \
+         proves whichever guard runs first"
+    );
 
     let (_status, response) = post(&state, &retry_body(1, TOOL_INTERIM, &args, &handle)).await;
 
