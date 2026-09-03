@@ -29,6 +29,25 @@
 //! observable at the wire. A component case cannot separate "wrong principal"
 //! from "expired"; the unit cases in `mik_7212_acs.rs` do that, and these prove
 //! the guard is reached at all.
+//!
+//! ## This file is RED on purpose, and may not merge alone
+//!
+//! 14 of the 19 cases fail today, all on the same cause: the retry route
+//! answers every presentation with the blanket `-32602` above, so no guard is
+//! ever reached. They were written before the wiring so their first failure is
+//! free — a case written afterwards is drafted against code its author has
+//! already convinced themselves is correct.
+//!
+//! They are NOT `#[ignore]`d. An ignored test is one nobody runs and nobody
+//! un-ignores, and the point of writing these first is lost the moment they
+//! stop being consulted. The cost is the honest one: **this file merges with
+//! the wiring increment or after it, never before**, because on `main` alone
+//! it is a red suite with no path to green.
+//!
+//! The number is what separates "expected red" from "regression": 14 failing,
+//! 5 passing, and `fixture_control_a_valid_retry_reaches_the_backend` among
+//! the failures. A different count means something other than the missing
+//! route is wrong, and the delta is where to look.
 
 use std::sync::Arc;
 
@@ -166,14 +185,29 @@ fn fingerprint_of(subject: &str) -> String {
 /// implementation would agree with whatever the implementation did, which is
 /// the failure mode the test plan is written against.
 ///
+/// The recorder is reset before returning: minting is arrange, and a case
+/// that observed the mint's own backend call would be observing its own
+/// setup.
+///
 /// `tool` must be one the fixture backend answers with an interim exchange —
 /// a final answer mints nothing, which is the production contract, not a
 /// fixture limitation.
-async fn mint_for(state: &Arc<AppState>, subject: &str, tool: &str, args: &Value) -> String {
+async fn mint_for(
+    state: &Arc<AppState>,
+    received: &Received,
+    subject: &str,
+    tool: &str,
+    args: &Value,
+) -> String {
     let (_status, response) = post_as(state, &fresh_body(1, tool, args), subject).await;
-    handle_the_client_received(state, &response).unwrap_or_else(|| {
+    let handle = handle_the_client_received(state, &response).unwrap_or_else(|| {
         panic!("the gateway must mint a continuation for an interim exchange, answered {response}")
-    })
+    });
+    // The mint's own call is arrange, not evidence. Cleared here rather than at
+    // each case, because a case that forgets does not fail loudly: it reads the
+    // mint's call as the retry's and passes.
+    received.lock().expect("recorder").clear();
+    handle
 }
 
 /// An `AppState` with the fixture backend already behind `BACKEND`.
@@ -340,8 +374,8 @@ fn assert_not_refused_by_the_continuation_guard(response: &Value, case: &str) {
 /// THEN the continuation guard refuses it.
 #[tokio::test]
 async fn ac_mrtr_4_a_handle_minted_for_one_principal_is_refused_for_another() {
-    let (state, _received) = state_with_fixture().await;
-    let handle = mint_for(&state, CALLER_B, TOOL_INTERIM, &arguments()).await;
+    let (state, received) = state_with_fixture().await;
+    let handle = mint_for(&state, &received, CALLER_B, TOOL_INTERIM, &arguments()).await;
 
     let (_status, response) =
         post(&state, &retry_body(1, TOOL_INTERIM, &arguments(), &handle)).await;
@@ -353,8 +387,8 @@ async fn ac_mrtr_4_a_handle_minted_for_one_principal_is_refused_for_another() {
 /// THEN the continuation guard refuses it.
 #[tokio::test]
 async fn ac_mrtr_4_a_handle_minted_for_one_tool_is_refused_for_another() {
-    let (state, _received) = state_with_fixture().await;
-    let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &arguments()).await;
+    let (state, received) = state_with_fixture().await;
+    let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &arguments()).await;
 
     let (_status, response) =
         post(&state, &retry_body(1, "other-tool", &arguments(), &handle)).await;
@@ -370,8 +404,8 @@ async fn ac_mrtr_4_a_handle_minted_for_one_tool_is_refused_for_another() {
 /// is provisional.
 #[tokio::test]
 async fn ac_mrtr_4_the_handle_it_was_minted_for_is_not_refused() {
-    let (state, _received) = state_with_fixture().await;
-    let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &arguments()).await;
+    let (state, received) = state_with_fixture().await;
+    let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &arguments()).await;
 
     let (_status, response) =
         post(&state, &retry_body(1, TOOL_INTERIM, &arguments(), &handle)).await;
@@ -391,8 +425,8 @@ async fn ac_mrtr_4_the_handle_it_was_minted_for_is_not_refused() {
 /// redemption was *not* refused.
 #[tokio::test]
 async fn ac_mrtr_5a_a_handle_is_refused_on_its_second_redemption() {
-    let (state, _received) = state_with_fixture().await;
-    let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &arguments()).await;
+    let (state, received) = state_with_fixture().await;
+    let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &arguments()).await;
     let body = retry_body(1, TOOL_INTERIM, &arguments(), &handle);
 
     let (_status, first) = post(&state, &body).await;
@@ -444,8 +478,8 @@ async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
 /// may order the two either way.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ac_mrtr_5c_two_racing_redemptions_yield_exactly_one_success() {
-    let (state, _received) = state_with_fixture().await;
-    let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &arguments()).await;
+    let (state, received) = state_with_fixture().await;
+    let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &arguments()).await;
     let body = retry_body(1, TOOL_INTERIM, &arguments(), &handle);
 
     let (left, right) = {
@@ -636,8 +670,7 @@ async fn fixture_control_a_fresh_call_reaches_the_backend() {
 async fn fixture_control_a_valid_retry_reaches_the_backend() {
     let (state, received) = state_with_fixture().await;
     let args = arguments();
-    let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &args).await;
-    received.lock().expect("recorder").clear();
+    let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &args).await;
 
     let (_status, response) = post(&state, &retry_body(1, TOOL_INTERIM, &args, &handle)).await;
 
@@ -704,7 +737,7 @@ async fn ac_mrtr_1_a_retry_reaches_the_backend_carrying_what_it_continued() {
         let state = app_state();
         let (url, received) = spawn_fixture_backend().await;
         register_fixture_backend(&state, &url);
-        let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &arguments()).await;
+        let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &arguments()).await;
 
         let body = retry_via_invoke(
             index as u64 + 1,
@@ -874,9 +907,9 @@ fn tamper(handle: &str) -> String {
 #[tokio::test]
 async fn ac_mrtr_3_every_forged_presentation_is_refused_by_the_continuation_guard() {
     // GIVEN: a genuine handle, and four ways a client can present something else.
-    let (state, _received) = state_with_fixture().await;
+    let (state, received) = state_with_fixture().await;
     let args = arguments();
-    let genuine = mint_for(&state, CALLER_A, TOOL_INTERIM, &args).await;
+    let genuine = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &args).await;
 
     let presentations = [
         (
@@ -926,9 +959,9 @@ async fn ac_mrtr_3_every_forged_presentation_is_refused_by_the_continuation_guar
 #[tokio::test]
 async fn ac_mrtr_3_a_genuine_handle_is_still_accepted() {
     // GIVEN: the handle this gateway minted, for this principal and this call.
-    let (state, _received) = state_with_fixture().await;
+    let (state, received) = state_with_fixture().await;
     let args = arguments();
-    let genuine = mint_for(&state, CALLER_A, TOOL_INTERIM, &args).await;
+    let genuine = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &args).await;
 
     // WHEN: presented unaltered.
     let (_, response) = post(&state, &retry_body(1, TOOL_INTERIM, &args, &genuine)).await;
@@ -1084,7 +1117,7 @@ async fn ac_mrtr_6_a_retry_at_another_replica_is_refused_and_opens_no_exchange()
     register_fixture_backend(&origin, &url);
     register_fixture_backend(&neighbour, &url);
     let args = arguments();
-    let handle = mint_for(&origin, CALLER_A, TOOL_INTERIM, &args).await;
+    let handle = mint_for(&origin, &received, CALLER_A, TOOL_INTERIM, &args).await;
     // The exchange the origin is holding. Staged directly: no non-test caller
     // writes to this table yet, and `Payload` carries no hold key, so "the hold
     // for this handle" cannot be expressed — what can be is that the origin
@@ -1095,9 +1128,6 @@ async fn ac_mrtr_6_a_retry_at_another_replica_is_refused_and_opens_no_exchange()
         .hold(BACKEND, now_secs() + 60)
         .await
         .expect("the bounded table must admit one exchange");
-    // The origin's own mint reached the backend; only what the neighbour does
-    // with the handle is on trial here.
-    received.lock().expect("recorder").clear();
 
     // WHEN: the retry lands on B, as a round-robin balancer will send it.
     let (_status, response) = post(&neighbour, &retry_body(1, TOOL_INTERIM, &args, &handle)).await;
@@ -1167,7 +1197,7 @@ async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused(
     let (url, received) = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);
     let args = arguments();
-    let handle = mint_for(&state, CALLER_A, TOOL_INTERIM, &args).await;
+    let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &args).await;
     let held = state
         .continuation
         .in_flight()
@@ -1227,7 +1257,7 @@ async fn ac_mrtr_5d_one_handle_retried_at_two_replicas_yields_one_backend_call()
     register_fixture_backend(&origin, &origin_url);
     register_fixture_backend(&neighbour, &neighbour_url);
     let args = arguments();
-    let handle = mint_for(&origin, CALLER_A, TOOL_INTERIM, &args).await;
+    let handle = mint_for(&origin, &origin_calls, CALLER_A, TOOL_INTERIM, &args).await;
 
     // WHEN: both land together. `join` rather than sequential posts, so a
     // check-then-insert ledger has the window it needs to be wrong in.
