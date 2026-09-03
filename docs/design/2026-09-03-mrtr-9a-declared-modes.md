@@ -12,8 +12,13 @@
   hold one of them is a design for a caller that does not exist.
 - `MRTR.9b`. A separate row with a separate criterion.
 - Every `DE-9a` continuation variant. This change creates none; it adds no
-  new error code at all. `DE-9`'s payload *shape* is in scope, because the
-  refusal has to carry something (see *The DE-9 sub-decision* below).
+  new error code at all.
+- `DE-9` itself — which code an *unrecognised method* is refused with. The
+  wiring design expected it to land here; it does not, because a mode gate
+  never reclassifies a method. It is re-deferred with its four fields under
+  *Unknowns*, not answered (see *The DE-9 sub-decision* below). What **is** in
+  scope is the payload the *mode* refusal carries, because the refusal has to
+  carry something.
 - The declaration path for anything other than `_meta`-carried
   `clientCapabilities` — the era probe and per-backend detection are cluster B.
 - Widening `RequestFields` to answer questions no consumer asks.
@@ -78,6 +83,36 @@ spot:
 The first premise — "every consumer asks the same question" — is what this
 change falsifies. One consumer now asks a second question. The economy stands;
 the flattening was correct for the question that existed when it was written.
+
+## Trust boundary and threats (DoR C6, C15)
+
+This change parses caller-controlled data before the caller has been admitted
+to anything, so the canonical readiness gates apply and are answered here
+rather than assumed.
+
+**Trust boundary (C15).** Tier: **unauth** — a capability declaration arrives in
+`_meta` on a request and is read before any admission decision uses it. Data
+locality: **local**; the declaration is parsed, reduced to a fixed set and
+dropped, and nothing about it is stored or forwarded. Partition behaviour:
+**N/A** — no distributed state, no replication, no consensus on this path.
+Crypto: **none introduced**, so `T1c` post-quantum readiness is N/A rather than
+deferred.
+
+**STRIDE (C6), short form.** Only three of the six bear on this path, and the
+mitigation for each is a part of this change rather than a promise:
+
+| | applies | mitigation |
+|---|---|---|
+| Spoofing | no | a client that over-declares a mode harms only itself; the gateway grants it nothing |
+| Tampering | no | the declaration is read, not written back or persisted |
+| Repudiation | no | no audit claim rests on the declared set |
+| **Information disclosure** | **yes** | `url` mode exists so that data other than the URL is *not* exposed to the client. Sending a url-mode request to a client that never declared url is the disclosure, and refusing it is this criterion |
+| **Denial of service** | **yes** | today's `Vec<String>` is caller-sized and retained pre-admission — an amplification this change closes by reducing to a fixed gateway-owned set at parse |
+| **Elevation of privilege** | **yes** | an undeclared mode is a capability the gateway hands a backend that was never granted it; the gate is the control |
+
+The information-disclosure and elevation rows are the same refusal seen from
+two ends, which is why one gate closes both. The denial-of-service row is
+independent of the criterion and would be worth doing on its own.
 
 ## Wire shape
 
@@ -186,7 +221,8 @@ amplification for a field lookup.
 ## The DE-9 sub-decision
 
 Binding decision 8 puts the `DE-9` error-code scope with this row. `DE-9` is the
-**payload shape of an unrecognised-method error** (wiring design `:663`). Its
+**error code an unrecognised input method is refused with** (wiring design
+`:663`, second finding). Its
 seven continuation variants are `DE-9a` (`:687`), a separate sub-decision this
 change does not touch — `MRTR.9a` is not a continuation redemption at all.
 
@@ -224,10 +260,20 @@ The refusal **message** changes too. Today it reads *"client did not declare the
 elicitation and not the mode. A refusal that misstates its own reason sends the
 client to fix something that is not broken.
 
-What remains is `DE-9`'s actual question — what the payload carries — and the
-existing convention already answers it. The refusal keeps code `-32021` and the
-`requiredCapabilities` field it already sets, and gains structured detail in
-`error.data`: the mode requested and the modes declared. A client that wants to
+`DE-9` itself stays open, and an earlier draft of this document closed it by
+restating it. It asked what code an *unrecognised method* is refused with, on
+the ground that `-32021` means a capability is missing when nothing is; this
+document answered a different question — what a *mode* refusal carries — and
+called `DE-9` resolved. A question answered by being reworded is not answered.
+It is re-deferred below with its four fields, and the wiring design's
+expectation that it would land here is what this paragraph corrects.
+
+What this change does settle is the mode refusal's own payload. It keeps code
+`-32021` and gains structured detail in `error.data`: the mode requested. It
+does **not** keep `requiredCapabilities`. That field names what the client must
+declare to succeed, and for a mode mismatch the client has already declared
+`elicitation` — repeating it is the same false instruction as the message this
+change is rewriting, in a field instead of a sentence. A client that wants to
 distinguish *mode* from *capability* reads a field; nothing has to learn a new
 code, and nothing in the error vocabulary becomes a contract this change is
 stuck supporting.
@@ -258,9 +304,10 @@ minted. A rollback must keep the field shape it shipped, or it breaks the
 clients that took the design at its word. Additive-and-stable is cheap to
 honour, and saying so here stops a later rollback discovering it.
 
-**Exit criteria.** `ac_mrtr_9a_a_url_mode_request_to_a_form_only_client_is_refused`
-is green on its own criterion assertion; `ac_mrtr_9a_a_form_mode_request_to_a_form_only_client_is_relayed`
-stays green; no other `DE-9a` variant is added; `cargo fmt --check` and
+**Exit criteria.** Every case in the sibling test plan passes — the matrix and
+cases 2 through 7, not only the two that predate it — and the existing suite
+stays green; `ac_mrtr_9a_a_url_mode_request_to_a_form_only_client_is_refused`
+is green on its own criterion assertion; no other `DE-9a` variant is added; `cargo fmt --check` and
 `cargo clippy --all-targets -- -D warnings` clean. Anything beyond that is a
 different row.
 
@@ -295,4 +342,16 @@ All four **resolved**; per §P1 each records the answer, not the plan to get one
   attribution of that default, and with it the reversibility argument: a
   gateway policy could be revisited, a MUST cannot.
 
-**Deferred:** none. Nothing in this change waits on an open question.
+**Deferred:** `DE-9` — what error code an unrecognised *input method* is
+refused with. **Owner:** the `DE-9` row of the wiring design, unmoved by this
+change. **What would resolve it:** a decision on whether an unclassifiable
+upstream method is a protocol error (`-32600`) or keeps a gateway-specific
+code, taken against the specification's error-handling sentence. **When:** with
+the next change that touches the unrecognised-method arm of the refusal path.
+**If it resolves badly:** a client keeps reading `-32021` for a malformed
+upstream response and retries a declaration that cannot help — today's
+behaviour, unchanged by this row and not worsened by it.
+
+Nothing in this change depends on that answer: the mode gate refuses a mode the
+client did not declare, which is a capability question, and it never
+reclassifies a method.
