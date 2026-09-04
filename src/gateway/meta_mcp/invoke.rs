@@ -1201,6 +1201,15 @@ impl MetaMcp {
                 &projection_key_suffix,
                 caller_principal.as_deref(),
                 caller.retry,
+                crate::cache::KeyContext {
+                    routing_profile: &profile.name,
+                    // No negotiated revision and no policy generation reach this
+                    // layer yet: revision is shaped downstream in the router and
+                    // no policy epoch exists to read. Accepted here so the seam
+                    // is the only place that has to change when they do.
+                    protocol_revision: None,
+                    policy_epoch: 0,
+                },
             );
             if let Some(cached) = cache.get(&cache_key) {
                 debug!(server, tool, trace_id, "Cache hit");
@@ -1767,6 +1776,15 @@ impl MetaMcp {
                 &projection_key_suffix,
                 caller_principal.as_deref(),
                 caller.retry,
+                crate::cache::KeyContext {
+                    routing_profile: &profile.name,
+                    // No negotiated revision and no policy generation reach this
+                    // layer yet: revision is shaped downstream in the router and
+                    // no policy epoch exists to read. Accepted here so the seam
+                    // is the only place that has to change when they do.
+                    protocol_revision: None,
+                    policy_epoch: 0,
+                },
             );
             if cache.set(&cache_key, result.clone(), self.default_cache_ttl) {
                 debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");

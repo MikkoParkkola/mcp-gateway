@@ -405,6 +405,13 @@ async fn ac_mrtr_5a_a_handle_is_refused_on_its_second_redemption() {
 /// payload is re-minted with two timestamps moved — and every other field is
 /// taken from a real production mint rather than rebuilt by hand.
 ///
+/// Both timestamps sit inside `CONTINUATION_LIFETIME_SECS`: the window is 100s
+/// wide so `mint` will still seal it, and the whole window is behind `now` so
+/// the handle is late. Widening it past the ceiling would stage a second defect
+/// and the refusal would name `LifetimeExceeded` instead — see
+/// `ac_mrtr_8b_a_handle_outliving_the_ceiling_cannot_be_redeemed`, which is
+/// where that belongs.
+///
 /// Hand-building all eight fields is what this avoids, and the avoidance is not
 /// stylistic: a hand-written `original_request_digest` silently drifted from the
 /// tool the retry posts, and a digest mismatch is refused by the *binding*
@@ -435,8 +442,8 @@ async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
         .expect("a handle the gateway just minted must open");
 
     let expired = Payload {
-        issued_at: now - 7200,
-        expires_at: now - 3600,
+        issued_at: now - 200,
+        expires_at: now - 100,
         ..minted
     };
     let handle = state

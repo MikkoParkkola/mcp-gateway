@@ -25,8 +25,12 @@ fn payload() -> Payload {
         principal_fingerprint: "sha256:caller-a".to_string(),
         original_request_digest: "sha256:req-1".to_string(),
         origin_replica: "gw-1".to_string(),
-        issued_at: 1_000,
-        expires_at: 2_000,
+        // 200s wide, and every `open` below is called at 1_500 inside it.
+        // `Keyring::mint` refuses a window wider than
+        // `CONTINUATION_LIFETIME_SECS` (300), so a fixture spanning
+        // 1_000..2_000 no longer seals — see MRTR.8b.
+        issued_at: 1_400,
+        expires_at: 1_600,
         jti: "jti-1".to_string(),
         hold_key: "exchange-1".to_string(),
     }
@@ -129,12 +133,12 @@ fn ac_mrtr_5_an_expired_envelope_is_refused() {
     let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
     let token = keyring.mint(&payload()).expect("mint");
     assert!(matches!(
-        keyring.open(&token, 2_001),
+        keyring.open(&token, 1_601),
         Err(ContinuationError::Expired)
     ));
     // And exactly at the boundary it is still live, so the rule is a deadline
     // rather than an off-by-one.
-    assert!(keyring.open(&token, 2_000).is_ok());
+    assert!(keyring.open(&token, 1_600).is_ok());
 }
 
 // ===========================================================================
@@ -806,8 +810,12 @@ mod hardening {
             principal_fingerprint: "sha256:caller-a".into(),
             original_request_digest: "sha256:req-1".into(),
             origin_replica: "gw-1".into(),
-            issued_at: 1_000,
-            expires_at: 2_000,
+            // 200s wide, and every `open` below is called at 1_500 inside it.
+            // `Keyring::mint` refuses a window wider than
+            // `CONTINUATION_LIFETIME_SECS` (300), so a fixture spanning
+            // 1_000..2_000 no longer seals — see MRTR.8b.
+            issued_at: 1_400,
+            expires_at: 1_600,
             jti: "jti-1".into(),
             hold_key: "exchange-1".into(),
         }
@@ -1019,8 +1027,12 @@ mod mint_budget {
             principal_fingerprint: "sha256:caller-a".into(),
             original_request_digest: "sha256:req-1".into(),
             origin_replica: "gw-1".into(),
-            issued_at: 1_000,
-            expires_at: 2_000,
+            // 200s wide, and every `open` below is called at 1_500 inside it.
+            // `Keyring::mint` refuses a window wider than
+            // `CONTINUATION_LIFETIME_SECS` (300), so a fixture spanning
+            // 1_000..2_000 no longer seals — see MRTR.8b.
+            issued_at: 1_400,
+            expires_at: 1_600,
             jti: "jti-1".into(),
             hold_key: "exchange-1".into(),
         }
@@ -1102,8 +1114,12 @@ mod envelope_size {
             principal_fingerprint: "sha256:caller-a".into(),
             original_request_digest: "sha256:req-1".into(),
             origin_replica: "gw-1".into(),
-            issued_at: 1_000,
-            expires_at: 2_000,
+            // 200s wide, and every `open` below is called at 1_500 inside it.
+            // `Keyring::mint` refuses a window wider than
+            // `CONTINUATION_LIFETIME_SECS` (300), so a fixture spanning
+            // 1_000..2_000 no longer seals — see MRTR.8b.
+            issued_at: 1_400,
+            expires_at: 1_600,
             jti: "jti-1".into(),
             hold_key: "exchange-1".into(),
         }

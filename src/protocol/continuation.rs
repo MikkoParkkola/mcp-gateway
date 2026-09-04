@@ -402,8 +402,25 @@ impl Keyring {
     /// Returns `Malformed` if the payload cannot be serialised or the system
     /// random source fails, and `MintBudgetExhausted` once this key has sealed
     /// its budget of envelopes (see [`MINT_BUDGET`]), and `TooLarge` when the
-    /// sealed envelope would exceed [`MAX_ENVELOPE_LEN`].
+    /// sealed envelope would exceed [`MAX_ENVELOPE_LEN`], and
+    /// `LifetimeExceeded` when the payload's window is wider than
+    /// [`CONTINUATION_LIFETIME_SECS`].
     pub fn mint(&self, payload: &Payload) -> Result<String, ContinuationError> {
+        // Ahead of the budget, so a refusal cannot consume one — the same
+        // reason the budget is charged before the nonce is drawn.
+        //
+        // `expiry_for` is the only deadline this gateway offers, and a caller
+        // that sets its own could offer any. Checked here rather than only at
+        // `open` because a bound applied at one end lets the gateway mint what
+        // it will later refuse; the same argument `MAX_ENVELOPE_LEN` makes.
+        //
+        // `saturating_sub` reads a backwards window (`expires_at` before
+        // `issued_at`) as zero rather than wrapping it into a legal width.
+        // Sealing one is harmless: it is already past its deadline, and
+        // `Expired` is the honest answer for it.
+        if payload.expires_at.saturating_sub(payload.issued_at) > CONTINUATION_LIFETIME_SECS {
+            return Err(ContinuationError::LifetimeExceeded);
+        }
         // Counted before the nonce is drawn, so a refusal cannot consume one.
         // Fetch-and-add rather than read-then-write: concurrent minters must not
         // be able to step past the budget between the two halves.
@@ -490,6 +507,16 @@ impl Keyring {
         // deadline is a field an attacker chose.
         if now > payload.expires_at {
             return Err(ContinuationError::Expired);
+        }
+        // After the deadline check, never before: a handle that is merely late
+        // must answer `Expired`, and an age older than the ceiling implies a
+        // passed deadline for every payload `mint` accepts. So this branch is
+        // unreachable today — it is what would refuse an envelope sealed by a
+        // build whose mint-side check was removed, which is the case the
+        // ceiling exists to survive. `saturating_add` keeps an absurd
+        // `issued_at` from wrapping the sum into the past and reading as fresh.
+        if now > payload.issued_at.saturating_add(CONTINUATION_LIFETIME_SECS) {
+            return Err(ContinuationError::LifetimeExceeded);
         }
         Ok(payload)
     }

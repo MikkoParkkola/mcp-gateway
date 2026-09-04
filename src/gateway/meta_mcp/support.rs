@@ -53,6 +53,10 @@ pub(super) fn idempotency_key_for(
 /// The retry discriminator is the MRTR.10 binding. A retry reuses the original
 /// call's arguments, so without it two continuations answering the same gate
 /// differently share one entry and the first answer is served for the second.
+///
+/// `context` is forwarded, not consumed here: the routing profile, protocol
+/// revision and policy generation belong to the key the cache layer derives,
+/// so this passes them down rather than mixing a discriminator of its own.
 pub(super) fn response_cache_key_for(
     server: &str,
     tool: &str,
@@ -60,6 +64,7 @@ pub(super) fn response_cache_key_for(
     projection_key_suffix: &str,
     principal: Option<&str>,
     retry: &crate::protocol::mrtr::RetryFields,
+    context: crate::cache::KeyContext<'_>,
 ) -> String {
     let base = crate::cache::ResponseCache::response_key(
         server,
@@ -67,6 +72,7 @@ pub(super) fn response_cache_key_for(
         arguments,
         projection_key_suffix,
         principal,
+        context,
     );
     format!("{base}{}", retry.key_discriminator())
 }
@@ -506,7 +512,15 @@ mod tests {
                 idempotency_key: None,
                 malformed: Vec::new(),
             };
-            super::response_cache_key_for("air", "book", &args, "", None, &retry)
+            super::response_cache_key_for(
+                "air",
+                "book",
+                &args,
+                "",
+                None,
+                &retry,
+                crate::cache::KeyContext::default(),
+            )
         };
         assert_ne!(
             key_for(json!({"confirm": "accept"})),
@@ -530,6 +544,7 @@ mod tests {
             "|proj",
             Some("actor-1"),
             &crate::protocol::mrtr::NO_RETRY,
+            crate::cache::KeyContext::default(),
         );
         let before = crate::cache::ResponseCache::response_key(
             "srv",
@@ -537,6 +552,7 @@ mod tests {
             &args,
             "|proj",
             Some("actor-1"),
+            crate::cache::KeyContext::default(),
         );
         assert_eq!(key, before);
     }
@@ -555,6 +571,7 @@ mod tests {
                 "",
                 Some(p),
                 &crate::protocol::mrtr::NO_RETRY,
+                crate::cache::KeyContext::default(),
             )
         };
         assert_ne!(k("actor-1"), k("actor-2"));
