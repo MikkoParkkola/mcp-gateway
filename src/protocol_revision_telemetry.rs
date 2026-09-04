@@ -61,6 +61,9 @@ impl Transport {
 }
 
 /// Filters that make a `tools/list` result session- or tenant-specific.
+// These are four independent, bounded metric dimensions, not mutually
+// exclusive states; an enum would obscure valid combinations.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ListFilters {
     /// API-key / principal assembly ran.
@@ -100,6 +103,9 @@ impl CacheScope {
 }
 
 /// One `tools/list` shadow observation. Never attached to the live response.
+// Mirrors ListFilters in test snapshots so each independent dimension remains
+// directly assertable.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolsListShadow {
     /// Whether a principal filter ran.
