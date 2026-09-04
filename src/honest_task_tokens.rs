@@ -44,6 +44,20 @@ impl TaskTokenRow {
     }
 }
 
+/// Presentation-only percentage derived from the exact integer token counts.
+///
+/// A very large `u64` can lose low-order bits when represented as `f64`, but
+/// that does not affect the retained counts or the `meta_wins` decision. The
+/// percentage is display data and does not drive control flow.
+#[allow(clippy::cast_precision_loss)]
+fn savings_percent(eager_tokens: u64, meta_tokens: u64) -> f64 {
+    if eager_tokens == 0 {
+        0.0
+    } else {
+        (1.0 - (meta_tokens as f64 / eager_tokens as f64)) * 100.0
+    }
+}
+
 /// Compare eager load against a meta-surface that pays `extra_discovery_turns`.
 ///
 /// A completed direct tool call is two requests (prompt + follow-up), each
@@ -59,11 +73,7 @@ pub fn task_tokens(n_tools: u64, extra_discovery_turns: u64) -> TaskTokenRow {
     let meta_tokens = README_META_TOOLS
         .saturating_mul(META_TOKENS_PER_TOOL)
         .saturating_mul(meta_turns);
-    let savings_percent = if eager_tokens == 0 {
-        0.0
-    } else {
-        (1.0 - (meta_tokens as f64 / eager_tokens as f64)) * 100.0
-    };
+    let savings_percent = savings_percent(eager_tokens, meta_tokens);
     TaskTokenRow {
         n_tools,
         extra_discovery_turns,
@@ -77,11 +87,7 @@ pub fn task_tokens(n_tools: u64, extra_discovery_turns: u64) -> TaskTokenRow {
 pub fn schema_only_first_request(n_tools: u64) -> TaskTokenRow {
     let eager_tokens = n_tools.saturating_mul(DIRECT_TOKENS_PER_TOOL);
     let meta_tokens = README_META_TOOLS.saturating_mul(META_TOKENS_PER_TOOL);
-    let savings_percent = if eager_tokens == 0 {
-        0.0
-    } else {
-        (1.0 - (meta_tokens as f64 / eager_tokens as f64)) * 100.0
-    };
+    let savings_percent = savings_percent(eager_tokens, meta_tokens);
     TaskTokenRow {
         n_tools,
         extra_discovery_turns: 0,
