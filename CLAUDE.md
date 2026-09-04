@@ -116,7 +116,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 
 ## Current Status
 
-- **v3.5.1** · Rust 1.88+ · Edition 2024 · ~101K LOC · MIT core + PolyForm Noncommercial EE
+- **v3.5.1** · Rust 1.95+ · Edition 2024 · ~101K LOC · MIT core + PolyForm Noncommercial EE
 - Published on crates.io + Homebrew + npm + ghcr.io container images + Glama + VS Code + Cursor one-click install
 - **Meta-MCP surface**: 14-16 tools in production scenarios (README benchmark scenario)
 - **Capability backends**: 110+ REST capabilities + MCP backends routed via the same surface
