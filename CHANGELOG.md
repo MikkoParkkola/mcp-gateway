@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.1] - 2026-09-04
+
 ### Changed
 
 - **`gateway_search` returns L0 by default** (MIK-7084): tool name, one-line purpose, and score. `detail=l1` adds signature, when-to-use, and required params; `detail=l2` returns the full `input_schema`. `include_schema=true` still maps to L2 and is deprecated, not removed. Ranking diagnostics (`ranking` reasons and signals) are omitted unless `explain=true`. `gateway_search_tools` also omits `ranking` unless `explain=true`.
@@ -32,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the transport's `pending` map on drop, so a late response finds no
   dangling sender and the map does not grow across reconnect loops.
   ([@terafin](https://github.com/terafin), [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465))
+- **Unreadable gateway config now reports a diagnosis** instead of a generic
+  failure, so a permissions or parse problem is visible at startup.
+  ([#461](https://github.com/MikkoParkkola/mcp-gateway/pull/461))
+- **Sampling POST-backs are bound to the prompted session**, so a late
+  sampling response cannot land on a different client.
+- **Glob L0 ranking drops disabled tools** and still assigns a score, so
+  search results do not advertise tools the operator turned off.
+  ([#470](https://github.com/MikkoParkkola/mcp-gateway/pull/470))
 
 ## [3.5.0] - 2026-08-28
 
@@ -1315,6 +1325,7 @@ credential path.
 - Configuration via YAML with Pydantic validation
 - systemd/launchd service templates
 
+[3.5.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.0...v3.5.1
 [3.5.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.4.0...v3.5.0
 [2.10.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.9.1...v2.10.0
 [2.9.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.9.0...v2.9.1
