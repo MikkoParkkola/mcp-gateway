@@ -855,3 +855,43 @@ The branch does not merge while any row here is still red, which is the same con
 "clusters A and C have landed". Nothing is quarantined and nothing is skipped: the
 failures are true, and hiding them behind `#[ignore]` would trade a true signal for an
 invisible one on a branch four sessions share.
+
+## MRTR.7a/7b is a transport increment, not wiring
+
+The rollup and this board both described the legacy-client bridge as the one unwired
+mechanism in cluster A, which reads as a missing call site. The approved design
+(`docs/design/2026-09-01-mrtr7-legacy-client-bridge.md`) mandates considerably more, all
+inside this increment:
+
+| part | why it is not optional |
+|---|---|
+| closed `ServerRequest` enum with per-variant answer projection | the design rejects a method-string forwarder outright — it would let a backend reach any client method on the gateway's authority |
+| `ClientChannel` over SSE **and** stdio | `send_to_session` (`src/gateway/streaming.rs:254`) is SSE-only, and every server-initiated request goes through it |
+| per-session client-capability store built at `initialize` | `rg 'ClientChannel|session_capabilities|SessionCapabilit' src/` returns zero hits; nothing retains `ClientCapabilities` today |
+| five bounds constants | — |
+| concurrency refactor of the stdio serve loop (`src/gateway/server/mod.rs:1564`) | the loop reads one line and dispatches to completion, so awaiting a client reply inside dispatch blocks the only reader that could deliver it — a deadlock until timeout, not a slowdown |
+
+Roughly 800-1500 lines across `src/protocol/`, `src/gateway/server/`, `streaming.rs` and
+the invoke path. Its bridge site is `invoke_tool_traced`
+(`src/gateway/meta_mcp/invoke.rs:525`), which cluster D currently holds. Attaching one
+level up at `handle_tools_call` does not avoid the collision: the interim classification
+at `invoke.rs:1471` is entangled with the local idempotency reservation, which leaves an
+interim result deliberately unsettled so a retry can be served.
+
+Review status is also thinner than `gap-plan.md:654` reads — one vendor, `SHIP`, on a
+head the design has since moved past by six commits. Under §12 that is not a passed dual
+gate on the current head.
+
+## MRTR.8b — reclamation is capacity-triggered, not time-triggered
+
+The PARTIAL on row 133 has a specific cause. `reclaim_abandoned` is called from exactly
+one place: inside the `held.len() >= self.capacity` branch of `InFlight::hold`
+(`src/protocol/continuation.rs:659-680`). `InFlight::reap` has no production caller at
+all — the `reap` matches elsewhere belong to a different type in `session_lifecycle.rs`.
+
+So a table below capacity never reclaims. The count bound holds (that is `8a`, MET), but
+an entry past its `expires_at` is dropped only when a new hold arrives while the table is
+full. If traffic stops, expired state persists indefinitely. The requirement
+(`requirements.md:183`) demands bounded **lifetime** and reclamation on abandonment: the
+abandonment arm holds under pressure, the lifetime arm does not hold at rest. `NFR.PERF.3`
+records the same gap and adds that no soak exists to observe it.
