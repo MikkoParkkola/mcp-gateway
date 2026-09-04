@@ -1708,6 +1708,31 @@ impl Gateway {
             }
             "initialize" => meta_mcp.handle_initialize(id, params.as_ref(), Some(session_id), None),
             "tools/list" => {
+                // NFR.OBS.2, stdio. The same record the HTTP path writes at
+                // `router/handlers.rs`, which stdio never reaches. Written
+                // before the list is built, so it cannot be derived from the
+                // answer it exists to check.
+                //
+                // Three of the fields are constant on this transport and are
+                // written as the constants they are: stdio carries no headers,
+                // so no request names a profile; there is no URL to carry a
+                // code-mode override; and a stdio result is never decorated
+                // with `cacheScope`, so the scope is recorded as computed and
+                // separately reported as not advertised.
+                let query_present = params
+                    .as_ref()
+                    .and_then(|p| p.get("query"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|query| !query.is_empty());
+                info!(
+                    target: "mcp_gateway::observed",
+                    profile = "none",
+                    code_mode = meta_mcp.code_mode_enabled,
+                    query_present,
+                    cache_scope = crate::protocol::cacheable::scope_for_method("tools/list").as_str(),
+                    cache_scope_advertised = false,
+                    "tools/list surface inputs and cache scope"
+                );
                 meta_mcp.handle_tools_list_with_params(id, params.as_ref(), Some(session_id))
             }
             "tools/call" => {
