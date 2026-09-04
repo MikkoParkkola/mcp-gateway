@@ -535,6 +535,28 @@ mod http {
     }
 
     #[tokio::test]
+    async fn ac_stateless_6_every_removed_method_is_refused_on_the_modern_path() {
+        // Total over the constant the handler consults, not over the three
+        // methods the criterion happens to name: a test listing its own
+        // methods goes quiet the moment a sixth is removed, and the guard it
+        // is watching is the same `contains` either way.
+        for (method, id) in mcp_gateway::protocol::meta::REMOVED_IN_2026_07_28
+            .iter()
+            .zip(900i64..)
+        {
+            let mut request = modern_tools_list(id);
+            request["method"] = json!(method);
+            let (status, _, body) = post_mcp(request).await;
+
+            assert_eq!(status, StatusCode::NOT_FOUND, "{method}: {body}");
+            assert_eq!(
+                body["error"]["code"], -32601,
+                "{method} is removed in 2026-07-28 and must be refused: {body}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn ac_stateless_6_ping_still_works_on_the_legacy_path() {
         // The regression. A version-blind removal satisfies the row above and
         // breaks every 2025 client's health check — and this gateway's own
