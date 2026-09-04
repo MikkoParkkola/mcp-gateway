@@ -221,8 +221,8 @@ acting as a network proxy.**
 | # | Cloudflare Component | mcp-gateway Equivalent | Verdict | Evidence |
 |---|---------------------|----------------------|---------|---------|
 | 1 | **Remote MCP servers** (Workers, global edge, CI/CD governed, monorepo template) | HTTP backends (`transport.url`), capability YAML, stdio backends. No edge deployment, no CI/CD template. | **MATCH** on decoupling; **LAG** on enterprise governance scaffolding | `src/backend/`, `src/capability/`, `src/transport/` |
-| 2 | **Cloudflare Access** (SSO/MFA/device certs, OIDC, Zero Trust) | Bearer token auth, API key auth for inbound. OAuth 2.0 PKCE for backend auth. No SSO/OIDC for MCP clients. | **LAG** — no client-facing SSO. Per-key quota (`gateway_cost_report`) is partial coverage. | `src/gateway/auth.rs`, `src/oauth/` |
-| 3 | **MCP Server Portals** (centralized discovery, per-user tool exposure, DLP guardrails, audit log) | `gateway_search_tools`, `gateway_list_servers`, routing profiles, `gateway_set_profile`. No DLP layer, no per-user tool filtering based on identity, no centralized org portal. | **MATCH** on discovery; **LAG** on governance/DLP/identity-based filtering | `src/routing_profile.rs`, `src/gateway/meta_mcp/search.rs` |
+| 2 | **Cloudflare Access** (SSO/MFA/device certs, OIDC, Zero Trust) | Opt-in generic inbound OIDC through the key server, either by exchanging an ID token for a short-lived scoped gateway token or by delegated-bearer verification. Identity-derived backend and tool scopes are enforced at dispatch. No packaged enterprise IdP onboarding or end-user SSO portal. | **MATCH** on generic OIDC and scoped authorization; **LAG** on packaged enterprise SSO, MFA, and device posture. | `src/config/features/key_server.rs`, `src/key_server/`, `src/gateway/router/authorization.rs` |
+| 3 | **MCP Server Portals** (centralized discovery, per-user tool exposure, DLP guardrails, audit log) | `gateway_search_tools`, `gateway_list_servers`, routing profiles, identity grants, and identity-derived tool scopes enforced at dispatch. No DLP layer or centralized organization portal. | **MATCH** on discovery and identity-scoped tool access; **LAG** on DLP and organization-wide portal governance. | `src/routing_profile.rs`, `src/identity_grants.rs`, `src/gateway/meta_mcp/search.rs` |
 | 4 | **AI Gateway** (LLM cost controls, provider switching, per-employee token budgets) | `gateway_cost_report`, `gateway_get_stats`, response cache. Does not intercept LLM calls; operates at tool layer only. | **LAG** — different architectural layer. AI Gateway sits between client and LLM; mcp-gateway sits between client and tools. Cross-reference: Linear MIK-2938 (airlok). | `src/stats.rs`, `src/cache.rs` |
 | 5 | **Code Mode** (search+execute, fixed token cost, V8 sandbox) | `gateway_search` + `gateway_execute` (Code Mode already shipped). URL toggle is static config; no V8 sandbox. | **MATCH** on search+execute; **LAG** on URL-param toggle and sandbox execution | `src/gateway/meta_mcp_tool_defs.rs:563`, `src/gateway/meta_mcp/search.rs:221`, `src/config/features/code_mode.rs` |
 
@@ -231,8 +231,8 @@ acting as a network proxy.**
 | Verdict | Components |
 |---------|-----------|
 | **LEAD** | None — Cloudflare's enterprise architecture has broader infrastructure leverage |
-| **MATCH** | Remote MCP decoupling (1), Tool discovery (3-discovery), Code Mode search+execute (5) |
-| **LAG** | Enterprise auth/SSO (2), Governance/DLP portal (3-governance), AI Gateway layer (4), URL-param toggle (5-toggle) |
+| **MATCH** | Remote MCP decoupling (1), generic OIDC and scoped authorization (2), tool discovery and identity-scoped access (3), Code Mode search+execute (5) |
+| **LAG** | Packaged enterprise SSO/MFA/device posture (2), DLP and organization portal governance (3), AI Gateway layer (4), URL-param toggle (5-toggle) |
 
 ---
 
@@ -241,8 +241,8 @@ acting as a network proxy.**
 | Sub-issue | Priority | Effort | Notes |
 |-----------|----------|--------|-------|
 | Per-connection Code Mode URL toggle (`?codemode=search_and_execute`) | Medium | Small | Safe, isolated, HTTP router change |
-| Client SSO/OIDC integration for incoming MCP connections | Low | Large | Major auth scope; LAG is acceptable for local-first use |
-| Identity-based tool filtering in routing profiles | Low | Medium | Profiles exist; needs identity context from auth layer |
+| Packaged enterprise SSO onboarding and device-posture integration | Low | Large | Generic OIDC and identity-derived scopes exist; the remaining gap is the managed enterprise product layer |
+| Organization portal and DLP policy layer | Low | Large | Identity-scoped access exists; centralized administration and content policy do not |
 
 **AI Gateway gap** (Component 4) maps to **Linear MIK-2938 airlok** — no sub-issue needed here.
 

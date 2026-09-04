@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Competitive shadow-scan guidance now stays portable and loadable.** The
+  public-repository check no longer depends on GNU-only `grep -P`, and the
+  generated Nginx example preserves quoted and escaped log values.
+
 ## [3.5.1] - 2026-09-04
 
 ### Changed
