@@ -21,10 +21,10 @@ without an assessment no longer are.
 
 Of the blocking NFRs, six are not independent work: NFR.SEC.2-4, NFR.OBS.4 and NFR.PERF.3
 all verify the MIK-7212 continuation envelope, and NFR.OBS.3 verifies MIK-7217 era detection.
-The two are at different stages: the continuation envelope is wired and green, so its five rows
-need recorded evidence over a path that exists; era detection is unwired, so NFR.OBS.3 cannot
-close before the mechanism does. Closing a cluster does not close its NFR rows either, since each
-still needs its own evidence.
+Both mechanisms are now wired and green, so all six rows need recorded evidence over a path that
+exists rather than a mechanism to be built. NFR.OBS.3 closed on 2026-09-04 once era detection was
+observable. Closing a cluster does not close its NFR rows either, since each still needs its own
+evidence.
 
 Two are known without a sweep. NFR.SEC.5 is now met: all four of its command gates were run on
 this worktree on 2026-09-01 — `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`
@@ -342,7 +342,8 @@ called at `:1301`; 18 + 25 passing at `b5d4ce7f`). Its remaining rows are EVIDEN
 a path that exists — recorded runs and the five NFR rows that verify it — not mechanism, which
 is why they can be produced alongside other work rather than gating it. CONFIRM.2 follows it.
 What is left with no design, no test plan and no code is the revision surface (MIK-7272, seven
-rows, five separate half-wirings) and era detection's `NFR.OBS.3`. Those are the schedule now.
+rows, five separate half-wirings). Era detection's `NFR.OBS.3` landed on 2026-09-04, leaving
+`DISCOVER.5`'s discard record as cluster B's only open row. The revision surface is the schedule now.
 
 **Wave 5 — the two measurements.** `NFR.PERF.1` needs a P50 and a P99 that the component
 session on `spark` could not produce: no wire, no backend, no queue, therefore no latency

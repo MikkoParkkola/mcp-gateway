@@ -676,8 +676,9 @@ the GPT reviewer is usage-limited until then.
 `src/backend/era.rs` exists and `Backend` carries an `Arc<EraCache>` that lifecycle resolves once
 per start. That closes the "called from nothing" half of the cluster-B row in the rollup. It does
 not close the cluster: **no request path reads the cached era to choose a request shape**, so
-`DISCOVER.4` and `DISCOVER.5` remain blocking on the consuming side, and `NFR.OBS.3` still has no
-counter.
+`DISCOVER.4` and `DISCOVER.5` remained blocking on the consuming side. `DISCOVER.4a/4b/5a/5b` have
+since landed, and `NFR.OBS.3` closed on 2026-09-04: an `EraObservation` per backend, rendered by
+`gateway_list_servers` and recorded as `era_probe`/`era_cache`/`era_invalidated`.
 
 Two lifetime limits of the cache are recorded here rather than filed, because they bound what the
 consuming side may assume. The cache is per-`Backend` and shared across every `PoolKey` slot, so
