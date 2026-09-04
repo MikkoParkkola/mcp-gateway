@@ -14,7 +14,10 @@
     ],
     "trials_per_mode_and_size": 2,
     "direct_surface": "all generated tools exposed",
-    "meta_surface": "gateway_search_tools plus gateway_invoke",
+    "meta_surface": "two synthetic tools: gateway_search_tools plus gateway_invoke",
+    "system_under_test": "isolated benchmark MCP server; the mcp-gateway binary is not in the request path",
+    "search_behavior": "extract the requested case number; fall back to the runner-provided expected index when no number is present",
+    "host_configuration": "plugins and apps disabled; memories and host skill discovery disabled; the host may still report shortened-skill and under-development-feature warnings",
     "latency_scope": "full codex process wall time",
     "token_source": "codex turn.completed usage input_tokens and output_tokens",
     "success_rule": "correct final tool plus exact returned proof marker in final answer"

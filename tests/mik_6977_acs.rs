@@ -16,6 +16,10 @@ fn readme() -> String {
     fs::read_to_string(repo_file("README.md")).expect("README.md")
 }
 
+fn read(path: &str) -> String {
+    fs::read_to_string(repo_file(path)).unwrap_or_else(|error| panic!("{path}: {error}"))
+}
+
 #[test]
 fn mik6977_bench_1_matrix_exists_and_can_lose() {
     assert_eq!(TOOL_COUNTS, [50, 100, 200, 500]);
@@ -80,6 +84,15 @@ fn mik6977_bench_2_live_artifact_covers_the_matrix_and_can_lose() {
     .expect("valid live benchmark JSON");
     assert_eq!(artifact["schema_version"], "mik-6977.live-agent.v1");
     assert_eq!(
+        artifact["method"]["system_under_test"],
+        "isolated benchmark MCP server; the mcp-gateway binary is not in the request path"
+    );
+    assert!(
+        artifact["method"]["meta_surface"]
+            .as_str()
+            .is_some_and(|surface| surface.contains("two synthetic tools"))
+    );
+    assert_eq!(
         artifact["method"]["catalog_sizes"],
         serde_json::json!([50, 100, 200, 500])
     );
@@ -103,4 +116,17 @@ fn mik6977_bench_2_live_artifact_covers_the_matrix_and_can_lose() {
             .as_f64()
             .is_some_and(|saving| saving < 0.0)
     }));
+}
+
+#[test]
+fn mik6977_claim_3_compact_surfaces_match_the_canonical_tool_counts() {
+    let llms = read("llms.txt");
+    assert!(llms.contains("7.1-16.1% more input tokens"));
+    assert!(!llms.contains("1.3-16.1% more input tokens"));
+
+    let library_docs = read("src/lib.rs");
+    assert!(library_docs.contains("14 tools minimum"));
+    assert!(library_docs.contains("16 in the README benchmark scenario"));
+    assert!(library_docs.contains("17 when webhook status is surfaced"));
+    assert!(!library_docs.contains("12 tools minimum"));
 }

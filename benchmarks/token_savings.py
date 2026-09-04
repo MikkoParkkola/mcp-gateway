@@ -205,13 +205,7 @@ GATEWAY_TOOLS = [
     ),
     make_gateway_tool_definition(
         "gateway_get_stats",
-        "Get usage statistics including invocations, cache hits, token savings, and top tools.",
-        properties={
-            "price_per_million": {
-                "type": "number",
-                "description": "Token price per million for cost calculations.",
-            }
-        },
+        "Get observed usage statistics including invocations and cache hits, plus top tools.",
     ),
     make_gateway_tool_definition(
         "gateway_cost_report",

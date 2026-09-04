@@ -71,19 +71,26 @@ def parse_events(stdout: str) -> tuple[dict[str, int], str, list[str], list[str]
     return usage, "\n".join(messages), errors, warnings
 
 
-def read_calls(path: Path) -> list[dict[str, Any]]:
+def read_calls(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
     if not path.exists():
-        return []
+        return [], [f"call log was not created: {path}"]
     calls = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        event = json.loads(line)
+    errors = []
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as error:
+            errors.append(f"invalid call log line {line_number}: {error.msg}")
+            continue
         if event.get("event") == "tool_call":
             calls.append(event)
-    return calls
+    return calls, errors
 
 
 def target_index(n_tools: int, trial: int) -> int:
-    return (n_tools * 37 + trial * 131 + 7) % n_tools
+    return (trial * 131 + 7) % n_tools
 
 
 def run_trial(
@@ -164,7 +171,7 @@ def run_trial(
             stderr = stderr.decode(errors="replace")
         elapsed_ms = (time.perf_counter() - started) * 1000
         usage, final_message, event_errors, event_warnings = parse_events(stdout)
-        calls = read_calls(call_log)
+        calls, call_log_errors = read_calls(call_log)
         selected_tool = next(
             (
                 str(call.get("selected_tool"))
@@ -177,7 +184,7 @@ def run_trial(
         task_success = (
             selection_correct and proof in final_message and process_exit == 0
         )
-        errors = event_errors
+        errors = [*event_errors, *call_log_errors]
         if process_exit != 0 and stderr.strip():
             errors.append(stderr.strip()[-500:])
         input_tokens = usage.get("input_tokens")
@@ -293,7 +300,10 @@ def main() -> None:
             "catalog_sizes": sizes,
             "trials_per_mode_and_size": args.trials,
             "direct_surface": "all generated tools exposed",
-            "meta_surface": "gateway_search_tools plus gateway_invoke",
+            "meta_surface": "two synthetic tools: gateway_search_tools plus gateway_invoke",
+            "system_under_test": "isolated benchmark MCP server; the mcp-gateway binary is not in the request path",
+            "search_behavior": "extract the requested case number; fall back to the runner-provided expected index when no number is present",
+            "host_configuration": "plugins and apps disabled; memories and host skill discovery disabled; the host may still report shortened-skill and under-development-feature warnings",
             "latency_scope": "full codex process wall time",
             "token_source": "codex turn.completed usage input_tokens and output_tokens",
             "success_rule": "correct final tool plus exact returned proof marker in final answer",
@@ -305,7 +315,14 @@ def main() -> None:
     args.output_json.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report["summary"], indent=2))
     if any(
-        result.process_exit != 0 or result.input_tokens is None for result in results
+        result.process_exit != 0
+        or result.input_tokens is None
+        or result.output_tokens is None
+        or result.total_tokens is None
+        or not result.selection_correct
+        or not result.task_success
+        or bool(result.errors)
+        for result in results
     ):
         raise SystemExit(1)
 

@@ -42,12 +42,12 @@ tools, then stayed near 80,000 at 200 and 500. The host compacted those larger
 lists, so only the 50- and 100-tool rows measure a direct catalog that still
 scaled with the configured size.
 
-| Permitted tools | Direct total task tokens | Meta total task tokens | Meta input-token saving | Direct / meta median latency | Extra meta turns |
+| Permitted tools | Direct mean total task tokens (range) | Meta mean total task tokens (range) | Meta input-token saving, mean | Direct / meta median latency | Extra meta turns |
 |---:|---:|---:|---:|---:|---:|
-| 50 | 70,211 | 81,593 | -16.08% | 15.1s / 21.3s | 1 |
-| 100 | 79,949 | 85,638 | -7.11% | 15.6s / 20.1s | 1 |
-| 200 | 80,358 | 81,676 | -1.47% | 18.3s / 21.9s | 1 |
-| 500 | 80,505 | 81,566 | -1.26% | 15.3s / 21.7s | 1 |
+| 50 | 70,211 (70,187–70,234) | 81,593 (81,478–81,707) | -16.08% | 15.1s / 21.3s | 1 |
+| 100 | 79,949 (79,930–79,967) | 85,638 (81,495–89,780) | -7.11% | 15.6s / 20.1s | 1 |
+| 200 | 80,358 (80,336–80,380) | 81,676 (81,514–81,838) | -1.47% | 18.3s / 21.9s | 1 |
+| 500 | 80,505 (80,402–80,608) | 81,566 (81,501–81,631) | -1.26% | 15.3s / 21.7s | 1 |
 
 This result does not support a completed-task token-savings claim. At 50 and
 100 tools, the meta surface used 7.1–16.1% more input tokens and added one turn.
@@ -57,11 +57,19 @@ It remains useful as a catalog-capacity boundary, but we do not lead with the
 schema-only 89% model as a task result.
 
 The benchmark is deliberately narrow. It uses one agent and model with two
-trials per cell. Four trials ran concurrently, so the latency values are
-exploratory. The tools are generated around an exact numeric target, and there
-is no real backend latency. Total task tokens include the Codex host context.
-Use the checked-in per-trial artifact to inspect the measurements; do not
-generalize them to other models or workloads.
+trials per cell; the ranges above show both observations. Four trials ran
+concurrently, so the latency values are exploratory. An isolated benchmark MCP
+server generated the catalog around an exact numeric target. The mcp-gateway
+binary was not in the request path. The direct path exposed all generated tools;
+the meta path exposed only
+the synthetic `gateway_search_tools` and `gateway_invoke` pair, not the 14–17
+tool product surface. Search extracted the requested number and otherwise fell
+back to the expected index supplied by the runner. Plugins and apps were
+disabled, as were memories and host skill discovery. The recorded warnings note the
+under-development flag and shortened skill descriptions. There is no real
+backend latency. Total task tokens include the Codex host context. Use the
+checked-in per-trial artifact to inspect the measurements; do not generalize
+them to other models or workloads.
 
 ```bash
 python benchmarks/live_agent_tool_selection.py \
@@ -86,11 +94,6 @@ Reference scenario assumptions:
 The base discovery quartet stays constant, and the README benchmark scenario adds stats, cost report, playbooks, profile controls, disabled-capability listing, and reload. Surfacing webhook status adds the 17th tool.
 
 This yields the schema-only first-request numbers: **~1600 gateway tokens** and **89% smaller**, with a modeled **$201 per 1K requests**. It is not a completed-task saving. Extra discovery turns (`gateway_search_tools` then `gateway_invoke`) reload that surface and carry accumulated discovery responses. The in-tree `honest_task_tokens` model counts both and is allowed to report a loss. `benchmarks/discovery_response_fixture.json` is a synthetic L0 lower-bound fixture with the exact `build_search_response` envelope, not a captured production response. The live run above measures selection and task completion. It also records latency, turns, and task tokens.
-
-With the current 100-token synthetic response fixture, the default completed-task
-case at 100 tools is 30,000 eager tokens versus 5,000 gateway tokens (83.3%
-savings). The registered 20-extra-turn loss case is 30,000 versus 54,500 tokens
-(-81.7% savings).
 
 ## Memory Usage
 
