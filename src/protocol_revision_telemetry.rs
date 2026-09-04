@@ -248,6 +248,7 @@ pub struct DurableTelemetrySink {
     lock_path: PathBuf,
     previous_snapshot: Snapshot,
     previous_shadow: BTreeMap<String, u64>,
+    parent_sync_pending: bool,
 }
 
 impl DurableTelemetrySink {
@@ -264,6 +265,7 @@ impl DurableTelemetrySink {
                 read_window_file(&window_path)?;
             } else {
                 write_window_atomic(&window_path, &DurableWindow::empty(unix_seconds()?))?;
+                sync_parent_directory(&window_path)?;
             }
         }
         Ok(Self {
@@ -271,6 +273,7 @@ impl DurableTelemetrySink {
             lock_path,
             previous_snapshot: Snapshot::default(),
             previous_shadow: empty_shadow_counts(),
+            parent_sync_pending: false,
         })
     }
 
@@ -300,9 +303,23 @@ impl DurableTelemetrySink {
         current_shadow: BTreeMap<String, u64>,
         now: u64,
     ) -> io::Result<()> {
+        self.persist_with_parent_sync(current, current_shadow, now, sync_parent_directory)
+    }
+
+    fn persist_with_parent_sync(
+        &mut self,
+        current: Snapshot,
+        current_shadow: BTreeMap<String, u64>,
+        now: u64,
+        sync_parent: impl FnOnce(&Path) -> io::Result<()>,
+    ) -> io::Result<()> {
         let snapshot_delta = snapshot_delta(&current, &self.previous_snapshot);
         let shadow_delta = map_delta(&current_shadow, &self.previous_shadow);
         if snapshot_delta.total == 0 && shadow_delta.values().all(|count| *count == 0) {
+            if self.parent_sync_pending {
+                sync_parent(&self.window_path)?;
+                self.parent_sync_pending = false;
+            }
             return Ok(());
         }
 
@@ -313,9 +330,11 @@ impl DurableTelemetrySink {
         window.updated_at_unix_seconds = window.updated_at_unix_seconds.max(now);
         validate_window(&window)?;
         write_window_atomic(&self.window_path, &window)?;
-
         self.previous_snapshot = current;
         self.previous_shadow = current_shadow;
+        self.parent_sync_pending = true;
+        sync_parent(&self.window_path)?;
+        self.parent_sync_pending = false;
         Ok(())
     }
 }
@@ -802,10 +821,6 @@ fn unix_seconds() -> io::Result<u64> {
 fn write_window_atomic(path: &Path, window: &DurableWindow) -> io::Result<()> {
     let bytes = serde_json::to_vec_pretty(window)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    #[cfg(unix)]
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "window has no parent"))?;
     let temporary = path.with_extension("json.tmp");
     {
         let mut options = OpenOptions::new();
@@ -818,8 +833,19 @@ fn write_window_atomic(path: &Path, window: &DurableWindow) -> io::Result<()> {
         file.sync_all()?;
     }
     std::fs::rename(&temporary, path)?;
-    #[cfg(unix)]
-    File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "window has no parent"))?;
+    File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
@@ -1355,6 +1381,42 @@ mod tests {
                 session: true,
                 request: false,
             }),
+            1
+        );
+    }
+
+    #[test]
+    fn committed_window_is_not_counted_twice_after_parent_sync_failure() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut sink = DurableTelemetrySink::open(directory.path()).expect("durable sink");
+        let mut registry = Registry::new();
+        registry.observe_request(Some("2025-11-25"), "codex", Transport::Stdio);
+
+        let error = sink
+            .persist_with_parent_sync(registry.snapshot(), registry.shadow_snapshot(), 1, |_| {
+                Err(io::Error::other("injected parent sync failure"))
+            })
+            .expect_err("parent sync must fail after the rename");
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert!(sink.parent_sync_pending);
+        assert_eq!(
+            load_durable_window(directory.path())
+                .unwrap()
+                .snapshot
+                .total,
+            1
+        );
+
+        sink.persist_with_parent_sync(registry.snapshot(), registry.shadow_snapshot(), 2, |_| {
+            Ok(())
+        })
+        .expect("retry pending parent sync");
+        assert!(!sink.parent_sync_pending);
+        assert_eq!(
+            load_durable_window(directory.path())
+                .unwrap()
+                .snapshot
+                .total,
             1
         );
     }
