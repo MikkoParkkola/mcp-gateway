@@ -242,6 +242,13 @@ pub enum ContinuationError {
     MintBudgetExhausted,
     /// Larger than [`MAX_ENVELOPE_LEN`], either presented or asked to be minted.
     TooLarge,
+    /// Its window is wider than [`CONTINUATION_LIFETIME_SECS`], either
+    /// presented or asked to be minted.
+    ///
+    /// Distinct from [`Self::Expired`], which says a deadline has passed. This
+    /// says the deadline was never one this gateway is willing to offer, so an
+    /// operator seeing it is looking at a minting bug, not at a slow client.
+    LifetimeExceeded,
 }
 
 impl ContinuationError {
@@ -271,6 +278,9 @@ impl std::fmt::Display for ContinuationError {
                 write!(f, "continuation key has exhausted its mint budget")
             }
             Self::TooLarge => write!(f, "continuation exceeds the permitted size"),
+            Self::LifetimeExceeded => {
+                write!(f, "continuation outlives the permitted lifetime")
+            }
         }
     }
 }

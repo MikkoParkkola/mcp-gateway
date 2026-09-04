@@ -458,6 +458,75 @@ async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
     assert_refused_by_the_continuation_guard(&response, "handle one hour past its deadline");
 }
 
+/// GIVEN a payload whose window is an hour wide, WHEN the gateway is asked to
+/// seal it, THEN the handle is unredeemable — refused at the mint, and refused
+/// at the open by any build that seals one anyway.
+///
+/// `CONTINUATION_LIFETIME_SECS` is the ceiling `expiry_for` mints at, and until
+/// this case nothing enforced it: `open` compared `now` against whatever
+/// `expires_at` the sealed payload carried, so a second mint site setting its
+/// own deadline could issue a handle valid for a century and the keyring would
+/// honour it. The AEAD seal means only this gateway can construct one — which
+/// makes this a guard against our own future code, not against a client.
+///
+/// Asserted at both ends for the reason `MAX_ENVELOPE_LEN` already is: a bound
+/// applied only when opening lets the gateway mint what it will later refuse.
+/// Only the mint refusal fires. The open branch is unreachable for any payload
+/// `mint` accepts — a legal window makes `now > expires_at` true first, so
+/// `Expired` answers — and this case says so rather than pretending to
+/// exercise it. The `Ok` arm below is what a build without the mint check
+/// would take.
+#[tokio::test]
+async fn ac_mrtr_8b_a_handle_outliving_the_ceiling_cannot_be_redeemed() {
+    let (state, received) = state_with_fixture().await;
+    let args = arguments();
+    let live = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &args).await;
+    let now = now_secs();
+    let minted = state
+        .continuation
+        .keyring()
+        .open(&live, now)
+        .expect("a handle the gateway just minted must open");
+
+    let stretched = Payload {
+        issued_at: now,
+        expires_at: now + 3600,
+        ..minted.clone()
+    };
+    match state.continuation.keyring().mint(&stretched) {
+        Err(ContinuationError::LifetimeExceeded) => {}
+        Err(other) => {
+            panic!("an overlong window must be refused as LifetimeExceeded, got {other}")
+        }
+        Ok(handle) => assert!(
+            matches!(
+                state.continuation.keyring().open(&handle, now),
+                Err(ContinuationError::LifetimeExceeded)
+            ),
+            "a build that seals an overlong window must still refuse to redeem it"
+        ),
+    }
+
+    // The positive control the ceiling needs. Production mints land exactly on
+    // it — `expiry_for` is `now + CONTINUATION_LIFETIME_SECS`, private to the
+    // module, which is why 300 is spelled out here — so a `>=` comparison would
+    // refuse every honest handle rather than only the overlong one.
+    let at_the_ceiling = Payload {
+        issued_at: now,
+        expires_at: now + 300,
+        ..minted
+    };
+    let handle = state
+        .continuation
+        .keyring()
+        .mint(&at_the_ceiling)
+        .expect("a window exactly the permitted width must still mint");
+    assert!(
+        state.continuation.keyring().open(&handle, now).is_ok(),
+        "a window exactly the permitted width must still redeem"
+    );
+}
+
 /// GIVEN one handle, WHEN two redemptions race on the minting process,
 /// THEN exactly one of them is refused.
 ///
