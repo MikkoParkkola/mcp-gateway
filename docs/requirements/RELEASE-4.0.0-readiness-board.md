@@ -895,3 +895,27 @@ full. If traffic stops, expired state persists indefinitely. The requirement
 (`requirements.md:183`) demands bounded **lifetime** and reclamation on abandonment: the
 abandonment arm holds under pressure, the lifetime arm does not hold at rest. `NFR.PERF.3`
 records the same gap and adds that no soak exists to observe it.
+
+## OPEN DECISION — is the revision on by default in 4.0.0?
+
+Put to the operator on 2026-09-04 and not yet answered. Recorded here as a deferred
+question under the design process rather than settled by whoever needs an answer first:
+parking the bridge work is a reduction in release scope, and that needs the requester's
+recorded agreement.
+
+| field | value |
+|---|---|
+| owner | the operator; nobody else may settle it |
+| what would resolve it | a choice between shipping the revision opt-in with the default flip deferred, and building the transport increment so that 4.0.0 flips it |
+| when | before cluster F is scheduled, and before any second-vendor review of the bridge design is commissioned |
+| if it resolves the other way | if the answer is "on by default in 4.0.0", the bridge becomes the release's critical path: a transport increment behind a file that cluster D holds, with its design review restarting on the current head |
+
+Nothing depending on it is being implemented. `MIK-7212.MRTR.7a` and `7b` are parked, not
+abandoned; `NFR.COMPAT.1` and `NFR.OBS.5` stay blocked behind them. Every cluster that does
+not depend on the answer continues meanwhile.
+
+The recommendation on the table is to ship opt-in and defer the flip. The increment is the
+single riskiest change in the backlog — it refactors the stdio serve loop, which today
+deadlocks if a dispatch awaits a client reply — and what it buys is a default value. The
+six operator-facing documents stating that the revision is off by default are true under
+that option and need no edits.
