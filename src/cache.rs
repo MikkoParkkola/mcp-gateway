@@ -108,6 +108,19 @@ pub struct KeyContext<'a> {
     pub policy_epoch: u64,
 }
 
+impl KeyContext<'_> {
+    /// Digest of the routing and policy inputs, hashed for the same reason the
+    /// principal is: a profile name is caller-controlled and must not reach the
+    /// key verbatim, and a fixed-width digest keeps the key bounded.
+    fn digest(&self) -> String {
+        canonical_json_sha256(&serde_json::json!({
+            "routing_profile": self.routing_profile,
+            "protocol_revision": self.protocol_revision,
+            "policy_epoch": self.policy_epoch,
+        }))
+    }
+}
+
 impl ResponseCache {
     /// Create a new empty cache with no size limit
     #[must_use]
