@@ -3,12 +3,16 @@
 **Work:** mcp-gateway (this repository)
 **Author:** Mikko Parkkola, Finland
 **Date of declaration:** 2026-07-12
+**Last amended:** 2026-09-04 (outside contributions recorded)
 
 ## Declaration
 
-Mikko Parkkola is the sole human author of mcp-gateway. As of this date there
-are no other human contributors. Where future contributions are accepted, they
-are governed by [`CLA.md`](CLA.md).
+Mikko Parkkola is the principal human author of mcp-gateway and the author of
+its protectable expression as described below. Outside contributions accepted
+into the work are listed under [Contributors](#contributors), together with
+whether that contributor's [`CLA.md`](CLA.md) acceptance is on record. Under
+that agreement a contributor grants the licences this project's licensing
+scheme requires while retaining copyright in their own contribution.
 
 The work is an original work of authorship. Its protectable expression — the
 architecture, module structure, control and data flow, interface design, naming,
@@ -47,6 +51,20 @@ This posture is consistent with the governing framework:
   AI-assisted material is copyrightable. *Thaler v. Perlmutter* (D.C. Cir. 2025)
   bars copyright only for works authored *solely* by AI with human input
   disclaimed — not this work.
+
+## Contributors
+
+Outside contributions accepted into the work, in the order they were merged. A
+contributor's acceptance of [`CLA.md`](CLA.md) is recorded in the pull request
+that introduced their first contribution; where that record is outstanding, or
+where the contribution predates [`CLA.md`](CLA.md) (added 2026-07-11), this
+table says so rather than implying an acceptance that was never given.
+
+| Contributor | Contribution | Pull request | CLA on record |
+|---|---|---|---|
+| Bryan Zick, submitted by [v4de](https://github.com/v4de) | `structuredContent` in responses from tools that declare an `outputSchema`, as the MCP 2025-06-18 spec requires | [#159](https://github.com/MikkoParkkola/mcp-gateway/pull/159) | **not applicable** — merged 2026-04-27, before `CLA.md` existed |
+| [v4de](https://github.com/v4de) | Rust 1.95 clippy, rustfmt and compilation fixes across ~15 sites | [#160](https://github.com/MikkoParkkola/mcp-gateway/pull/160) | **not applicable** — merged 2026-04-28, before `CLA.md` existed |
+| [terafin](https://github.com/terafin) | Parallel, timeout-bounded backend fan-out for `prompts/list` and `resources/list`; cancellation-safe cleanup of in-flight transport requests | [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465) | **outstanding** — requested 2026-09-04, after the merge |
 
 ## Third-party material
 

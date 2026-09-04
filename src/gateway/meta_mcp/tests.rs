@@ -2612,8 +2612,8 @@ async fn prompts_list_skips_hung_backend_within_timeout() {
         resp.error
     );
     assert!(
-        elapsed < Duration::from_secs(10),
-        "must skip hung backend quickly, took {:?}",
+        elapsed < Duration::from_secs(2),
+        "must skip the hung backend at the 100ms aggregation timeout, not at the backend's own 5s timeout, took {:?}",
         elapsed
     );
     // Only the gateway meta-prompts remain.
@@ -2642,8 +2642,8 @@ async fn resources_list_skips_hung_backend_within_timeout() {
         resp.error
     );
     assert!(
-        elapsed < Duration::from_secs(10),
-        "must skip hung backend quickly, took {:?}",
+        elapsed < Duration::from_secs(2),
+        "must skip the hung backend at the 100ms aggregation timeout, not at the backend's own 5s timeout, took {:?}",
         elapsed
     );
 }
@@ -2725,8 +2725,8 @@ async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
         resp.error
     );
     assert!(
-        elapsed < Duration::from_secs(10),
-        "fast result must return within a single timeout, took {:?}",
+        elapsed < Duration::from_secs(3),
+        "fast result must return at the 1s aggregation timeout, not at the hung backend's own 5s timeout, took {:?}",
         elapsed
     );
     // Both the gateway meta-prompts AND the fast backend's prompt are present;
