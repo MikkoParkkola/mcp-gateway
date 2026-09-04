@@ -92,6 +92,7 @@ def generate_backend_tools(backend: str, n_tools: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 PUBLIC_CLAIMS_PATH = Path(__file__).with_name("public_claims.json")
+DISCOVERY_RESPONSE_FIXTURE_PATH = Path(__file__).with_name("discovery_response_fixture.json")
 
 
 def load_public_claims() -> dict:
@@ -452,10 +453,23 @@ def honest_results() -> dict:
     extra = 2
     eager_turns = 2
     meta_turns = 1 + extra
+    direct_tokens_per_tool = README_SCENARIO["direct_tokens_per_tool"]
+    meta_tokens_per_tool = README_SCENARIO["gateway_tokens_per_tool"]
+    meta_tools = len(GATEWAY_TOOLS)
+    discovery_response_tokens = (len(DISCOVERY_RESPONSE_FIXTURE_PATH.read_bytes()) + 3) // 4
+
+    def meta_total(extra_turns: int) -> int:
+        search_turns = max(0, extra_turns - 1)
+        history_copies = search_turns * (search_turns + 1) // 2
+        return (
+            meta_tools * meta_tokens_per_tool * (1 + extra_turns)
+            + discovery_response_tokens * history_copies
+        )
+
     rows = []
     for n in (50, 100, 200, 500):
-        eager = n * 150 * eager_turns
-        meta = 16 * 100 * meta_turns
+        eager = n * direct_tokens_per_tool * eager_turns
+        meta = meta_total(extra)
         savings = (1 - meta / eager) * 100
         rows.append(
             {
@@ -472,12 +486,18 @@ def honest_results() -> dict:
         "n_tools": 100,
         "eager_turns": 2,
         "meta_turns": 21,
-        "eager_tokens": 100 * 150 * 2,
-        "meta_tokens": 16 * 100 * 21,
-        "savings_percent": (1 - (16 * 100 * 21) / (100 * 150 * 2)) * 100,
+        "eager_tokens": 100 * direct_tokens_per_tool * 2,
+        "meta_tokens": meta_total(20),
+        "savings_percent": (1 - meta_total(20) / (100 * direct_tokens_per_tool * 2)) * 100,
         "meta_wins": False,
     }
-    return {"scenario": "honest", "rows": rows, "loss_case": lose}
+    return {
+        "scenario": "honest",
+        "discovery_response_fixture": str(DISCOVERY_RESPONSE_FIXTURE_PATH),
+        "discovery_response_tokens": discovery_response_tokens,
+        "rows": rows,
+        "loss_case": lose,
+    }
 
 
 def print_honest_results(results: dict) -> None:

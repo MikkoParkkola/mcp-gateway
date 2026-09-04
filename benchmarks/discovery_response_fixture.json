@@ -1,0 +1,9 @@
+{
+  "tools": [
+    {"name": "linear_get_issue", "purpose": "Read one Linear issue", "score": 0.97},
+    {"name": "linear_update_issue", "purpose": "Update one Linear issue", "score": 0.91},
+    {"name": "linear_add_comment", "purpose": "Add a comment to one Linear issue", "score": 0.86}
+  ],
+  "query": "linear issue status",
+  "returned": 3
+}

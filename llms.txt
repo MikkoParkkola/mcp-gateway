@@ -1,6 +1,6 @@
 # mcp-gateway
 
-> Universal MCP gateway. README benchmark keeps 14 Meta-MCP tools in context (~1400 tokens, 91% token savings).
+> Universal MCP gateway. The README schema-only first-request model keeps 16 Meta-MCP tools in context (~1600 tokens, 89% savings); completed-task results also count discovery turns and responses.
 
 MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface (12 tools minimum, 14 in the README benchmark scenario, 15 when webhook status is surfaced) and discovers the right backend tool on demand.
 

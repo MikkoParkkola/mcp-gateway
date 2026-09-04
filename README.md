@@ -217,7 +217,7 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 
 ## Why use MCP Gateway?
 
-- **Compact context by default.** The agent loads a fixed meta-surface (16 tools in the README scenario, ~1,600 tokens) instead of every backend definition. That 89% figure is a schema-only first-request model. Counting extra discovery turns can erase it — see `honest_task_tokens` in [Benchmarks](docs/BENCHMARKS.md).
+- **Compact context by default.** The agent loads a fixed meta-surface (16 tools in the README scenario, ~1,600 tokens) instead of every backend definition. The 89% schema-only first-request model does not include discovery history. Counting extra discovery turns and their responses can erase it — see `honest_task_tokens` in [Benchmarks](docs/BENCHMARKS.md).
 - **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
 - **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 110+ capabilities ship built in.
 - **Per-user identity to backends.** Multitenant backends can receive the verified end-user identity with no gateway-stored long-lived credential. See [Multitenant identity](#end-user-identity-v31).
@@ -255,7 +255,7 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 |---|----------------|--------------|
 | **Tools in context** | Every definition, every request | 16 meta-tools in the README benchmark (~1,600 tokens) |
 | **Token overhead** | ~15,000 tokens (100 tools) | ~1600 tokens schema-only first-request; extra discovery turns can erase that |
-| **Cost at scale** | ~$0.22 per request (Opus input) | ~$0.024 per request, **$201 saved per 1K** |
+| **Cost at scale** | ~$0.22 per request (Opus input) | ~$0.024 per request, **$201 saved per 1K** in the schema-only first-request model |
 | **Practical tool limit** | 20 to 50 tools under context pressure | Unlimited, discovered on demand |
 | **Connect a new REST API** | Build an MCP server (days) | Drop a YAML file or import an OpenAPI spec (minutes) |
 | **Changing MCP config** | Restart the AI session, lose context | Restart gateway (~8ms), session stays alive |

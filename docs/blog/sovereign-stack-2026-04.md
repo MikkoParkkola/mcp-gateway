@@ -41,7 +41,7 @@ Capability YAMLs are SHA-256 pinned. A post-load mutation trips `RUG-PULL DETECT
 Numbers, all from the repo:
 
 - 2888 tests, `#![deny(unsafe_code)]`, zero clippy warnings
-- ~91% token savings at 100 tools / 1000 requests (`benchmarks/token_savings.py`)
+- 89% in the schema-only first-request model at 100 tools; completed-task math also counts discovery turns and responses (`benchmarks/token_savings.py`)
 - ~8 ms startup (`hyperfine`, `docs/BENCHMARKS.md`)
 - 101 built-in REST capabilities across 16 categories
 

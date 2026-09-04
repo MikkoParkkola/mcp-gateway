@@ -4,7 +4,7 @@
 
 ## System Overview
 
-The gateway sits between LLM clients (Claude Code, Cursor, etc.) and multiple MCP tool servers. Instead of loading all tool definitions into context (thousands of tokens), clients connect to the gateway and use a small set of **meta-tools** to discover and invoke tools on demand. This yields ~95% context token savings.
+The gateway sits between LLM clients (Claude Code, Cursor, etc.) and multiple MCP tool servers. Instead of loading all tool definitions into context (thousands of tokens), clients connect to the gateway and use a small set of **meta-tools** to discover and invoke tools on demand. The README's 89% figure is a schema-only first-request model; completed-task results also count discovery turns and responses.
 
 ```
                             +-----------------------+

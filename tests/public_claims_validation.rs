@@ -7,6 +7,10 @@ use mcp_gateway::{
     config::{Config, FailsafeConfig, WebhookConfig},
     config_reload::{LiveConfig, ReloadContext},
     gateway::{WebhookRegistry, test_helpers::MetaMcp},
+    honest_task_tokens::{
+        DIRECT_TOKENS_PER_TOOL, META_TOKENS_PER_TOOL, README_META_TOOLS,
+        representative_discovery_response_tokens,
+    },
     protocol::{JsonRpcResponse, RequestId, ToolsListResult},
     stats::UsageStats,
 };
@@ -146,6 +150,15 @@ const PUBLIC_CLAIM_SURFACES: &[&str] = &[
     "src/cli/mod.rs",
     "Cargo.toml",
     "homebrew/mcp-gateway.rb",
+    "npm/package.json",
+    ".github/workflows/release.yml",
+    "ARCHITECTURE.md",
+    "codebase-map.md",
+    "docs/show-hn.md",
+    "docs/blog/sovereign-stack-2026-04.md",
+    "docs/design/RFC-0081-intelligent-tool-surfacing.md",
+    "CHANGELOG.md",
+    "docs/legal/dependency-licenses.tsv",
     "src/commands/mod.rs",
     "src/gateway/meta_mcp_helpers.rs",
     "src/gateway/server/support.rs",
@@ -318,8 +331,11 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
         "README lede must not lead with the schema-only 89% figure"
     );
     assert!(
-        readme.contains(&format!("**${} saved per 1K**", savings_usd.round() as u64)),
-        "README should contain the canonical rounded cost savings claim"
+        readme.contains(&format!(
+            "**${} saved per 1K** in the schema-only first-request model",
+            savings_usd.round() as u64
+        )),
+        "README should qualify the canonical rounded cost savings claim"
     );
     assert!(
         readme.contains(&format!(
@@ -341,6 +357,22 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
         !readme.contains("hot-reload in ~500ms"),
         "README should not advertise an unsupported hot-reload timing claim"
     );
+}
+
+#[test]
+fn honest_model_constants_match_canonical_claims() {
+    let claims = load_claims();
+    assert_eq!(
+        DIRECT_TOKENS_PER_TOOL,
+        claims.readme_token_savings.direct_tokens_per_tool
+    );
+    assert_eq!(
+        META_TOKENS_PER_TOOL,
+        claims.readme_token_savings.gateway_tokens_per_tool
+    );
+    assert_eq!(README_META_TOOLS, claims.readme_token_savings.gateway_tools);
+    assert!(representative_discovery_response_tokens() > 0);
+    assert!(repo_file("benchmarks/discovery_response_fixture.json").is_file());
 }
 
 #[test]

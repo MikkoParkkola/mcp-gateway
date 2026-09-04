@@ -112,7 +112,7 @@ mcp-gateway sits between any AI client and any set of MCP tools. Instead of load
 
 The gateway is a **tool + capability router**, not a general chat-completions / embeddings gateway. When a backend asks for `sampling/createMessage`, the connected client still performs the model call. OpenAI-compatible prompt-cache helpers exist only so `gateway_invoke` can preserve `prompt_cache_key` behavior for backends that call LLM APIs internally.
 
-**Dual-protocol**: MCP + A2A transport adapter. **OWASP Agentic AI Top 10**: 10/10 covered. **Safety posture**: `#![deny(unsafe_code)]`, SHA-256 integrity pinning on every capability, mTLS option, message signing, agent identity.
+**Dual-protocol**: MCP + A2A transport adapter. **OWASP Agentic AI Top 10**: scoped in-tree self-assessment, not certification. **Safety posture**: `#![deny(unsafe_code)]`; optional SHA-256 capability pinning fails closed on mismatch; mTLS, message signing, and agent identity are available.
 
 ## Current Status
 
@@ -139,7 +139,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 | **Meta-MCP surface is compact** (14-16 tools target) | Context-token savings are the entire value proposition | Add meta-tools that could be dynamic-discovery tools |
 | **mcp-gateway is NOT a chat / embeddings gateway** | Scope boundary; model calls stay with the connected client | Add OpenAI chat-completion proxying as a first-class feature |
 | **`#![deny(unsafe_code)]`** | Gateway sits on the trust path for every tool call | Introduce unsafe to chase performance |
-| **SHA-256 integrity pinning on every capability** | Supply-chain safety; capability tampering must be detectable | Load capabilities without hash verification |
+| **Optional SHA-256 capability pinning** | Pinned capability tampering must be detectable and fail closed | Accept a mismatched pin |
 | **OWASP Agentic AI Top 10 compliance** | Security posture is a shipped differentiator | Regress a covered control without an ADR |
 | **Dual MCP + A2A transport** | Cross-provider agent messaging (#145, MIK-2970) | Treat A2A as an afterthought; avoid compiling it out of default builds |
 | **Capability definitions public (mcp-gateway) / private (mcp-gateway-private)** | Public catalog for community; private API credentials / deploy configs | Mix private capabilities into the public catalog |
@@ -192,7 +192,7 @@ cargo fmt                            # auto-format
 
 Single-binary gateway: AI client -> compact Meta-MCP surface (13-16 tools) -> dynamic discovery of 500+ backend tools.
 ~90% token savings by not loading all tool definitions into every request.
-OWASP Agentic AI Top 10: 10/10 covered. MCP + A2A dual-protocol.
+OWASP Agentic AI Top 10: scoped in-tree self-assessment, not certification. MCP + A2A dual-protocol.
 
 Key modules: `gateway/` (core router, OAuth, streaming, UI), `provider/` (MCP/composite/capability),
 `capability/` (discovery, validation), `transport/` (HTTP, stdio), `security/` (firewall, mTLS, message signing, agent identity, memory scanner),

@@ -21,6 +21,21 @@ pub const README_META_TOOLS: u64 = 16;
 pub const TOOL_COUNTS: [u64; 4] = [50, 100, 200, 500];
 /// Default discovery path: `gateway_search_tools` then `gateway_invoke`.
 pub const DEFAULT_EXTRA_TURNS: u64 = 2;
+const DISCOVERY_RESPONSE_FIXTURE: &str =
+    include_str!("../benchmarks/discovery_response_fixture.json");
+
+/// Conservative four-bytes-per-token estimate for the checked-in discovery response.
+pub fn representative_discovery_response_tokens() -> u64 {
+    u64::try_from(DISCOVERY_RESPONSE_FIXTURE.len())
+        .unwrap_or(u64::MAX)
+        .div_ceil(4)
+}
+
+fn accumulated_discovery_history_tokens(extra_discovery_turns: u64) -> u64 {
+    let search_turns = extra_discovery_turns.saturating_sub(1);
+    let history_copies = search_turns.saturating_mul(search_turns.saturating_add(1)) / 2;
+    representative_discovery_response_tokens().saturating_mul(history_copies)
+}
 
 /// One row of eager-vs-meta task-token math.
 #[derive(Debug, Clone, PartialEq)]
@@ -31,7 +46,7 @@ pub struct TaskTokenRow {
     pub extra_discovery_turns: u64,
     /// Eager: every tool definition loaded once.
     pub eager_tokens: u64,
-    /// Meta: meta-surface × (1 + extra turns).
+    /// Meta: repeated meta-surface plus accumulated discovery-response history.
     pub meta_tokens: u64,
     /// `(1 - meta/eager) * 100`. Negative means the meta path lost.
     pub savings_percent: f64,
@@ -65,6 +80,10 @@ fn savings_percent(eager_tokens: u64, meta_tokens: u64) -> f64 {
 /// (prompt + search + invoke when extra is 2). Same completed-task length is
 /// required on both sides so the comparison can lose.
 pub fn task_tokens(n_tools: u64, extra_discovery_turns: u64) -> TaskTokenRow {
+    assert!(
+        extra_discovery_turns > 0,
+        "completed-task token math requires at least one meta-tool turn; use schema_only_first_request for zero"
+    );
     let eager_turns = 2;
     let meta_turns = extra_discovery_turns.saturating_add(1);
     let eager_tokens = n_tools
@@ -72,7 +91,8 @@ pub fn task_tokens(n_tools: u64, extra_discovery_turns: u64) -> TaskTokenRow {
         .saturating_mul(eager_turns);
     let meta_tokens = README_META_TOOLS
         .saturating_mul(META_TOKENS_PER_TOOL)
-        .saturating_mul(meta_turns);
+        .saturating_mul(meta_turns)
+        .saturating_add(accumulated_discovery_history_tokens(extra_discovery_turns));
     let savings_percent = savings_percent(eager_tokens, meta_tokens);
     TaskTokenRow {
         n_tools,
@@ -117,12 +137,28 @@ mod tests {
 
     #[test]
     fn extra_turns_can_make_meta_lose() {
-        let win = task_tokens(100, 0);
+        let win = task_tokens(100, 1);
         let lose = task_tokens(100, 20);
         assert!(win.meta_wins());
         assert!(!lose.meta_wins());
         assert!(lose.savings_percent < 0.0);
         assert!(lose.meta_tokens > lose.eager_tokens);
+    }
+
+    #[test]
+    #[should_panic(expected = "use schema_only_first_request for zero")]
+    fn zero_extra_turns_are_not_a_completed_task() {
+        let _ = task_tokens(100, 0);
+    }
+
+    #[test]
+    fn discovery_response_history_is_counted() {
+        let row = task_tokens(100, 2);
+        let schemas_only = README_META_TOOLS * META_TOKENS_PER_TOOL * 3;
+        assert_eq!(
+            row.meta_tokens,
+            schemas_only + representative_discovery_response_tokens()
+        );
     }
 
     #[test]
