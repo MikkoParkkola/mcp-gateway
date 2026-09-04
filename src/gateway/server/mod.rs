@@ -3198,6 +3198,93 @@ mod tests {
                 "stdio has no headers, so a modern request's revision can only \
                  have come from `_meta`"
             );
+
+            // OBS.2, stdio. The criterion asks for a record of the inputs that
+            // decide the `tools/list` surface and the `cacheScope` the answer
+            // would carry, for *every* `tools/list`. HTTP records it at
+            // `router/handlers.rs`; stdio reaches that site never.
+            //
+            // The three stdio-specific values are asserted here rather than
+            // assumed: no header carries a profile, no URL carries a code-mode
+            // override, and no stdio result is decorated with `cacheScope`.
+            #[test]
+            fn ac_obs_2_stdio_records_the_tools_list_surface() {
+                let records = records_for(&json!({
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/list",
+                    "params": { "query": "calendar" }
+                }));
+
+                let surface = records
+                    .iter()
+                    // Selected by a field only this record carries. A `tools/list`
+                    // request now emits two observations and picking by index
+                    // would silently follow whichever site moved first.
+                    .find(|record| record.contains_key("cache_scope"))
+                    .unwrap_or_else(|| {
+                        let keys: Vec<Vec<&String>> = records
+                            .iter()
+                            .map(|record| record.keys().collect())
+                            .collect();
+                        panic!(
+                            "every stdio `tools/list` must be observed: {} record(s) \
+                         captured, keys {:?}. Empty => the capture never \
+                         delivered; non-empty => no site recorded the surface",
+                            records.len(),
+                            keys,
+                        )
+                    });
+
+                assert_eq!(
+                    value(surface, "cache_scope"),
+                    crate::protocol::cacheable::scope_for_method("tools/list").as_str(),
+                    "the record must name the scope the table assigns, not a \
+                 literal that can drift away from it"
+                );
+                assert_eq!(
+                    value(surface, "cache_scope_advertised"),
+                    "false",
+                    "a stdio result is never decorated with `cacheScope`, so a \
+                 record claiming it was advertised would report a field the \
+                 client never received"
+                );
+                assert_eq!(
+                    value(surface, "profile"),
+                    "none",
+                    "stdio carries no headers, so no request can name a profile"
+                );
+                assert_eq!(
+                    value(surface, "query_present"),
+                    "true",
+                    "this request carried a non-empty `query`"
+                );
+            }
+
+            // The companion of the row above: an absent or empty `query` is not a
+            // filter. `query_present` is read from the value it names, so the
+            // empty string must record `false` -- an `is_some` reading would claim
+            // a filter ran on a request that falls back to the standard path.
+            #[test]
+            fn ac_obs_2_stdio_records_an_empty_query_as_no_query() {
+                for params in [json!({}), json!({ "query": "" })] {
+                    let records = records_for(&json!({
+                        "jsonrpc": "2.0",
+                        "id": 8,
+                        "method": "tools/list",
+                        "params": params
+                    }));
+                    let surface = records
+                        .iter()
+                        .find(|record| record.contains_key("cache_scope"))
+                        .expect("every stdio `tools/list` must be observed");
+                    assert_eq!(
+                        value(surface, "query_present"),
+                        "false",
+                        "an absent or empty `query` selects no filter"
+                    );
+                }
+            }
         }
     }
 }
