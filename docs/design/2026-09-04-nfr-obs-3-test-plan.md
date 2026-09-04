@@ -125,14 +125,15 @@ case is removed rather than written red.
 `ProtocolEra::resolve_with` takes the era mutex and holds it across the probe
 (`src/protocol/era.rs:152-163`), so concurrent resolution serialises onto a single
 probe and no second outcome can arrive stale. There is no generation or epoch
-counter to make one identifiable if it could.
+counter to make one identifiable if it could. The design records the same fact
+against the cited event (the `‡` note under its event table).
 
 | field | value |
 |---|---|
 | owner | `MIK-7217` (era detection), carried forward with the record |
 | what would resolve it | a probe identity — generation counter or transport epoch — that makes a late outcome distinguishable from the live one |
 | when | when a second concurrent probe path is introduced; not before, because today there cannot be one |
-| if it resolves badly | the record is deleted from the design's event table rather than left describing an unreachable branch |
+| if it resolves badly | the cited record stays cited and stays marked unreachable; the design's amendment to its field set is withdrawn rather than left describing a branch nothing reaches |
 
 Nothing in this plan depends on it.
 

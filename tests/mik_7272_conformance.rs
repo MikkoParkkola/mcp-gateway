@@ -180,8 +180,8 @@ const MINOR: &[Row] = &[
         requirement: "MIK-7272.EXT.1",
         role: Role::Both,
         transport: Transport::Any,
-        // Deliberately empty, and this row is therefore red. The two tests
-        // named here until now exercised `ExtensionSet` negotiation and never
+        // Empty, and tracked in `TRACKED_GAPS` below. The two tests named
+        // here until now exercised `ExtensionSet` negotiation and never
         // the `extensions` field on serialised capabilities, which is what this
         // statement is about — so the cell asserted coverage that did not
         // exist, and the assertion below could not tell, because it checks that
@@ -297,6 +297,21 @@ fn all_rows() -> Vec<&'static Row> {
     MAJOR.iter().chain(MINOR.iter()).collect()
 }
 
+/// Cells that are empty on purpose, each naming the work that fills it.
+///
+/// A gap belongs here or it is the finding: an untracked empty cell fails
+/// `matrix_has_no_empty_cells`, and an entry here whose row has since been
+/// covered fails `a_tracked_gap_is_still_empty`. A mistyped statement is
+/// caught by the first of those, because it exempts nothing. None of the three
+/// states can be reached by leaving the file alone, which is the point: a
+/// permanently red suite teaches everyone to ignore red, and a silent
+/// exemption teaches nobody anything.
+const TRACKED_GAPS: &[(&str, &str)] = &[(
+    "1. extensions field on client and server capabilities",
+    "Cluster B writes E1-E5 of \
+     docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md",
+)];
+
 #[test]
 fn matrix_has_no_empty_cells() {
     // The finding this file exists to produce. A statement listed with no test
@@ -306,11 +321,33 @@ fn matrix_has_no_empty_cells() {
         .iter()
         .filter(|row| row.evidence.is_empty())
         .map(|row| row.statement)
+        .filter(|statement| !TRACKED_GAPS.iter().any(|(gap, _)| gap == statement))
         .collect();
 
     assert!(
         empty.is_empty(),
-        "these normative statements have no evidence: {empty:#?}"
+        "these normative statements have no evidence and no tracked gap: {empty:#?}"
+    );
+}
+
+#[test]
+fn a_tracked_gap_is_still_empty() {
+    // The other half of the exemption. A gap that has been filled and left
+    // listed here is an exemption nothing needs, and it would silently absolve
+    // the next row that regresses into the same statement.
+    let filled: Vec<&str> = TRACKED_GAPS
+        .iter()
+        .filter(|(gap, _)| {
+            all_rows()
+                .iter()
+                .any(|row| row.statement == *gap && !row.evidence.is_empty())
+        })
+        .map(|(gap, _)| *gap)
+        .collect();
+
+    assert!(
+        filled.is_empty(),
+        "these gaps now have evidence and must leave TRACKED_GAPS: {filled:#?}"
     );
 }
 

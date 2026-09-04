@@ -37,7 +37,15 @@ quoted here as the thing being audited, **cited not authored**:
 | `era_probe` | `backend`, `outcome` ∈ {`modern`, `legacy`, `no_answer`}, `duration_ms`, `trigger` ∈ {`start`, `reprobe`} |
 | `era_cache` | `backend`, `hit` ∈ {`true`, `false`} |
 | `era_invalidated` | `backend`, `reason` ∈ {`restart`, `trigger`} |
-| `era_probe_discarded` | `backend` (amended below: the probe record, minus `error_code`) |
+| `era_probe_discarded` ‡ | `backend` (amended below: the probe record, minus `error_code`) |
+
+‡ **Nothing produces this record today.** `ProtocolEra::resolve_with` takes the era mutex and
+holds it across the probe (`src/protocol/era.rs:152-163`), so concurrent resolution serialises
+onto a single probe and no second outcome can arrive stale; there is no generation or transport
+epoch that would make one identifiable if it could. The record is cited because the era design
+proposes it, and the amendment below is the shape it takes once an identity-checked path exists
+(MIK-7217). OBS.3 writes no case for it, and the test plan records that as a deferred dependency
+rather than a red test.
 
 OBS.3's job is to check that set against the criterion's three clauses. Two of the three are already
 answered; one is not.
@@ -271,10 +279,12 @@ stream and the operator read. The enum's Rust spelling is `PascalCase` and its `
 Absent everywhere else, and never a metric label.
 
 `era_probe_discarded` takes the same `outcome`, `evidence`, `duration_ms` and `trigger` fields — the
-whole record minus `error_code`, so a discarded probe can be lined up against the one that won. It is the one event in the set
-that today says only *that* something was thrown away; under a criterion asking **by what evidence**,
+whole record minus `error_code`, so a discarded probe can be lined up against the one that won. As
+cited it says only *that* something was thrown away; under a criterion asking **by what evidence**,
 an event recording no evidence is the gap the criterion names. Fields on an event, so no cardinality
-follows.
+follows. The amendment is conditional on the producing path arriving (‡ above): it fixes the record's
+shape now so the identity work does not have to invent one under time pressure, and it asserts
+nothing about behaviour this criterion can observe.
 
 ### The load-bearing transitions
 
@@ -288,7 +298,6 @@ follows.
 | re-probe → modern code | `era_probe` | `modern` | `probed` | `modern_error_code` | set | `reprobe` |
 | re-probe → deadline | `era_probe` | `legacy` | `assumed` | `no_answer` | set | `reprobe` |
 | backend restarts † | `era_invalidated` (`reason=restart`) | `legacy` | `assumed` | `never_probed` | cleared | cleared |
-| stale outcome discarded | `era_probe_discarded` | unchanged | unchanged | unchanged | unchanged | unchanged |
 
 † **Unreachable today, and this ticket does not wire it.** `invalidate()` has exactly one caller —
 the contradiction re-probe at `src/backend/era.rs:100`. No restart path clears the era, and nothing
@@ -304,9 +313,9 @@ criterion's scope and is recorded here as its dependency, not deferred into sile
 
 These are the rows where something can go wrong, not the full cross-product: the remaining
 start/re-probe × evidence combinations follow the same three columns mechanically, and the fixture
-covers them case-for-case. Two rows carry the whole design: a `no_answer` re-probe moves `era_source` back to `assumed` while
-leaving `era_probed_at` set, and a discarded outcome changes nothing at all. Both are directly
-testable.
+covers them case-for-case. One row carries the whole design: a `no_answer` re-probe moves `era_source` back to `assumed` while
+leaving `era_probed_at` set. It is directly testable, and the row that would have sat beside it —
+a discarded outcome changing nothing at all — is the one with no producing path.
 
 **What the operator actually sees.** Three `gateway_list_servers` entries, abridged to the era fields:
 
