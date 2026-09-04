@@ -620,13 +620,44 @@ URI is remote-fetched by nature, whereas an MCP backend on loopback is an ordina
 deployment — but the difference is written down rather than smoothed over. Caught by
 the implementing agent while verifying this brief's citations.
 
+**Second correction: the precedent cited above is not the closest one, and the
+closest one is nearly this guard already.** Both drafts reached for
+`key_server/oidc.rs` because the search was for a plain-`http` refusal. The search
+should have been for a plain-`http`-with-a-loopback-carve-out refusal, and one
+exists: `resource_origin` in `src/gateway/router/well_known.rs:151-176` refuses
+`scheme == "http" && !is_loopback_host(host)`, cites RFC 9728 §1.2 for why loopback
+is the sole exception, rejects `parsed.username()` and `parsed.password()` outright,
+and carries a faithful-host guard that rejects any value whose host the parser
+rewrote — alternate or decimal IPv4, IDNA/punycode, percent-encoding. Three
+consequences, none cosmetic. The policy decided here is **aligned with an existing
+in-repo policy** rather than a weakening of the OIDC one, so the permissiveness noted
+in the correction above is the house style and not a concession. The credential-in-URL
+path both design reviewers found independently is already refused at that site, which
+is corroboration from the code rather than from a reviewer. And the faithful-host
+guard is hardening this guard would otherwise have had to invent — `http://2130706433/`
+is `127.0.0.1` in decimal and must not be waved through as loopback by a classifier
+that only compares strings.
+
+The loopback classifier has **one owner**: `well_known::is_loopback_host`
+(`src/gateway/router/well_known.rs:63-76`), re-exported `pub` as
+`crate::gateway::router::is_loopback_bind`. Nothing in this change may write a second
+one. `src/discovery/shadow/helpers.rs:341-349` already did, and gets repaired in the
+same change rather than filed — see the disposal ruling below.
+
+Method note, because this is the second correction to the same passage. Both errors
+were the same error: a precedent recalled by shape rather than located by search, then
+cited without reading the lines. `rg` for the policy predicate, not for the module
+you expect to hold it.
+
 **Where it goes: `validate_backend_urls` (`src/config/mod.rs:946-963`), not the
 transport.** The board's own source pass established that the two flagged sinks are
 operator-provenanced and that the one backend-supplied input is already pinned by
 `same_origin`. A transport-layer guard would therefore sit downstream of the real
 defect and fire after the operator has already been told the configuration is valid.
-Config validation is where an operator finds out, and it is where the OIDC precedent
-already lives.
+Config validation is where an operator finds out. Neither cited precedent lives
+there — `oidc.rs:592` validates a fetched discovery document and `well_known.rs:155`
+parses a request-time identifier — so the placement is argued from where the operator
+learns the configuration is wrong, not from precedent.
 
 This is a §P3 design event and is named as one. It changes behaviour outside what
 the release scope declared FOR: a configuration that starts today will refuse to
@@ -676,3 +707,35 @@ era-observation construction path in preference to an injection point on `Backen
 must not be `#[cfg(test)]`, since integration tests compile against the lib without
 that cfg and could not reach it, and is to be named as a §P3 design event where it is
 made.
+
+### A second defect found under that guard, and why it was fixed instead of filed
+
+The agent building the credential guard found a second defect and disposed it as
+*file a ticket*, explicitly offering the overrule. Overruled: it is fixed in the same
+change.
+
+**What it is.** `is_loopback_url` (`src/discovery/shadow/helpers.rs:341-349`) decides
+loopback with `host == "localhost" || host == "::1" || host.starts_with("127.")`. Both
+halves are wrong in opposite directions. `starts_with("127.")` matches any registrable
+DNS name beginning `127.` — one an attacker can register. And `url::Url` yields the
+IPv6 host **with brackets**, so `host == "::1"` never matches and `http://[::1]:8080/`
+is never recognised.
+
+**Why that is not cosmetic.** `local_only` feeds `auth_exposure`, which feeds
+`classify_severity`'s `network_exposed` (`src/discovery/shadow.rs:826`, `:835`,
+`:941`). The permissive half therefore **downgrades the severity** of exactly the
+ungoverned network-exposed server shadow discovery exists to flag; the strict half
+raises a false alarm on a genuine local one.
+
+**Why not a ticket.** §P0 reserves that disposal for findings where a human must
+decide something. Tracing `local_only` to a severity downgrade *made* the decision, so
+nothing was left to refer upward, and a DoR-compliant ticket would have been larger
+than the repair. The repair is also the repair protocol's elimination move rather than
+a patch: *two components can disagree about X* is closed by *one owner of X*, not by a
+check that detects the disagreement. Three loopback classifiers were about to exist —
+the correct one, this one, and whichever the new guard wrote. Both the guard and the
+shadow helper now delegate to `is_loopback_bind`, and one owner remains.
+
+Two commits, separately scoped, so the classifier fix stands if the guard needs
+another round. Regression cases: a `127.`-prefixed DNS name must classify
+network-exposed; `http://[::1]:8080/` must classify loopback.
