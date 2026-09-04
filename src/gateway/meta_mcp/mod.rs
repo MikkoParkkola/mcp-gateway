@@ -1181,7 +1181,12 @@ impl MetaMcp {
         let effective_code_mode = self.code_mode_enabled || url_override;
         if effective_code_mode && !self.code_mode_enabled {
             // URL-activated Code Mode: return the two fixed tools directly.
-            self.shadow_tools_list_assembly(session_id, true);
+            crate::protocol_revision_telemetry::observe_tools_list(
+                crate::protocol_revision_telemetry::ListFilters {
+                    request: true,
+                    ..crate::protocol_revision_telemetry::ListFilters::default()
+                },
+            );
             let tools = build_code_mode_tools();
             let tool_descriptors =
                 project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);

@@ -40,6 +40,20 @@ fn allow_all_profile_has_unrestricted_description() {
     assert!(!profile.is_restrictive());
 }
 
+#[test]
+fn wildcard_allowlist_and_empty_denylist_are_unrestricted() {
+    let profile = profile_from(Some(&["*"]), Some(&[]), Some(&["*"]), Some(&[]));
+    assert!(!profile.is_restrictive());
+    assert!(profile.check("any-backend", "any-tool").is_ok());
+}
+
+#[test]
+fn empty_allowlist_is_restrictive() {
+    let profile = profile_from(Some(&[]), None, None, None);
+    assert!(profile.is_restrictive());
+    assert!(profile.check("any-backend", "any-tool").is_err());
+}
+
 // ── allow_tools list ─────────────────────────────────────────────────
 
 #[test]

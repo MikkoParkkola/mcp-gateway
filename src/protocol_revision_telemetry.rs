@@ -442,7 +442,9 @@ pub fn observe_inbound_request(
     let mut reg = global()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let previous = reg.session_attribution(session_id);
+    let previous = (transport == Transport::Stdio)
+        .then(|| reg.session_attribution(session_id))
+        .flatten();
     let requested_label = revision_label(explicit_requested.as_deref())
         .or_else(|| previous.and_then(|item| item.requested_revision));
     let client = if explicit_client == UNATTRIBUTED_CLIENT {
@@ -450,7 +452,8 @@ pub fn observe_inbound_request(
     } else {
         client_label(&explicit_client)
     };
-    if method == "initialize"
+    if transport == Transport::Stdio
+        && method == "initialize"
         && let Some(session_id) = session_id
     {
         reg.bind_session(
@@ -733,6 +736,40 @@ mod tests {
             after.by_revision.get("2025-06-18").copied().unwrap_or(0)
                 >= before.by_revision.get("2025-06-18").copied().unwrap_or(0) + 2
         );
+    }
+
+    #[test]
+    fn http_request_without_revision_does_not_reuse_session_attribution() {
+        let session_id = "mik-7218-http-is-request-scoped";
+        let initialize = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "clientInfo": {"name": "Claude Desktop"}
+            }
+        });
+        observe_inbound_request(
+            &initialize,
+            initialize.get("params"),
+            "initialize",
+            None,
+            Some(session_id),
+            Transport::Stdio,
+        );
+        let before = global_snapshot();
+        let request = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"});
+        observe_inbound_request(
+            &request,
+            None,
+            "tools/list",
+            None,
+            Some(session_id),
+            Transport::Http,
+        );
+        let after = global_snapshot();
+        assert!(after.unattributed > before.unattributed);
     }
 
     #[test]

@@ -211,7 +211,13 @@ impl PatternFilter {
     }
 
     fn is_unrestricted(&self) -> bool {
-        self.allow.is_none() && self.deny.is_none()
+        let allow_all = self.allow.as_ref().is_none_or(|patterns| {
+            patterns
+                .iter()
+                .any(|pattern| matches!(pattern, Pattern::Wildcard))
+        });
+        let deny_nothing = self.deny.as_ref().is_none_or(Vec::is_empty);
+        allow_all && deny_nothing
     }
 
     /// Return `true` if `name` passes both the allow and deny stages.
