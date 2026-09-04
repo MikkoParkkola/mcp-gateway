@@ -36,7 +36,7 @@ have no branch, no worktree and no commit — verified against `git worktree lis
 
 **Recorded, not filed — two outbound-error observations.** `reqwest::Error`'s `Display` appends `" for url (...)"` verbatim (`reqwest-0.13.4/src/error.rs:279-280`), so any site logging a raw one emits the backend URL and whatever credential its query string carries. The site CodeQL flagged is repaired (`redact_url`, `src/capability/executor/mod.rs`); the wider class is not swept. The OAuth client logs errors at `src/oauth/client/mod.rs:338,608,621,1048,1060` — these are wrapped errors, not raw `reqwest::Error`, and **whether the chain preserves reqwest's URL-bearing `Display` was not traced**. Worth a sweep because the URL there is a token endpoint; not a finding until someone reads the error type.
 
-**Reopened, and the gap is narrower than the alert.** Code-scanning alerts #90 and #91 (`rust/cleartext-transmission`, `src/transport/http/mod.rs`) were dismissed `won't fix` on 2026-09-03 with the reason *"plain-http local backends are supported by design"*. That reason was **not verified and does not hold**, so both alerts are back to `open`. What a source pass since established is that CodeQL's own claim — an attacker-reachable sink — is a false positive, while the gap underneath it is real and has an in-repo precedent. The sink's provenance is operator-only: `http_url` arrives from the config file, the CLI, the admin web UI or the curated server registry, never from a request. The one genuinely backend-supplied input, the SSE `message_url`, is pinned by `resolve_message_url` through `same_origin`, which compares `a.scheme()` (`src/transport/http/mod.rs:49`, called at `:796`), so a backend can move the credential neither to another origin nor from `https` down to `http`. The real defect is upstream of both: `validate_backend_urls` (`src/config/mod.rs:946-963`) checks non-empty and parseable and nothing else, so `http://internal-host:8080` with `oauth.enabled` is accepted and sends `Authorization: Bearer` in cleartext to a non-loopback host. The same repository already refuses a plain-`http` JWKS URI outright (`key_server/oidc.rs:592`); the sibling issuer check at `:377` only warns. That asymmetry is the finding, and closing it is a design event under §P3, not a dismissal: refusing outright would break a loopback backend that plain HTTP serves correctly today, so the choice between a refusal, a loopback carve-out and an explicit opt-in belongs to the operator. The alerts stay open as the record of an unclosed gap until that call is made.
+**Reopened, and the gap is narrower than the alert.** Code-scanning alerts #90 and #91 (`rust/cleartext-transmission`, `src/transport/http/mod.rs`) were dismissed `won't fix` on 2026-09-03 with the reason *"plain-http local backends are supported by design"*. That reason was **not verified and does not hold**, so both alerts are back to `open`. What a source pass since established is that CodeQL's own claim — an attacker-reachable sink — is a false positive, while the gap underneath it is real and has an in-repo precedent. The sink's provenance is operator-only: `http_url` arrives from the config file, the CLI, the admin web UI or the curated server registry, never from a request. The one genuinely backend-supplied input, the SSE `message_url`, is pinned by `resolve_message_url` through `same_origin`, which compares `a.scheme()` (`src/transport/http/mod.rs:49`, called at `:796`), so a backend can move the credential neither to another origin nor from `https` down to `http`. The real defect is upstream of both: `validate_backend_urls` (`src/config/mod.rs:946-963`) checks non-empty and parseable and nothing else, so `http://internal-host:8080` with `oauth.enabled` is accepted and sends `Authorization: Bearer` in cleartext to a non-loopback host. The same repository already refuses plain `http` off-loopback in `resource_origin` (`src/gateway/router/well_known.rs:151-176`), with a loopback carve-out and a userinfo rejection — closing this gap aligns with that policy rather than inventing one. Closing it is a design event under §P3, not a dismissal, because a configuration that starts today stops starting. **Decided** — refuse a credential on a plain-`http` non-loopback backend, with a loopback carve-out and a per-backend opt-in; see the decision record and its two corrections later in this document. The alerts stay open as the record of the gap until the guard lands.
 **`security.message_signing` is a config option that enables nothing.** A search for every consumer returns tests only: `enable_message_signing` (`src/gateway/meta_mcp/mod.rs:652`) has one caller, `src/gateway/meta_mcp/authz_tests.rs:708`; `MessageSigner::new` is constructed at that same test callsite, in `message_signing.rs`'s own tests and in a doc example, nowhere else; and `security.message_signing.enabled` appears outside its own config struct only in four doc comments (`meta_mcp/mod.rs:319`, `:325`, `:345`, `:651`) that describe when it *would* be `Some`. `validate_secret`, which `:651` tells the caller it must call, has no caller at all. An operator who sets `security.message_signing.enabled = true` therefore gets no signing and no warning, which is worse than the feature being absent: the config surface asserts a security control the binary does not apply. This is a §2 WIRED and D7 failure, and both honest repairs — wire it to the config, or delete the feature and its config key — change a security surface, so the choice is the operator's rather than a cleanup.
 
 
@@ -497,7 +497,7 @@ operator].
 Everything below was counted or read at source today. Where it contradicts a cell
 above, this section is the later reading, not a second opinion.
 
-### The blocking count is 37, and four of them were invisible to every prior count
+### The blocking count is 38, and five of them were invisible to every prior count
 
 `RELEASE-4.0.0-criteria-status.md` holds 158 criterion rows (plus 12 rows belonging
 to the setter table and the group summary, which are not criteria and are excluded
@@ -509,13 +509,32 @@ here). Parsed by the column the header names `blocking`, not by transcription:
 | PARTIAL | 9 |
 | UNWIRED | 7 |
 | UNTESTED | 4 |
-| **total open and blocking** | **37** |
+| REVISED, NOT MET | 1 |
+| **total open and blocking** | **38** |
 
 No blocking row is MET: the `blocking` column is maintained as *still blocking* and
 flipped to `no` on close, so `blocking=yes` and *open* are the same set. 109 rows
 read `blocking=no`; 99 of those are plain `MET`, 2 are `N/A`, 7 carry a qualified
 MET (`MET (structural)` x3, `MET (I)` x2, `MET (caveat)`, `MET (residual)`), and one
 — `NFR.OBS.5` — reads `REVISED, NOT MET` while marked non-blocking.
+
+**The count was 37 and is now 38: `NFR.OBS.5` was open and flagged non-blocking.**
+Its status cell reads `REVISED, NOT MET` — a spelling outside the file's stated
+vocabulary — and its own evidence cell ends *"This row is unmet until
+`tests/nfr_obs5_flag.rs` is rewritten around the new default and re-probed"*, while
+the `blocking` column read `no`. `RELEASE-4.0.0-gap-plan.md:930-938` agrees: the
+operator's 2026-09-03 ruling retired the `default off` clause and "the row moves from
+MET to unmet". Self-declared open work with a `no` in the blocking column is not a
+judgement call, so the flag is flipped rather than referred upward.
+
+Two things travelled with it. `RELEASE-4.0.0-requirements.md:294` still carried the
+retired `defaulting off until the conformance matrix is complete` clause, so the
+authority document asserted a requirement the operator had withdrawn the day before —
+a §P4a failure in the change that made the ruling, not a new decision here. The row
+text is now the revised criterion with the ruling cited. And flipping the flag
+introduced, for one edit, exactly the unescaped-pipe column shift described below;
+it was caught by counting the row's fields against the header rather than by reading
+it. Any edit to a cell in that table gets the same field count afterwards.
 
 **Four blocking rows do not survive a naive column parse.** `MIK-7212.MRTR.7a`,
 `MIK-7212.MRTR.7b`, `MIK-7272.EXT.1` (all `UNWIRED`) and `MIK-7246.CONFIRM.1a`
@@ -543,7 +562,7 @@ above is unaffected.
 - **The four `UNWIRED`/`PARTIAL` `MIK-7217.DISCOVER` rows** were re-evidenced against
   the live probe path and flipped to MET on 2026-09-04. No code changed; the
   citations were re-verified and the status text replaced. They are inside the 99
-  above, not the 37.
+  above, not the 38.
 
 ### Machine state, and why it stopped the work
 

@@ -291,7 +291,7 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 | NFR.OBS.2 | For every `tools/list`, the gateway MUST record which filters ran and the `cacheScope` that would be emitted, before that field is advertised to any real client. | T |
 | NFR.OBS.3 | Era detection per backend MUST be observable — which era, by what evidence, and when re-probed. | T |
 | NFR.OBS.4 | Continuation mint, redeem, expiry and rejection MUST be counted, with reason. | T |
-| NFR.OBS.5 | Modern-protocol serving MUST be behind a flag, defaulting off until the conformance matrix is complete, and MUST be revertible without a downgrade. | T, D |
+| NFR.OBS.5 | Modern-protocol serving MUST be behind a flag and MUST be revertible without a downgrade. The gateway serves the latest revision by default and negotiates down to the highest revision the client supports. (Revised 2026-09-03 by operator ruling, recorded in `RELEASE-4.0.0-gap-plan.md`; the original `defaulting off until the conformance matrix is complete` clause is retired. The flag survives as the operator escape hatch the revertibility clause hangs on.) | T, D |
 
 ### 4.5 Documentation
 
