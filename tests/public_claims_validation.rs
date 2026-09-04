@@ -40,12 +40,9 @@ struct StartupBenchmark {
 
 #[derive(Debug, Deserialize)]
 struct TokenSavingsClaim {
-    direct_tools: u64,
     direct_tokens_per_tool: u64,
     gateway_tools: u64,
     gateway_tokens_per_tool: u64,
-    requests: u64,
-    input_cost_per_million_usd: f64,
 }
 
 fn repo_file(path: &str) -> PathBuf {
@@ -110,31 +107,6 @@ fn live_meta_tool_counts() -> MetaToolClaims {
 
 fn capability_floor(count: usize) -> usize {
     (count / 10) * 10
-}
-
-#[allow(
-    clippy::cast_precision_loss,
-    reason = "Token counts and request rates are validation inputs well below \
-              2^53 — precision loss is impossible at the scales used in claims."
-)]
-fn readme_savings_metrics(claims: &PublicClaims) -> (u64, u64, f64, f64) {
-    let direct_tokens = claims.readme_token_savings.direct_tools
-        * claims.readme_token_savings.direct_tokens_per_tool;
-    let gateway_tokens = claims.readme_token_savings.gateway_tools
-        * claims.readme_token_savings.gateway_tokens_per_tool;
-    let savings_percent = (1.0 - (gateway_tokens as f64 / direct_tokens as f64)) * 100.0;
-    let direct_cost = (direct_tokens as f64 * claims.readme_token_savings.requests as f64
-        / 1_000_000.0)
-        * claims.readme_token_savings.input_cost_per_million_usd;
-    let gateway_cost = (gateway_tokens as f64 * claims.readme_token_savings.requests as f64
-        / 1_000_000.0)
-        * claims.readme_token_savings.input_cost_per_million_usd;
-    (
-        direct_tokens,
-        gateway_tokens,
-        savings_percent,
-        direct_cost - gateway_cost,
-    )
 }
 
 const PUBLIC_CLAIM_SURFACES: &[&str] = &[
@@ -289,8 +261,6 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
     let claims = load_claims();
     let readme = read_repo_file("README.md");
     let rounded_startup_ms = claims.startup_benchmark.mean_ms.round() as u64;
-    let (_direct_tokens, gateway_tokens, _savings_percent, savings_usd) =
-        readme_savings_metrics(&claims);
 
     assert!(
         readme.contains(&format!(
@@ -323,23 +293,12 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
         "README capability table should advertise the canonical built-in capability floor"
     );
     assert!(
-        readme.contains(&format!("~{gateway_tokens} tokens")),
-        "README should contain the canonical gateway token claim"
-    );
-    assert!(
-        readme.contains("schema-only"),
-        "README must label the 89% figure as schema-only, not measured task-token savings"
+        readme.contains("no completed-task token saving"),
+        "README should lead with the checked-in live benchmark result"
     );
     assert!(
         !readme.chars().take(900).collect::<String>().contains("89%"),
         "README lede must not lead with the schema-only 89% figure"
-    );
-    assert!(
-        readme.contains(&format!(
-            "**${} saved per 1K** in the schema-only first-request model",
-            savings_usd.round() as u64
-        )),
-        "README should qualify the canonical rounded cost savings claim"
     );
     assert!(
         readme.contains(&format!(
@@ -380,12 +339,9 @@ fn honest_model_constants_match_canonical_claims() {
 }
 
 #[test]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     let claims = load_claims();
     let benchmarks = read_repo_file("docs/BENCHMARKS.md");
-    let (_direct_tokens, gateway_tokens, savings_percent, savings_usd) =
-        readme_savings_metrics(&claims);
 
     assert!(
         benchmarks.contains("benchmarks/public_claims.json"),
@@ -433,16 +389,12 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
         "benchmark docs should describe how to reproduce the README token-savings scenario"
     );
     assert!(
-        benchmarks.contains("python benchmarks/token_savings.py --scenario honest"),
-        "benchmark docs should describe how to reproduce the honest extra-turn model"
+        benchmarks.contains("python benchmarks/live_agent_tool_selection.py"),
+        "benchmark docs should describe how to reproduce the live completed-task measurement"
     );
     assert!(
-        benchmarks.contains(&format!("~{gateway_tokens} gateway tokens")),
-        "benchmark docs should include the canonical rounded gateway token claim"
-    );
-    assert!(
-        benchmarks.contains(&format!("**{}% savings**", savings_percent.round() as u64)),
-        "benchmark docs should include the canonical rounded savings percentage"
+        benchmarks.contains("no measured saving"),
+        "benchmark docs should publish the checked-in live result"
     );
     assert!(
         benchmarks.contains("schema-only"),
@@ -451,10 +403,6 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     assert!(
         benchmarks.contains("honest_task_tokens"),
         "benchmark docs must name the extra-turn task-token model"
-    );
-    assert!(
-        benchmarks.contains(&format!("**${} saved per 1K", savings_usd.round() as u64)),
-        "benchmark docs should include the canonical rounded savings value"
     );
     assert!(
         benchmarks.contains(&format!(

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-MCP Gateway Token Savings Benchmark
+MCP Gateway Context Benchmark
 
-Demonstrates the context token reduction achieved by the meta-MCP gateway
-pattern compared to direct tool registration.
+Compares schema-only context reduction with an extra-turn task-token model.
+The default task model can report a loss; use an explicit scenario for the
+synthetic or README first-request calculations.
 
 Direct approach: Every backend's tools are individually registered in the
 LLM's system prompt, consuming context tokens proportional to the total
@@ -47,6 +48,7 @@ def estimate_tokens(text: str) -> int:
 # Synthetic tool definitions
 # ---------------------------------------------------------------------------
 
+
 def make_tool_definition(backend: str, tool_name: str, n_params: int = 3) -> dict:
     """Generate a realistic MCP tool definition."""
     params = {
@@ -66,7 +68,7 @@ def make_tool_definition(backend: str, tool_name: str, n_params: int = 3) -> dic
         "inputSchema": {
             "type": "object",
             "properties": params,
-            "required": [f"param_0"],
+            "required": ["param_0"],
         },
     }
 
@@ -74,15 +76,41 @@ def make_tool_definition(backend: str, tool_name: str, n_params: int = 3) -> dic
 def generate_backend_tools(backend: str, n_tools: int) -> list[dict]:
     """Generate n_tools definitions for one backend."""
     tool_names = [
-        "list_items", "get_item", "create_item", "update_item", "delete_item",
-        "search", "filter", "aggregate", "export", "import_data",
-        "get_status", "get_config", "set_config", "validate", "transform",
-        "notify", "subscribe", "unsubscribe", "get_metrics", "get_logs",
-        "get_schema", "list_users", "get_user", "create_user", "delete_user",
-        "list_projects", "get_project", "run_query", "get_report", "sync",
+        "list_items",
+        "get_item",
+        "create_item",
+        "update_item",
+        "delete_item",
+        "search",
+        "filter",
+        "aggregate",
+        "export",
+        "import_data",
+        "get_status",
+        "get_config",
+        "set_config",
+        "validate",
+        "transform",
+        "notify",
+        "subscribe",
+        "unsubscribe",
+        "get_metrics",
+        "get_logs",
+        "get_schema",
+        "list_users",
+        "get_user",
+        "create_user",
+        "delete_user",
+        "list_projects",
+        "get_project",
+        "run_query",
+        "get_report",
+        "sync",
     ]
     return [
-        make_tool_definition(backend, tool_names[i % len(tool_names)], n_params=3 + (i % 3))
+        make_tool_definition(
+            backend, tool_names[i % len(tool_names)], n_params=3 + (i % 3)
+        )
         for i in range(n_tools)
     ]
 
@@ -92,7 +120,9 @@ def generate_backend_tools(backend: str, n_tools: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 PUBLIC_CLAIMS_PATH = Path(__file__).with_name("public_claims.json")
-DISCOVERY_RESPONSE_FIXTURE_PATH = Path(__file__).with_name("discovery_response_fixture.json")
+DISCOVERY_RESPONSE_FIXTURE_PATH = Path(__file__).with_name(
+    "discovery_response_fixture.json"
+)
 
 
 def load_public_claims() -> dict:
@@ -293,13 +323,30 @@ if README_SCENARIO["gateway_tools"] != len(GATEWAY_TOOLS):
 # Benchmark
 # ---------------------------------------------------------------------------
 
+
 def synthetic_results(n_backends: int, tools_per_backend: int) -> dict:
     """Return synthetic benchmark results for arbitrary backend counts."""
     backend_names = [
-        "slack", "github", "jira", "confluence", "linear",
-        "notion", "postgres", "stripe", "sendgrid", "datadog",
-        "sentry", "pagerduty", "grafana", "elasticsearch", "redis",
-        "mongodb", "snowflake", "bigquery", "s3", "cloudflare",
+        "slack",
+        "github",
+        "jira",
+        "confluence",
+        "linear",
+        "notion",
+        "postgres",
+        "stripe",
+        "sendgrid",
+        "datadog",
+        "sentry",
+        "pagerduty",
+        "grafana",
+        "elasticsearch",
+        "redis",
+        "mongodb",
+        "snowflake",
+        "bigquery",
+        "s3",
+        "cloudflare",
     ]
 
     all_direct_tools = []
@@ -364,7 +411,9 @@ def print_synthetic_results(results: dict) -> None:
     print(row("Approach              Tools in Prompt    Est. Tokens"))
     print(row("--------              ---------------    -----------"))
     print(row(f"Direct (all tools)    {total_tools:>15,}    {direct_tokens:>11,}"))
-    print(row(f"Meta-MCP (gateway)    {len(GATEWAY_TOOLS):>15,}    {gateway_tokens:>11,}"))
+    print(
+        row(f"Meta-MCP (gateway)    {len(GATEWAY_TOOLS):>15,}    {gateway_tokens:>11,}")
+    )
     print(row())
     print(sep())
     print(row())
@@ -380,10 +429,26 @@ def print_synthetic_results(results: dict) -> None:
     print("  --------  -----  --------------  ----------------  -------")
 
     backend_names = [
-        "slack", "github", "jira", "confluence", "linear",
-        "notion", "postgres", "stripe", "sendgrid", "datadog",
-        "sentry", "pagerduty", "grafana", "elasticsearch", "redis",
-        "mongodb", "snowflake", "bigquery", "s3", "cloudflare",
+        "slack",
+        "github",
+        "jira",
+        "confluence",
+        "linear",
+        "notion",
+        "postgres",
+        "stripe",
+        "sendgrid",
+        "datadog",
+        "sentry",
+        "pagerduty",
+        "grafana",
+        "elasticsearch",
+        "redis",
+        "mongodb",
+        "snowflake",
+        "bigquery",
+        "s3",
+        "cloudflare",
     ]
     for nb, tpb in [(1, 10), (3, 15), (5, 20), (10, 20), (10, 30), (20, 25)]:
         tools = []
@@ -397,13 +462,17 @@ def print_synthetic_results(results: dict) -> None:
         print(f"  {nb:>8}  {total:>5}  {d_tok:>14,}  {g_tok:>16,}  {pct:>5.1f}%")
     print()
     print("  Note: Token estimates use ~3.5 chars/token heuristic.")
-    print(f"  Gateway tools are constant ({len(GATEWAY_TOOLS)}) regardless of backend count.")
+    print(
+        f"  Gateway tools are constant ({len(GATEWAY_TOOLS)}) regardless of backend count."
+    )
     print()
 
 
 def readme_results() -> dict:
     """Return the exact token/cost scenario published in README.md."""
-    direct_tokens = README_SCENARIO["direct_tools"] * README_SCENARIO["direct_tokens_per_tool"]
+    direct_tokens = (
+        README_SCENARIO["direct_tools"] * README_SCENARIO["direct_tokens_per_tool"]
+    )
     gateway_tokens = len(GATEWAY_TOOLS) * README_SCENARIO["gateway_tokens_per_tool"]
     direct_cost = (
         direct_tokens * README_SCENARIO["requests"] / 1_000_000
@@ -456,7 +525,9 @@ def honest_results() -> dict:
     direct_tokens_per_tool = README_SCENARIO["direct_tokens_per_tool"]
     meta_tokens_per_tool = README_SCENARIO["gateway_tokens_per_tool"]
     meta_tools = len(GATEWAY_TOOLS)
-    discovery_response_tokens = (len(DISCOVERY_RESPONSE_FIXTURE_PATH.read_bytes()) + 3) // 4
+    discovery_response_tokens = (
+        len(DISCOVERY_RESPONSE_FIXTURE_PATH.read_bytes()) + 3
+    ) // 4
 
     def meta_total(extra_turns: int) -> int:
         search_turns = max(0, extra_turns - 1)
@@ -490,7 +561,8 @@ def honest_results() -> dict:
         "meta_turns": 21,
         "eager_tokens": 100 * direct_tokens_per_tool * 2,
         "meta_tokens": meta_total(20),
-        "savings_percent": (1 - meta_total(20) / (100 * direct_tokens_per_tool * 2)) * 100,
+        "savings_percent": (1 - meta_total(20) / (100 * direct_tokens_per_tool * 2))
+        * 100,
         "meta_wins": meta_total(20) < 100 * direct_tokens_per_tool * 2,
     }
     return {
@@ -523,20 +595,24 @@ def print_honest_results(results: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Benchmark context token savings of the MCP Gateway meta-MCP pattern."
+        description="Compare MCP Gateway schema-only and extra-turn task-token models."
     )
     parser.add_argument(
         "--scenario",
         choices=("synthetic", "readme", "honest"),
-        default="synthetic",
-        help="Benchmark scenario to run (default: synthetic)",
+        default="honest",
+        help="Benchmark scenario to run (default: honest extra-turn model)",
     )
     parser.add_argument(
-        "--backends", type=int, default=5,
+        "--backends",
+        type=int,
+        default=5,
         help="Number of MCP backend servers (default: 5)",
     )
     parser.add_argument(
-        "--tools-per-backend", type=int, default=20,
+        "--tools-per-backend",
+        type=int,
+        default=20,
         help="Number of tools per backend (default: 20)",
     )
     parser.add_argument(
