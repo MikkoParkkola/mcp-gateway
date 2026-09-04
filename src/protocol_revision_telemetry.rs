@@ -802,6 +802,7 @@ fn unix_seconds() -> io::Result<u64> {
 fn write_window_atomic(path: &Path, window: &DurableWindow) -> io::Result<()> {
     let bytes = serde_json::to_vec_pretty(window)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    #[cfg(unix)]
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "window has no parent"))?;
