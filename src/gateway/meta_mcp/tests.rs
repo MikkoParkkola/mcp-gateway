@@ -188,30 +188,39 @@ fn tools_list_wiring_records_real_cache_scope_inputs() {
 
 #[test]
 fn static_code_mode_does_not_claim_profile_or_session_filtering() {
-    let meta = make_meta_mcp_code_mode();
+    let meta = make_meta_mcp_with_profiles().with_code_mode(true);
     meta.session_profiles
-        .set_profile("code-mode-session", "non-default");
+        .set_profile("code-mode-session", "coding");
     let shadow = meta.shadow_tools_list_assembly(Some("code-mode-session"), false);
 
     assert!(!shadow.profile);
     assert!(!shadow.session);
     assert!(!shadow.request);
+
+    let query_shadow = meta.shadow_tools_list_assembly(Some("code-mode-session"), true);
+    assert!(query_shadow.profile);
+    assert!(query_shadow.request);
 }
 
 #[test]
-fn restrictive_default_profile_is_recorded_as_filtered() {
+fn restrictive_default_profile_without_surfaced_tools_does_not_shape_standard_list() {
     use crate::protocol_revision_telemetry::{ListFilters, global_shadow_count};
 
     let meta = make_meta_mcp_with_profiles();
-    let filtered = ListFilters {
-        profile: true,
-        ..ListFilters::default()
-    };
-    let before = global_shadow_count(filtered);
+    let unfiltered = ListFilters::default();
+    let before = global_shadow_count(unfiltered);
 
     meta.handle_tools_list(RequestId::Number(7004));
 
-    assert!(global_shadow_count(filtered) > before);
+    assert!(global_shadow_count(unfiltered) > before);
+
+    let surfaced = vec![SurfacedToolConfig {
+        server: "brave".to_string(),
+        tool: "brave_search".to_string(),
+    }];
+    let surfaced_meta = make_meta_mcp_with_profiles().with_surfaced_tools(surfaced);
+    let profile_filtered = surfaced_meta.shadow_tools_list_assembly(None, false);
+    assert!(profile_filtered.profile);
 }
 
 #[test]

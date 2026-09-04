@@ -1056,14 +1056,15 @@ impl MetaMcp {
         session_id: Option<&str>,
         request_variant: bool,
     ) -> crate::protocol_revision_telemetry::ToolsListShadow {
-        // Static Code Mode always returns the same two meta-tools. Routing
-        // profile and promoted-session state do not filter that response.
-        if self.code_mode_enabled {
+        // Static Code Mode returns the same two meta-tools only on the standard
+        // path. A spec-preview query returns filtered backend tools instead.
+        if self.code_mode_enabled && !request_variant {
             return crate::protocol_revision_telemetry::observe_tools_list(
                 crate::protocol_revision_telemetry::ListFilters::default(),
             );
         }
-        let profile = self.active_profile(session_id).is_restrictive();
+        let profile = self.active_profile(session_id).is_restrictive()
+            && (request_variant || !self.surfaced_tools.is_empty());
         #[cfg(feature = "spec-preview")]
         let session = !self.promoted_tools_for_session(session_id).is_empty();
         #[cfg(not(feature = "spec-preview"))]

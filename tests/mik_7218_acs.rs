@@ -4,8 +4,8 @@
 
 use mcp_gateway::protocol_revision_telemetry::{
     ATTRIBUTION_FLOOR, CacheScope, ListFilters, META_CLIENT_INFO, META_PROTOCOL_VERSION,
-    MIN_MEASUREMENT_WINDOW, RETIRE_BELOW_SHARE, Registry, Transport, attribution_rate,
-    cache_scope_decision, client_identity, distribution_table, global_snapshot,
+    MIN_MEASUREMENT_WINDOW, RETIRE_BELOW_SHARE, Registry, RetirementBlocked, Transport,
+    attribution_rate, cache_scope_decision, client_identity, distribution_table, global_snapshot,
     observe_inbound_request, public_over_filtered, requested_revision, retire_revisions,
 };
 use serde_json::json;
@@ -114,7 +114,10 @@ fn mcp728_u1_4_measurement_window_table_and_stop_criterion() {
         attribution_rate(&production) < ATTRIBUTION_FLOOR,
         "empty window is not fit to decide on"
     );
-    assert!(retire_revisions(&production, MIN_MEASUREMENT_WINDOW).is_empty());
+    assert_eq!(
+        retire_revisions(&production, MIN_MEASUREMENT_WINDOW),
+        Err(RetirementBlocked::NoObservations)
+    );
 
     for _ in 0..5 {
         reg.observe_request(Some("2025-11-25"), "test", Transport::Http);
@@ -160,15 +163,22 @@ fn mcp728_u1_6_two_percent_rule_unadjusted_and_blocked_when_underattributed() {
     let mut under = Registry::new();
     under.observe_request(Some("2024-11-05"), "c", Transport::Http);
     under.observe_request(None, "c", Transport::Http);
-    assert!(retire_revisions(&under.snapshot(), MIN_MEASUREMENT_WINDOW).is_empty());
+    assert_eq!(
+        retire_revisions(&under.snapshot(), MIN_MEASUREMENT_WINDOW),
+        Err(RetirementBlocked::AttributionBelowFloor)
+    );
 
     let mut full = Registry::new();
     for _ in 0..99 {
         full.observe_request(Some("2025-11-25"), "c", Transport::Http);
     }
     full.observe_request(Some("2024-11-05"), "c", Transport::Http);
-    assert!(retire_revisions(&full.snapshot(), std::time::Duration::from_secs(1)).is_empty());
-    let retired = retire_revisions(&full.snapshot(), MIN_MEASUREMENT_WINDOW);
+    assert_eq!(
+        retire_revisions(&full.snapshot(), std::time::Duration::from_secs(1)),
+        Err(RetirementBlocked::WindowTooShort)
+    );
+    let retired = retire_revisions(&full.snapshot(), MIN_MEASUREMENT_WINDOW)
+        .expect("full attributed window is actionable");
     assert!(retired.iter().any(|r| r == "2024-11-05"));
     assert!(retired.iter().any(|r| r == "2024-10-07"));
     assert!(!retired.iter().any(|r| r == "2025-11-25"));

@@ -158,6 +158,17 @@ pub struct Snapshot {
     pub total: u64,
 }
 
+/// Why a production window cannot yet produce a retirement decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetirementBlocked {
+    /// Fewer than seven days have elapsed.
+    WindowTooShort,
+    /// No request observations were recorded.
+    NoObservations,
+    /// Fewer than 80% of requests carried attributable revision data.
+    AttributionBelowFloor,
+}
+
 impl Registry {
     /// Empty counters.
     pub fn new() -> Self {
@@ -357,23 +368,29 @@ pub fn attribution_rate(snapshot: &Snapshot) -> f64 {
 ///
 /// Every unattributed observation is treated as if it belonged to the revision
 /// being evaluated. This prevents missing attribution from making an older
-/// revision look safer to remove. Empty, short, or under-attributed windows
-/// return no candidates.
-pub fn retire_revisions(snapshot: &Snapshot, elapsed: Duration) -> Vec<String> {
-    if elapsed < MIN_MEASUREMENT_WINDOW
-        || snapshot.total == 0
-        || attribution_rate(snapshot) < ATTRIBUTION_FLOOR
-    {
-        return Vec::new();
+/// revision look safer to remove. An unusable window is returned separately
+/// from a usable window with no retirement candidates.
+pub fn retire_revisions(
+    snapshot: &Snapshot,
+    elapsed: Duration,
+) -> Result<Vec<String>, RetirementBlocked> {
+    if elapsed < MIN_MEASUREMENT_WINDOW {
+        return Err(RetirementBlocked::WindowTooShort);
     }
-    crate::protocol::SUPPORTED_VERSIONS
+    if snapshot.total == 0 {
+        return Err(RetirementBlocked::NoObservations);
+    }
+    if attribution_rate(snapshot) < ATTRIBUTION_FLOOR {
+        return Err(RetirementBlocked::AttributionBelowFloor);
+    }
+    Ok(crate::protocol::SUPPORTED_VERSIONS
         .iter()
         .filter(|rev| {
             let count = snapshot.by_revision.get(**rev).copied().unwrap_or(0);
             ratio(count.saturating_add(snapshot.unattributed), snapshot.total) < RETIRE_BELOW_SHARE
         })
         .map(|rev| (*rev).to_string())
-        .collect()
+        .collect())
 }
 
 /// Markdown table for the Linear comment. Unattributed is its own row, not a revision.
@@ -432,6 +449,9 @@ pub fn observe_inbound_request(
     session_id: Option<&str>,
     transport: Transport,
 ) {
+    if method.starts_with("notifications/") {
+        return;
+    }
     let meta = request_meta(request, params);
     let initialize_params = (method == "initialize").then_some(params).flatten();
     let explicit_requested = requested_revision(initialize_params, meta)
@@ -467,7 +487,7 @@ pub fn observe_inbound_request(
     reg.observe_request(requested_label, client, transport);
     drop(reg);
     emit_request_metrics(requested_label, client, transport);
-    tracing::info!(
+    tracing::debug!(
         requested_revision = requested_label.unwrap_or("unattributed"),
         client,
         transport = transport.as_str(),
@@ -483,7 +503,7 @@ pub fn observe_tools_list(filters: ListFilters) -> ToolsListShadow {
     let shadow = reg.shadow_tools_list(filters);
     drop(reg);
     emit_tools_list_metrics(filters, shadow.would_emit_cache_scope);
-    tracing::info!(
+    tracing::debug!(
         principal = shadow.principal,
         profile = shadow.profile,
         session = shadow.session,
@@ -627,6 +647,43 @@ mod tests {
     }
 
     #[test]
+    fn every_supported_revision_has_a_dedicated_metric_label() {
+        for revision in crate::protocol::SUPPORTED_VERSIONS {
+            assert!(
+                MEASURED_REVISIONS.contains(revision),
+                "supported revision {revision} would collapse into the other bucket"
+            );
+        }
+    }
+
+    #[test]
+    fn notifications_are_not_request_observations() {
+        let before = global_snapshot()
+            .by_revision
+            .get(OTHER_REVISION)
+            .copied()
+            .unwrap_or(0);
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        });
+        observe_inbound_request(
+            &notification,
+            None,
+            "notifications/initialized",
+            Some("notification-only-test-revision"),
+            None,
+            Transport::Http,
+        );
+        let after = global_snapshot()
+            .by_revision
+            .get(OTHER_REVISION)
+            .copied()
+            .unwrap_or(0);
+        assert_eq!(after, before);
+    }
+
+    #[test]
     fn cache_scope_public_only_when_unfiltered() {
         assert_eq!(
             cache_scope_decision(ListFilters::default()),
@@ -646,12 +703,18 @@ mod tests {
     #[test]
     fn two_percent_rule_does_not_fire_on_underattributed_or_empty() {
         let empty = Registry::new().snapshot();
-        assert!(retire_revisions(&empty, MIN_MEASUREMENT_WINDOW).is_empty());
+        assert_eq!(
+            retire_revisions(&empty, MIN_MEASUREMENT_WINDOW),
+            Err(RetirementBlocked::NoObservations)
+        );
         let mut low = Registry::new();
         low.observe_request(Some("2025-06-18"), "c", Transport::Http);
         low.observe_request(None, "c", Transport::Http);
         // 50% attributed < 80% floor
-        assert!(retire_revisions(&low.snapshot(), MIN_MEASUREMENT_WINDOW).is_empty());
+        assert_eq!(
+            retire_revisions(&low.snapshot(), MIN_MEASUREMENT_WINDOW),
+            Err(RetirementBlocked::AttributionBelowFloor)
+        );
     }
 
     #[test]
@@ -661,8 +724,12 @@ mod tests {
             reg.observe_request(Some("2025-11-25"), "c", Transport::Http);
         }
         reg.observe_request(Some("2024-11-05"), "c", Transport::Http);
-        assert!(retire_revisions(&reg.snapshot(), Duration::from_secs(1)).is_empty());
-        let retired = retire_revisions(&reg.snapshot(), MIN_MEASUREMENT_WINDOW);
+        assert_eq!(
+            retire_revisions(&reg.snapshot(), Duration::from_secs(1)),
+            Err(RetirementBlocked::WindowTooShort)
+        );
+        let retired = retire_revisions(&reg.snapshot(), MIN_MEASUREMENT_WINDOW)
+            .expect("full attributed window is actionable");
         assert!(retired.iter().any(|r| r == "2024-11-05"));
         assert!(retired.iter().any(|r| r == "2024-10-07"));
         assert!(!retired.iter().any(|r| r == "2025-11-25"));
