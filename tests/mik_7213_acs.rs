@@ -410,10 +410,18 @@ fn ac_cache_3_every_cacheable_method_has_an_assessed_row() {
 
 #[test]
 fn ac_cache_4_two_principals_do_not_share_an_entry() {
-    use mcp_gateway::cache::ResponseCache;
+    use mcp_gateway::cache::{KeyContext, ResponseCache};
     let arguments = serde_json::json!({ "query": "quarterly numbers" });
-    let key =
-        |principal| ResponseCache::response_key("memory", "search", &arguments, "", principal);
+    let key = |principal| {
+        ResponseCache::response_key(
+            "memory",
+            "search",
+            &arguments,
+            "",
+            principal,
+            KeyContext::default(),
+        )
+    };
 
     // Every other input is equal by construction, so a difference can only come
     // from the principal. Identity propagation is off in this case — the
@@ -492,4 +500,38 @@ fn ac_cache_3_the_wire_field_is_filled_from_the_table() {
         "the `cacheScope` a client receives must come from the table, not from \
          one method's answer applied to five"
     );
+}
+
+#[test]
+fn ac_cache_4a_two_routing_profiles_do_not_share_an_entry() {
+    use mcp_gateway::cache::{KeyContext, ResponseCache};
+    let arguments = serde_json::json!({ "query": "quarterly numbers" });
+    let key = |routing_profile| {
+        ResponseCache::response_key(
+            "memory",
+            "search",
+            &arguments,
+            "",
+            None,
+            KeyContext {
+                routing_profile,
+                ..KeyContext::default()
+            },
+        )
+    };
+
+    // The routing profile selects which backends answer and which tools are
+    // visible, so two profiles are two different questions. Every other input
+    // is equal by construction here, so a shared key can only come from the
+    // profile going unkeyed.
+    assert_ne!(
+        key("readonly"),
+        key("admin"),
+        "a response that varies with the routing profile is served from one \
+         entry, so a restricted caller is handed the permissive answer"
+    );
+
+    // Determinism control: without it the assertion above passes for a key
+    // that is merely different every time.
+    assert_eq!(key("readonly"), key("readonly"));
 }
