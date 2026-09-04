@@ -131,7 +131,7 @@ impl Backend {
                 pool
             },
             failsafe_config: failsafe_config.clone(),
-            era: Arc::new(crate::protocol::era::EraCache::new()),
+            era: Arc::new(crate::protocol::era::EraCache::for_backend(name)),
             tools_cache: CachedMetadata::new(),
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),

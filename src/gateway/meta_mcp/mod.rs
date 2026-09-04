@@ -1553,7 +1553,7 @@ impl MetaMcp {
                 self.code_mode_execute(&arguments, session_id, &caller)
                     .await
             }
-            "gateway_list_servers" => self.list_servers(),
+            "gateway_list_servers" => self.list_servers().await,
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
             "gateway_invoke" => self.invoke_tool(&arguments, session_id, &caller).await,

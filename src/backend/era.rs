@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::Backend;
 use crate::protocol::JsonRpcResponse;
-use crate::protocol::era::{Era, ProbeOutcome, classify};
+use crate::protocol::era::{Era, EraObservation, ProbeOutcome, classify};
 use crate::transport::Transport;
 
 /// Method a modern peer answers with its discovery document.
@@ -62,6 +62,12 @@ impl Backend {
         self.era.cached().await
     }
 
+    /// Everything an operator can see about this backend's era, for
+    /// `gateway_list_servers`. Never probes.
+    pub async fn era_observation(&self) -> EraObservation {
+        self.era.observation().await
+    }
+
     /// Resolve the era of a freshly started peer, probing at most once.
     ///
     /// Awaited on the start path so the first request already knows which
@@ -98,7 +104,7 @@ impl Backend {
         let timeout = self.probe_timeout();
         tokio::spawn(async move {
             era.invalidate().await;
-            era.resolve_with(|| probe(&transport, timeout)).await;
+            era.reprobe_with(|| probe(&transport, timeout)).await;
         });
     }
 

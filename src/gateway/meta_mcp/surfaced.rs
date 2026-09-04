@@ -169,24 +169,26 @@ impl MetaMcp {
 impl MetaMcp {
     /// `gateway_list_servers` — list all servers with kill-switch and circuit-breaker state.
     #[allow(clippy::unnecessary_wraps)]
-    pub(super) fn list_servers(&self) -> Result<Value> {
-        let mut servers: Vec<Value> = self
-            .backends
-            .all()
-            .iter()
-            .map(|b| {
-                let status = b.status();
-                let killed = self.kill_switch.is_killed(&status.name);
-                json!({
-                    "name": status.name,
-                    "running": status.running,
-                    "transport": status.transport,
-                    "tools_count": status.tools_cached,
-                    "circuit_breaker": status.circuit_state,
-                    "status": if killed { "disabled" } else { "active" }
-                })
-            })
-            .collect();
+    pub(super) async fn list_servers(&self) -> Result<Value> {
+        let mut servers: Vec<Value> = Vec::new();
+        for b in self.backends.all() {
+            let status = b.status();
+            let killed = self.kill_switch.is_killed(&status.name);
+            let mut entry = json!({
+                "name": status.name,
+                "running": status.running,
+                "transport": status.transport,
+                "tools_count": status.tools_cached,
+                "circuit_breaker": status.circuit_state,
+                "status": if killed { "disabled" } else { "active" }
+            });
+            // The era determination rides on the same entry as the rest of the
+            // backend's state, so an operator reading one server reads one row.
+            if let Some(fields) = entry.as_object_mut() {
+                fields.extend(b.era_observation().await.render());
+            }
+            servers.push(entry);
+        }
 
         if let Some(cap) = self.get_capabilities() {
             let status = cap.status();

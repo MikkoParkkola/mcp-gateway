@@ -29,6 +29,21 @@ pub enum Era {
     Legacy,
 }
 
+impl Era {
+    /// The wire spelling, shared by the operator read and the `era_probe`
+    /// event so the two cannot drift.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Modern => "modern",
+            Self::Legacy => "legacy",
+        }
+    }
+}
+
+/// JSON-RPC `method not found` — the honest legacy answer to `server/discover`.
+const METHOD_NOT_FOUND_CODE: i32 = -32601;
+
 /// JSON-RPC error code for `UnsupportedProtocolVersion` in 2026-07-28.
 ///
 /// Renumbered from `-32004` by that revision's error-code allocation policy,
@@ -116,10 +131,14 @@ pub fn classify(outcome: &ProbeOutcome) -> Era {
 /// and commit afterwards.
 #[derive(Debug, Default)]
 pub struct EraCache {
-    /// `None` until determined. Held across an await, so a `tokio` lock rather
-    /// than a `std` one — the probe happens under it, which is what makes eight
-    /// racing callers issue one probe instead of eight.
-    era: tokio::sync::Mutex<Option<Era>>,
+    /// The backend this cache belongs to, so the records it emits name it.
+    name: String,
+    /// The determination, held across an await because the probe runs under
+    /// the lock — a `tokio` lock rather than a `std` one for that reason.
+    ///
+    /// One value rather than five cells: no reader can observe an `era` from
+    /// the latest probe beside an `era_evidence` from the previous one.
+    observation: tokio::sync::Mutex<EraObservation>,
 }
 
 impl EraCache {
@@ -129,9 +148,33 @@ impl EraCache {
         Self::default()
     }
 
+    /// A cache whose records name `backend`.
+    #[must_use]
+    pub fn for_backend(backend: impl Into<String>) -> Self {
+        Self {
+            name: backend.into(),
+            observation: tokio::sync::Mutex::default(),
+        }
+    }
+
     /// The era, if one has been determined and not since invalidated.
     pub async fn cached(&self) -> Option<Era> {
-        *self.era.lock().await
+        let observation = *self.observation.lock().await;
+        (observation.source == EraSource::Probed).then_some(observation.era)
+    }
+
+    /// Everything an operator can see about this backend's era.
+    ///
+    /// Emits the `era_cache` record: a read of a determined era is a hit, a
+    /// read of an undetermined one is not. Reading never probes.
+    pub async fn observation(&self) -> EraObservation {
+        let observation = *self.observation.lock().await;
+        tracing::debug!(
+            target: "mcp_gateway::observed",
+            backend = %self.name,
+            hit = observation.source == EraSource::Probed,
+        );
+        observation
     }
 
     /// Discard the determination, so the next resolution probes again.
@@ -145,35 +188,83 @@ impl EraCache {
     /// leaving the caller believing it had discarded a belief it had not. A
     /// control that fails silently is worse than one that blocks briefly.
     pub async fn invalidate(&self) {
-        *self.era.lock().await = None;
+        self.invalidate_because("trigger").await;
     }
 
-    /// Return the cached era, or determine it by probing.
-    ///
-    /// The probe runs while the lock is held. That is deliberate: it serialises
-    /// concurrent resolution onto a single probe, which is the point.
+    /// Discard the determination, recording why.
+    pub async fn invalidate_because(&self, reason: &str) {
+        *self.observation.lock().await = EraObservation::never_probed();
+        tracing::debug!(
+            target: "mcp_gateway::observed",
+            backend = %self.name,
+            reason = %reason,
+        );
+    }
+
+    /// Return the cached era, or determine it by probing on the start path.
     pub async fn resolve_with<F, Fut>(&self, probe: F) -> Era
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = ProbeOutcome>,
     {
-        let mut guard = self.era.lock().await;
-        if let Some(era) = *guard {
-            return era;
-        }
-        let outcome = probe().await;
-        let era = classify(&outcome);
+        self.resolve_triggered(ProbeTrigger::Start, probe).await
+    }
 
-        // Silence is not a finding. `classify` answers Legacy for a probe that
-        // never came back, which is the right way to *treat* the next request
-        // and the wrong thing to *remember*: a backend briefly unreachable
-        // would be pinned to the legacy path for the life of the process, and
-        // a dual-era peer that recovered would never be spoken to properly
-        // again. Cache only what the peer actually told us.
-        if !matches!(outcome, ProbeOutcome::NoAnswer) {
-            *guard = Some(era);
+    /// Return the cached era, or determine it by probing after a contradiction.
+    pub async fn reprobe_with<F, Fut>(&self, probe: F) -> Era
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ProbeOutcome>,
+    {
+        self.resolve_triggered(ProbeTrigger::Reprobe, probe).await
+    }
+
+    /// The probe runs while the lock is held. That is deliberate: it serialises
+    /// concurrent resolution onto a single probe, which is the point.
+    ///
+    /// Silence is not a finding. A probe that never came back leaves the era
+    /// [`EraSource::Assumed`], so a backend briefly unreachable is not pinned
+    /// to the legacy path for the life of the process — while still stamping
+    /// `probed_at`, because a probe did run.
+    async fn resolve_triggered<F, Fut>(&self, trigger: ProbeTrigger, probe: F) -> Era
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ProbeOutcome>,
+    {
+        let mut guard = self.observation.lock().await;
+        if guard.source == EraSource::Probed {
+            tracing::debug!(target: "mcp_gateway::observed", backend = %self.name, hit = true);
+            return guard.era;
         }
-        era
+        tracing::debug!(target: "mcp_gateway::observed", backend = %self.name, hit = false);
+
+        let started = std::time::Instant::now();
+        let outcome = probe().await;
+        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let observation = EraObservation::from_outcome(&outcome, trigger, chrono::Utc::now());
+
+        match outcome {
+            ProbeOutcome::Error(code) => tracing::debug!(
+                target: "mcp_gateway::observed",
+                backend = %self.name,
+                outcome = observation.era.as_str(),
+                evidence = observation.evidence.as_str(),
+                error_code = code,
+                duration_ms,
+                trigger = trigger.as_str(),
+            ),
+            _ => tracing::debug!(
+                target: "mcp_gateway::observed",
+                backend = %self.name,
+                outcome = observation.era.as_str(),
+                evidence = observation.evidence.as_str(),
+                duration_ms,
+                trigger = trigger.as_str(),
+            ),
+        }
+
+        *guard = observation;
+        observation.era
     }
 }
 
@@ -286,6 +377,39 @@ pub struct EraObservation {
     pub probed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+impl EraEvidence {
+    /// The wire spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NeverProbed => "never_probed",
+            Self::DiscoverModern => "discover_modern",
+            Self::DiscoverNotModern => "discover_not_modern",
+            Self::ModernErrorCode => "modern_error_code",
+            Self::MethodNotFound => "method_not_found",
+            Self::OtherError => "other_error",
+            Self::NoAnswer => "no_answer",
+        }
+    }
+}
+
+impl ProbeTrigger {
+    /// The wire spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Reprobe => "reprobe",
+        }
+    }
+}
+
+impl Default for EraObservation {
+    fn default() -> Self {
+        Self::never_probed()
+    }
+}
+
 impl EraObservation {
     /// The determination held before any probe has run.
     #[must_use]
@@ -296,6 +420,41 @@ impl EraObservation {
             evidence: EraEvidence::NeverProbed,
             trigger: None,
             probed_at: None,
+        }
+    }
+
+    /// The determination one probe produced.
+    ///
+    /// Silence is the one case where a probe ran and the era stays
+    /// [`EraSource::Assumed`]: the peer told us nothing, so pinning it to the
+    /// legacy default would outlive the outage that caused it.
+    #[must_use]
+    pub fn from_outcome(
+        outcome: &ProbeOutcome,
+        trigger: ProbeTrigger,
+        probed_at: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
+        let era = classify(outcome);
+        let (source, evidence) = match outcome {
+            ProbeOutcome::NoAnswer => (EraSource::Assumed, EraEvidence::NoAnswer),
+            ProbeOutcome::Result(_) if era == Era::Modern => {
+                (EraSource::Probed, EraEvidence::DiscoverModern)
+            }
+            ProbeOutcome::Result(_) => (EraSource::Probed, EraEvidence::DiscoverNotModern),
+            ProbeOutcome::Error(_) if era == Era::Modern => {
+                (EraSource::Probed, EraEvidence::ModernErrorCode)
+            }
+            ProbeOutcome::Error(code) if *code == METHOD_NOT_FOUND_CODE => {
+                (EraSource::Probed, EraEvidence::MethodNotFound)
+            }
+            ProbeOutcome::Error(_) => (EraSource::Probed, EraEvidence::OtherError),
+        };
+        Self {
+            era,
+            source,
+            evidence,
+            trigger: Some(trigger),
+            probed_at: Some(probed_at),
         }
     }
 
