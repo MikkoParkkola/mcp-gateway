@@ -17,7 +17,6 @@
 //! for.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -90,11 +89,11 @@ impl Visit for FieldVisitor<'_> {
 /// concurrent cases would read each other's events.
 async fn capture_lock() -> tokio::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    static INSTALLED: OnceLock<()> = OnceLock::new();
     let guard = LOCK
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
         .await;
-    static INSTALLED: OnceLock<()> = OnceLock::new();
     INSTALLED.get_or_init(|| {
         let subscriber = Registry::default()
             .with(Collector)
@@ -170,7 +169,6 @@ const EMPTY_TOOLS: &str = r#""result":{"tools":[]}"#;
 
 struct Fixture {
     _dir: TempDir,
-    log: PathBuf,
     command: String,
 }
 
@@ -231,7 +229,6 @@ impl Fixture {
         std::fs::write(&script, body).expect("write fixture");
         Self {
             _dir: dir,
-            log,
             command: format!("sh {}", script.display()),
         }
     }
@@ -264,10 +261,6 @@ impl Fixture {
             &FailsafeConfig::default(),
             Duration::from_secs(300),
         )
-    }
-
-    fn frames(&self) -> String {
-        std::fs::read_to_string(&self.log).unwrap_or_default()
     }
 }
 
@@ -418,7 +411,10 @@ fn snapshot(entry: &Value) -> Value {
 async fn probe_and_read(fixture: &Fixture, name: &str) -> Value {
     let backends = Arc::new(BackendRegistry::new());
     let backend = Arc::new(fixture.backend(name));
-    backends.register(Arc::clone(&backend));
+    assert!(
+        backends.register(Arc::clone(&backend)),
+        "backend must register"
+    );
     backend
         .ensure_started()
         .await
@@ -451,7 +447,10 @@ async fn never_probed_reads_as_an_assumed_legacy_era() {
     let _guard = capture_lock().await;
     let fixture = Fixture::new(MODERN_DISCOVER);
     let backends = Arc::new(BackendRegistry::new());
-    backends.register(Arc::new(fixture.backend("unstarted")));
+    assert!(
+        backends.register(Arc::new(fixture.backend("unstarted"))),
+        "backend must register"
+    );
 
     // Deliberately not started: the probe runs on the start path.
     let servers = read::servers(backends).await;
@@ -668,7 +667,10 @@ async fn a_contradiction_reprobes_and_the_whole_read_moves_with_it() {
     let fixture = Fixture::reprobing(METHOD_NOT_FOUND, UNSUPPORTED_VERSION);
     let backends = Arc::new(BackendRegistry::new());
     let backend = Arc::new(fixture.backend("contradicted"));
-    backends.register(Arc::clone(&backend));
+    assert!(
+        backends.register(Arc::clone(&backend)),
+        "backend must register"
+    );
     backend.ensure_started().await.expect("start");
 
     let before = entry(&read::servers(Arc::clone(&backends)).await, "contradicted");
@@ -716,7 +718,10 @@ async fn a_reprobe_that_gets_no_answer_returns_the_era_to_assumed() {
     let fixture = Fixture::reprobing(NOT_MODERN_DISCOVER, "");
     let backends = Arc::new(BackendRegistry::new());
     let backend = Arc::new(fixture.backend("silenced"));
-    backends.register(Arc::clone(&backend));
+    assert!(
+        backends.register(Arc::clone(&backend)),
+        "backend must register"
+    );
     backend.ensure_started().await.expect("start");
 
     let before = entry(&read::servers(Arc::clone(&backends)).await, "silenced");
@@ -816,7 +821,10 @@ async fn the_era_invalidated_record_names_the_contradiction_as_its_reason() {
     let fixture = Fixture::reprobing(METHOD_NOT_FOUND, UNSUPPORTED_VERSION);
     let backends = Arc::new(BackendRegistry::new());
     let backend = Arc::new(fixture.backend("invalidated"));
-    backends.register(Arc::clone(&backend));
+    assert!(
+        backends.register(Arc::clone(&backend)),
+        "backend must register"
+    );
     backend.ensure_started().await.expect("start");
     let _ = backend.request("tools/list", None).await;
     await_reprobe(&backends, "invalidated").await;
@@ -849,8 +857,14 @@ async fn the_era_read_agrees_with_how_the_peer_answers_a_modern_only_call() {
     let backends = Arc::new(BackendRegistry::new());
     let modern_backend = Arc::new(modern.backend("speaks-modern"));
     let legacy_backend = Arc::new(legacy.backend("speaks-legacy"));
-    backends.register(Arc::clone(&modern_backend));
-    backends.register(Arc::clone(&legacy_backend));
+    assert!(
+        backends.register(Arc::clone(&modern_backend)),
+        "backend must register"
+    );
+    assert!(
+        backends.register(Arc::clone(&legacy_backend)),
+        "backend must register"
+    );
     modern_backend.ensure_started().await.expect("start modern");
     legacy_backend.ensure_started().await.expect("start legacy");
 
@@ -893,8 +907,14 @@ async fn each_backend_carries_its_own_era_observation() {
     let unprobed = Fixture::new(MODERN_DISCOVER);
     let backends = Arc::new(BackendRegistry::new());
     let started = Arc::new(probed.backend("probed-peer"));
-    backends.register(Arc::clone(&started));
-    backends.register(Arc::new(unprobed.backend("unprobed-peer")));
+    assert!(
+        backends.register(Arc::clone(&started)),
+        "backend must register"
+    );
+    assert!(
+        backends.register(Arc::new(unprobed.backend("unprobed-peer"))),
+        "backend must register"
+    );
     started.ensure_started().await.expect("start");
 
     let servers = read::servers(backends).await;

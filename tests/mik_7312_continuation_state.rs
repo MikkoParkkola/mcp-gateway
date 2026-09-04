@@ -72,6 +72,15 @@ fn app_state() -> Arc<AppState> {
     })
 }
 
+/// A deadline inside the mint-side lifetime ceiling.
+///
+/// `mint` refuses a payload whose window is wider than the gateway's own
+/// (300s), so a test stamp has to sit inside it or it never reaches the
+/// behaviour under test.
+const EXPIRES_AT: u64 = 1_200;
+/// A moment before `EXPIRES_AT`, so nothing here turns on expiry.
+const NOW: u64 = 1_100;
+
 fn payload(jti: &str, origin: &str, expires_at: u64) -> Payload {
     Payload {
         backend_id: "backend".to_string(),
@@ -94,7 +103,7 @@ fn payload(jti: &str, origin: &str, expires_at: u64) -> Payload {
 #[tokio::test]
 async fn continuation_state_is_reachable_from_the_production_app_state() {
     let state = app_state();
-    let minted = payload("jti-reachable", "replica-a", 2_000);
+    let minted = payload("jti-reachable", "replica-a", EXPIRES_AT);
 
     let token = state
         .continuation
@@ -104,7 +113,7 @@ async fn continuation_state_is_reachable_from_the_production_app_state() {
     let opened = state
         .continuation
         .keyring()
-        .open(&token, 1_500)
+        .open(&token, NOW)
         .expect("open through AppState");
     assert_eq!(opened.jti, "jti-reachable");
 
@@ -112,7 +121,7 @@ async fn continuation_state_is_reachable_from_the_production_app_state() {
         state
             .continuation
             .ledger()
-            .consume(&opened.jti, opened.expires_at, 1_500)
+            .consume(&opened.jti, opened.expires_at, NOW)
             .await,
         "first spend wins"
     );
@@ -120,7 +129,7 @@ async fn continuation_state_is_reachable_from_the_production_app_state() {
         !state
             .continuation
             .ledger()
-            .consume(&opened.jti, opened.expires_at, 1_500)
+            .consume(&opened.jti, opened.expires_at, NOW)
             .await,
         "a spent continuation is refused, so it is single-use"
     );
@@ -140,12 +149,12 @@ async fn a_token_minted_by_one_app_state_is_refused_by_another() {
     let token = a
         .continuation
         .keyring()
-        .mint(&payload("jti-cross-replica", "replica-a", 2_000))
+        .mint(&payload("jti-cross-replica", "replica-a", EXPIRES_AT))
         .expect("mint on A");
 
     assert!(
         matches!(
-            b.continuation.keyring().open(&token, 1_500),
+            b.continuation.keyring().open(&token, NOW),
             Err(ContinuationError::NotAuthentic)
         ),
         "B holds different key material, so A's envelope does not authenticate there"
