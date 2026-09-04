@@ -33,8 +33,6 @@ mcp-gateway's receipt path is opt-in and does not cover every cache hit.
 
 ## Feature bar
 
-Header (single line for mechanical checks): `| Connectors | IdP | Shadow | Runtime guards | Audit | Attestation |`
-
 | Capability | mcp-gateway (this repo) | Willow / Webrix (public pages) | mcp-gateway verdict |
 | --- | --- | --- | --- |
 | Connectors | YAML capabilities + OpenAPI import; no 1000-item catalog | **1000+** connectors claimed | **LAG** |
@@ -42,7 +40,7 @@ Header (single line for mechanical checks): `| Connectors | IdP | Shadow | Runti
 | Shadow-AI / unmanaged MCP | Local passive scan: `src/discovery/config_scanner.rs`, `src/discovery/process_scanner.rs`, `mcp-gateway cap discover --shadow`. Not a network proxy. Not org-wide automatic discovery. Follow-up work is required before treating this as an enterprise product surface. | Organization-wide automatic discovery claimed | **LAG** (local scan exists; enterprise discovery does not) |
 | Runtime guards | Policy, firewall, circuit-breaker, rate-limit, schema validation | Runtime guards claimed | **MATCH** |
 | Audit | Structured tracing/telemetry; cache-hit paths can skip the invocation event; transparency log is optional | Every action logged and exportable (public claim) | **LAG** |
-| Attestation | Optional outbound HMAC `_meta.provenance` receipts. This is not a signed `.state` artifact. Inbound attestation token validation is a separate opt-in. | Ordinary audit log, not cryptographic action receipts | **LEAD** only when the opt-in receipt path is enabled |
+| Attestation | Optional outbound HMAC `_meta.provenance` receipts. This is not a signed `.state` artifact. Inbound attestation token validation is a separate opt-in. | No cryptographic action receipt was identified in the reviewed public sources; audit logging is claimed | **LEAD** on the documented-capability comparison only, and only when the opt-in receipt path is enabled |
 
 Verdict vocabulary is **LEAD** / **MATCH** / **LAG** relative to the public
 Willow/Webrix bar.
@@ -55,9 +53,10 @@ beyond the local scan that already ships:
 1. **Config scanning** — `src/discovery/config_scanner.rs` reads client MCP
    configs. A server in those files that is not registered here is an unmanaged
    MCP candidate.
-2. **Process scanning** — `src/discovery/process_scanner.rs` lists running
-   stdio MCP patterns. Processes the gateway did not spawn are unmanaged
-   candidates.
+2. **Process scanning** — `src/discovery/process_scanner.rs` lists running MCP
+   patterns when it can infer a listening port. Port-resolvable processes the
+   gateway did not spawn are unmanaged candidates; unported stdio servers are
+   not currently reported by this scanner.
 3. **Exported network / SIEM rules** — operators can feed selector patterns to
    their own firewall, proxy, or SIEM. mcp-gateway is **not** a network proxy
    and does not inspect bypass traffic.

@@ -141,5 +141,4 @@ Source files live in `src/`. Each module is split to 800 LOC or fewer.
 - **API keys** support per-client rate limits, opt-in per-client circuit breakers, and backend restrictions.
 - **Secrets** use OS keychain (macOS Keychain, Linux secret-service) -- never stored in config files.
 - **OAuth** supports per-backend configuration with dynamic client registration.
-- **Public comparison**: [Willow / Webrix landscape](competitive/willow-enterprise-agent-governance.md) (MIK-5843).
 - **`/health`** is always public (configurable via `auth.public_paths`).

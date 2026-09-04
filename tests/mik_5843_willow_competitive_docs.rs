@@ -101,20 +101,11 @@ fn mik_5843_shadow_ai_scope_and_implementation_anchors() {
 }
 
 #[test]
-fn mik_5843_page_is_linked_from_an_index() {
-    let indexes = [
-        "docs/competitive/README.md",
-        "docs/SHADOW_SCAN.md",
-        "docs/design/RFC-0132-cloudflare-enterprise-mcp-gap-analysis.md",
-        "docs/ARCHITECTURE.md",
-    ];
-    let linked = indexes.iter().any(|path| {
-        std::fs::read_to_string(path)
-            .ok()
-            .is_some_and(|s| s.contains("willow-enterprise-agent-governance"))
-    });
+fn mik_5843_page_is_linked_from_the_competitive_index() {
+    let index = std::fs::read_to_string("docs/competitive/README.md")
+        .expect("read docs/competitive/README.md");
     assert!(
-        linked,
-        "no docs index references willow-enterprise-agent-governance"
+        index.contains("willow-enterprise-agent-governance"),
+        "competitive index does not reference willow-enterprise-agent-governance"
     );
 }
