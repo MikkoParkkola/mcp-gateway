@@ -195,6 +195,8 @@ pub enum RetirementBlocked {
     UnattributedAtOrAboveRetirementThreshold,
     /// Present but unrecognized revisions are too common to classify safely.
     OtherAtOrAboveRetirementThreshold,
+    /// HTTP and stdio evidence do not cover the same production window.
+    WindowMisaligned,
 }
 
 /// Restart-safe aggregate for a production measurement window.
@@ -673,15 +675,49 @@ pub fn load_durable_window(data_dir: &Path) -> io::Result<DurableWindow> {
     read_window_file(&durable_window_path(data_dir))
 }
 
-/// Evaluate retirement from the persisted start time and aggregate counters.
+/// Evaluate the production decision from exact-window HTTP and stdio evidence.
 ///
-/// This is the production decision path. Unlike [`retire_revisions`], callers
-/// cannot supply an elapsed duration or an in-process snapshot.
-pub fn durable_retirement_decision(
+/// HTTP observations live in Prometheus while stdio observations live in the
+/// durable window. A revision is eligible only when both independent sources
+/// mark it below the threshold for the same window.
+pub fn production_retirement_decision(
     data_dir: &Path,
+    http_snapshot: &Snapshot,
+    http_started_at_unix_seconds: u64,
+) -> io::Result<Result<Vec<String>, RetirementBlocked>> {
+    production_retirement_decision_at(
+        data_dir,
+        http_snapshot,
+        http_started_at_unix_seconds,
+        unix_seconds()?,
+    )
+}
+
+/// Time-injected production decision used by deterministic tests and offline exports.
+pub fn production_retirement_decision_at(
+    data_dir: &Path,
+    http_snapshot: &Snapshot,
+    http_started_at_unix_seconds: u64,
+    ended_at_unix_seconds: u64,
 ) -> io::Result<Result<Vec<String>, RetirementBlocked>> {
     let window = load_durable_window(data_dir)?;
-    Ok(window.retirement_decision_at(unix_seconds()?))
+    if http_started_at_unix_seconds != window.started_at_unix_seconds {
+        return Ok(Err(RetirementBlocked::WindowMisaligned));
+    }
+    let elapsed =
+        Duration::from_secs(ended_at_unix_seconds.saturating_sub(http_started_at_unix_seconds));
+    let stdio_candidates = match window.retirement_decision_at(ended_at_unix_seconds) {
+        Ok(candidates) => candidates,
+        Err(blocked) => return Ok(Err(blocked)),
+    };
+    let http_candidates = match retire_revisions(http_snapshot, elapsed) {
+        Ok(candidates) => candidates,
+        Err(blocked) => return Ok(Err(blocked)),
+    };
+    Ok(Ok(stdio_candidates
+        .into_iter()
+        .filter(|candidate| http_candidates.contains(candidate))
+        .collect()))
 }
 
 fn snapshot_delta(current: &Snapshot, previous: &Snapshot) -> Snapshot {

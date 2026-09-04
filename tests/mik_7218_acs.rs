@@ -7,7 +7,7 @@ use mcp_gateway::protocol_revision_telemetry::{
     MIN_MEASUREMENT_WINDOW, OTHER_REVISION, RETIRE_BELOW_SHARE, Registry, RetirementBlocked,
     Transport, attribution_rate, cache_scope_decision, client_identity, distribution_table,
     durable_window_path, global_snapshot, load_durable_window, observe_inbound_request,
-    public_over_filtered, requested_revision, retire_revisions,
+    production_retirement_decision_at, public_over_filtered, requested_revision, retire_revisions,
 };
 use serde_json::json;
 
@@ -294,5 +294,51 @@ fn mcp728_u1_2_stdio_window_survives_process_restart() {
                 window.started_at_unix_seconds + MIN_MEASUREMENT_WINDOW.as_secs()
             )
             .is_ok()
+    );
+}
+
+#[test]
+fn mcp728_u1_4_production_decision_intersects_http_and_stdio_windows() {
+    let data_dir = tempfile::tempdir().expect("temporary data directory");
+    let mut sink =
+        mcp_gateway::protocol_revision_telemetry::DurableTelemetrySink::open(data_dir.path())
+            .expect("create durable telemetry window");
+    let mut stdio = Registry::new();
+    for _ in 0..99 {
+        stdio.observe_request(Some("2025-11-25"), "stdio", Transport::Stdio);
+    }
+    stdio.observe_request(Some("2024-11-05"), "stdio", Transport::Stdio);
+    sink.persist_registry(&stdio)
+        .expect("persist stdio production counters");
+
+    let window = load_durable_window(data_dir.path()).expect("load durable start time");
+    let mut http = Registry::new();
+    for _ in 0..98 {
+        http.observe_request(Some("2025-11-25"), "http", Transport::Http);
+    }
+    for _ in 0..2 {
+        http.observe_request(Some("2024-11-05"), "http", Transport::Http);
+    }
+
+    let candidates = production_retirement_decision_at(
+        data_dir.path(),
+        &http.snapshot(),
+        window.started_at_unix_seconds,
+        window.started_at_unix_seconds + MIN_MEASUREMENT_WINDOW.as_secs(),
+    )
+    .expect("evaluate production window")
+    .expect("aligned windows are actionable");
+    assert!(!candidates.iter().any(|revision| revision == "2024-11-05"));
+    assert!(candidates.iter().any(|revision| revision == "2024-10-07"));
+
+    assert_eq!(
+        production_retirement_decision_at(
+            data_dir.path(),
+            &http.snapshot(),
+            window.started_at_unix_seconds + 1,
+            window.started_at_unix_seconds + MIN_MEASUREMENT_WINDOW.as_secs(),
+        )
+        .expect("evaluate misaligned window"),
+        Err(RetirementBlocked::WindowMisaligned)
     );
 }

@@ -111,7 +111,11 @@ registered at zero. Record these fields after deployment:
 
 Use the durable file's start time for the stdio retirement decision, not an
 operator-supplied duration or an in-memory process snapshot. No distribution can
-be claimed until the result comment contains that live evidence.
+be claimed until the result comment contains that live evidence. Evaluate the
+final gate with `production_retirement_decision`: it requires the HTTP baseline
+to match the durable stdio start time and retires only the intersection of the
+HTTP and stdio candidates. A standalone stdio result is not a production
+retirement decision.
 
 **Pre-registered 2% rule: not applied.** The stop criterion forbids narrowing
 on partial data. Decision 2 stays unfrozen. No revision is retired.
