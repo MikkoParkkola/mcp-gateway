@@ -631,6 +631,14 @@ pub struct InFlight {
     held: tokio::sync::Mutex<std::collections::HashMap<String, (String, u64)>>,
 }
 
+/// Drop exchanges whose deadline has passed.
+///
+/// A free function rather than a method because [`InFlight::hold`] calls it
+/// while already holding the lock.
+fn reclaim_abandoned(held: &mut std::collections::HashMap<String, (String, u64)>, now: u64) {
+    held.retain(|_, (_, deadline)| now <= *deadline);
+}
+
 impl InFlight {
     /// A table for this replica, holding at most `capacity` exchanges.
     #[must_use]
@@ -648,10 +656,21 @@ impl InFlight {
     /// can see. Growing instead would make the table a memory-exhaustion vector
     /// reachable by any client that starts elicitations and walks away, which
     /// the specification explicitly permits it to do.
-    pub async fn hold(&self, backend_id: &str, expires_at: u64) -> Option<String> {
+    pub async fn hold(&self, backend_id: &str, expires_at: u64, now: u64) -> Option<String> {
         let mut held = self.held.lock().await;
         if held.len() >= self.capacity {
-            return None;
+            // Reclaim here rather than in a separate reaper someone must
+            // remember to call. Abandonment is the common case — a client is
+            // free never to retry — so a table that only ever grew would
+            // refuse every new elicitation once enough callers walked away,
+            // which is the denial of service the bound exists to prevent.
+            // Same shape as `SpentLedger::consume`, deliberately: one place
+            // enforces the bound and one place reclaims, and they are the same
+            // place, so neither can be wired without the other.
+            reclaim_abandoned(&mut held, now);
+            if held.len() >= self.capacity {
+                return None;
+            }
         }
         // Named by the gateway, never by the client: two exchanges against one
         // backend must not collide, and no caller may name another's.
@@ -694,18 +713,6 @@ impl InFlight {
     /// not the ordinary path — the ordinary path is that an exchange ends.
     pub async fn complete(&self, key: &str) -> bool {
         self.held.lock().await.remove(key).is_some()
-    }
-
-    /// Drop exchanges whose deadline has passed.
-    ///
-    /// Abandonment is the common case, not the exceptional one: a client is
-    /// free never to retry, so every held exchange needs a deadline and someone
-    /// to enforce it.
-    pub async fn reap(&self, now: u64) {
-        self.held
-            .lock()
-            .await
-            .retain(|_, (_, deadline)| now <= *deadline);
     }
 
     /// How many exchanges are held.
@@ -815,7 +822,10 @@ impl ContinuationState {
         original_request_digest: String,
         now: u64,
     ) -> Option<Payload> {
-        let hold_key = self.in_flight.hold(&backend_id, expiry_for(now)).await?;
+        let hold_key = self
+            .in_flight
+            .hold(&backend_id, expiry_for(now), now)
+            .await?;
         Some(Payload::mint(
             backend_id,
             backend_request_state,

@@ -1217,7 +1217,7 @@ async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused(
     let stranger = state
         .continuation
         .in_flight()
-        .hold(&payload.backend_id, now_secs() + 60)
+        .hold(&payload.backend_id, now_secs() + 60, now_secs())
         .await
         .expect("the table has room for one honest concurrent exchange");
     assert_ne!(

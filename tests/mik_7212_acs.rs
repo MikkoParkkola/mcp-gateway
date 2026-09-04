@@ -400,7 +400,7 @@ mod inflight {
     #[tokio::test]
     async fn ac_mrtr_6_a_retry_reaching_the_holding_replica_is_served_here() {
         let table = InFlight::new("gw-1", 100);
-        let key = table.hold("weather", 2_000).await.expect("capacity");
+        let key = table.hold("weather", 2_000, 0).await.expect("capacity");
 
         assert!(matches!(table.route(&key).await, Routing::Here));
     }
@@ -424,7 +424,7 @@ mod inflight {
         // same-replica case one test up.
         let minting = InFlight::new("gw-1", 100);
         let receiving = InFlight::new("gw-2", 100);
-        let key = minting.hold("weather", 2_000).await.expect("capacity");
+        let key = minting.hold("weather", 2_000, 0).await.expect("capacity");
 
         assert!(
             matches!(receiving.route(&key).await, Routing::Gone),
@@ -456,10 +456,10 @@ mod inflight {
         // bounded table and a memory-exhaustion vector.
         let table = InFlight::new("gw-1", 4);
         for _ in 0..4 {
-            assert!(table.hold("weather", 9_999).await.is_some());
+            assert!(table.hold("weather", 9_999, 0).await.is_some());
         }
         assert!(
-            table.hold("weather", 9_999).await.is_none(),
+            table.hold("weather", 9_999, 0).await.is_none(),
             "at capacity the gateway must refuse to start a new exchange rather \
              than grow, and refusing is what the caller turns into an error the \
              client can see"
@@ -469,15 +469,25 @@ mod inflight {
     #[tokio::test]
     async fn ac_mrtr_8_an_abandoned_exchange_is_reclaimed() {
         let table = InFlight::new("gw-1", 4);
-        let key = table.hold("weather", 1_000).await.expect("capacity");
+        let key = table.hold("weather", 1_000, 0).await.expect("capacity");
+        for _ in 1..4 {
+            table.hold("weather", 1_000, 0).await.expect("capacity");
+        }
 
-        table.reap(1_001).await;
+        // The table is full of exchanges nobody came back for. A caller
+        // arriving after their deadline must still get a slot -- reclamation
+        // happens on the path that enforces the bound, so there is no reaper
+        // to forget to call.
+        assert!(
+            table.hold("weather", 9_999, 1_001).await.is_some(),
+            "a table full of abandoned exchanges must reclaim rather than refuse"
+        );
         assert!(
             matches!(table.route(&key).await, Routing::Gone),
             "an abandoned exchange must not hold its slot forever"
         );
         assert!(
-            table.hold("weather", 9_999).await.is_some(),
+            table.hold("weather", 9_999, 0).await.is_some(),
             "and its slot must come back"
         );
     }
@@ -487,8 +497,8 @@ mod inflight {
         // Two exchanges for the same backend must not collide, and a client
         // must not be able to name someone else's.
         let table = Arc::new(InFlight::new("gw-1", 100));
-        let a = table.hold("weather", 9_999).await.expect("capacity");
-        let b = table.hold("weather", 9_999).await.expect("capacity");
+        let a = table.hold("weather", 9_999, 0).await.expect("capacity");
+        let b = table.hold("weather", 9_999, 0).await.expect("capacity");
         assert_ne!(a, b, "each exchange gets its own key");
     }
 }
@@ -898,15 +908,15 @@ mod hardening {
         // started until its deadline passes, so a healthy gateway refuses new
         // elicitations because of ones that finished long ago.
         let table = InFlight::new("gw-1", 1);
-        let key = table.hold("weather", 9_999).await.expect("capacity");
-        assert!(table.hold("weather", 9_999).await.is_none());
+        let key = table.hold("weather", 9_999, 0).await.expect("capacity");
+        assert!(table.hold("weather", 9_999, 0).await.is_none());
 
         assert!(
             table.complete(&key).await,
             "completing must report the release"
         );
         assert!(
-            table.hold("weather", 9_999).await.is_some(),
+            table.hold("weather", 9_999, 0).await.is_some(),
             "a finished exchange must return its slot"
         );
         assert!(
@@ -918,7 +928,7 @@ mod hardening {
     #[tokio::test]
     async fn a_completed_exchange_is_gone_for_routing() {
         let table = InFlight::new("gw-1", 4);
-        let key = table.hold("weather", 9_999).await.expect("capacity");
+        let key = table.hold("weather", 9_999, 0).await.expect("capacity");
         assert!(table.complete(&key).await);
 
         assert!(
@@ -939,16 +949,16 @@ mod hardening {
         use std::sync::Arc;
 
         let table = Arc::new(InFlight::new("gw-1", 4));
-        let key = table.hold("weather", 9_999).await.expect("capacity");
+        let key = table.hold("weather", 9_999, 0).await.expect("capacity");
 
-        // Hammer routing while reaping runs concurrently: reaping takes the same
+        // Hammer routing while reclamation runs concurrently: `hold` takes the same
         // lock, so a `try_lock` implementation reports `Gone` for an exchange
         // that is plainly still held.
         let reaper = {
             let table = Arc::clone(&table);
             tokio::spawn(async move {
                 for _ in 0..500 {
-                    table.reap(0).await;
+                    table.hold("weather", 9_999, 0).await;
                     tokio::task::yield_now().await;
                 }
             })
