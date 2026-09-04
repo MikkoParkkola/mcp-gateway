@@ -39,13 +39,15 @@ fn mik6977_claim_1_readme_does_not_lead_with_unqualified_89() {
         !lede.contains("89%"),
         "lede must not lead with the schema-only 89% figure: {lede}"
     );
+    if text.contains("89%") {
+        assert!(
+            text.contains("schema-only") || text.contains("first-request model"),
+            "README must label any 89% math as schema-only / first-request"
+        );
+    }
     assert!(
-        text.contains("schema-only") || text.contains("first-request model"),
-        "README must label remaining 89% math as schema-only / first-request"
-    );
-    assert!(
-        text.to_lowercase().contains("honest_task_tokens") || text.contains("extra discovery turn"),
-        "README must point at the extra-turn task-token model"
+        text.to_lowercase().contains("extra search hop") || text.contains("added one turn"),
+        "README must disclose the measured extra-turn cost"
     );
 }
 
@@ -65,4 +67,40 @@ fn mik6977_claim_2_hash_pin_and_owasp_are_not_overclaimed() {
         lower.contains("self-assessed") || lower.contains("self-attested"),
         "OWASP coverage must be labelled self-assessed"
     );
+}
+
+#[test]
+fn mik6977_bench_2_live_artifact_covers_the_matrix_and_can_lose() {
+    let artifact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(repo_file(
+            "benchmarks/results/mik-6977-live-agent-2026-09-04.json",
+        ))
+        .expect("live benchmark artifact"),
+    )
+    .expect("valid live benchmark JSON");
+    assert_eq!(artifact["schema_version"], "mik-6977.live-agent.v1");
+    assert_eq!(
+        artifact["method"]["catalog_sizes"],
+        serde_json::json!([50, 100, 200, 500])
+    );
+    assert_eq!(artifact["trials"].as_array().map(Vec::len), Some(16));
+
+    for trial in artifact["trials"].as_array().expect("trial rows") {
+        assert_eq!(trial["process_exit"], 0);
+        assert!(trial["input_tokens"].as_u64().is_some());
+        assert!(trial["total_tokens"].as_u64().is_some());
+        assert!(trial["latency_ms"].as_f64().is_some());
+        assert!(trial["selection_correct"].as_bool().is_some());
+        assert!(trial["task_success"].as_bool().is_some());
+        assert!(trial["extra_turns"].as_u64().is_some());
+        assert_eq!(trial["errors"].as_array().map(Vec::len), Some(0));
+    }
+
+    let rows = artifact["summary"].as_array().expect("summary rows");
+    assert_eq!(rows.len(), 4);
+    assert!(rows.iter().all(|row| {
+        row["measured_input_token_savings_percent"]
+            .as_f64()
+            .is_some_and(|saving| saving < 0.0)
+    }));
 }

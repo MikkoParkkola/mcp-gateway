@@ -18,7 +18,7 @@
 
 **One gateway between your AI and every tool it needs, without flooding the context window.**
 
-MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect any number of MCP servers and REST APIs behind it, and the agent sees only a compact meta-surface of 14 to 16 tools instead of hundreds of tool definitions. It discovers and calls the right backend tool on demand. Schema-only first-request math and the extra-turn task-token model (which can lose) live in [Benchmarks](docs/BENCHMARKS.md). The answer to "how many tools can I connect" becomes "unlimited."
+MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect MCP servers and REST APIs behind it, and the agent sees a compact meta-surface of 14 to 16 tools instead of every backend definition. It discovers and calls backend tools on demand. A small live-agent benchmark found no completed-task token saving from that extra hop, so the value is catalog capacity plus policy and routing—not a blanket token claim. See [Benchmarks](docs/BENCHMARKS.md).
 
 ![demo](demo.gif)
 
@@ -28,7 +28,7 @@ Personal and noncommercial use is free, including running the full gateway. Runn
 
 Every MCP tool an AI client connects costs roughly 150 tokens of context overhead, loaded into every request whether the tool gets used or not. Connect 20 servers with 100 tools between them and you spend about 15,000 tokens before the conversation starts. Context limits then force a second cost: you have to decide up front which tools to connect and leave the rest out, so the agent makes worse decisions because it cannot reach data you chose not to load.
 
-MCP Gateway removes both costs. The agent loads a small fixed set of meta-tools, searches the full catalog with `gateway_search_tools`, and invokes any backend tool with `gateway_invoke` only when it needs it.
+MCP Gateway moves the full catalog out of the exposed tool list. The agent loads a small fixed set of meta-tools, searches with `gateway_search_tools`, and invokes a backend tool with `gateway_invoke`. This creates room for larger catalogs, but the extra search hop can cost more tokens and time on a completed task.
 
 ```mermaid
 flowchart LR
@@ -217,7 +217,7 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 
 ## Why use MCP Gateway?
 
-- **Compact context by default.** The agent loads a fixed meta-surface (16 tools in the README scenario, ~1,600 tokens) instead of every backend definition. The 89% schema-only first-request model does not include discovery history. Counting extra discovery turns and their responses can erase it — see `honest_task_tokens` in [Benchmarks](docs/BENCHMARKS.md).
+- **Larger catalog, smaller exposed surface.** The agent loads a fixed meta-surface instead of every backend definition. In the checked-in 50–500-tool live run, both paths completed every task, but the meta path used 1.3–16.1% more input tokens and added one turn. See [Benchmarks](docs/BENCHMARKS.md).
 - **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
 - **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 110+ capabilities ship built in.
 - **Per-user identity to backends.** Multitenant backends can receive the verified end-user identity with no gateway-stored long-lived credential. See [Multitenant identity](#end-user-identity-v31).
@@ -254,8 +254,8 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 | | Without gateway | With gateway |
 |---|----------------|--------------|
 | **Tools in context** | Every definition, every request | 16 meta-tools in the README benchmark (~1,600 tokens) |
-| **Token overhead** | ~15,000 tokens (100 tools) | ~1600 tokens schema-only first-request; extra discovery turns can erase that |
-| **Cost at scale** | ~$0.22 per request (Opus input) | ~$0.024 per request, **$201 saved per 1K** in the schema-only first-request model |
+| **Schema footprint** | ~15,000 modeled tokens (100 tools) | ~1,600 modeled tokens before discovery; not completed-task cost |
+| **Measured task cost** | Direct path was lower in the checked-in 50–500-tool run | Meta path used 1.3–16.1% more input tokens and one extra turn |
 | **Practical tool limit** | 20 to 50 tools under context pressure | Unlimited, discovered on demand |
 | **Connect a new REST API** | Build an MCP server (days) | Drop a YAML file or import an OpenAPI spec (minutes) |
 | **Changing MCP config** | Restart the AI session, lose context | Restart gateway (~8ms), session stays alive |
