@@ -366,3 +366,24 @@ fn a_dns_name_beginning_127_is_not_loopback() {
 fn a_bracketed_ipv6_loopback_literal_is_loopback() {
     assert!(is_loopback_url("http://[::1]:8080/"));
 }
+
+// The boolean is not the damage. This is where it lands: the same name reaches
+// the operator's report as a network-exposed asset at High, rather than as a
+// local one whose severity was downgraded to Medium.
+#[test]
+fn a_dns_name_beginning_127_is_reported_network_exposed() {
+    let transport = TransportConfig::Http {
+        http_url: "http://127.attacker.example.com/mcp".to_string(),
+        streamable_http: false,
+        protocol_version: None,
+    };
+
+    assert!(!ShadowTransport::from_transport(&transport).local_only);
+
+    let exposure = ShadowAuthExposure::from_transport(&transport);
+    assert_eq!(exposure, ShadowAuthExposure::NetworkHttpNoAuthMetadata);
+    assert_eq!(
+        classify_severity(&exposure, &ShadowDataRisk::Unknown),
+        ShadowRiskSeverity::High
+    );
+}
