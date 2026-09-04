@@ -1356,6 +1356,17 @@ pub struct BackendConfig {
     /// fully-trusted internal backends. Default: `false`.
     #[serde(default)]
     pub passthrough: bool,
+    /// Permit this backend to carry credentials over cleartext `http://` to a
+    /// non-loopback host.
+    ///
+    /// **Security warning**: a credential sent to a non-loopback `http://`
+    /// endpoint is readable by every host on the path and is replayable
+    /// forever. Config load REFUSES that combination unless this is set, which
+    /// makes the exception a recorded operator decision rather than a typo.
+    /// Loopback is exempt without the flag: the packet does not leave the
+    /// machine. Default: `false`.
+    #[serde(default)]
+    pub allow_cleartext_credentials: bool,
     /// Runtime profile name resolved from top-level `runtime.profiles`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_profile: Option<String>,
@@ -1388,6 +1399,10 @@ impl std::fmt::Debug for BackendConfig {
             .field("oauth", &self.oauth)
             .field("secrets", &format!("<{} rules>", self.secrets.len()))
             .field("passthrough", &self.passthrough)
+            .field(
+                "allow_cleartext_credentials",
+                &self.allow_cleartext_credentials,
+            )
             .field("runtime_profile", &self.runtime_profile)
             .field("identity_propagation", &self.identity_propagation)
             .finish()
@@ -1407,6 +1422,7 @@ impl Default for BackendConfig {
             oauth: None,
             secrets: Vec::new(),
             passthrough: false,
+            allow_cleartext_credentials: false,
             runtime_profile: None,
             identity_propagation: None,
         }
