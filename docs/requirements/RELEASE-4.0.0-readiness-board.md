@@ -770,3 +770,42 @@ address, and crate-internal so no public surface widens. Four commits: the desig
 inert `allow_cleartext_credentials` field, the twenty-one plan rows red, the guard
 turning them green, and the shadow classifier delegating to the same owner with two
 regressions verified against the pre-fix code.
+
+## Sequencing — what gates what
+
+The cluster table above says what each cluster *is*. It does not say what order the
+clusters can be worked in, and that order is not derivable from the rows: two clusters
+are gates, three are independent, and one cannot start until two others finish.
+
+| cluster | blocked by | blocks | shape of the remaining work |
+|---|---|---|---|
+| A continuation envelope | nothing | F | four mechanisms, three evidence rows (below) |
+| B era detection | nothing | nothing | tests only; the path is wired |
+| C revision surface | nothing | F | code; four designs already exist |
+| D response-cache keying | nothing | nothing | reviewed, implementation in flight |
+| E performance | nothing | nothing | one re-measurement (`NFR.PERF.1`) |
+| F compatibility facts | **A and C** | nothing | a one-line default flip, last |
+
+F is the only ordered work. A, B, C, D and E are mutually independent and can run in
+parallel; F is a single line that cannot move until both A and C close, because the flip
+makes the gateway serve a modern frame it must first be able to produce (C) and continue
+(A).
+
+### Cluster A is not one mechanism plus evidence
+
+The rollup's "what remains" sentence names the legacy-client bridge and then treats
+`NFR.SEC.2-4`, `NFR.OBS.4` and `NFR.PERF.3` as observation over a path that already
+exists. Read against the ledger rows, that holds for three of them and not for the other
+two, and it omits `MRTR.8b` entirely.
+
+| row | what it actually needs |
+|---|---|
+| `MRTR.7a`, `.7b` | mechanism — the legacy-client bridge, no production call site |
+| `MRTR.8b` | mechanism — the count bound is enforced, the **lifetime** bound is not |
+| `NFR.SEC.3` | mechanism — key rotation and a verification-key retention window do not exist |
+| `NFR.OBS.4` | mechanism — no mint/redeem/expiry/rejection counters exist |
+| `NFR.SEC.2`, `.4` | evidence — the path is wired; eight named fixtures are absent |
+| `NFR.PERF.3` | evidence — a soak showing reclamation, over a path that reclaims |
+
+Four mechanisms, not one. Sequencing A as a single owner's work underestimates it by the
+three rows the rollup sentence does not mention.
