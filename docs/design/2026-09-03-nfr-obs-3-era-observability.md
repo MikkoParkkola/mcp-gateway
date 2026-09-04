@@ -78,10 +78,11 @@ So the criterion is unmet in the plainest possible way — the detection is comp
 Findings 1 and 2 are amendments to a table that has not been implemented yet, which is the cheapest
 moment to amend it.
 
-**This also corrects a stale status.** `docs/requirements/RELEASE-4.0.0-criteria-status.md:326` marks
-`NFR.OBS.3` ABSENT and gives the reason as "verifies MIK-7217.DISCOVER.4-5, both unwired; there is no
-detection to observe". Both are now wired. The row stays ABSENT, but for a different and much
-narrower reason: the detection exists and is silent.
+**This also corrected a stale status.** The `NFR.OBS.3` row of
+`docs/requirements/RELEASE-4.0.0-criteria-status.md` gave its reason as "verifies
+MIK-7217.DISCOVER.4-5, both unwired; there is no detection to observe". Both are now wired, and the
+row has been rewritten to say so. It stays ABSENT for a different and much narrower reason: the
+detection exists and is silent.
 
 ## Finding 1 — `outcome` is the classification, not the evidence
 
