@@ -280,7 +280,10 @@ fn canonical_meta_tool_counts_match_live_runtime() {
 fn readme_quantitative_claims_match_canonical_benchmark_data() {
     let claims = load_claims();
     let readme = read_repo_file("README.md");
-    let rounded_startup_ms = claims.startup_benchmark.mean_ms.round() as u64;
+    // Rendered, not cast: these are non-negative measured values whose only
+    // use is the string in the doc, and a cast would need two lint waivers to
+    // say the same thing.
+    let rounded_startup_ms = format!("{:.0}", claims.startup_benchmark.mean_ms.round());
 
     assert!(
         readme.contains(&format!(
@@ -426,14 +429,11 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
         "benchmark docs should derive the gateway schema-token claim from public_claims.json"
     );
     assert!(
-        benchmarks.contains(&format!("**{}% smaller**", savings_percent.round() as u64)),
+        benchmarks.contains(&format!("**{:.0}% smaller**", savings_percent.round())),
         "benchmark docs should derive the rounded schema reduction from public_claims.json"
     );
     assert!(
-        benchmarks.contains(&format!(
-            "**${} per 1K requests**",
-            savings_usd.round() as u64
-        )),
+        benchmarks.contains(&format!("**${:.0} per 1K requests**", savings_usd.round())),
         "benchmark docs should derive the modeled request-cost delta from public_claims.json"
     );
     assert!(
@@ -442,8 +442,8 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     );
     assert!(
         benchmarks.contains(&format!(
-            "~{}ms",
-            claims.startup_benchmark.mean_ms.round() as u64
+            "~{:.0}ms",
+            claims.startup_benchmark.mean_ms.round()
         )),
         "benchmark docs should include the canonical rounded startup metric"
     );

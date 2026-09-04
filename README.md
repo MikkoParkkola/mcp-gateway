@@ -489,6 +489,8 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Changelog](CHANGELOG.md) | Release history |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
 | [MITRE F3 mapping](docs/compliance/MITRE-F3-MAPPING.md) | Fight Fraud Framework tactic map (PARTIAL/GAP, not a coverage claim) |
+| [ShadowRadar](docs/SHADOW_SCAN.md) | Passive local discovery and static network-rule export |
+| [Enterprise agent governance comparison](docs/competitive/willow-enterprise-agent-governance.md) | Willow/Webrix feature bar and mcp-gateway's current gaps |
 | [vs Anthropic MCP tunnels](#vs-anthropic-mcp-tunnels) | Where mcp-gateway and Anthropic's MCP tunnel compose |
 
 ## Troubleshooting
