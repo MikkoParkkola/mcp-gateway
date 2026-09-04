@@ -130,10 +130,10 @@ fn mik_5843_shipped_shadow_cli_matches_the_documented_scope() {
         .expect("run doctor --shadow");
     assert!(doctor.status.success());
     let output = String::from_utf8_lossy(&doctor.stdout);
-    assert!(output.contains("nginx log_format / if-block snippets"));
+    assert!(output.contains("nginx log-phase map snippet"));
     assert!(output.contains("$request_body"));
-    assert!(output.contains("~*'("));
-    assert!(!output.contains("~*("));
+    assert!(output.contains("\"~*("));
+    assert!(!output.contains("if ($request_body"));
     assert!(!output.contains("httpHost"));
     assert!(!output.contains("httpRequestURI"));
 }
