@@ -136,7 +136,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 
 | Decision | Rationale | Do not |
 |---|---|---|
-| **Meta-MCP surface is compact** (14-16 tools target) | Context-token savings are the entire value proposition | Add meta-tools that could be dynamic-discovery tools |
+| **Meta-MCP surface is compact** (14-16 tools target) | Catalog capacity and on-demand routing are the value proposition | Add meta-tools that could be dynamic-discovery tools |
 | **mcp-gateway is NOT a chat / embeddings gateway** | Scope boundary; model calls stay with the connected client | Add OpenAI chat-completion proxying as a first-class feature |
 | **`#![deny(unsafe_code)]`** | Gateway sits on the trust path for every tool call | Introduce unsafe to chase performance |
 | **Optional SHA-256 capability pinning** | Pinned capability tampering must be detectable and fail closed | Accept a mismatched pin |

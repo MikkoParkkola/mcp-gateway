@@ -47,7 +47,7 @@ The gateway advertises 14 to 17 meta-tools to connecting clients. The base set o
 | `gateway_list_tools` | yes | List tools from one backend (or all). Uses cached tool lists |
 | `gateway_search_tools` | yes | Keyword search across all backends with ranked results |
 | `gateway_invoke` | yes | Call any tool on any backend. Handles caching, idempotency, kill switch |
-| `gateway_get_stats` | if stats enabled | Usage stats: invocations, cache hits, token savings, top tools, cost |
+| `gateway_get_stats` | if stats enabled | Usage stats: invocations, cache hits, top tools, and discovery counts |
 | `gateway_cost_report` | yes | Current session and API-key spend |
 | `gateway_webhook_status` | if webhooks enabled | List webhook endpoints and delivery stats |
 | `gateway_run_playbook` | yes | Execute a multi-step playbook as a single call |
@@ -291,7 +291,7 @@ On dispatch failure, the idempotency entry is removed (`idem_cache.remove(key)`)
 | `registry` | `src/registry.rs` | Community capability registry: discovery and installation from local/GitHub sources |
 | `secrets` | `src/secrets.rs` | Credential resolution: `{keychain.SERVICE}`, `{env.VAR}`, `{oauth:provider}` |
 | `security` | `src/security/` | Input sanitization (XSS), SSRF URL validation, tool access policy enforcement |
-| `stats` | `src/stats.rs` | Usage statistics: invocations, cache hits, per-tool counts, token savings calculation |
+| `stats` | `src/stats.rs` | Usage statistics: invocations, cache hits, per-tool counts, and discovery counts |
 | `transform` | `src/transform.rs`, `src/transform/` | Response transform pipeline: field selection, stripping noise from API responses |
 | `transition` | `src/transition.rs` | Session-scoped tool sequence learning and predictive next-tool suggestions |
 | `transport` | `src/transport/` | MCP transport implementations: stdio (process spawn), HTTP (Streamable HTTP + SSE) |

@@ -17,7 +17,7 @@ Public quantitative claims are tracked in [benchmarks/public_claims.json](../ben
 | Meta-tools exposed to the AI | 14 minimum / 16 README benchmark / 17 with webhook status | `benchmarks/public_claims.json` |
 | Built-in capability YAMLs | 119 total (marketed as 110+) | `benchmarks/public_claims.json` + `find capabilities -name '*.yaml' -not -path '*/examples/*' \| wc -l` |
 | Startup time | ~8ms | `hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'` |
-| Live agent task cost | no measured saving in this 16-run sample; the meta path used 1.3–16.1% more input tokens | `benchmarks/results/mik-6977-live-agent-2026-09-04.json` |
+| Live agent task cost | no measured saving; the meta path cost more input tokens in all 8 matched pairs | `benchmarks/results/mik-6977-live-agent-2026-09-04.json` |
 | Schema-only model | 100 tools → ~1600 gateway schema tokens → 89% smaller first request; not completed-task cost | `python benchmarks/token_savings.py --scenario readme` |
 
 ## Startup Performance
@@ -37,7 +37,10 @@ Benchmark: target/release/mcp-gateway --help
 On 2026-09-04, Codex with `gpt-5.6-luna` retrieved one exact item from generated
 catalogs of 50, 100, 200, and 500 permitted tools. Each size had two direct and
 two meta-surface trials. Both paths selected the correct tool and completed all
-eight tasks.
+eight tasks. Direct input grew from 70,211 to 79,949 tokens between 50 and 100
+tools, then stayed near 80,000 at 200 and 500. The host compacted those larger
+lists, so only the 50- and 100-tool rows measure a direct catalog that still
+scaled with the configured size.
 
 | Permitted tools | Direct total task tokens | Meta total task tokens | Meta input-token saving | Direct / meta median latency | Extra meta turns |
 |---:|---:|---:|---:|---:|---:|
@@ -46,17 +49,19 @@ eight tasks.
 | 200 | 80,358 | 81,676 | -1.47% | 18.3s / 21.9s | 1 |
 | 500 | 80,505 | 81,566 | -1.26% | 15.3s / 21.7s | 1 |
 
-This result does not support a completed-task token-savings claim. The meta
-surface added a search call and one turn. It was 3.6–6.3 seconds slower in this
-small sample.
+This result does not support a completed-task token-savings claim. At 50 and
+100 tools, the meta surface used 7.1–16.1% more input tokens and added one turn.
+It cost more input tokens in all eight matched pairs. The 200- and 500-tool rows
+are retained as host-compaction evidence, not as catalog-scaling measurements.
 It remains useful as a catalog-capacity boundary, but we do not lead with the
 schema-only 89% model as a task result.
 
 The benchmark is deliberately narrow. It uses one agent and model with two
-trials per cell. The tools are generated around an exact numeric target, and
-there is no real backend latency. Total task tokens include the Codex host
-context. Use the checked-in per-trial artifact to inspect the measurements; do
-not generalize them to other models or workloads.
+trials per cell. Four trials ran concurrently, so the latency values are
+exploratory. The tools are generated around an exact numeric target, and there
+is no real backend latency. Total task tokens include the Codex host context.
+Use the checked-in per-trial artifact to inspect the measurements; do not
+generalize them to other models or workloads.
 
 ```bash
 python benchmarks/live_agent_tool_selection.py \

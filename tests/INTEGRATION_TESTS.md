@@ -84,7 +84,7 @@ If the gateway is not running, tests will gracefully skip with a warning:
 
 **What it tests**:
 - Calls `gateway_get_stats` via MCP JSON-RPC
-- Verifies response contains: `invocations`, `cache_hits`, `tokens_saved`, `top_tools`, `cache_hit_rate`, `tools_discovered`, `tools_available`, `estimated_savings_usd`
+- Verifies response contains: `invocations`, `cache_hits`, `top_tools`, `cache_hit_rate`, `tools_discovered`, `tools_available`
 - Validates field types (numbers, arrays, strings)
 
 **Expected output**:
@@ -93,8 +93,6 @@ If the gateway is not running, tests will gracefully skip with a warning:
   "invocations": 42,
   "cache_hits": 12,
   "cache_hit_rate": "28.6%",
-  "tokens_saved": 123456,
-  "estimated_savings_usd": "$1.85",
   "tools_discovered": 15,
   "tools_available": 20,
   "top_tools": [...]

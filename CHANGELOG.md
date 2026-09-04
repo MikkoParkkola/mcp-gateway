@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the ungrounded savings estimates from gateway statistics: the
+  `stats --price` flag, the `gateway_get_stats.price_per_million` argument,
+  the `tokens_saved` and `estimated_savings_usd` response fields, and the public
+  `StatsSnapshot::tokens_saved`, `StatsSnapshot::estimated_savings_usd`, and
+  `UsageStats::cost_savings` fields.
+
 ### Fixed
 
 - **Competitive shadow-scan exports now stay portable and loadable.** The
