@@ -101,6 +101,18 @@ fn mik_5843_shadow_ai_scope_and_implementation_anchors() {
 }
 
 #[test]
+fn mik_5843_rfc_names_the_shipped_shadow_commands() {
+    let rfc = std::fs::read_to_string(
+        "docs/design/RFC-0132-cloudflare-enterprise-mcp-gap-analysis.md",
+    )
+    .expect("read RFC-0132");
+    assert!(rfc.contains("Shipped in `mcp-gateway cap discover --shadow`"));
+    assert!(rfc.contains("Shipped in `mcp-gateway doctor --shadow`"));
+    assert!(!rfc.contains("`mcp-gateway discover --shadow`"));
+    assert!(!rfc.contains("shadow flagging missing"));
+}
+
+#[test]
 fn mik_5843_page_is_linked_from_the_competitive_index() {
     let index = std::fs::read_to_string("docs/competitive/README.md")
         .expect("read docs/competitive/README.md");

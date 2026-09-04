@@ -165,7 +165,7 @@ Report: server name, source (ClaudeDesktop / VsCode / etc.), transport config.
 cross-references them with `BackendRegistry`. Any such process not managed by the
 gateway is a shadow candidate. Unported stdio servers remain outside this layer.
 
-#### Layer 3: Regex-based MCP traffic detection (new, for HTTP layer)
+#### Layer 3: Regex-based MCP traffic detection (operator-side HTTP layer)
 
 Cloudflare uses Gateway DLP selectors to detect MCP traffic by inspecting HTTP body and
 host patterns. mcp-gateway can expose a similar `shadow_mcp_detect` capability that
@@ -184,7 +184,7 @@ Selectors from Cloudflare's reference (directly applicable):
 | HTTP body: `method` field | `"method"\s{0,5}:\s{0,5}"sampling/createMessage"` | LLM sampling |
 | HTTP body: protocol version | `"protocolVersion"\s{0,5}:\s{0,5}"202[4-9]` | MCP handshake |
 
-A new `mcp-gateway doctor --shadow` subcommand generates these regex rules as:
+The shipped `mcp-gateway doctor --shadow` subcommand generates these regex rules as:
 - Shell-friendly `grep` patterns
 - Nginx/HAProxy log filter config snippets
 - A YAML export for operator SIEMs
@@ -199,9 +199,9 @@ This is deferred — it requires elevated permissions and is OS-specific.
 
 | Layer | Mechanism | Scope | Status |
 |-------|-----------|-------|--------|
-| 1 | Config-file scan | Local MCP configs | Partial (discovery exists, shadow flagging missing) |
-| 2 | Process scan | Running stdio MCP servers | Partial (scanner exists, shadow flagging missing) |
-| 3 | Regex DLP rules export | HTTP/network layer (operator tool) | New (rule generation only — gateway can't intercept) |
+| 1 | Config-file scan | Local MCP configs | Shipped in `mcp-gateway cap discover --shadow` |
+| 2 | Process scan | Port-resolvable MCP processes | Shipped in `mcp-gateway cap discover --shadow`; unported stdio remains out of scope |
+| 3 | Regex DLP rules export | HTTP/network layer (operator tool) | Shipped in `mcp-gateway doctor --shadow` (rule generation only — no interception) |
 | 4 | Port/process scan | OS-level | Deferred |
 
 **Kill criterion resolution**: Full Cloudflare-style network interception is not feasible
@@ -236,8 +236,6 @@ acting as a network proxy.**
 | Sub-issue | Priority | Effort | Notes |
 |-----------|----------|--------|-------|
 | Per-connection Code Mode URL toggle (`?codemode=search_and_execute`) | Medium | Small | Safe, isolated, HTTP router change |
-| Shadow detection: `mcp-gateway discover --shadow` config/process scan | Medium | Small | Discovery infra already exists |
-| Shadow detection: DLP regex rule export (`mcp-gateway doctor --shadow`) | Low | Small | Rule generation only, no interception |
 | Client SSO/OIDC integration for incoming MCP connections | Low | Large | Major auth scope; LAG is acceptable for local-first use |
 | Identity-based tool filtering in routing profiles | Low | Medium | Profiles exist; needs identity context from auth layer |
 
