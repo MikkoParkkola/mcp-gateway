@@ -14,6 +14,8 @@
 //! the client. These tests are the fixtures NFR.SEC.4 requires, and each one
 //! must fail closed for the reason it names.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use mcp_gateway::protocol::continuation::{ContinuationError, Keyring, Payload};
 
 fn payload() -> Payload {
@@ -51,14 +53,29 @@ fn ac_mrtr_2_the_backends_state_is_not_readable_by_the_client() {
     // token it should never hold.
     let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
     let token = keyring.mint(&payload()).expect("mint");
-    assert!(
-        !token.contains("AEAD-protected"),
-        "the backend's state must not appear in what the client receives"
-    );
-    assert!(
-        !token.contains("weather"),
-        "nor the backend's identity, which tells the client where to aim: {token}"
-    );
+
+    // Decoded, not as the base64 string the client is handed. A signed-but-
+    // readable envelope — plain JSON with a tag on it — is exactly the failure
+    // this criterion names, and searching the *encoded* text would miss it:
+    // "weather" is not a substring of the base64 of "weather".
+    let decoded = B64
+        .decode(&token)
+        .expect("the envelope the client receives must at least be base64");
+    let plain = String::from_utf8_lossy(&decoded);
+    for secret in [
+        "AEAD-protected",
+        "weather",
+        "sha256:caller-a",
+        "sha256:req-1",
+        "gw-1",
+        "exchange-1",
+    ] {
+        assert!(
+            !plain.contains(secret),
+            "the client must not be able to read {secret:?} out of the \
+             envelope it echoes back"
+        );
+    }
 }
 
 #[test]
@@ -76,8 +93,13 @@ fn ac_mrtr_3_a_tampered_envelope_is_refused() {
             continue;
         }
         assert!(
-            keyring.open(&tampered, 1_500).is_err(),
-            "a modified envelope must be refused, not decoded: {tampered}"
+            matches!(
+                keyring.open(&tampered, 1_500),
+                Err(ContinuationError::NotAuthentic)
+            ),
+            "a modified envelope must be refused as inauthentic. `is_err()` \
+             alone would also pass if it were refused for length or version, \
+             which would not prove the AEAD tag is what caught it: {tampered}"
         );
     }
 }
@@ -85,10 +107,19 @@ fn ac_mrtr_3_a_tampered_envelope_is_refused() {
 #[test]
 fn ac_mrtr_3_a_garbage_envelope_is_refused_without_panicking() {
     let keyring = Keyring::new(&[(1, [7u8; 32])]).expect("keyring");
-    for junk in ["", "not-base64!!", "AAAA", "v1", &"A".repeat(10_000)] {
-        assert!(
-            keyring.open(junk, 1_500).is_err(),
-            "arbitrary client input must be refused: {junk}"
+    for (junk, expected) in [
+        ("", ContinuationError::Malformed),
+        ("not-base64!!", ContinuationError::Malformed),
+        ("AAAA", ContinuationError::Malformed),
+        ("v1", ContinuationError::Malformed),
+        (&"A".repeat(10_000), ContinuationError::TooLarge),
+    ] {
+        assert_eq!(
+            keyring.open(junk, 1_500).err(),
+            Some(expected),
+            "arbitrary client input must be refused for the reason that \
+             actually applies, so a refusal cannot drift onto another one \
+             unnoticed: {junk}"
         );
     }
 }
@@ -123,11 +154,13 @@ fn ac_mrtr_4_another_caller_cannot_redeem_it() {
     // Caller B presents caller A's continuation. It decrypts — we minted it —
     // so only the binding check stands between them.
     let opened = keyring.open(&token, 1_500).expect("authentic");
-    assert!(
+    assert_eq!(
         opened
             .redeemable_by("sha256:caller-b", "sha256:req-1")
-            .is_err(),
-        "a continuation minted for one caller must not redeem for another"
+            .err(),
+        Some(ContinuationError::NotAuthentic),
+        "a continuation minted for one caller must not redeem for another, and \
+         the refusal must be the binding check rather than any other failure"
     );
     assert!(
         opened
@@ -145,11 +178,13 @@ fn ac_mrtr_4_it_cannot_be_used_for_a_different_request() {
     let token = keyring.mint(&payload()).expect("mint");
     let opened = keyring.open(&token, 1_500).expect("authentic");
 
-    assert!(
+    assert_eq!(
         opened
             .redeemable_by("sha256:caller-a", "sha256:req-2")
-            .is_err(),
-        "a continuation must not carry over to a parallel request"
+            .err(),
+        Some(ContinuationError::NotAuthentic),
+        "a continuation must not carry over to a parallel request, and must \
+         refuse it as a binding failure rather than any other refusal"
     );
 }
 
