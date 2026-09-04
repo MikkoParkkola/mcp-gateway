@@ -4,9 +4,9 @@
 
 use mcp_gateway::protocol_revision_telemetry::{
     ATTRIBUTION_FLOOR, CacheScope, ListFilters, META_CLIENT_INFO, META_PROTOCOL_VERSION,
-    RETIRE_BELOW_SHARE, Registry, Transport, attribution_rate, cache_scope_decision,
-    client_identity, distribution_table, public_over_filtered, requested_revision,
-    retire_revisions,
+    MIN_MEASUREMENT_WINDOW, RETIRE_BELOW_SHARE, Registry, Transport, attribution_rate,
+    cache_scope_decision, client_identity, distribution_table, global_snapshot,
+    observe_inbound_request, public_over_filtered, requested_revision, retire_revisions,
 };
 use serde_json::json;
 
@@ -31,13 +31,47 @@ fn mcp728_u1_1_initialize_and_meta_paths_record_revision_and_client() {
         Some("2026-07-28")
     );
     assert_eq!(client_identity(None, Some(&meta)), "streamable-http-client");
+
+    let before = global_snapshot();
+    let modern_request = json!({
+        "jsonrpc": "2.0",
+        "id": 7218,
+        "method": "tools/list",
+        "params": {"_meta": meta}
+    });
+    observe_inbound_request(
+        &modern_request,
+        modern_request.get("params"),
+        "tools/list",
+        None,
+        None,
+        Transport::Http,
+    );
+    let legacy_request = json!({"jsonrpc": "2.0", "id": 7219, "method": "tools/list"});
+    observe_inbound_request(
+        &legacy_request,
+        None,
+        "tools/list",
+        Some("2025-06-18"),
+        None,
+        Transport::Http,
+    );
+    let after = global_snapshot();
+    assert!(
+        after.by_revision.get("2026-07-28").copied().unwrap_or(0)
+            > before.by_revision.get("2026-07-28").copied().unwrap_or(0)
+    );
+    assert!(
+        after.by_revision.get("2025-06-18").copied().unwrap_or(0)
+            > before.by_revision.get("2025-06-18").copied().unwrap_or(0)
+    );
 }
 
 #[test]
 fn mcp728_u1_2_unattributed_is_own_series_not_hidden_in_total() {
     let mut reg = Registry::new();
-    reg.observe_session(Some("2025-11-25"), "2025-11-25", "claude", Transport::Stdio);
-    reg.observe_session(None, "2025-11-25", "", Transport::Http);
+    reg.observe_request(Some("2025-11-25"), "2025-11-25", "claude", Transport::Stdio);
+    reg.observe_request(None, "2025-11-25", "", Transport::Http);
     let snap = reg.snapshot();
     assert_eq!(snap.total, 2);
     assert_eq!(snap.unattributed, 1);
@@ -80,10 +114,10 @@ fn mcp728_u1_4_measurement_window_table_and_stop_criterion() {
         attribution_rate(&production) < ATTRIBUTION_FLOOR,
         "empty window is not fit to decide on"
     );
-    assert!(retire_revisions(&production).is_empty());
+    assert!(retire_revisions(&production, MIN_MEASUREMENT_WINDOW).is_empty());
 
     for _ in 0..5 {
-        reg.observe_session(Some("2025-11-25"), "2025-11-25", "test", Transport::Http);
+        reg.observe_request(Some("2025-11-25"), "2025-11-25", "test", Transport::Http);
     }
     let table = distribution_table(&reg.snapshot());
     assert!(table.contains("2025-11-25"));
@@ -124,16 +158,17 @@ fn mcp728_u1_5_public_over_filtered_is_detectable() {
 fn mcp728_u1_6_two_percent_rule_unadjusted_and_blocked_when_underattributed() {
     assert!((RETIRE_BELOW_SHARE - 0.02).abs() <= f64::EPSILON);
     let mut under = Registry::new();
-    under.observe_session(Some("2024-11-05"), "2024-11-05", "c", Transport::Http);
-    under.observe_session(None, "2025-11-25", "c", Transport::Http);
-    assert!(retire_revisions(&under.snapshot()).is_empty());
+    under.observe_request(Some("2024-11-05"), "2024-11-05", "c", Transport::Http);
+    under.observe_request(None, "2025-11-25", "c", Transport::Http);
+    assert!(retire_revisions(&under.snapshot(), MIN_MEASUREMENT_WINDOW).is_empty());
 
     let mut full = Registry::new();
     for _ in 0..99 {
-        full.observe_session(Some("2025-11-25"), "2025-11-25", "c", Transport::Http);
+        full.observe_request(Some("2025-11-25"), "2025-11-25", "c", Transport::Http);
     }
-    full.observe_session(Some("2024-11-05"), "2024-11-05", "c", Transport::Http);
-    let retired = retire_revisions(&full.snapshot());
+    full.observe_request(Some("2024-11-05"), "2024-11-05", "c", Transport::Http);
+    assert!(retire_revisions(&full.snapshot(), std::time::Duration::from_secs(1)).is_empty());
+    let retired = retire_revisions(&full.snapshot(), MIN_MEASUREMENT_WINDOW);
     assert!(retired.iter().any(|r| r == "2024-11-05"));
     assert!(retired.iter().any(|r| r == "2024-10-07"));
     assert!(!retired.iter().any(|r| r == "2025-11-25"));

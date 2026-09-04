@@ -52,26 +52,49 @@ Rationale: 2025-06-18 and 2025-11-25 are the two revisions currently in wide cli
 
 **This is a decision, not a fact — it needs the unknown below resolved before it is frozen.**
 
-### U1 measurement (MIK-7218) — 2026-08-31
+### U1 measurement (MIK-7218) — instrumentation prepared 2026-09-04
 
-Instrumentation landed in `src/protocol_revision_telemetry.rs`. It counts only
-successful `initialize` dispatches, records both the requested wire revision and
-the revision actually negotiated, and splits the bounded labels by client family
-and HTTP/stdio transport. Missing requested revisions use a separate unattributed
-series. Stdio also emits the same bounded fields as a structured log. `tools/list`
-uses fixed counters for the filter set and the `cacheScope` the decision table
-would emit; it never retains per-request records or session ids.
+Instrumentation in `src/protocol_revision_telemetry.rs` counts parsed inbound
+requests, the only comparable unit because protocol-level sessions do not exist
+in 2026-07-28. Attribution comes from three sources:
 
-Read attribution from Prometheus as
-`mcp_protocol_revision_sessions_total / (mcp_protocol_revision_sessions_total +
-mcp_protocol_revision_unattributed_sessions_total)`. The pre-registered 2% share
-uses all initialized sessions, including unattributed sessions, as its denominator;
-this biases the check toward retaining older revisions. Zero-observation entries
-from the gateway's explicit `SUPPORTED_VERSIONS` table remain retirement candidates
-once the attribution floor is met.
+- modern per-request `_meta`;
+- the legacy HTTP `MCP-Protocol-Version` header; or
+- bounded, normalized attribution learned at `initialize` for legacy stdio
+  follow-ups.
 
-**Production window: not elapsed.** Snapshot at instrument time: 0 attributed
-sessions, 0 total. Attribution rate 0.0, below the 80% stop criterion.
+Client, revision, and transport labels have fixed families. A missing revision
+lands in a separate unattributed series. `tools/list` uses fixed counters for
+the real filter set and the `cacheScope` the decision table would emit. Raw
+client names never become labels; only hashes for up to 4,096 legacy session IDs
+are retained.
+
+Use one-week counter increases, reduced to scalars, for attribution:
+
+```promql
+sum(increase(mcp_protocol_revision_observations_total[1w]))
+/
+(
+  sum(increase(mcp_protocol_revision_observations_total[1w]))
+  + sum(increase(mcp_protocol_revision_unattributed_observations_total[1w]))
+)
+```
+
+The pre-registered 2% decision is evaluated only after seven elapsed days and
+the 80% attribution floor. For each revision, every unattributed observation is
+added to its count before testing the threshold. This conservative upper bound
+prevents uncertainty from making a revision look safe to remove. Revisions with
+zero observations are still evaluated from the gateway's explicit
+`SUPPORTED_VERSIONS` table.
+
+**Production window: not started.** Record these fields after deployment:
+
+- start timestamp and the timestamp seven full days later;
+- Prometheus counter increases over that exact interval; and
+- process restarts copied from deployment events.
+
+No distribution can be claimed until the result comment contains that live
+evidence.
 
 **Pre-registered 2% rule: not applied.** The stop criterion forbids narrowing
 on partial data. Decision 2 stays unfrozen. No revision is retired.

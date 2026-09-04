@@ -1622,6 +1622,15 @@ impl Gateway {
             Err(response) => return Some(response.to_value_lossy()),
         };
 
+        crate::protocol_revision_telemetry::observe_inbound_request(
+            request,
+            params.as_ref(),
+            &method,
+            None,
+            Some(session_id),
+            crate::protocol_revision_telemetry::Transport::Stdio,
+        );
+
         // Notifications have no id — send no response
         if method.starts_with("notifications/") {
             debug!(notification = %method, "stdio: notification (no response)");
@@ -1634,17 +1643,8 @@ impl Gateway {
             return Some(resp.to_value_lossy());
         };
 
-        let inbound_meta =
-            crate::protocol_revision_telemetry::request_meta(request, params.as_ref());
         let response = match method.as_str() {
-            "initialize" => meta_mcp.handle_initialize_for_transport(
-                id,
-                params.as_ref(),
-                inbound_meta,
-                Some(session_id),
-                None,
-                crate::protocol_revision_telemetry::Transport::Stdio,
-            ),
+            "initialize" => meta_mcp.handle_initialize(id, params.as_ref(), Some(session_id), None),
             "tools/list" => {
                 meta_mcp.handle_tools_list_with_params(id, params.as_ref(), Some(session_id))
             }

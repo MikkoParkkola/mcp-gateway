@@ -187,6 +187,27 @@ fn tools_list_wiring_records_real_cache_scope_inputs() {
 }
 
 #[test]
+fn static_code_mode_does_not_claim_profile_or_session_filtering() {
+    use crate::protocol_revision_telemetry::{ListFilters, global_shadow_count};
+
+    let meta = make_meta_mcp_code_mode();
+    meta.session_profiles
+        .set_profile("code-mode-session", "non-default");
+    let unfiltered = ListFilters::default();
+    let incorrectly_filtered = ListFilters {
+        profile: true,
+        ..ListFilters::default()
+    };
+    let before_unfiltered = global_shadow_count(unfiltered);
+    let before_filtered = global_shadow_count(incorrectly_filtered);
+
+    meta.handle_tools_list_for_session(RequestId::Number(7003), Some("code-mode-session"));
+
+    assert!(global_shadow_count(unfiltered) > before_unfiltered);
+    assert_eq!(global_shadow_count(incorrectly_filtered), before_filtered);
+}
+
+#[test]
 fn new_matches_featureless_constructor_defaults() {
     let backends = Arc::new(BackendRegistry::new());
     let from_new = MetaMcp::new(Arc::clone(&backends));

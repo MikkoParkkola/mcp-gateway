@@ -2,17 +2,16 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7218 / RFC-0060 U1: measure which MCP revisions clients speak.
 //!
-//! Negotiation still defaults a missing `protocolVersion` to `2024-11-05`.
-//! Telemetry must not: that default would hide the unattributed share the
-//! ticket requires as its own series.
-//!
-//! Only successful `initialize` dispatches are counted. This avoids retaining
-//! session capability tokens and prevents id-less HTTP requests from inflating
-//! the window with synthetic sessions.
+//! Modern MCP has no protocol session, so the only comparable unit across the
+//! legacy and modern eras is an inbound JSON-RPC request. Modern requests carry
+//! their identity in `_meta`; legacy HTTP requests carry a protocol header, and
+//! legacy stdio follow-ups reuse the bounded attribution learned at initialize.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -26,6 +25,10 @@ pub const UNATTRIBUTED_CLIENT: &str = "unattributed";
 pub const ATTRIBUTION_FLOOR: f64 = 0.80;
 /// Pre-registered retire threshold (RFC-0060 Decision 2). Written before data.
 pub const RETIRE_BELOW_SHARE: f64 = 0.02;
+/// Minimum production observation window required by MIK-7218.
+pub const MIN_MEASUREMENT_WINDOW: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+/// Hard bound for legacy session attribution retained in process memory.
+const MAX_SESSION_ATTRIBUTIONS: usize = 4_096;
 /// Revisions accepted as bounded metric labels. Everything else is `other`.
 pub const MEASURED_REVISIONS: &[&str] = &[
     "2026-07-28",
@@ -120,7 +123,14 @@ pub struct ToolsListShadow {
     pub would_emit_cache_scope: CacheScope,
 }
 
-/// Process-wide counters. Every key is normalized to a finite label set.
+#[derive(Debug, Clone, Copy)]
+struct SessionAttribution {
+    requested_revision: Option<&'static str>,
+    negotiated_revision: &'static str,
+    client: &'static str,
+}
+
+/// Process-wide counters. Every metric key is normalized to a finite label set.
 #[derive(Debug, Default)]
 pub struct Registry {
     /// Requested revisions. Kept as `by_revision` for the pre-registered table.
@@ -131,6 +141,8 @@ pub struct Registry {
     unattributed: u64,
     total: u64,
     shadow_counts: [u64; 16],
+    session_attributions: BTreeMap<u64, SessionAttribution>,
+    session_order: VecDeque<u64>,
 }
 
 /// Snapshot for `/metrics` tests and the Linear table.
@@ -156,8 +168,8 @@ impl Registry {
         Self::default()
     }
 
-    /// Record one successfully negotiated session.
-    pub fn observe_session(
+    /// Record one inbound request observation.
+    pub fn observe_request(
         &mut self,
         requested_revision: Option<&str>,
         negotiated_revision: &str,
@@ -182,6 +194,26 @@ impl Registry {
             }
             None => self.unattributed += 1,
         }
+    }
+
+    fn bind_session(&mut self, session_id: &str, attribution: SessionAttribution) {
+        let key = session_key(session_id);
+        if !self.session_attributions.contains_key(&key) {
+            while self.session_attributions.len() >= MAX_SESSION_ATTRIBUTIONS {
+                let Some(oldest) = self.session_order.pop_front() else {
+                    break;
+                };
+                self.session_attributions.remove(&oldest);
+            }
+            self.session_order.push_back(key);
+        }
+        self.session_attributions.insert(key, attribution);
+    }
+
+    fn session_attribution(&self, session_id: Option<&str>) -> Option<SessionAttribution> {
+        self.session_attributions
+            .get(&session_key(session_id?))
+            .copied()
     }
 
     /// Shadow-log one `tools/list` (not session-deduped: every list is a cache decision).
@@ -219,6 +251,12 @@ impl Registry {
     fn reset(&mut self) {
         *self = Self::default();
     }
+}
+
+fn session_key(session_id: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    session_id.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn shadow_index(filters: ListFilters) -> usize {
@@ -326,17 +364,24 @@ pub fn attribution_rate(snapshot: &Snapshot) -> f64 {
     ratio(attributed, snapshot.total)
 }
 
-/// Revisions below 2% of total. Empty or under-attributed windows return none
-/// (RFC-0060 stop criterion: do not narrow on partial data).
-pub fn retire_revisions(snapshot: &Snapshot) -> Vec<String> {
-    if snapshot.total == 0 || attribution_rate(snapshot) < ATTRIBUTION_FLOOR {
+/// Revisions whose conservative upper-bound share is below 2% after one week.
+///
+/// Every unattributed observation is treated as if it belonged to the revision
+/// being evaluated. This prevents missing attribution from making an older
+/// revision look safer to remove. Empty, short, or under-attributed windows
+/// return no candidates.
+pub fn retire_revisions(snapshot: &Snapshot, elapsed: Duration) -> Vec<String> {
+    if elapsed < MIN_MEASUREMENT_WINDOW
+        || snapshot.total == 0
+        || attribution_rate(snapshot) < ATTRIBUTION_FLOOR
+    {
         return Vec::new();
     }
     crate::protocol::SUPPORTED_VERSIONS
         .iter()
         .filter(|rev| {
             let count = snapshot.by_revision.get(**rev).copied().unwrap_or(0);
-            ratio(count, snapshot.total) < RETIRE_BELOW_SHARE
+            ratio(count.saturating_add(snapshot.unattributed), snapshot.total) < RETIRE_BELOW_SHARE
         })
         .map(|rev| (*rev).to_string())
         .collect()
@@ -356,8 +401,13 @@ pub fn distribution_table(snapshot: &Snapshot) -> String {
         share(snapshot.unattributed, snapshot.total)
     )
     .expect("writing to a String cannot fail");
-    writeln!(rows, "| total | {} | 100% |", snapshot.total)
-        .expect("writing to a String cannot fail");
+    writeln!(
+        rows,
+        "| total | {} | {:.1}% |",
+        snapshot.total,
+        if snapshot.total == 0 { 0.0 } else { 100.0 }
+    )
+    .expect("writing to a String cannot fail");
     rows
 }
 
@@ -381,22 +431,63 @@ fn global() -> &'static Mutex<Registry> {
     REGISTRY.get_or_init(|| Mutex::new(Registry::new()))
 }
 
-/// Record one successful initialize on the process registry.
-pub fn observe_initialize(
-    initialize_params: Option<&Value>,
-    request_meta: Option<&Value>,
-    negotiated_revision: &str,
+/// Record one parsed inbound JSON-RPC request.
+///
+/// Metric labels and remembered legacy attribution are bounded. Session IDs are
+/// reduced to hashes and retained only for a fixed-capacity cache.
+pub fn observe_inbound_request(
+    request: &Value,
+    params: Option<&Value>,
+    method: &str,
+    protocol_header: Option<&str>,
+    session_id: Option<&str>,
     transport: Transport,
 ) {
-    let requested = requested_revision(initialize_params, request_meta);
-    let raw_client = client_identity(initialize_params, request_meta);
-    let requested_label = revision_label(requested.as_deref());
-    let negotiated_label = revision_label(Some(negotiated_revision)).unwrap_or(OTHER_REVISION);
-    let client = client_label(&raw_client);
+    let meta = request_meta(request, params);
+    let initialize_params = (method == "initialize").then_some(params).flatten();
+    let explicit_requested = requested_revision(initialize_params, meta)
+        .or_else(|| protocol_header.map(str::trim).map(str::to_string))
+        .filter(|value| !value.is_empty());
+    let explicit_client = client_identity(initialize_params, meta);
+
     let mut reg = global()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    reg.observe_session(requested.as_deref(), negotiated_revision, client, transport);
+    let previous = reg.session_attribution(session_id);
+    let requested_label = revision_label(explicit_requested.as_deref())
+        .or_else(|| previous.and_then(|item| item.requested_revision));
+    let client = if explicit_client == UNATTRIBUTED_CLIENT {
+        previous.map_or(UNATTRIBUTED_CLIENT, |item| item.client)
+    } else {
+        client_label(&explicit_client)
+    };
+    let negotiated_label = if method == "initialize" {
+        let client_version = initialize_params
+            .and_then(|value| value.get("protocolVersion"))
+            .and_then(Value::as_str)
+            .unwrap_or(crate::protocol::PROTOCOL_VERSION);
+        revision_label(Some(crate::protocol::negotiate_version(client_version)))
+            .unwrap_or(OTHER_REVISION)
+    } else {
+        previous
+            .map(|item| item.negotiated_revision)
+            .or(requested_label)
+            .unwrap_or(OTHER_REVISION)
+    };
+
+    if method == "initialize"
+        && let Some(session_id) = session_id
+    {
+        reg.bind_session(
+            session_id,
+            SessionAttribution {
+                requested_revision: requested_label,
+                negotiated_revision: negotiated_label,
+                client,
+            },
+        );
+    }
+    reg.observe_request(requested_label, negotiated_label, client, transport);
     drop(reg);
     emit_session_metrics(requested_label, negotiated_label, client, transport);
     tracing::info!(
@@ -404,7 +495,7 @@ pub fn observe_initialize(
         negotiated_revision = negotiated_label,
         client,
         transport = transport.as_str(),
-        "mcp728.u1 negotiated session"
+        "mcp728.u1 inbound request observation"
     );
 }
 
@@ -469,7 +560,7 @@ fn emit_session_metrics(
     {
         if let Some(rev) = requested_revision {
             telemetry_metrics::counter!(
-                "mcp_protocol_revision_sessions_total",
+                "mcp_protocol_revision_observations_total",
                 "requested_revision" => rev.to_string(),
                 "negotiated_revision" => negotiated_revision.to_string(),
                 "client" => client.to_string(),
@@ -478,7 +569,7 @@ fn emit_session_metrics(
             .increment(1);
         } else {
             telemetry_metrics::counter!(
-                "mcp_protocol_revision_unattributed_sessions_total",
+                "mcp_protocol_revision_unattributed_observations_total",
                 "negotiated_revision" => negotiated_revision.to_string(),
                 "client" => client.to_string(),
                 "transport" => transport.as_str()
@@ -532,13 +623,13 @@ mod tests {
     #[test]
     fn unattributed_is_its_own_series() {
         let mut reg = Registry::new();
-        reg.observe_session(
+        reg.observe_request(
             Some("2025-11-25"),
             "2025-11-25",
             "claude-desktop",
             Transport::Http,
         );
-        reg.observe_session(None, "2025-11-25", "unknown", Transport::Stdio);
+        reg.observe_request(None, "2025-11-25", "unknown", Transport::Stdio);
         let snap = reg.snapshot();
         assert_eq!(snap.total, 2);
         assert_eq!(snap.unattributed, 1);
@@ -559,7 +650,7 @@ mod tests {
     fn arbitrary_labels_are_bounded() {
         let mut reg = Registry::new();
         for i in 0..100 {
-            reg.observe_session(
+            reg.observe_request(
                 Some(&format!("attacker-revision-{i}")),
                 "attacker-negotiated",
                 &format!("attacker-client-{i}"),
@@ -594,25 +685,96 @@ mod tests {
     #[test]
     fn two_percent_rule_does_not_fire_on_underattributed_or_empty() {
         let empty = Registry::new().snapshot();
-        assert!(retire_revisions(&empty).is_empty());
+        assert!(retire_revisions(&empty, MIN_MEASUREMENT_WINDOW).is_empty());
         let mut low = Registry::new();
-        low.observe_session(Some("2025-06-18"), "2025-06-18", "c", Transport::Http);
-        low.observe_session(None, "2025-11-25", "c", Transport::Http);
+        low.observe_request(Some("2025-06-18"), "2025-06-18", "c", Transport::Http);
+        low.observe_request(None, "2025-11-25", "c", Transport::Http);
         // 50% attributed < 80% floor
-        assert!(retire_revisions(&low.snapshot()).is_empty());
+        assert!(retire_revisions(&low.snapshot(), MIN_MEASUREMENT_WINDOW).is_empty());
     }
 
     #[test]
     fn two_percent_rule_retires_only_below_floor_when_attributed() {
         let mut reg = Registry::new();
         for _ in 0..99 {
-            reg.observe_session(Some("2025-11-25"), "2025-11-25", "c", Transport::Http);
+            reg.observe_request(Some("2025-11-25"), "2025-11-25", "c", Transport::Http);
         }
-        reg.observe_session(Some("2024-11-05"), "2024-11-05", "c", Transport::Http);
-        let retired = retire_revisions(&reg.snapshot());
+        reg.observe_request(Some("2024-11-05"), "2024-11-05", "c", Transport::Http);
+        assert!(retire_revisions(&reg.snapshot(), Duration::from_secs(1)).is_empty());
+        let retired = retire_revisions(&reg.snapshot(), MIN_MEASUREMENT_WINDOW);
         assert!(retired.iter().any(|r| r == "2024-11-05"));
         assert!(retired.iter().any(|r| r == "2024-10-07"));
         assert!(!retired.iter().any(|r| r == "2025-11-25"));
+    }
+
+    #[test]
+    fn modern_request_is_observed_without_initialize() {
+        let before = global_snapshot();
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {
+                "_meta": {
+                    META_PROTOCOL_VERSION: "2026-07-28",
+                    META_CLIENT_INFO: {"name": "Codex"}
+                }
+            }
+        });
+        observe_inbound_request(
+            &request,
+            request.get("params"),
+            "tools/list",
+            None,
+            None,
+            Transport::Http,
+        );
+        let after = global_snapshot();
+        assert!(
+            after.by_revision.get("2026-07-28").copied().unwrap_or(0)
+                > before.by_revision.get("2026-07-28").copied().unwrap_or(0)
+        );
+        assert!(
+            after.by_client.get("codex").copied().unwrap_or(0)
+                > before.by_client.get("codex").copied().unwrap_or(0)
+        );
+    }
+
+    #[test]
+    fn legacy_stdio_followup_reuses_bounded_initialize_attribution() {
+        let session_id = "mik-7218-legacy-stdio";
+        let before = global_snapshot();
+        let initialize = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "clientInfo": {"name": "Claude Desktop"}
+            }
+        });
+        observe_inbound_request(
+            &initialize,
+            initialize.get("params"),
+            "initialize",
+            None,
+            Some(session_id),
+            Transport::Stdio,
+        );
+        let followup = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"});
+        observe_inbound_request(
+            &followup,
+            None,
+            "tools/list",
+            None,
+            Some(session_id),
+            Transport::Stdio,
+        );
+        let after = global_snapshot();
+        assert!(
+            after.by_revision.get("2025-06-18").copied().unwrap_or(0)
+                >= before.by_revision.get("2025-06-18").copied().unwrap_or(0) + 2
+        );
     }
 
     #[test]

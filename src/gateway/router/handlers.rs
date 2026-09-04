@@ -507,6 +507,18 @@ pub(super) async fn meta_mcp_handler(
         }
     };
 
+    let protocol_header = headers
+        .get("mcp-protocol-version")
+        .and_then(|value| value.to_str().ok());
+    crate::protocol_revision_telemetry::observe_inbound_request(
+        &request,
+        params.as_ref(),
+        &method,
+        protocol_header,
+        Some(session_id.as_str()),
+        crate::protocol_revision_telemetry::Transport::Http,
+    );
+
     debug!(method = %method, session_id = %session_id, "Meta-MCP request");
 
     // Handle notifications (no id) - return 202 Accepted with empty body
@@ -515,7 +527,6 @@ pub(super) async fn meta_mcp_handler(
         return build_accepted_response(&session_id);
     }
 
-    let inbound_meta = crate::protocol_revision_telemetry::request_meta(&request, params.as_ref());
     // For requests, id is guaranteed to exist (checked in parse_request)
     let id = id.expect("id should exist for non-notification requests");
 
@@ -527,13 +538,11 @@ pub(super) async fn meta_mcp_handler(
 
     // Route to appropriate handler
     let response = match method.as_str() {
-        "initialize" => state.meta_mcp.handle_initialize_for_transport(
+        "initialize" => state.meta_mcp.handle_initialize(
             id,
             params.as_ref(),
-            inbound_meta,
             Some(session_id.as_str()),
             header_profile.as_deref(),
-            crate::protocol_revision_telemetry::Transport::Http,
         ),
         "tools/list" => state.meta_mcp.handle_tools_list_with_url_override(
             id,
