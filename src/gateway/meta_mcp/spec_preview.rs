@@ -43,6 +43,7 @@ impl MetaMcp {
             return self.handle_tools_list_for_session(id, session_id);
         }
 
+        self.shadow_tools_list_assembly(session_id, true);
         let profile = self.active_profile(session_id);
         let tools: Vec<Tool> = self.collect_filtered_backend_tools(&query, session_id, &profile);
 

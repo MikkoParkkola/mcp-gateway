@@ -482,6 +482,21 @@ pub(super) async fn backend_handler(
         }
     };
 
+    let protocol_header = inbound_headers
+        .get("mcp-protocol-version")
+        .and_then(|value| value.to_str().ok());
+    let session_id = inbound_headers
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok());
+    crate::protocol_revision_telemetry::observe_inbound_request(
+        &json_request,
+        params.as_ref(),
+        &method,
+        protocol_header,
+        session_id,
+        crate::protocol_revision_telemetry::Transport::Http,
+    );
+
     debug!(backend = %name, method = %method, client = ?client.as_ref().map(|c| &c.name), "Backend request");
 
     // Handle notifications - forward to backend but return 202 Accepted.

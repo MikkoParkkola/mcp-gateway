@@ -52,6 +52,74 @@ Rationale: 2025-06-18 and 2025-11-25 are the two revisions currently in wide cli
 
 **This is a decision, not a fact — it needs the unknown below resolved before it is frozen.**
 
+### U1 measurement (MIK-7218) — instrumentation prepared 2026-09-04
+
+Instrumentation in `src/protocol_revision_telemetry.rs` counts parsed inbound
+requests, the only comparable unit because protocol-level sessions do not exist
+in 2026-07-28. Attribution comes from three sources:
+
+- modern per-request `_meta`;
+- the legacy HTTP `MCP-Protocol-Version` header; or
+- bounded, normalized attribution learned at `initialize` for legacy stdio
+  follow-ups.
+
+Client, revision, and transport labels have fixed families. A missing revision
+lands in a separate unattributed series. `tools/list` uses fixed counters for
+the real filter set and the `cacheScope` the decision table would emit. Raw
+client names never become labels; only hashes for up to 4,096 legacy session IDs
+are retained.
+
+HTTP deployments expose these counters through Prometheus. Stdio has no metrics
+listener, so it writes a restart-safe aggregate to
+`~/.mcp-gateway/protocol-revision-telemetry/window.json`. The file contains the
+same bounded revision, client, transport, and `tools/list` dimensions. It is
+updated with an owner-only atomic write under a cross-process lock. Each process
+adds only its new observations, so restarting a stdio server does not reset the
+window. A write failure is logged as an incomplete measurement window; it does
+not silently produce retirement evidence.
+
+Use one-week counter increases, reduced to scalars, for attribution:
+
+```promql
+sum(increase(mcp_protocol_revision_observations_total[1w]))
+/
+(
+  sum(increase(mcp_protocol_revision_observations_total[1w]))
+  + sum(increase(mcp_protocol_revision_unattributed_observations_total[1w]))
+)
+```
+
+The pre-registered 2% decision is evaluated only after seven elapsed days and
+the 80% attribution floor. For each revision, every unattributed observation is
+added to its count before testing the threshold. A present but unrecognized
+revision lands in `other`. At 2% or more, `other` blocks the entire decision;
+below 2%, it is still added to every supported revision's upper-bound count.
+This prevents uncertainty from making a revision look safe to remove. Revisions
+with zero observations are still evaluated from the gateway's explicit
+`SUPPORTED_VERSIONS` table.
+
+**Production window: not started.** Stop all gateway processes, archive any
+earlier `protocol-revision-telemetry` directory, deploy, and then start the
+gateways. The new durable file's `started_at_unix_seconds` is the stdio baseline;
+take the HTTP baseline scrape after all bounded metric series have been
+registered at zero. Record these fields after deployment:
+
+- the durable start timestamp and the timestamp seven full days later;
+- Prometheus counter increases over that exact interval; and
+- process restarts copied from deployment events;
+- the final durable JSON aggregate and its rendered distribution table.
+
+Use the durable file's start time for the stdio retirement decision, not an
+operator-supplied duration or an in-memory process snapshot. No distribution can
+be claimed until the result comment contains that live evidence. Evaluate the
+final gate with `production_retirement_decision`: it requires the HTTP baseline
+to match the durable stdio start time and retires only the intersection of the
+HTTP and stdio candidates. A standalone stdio result is not a production
+retirement decision.
+
+**Pre-registered 2% rule: not applied.** The stop criterion forbids narrowing
+on partial data. Decision 2 stays unfrozen. No revision is retired.
+
 ## Unknowns, each with a fail-fast (§P1)
 
 An unknown without a scheduled check is a defect. Five; one resolved, four outstanding:
