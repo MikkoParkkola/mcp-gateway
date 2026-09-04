@@ -28,10 +28,15 @@ pub mod webhooks;
 mod ws_listener;
 
 pub use auth::{AuthState, ResolvedAuthConfig, auth_middleware};
+// One owner for "is this host loopback", reachable crate-wide. `mod router` is
+// private, so config validation and shadow discovery cannot spell the classifier
+// without this line — and the alternative to the line is a second copy of the
+// rule, which is what it exists to prevent. Crate-internal: no public surface.
 pub use oauth::{
     AgentAuthState, AgentIdentity, AgentRegistry, GatewayKeyPair, agent_auth_middleware,
 };
 pub use proxy::ProxyManager;
+pub(crate) use router::is_loopback_bind as is_loopback_host;
 pub use server::Gateway;
 pub(crate) use server::{next_start_refusal, reload_posture_refusal};
 pub use streaming::{NotificationMultiplexer, TaggedNotification};

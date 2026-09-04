@@ -956,7 +956,7 @@ impl Config {
                             "Backend '{name}' has an empty http_url"
                         )));
                     }
-                    url::Url::parse(http_url).map_err(|e| {
+                    let url = url::Url::parse(http_url).map_err(|e| {
                         Error::ConfigValidation(format!(
                             // The URL is not echoed: a malformed one still carries its
                             // userinfo and query, and a validation error is printed on
@@ -964,6 +964,7 @@ impl Config {
                             "Backend '{name}' has an invalid http_url: {e}"
                         ))
                     })?;
+                    Self::reject_cleartext_credentials(name, backend, &url)?;
                 }
                 #[cfg(feature = "a2a")]
                 TransportConfig::A2a { a2a_url, .. } => {
@@ -972,18 +973,68 @@ impl Config {
                             "Backend '{name}' has an empty a2a_url"
                         )));
                     }
-                    url::Url::parse(a2a_url).map_err(|e| {
+                    let url = url::Url::parse(a2a_url).map_err(|e| {
                         Error::ConfigValidation(format!(
                             // Twin of the http_url line above. Fixing one spelling of a
                             // leak and not the other is how the first fix stops mattering.
                             "Backend '{name}' has an invalid a2a_url: {e}"
                         ))
                     })?;
+                    Self::reject_cleartext_credentials(name, backend, &url)?;
                 }
                 TransportConfig::Stdio { .. } => {}
             }
         }
         Ok(())
+    }
+
+    /// Refuse a backend that would put a credential on a cleartext wire.
+    ///
+    /// A credential sent over `http://` to a host off this machine is readable
+    /// by everything on the path and replayable forever, so config load treats
+    /// the combination as a mistake unless the operator has said otherwise in
+    /// `allow_cleartext_credentials`.
+    ///
+    /// Runs only for an enabled backend: a disabled one opens no connection, so
+    /// it leaks nothing. The skip covers this predicate alone — an empty or
+    /// malformed URL still fails above, whatever `enabled` says.
+    fn reject_cleartext_credentials(
+        name: &str,
+        backend: &BackendConfig,
+        url: &url::Url,
+    ) -> Result<()> {
+        if !backend.enabled || backend.allow_cleartext_credentials || url.scheme() != "http" {
+            return Ok(());
+        }
+        // Loopback never leaves the machine. Decided by the classifier the
+        // Origin gate already uses, so the two cannot drift; `host_str` hands it
+        // a bare host, brackets and all for an IPv6 literal.
+        let host = url.host_str().unwrap_or_default();
+        if crate::gateway::is_loopback_host(host) {
+            return Ok(());
+        }
+        // Five ways a credential reaches this backend. Any static header counts:
+        // a known-name list would miss `X-Custom-Token` and every other spelling
+        // an operator picks. A query counts because it is operator-supplied
+        // material on the wire and its sensitivity is not decidable here.
+        let credential_bearing = backend.oauth.is_some()
+            || backend.identity_propagation.is_some()
+            || !backend.secrets.is_empty()
+            || !backend.headers.is_empty()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some();
+        if !credential_bearing {
+            return Ok(());
+        }
+        // The message names the backend and nothing else. It is printed on
+        // startup and pasted into support threads, and the URL it would
+        // otherwise echo is exactly the credential-bearing one (MIK-7221).
+        Err(Error::ConfigValidation(format!(
+            "Backend '{name}' would send credentials in cleartext to a host off this \
+             machine. Use TLS, or set allow_cleartext_credentials on this backend to \
+             accept that the credentials are readable and replayable in transit."
+        )))
     }
 
     fn validate_required_env_references(&self, overlay: &EnvOverlay) -> Result<()> {
@@ -2004,8 +2055,11 @@ mod cleartext_credential_guard {
     #[test]
     fn refusal_message_names_the_backend_and_leaks_nothing() {
         let message = refusal(http_backend(&format!("http://user:pw@{REMOTE}")));
+        // The quoted name, not a bare `b`: the word "backend" appears in the
+        // remediation sentence, so a substring check on the letter alone would
+        // pass on a message that names nothing.
         assert!(
-            message.contains('b'),
+            message.contains("'b'"),
             "the refusal must name the backend: {message}"
         );
         for leaked in ["user:pw", REMOTE, "http://"] {
