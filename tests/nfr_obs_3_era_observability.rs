@@ -355,6 +355,9 @@ mod read {
             // handler runs, and that rejection is not what these cases observe.
             .header("MCP-Protocol-Version", "2026-07-28")
             .header("Mcp-Method", "tools/call")
+            // `tools/call` carries a name, so the header must mirror the body's
+            // `params.name` or the guard refuses the call before any handler runs.
+            .header("Mcp-Name", "gateway_list_servers")
             .body(Body::from(serde_json::to_vec(&body).expect("body")))
             .expect("request");
         let response = create_router(state(backends))
@@ -708,6 +711,62 @@ async fn a_contradiction_reprobes_and_the_whole_read_moves_with_it() {
         "the re-probe's time cannot precede the start probe's: {before} -> {after}"
     );
     assert_no_error_code(&after);
+}
+
+/// A request that does not contradict the recorded era re-probes nothing.
+///
+/// The paired half of the two re-probe cases above: they prove the fields move
+/// when a re-probe runs, and nothing proves they hold still when none does. A
+/// gateway re-probing on every request would satisfy both of those and be
+/// caught only here.
+///
+/// The settle window is what makes the negative honest. A re-probe is a
+/// detached task, so an immediate second read would agree with an unchanged
+/// snapshot simply by outrunning it. Polling for a change and finding none
+/// across the window is the assertion; a single read is not.
+#[tokio::test]
+async fn an_uncontradicted_request_leaves_the_probe_trigger_and_time_alone() {
+    let _guard = capture_lock().await;
+    let fixture = Fixture::new(METHOD_NOT_FOUND);
+    let backends = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(fixture.backend("uncontradicted"));
+    assert!(
+        backends.register(Arc::clone(&backend)),
+        "backend must register"
+    );
+    backend.ensure_started().await.expect("start");
+
+    let before = entry(
+        &read::servers(Arc::clone(&backends)).await,
+        "uncontradicted",
+    );
+    assert_eq!(
+        before["era_probe_trigger"], "start",
+        "the start probe must have run, or this case observes nothing: {before}"
+    );
+
+    // Answers with a result, so there is no error for the era to disagree with.
+    let answer = backend
+        .request("tools/list", None)
+        .await
+        .expect("peer answers");
+    assert!(
+        answer.error.is_none(),
+        "the request must not carry an error, or it is a contradiction case: {answer:?}"
+    );
+
+    for _ in 0..25 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let now = entry(
+            &read::servers(Arc::clone(&backends)).await,
+            "uncontradicted",
+        );
+        assert_eq!(
+            snapshot(&now),
+            snapshot(&before),
+            "no re-probe ran, so the whole read must be unchanged: {before} -> {now}"
+        );
+    }
 }
 
 /// A re-probe that gets no answer gives the era back, rather than keeping a

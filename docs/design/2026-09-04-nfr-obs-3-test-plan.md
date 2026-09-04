@@ -17,7 +17,7 @@ three while leaving the third — the clause the ticket exists for — unwritten
 |---|---|---|---|
 | which era | for a probed-modern backend and a never-probed one: issue a request whose result differs by era, and assert the operator read's `era` agrees with the behaviour observed | system | behaviour |
 | by what evidence | every `EraEvidence` variant is reachable from the probe path and renders on the read | component | behaviour |
-| when re-probed | `era_probed_at` and `era_probe_trigger` move on a re-probe and not on a discarded outcome | component | behaviour |
+| when re-probed | `era_probed_at` and `era_probe_trigger` move on a re-probe, and hold still when no re-probe runs | component | behaviour |
 | per backend | two backends with different eras each show their own `era`, `era_evidence` and `era_probed_at` on one `gateway_list_servers` response | system | behaviour |
 
 No empty cell. The third row is the one with no equivalent in the existing suite.
@@ -76,13 +76,14 @@ defect.
 
 ## Transition cases
 
-Two cases the matrix cannot express, because they are about change over time
+Three cases the matrix cannot express, because they are about change over time
 rather than a single outcome.
 
 | case | asserts |
 |---|---|
 | start probe, then a contradiction re-probe that answers modern | the complete after-snapshot: `era` `modern`, `era_source` `probed`, `era_evidence` `modern_error_code`, `era_probe_trigger` `reprobe`, `era_probed_at` the stepped clock value |
 | a re-probe that gets no answer after a probe that did | the complete after-snapshot: `era` `legacy`, `era_source` back to `assumed`, `era_evidence` `no_answer`, `era_probe_trigger` `reprobe`, `era_probed_at` the stepped clock value |
+| a request that does not contradict the recorded era | the complete snapshot is unchanged across a settle window: no re-probe ran, so `era_probe_trigger` stays `start` and `era_probed_at` stays put |
 
 **Both assert a complete wire snapshot, before and after, not the fields that
 moved.** A transition case that pins only the moving fields passes while a stale
@@ -128,7 +129,15 @@ detached task holding an `Arc` clone of the transport it observed, and
 `Backend::force_restart` can replace that transport while the task is still
 probing — but `ProtocolEra` carries no generation or transport epoch, so the
 outcome is accepted rather than thrown away, and an event meaning *thrown away*
-never fires. The design records the same fact against the cited event (the `‡`
+never fires.
+
+The two are not the same failure and the distinction is what defers the record.
+*Applying a stale outcome* is the live defect: an era observed on a replaced
+transport is written over the live one, and it is observable today — the read
+shows an era the current peer never demonstrated. *Discarding* one is the
+behaviour the record would report, and it cannot be observed at all, because
+nothing yet decides an outcome is stale. A test asserting the discard would
+therefore be asserting the fix, not the code. The design records the same fact against the cited event (the `‡`
 note under its event table), and carries the race itself to `MIK-7217`.
 
 | field | value |
@@ -147,8 +156,10 @@ observes one.
 
 Two backends in one `gateway_list_servers` response: A probed and classified
 `modern`, B never probed. Each entry carries its own `era`, `era_source`,
-`era_evidence` and `era_probed_at`, and B's `era_probed_at` is absent while A's is
-set. A shared cell, a cached first answer, or a fold over all backends renders
+`era_evidence`, `era_probe_trigger` and `era_probed_at`; B's `era_probe_trigger`
+and `era_probed_at` are both absent while A's are both set. Pinning the trigger
+here and not only the timestamp matters because a fold that copied one field
+across backends would be caught by the other. A shared cell, a cached first answer, or a fold over all backends renders
 identically when only one backend is observed, and this is the only case that
 separates them.
 
