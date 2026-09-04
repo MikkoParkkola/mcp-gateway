@@ -4,9 +4,10 @@
 
 use mcp_gateway::protocol_revision_telemetry::{
     ATTRIBUTION_FLOOR, CacheScope, ListFilters, META_CLIENT_INFO, META_PROTOCOL_VERSION,
-    MIN_MEASUREMENT_WINDOW, RETIRE_BELOW_SHARE, Registry, RetirementBlocked, Transport,
-    attribution_rate, cache_scope_decision, client_identity, distribution_table, global_snapshot,
-    observe_inbound_request, public_over_filtered, requested_revision, retire_revisions,
+    MIN_MEASUREMENT_WINDOW, OTHER_REVISION, RETIRE_BELOW_SHARE, Registry, RetirementBlocked,
+    Transport, attribution_rate, cache_scope_decision, client_identity, distribution_table,
+    durable_window_path, global_snapshot, load_durable_window, observe_inbound_request,
+    public_over_filtered, requested_revision, retire_revisions,
 };
 use serde_json::json;
 
@@ -211,4 +212,87 @@ fn mcp728_u1_6_two_percent_rule_unadjusted_and_blocked_when_underattributed() {
     assert!(retired.iter().any(|r| r == "2024-11-05"));
     assert!(retired.iter().any(|r| r == "2024-10-07"));
     assert!(!retired.iter().any(|r| r == "2025-11-25"));
+}
+
+#[test]
+fn mcp728_u1_6_unknown_revisions_are_conservative() {
+    let mut blocked = Registry::new();
+    for _ in 0..98 {
+        blocked.observe_request(Some("2025-11-25"), "c", Transport::Http);
+    }
+    blocked.observe_request(Some("future-a"), "c", Transport::Http);
+    blocked.observe_request(Some("future-b"), "c", Transport::Http);
+    assert_eq!(
+        retire_revisions(&blocked.snapshot(), MIN_MEASUREMENT_WINDOW),
+        Err(RetirementBlocked::OtherAtOrAboveRetirementThreshold)
+    );
+
+    let mut upper_bound = Registry::new();
+    for _ in 0..98 {
+        upper_bound.observe_request(Some("2025-11-25"), "c", Transport::Http);
+    }
+    upper_bound.observe_request(Some("2024-11-05"), "c", Transport::Http);
+    upper_bound.observe_request(Some("future-revision"), "c", Transport::Http);
+    let snapshot = upper_bound.snapshot();
+    assert_eq!(snapshot.by_revision.get(OTHER_REVISION), Some(&1));
+    let retired = retire_revisions(&snapshot, MIN_MEASUREMENT_WINDOW)
+        .expect("one percent other is bounded into each revision's upper share");
+    assert!(!retired.iter().any(|revision| revision == "2024-11-05"));
+}
+
+#[test]
+fn mcp728_u1_2_stdio_window_survives_process_restart() {
+    let data_dir = tempfile::tempdir().expect("temporary data directory");
+    let mut first_sink =
+        mcp_gateway::protocol_revision_telemetry::DurableTelemetrySink::open(data_dir.path())
+            .expect("create durable telemetry window");
+    let mut first_process = Registry::new();
+    for _ in 0..60 {
+        first_process.observe_request(Some("2025-11-25"), "claude", Transport::Stdio);
+    }
+    first_process.shadow_tools_list(ListFilters::default());
+    first_sink
+        .persist_registry(&first_process)
+        .expect("persist first process counters");
+    let first_window = load_durable_window(data_dir.path()).expect("load first process window");
+    assert_eq!(first_window.snapshot.total, 60);
+    assert_eq!(first_window.tools_list_shadow.values().sum::<u64>(), 1);
+
+    drop(first_sink);
+    let mut restarted_sink =
+        mcp_gateway::protocol_revision_telemetry::DurableTelemetrySink::open(data_dir.path())
+            .expect("reopen durable telemetry window");
+    let mut restarted_process = Registry::new();
+    for _ in 0..40 {
+        restarted_process.observe_request(Some("2025-11-25"), "codex", Transport::Stdio);
+    }
+    restarted_sink
+        .persist_registry(&restarted_process)
+        .expect("persist restarted process counters");
+
+    let window = load_durable_window(data_dir.path()).expect("load aggregate after restart");
+    assert_eq!(
+        window.started_at_unix_seconds,
+        first_window.started_at_unix_seconds
+    );
+    assert_eq!(window.snapshot.total, 100);
+    assert_eq!(window.snapshot.by_transport.get("stdio"), Some(&100));
+    assert_eq!(window.tools_list_shadow.len(), 16);
+    assert_eq!(
+        durable_window_path(data_dir.path()).file_name().unwrap(),
+        "window.json"
+    );
+    assert_eq!(
+        window.retirement_decision_at(
+            window.started_at_unix_seconds + MIN_MEASUREMENT_WINDOW.as_secs() - 1
+        ),
+        Err(RetirementBlocked::WindowTooShort)
+    );
+    assert!(
+        window
+            .retirement_decision_at(
+                window.started_at_unix_seconds + MIN_MEASUREMENT_WINDOW.as_secs()
+            )
+            .is_ok()
+    );
 }

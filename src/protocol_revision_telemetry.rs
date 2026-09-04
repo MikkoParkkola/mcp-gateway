@@ -9,11 +9,19 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::{self, Write as _};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::fs_lock::ExclusiveFileLock;
 
 /// Wire key for 2026 per-request protocol revision.
 pub const META_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
@@ -50,6 +58,12 @@ const MEASURED_CLIENTS: &[&str] = &[
     "other",
 ];
 const MEASURED_TRANSPORTS: &[Transport] = &[Transport::Http, Transport::Stdio, Transport::Internal];
+/// Directory below the gateway data directory that holds the restart-safe window.
+pub const DURABLE_TELEMETRY_DIR: &str = "protocol-revision-telemetry";
+/// Durable aggregate filename read by operators after the measurement window.
+pub const DURABLE_WINDOW_FILE: &str = "window.json";
+/// Schema identifier for the operator-readable aggregate.
+pub const DURABLE_WINDOW_SCHEMA: &str = "mcp_protocol_revision_window.v1";
 
 /// Inbound transport for a negotiated session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,7 +168,7 @@ pub struct Registry {
 }
 
 /// Snapshot for `/metrics` tests and the Linear table.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
     /// Requests whose revision was named on the wire.
     pub by_revision: BTreeMap<String, u64>,
@@ -179,6 +193,131 @@ pub enum RetirementBlocked {
     AttributionBelowFloor,
     /// Unattributed requests alone could keep every revision above 2%.
     UnattributedAtOrAboveRetirementThreshold,
+    /// Present but unrecognized revisions are too common to classify safely.
+    OtherAtOrAboveRetirementThreshold,
+}
+
+/// Restart-safe aggregate for a production measurement window.
+///
+/// The file contains bounded labels only. It never stores raw client names,
+/// session identifiers, request bodies, or tool arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DurableWindow {
+    /// Stable on-disk schema identifier.
+    pub schema_version: String,
+    /// Unix timestamp when this window started.
+    pub started_at_unix_seconds: u64,
+    /// Most recent successful aggregate update, recorded as Unix seconds for operator inspection
+    /// after the seven-day window.
+    pub updated_at_unix_seconds: u64,
+    /// Cross-process request counters accumulated since `started_at_unix_seconds`.
+    pub snapshot: Snapshot,
+    /// All 16 bounded `tools/list` filter combinations, including zeroes.
+    pub tools_list_shadow: BTreeMap<String, u64>,
+}
+
+impl DurableWindow {
+    fn empty(now: u64) -> Self {
+        Self {
+            schema_version: DURABLE_WINDOW_SCHEMA.to_string(),
+            started_at_unix_seconds: now,
+            updated_at_unix_seconds: now,
+            snapshot: Snapshot::default(),
+            tools_list_shadow: empty_shadow_counts(),
+        }
+    }
+
+    /// Evaluate the persisted counters using the durable start timestamp.
+    pub fn retirement_decision_at(
+        &self,
+        now_unix_seconds: u64,
+    ) -> Result<Vec<String>, RetirementBlocked> {
+        let elapsed =
+            Duration::from_secs(now_unix_seconds.saturating_sub(self.started_at_unix_seconds));
+        retire_revisions(&self.snapshot, elapsed)
+    }
+}
+
+/// Cross-process sink used by stdio servers.
+///
+/// Each process contributes only the delta since its preceding write. A shared
+/// advisory lock serializes the aggregate update across gateway processes.
+#[derive(Debug)]
+pub struct DurableTelemetrySink {
+    window_path: PathBuf,
+    lock_path: PathBuf,
+    previous_snapshot: Snapshot,
+    previous_shadow: BTreeMap<String, u64>,
+}
+
+impl DurableTelemetrySink {
+    /// Open or create the durable measurement window below `data_dir`.
+    pub fn open(data_dir: &Path) -> io::Result<Self> {
+        let directory = data_dir.join(DURABLE_TELEMETRY_DIR);
+        std::fs::create_dir_all(&directory)?;
+        force_directory_owner_only(&directory)?;
+        let window_path = directory.join(DURABLE_WINDOW_FILE);
+        let lock_path = directory.join(".window.lock");
+        {
+            let _lock = ExclusiveFileLock::acquire(&lock_path)?;
+            if window_path.exists() {
+                read_window_file(&window_path)?;
+            } else {
+                write_window_atomic(&window_path, &DurableWindow::empty(unix_seconds()?))?;
+            }
+        }
+        Ok(Self {
+            window_path,
+            lock_path,
+            previous_snapshot: Snapshot::default(),
+            previous_shadow: empty_shadow_counts(),
+        })
+    }
+
+    /// Add counters observed since this sink's preceding successful write.
+    pub fn persist_registry(&mut self, registry: &Registry) -> io::Result<()> {
+        self.persist(
+            registry.snapshot(),
+            registry.shadow_snapshot(),
+            unix_seconds()?,
+        )
+    }
+
+    /// Persist the current process-global counters.
+    pub fn persist_global(&mut self) -> io::Result<()> {
+        let (snapshot, shadow) = {
+            let registry = global()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (registry.snapshot(), registry.shadow_snapshot())
+        };
+        self.persist(snapshot, shadow, unix_seconds()?)
+    }
+
+    fn persist(
+        &mut self,
+        current: Snapshot,
+        current_shadow: BTreeMap<String, u64>,
+        now: u64,
+    ) -> io::Result<()> {
+        let snapshot_delta = snapshot_delta(&current, &self.previous_snapshot);
+        let shadow_delta = map_delta(&current_shadow, &self.previous_shadow);
+        if snapshot_delta.total == 0 && shadow_delta.values().all(|count| *count == 0) {
+            return Ok(());
+        }
+
+        let _lock = ExclusiveFileLock::acquire(&self.lock_path)?;
+        let mut window = read_window_file(&self.window_path)?;
+        add_snapshot(&mut window.snapshot, &snapshot_delta)?;
+        add_map(&mut window.tools_list_shadow, &shadow_delta)?;
+        window.updated_at_unix_seconds = window.updated_at_unix_seconds.max(now);
+        validate_window(&window)?;
+        write_window_atomic(&self.window_path, &window)?;
+
+        self.previous_snapshot = current;
+        self.previous_shadow = current_shadow;
+        Ok(())
+    }
 }
 
 impl Registry {
@@ -258,6 +397,17 @@ impl Registry {
         self.shadow_counts[shadow_index(filters)]
     }
 
+    fn shadow_snapshot(&self) -> BTreeMap<String, u64> {
+        all_filter_combinations()
+            .map(|filters| {
+                (
+                    shadow_key(filters, cache_scope_decision(filters)),
+                    self.shadow_count(filters),
+                )
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     #[allow(dead_code)]
     fn reset(&mut self) {
@@ -276,6 +426,38 @@ fn shadow_index(filters: ListFilters) -> usize {
         | (usize::from(filters.profile) << 1)
         | (usize::from(filters.session) << 2)
         | (usize::from(filters.request) << 3)
+}
+
+fn all_filter_combinations() -> impl Iterator<Item = ListFilters> {
+    [false, true].into_iter().flat_map(|principal| {
+        [false, true].into_iter().flat_map(move |profile| {
+            [false, true].into_iter().flat_map(move |session| {
+                [false, true].into_iter().map(move |request| ListFilters {
+                    principal,
+                    profile,
+                    session,
+                    request,
+                })
+            })
+        })
+    })
+}
+
+fn shadow_key(filters: ListFilters, scope: CacheScope) -> String {
+    format!(
+        "principal={},profile={},session={},request={},would_emit_cache_scope={}",
+        filters.principal,
+        filters.profile,
+        filters.session,
+        filters.request,
+        scope.as_str()
+    )
+}
+
+fn empty_shadow_counts() -> BTreeMap<String, u64> {
+    all_filter_combinations()
+        .map(|filters| (shadow_key(filters, cache_scope_decision(filters)), 0))
+        .collect()
 }
 
 /// Revision the client asked for. `_meta` wins when both are present.
@@ -398,11 +580,24 @@ pub fn retire_revisions(
     if ratio(snapshot.unattributed, snapshot.total) >= RETIRE_BELOW_SHARE {
         return Err(RetirementBlocked::UnattributedAtOrAboveRetirementThreshold);
     }
+    let other = snapshot
+        .by_revision
+        .get(OTHER_REVISION)
+        .copied()
+        .unwrap_or(0);
+    if ratio(other, snapshot.total) >= RETIRE_BELOW_SHARE {
+        return Err(RetirementBlocked::OtherAtOrAboveRetirementThreshold);
+    }
     Ok(crate::protocol::SUPPORTED_VERSIONS
         .iter()
         .filter(|rev| {
             let count = snapshot.by_revision.get(**rev).copied().unwrap_or(0);
-            ratio(count.saturating_add(snapshot.unattributed), snapshot.total) < RETIRE_BELOW_SHARE
+            ratio(
+                count
+                    .saturating_add(snapshot.unattributed)
+                    .saturating_add(other),
+                snapshot.total,
+            ) < RETIRE_BELOW_SHARE
         })
         .map(|rev| (*rev).to_string())
         .collect())
@@ -446,6 +641,217 @@ fn ratio(n: u64, total: u64) -> f64 {
     // human-facing shares and the pre-registered percentage threshold.
     n as f64 / total as f64
 }
+
+/// Location of the restart-safe aggregate below a gateway data directory.
+pub fn durable_window_path(data_dir: &Path) -> PathBuf {
+    data_dir
+        .join(DURABLE_TELEMETRY_DIR)
+        .join(DURABLE_WINDOW_FILE)
+}
+
+/// Load and validate the operator-readable production window.
+pub fn load_durable_window(data_dir: &Path) -> io::Result<DurableWindow> {
+    read_window_file(&durable_window_path(data_dir))
+}
+
+/// Evaluate retirement from the persisted start time and aggregate counters.
+///
+/// This is the production decision path. Unlike [`retire_revisions`], callers
+/// cannot supply an elapsed duration or an in-process snapshot.
+pub fn durable_retirement_decision(
+    data_dir: &Path,
+) -> io::Result<Result<Vec<String>, RetirementBlocked>> {
+    let window = load_durable_window(data_dir)?;
+    Ok(window.retirement_decision_at(unix_seconds()?))
+}
+
+fn snapshot_delta(current: &Snapshot, previous: &Snapshot) -> Snapshot {
+    Snapshot {
+        by_revision: map_delta(&current.by_revision, &previous.by_revision),
+        by_client: map_delta(&current.by_client, &previous.by_client),
+        by_transport: map_delta(&current.by_transport, &previous.by_transport),
+        unattributed: counter_delta(current.unattributed, previous.unattributed),
+        total: counter_delta(current.total, previous.total),
+    }
+}
+
+fn map_delta(
+    current: &BTreeMap<String, u64>,
+    previous: &BTreeMap<String, u64>,
+) -> BTreeMap<String, u64> {
+    current
+        .iter()
+        .map(|(key, value)| {
+            let prior = previous.get(key).copied().unwrap_or(0);
+            (key.clone(), counter_delta(*value, prior))
+        })
+        .collect()
+}
+
+fn counter_delta(current: u64, previous: u64) -> u64 {
+    current.checked_sub(previous).unwrap_or(current)
+}
+
+fn add_snapshot(target: &mut Snapshot, delta: &Snapshot) -> io::Result<()> {
+    add_map(&mut target.by_revision, &delta.by_revision)?;
+    add_map(&mut target.by_client, &delta.by_client)?;
+    add_map(&mut target.by_transport, &delta.by_transport)?;
+    target.unattributed = checked_counter_add(target.unattributed, delta.unattributed)?;
+    target.total = checked_counter_add(target.total, delta.total)?;
+    Ok(())
+}
+
+fn add_map(target: &mut BTreeMap<String, u64>, delta: &BTreeMap<String, u64>) -> io::Result<()> {
+    for (key, increment) in delta {
+        let value = target.entry(key.clone()).or_insert(0);
+        *value = checked_counter_add(*value, *increment)?;
+    }
+    Ok(())
+}
+
+fn checked_counter_add(current: u64, increment: u64) -> io::Result<u64> {
+    current
+        .checked_add(increment)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "telemetry counter overflow"))
+}
+
+fn read_window_file(path: &Path) -> io::Result<DurableWindow> {
+    let bytes = std::fs::read(path)?;
+    let window: DurableWindow = serde_json::from_slice(&bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    validate_window(&window)?;
+    Ok(window)
+}
+
+fn validate_window(window: &DurableWindow) -> io::Result<()> {
+    if window.schema_version != DURABLE_WINDOW_SCHEMA {
+        return Err(invalid_window("unsupported durable telemetry schema"));
+    }
+    if window.updated_at_unix_seconds < window.started_at_unix_seconds {
+        return Err(invalid_window("window update precedes its start"));
+    }
+    validate_bounded_keys(
+        &window.snapshot.by_revision,
+        MEASURED_REVISIONS
+            .iter()
+            .copied()
+            .chain(std::iter::once(OTHER_REVISION)),
+        "revision",
+    )?;
+    validate_bounded_keys(
+        &window.snapshot.by_client,
+        MEASURED_CLIENTS.iter().copied(),
+        "client",
+    )?;
+    validate_bounded_keys(
+        &window.snapshot.by_transport,
+        MEASURED_TRANSPORTS
+            .iter()
+            .map(|transport| transport.as_str()),
+        "transport",
+    )?;
+    if checked_counter_sum(window.snapshot.by_revision.values().copied())?
+        .checked_add(window.snapshot.unattributed)
+        != Some(window.snapshot.total)
+    {
+        return Err(invalid_window("revision counters do not equal total"));
+    }
+    if checked_counter_sum(window.snapshot.by_client.values().copied())? != window.snapshot.total {
+        return Err(invalid_window("client counters do not equal total"));
+    }
+    if checked_counter_sum(window.snapshot.by_transport.values().copied())? != window.snapshot.total
+    {
+        return Err(invalid_window("transport counters do not equal total"));
+    }
+    let expected_shadow = empty_shadow_counts();
+    if window.tools_list_shadow.keys().ne(expected_shadow.keys()) {
+        return Err(invalid_window("tools/list shadow labels are incomplete"));
+    }
+    Ok(())
+}
+
+fn validate_bounded_keys<'a>(
+    values: &BTreeMap<String, u64>,
+    allowed: impl Iterator<Item = &'a str>,
+    label: &str,
+) -> io::Result<()> {
+    let allowed = allowed.collect::<std::collections::BTreeSet<_>>();
+    if let Some(unbounded) = values.keys().find(|key| !allowed.contains(key.as_str())) {
+        return Err(invalid_window(&format!(
+            "unbounded {label} label in durable telemetry: {unbounded}"
+        )));
+    }
+    Ok(())
+}
+
+fn invalid_window(message: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+fn checked_counter_sum(mut values: impl Iterator<Item = u64>) -> io::Result<u64> {
+    values.try_fold(0, checked_counter_add)
+}
+
+fn unix_seconds() -> io::Result<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+fn write_window_atomic(path: &Path, window: &DurableWindow) -> io::Result<()> {
+    let bytes = serde_json::to_vec_pretty(window)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "window has no parent"))?;
+    let temporary = path.with_extension("json.tmp");
+    {
+        let mut options = OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        set_owner_only(&mut options);
+        let mut file = options.open(&temporary)?;
+        force_file_owner_only(&file)?;
+        file.write_all(&bytes)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&temporary, path)?;
+    #[cfg(unix)]
+    File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_owner_only(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options.mode(0o600);
+}
+
+#[cfg(unix)]
+fn force_file_owner_only(file: &std::fs::File) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn force_file_owner_only(_file: &std::fs::File) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn force_directory_owner_only(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+}
+
+#[cfg(not(unix))]
+fn force_directory_owner_only(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_owner_only(_options: &mut OpenOptions) {}
 
 fn global() -> &'static Mutex<Registry> {
     static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();

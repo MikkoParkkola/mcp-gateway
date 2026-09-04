@@ -1460,8 +1460,21 @@ impl Gateway {
             meta_mcp,
             tool_policy,
             mtls_policy,
+            data_dir,
             ..
         } = self.build_meta_mcp().await?;
+        let mut protocol_telemetry_sink =
+            match crate::protocol_revision_telemetry::DurableTelemetrySink::open(&data_dir) {
+                Ok(sink) => Some(sink),
+                Err(error) => {
+                    warn!(
+                        %error,
+                        data_dir = %data_dir.display(),
+                        "stdio protocol-revision telemetry is not durable; do not start the measurement window"
+                    );
+                    None
+                }
+            };
 
         if self.config.capabilities.enabled {
             let executor = Arc::new(CapabilityExecutor::new());
@@ -1549,6 +1562,7 @@ impl Gateway {
                     session_id,
                 )
                 .await;
+                Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
                 if !responses.is_empty() {
                     let batch_resp = serde_json::Value::Array(responses);
                     Self::write_response(&mut stdout, &batch_resp).await;
@@ -1560,6 +1574,7 @@ impl Gateway {
             let response_opt =
                 Self::dispatch_single(&meta_mcp, &tool_policy, &mtls_policy, &request, session_id)
                     .await;
+            Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
 
             if let Some(response) = response_opt {
                 Self::write_response(&mut stdout, &response).await;
@@ -1567,6 +1582,7 @@ impl Gateway {
         }
 
         info!("stdio: EOF reached, shutting down");
+        Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
         // Stop sweeping and probing before tearing the backends down. Both tasks
         // hold an Arc on the registry and have no shutdown channel in this mode,
         // so leaving either running keeps the registry alive after run_stdio
@@ -1582,6 +1598,19 @@ impl Gateway {
         warm_start_tasks.cancel().await;
         self.backends.stop_all().await;
         Ok(())
+    }
+
+    fn persist_stdio_protocol_telemetry(
+        sink: &mut Option<crate::protocol_revision_telemetry::DurableTelemetrySink>,
+    ) {
+        if let Some(sink) = sink
+            && let Err(error) = sink.persist_global()
+        {
+            warn!(
+                %error,
+                "failed to persist stdio protocol-revision telemetry; measurement window is incomplete"
+            );
+        }
     }
 
     /// Write a JSON-RPC response to stdout followed by a newline.
@@ -2337,6 +2366,57 @@ mod tests {
         assert!(
             after.by_client.get("claude").copied().unwrap_or(0)
                 > before.by_client.get("claude").copied().unwrap_or(0)
+        );
+    }
+
+    #[tokio::test]
+    async fn stdio_dispatch_persists_operator_readable_protocol_counters() {
+        let data_dir = tempfile::tempdir().expect("temporary data directory");
+        let mut sink = Some(
+            crate::protocol_revision_telemetry::DurableTelemetrySink::open(data_dir.path())
+                .expect("open durable telemetry sink"),
+        );
+        Gateway::persist_stdio_protocol_telemetry(&mut sink);
+
+        Gateway::dispatch_single(
+            &test_meta_mcp(),
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 7219,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "clientInfo": {"name": "Codex"}
+                }
+            }),
+            "stdio-durable-window-test",
+        )
+        .await
+        .expect("initialize returns a response");
+        Gateway::persist_stdio_protocol_telemetry(&mut sink);
+
+        let window = crate::protocol_revision_telemetry::load_durable_window(data_dir.path())
+            .expect("load durable stdio aggregate");
+        assert!(window.snapshot.total >= 1);
+        assert!(
+            window
+                .snapshot
+                .by_transport
+                .get("stdio")
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        );
+        assert!(
+            window
+                .snapshot
+                .by_revision
+                .get("2025-11-25")
+                .copied()
+                .unwrap_or(0)
+                >= 1
         );
     }
 

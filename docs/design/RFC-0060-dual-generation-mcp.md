@@ -69,6 +69,15 @@ the real filter set and the `cacheScope` the decision table would emit. Raw
 client names never become labels; only hashes for up to 4,096 legacy session IDs
 are retained.
 
+HTTP deployments expose these counters through Prometheus. Stdio has no metrics
+listener, so it writes a restart-safe aggregate to
+`~/.mcp-gateway/protocol-revision-telemetry/window.json`. The file contains the
+same bounded revision, client, transport, and `tools/list` dimensions. It is
+updated with an owner-only atomic write under a cross-process lock. Each process
+adds only its new observations, so restarting a stdio server does not reset the
+window. A write failure is logged as an incomplete measurement window; it does
+not silently produce retirement evidence.
+
 Use one-week counter increases, reduced to scalars, for attribution:
 
 ```promql
@@ -82,21 +91,27 @@ sum(increase(mcp_protocol_revision_observations_total[1w]))
 
 The pre-registered 2% decision is evaluated only after seven elapsed days and
 the 80% attribution floor. For each revision, every unattributed observation is
-added to its count before testing the threshold. This conservative upper bound
-prevents uncertainty from making a revision look safe to remove. Revisions with
-zero observations are still evaluated from the gateway's explicit
+added to its count before testing the threshold. A present but unrecognized
+revision lands in `other`. At 2% or more, `other` blocks the entire decision;
+below 2%, it is still added to every supported revision's upper-bound count.
+This prevents uncertainty from making a revision look safe to remove. Revisions
+with zero observations are still evaluated from the gateway's explicit
 `SUPPORTED_VERSIONS` table.
 
-**Production window: not started.** Start it from a baseline scrape taken after
-the process has pre-registered every bounded metric series at zero. Record these
-fields after deployment:
+**Production window: not started.** Stop all gateway processes, archive any
+earlier `protocol-revision-telemetry` directory, deploy, and then start the
+gateways. The new durable file's `started_at_unix_seconds` is the stdio baseline;
+take the HTTP baseline scrape after all bounded metric series have been
+registered at zero. Record these fields after deployment:
 
-- start timestamp and the timestamp seven full days later;
+- the durable start timestamp and the timestamp seven full days later;
 - Prometheus counter increases over that exact interval; and
-- process restarts copied from deployment events.
+- process restarts copied from deployment events;
+- the final durable JSON aggregate and its rendered distribution table.
 
-No distribution can be claimed until the result comment contains that live
-evidence.
+Use the durable file's start time for the stdio retirement decision, not an
+operator-supplied duration or an in-memory process snapshot. No distribution can
+be claimed until the result comment contains that live evidence.
 
 **Pre-registered 2% rule: not applied.** The stop criterion forbids narrowing
 on partial data. Decision 2 stays unfrozen. No revision is retired.
