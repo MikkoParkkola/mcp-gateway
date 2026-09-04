@@ -758,3 +758,15 @@ shadow helper now delegate to `is_loopback_bind`, and one owner remains.
 Two commits, separately scoped, so the classifier fix stands if the guard needs
 another round. Regression cases: a `127.`-prefixed DNS name must classify
 network-exposed; `http://[::1]:8080/` must classify loopback.
+
+**Landed, with one correction to this ruling.** The classifier is not reachable as
+`is_loopback_bind` outside the gateway: `src/gateway/mod.rs` declares `mod router`
+privately, so the `pub` on the function only ever meant *within `gateway`*, which is
+why `server/support.rs` can call it and config validation cannot. A reviewer caught
+that before it became a failed build. It is now re-exported crate-internally as
+`pub(crate) use router::is_loopback_bind as is_loopback_host` — aliased back to the
+truthful name, since both new callers classify a backend host rather than a bind
+address, and crate-internal so no public surface widens. Four commits: the design, the
+inert `allow_cleartext_credentials` field, the twenty-one plan rows red, the guard
+turning them green, and the shadow classifier delegating to the same owner with two
+regressions verified against the pre-fix code.
