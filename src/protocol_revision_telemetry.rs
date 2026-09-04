@@ -556,6 +556,18 @@ pub fn request_meta<'a>(request: &'a Value, params: Option<&'a Value>) -> Option
         .or_else(|| params.and_then(|p| p.get("_meta")))
 }
 
+/// Resolve one `_meta` field with root-level precedence and per-field fallback.
+fn request_meta_value<'a>(
+    request: &'a Value,
+    params: Option<&'a Value>,
+    key: &str,
+) -> Option<&'a Value> {
+    request
+        .get("_meta")
+        .and_then(|meta| meta.get(key))
+        .or_else(|| params.and_then(|p| p.get("_meta"))?.get(key))
+}
+
 /// Decision table from RFC-0060: public only for the unfiltered skeleton.
 pub fn cache_scope_decision(filters: ListFilters) -> CacheScope {
     if filters.any() {
@@ -936,12 +948,18 @@ pub fn observe_inbound_request(
     if method.starts_with("notifications/") {
         return;
     }
-    let meta = request_meta(request, params);
     let initialize_params = (method == "initialize").then_some(params).flatten();
-    let explicit_requested = requested_revision(initialize_params, meta)
+    let explicit_requested = request_meta_value(request, params, META_PROTOCOL_VERSION)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| requested_revision(initialize_params, None))
         .or_else(|| protocol_header.map(str::trim).map(str::to_string))
         .filter(|value| !value.is_empty());
-    let explicit_client = client_identity(initialize_params, meta);
+    let explicit_client = client_info_name(request_meta_value(request, params, META_CLIENT_INFO))
+        .or_else(|| client_info_name(initialize_params.and_then(|p| p.get("clientInfo"))))
+        .unwrap_or_else(|| UNATTRIBUTED_CLIENT.to_string());
 
     let mut reg = global()
         .lock()

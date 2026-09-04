@@ -86,6 +86,43 @@ fn mcp728_u1_1_initialize_and_meta_paths_record_revision_and_client() {
 }
 
 #[test]
+fn mcp728_u1_1_root_and_params_meta_fall_back_per_field() {
+    let before = global_snapshot();
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 7220,
+        "method": "tools/list",
+        "_meta": {
+            META_PROTOCOL_VERSION: "2026-07-28"
+        },
+        "params": {
+            "_meta": {
+                META_CLIENT_INFO: {"name": "Codex"}
+            }
+        }
+    });
+
+    observe_inbound_request(
+        &request,
+        request.get("params"),
+        "tools/list",
+        None,
+        None,
+        Transport::Http,
+    );
+
+    let after = global_snapshot();
+    assert!(
+        after.by_revision.get("2026-07-28").copied().unwrap_or(0)
+            > before.by_revision.get("2026-07-28").copied().unwrap_or(0)
+    );
+    assert!(
+        after.by_client.get("codex").copied().unwrap_or(0)
+            > before.by_client.get("codex").copied().unwrap_or(0)
+    );
+}
+
+#[test]
 fn mcp728_u1_2_unattributed_is_own_series_not_hidden_in_total() {
     let mut reg = Registry::new();
     reg.observe_request(Some("2025-11-25"), "claude", Transport::Stdio);
