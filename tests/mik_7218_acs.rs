@@ -4,8 +4,9 @@
 
 use mcp_gateway::protocol_revision_telemetry::{
     ATTRIBUTION_FLOOR, CacheScope, ListFilters, META_CLIENT_INFO, META_PROTOCOL_VERSION,
-    RETIRE_BELOW_SHARE, Registry, attribution_rate, cache_scope_decision, client_identity,
-    distribution_table, public_over_filtered, requested_revision, retire_revisions,
+    RETIRE_BELOW_SHARE, Registry, Transport, attribution_rate, cache_scope_decision,
+    client_identity, distribution_table, public_over_filtered, requested_revision,
+    retire_revisions,
 };
 use serde_json::json;
 
@@ -35,8 +36,8 @@ fn mcp728_u1_1_initialize_and_meta_paths_record_revision_and_client() {
 #[test]
 fn mcp728_u1_2_unattributed_is_own_series_not_hidden_in_total() {
     let mut reg = Registry::new();
-    reg.observe_session("a", Some("2025-11-25"), "claude");
-    reg.observe_session("b", None, "");
+    reg.observe_session(Some("2025-11-25"), "2025-11-25", "claude", Transport::Stdio);
+    reg.observe_session(None, "2025-11-25", "", Transport::Http);
     let snap = reg.snapshot();
     assert_eq!(snap.total, 2);
     assert_eq!(snap.unattributed, 1);
@@ -57,6 +58,7 @@ fn mcp728_u1_3_tools_list_shadows_filters_and_would_be_cache_scope() {
         principal: true,
         profile: false,
         session: true,
+        request: false,
     };
     let shadow = reg.shadow_tools_list(filtered);
     assert!(shadow.principal && shadow.session);
@@ -80,8 +82,8 @@ fn mcp728_u1_4_measurement_window_table_and_stop_criterion() {
     );
     assert!(retire_revisions(&production).is_empty());
 
-    for i in 0..5 {
-        reg.observe_session(&format!("s{i}"), Some("2025-11-25"), "test");
+    for _ in 0..5 {
+        reg.observe_session(Some("2025-11-25"), "2025-11-25", "test", Transport::Http);
     }
     let table = distribution_table(&reg.snapshot());
     assert!(table.contains("2025-11-25"));
@@ -95,6 +97,7 @@ fn mcp728_u1_5_public_over_filtered_is_detectable() {
             principal: true,
             profile: false,
             session: false,
+            request: false,
         },
         CacheScope::Public,
     );
@@ -104,12 +107,14 @@ fn mcp728_u1_5_public_over_filtered_is_detectable() {
         principal: true,
         profile: false,
         session: false,
+        request: false,
     });
     assert!(!public_over_filtered(
         ListFilters {
             principal: shadow.principal,
             profile: shadow.profile,
             session: shadow.session,
+            request: shadow.request,
         },
         shadow.would_emit_cache_scope
     ));
@@ -119,17 +124,17 @@ fn mcp728_u1_5_public_over_filtered_is_detectable() {
 fn mcp728_u1_6_two_percent_rule_unadjusted_and_blocked_when_underattributed() {
     assert_eq!(RETIRE_BELOW_SHARE, 0.02);
     let mut under = Registry::new();
-    under.observe_session("x", Some("2024-11-05"), "c");
-    under.observe_session("y", None, "c");
+    under.observe_session(Some("2024-11-05"), "2024-11-05", "c", Transport::Http);
+    under.observe_session(None, "2025-11-25", "c", Transport::Http);
     assert!(retire_revisions(&under.snapshot()).is_empty());
 
     let mut full = Registry::new();
-    for i in 0..99 {
-        full.observe_session(&format!("k{i}"), Some("2025-11-25"), "c");
+    for _ in 0..99 {
+        full.observe_session(Some("2025-11-25"), "2025-11-25", "c", Transport::Http);
     }
-    full.observe_session("old", Some("2024-11-05"), "c");
-    assert_eq!(
-        retire_revisions(&full.snapshot()),
-        vec!["2024-11-05".to_string()]
-    );
+    full.observe_session(Some("2024-11-05"), "2024-11-05", "c", Transport::Http);
+    let retired = retire_revisions(&full.snapshot());
+    assert!(retired.iter().any(|r| r == "2024-11-05"));
+    assert!(retired.iter().any(|r| r == "2024-10-07"));
+    assert!(!retired.iter().any(|r| r == "2025-11-25"));
 }

@@ -974,6 +974,25 @@ impl MetaMcp {
         session_id: Option<&str>,
         header_profile: Option<&str>,
     ) -> JsonRpcResponse {
+        self.handle_initialize_for_transport(
+            id,
+            params,
+            None,
+            session_id,
+            header_profile,
+            crate::protocol_revision_telemetry::Transport::Internal,
+        )
+    }
+
+    pub(crate) fn handle_initialize_for_transport(
+        &self,
+        id: RequestId,
+        params: Option<&Value>,
+        request_meta: Option<&Value>,
+        session_id: Option<&str>,
+        header_profile: Option<&str>,
+        transport: crate::protocol_revision_telemetry::Transport,
+    ) -> JsonRpcResponse {
         let client_version = extract_client_version(params);
         let negotiated_version = negotiate_version(client_version);
         debug!(
@@ -981,10 +1000,11 @@ impl MetaMcp {
             negotiated = negotiated_version,
             "Protocol version negotiation"
         );
-        crate::protocol_revision_telemetry::observe_inbound(
-            session_id.unwrap_or("no-session"),
+        crate::protocol_revision_telemetry::observe_initialize(
             params,
-            None,
+            request_meta,
+            negotiated_version,
+            transport,
         );
 
         let profile_hint = header_profile.or_else(|| {
@@ -1057,17 +1077,26 @@ impl MetaMcp {
         self.handle_tools_list_for_session(id, None)
     }
 
-    fn shadow_tools_list_assembly(&self, session_id: Option<&str>, spec_preview_query: bool) {
+    fn shadow_tools_list_assembly(
+        &self,
+        session_id: Option<&str>,
+        request_variant: bool,
+    ) -> crate::protocol_revision_telemetry::ToolsListShadow {
         let default = self.profile_registry.default_name();
         let profile = session_id
             .is_some_and(|sid| self.session_profiles.get_profile_name(sid, default) != default);
+        #[cfg(feature = "spec-preview")]
+        let session = !self.promoted_tools_for_session(session_id).is_empty();
+        #[cfg(not(feature = "spec-preview"))]
+        let session = false;
         crate::protocol_revision_telemetry::observe_tools_list(
             crate::protocol_revision_telemetry::ListFilters {
                 principal: false,
                 profile,
-                session: session_id.is_some() || self.code_mode_enabled || spec_preview_query,
+                session,
+                request: request_variant,
             },
-        );
+        )
     }
 
     /// Session-aware variant of `handle_tools_list` used by the router.

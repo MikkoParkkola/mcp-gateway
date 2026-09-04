@@ -168,6 +168,25 @@ fn make_meta_mcp_code_mode() -> MetaMcp {
 }
 
 #[test]
+fn tools_list_wiring_records_real_cache_scope_inputs() {
+    use crate::protocol_revision_telemetry::{ListFilters, global_shadow_count};
+
+    let meta = make_meta_mcp();
+    let unfiltered = ListFilters::default();
+    let before_public = global_shadow_count(unfiltered);
+    meta.handle_tools_list(RequestId::Number(7001));
+    assert!(global_shadow_count(unfiltered) > before_public);
+
+    let request_filtered = ListFilters {
+        request: true,
+        ..ListFilters::default()
+    };
+    let before_private = global_shadow_count(request_filtered);
+    meta.handle_tools_list_with_url_override(RequestId::Number(7002), None, None, true);
+    assert!(global_shadow_count(request_filtered) > before_private);
+}
+
+#[test]
 fn new_matches_featureless_constructor_defaults() {
     let backends = Arc::new(BackendRegistry::new());
     let from_new = MetaMcp::new(Arc::clone(&backends));

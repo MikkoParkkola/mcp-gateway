@@ -1636,18 +1636,15 @@ impl Gateway {
 
         let inbound_meta =
             crate::protocol_revision_telemetry::request_meta(request, params.as_ref());
-        crate::protocol_revision_telemetry::observe_inbound(
-            session_id,
-            if method == "initialize" {
-                params.as_ref()
-            } else {
-                None
-            },
-            inbound_meta,
-        );
-
         let response = match method.as_str() {
-            "initialize" => meta_mcp.handle_initialize(id, params.as_ref(), Some(session_id), None),
+            "initialize" => meta_mcp.handle_initialize_for_transport(
+                id,
+                params.as_ref(),
+                inbound_meta,
+                Some(session_id),
+                None,
+                crate::protocol_revision_telemetry::Transport::Stdio,
+            ),
             "tools/list" => {
                 meta_mcp.handle_tools_list_with_params(id, params.as_ref(), Some(session_id))
             }
@@ -2297,6 +2294,59 @@ mod tests {
 
         assert_eq!(response["error"]["code"], -32600);
         assert_eq!(response["error"]["message"], "Missing id");
+    }
+
+    #[tokio::test]
+    async fn stdio_initialize_records_requested_and_negotiated_revisions() {
+        let before = crate::protocol_revision_telemetry::global_snapshot();
+        let response = Gateway::dispatch_single(
+            &test_meta_mcp(),
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 7218,
+                "method": "initialize",
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientInfo": {"name": "Claude Code"}
+                },
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "clientInfo": {"name": "ignored-by-meta"}
+                }
+            }),
+            "stdio-session-mik-7218",
+        )
+        .await
+        .expect("initialize returns a response");
+
+        assert_eq!(response["result"]["protocolVersion"], "2025-06-18");
+        let after = crate::protocol_revision_telemetry::global_snapshot();
+        assert!(
+            after.by_revision.get("2026-07-28").copied().unwrap_or(0)
+                > before.by_revision.get("2026-07-28").copied().unwrap_or(0)
+        );
+        assert!(
+            after
+                .by_negotiated_revision
+                .get("2025-06-18")
+                .copied()
+                .unwrap_or(0)
+                > before
+                    .by_negotiated_revision
+                    .get("2025-06-18")
+                    .copied()
+                    .unwrap_or(0)
+        );
+        assert!(
+            after.by_transport.get("stdio").copied().unwrap_or(0)
+                > before.by_transport.get("stdio").copied().unwrap_or(0)
+        );
+        assert!(
+            after.by_client.get("claude").copied().unwrap_or(0)
+                > before.by_client.get("claude").copied().unwrap_or(0)
+        );
     }
 
     // ── MIK-7252: stdio authorization ──────────────────────────────────────
