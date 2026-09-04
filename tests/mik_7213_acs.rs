@@ -271,18 +271,55 @@ mod http {
             "tools/list",
             "prompts/list",
             "resources/list",
+            "resources/read",
             "resources/templates/list",
         ]
         .iter()
         .enumerate()
         {
-            let id = 100 + i64::try_from(i).expect("a four-element index fits");
+            let id = 100 + i64::try_from(i).expect("a five-element index fits");
             let (_, body) = post_modern(method, id).await;
             let scope = &body["result"]["cacheScope"];
             assert_ne!(
                 scope, "public",
                 "{method} must not tell a shared cache it may serve this across \
                  authorization contexts: {body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ac_cache_1_both_fields_are_present_on_every_cacheable_method() {
+        // CACHE.1a and CACHE.1b say "all five". The single-method case above
+        // and the `!= "public"` loop below both pass while four of the five
+        // omit the fields entirely -- a missing key is not "public" either.
+        // This is the assertion that makes the "all five" clause falsifiable.
+        //
+        // Four here, not five: `resources/read` cannot produce a successful
+        // result over this fixture (no backend serves any URI, so it answers
+        // -32602 and an error carries no result to decorate). The fifth is
+        // covered where the decision is actually made, by
+        // `every_cacheable_method_gets_both_fields` in
+        // `src/gateway/router/handlers.rs`, which is total over
+        // `CACHEABLE_METHODS` and so cannot drift as the list grows.
+        for (i, method) in [
+            "tools/list",
+            "prompts/list",
+            "resources/list",
+            "resources/templates/list",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let id = 200 + i64::try_from(i).expect("a four-element index fits");
+            let (_, body) = post_modern(method, id).await;
+            assert!(
+                body["result"]["ttlMs"].as_u64().is_some_and(|t| t > 0),
+                "{method} must carry a positive ttlMs: {body}"
+            );
+            assert!(
+                body["result"]["cacheScope"].as_str().is_some(),
+                "{method} must carry a cacheScope: {body}"
             );
         }
     }
