@@ -7,7 +7,7 @@ The ledger (`RELEASE-4.0.0-criteria-status.md`) carries the counts; run
 `scripts/release/count-release-criteria.py --check` for them rather than reading a figure here.
 Whatever the blocking count is on the day, it is not that many decisions. The ledger's own
 evidence cells say so — `NFR.SEC.2`, `.3`, `.4`, `NFR.OBS.4` and `NFR.PERF.3` all read
-"same envelope", and `NFR.OBS.3` reads "verifies MIK-7217.DISCOVER.4-5". Grouping on those
+"same envelope", and `NFR.OBS.3` observes the era detection MIK-7217.DISCOVER.4-5 built. Grouping on those
 clauses collapses them into **the clusters tabled below and one residue**, of which five are unbuilt
 mechanisms and two are measurements nobody has run.
 
@@ -23,7 +23,7 @@ is tracked in `RELEASE-4.0.0-readiness-board.md`. This section defines them.
 | # | cluster | rows | count | what is actually missing |
 |---|---|---|---|---|
 | A | MIK-7212 continuation envelope | `MRTR.1`, `MRTR.3`, `MRTR.7-8`, `MRTR.10a`, `NFR.SEC.2`, `NFR.SEC.3`, `NFR.SEC.4`, `NFR.OBS.4`, `NFR.PERF.3` | 14 | the envelope is minted, opened, bound and consumed on the tool-invoke path (`redeem_retry`, `src/gateway/meta_mcp/invoke.rs:529`, called at `:1301`). `MRTR.4-5` and `MRTR.9` left this cluster when that wiring landed; what remains is the observability and performance evidence over it |
-| B | MIK-7217 era detection | `DISCOVER.4`, `DISCOVER.5`, `NFR.OBS.3` | 5 | `src/protocol/era.rs` is fully built and called from nothing. Design: `docs/design/2026-08-31-discover-outbound-era-probe.md` |
+| B | MIK-7217 era detection | `NFR.OBS.3` | 1 | detection itself landed: `src/protocol/era.rs` is called from `src/backend/era.rs`, on the start path (`src/backend/lifecycle.rs:232`) and the response path (`src/backend/ops.rs:274`), closing `DISCOVER.4a/4b/5a/5b`. What remains is visibility — neither era module emits a log line or a metric, so no operator can see which era was chosen, on what evidence, or when it was re-probed. Design: `docs/design/2026-09-03-nfr-obs-3-era-observability.md` |
 | C | MIK-7272 revision surface | `ORDER.2`, `SUB.2` (own-stream clause), `SUB.4`, `EXT.1`, `OTEL.1`, `TASK.1` | 7 | five separate half-wirings: idempotency cache never enabled, extension set write-side absent, task methods advertised and not served, routing profile ignores modern mode |
 | D | MIK-7213 response-cache keying | `CACHE.4` | 2 | the two clause rows `CACHE.4a` (key missing routing profile and protocol revision) and `CACHE.4b` (no policy epoch), designed in `docs/design/2026-08-31-cluster-f-response-cache-keying.md`. `CACHE.3` was in this cluster until both its clauses were met: the decision table is now read by the emitting code |
 | E | performance measurements | `NFR.PERF.1` | 1 | the run exists as of 2026-09-03: `v3.5.0` (`32f135a6`) against `5c29494a`, one clone and one criterion session on `spark`, recorded in `RELEASE-4.0.0-performance.md`. It closed `NFR.PERF.2`, which leaves this cluster. What it did not produce is a P50 or a P99: criterion measures in-process component work, so there is no wire, no backend and no queue and therefore no latency distribution. No shared case regressed past 10% on either estimator and the largest movement in the set is a 67% improvement, which is why the row is PARTIAL rather than ABSENT — but the two estimators the clause names still have no value, and only an end-to-end comparison against a 3.5.0 binary produces them |
