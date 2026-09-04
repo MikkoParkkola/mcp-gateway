@@ -1502,7 +1502,7 @@ mod era_resolution {
         // to remember: a backend briefly unreachable would be pinned to the
         // legacy path for the life of the process, and a dual-era peer that
         // recovered would never be spoken to properly again.
-        let cache = EraCache::new();
+        let cache = EraCache::for_backend("test");
 
         let first = cache
             .resolve_with(|| async { ProbeOutcome::NoAnswer })
@@ -1522,7 +1522,7 @@ mod era_resolution {
     #[tokio::test]
     async fn a_conclusive_answer_is_remembered() {
         // The cache must still do its job: one probe, then no more.
-        let cache = EraCache::new();
+        let cache = EraCache::for_backend("test");
         let first = cache
             .resolve_with(|| async { ProbeOutcome::Result(discovery(&json!(["2026-07-28"]))) })
             .await;

@@ -69,6 +69,20 @@ pub enum ProbeOutcome {
     NoAnswer,
 }
 
+impl ProbeOutcome {
+    /// What the `era_probe` record calls this outcome.
+    ///
+    /// Silence is its own outcome, not the era the silence falls back to: an
+    /// operator reading `legacy` here would take a dead transport for a peer
+    /// that answered.
+    fn outcome_label(&self, era: Era) -> &'static str {
+        match self {
+            Self::NoAnswer => "no_answer",
+            Self::Result(_) | Self::Error(_) => era.as_str(),
+        }
+    }
+}
+
 /// Decide which era a peer speaks from the outcome of one `server/discover`
 /// probe.
 ///
@@ -129,7 +143,7 @@ pub fn classify(outcome: &ProbeOutcome) -> Era {
 /// an implementation property of one method, worth at most the duplicate
 /// idempotent requests it saves, and callers are free to probe outside the lock
 /// and commit afterwards.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct EraCache {
     /// The backend this cache belongs to, so the records it emits name it.
     name: String,
@@ -142,12 +156,6 @@ pub struct EraCache {
 }
 
 impl EraCache {
-    /// A cache holding no determination yet.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// A cache whose records name `backend`.
     #[must_use]
     pub fn for_backend(backend: impl Into<String>) -> Self {
@@ -169,7 +177,7 @@ impl EraCache {
     /// read of an undetermined one is not. Reading never probes.
     pub async fn observation(&self) -> EraObservation {
         let observation = *self.observation.lock().await;
-        tracing::debug!(
+        tracing::info!(
             target: "mcp_gateway::observed",
             backend = %self.name,
             hit = observation.source == EraSource::Probed,
@@ -194,7 +202,7 @@ impl EraCache {
     /// Discard the determination, recording why.
     pub async fn invalidate_because(&self, reason: &str) {
         *self.observation.lock().await = EraObservation::never_probed();
-        tracing::debug!(
+        tracing::info!(
             target: "mcp_gateway::observed",
             backend = %self.name,
             reason = %reason,
@@ -233,10 +241,10 @@ impl EraCache {
     {
         let mut guard = self.observation.lock().await;
         if guard.source == EraSource::Probed {
-            tracing::debug!(target: "mcp_gateway::observed", backend = %self.name, hit = true);
+            tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = true);
             return guard.era;
         }
-        tracing::debug!(target: "mcp_gateway::observed", backend = %self.name, hit = false);
+        tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = false);
 
         let started = std::time::Instant::now();
         let outcome = probe().await;
@@ -246,20 +254,20 @@ impl EraCache {
         // Two call sites rather than an optional field: `error_code` is absent
         // on the non-error rows, and `tracing` has no way to omit a field.
         if let ProbeOutcome::Error(code) = &outcome {
-            tracing::debug!(
+            tracing::info!(
                 target: "mcp_gateway::observed",
                 backend = %self.name,
-                outcome = observation.era.as_str(),
+                outcome = outcome.outcome_label(observation.era),
                 evidence = observation.evidence.as_str(),
                 error_code = code,
                 duration_ms,
                 trigger = trigger.as_str(),
             );
         } else {
-            tracing::debug!(
+            tracing::info!(
                 target: "mcp_gateway::observed",
                 backend = %self.name,
-                outcome = observation.era.as_str(),
+                outcome = outcome.outcome_label(observation.era),
                 evidence = observation.evidence.as_str(),
                 duration_ms,
                 trigger = trigger.as_str(),

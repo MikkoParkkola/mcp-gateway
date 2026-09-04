@@ -626,7 +626,7 @@ mod era_cache {
     #[tokio::test]
     async fn ac_discover_5_era_is_probed_once_and_reused() {
         // GIVEN: a peer whose era has never been determined
-        let cache = EraCache::new();
+        let cache = EraCache::for_backend("test");
         let probes = Arc::new(AtomicUsize::new(0));
 
         // WHEN: the era is resolved twice
@@ -656,7 +656,7 @@ mod era_cache {
     #[tokio::test]
     async fn ac_discover_5_a_failed_assumption_forces_a_re_probe() {
         // GIVEN: a peer cached as modern
-        let cache = EraCache::new();
+        let cache = EraCache::for_backend("test");
         let probes = Arc::new(AtomicUsize::new(0));
         let counted = || {
             let c = Arc::clone(&probes);
@@ -684,7 +684,7 @@ mod era_cache {
     async fn ac_discover_5_concurrent_resolution_probes_once() {
         // GIVEN: two callers racing on a peer whose era is unknown — the shape
         // warm-start produces, since several tasks touch a backend at once
-        let cache = Arc::new(EraCache::new());
+        let cache = Arc::new(EraCache::for_backend("test"));
         let probes = Arc::new(AtomicUsize::new(0));
 
         let mut handles = Vec::new();
