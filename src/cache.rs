@@ -91,6 +91,23 @@ impl CacheStats {
     }
 }
 
+/// The routing and policy context a cached response depends on but the call's
+/// own `{server, tool, arguments}` never name.
+///
+/// A response assembled under one routing profile, protocol revision or policy
+/// generation is not interchangeable with one assembled under another, so these
+/// belong to the key even though no caller writes them down.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KeyContext<'a> {
+    /// Name of the routing profile the call was admitted under.
+    pub routing_profile: &'a str,
+    /// Negotiated protocol revision, or `None` when the caller declared none.
+    pub protocol_revision: Option<&'a str>,
+    /// Generation of the policy the response was assembled under. Bumping it
+    /// must strand every entry assembled under the previous generation.
+    pub policy_epoch: u64,
+}
+
 impl ResponseCache {
     /// Create a new empty cache with no size limit
     #[must_use]
@@ -238,6 +255,13 @@ impl ResponseCache {
     ///
     /// `None` is a caller the gateway could not identify. Two of those are the
     /// same caller as far as the cache can tell, and they share an entry.
+    ///
+    /// `context` carries the routing and policy inputs the call does not name:
+    /// the routing profile that chose which backends answer, the protocol
+    /// revision the reply was shaped for, and the policy epoch it was
+    /// authorized under. They are mixed in as one digest for the same reason
+    /// the principal is hashed, and unconditionally: a suffix that is empty
+    /// for a default context is a dimension that is only sometimes keyed.
     #[must_use]
     pub fn response_key(
         server: &str,
@@ -245,13 +269,15 @@ impl ResponseCache {
         arguments: &Value,
         projection_suffix: &str,
         principal: Option<&str>,
+        context: KeyContext<'_>,
     ) -> String {
         let base = Self::build_key(server, tool, arguments);
         let principal = principal.map_or_else(String::new, |subject| {
             let digest = canonical_json_sha256(&Value::String(subject.to_string()));
             format!("|sub:{digest}")
         });
-        format!("{base}{projection_suffix}{principal}")
+        let context = context.digest();
+        format!("{base}{projection_suffix}{principal}|ctx:{context}")
     }
 
     /// Compute SHA-256 hash of arguments in canonical JSON form
