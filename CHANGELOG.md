@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Competitive shadow-scan exports now stay portable and loadable.** The
+  generated grep rules use the system `grep -E` on macOS and Linux, while the
+  Nginx example preserves quoted and escaped log values.
+
 ## [3.5.1] - 2026-09-04
 
 ### Changed

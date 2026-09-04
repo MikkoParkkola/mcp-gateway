@@ -113,6 +113,9 @@ larger scope and should be a separate major RFC if demanded. Current chain execu
 
 ## Component 2: Shadow MCP Detection
 
+Public comparison of this bounded shadow-AI / unmanaged MCP candidate against
+an enterprise governance product: [Willow / Webrix](../competitive/willow-enterprise-agent-governance.md) (MIK-5843). Local inventory remains `mcp-gateway cap discover --shadow`; mcp-gateway is not a network proxy.
+
 ### Current state (mcp-gateway)
 
 mcp-gateway manages its **own** backends and has no visibility into MCP traffic that
@@ -130,9 +133,11 @@ shadow MCP activity by other means:
    Claude Desktop, Claude Code, VS Code, Cursor, and 7 other MCP config files. Any MCP
    server in those configs that is NOT registered in the gateway is a "shadow MCP" candidate.
 
-2. **Process-scanner shadow detection** — `src/discovery/process_scanner.rs` already scans
-   running processes for stdio MCP server patterns. Processes not originating from the
-   gateway are shadow candidates.
+2. **Process-scanner shadow detection** — `src/discovery/process_scanner.rs` scans
+   running MCP patterns for which it can infer a listening port. Port-resolvable
+   processes whose inferred names do not match configured backend names are shadow
+   candidates; the scan does not prove process origin. Unported stdio servers are
+   outside the current scanner's coverage.
 
 3. **Outbound request inspection** (partial) — for HTTP backends the gateway is the
    intermediary, so backend-to-server communication passes through it. But client-to-server
@@ -140,12 +145,14 @@ shadow MCP activity by other means:
 
 ### Shadow MCP Detection Design
 
-**Scope**: `mcp-gateway discover --shadow` — extend the existing discovery CLI to flag
-MCP servers found in the environment but not registered in the current gateway config.
+**Shipped scope**: `mcp-gateway cap discover --shadow` flags MCP servers found in
+the local environment but not registered in the current gateway config. Future work
+is limited to wider network and fleet visibility.
 
-#### Layer 1: Config-file scan (already implemented, needs flagging)
+#### Layer 1: Config-file scan (implemented)
 
-Scan the same sources as `AutoDiscovery` but compare against `BackendRegistry`:
+The shipped command scans the same sources as `AutoDiscovery` and compares
+discovered names with backend names loaded from the selected gateway config:
 
 ```
 shadow_servers = discovered_servers - registered_backends
@@ -153,12 +160,15 @@ shadow_servers = discovered_servers - registered_backends
 
 Report: server name, source (ClaudeDesktop / VsCode / etc.), transport config.
 
-#### Layer 2: Process scan (already implemented, needs flagging)
+#### Layer 2: Process scan (implemented for port-resolvable processes)
 
-`ProcessScanner` already identifies running stdio MCP servers. Cross-reference with
-`BackendRegistry`. Any running MCP process not managed by the gateway is a shadow server.
+`ProcessScanner` identifies running MCP patterns with an inferred listening port and
+compares their inferred names with backend names from the selected config. A name
+that is absent from that config is a shadow candidate; name equality is not proof
+that the gateway started or owns the process. Unported stdio servers remain outside
+this layer.
 
-#### Layer 3: Regex-based MCP traffic detection (new, for HTTP layer)
+#### Layer 3: Regex-based MCP traffic detection (operator-side HTTP layer)
 
 Cloudflare uses Gateway DLP selectors to detect MCP traffic by inspecting HTTP body and
 host patterns. mcp-gateway can expose a similar `shadow_mcp_detect` capability that
@@ -177,9 +187,11 @@ Selectors from Cloudflare's reference (directly applicable):
 | HTTP body: `method` field | `"method"\s{0,5}:\s{0,5}"sampling/createMessage"` | LLM sampling |
 | HTTP body: protocol version | `"protocolVersion"\s{0,5}:\s{0,5}"202[4-9]` | MCP handshake |
 
-A new `mcp-gateway doctor --shadow` subcommand generates these regex rules as:
+The shipped `mcp-gateway doctor --shadow` subcommand exports the HTTP-body
+method and protocol-version rules above. Host and URI selectors remain
+unimplemented candidates. The available output formats are:
 - Shell-friendly `grep` patterns
-- Nginx/HAProxy log filter config snippets
+- Nginx log filter config snippets (not HAProxy syntax)
 - A YAML export for operator SIEMs
 
 #### Layer 4: Blocked port / process access (future)
@@ -192,9 +204,9 @@ This is deferred — it requires elevated permissions and is OS-specific.
 
 | Layer | Mechanism | Scope | Status |
 |-------|-----------|-------|--------|
-| 1 | Config-file scan | Local MCP configs | Partial (discovery exists, shadow flagging missing) |
-| 2 | Process scan | Running stdio MCP servers | Partial (scanner exists, shadow flagging missing) |
-| 3 | Regex DLP rules export | HTTP/network layer (operator tool) | New (rule generation only — gateway can't intercept) |
+| 1 | Config-file scan | Local MCP configs | Shipped in `mcp-gateway cap discover --shadow` |
+| 2 | Process scan | Port-resolvable MCP processes | Shipped in `mcp-gateway cap discover --shadow`; unported stdio remains out of scope |
+| 3 | Regex DLP rules export | HTTP/network layer (operator tool) | Shipped in `mcp-gateway doctor --shadow` (rule generation only — no interception) |
 | 4 | Port/process scan | OS-level | Deferred |
 
 **Kill criterion resolution**: Full Cloudflare-style network interception is not feasible
@@ -209,8 +221,8 @@ acting as a network proxy.**
 | # | Cloudflare Component | mcp-gateway Equivalent | Verdict | Evidence |
 |---|---------------------|----------------------|---------|---------|
 | 1 | **Remote MCP servers** (Workers, global edge, CI/CD governed, monorepo template) | HTTP backends (`transport.url`), capability YAML, stdio backends. No edge deployment, no CI/CD template. | **MATCH** on decoupling; **LAG** on enterprise governance scaffolding | `src/backend/`, `src/capability/`, `src/transport/` |
-| 2 | **Cloudflare Access** (SSO/MFA/device certs, OIDC, Zero Trust) | Bearer token auth, API key auth for inbound. OAuth 2.0 PKCE for backend auth. No SSO/OIDC for MCP clients. | **LAG** — no client-facing SSO. Per-key quota (`gateway_cost_report`) is partial coverage. | `src/gateway/auth.rs`, `src/oauth/` |
-| 3 | **MCP Server Portals** (centralized discovery, per-user tool exposure, DLP guardrails, audit log) | `gateway_search_tools`, `gateway_list_servers`, routing profiles, `gateway_set_profile`. No DLP layer, no per-user tool filtering based on identity, no centralized org portal. | **MATCH** on discovery; **LAG** on governance/DLP/identity-based filtering | `src/routing_profile.rs`, `src/gateway/meta_mcp/search.rs` |
+| 2 | **Cloudflare Access** (SSO/MFA/device certs, OIDC, Zero Trust) | Opt-in generic inbound OIDC through the key server, either by exchanging an ID token for a short-lived scoped gateway token or by delegated-bearer verification. Identity-derived backend and tool scopes are enforced at dispatch. No packaged enterprise IdP onboarding or end-user SSO portal. | **MATCH** on generic OIDC and scoped authorization; **LAG** on packaged enterprise SSO, MFA, and device posture. | `src/config/features/key_server.rs`, `src/key_server/`, `src/gateway/router/authorization.rs` |
+| 3 | **MCP Server Portals** (centralized discovery, per-user tool exposure, DLP guardrails, audit log) | `gateway_search_tools`, `gateway_list_servers`, routing profiles, identity grants, and identity-derived tool scopes enforced at dispatch. No DLP layer or centralized organization portal. | **MATCH** on discovery and identity-scoped tool access; **LAG** on DLP and organization-wide portal governance. | `src/routing_profile.rs`, `src/identity_grants.rs`, `src/gateway/meta_mcp/search.rs` |
 | 4 | **AI Gateway** (LLM cost controls, provider switching, per-employee token budgets) | `gateway_cost_report`, `gateway_get_stats`, response cache. Does not intercept LLM calls; operates at tool layer only. | **LAG** — different architectural layer. AI Gateway sits between client and LLM; mcp-gateway sits between client and tools. Cross-reference: Linear MIK-2938 (airlok). | `src/stats.rs`, `src/cache.rs` |
 | 5 | **Code Mode** (search+execute, fixed token cost, V8 sandbox) | `gateway_search` + `gateway_execute` (Code Mode already shipped). URL toggle is static config; no V8 sandbox. | **MATCH** on search+execute; **LAG** on URL-param toggle and sandbox execution | `src/gateway/meta_mcp_tool_defs.rs:563`, `src/gateway/meta_mcp/search.rs:221`, `src/config/features/code_mode.rs` |
 
@@ -219,8 +231,8 @@ acting as a network proxy.**
 | Verdict | Components |
 |---------|-----------|
 | **LEAD** | None — Cloudflare's enterprise architecture has broader infrastructure leverage |
-| **MATCH** | Remote MCP decoupling (1), Tool discovery (3-discovery), Code Mode search+execute (5) |
-| **LAG** | Enterprise auth/SSO (2), Governance/DLP portal (3-governance), AI Gateway layer (4), URL-param toggle (5-toggle) |
+| **MATCH** | Remote MCP decoupling (1), generic OIDC and scoped authorization (2), tool discovery and identity-scoped access (3), Code Mode search+execute (5) |
+| **LAG** | Packaged enterprise SSO/MFA/device posture (2), DLP and organization portal governance (3), AI Gateway layer (4), URL-param toggle (5-toggle) |
 
 ---
 
@@ -229,10 +241,8 @@ acting as a network proxy.**
 | Sub-issue | Priority | Effort | Notes |
 |-----------|----------|--------|-------|
 | Per-connection Code Mode URL toggle (`?codemode=search_and_execute`) | Medium | Small | Safe, isolated, HTTP router change |
-| Shadow detection: `mcp-gateway discover --shadow` config/process scan | Medium | Small | Discovery infra already exists |
-| Shadow detection: DLP regex rule export (`mcp-gateway doctor --shadow`) | Low | Small | Rule generation only, no interception |
-| Client SSO/OIDC integration for incoming MCP connections | Low | Large | Major auth scope; LAG is acceptable for local-first use |
-| Identity-based tool filtering in routing profiles | Low | Medium | Profiles exist; needs identity context from auth layer |
+| Packaged enterprise SSO onboarding and device-posture integration | Low | Large | Generic OIDC and identity-derived scopes exist; the remaining gap is the managed enterprise product layer |
+| Organization portal and DLP policy layer | Low | Large | Identity-scoped access exists; centralized administration and content policy do not |
 
 **AI Gateway gap** (Component 4) maps to **Linear MIK-2938 airlok** — no sub-issue needed here.
 
