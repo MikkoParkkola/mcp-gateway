@@ -158,9 +158,7 @@ pub(super) fn ranked_results_to_code_mode_json(
                         if explain {
                             map.insert(
                                 "ranking".to_string(),
-                                prune_constant_signals(
-                                    &crate::gateway::search_disclosure::ranking_debug_object(&r),
-                                ),
+                                crate::gateway::search_disclosure::ranking_debug_object(&r),
                             );
                         }
                     }
