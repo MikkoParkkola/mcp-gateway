@@ -7,7 +7,7 @@ description: >-
   to author these resources as typed config. Helm does not manage CRD
   upgrade/delete lifecycle; see https://helm.sh/docs/chart_best_practices/custom_resource_definitions/
 type: application
-version: 0.1.3
+version: 0.1.4
 appVersion: "3.5.1"
 home: https://github.com/MikkoParkkola/mcp-gateway
 maintainers:

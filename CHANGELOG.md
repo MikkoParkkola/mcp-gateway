@@ -1325,6 +1325,7 @@ credential path.
 - Configuration via YAML with Pydantic validation
 - systemd/launchd service templates
 
+[Unreleased]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.1...HEAD
 [3.5.1]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.5.0...v3.5.1
 [3.5.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v3.4.0...v3.5.0
 [2.10.0]: https://github.com/MikkoParkkola/mcp-gateway/compare/v2.9.1...v2.10.0
