@@ -105,6 +105,7 @@ impl Fixture {
             oauth: None,
             secrets: Vec::new(),
             passthrough: false,
+            allow_cleartext_credentials: false,
             runtime_profile: None,
             identity_propagation: None,
         };
