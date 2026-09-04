@@ -157,7 +157,6 @@ const PUBLIC_CLAIM_SURFACES: &[&str] = &[
     "docs/show-hn.md",
     "docs/blog/sovereign-stack-2026-04.md",
     "docs/design/RFC-0081-intelligent-tool-surfacing.md",
-    "CHANGELOG.md",
     "docs/legal/dependency-licenses.tsv",
     "src/commands/mod.rs",
     "src/gateway/meta_mcp_helpers.rs",
