@@ -50,14 +50,15 @@ Willow/Webrix bar.
 Shadow-AI / unmanaged MCP detection remains a **net-new capability candidate**
 beyond the local scan that already ships:
 
-1. **Config scanning** — `src/discovery/config_scanner.rs` reads client MCP
+1. **Config scanning:** `src/discovery/config_scanner.rs` reads client MCP
    configs. A server in those files that is not registered here is an unmanaged
    MCP candidate.
-2. **Process scanning** — `src/discovery/process_scanner.rs` lists running MCP
-   patterns when it can infer a listening port. Port-resolvable processes the
-   gateway did not spawn are unmanaged candidates; unported stdio servers are
-   not currently reported by this scanner.
-3. **Exported network / SIEM rules** — operators can feed selector patterns to
+2. **Process scanning:** `src/discovery/process_scanner.rs` lists running MCP
+   patterns when it can infer a listening port. The shadow report compares
+   deduplicated process names with configured backend names; it does not prove
+   that the gateway spawned or manages a matching process. Unported stdio
+   servers are not currently reported by this scanner.
+3. **Exported network / SIEM rules:** operators can feed selector patterns to
    their own firewall, proxy, or SIEM. mcp-gateway is **not** a network proxy
    and does not inspect bypass traffic.
 

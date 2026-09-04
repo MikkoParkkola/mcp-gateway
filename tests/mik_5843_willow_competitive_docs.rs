@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-5843: Willow competitive landscape page must keep its claims.
 
+use std::process::Command;
+
 fn willow_page() -> String {
     std::fs::read_to_string("docs/competitive/willow-enterprise-agent-governance.md")
         .expect("docs/competitive/willow-enterprise-agent-governance.md must exist")
@@ -109,6 +111,29 @@ fn mik_5843_rfc_names_the_shipped_shadow_commands() {
     assert!(rfc.contains("Shipped in `mcp-gateway doctor --shadow`"));
     assert!(!rfc.contains("`mcp-gateway discover --shadow`"));
     assert!(!rfc.contains("shadow flagging missing"));
+    assert!(rfc.contains("Host and URI selectors remain\nunimplemented candidates"));
+    assert!(rfc.contains("Nginx log filter config snippets (not HAProxy syntax)"));
+}
+
+#[test]
+fn mik_5843_shipped_shadow_cli_matches_the_documented_scope() {
+    let discover_help = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        .args(["cap", "discover", "--help"])
+        .output()
+        .expect("run cap discover --help");
+    assert!(discover_help.status.success());
+    assert!(String::from_utf8_lossy(&discover_help.stdout).contains("--shadow"));
+
+    let doctor = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        .args(["doctor", "--shadow", "--shadow-format", "nginx"])
+        .output()
+        .expect("run doctor --shadow");
+    assert!(doctor.status.success());
+    let output = String::from_utf8_lossy(&doctor.stdout);
+    assert!(output.contains("nginx log_format / if-block snippets"));
+    assert!(output.contains("$request_body"));
+    assert!(!output.contains("httpHost"));
+    assert!(!output.contains("httpRequestURI"));
 }
 
 #[test]
@@ -128,4 +153,34 @@ fn mik_5843_page_is_linked_from_the_project_readme() {
         readme.contains("docs/competitive/willow-enterprise-agent-governance.md"),
         "project README does not reference the Willow comparison"
     );
+    assert!(
+        readme.contains("[ShadowRadar](docs/SHADOW_SCAN.md)"),
+        "project README does not link the operator-facing shadow documentation"
+    );
+}
+
+#[test]
+fn mik_5843_shadow_docs_expose_static_rule_export_without_enterprise_overclaim() {
+    let docs = std::fs::read_to_string("docs/SHADOW_SCAN.md").expect("read SHADOW_SCAN.md");
+    for format in ["grep", "nginx", "yaml"] {
+        assert!(docs.contains(&format!(
+            "mcp-gateway doctor --shadow --shadow-format {format}"
+        )));
+    }
+    assert!(docs.contains("does not inspect traffic or publish findings to a SIEM"));
+    assert!(docs.contains("remain enterprise workflow capabilities"));
+}
+
+#[test]
+fn mik_5843_public_competitive_allowlist_matches_gitignore_exceptions() {
+    let gitignore = std::fs::read_to_string(".gitignore").expect("read .gitignore");
+    for path in [
+        "docs/competitive/README.md",
+        "docs/competitive/willow-enterprise-agent-governance.md",
+    ] {
+        assert!(
+            gitignore.lines().any(|line| line == format!("!{path}")),
+            "{path} must have a matching .gitignore exception"
+        );
+    }
 }

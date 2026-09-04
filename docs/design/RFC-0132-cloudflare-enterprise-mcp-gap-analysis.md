@@ -184,9 +184,11 @@ Selectors from Cloudflare's reference (directly applicable):
 | HTTP body: `method` field | `"method"\s{0,5}:\s{0,5}"sampling/createMessage"` | LLM sampling |
 | HTTP body: protocol version | `"protocolVersion"\s{0,5}:\s{0,5}"202[4-9]` | MCP handshake |
 
-The shipped `mcp-gateway doctor --shadow` subcommand generates these regex rules as:
+The shipped `mcp-gateway doctor --shadow` subcommand exports the HTTP-body
+method and protocol-version rules above. Host and URI selectors remain
+unimplemented candidates. The available output formats are:
 - Shell-friendly `grep` patterns
-- Nginx/HAProxy log filter config snippets
+- Nginx log filter config snippets (not HAProxy syntax)
 - A YAML export for operator SIEMs
 
 #### Layer 4: Blocked port / process access (future)

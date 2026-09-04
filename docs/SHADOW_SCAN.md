@@ -35,6 +35,18 @@ mcp-gateway cap discover --shadow --write-config
 The write path only adopts findings classified as local and adoptable. Findings
 that require owner review, quarantine, or enterprise workflow are skipped.
 
+Export static network-detection rules for operator-managed tooling:
+
+```bash
+mcp-gateway doctor --shadow --shadow-format grep
+mcp-gateway doctor --shadow --shadow-format nginx
+mcp-gateway doctor --shadow --shadow-format yaml
+```
+
+This free/core command generates body-method and protocol-version patterns; it
+does not inspect traffic or publish findings to a SIEM. Scheduled SIEM export,
+fleet inventory, and remediation remain enterprise workflow capabilities.
+
 ## ShadowAsset JSON schema
 
 Reports use `schema_version: "shadow_radar.v1"`. Each unmanaged asset includes:
