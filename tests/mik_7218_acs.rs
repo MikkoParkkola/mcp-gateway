@@ -185,6 +185,18 @@ fn mcp728_u1_6_two_percent_rule_unadjusted_and_blocked_when_underattributed() {
         Err(RetirementBlocked::AttributionBelowFloor)
     );
 
+    let mut ambiguous = Registry::new();
+    for _ in 0..95 {
+        ambiguous.observe_request(Some("2025-11-25"), "c", Transport::Http);
+    }
+    for _ in 0..5 {
+        ambiguous.observe_request(None, "c", Transport::Http);
+    }
+    assert_eq!(
+        retire_revisions(&ambiguous.snapshot(), MIN_MEASUREMENT_WINDOW),
+        Err(RetirementBlocked::UnattributedAtOrAboveRetirementThreshold)
+    );
+
     let mut full = Registry::new();
     for _ in 0..99 {
         full.observe_request(Some("2025-11-25"), "c", Transport::Http);

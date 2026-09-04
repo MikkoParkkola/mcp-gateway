@@ -177,6 +177,8 @@ pub enum RetirementBlocked {
     NoObservations,
     /// Fewer than 80% of requests carried attributable revision data.
     AttributionBelowFloor,
+    /// Unattributed requests alone could keep every revision above 2%.
+    UnattributedAtOrAboveRetirementThreshold,
 }
 
 impl Registry {
@@ -392,6 +394,9 @@ pub fn retire_revisions(
     }
     if attribution_rate(snapshot) < ATTRIBUTION_FLOOR {
         return Err(RetirementBlocked::AttributionBelowFloor);
+    }
+    if ratio(snapshot.unattributed, snapshot.total) >= RETIRE_BELOW_SHARE {
+        return Err(RetirementBlocked::UnattributedAtOrAboveRetirementThreshold);
     }
     Ok(crate::protocol::SUPPORTED_VERSIONS
         .iter()
@@ -788,6 +793,18 @@ mod tests {
         assert_eq!(
             retire_revisions(&low.snapshot(), MIN_MEASUREMENT_WINDOW),
             Err(RetirementBlocked::AttributionBelowFloor)
+        );
+
+        let mut ambiguous = Registry::new();
+        for _ in 0..95 {
+            ambiguous.observe_request(Some("2025-11-25"), "c", Transport::Http);
+        }
+        for _ in 0..5 {
+            ambiguous.observe_request(None, "c", Transport::Http);
+        }
+        assert_eq!(
+            retire_revisions(&ambiguous.snapshot(), MIN_MEASUREMENT_WINDOW),
+            Err(RetirementBlocked::UnattributedAtOrAboveRetirementThreshold)
         );
     }
 
