@@ -44,7 +44,15 @@ fn mik_5843_willow_page_has_feature_bar_and_verdicts() {
             && page.contains("Attestation"),
         "feature-bar headings missing"
     );
-    for needle in ["LEAD", "MATCH", "LAG", "1000+", "Okta", "Entra", "JumpCloud"] {
+    for needle in [
+        "LEAD",
+        "MATCH",
+        "LAG",
+        "1000+",
+        "Okta",
+        "Entra",
+        "JumpCloud",
+    ] {
         assert!(
             page.contains(needle),
             "feature-bar vocabulary missing: {needle}"
