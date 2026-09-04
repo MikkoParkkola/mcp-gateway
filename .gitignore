@@ -40,8 +40,10 @@ history.txt
 docs/plans/
 docs/submissions/
 docs/strategy/
-# Unpublished notes only. Public landscape pages live in docs/competitive/.
-docs/competitive/_unpublished/
+# Public landscape pages are named explicitly; everything else stays private.
+docs/competitive/*
+!docs/competitive/README.md
+!docs/competitive/willow-enterprise-agent-governance.md
 docs/competitive-intelligence/
 docs/positioning/
 linkedin-post-draft.md
