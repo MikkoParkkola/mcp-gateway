@@ -4,33 +4,24 @@
 //! legacy peer nothing (b), it is served BY DEFAULT (c), and the gateway
 //! negotiates down to the highest revision a client supports (d).
 //!
-//! THREE CASES IN THIS FILE FAIL TODAY, DELIBERATELY. Clause (c) needs a code
-//! change this file does not contain and is not authorised to make:
-//!
-//!   1. `src/config/mod.rs:1229` — the struct default `modern_protocol: false`.
-//!   2. `src/config/mod.rs:1181` — the FIELD-level `#[serde(default)]`, which
-//!      must be DELETED. The struct already carries a container-level
-//!      `#[serde(default)]` (`:1166`); the field-level one shadows it and
-//!      resolves to `bool::default()` — `false` — so a config file with a
-//!      `server:` section that omits the flag deserializes to `false` whatever
-//!      the struct default says. That is every real deployment. Change 1 alone
-//!      would turn case 1 green while an operator still got the old behaviour:
-//!      a passing test over a broken criterion.
-//!
-//! Both are sequenced behind cluster A wiring the continuation path — default-on
-//! turns every gap there into a first-run defect
-//! (`docs/requirements/RELEASE-4.0.0-blocking-rollup.md:30`, operator ruling
-//! 2026-09-02). Until then clause (c) is legitimately unmet and cases 1, 2 and 7
-//! fail for the right reason. Red here means "not built yet", not "broken".
+//! ALL SIX CASES PASS. Clause (c) landed in `src/config/mod.rs`: the struct
+//! default `modern_protocol` is `true`, and the field-level `#[serde(default)]`
+//! that shadowed it is gone. The shadow mattered on its own — it resolved to
+//! `bool::default()` ahead of the container-level `#[serde(default)]` on
+//! `ServerConfig`, so a config file with a `server:` section that omits the flag
+//! deserialized to `false` whatever the struct default said. That is every real
+//! deployment. Flipping the struct default alone would have turned case 1 green
+//! while an operator still got the old behaviour: a passing test over a broken
+//! criterion. Case 7 is the guard against that regression.
 //!
 //! | case | clause | today |
 //! |---|---|---|
-//! | 1 default gateway serves a modern frame | c | FAILS |
-//! | 2 default gateway advertises the revision | c | FAILS |
+//! | 1 default gateway serves a modern frame | c | passes |
+//! | 2 default gateway advertises the revision | c | passes |
 //! | 3 flag off refuses the revision | a | passes |
 //! | 4 revert stops serving, legacy unchanged | b | passes |
 //! | 5 negotiation down to each supported revision | d | passes |
-//! | 7 a config file omitting the flag still serves modern | c | FAILS |
+//! | 7 a config file omitting the flag still serves modern | c | passes |
 //!
 //! Every assertion goes through the router. Reading
 //! `config.server.modern_protocol` back would prove the field exists, not that

@@ -1167,18 +1167,21 @@ fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static st
 pub struct ServerConfig {
     /// Serve requests written against MCP revision 2026-07-28.
     ///
-    /// **Off by default while the revision's support is being built.** The
-    /// gateway can already answer a stateless request, but not yet every part
-    /// of that revision — the standard request headers, multi-round-trip
-    /// requests, the cacheability fields and `subscriptions/listen` are still
-    /// arriving. Serving a client half a revision is worse than refusing it,
-    /// because the half that works hides the half that does not.
+    /// **On by default.** The gateway serves the latest revision and negotiates
+    /// down to the highest revision a client declares, so a legacy peer is
+    /// unaffected by the default.
     ///
-    /// With this off, a request declaring 2026-07-28 is refused with
-    /// `UnsupportedProtocolVersion` — the answer a client can act on — and
-    /// `server/discover` does not advertise the revision. Turning it on is one
-    /// switch, and it is what makes the two statements true together.
-    #[serde(default)]
+    /// Setting it to `false` is the operator escape hatch NFR.OBS.5 hangs its
+    /// revertibility clause on: a request declaring 2026-07-28 is then refused
+    /// with `UnsupportedProtocolVersion` — the answer a client can act on — and
+    /// `server/discover` stops advertising the revision. The revert is
+    /// restart-scoped, because the whole `server` section is restart-required
+    /// (`pending_restart_fields`, `src/config_reload/mod.rs`).
+    ///
+    /// No field-level `#[serde(default)]` here, deliberately: it would resolve
+    /// to `bool::default()` and shadow the container-level `#[serde(default)]`
+    /// on `ServerConfig`, so a config file with a `server:` section that omits
+    /// the flag would silently deserialize to `false`.
     pub modern_protocol: bool,
     /// Host to bind to.
     pub host: String,
@@ -1225,8 +1228,9 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            // Off until the revision is served completely, not partly.
-            modern_protocol: false,
+            // The latest revision is what a gateway serves unless an operator
+            // reverts it; older peers are reached by negotiating down.
+            modern_protocol: true,
             host: "127.0.0.1".to_string(),
             port: 39400,
             ws_port: None,
