@@ -819,9 +819,12 @@ deployment whose config file contains a `server:` section still modern-off, whic
 every real deployment. A test written against `Config::default()` goes green while the
 operator-facing default stays off.
 
-The change is three parts: `#[serde(default = "…")]` returning true, the struct default
-(`src/config/mod.rs:1229` — every doc citing `1174` or `1127` is stale), and a
-deserialization case proving a `server:` mapping that omits the flag comes back `true`.
+The repair is a DELETION, not a new default function. `ServerConfig` already carries a
+container-level `#[serde(default)]` (`src/config/mod.rs:1166`) which resolves a missing
+field to `ServerConfig::default()`. The field-level attribute is redundant and shadows
+it. So: delete `#[serde(default)]` at `:1181`, flip the struct default at `:1229` (every
+doc citing `1174` or `1127` is stale), and add a deserialization case proving a `server:`
+mapping that omits the flag comes back `true`.
 
 Six operator-facing documents state that modern is off by default: `README.md:355`,
 `docs/DEPLOYMENT.md:135`, `RELEASE-4.0.0-pr-body.md:6`, `execution-plan.md:39`,
@@ -831,3 +834,24 @@ owns it.
 
 Found by `gpt-review` against the test plan for `NFR.OBS.5`, confirmed at source, before
 any flip was attempted.
+
+A seventh surface sits in the code, not in that list: the doc comment on the field
+(`src/config/mod.rs:1168-1172`) states the revision is off by default and that turning it
+on is one switch. The flip falsifies both sentences and must rewrite them.
+
+## Expected-red suites on `fix/mrtr2-continuation-handle`
+
+Two suites fail on this branch on purpose, and a third party cannot tell them from rot
+without this table. A suite is listed here only while the criterion it pins is genuinely
+unmet; when the criterion closes, the suite goes green and its row is deleted. A red
+suite that is NOT listed here is a regression and blocks under stop-the-line.
+
+| suite | failures | pins | goes green when |
+|---|---|---|---|
+| `nfr_obs5_flag` | 3 of 6 | `NFR.OBS.5` clause (c) — the latest revision is not served by default | the default change lands, behind clusters A and C |
+| `nfr_obs_3_era_observability` | 15 | `NFR.OBS.3` — era detection emits nothing observable | the era-detection counters land |
+
+The branch does not merge while any row here is still red, which is the same condition as
+"clusters A and C have landed". Nothing is quarantined and nothing is skipped: the
+failures are true, and hiding them behind `#[ignore]` would trade a true signal for an
+invisible one on a branch four sessions share.
