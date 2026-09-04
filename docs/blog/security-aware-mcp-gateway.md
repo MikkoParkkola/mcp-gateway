@@ -6,7 +6,7 @@ Status: Draft for launch
 
 ## TL;DR
 
-I built mcp-gateway. It replaces N direct MCP server connections with a compact Meta-MCP surface (14 tools minimum; 16 in the README scenario), supports optional SHA-256 pins for capability YAMLs, and runs every tool description through a validator that catches the Invariant Labs tool-poisoning patterns. It is a Rust single binary, source-available under PolyForm Noncommercial by default with a separately licensed MIT core, and had 2888 passing tests at the time of this post.
+I built mcp-gateway. It replaces N direct MCP server connections with a compact Meta-MCP surface: 14 tools minimum and 16 in the README scenario. Pins are optional. Every tool description passes through a validator for the Invariant Labs tool-poisoning patterns. The binary is Rust. Its default license is PolyForm Noncommercial, while the core is separately MIT-licensed. At publication, 2888 tests passed.
 
 This post walks through why that architecture exists, what attacks it defeats today, and what it still does not solve.
 

@@ -108,7 +108,7 @@ Universal MCP Gateway | Rust 1.88+ | Edition 2024 | ~101K LOC | MIT
 
 ## Product Vision
 
-mcp-gateway sits between any AI client and any set of MCP tools. Instead of loading hundreds of tool definitions into every request, the AI sees a compact **Meta-MCP surface** — 14 tools minimum, 16 in the README benchmark, 17 when webhook status is surfaced — and discovers the right backend tool on demand. This cuts schema-only first-request context on a 100-tool stack (the 89% README model ignores extra discovery turns; `honest_task_tokens` can lose), removes the "pick which tools to connect" tradeoff, and makes `Unlimited` a practical answer to `how many tools`.
+mcp-gateway sits between any AI client and any set of MCP tools. Instead of loading hundreds of tool definitions into every request, the AI sees a compact **Meta-MCP surface** (14 tools minimum, 16 in the README benchmark, 17 when webhook status is surfaced) and discovers the right backend tool on demand. This cuts schema-only first-request context on a 100-tool stack (the 89% README model ignores extra discovery turns; `honest_task_tokens` can lose), removes the "pick which tools to connect" tradeoff, and makes `Unlimited` a practical answer to `how many tools`.
 
 The gateway is a **tool + capability router**, not a general chat-completions / embeddings gateway. When a backend asks for `sampling/createMessage`, the connected client still performs the model call. OpenAI-compatible prompt-cache helpers exist only so `gateway_invoke` can preserve `prompt_cache_key` behavior for backends that call LLM APIs internally.
 
