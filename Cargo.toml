@@ -4,7 +4,7 @@ version = "3.5.1"
 edition = "2024"
 rust-version = "1.95"
 authors = ["Mikko Parkkola <mikko.parkkola@iki.fi>"]
-description = "Universal MCP Gateway - Single-port multiplexing with Meta-MCP for ~95% context token savings"
+description = "Universal MCP Gateway - compact Meta-MCP surface over many backends"
 license-file = "LICENSES.md"
 homepage = "https://github.com/MikkoParkkola/mcp-gateway"
 repository = "https://github.com/MikkoParkkola/mcp-gateway"
@@ -34,13 +34,29 @@ include = [
     "src/**",
     "tests/**",
     "benches/**",
-    "benchmarks/**",
+    "benchmarks/public_claims.json",
+    "benchmarks/discovery_response_fixture.json",
+    "benchmarks/token_savings.py",
+    "benchmarks/live_agent_mcp_server.py",
+    "benchmarks/live_agent_tool_selection.py",
+    "benchmarks/results/mik-6977-live-agent-2026-09-04.json",
     "capabilities/**",
     "examples/**",
     "docs/ARCHITECTURE.md",
     "docs/BENCHMARKS.md",
     "docs/COMMUNITY_REGISTRY.md",
     "docs/QUICKSTART.md",
+    "ARCHITECTURE.md",
+    "codebase-map.md",
+    "docs/show-hn.md",
+    "docs/blog/sovereign-stack-2026-04.md",
+    "docs/blog/security-aware-mcp-gateway.md",
+    "docs/design/RFC-0081-intelligent-tool-surfacing.md",
+    "docs/legal/dependency-licenses.tsv",
+    "CLAUDE.md",
+    "homebrew/mcp-gateway.rb",
+    "npm/package.json",
+    ".github/workflows/release.yml",
 ]
 
 [workspace]

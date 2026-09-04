@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the ungrounded savings estimates from gateway statistics: the
+  `stats --price` flag, the `gateway_get_stats.price_per_million` argument,
+  the `tokens_saved` and `estimated_savings_usd` response fields, and the public
+  `StatsSnapshot::tokens_saved`, `StatsSnapshot::estimated_savings_usd`, and
+  `UsageStats::cost_savings` fields.
+
 ### Fixed
 
 - **Competitive shadow-scan exports now stay portable and loadable.** The
@@ -1106,7 +1114,7 @@ credential path.
 
 ### Added
 
-- **Intelligent Tool Surfacing** (RFC-0081): Static tool pinning via `surfaced_tools` config — operators can expose high-value backend tools directly in `tools/list` for one-hop invocation while preserving ~95% context token savings for the rest.
+- **Intelligent Tool Surfacing** (RFC-0081): Static tool pinning via `surfaced_tools` config — operators can expose high-value backend tools directly in `tools/list` for one-hop invocation while preserving the compact Meta-MCP surface for the rest.
 - **Tool Annotations** (MCP 2025-11-25): All meta-tools now carry `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` annotations. `gateway_search_tools` includes `outputSchema`.
 - **"Did You Mean?" suggestions**: Levenshtein-based typo correction on both meta-tool dispatch (`handle_tools_call`) and backend tool invocation (`gateway_invoke`).
 - **Dynamic meta-tool descriptions**: Tool and server counts are live (`format!()`) instead of static "150+".

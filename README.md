@@ -9,7 +9,7 @@
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
-[![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-10%2F10_covered-brightgreen.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
+[![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-self--assessed-blue.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
 [![MITRE F3](https://img.shields.io/badge/MITRE_F3-gateway_boundary_mapped-lightgrey.svg)](docs/compliance/MITRE-F3-MAPPING.md)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 [![Quality Score](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badges/score.svg)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
@@ -18,7 +18,7 @@
 
 **One gateway between your AI and every tool it needs, without flooding the context window.**
 
-MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect any number of MCP servers and REST APIs behind it, and the agent sees only a compact meta-surface of 14 to 16 tools instead of hundreds of tool definitions. It discovers and calls the right backend tool on demand. On a 100-tool stack that is about 89% less context-token overhead per request in the README [benchmark](docs/BENCHMARKS.md), and the answer to "how many tools can I connect" becomes "unlimited."
+MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect MCP servers and REST APIs behind it, and the agent sees a compact meta-surface of 14 to 16 tools instead of every backend definition. It discovers and calls backend tools on demand. A small live-agent benchmark found no completed-task token saving from that extra hop, so the value is catalog capacity plus policy and routing—not a blanket token claim. See [Benchmarks](docs/BENCHMARKS.md).
 
 ![demo](demo.gif)
 
@@ -28,7 +28,7 @@ Personal and noncommercial use is free, including running the full gateway. Runn
 
 Every MCP tool an AI client connects costs roughly 150 tokens of context overhead, loaded into every request whether the tool gets used or not. Connect 20 servers with 100 tools between them and you spend about 15,000 tokens before the conversation starts. Context limits then force a second cost: you have to decide up front which tools to connect and leave the rest out, so the agent makes worse decisions because it cannot reach data you chose not to load.
 
-MCP Gateway removes both costs. The agent loads a small fixed set of meta-tools, searches the full catalog with `gateway_search_tools`, and invokes any backend tool with `gateway_invoke` only when it needs it.
+MCP Gateway moves the full catalog out of the exposed tool list. The agent loads a small fixed set of meta-tools, searches with `gateway_search_tools`, and invokes a backend tool with `gateway_invoke`. This creates room for larger catalogs, but the extra search hop can cost more tokens and time on a completed task.
 
 ```mermaid
 flowchart LR
@@ -217,11 +217,11 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 
 ## Why use MCP Gateway?
 
-- **About 89% less context overhead.** In the README benchmark, 100 backend tools cost roughly 1,600 tokens instead of 15,000, because the agent only loads the tools it uses this turn. Numbers are reproducible; see [Benchmarks](docs/BENCHMARKS.md).
+- **Larger catalog, smaller exposed surface.** The agent loads a fixed meta-surface instead of every backend definition. In the checked-in live run, both paths completed every task, but the meta path used 1.2–16.1% more input tokens and added one turn. See [Benchmarks](docs/BENCHMARKS.md).
 - **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
 - **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 110+ capabilities ship built in.
 - **Per-user identity to backends.** Multitenant backends can receive the verified end-user identity with no gateway-stored long-lived credential. See [Multitenant identity](#end-user-identity-v31).
-- **Secure by construction.** A tool-poisoning validator scans every backend tool description before it reaches the agent, SHA-256 pinning with rug-pull detection protects each capability, and the OWASP Agentic AI Top 10 is covered 10 out of 10. The crate sets `#![deny(unsafe_code)]`, so any unsafe block needs an explicit `#[allow]` opt-in, with optional mTLS, message signing, and agent identity.
+- **Secure by construction.** A tool-poisoning validator scans every backend tool description before it reaches the agent. SHA-256 capability pinning is optional: unpinned files load, pinned files fail closed on mismatch. OWASP Agentic AI Top 10 coverage is self-assessed in-tree, not a certification. The crate sets `#![deny(unsafe_code)]`, so any unsafe block needs an explicit `#[allow]` opt-in, with optional mTLS, message signing, and agent identity.
 - **Swap your MCP stack without losing your session.** Hot-reload backends and config in about 8ms while the AI stays connected. No restart, no lost context.
 - **Production resilience.** Circuit breakers, retries with backoff, rate limiting, and health checks keep one flaky server from taking down the whole toolchain.
 - **Dual protocol.** MCP plus an A2A (agent-to-agent) transport adapter, so the same gateway routes tool calls and cross-provider agent messages.
@@ -254,8 +254,8 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 | | Without gateway | With gateway |
 |---|----------------|--------------|
 | **Tools in context** | Every definition, every request | 16 meta-tools in the README benchmark (~1,600 tokens) |
-| **Token overhead** | ~15,000 tokens (100 tools) | ~1600 tokens, **89% savings** |
-| **Cost at scale** | ~$0.22 per request (Opus input) | ~$0.024 per request, **$201 saved per 1K** |
+| **Schema footprint** | ~15,000 modeled tokens (100 tools) | ~1,600 modeled tokens before discovery; not completed-task cost |
+| **Measured task cost** | Direct path was lower at every tested size | Meta path used 1.2–16.1% more input tokens and one extra turn |
 | **Practical tool limit** | 20 to 50 tools under context pressure | Unlimited, discovered on demand |
 | **Connect a new REST API** | Build an MCP server (days) | Drop a YAML file or import an OpenAPI spec (minutes) |
 | **Changing MCP config** | Restart the AI session, lose context | Restart gateway (~8ms), session stays alive |
@@ -280,13 +280,13 @@ Connecting N MCP servers to an agent means accepting N attack surfaces. Tool poi
 mcp-gateway puts every backend tool description behind one audit surface and defends it structurally:
 
 - **Tool-poisoning validator (AX-010).** Every backend tool description is scanned before it reaches the agent's context window. HIGH patterns fail closed: `<IMPORTANT>` blocks, `~/.ssh`/`~/.aws`/`id_rsa`/`.env`/`/etc/passwd`, `sidenote` exfiltration language, `curl .* https?://`, and `base64` in an exfil context. MEDIUM patterns warn: 40+ consecutive spaces, zero-width or bidi-override Unicode, and oversized descriptions. Implementation: [`src/validator/rules/tool_poisoning.rs`](src/validator/rules/tool_poisoning.rs) (19 tests).
-- **SHA-256 capability hash-pinning.** `mcp-gateway cap pin <file>` writes a `sha256:` line over the file's canonical hash (`grep -v '^sha256:' capability.yaml | sha256sum` reproduces it from any shell). The loader refuses any mismatched file on load and on every watcher event.
+- **Optional SHA-256 capability hash-pinning.** `mcp-gateway cap pin <file>` writes a `sha256:` line over the file's canonical hash (`grep -v '^sha256:' capability.yaml | sha256sum` reproduces it from any shell). Unpinned files still load. A pinned file that no longer matches fails closed on load and on every watcher event.
 - **Rug-pull detection.** When a pinned capability's on-disk content changes after approval, the watcher unloads it and logs `RUG-PULL DETECTED`. The capability stays quarantined until an operator re-pins it. Implementation: [`src/capability/hash.rs`](src/capability/hash.rs) and `detect_rug_pulls` in [`src/capability/backend.rs`](src/capability/backend.rs).
 - **Centralized audit surface.** Capability YAMLs are plain text: diffable, greppable, and reviewable in a PR. The agent only ever sees the compact meta-surface, so there is no N-server tool-list pollution and no N-server attack surface.
 
 Full walkthrough, PoC snippets, and roadmap: [docs/blog/security-aware-mcp-gateway.md](docs/blog/security-aware-mcp-gateway.md).
 
-- **OWASP Agentic AI Top 10.** Controls are covered across all 10 ASI risks at the gateway boundary, with hardening follow-ups tracked separately for SBOMs, release signing, live remote attestation discovery, multi-gateway signing, SQL-sink defaults, and collusion detection. See [docs/OWASP_AGENTIC_AI_COMPLIANCE.md](docs/OWASP_AGENTIC_AI_COMPLIANCE.md).
+- **OWASP Agentic AI Top 10 (self-assessed).** Controls are mapped across all 10 ASI risks at the gateway boundary in-tree. That is not a certification. Hardening follow-ups are tracked separately for SBOMs, release signing, live remote attestation discovery, multi-gateway signing, SQL-sink defaults, and collusion detection. See [docs/OWASP_AGENTIC_AI_COMPLIANCE.md](docs/OWASP_AGENTIC_AI_COMPLIANCE.md).
 - **MITRE Fight Fraud Framework (F3).** A tactic-by-tactic mapping of the same gateway-boundary controls to F3 v1.1, including the two F3-native tactics (FA0001 Positioning, FA0002 Monetization). Most cash-out and card-scheme techniques are explicit gaps. See [docs/compliance/MITRE-F3-MAPPING.md](docs/compliance/MITRE-F3-MAPPING.md).
 
 ### Recent additions

@@ -57,14 +57,14 @@ async fn main() -> ExitCode {
         Some(Command::Tls(tls_cmd)) => commands::run_tls_command(tls_cmd),
         Some(Command::Trust(trust_cmd)) => commands::run_trust_command(trust_cmd).await,
         Some(Command::Identity(identity_cmd)) => commands::run_identity_command(identity_cmd).await,
-        Some(Command::Stats { url, price }) => {
+        Some(Command::Stats { url }) => {
             let effective_url = resolve_stats_url(
                 url,
                 config_path.as_deref(),
                 port_override,
                 host_override.as_deref(),
             );
-            commands::run_stats_command(&effective_url, price).await
+            commands::run_stats_command(&effective_url).await
         }
         Some(Command::Validate {
             paths,

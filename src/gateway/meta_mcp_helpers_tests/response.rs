@@ -16,6 +16,21 @@ fn build_search_response_structure() {
 }
 
 #[test]
+fn honest_benchmark_fixture_matches_runtime_search_envelope() {
+    let matches = vec![
+        json!({"server": "fulcrum", "tool": "linear_get_issue", "description": "Read one Linear issue"}),
+        json!({"server": "fulcrum", "tool": "linear_update_issue", "description": "Update one Linear issue"}),
+        json!({"server": "fulcrum", "tool": "linear_add_comment", "description": "Add a comment to one Linear issue"}),
+    ];
+    let expected = build_search_response("linear issue status", &matches, 3, &[]);
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../benchmarks/discovery_response_fixture.json"
+    ))
+    .expect("discovery response fixture should be JSON");
+    assert_eq!(fixture, expected);
+}
+
+#[test]
 fn build_search_response_empty_matches_no_suggestions() {
     let resp = build_search_response("nothing", &[], 0, &[]);
     assert_eq!(resp["total"], 0);
@@ -157,29 +172,6 @@ fn parse_tool_arguments_accepts_stringified_nested_object() {
     assert_eq!(result["nested"]["deep"], true);
 }
 
-// ── extract_price_per_million ───────────────────────────────────────
-
-#[test]
-fn extract_price_per_million_default_is_15() {
-    let args = json!({});
-    let price = extract_price_per_million(&args);
-    assert!((price - 15.0).abs() < f64::EPSILON);
-}
-
-#[test]
-fn extract_price_per_million_custom_value() {
-    let args = json!({"price_per_million": 3.5});
-    let price = extract_price_per_million(&args);
-    assert!((price - 3.5).abs() < f64::EPSILON);
-}
-
-#[test]
-fn extract_price_per_million_ignores_non_number() {
-    let args = json!({"price_per_million": "free"});
-    let price = extract_price_per_million(&args);
-    assert!((price - 15.0).abs() < f64::EPSILON);
-}
-
 // ── build_stats_response ────────────────────────────────────────────
 
 #[test]
@@ -190,19 +182,18 @@ fn build_stats_response_fields() {
         cache_hit_rate: 0.30,
         tools_discovered: 50,
         tools_available: 200,
-        tokens_saved: 500_000,
         top_tools: vec![],
         total_cached_tokens: 0,
         cached_tokens_by_server: vec![],
     };
-    let resp = build_stats_response(&snapshot, 15.0);
+    let resp = build_stats_response(&snapshot);
     assert_eq!(resp["invocations"], 100);
     assert_eq!(resp["cache_hits"], 30);
     assert_eq!(resp["cache_hit_rate"], "30.0%");
     assert_eq!(resp["tools_discovered"], 50);
     assert_eq!(resp["tools_available"], 200);
-    assert_eq!(resp["tokens_saved"], 500_000);
-    assert_eq!(resp["estimated_savings_usd"], "$7.50");
+    assert!(resp.get("tokens_saved").is_none());
+    assert!(resp.get("estimated_savings_usd").is_none());
 }
 
 #[test]
@@ -213,32 +204,12 @@ fn build_stats_response_zero_values() {
         cache_hit_rate: 0.0,
         tools_discovered: 0,
         tools_available: 0,
-        tokens_saved: 0,
         top_tools: vec![],
         total_cached_tokens: 0,
         cached_tokens_by_server: vec![],
     };
-    let resp = build_stats_response(&snapshot, 15.0);
+    let resp = build_stats_response(&snapshot);
     assert_eq!(resp["invocations"], 0);
-    assert_eq!(resp["estimated_savings_usd"], "$0.00");
-}
-
-#[test]
-fn build_stats_response_custom_price() {
-    let snapshot = StatsSnapshot {
-        invocations: 10,
-        cache_hits: 5,
-        cache_hit_rate: 0.5,
-        tools_discovered: 20,
-        tools_available: 100,
-        tokens_saved: 1_000_000,
-        top_tools: vec![],
-        total_cached_tokens: 0,
-        cached_tokens_by_server: vec![],
-    };
-    let resp = build_stats_response(&snapshot, 3.0);
-    assert_eq!(resp["estimated_savings_usd"], "$3.00");
-    assert_eq!(resp["cache_hit_rate"], "50.0%");
 }
 
 // ── wrap_tool_success ───────────────────────────────────────────────

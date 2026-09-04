@@ -18,7 +18,7 @@ Auto-generated table of contents for `mcp-gateway/`. Scan before opening files. 
 | `docs/` | contains: UPGRADING-3.0.md, ADR-008-multi-user-oauth-isolation.md, release-note… |
 | `examples/` | contains: gateway-full.yaml, validator_demo.rs, per-client-tool-scopes.yaml |
 | `homebrew/` | contains: mcp-gateway.rb |
-| `npm/` | Universal MCP Gateway — single-port multiplexing with Meta-MCP for ~95% context… |
+| `npm/` | Universal MCP Gateway — single-port multiplexing with a compact Meta-MCP surface… |
 | `packaging/` | contains: mcp-gateway.rb |
 | `playbooks/` | contains: research.yaml |
 | `scripts/` | contains: helm-airgap-smoke.sh, helm-supply-chain-smoke.sh, helm-chart-smoke.sh |

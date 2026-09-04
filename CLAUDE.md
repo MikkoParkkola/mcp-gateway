@@ -104,15 +104,15 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 
 # mcp-gateway
 
-Universal MCP Gateway | Rust 1.88+ | Edition 2024 | ~101K LOC | MIT
+Universal MCP Gateway | Rust 1.88+ | Edition 2024 | ~101K LOC | PolyForm Noncommercial default, MIT core
 
 ## Product Vision
 
-mcp-gateway sits between any AI client and any set of MCP tools. Instead of loading hundreds of tool definitions into every request, the AI sees a compact **Meta-MCP surface** — 14 tools minimum, 16 in the README benchmark, 17 when webhook status is surfaced — and discovers the right backend tool on demand. This cuts ~89% of context-token overhead on a 100-tool stack, removes the "pick which tools to connect" tradeoff, and makes `Unlimited` a practical answer to `how many tools`.
+mcp-gateway sits between any AI client and any set of MCP tools. Instead of loading hundreds of tool definitions into every request, the AI sees a compact **Meta-MCP surface** (14 tools minimum, 16 in the README benchmark, 17 when webhook status is surfaced) and discovers the right backend tool on demand. This cuts schema-only first-request context on a 100-tool stack (the 89% README model ignores extra discovery turns; `honest_task_tokens` can lose), removes the "pick which tools to connect" tradeoff, and makes `Unlimited` a practical answer to `how many tools`.
 
 The gateway is a **tool + capability router**, not a general chat-completions / embeddings gateway. When a backend asks for `sampling/createMessage`, the connected client still performs the model call. OpenAI-compatible prompt-cache helpers exist only so `gateway_invoke` can preserve `prompt_cache_key` behavior for backends that call LLM APIs internally.
 
-**Dual-protocol**: MCP + A2A transport adapter. **OWASP Agentic AI Top 10**: 10/10 covered. **Safety posture**: `#![deny(unsafe_code)]`, SHA-256 integrity pinning on every capability, mTLS option, message signing, agent identity.
+**Dual-protocol**: MCP + A2A transport adapter. **OWASP Agentic AI Top 10**: scoped in-tree self-assessment, not certification. **Safety posture**: `#![deny(unsafe_code)]`; optional SHA-256 capability pinning fails closed on mismatch; mTLS, message signing, and agent identity are available.
 
 ## Current Status
 
@@ -120,7 +120,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 - Published on crates.io + Homebrew + npm + ghcr.io container images + Glama + VS Code + Cursor one-click install
 - **Meta-MCP surface**: 14-16 tools in production scenarios (README benchmark scenario)
 - **Capability backends**: 110+ REST capabilities + MCP backends routed via the same surface
-- **Security**: unsafe denied (`#![deny(unsafe_code)]`); dependency-status badge; OWASP Agentic AI 10/10 docs at `docs/OWASP_AGENTIC_AI_COMPLIANCE.md`
+- **Security**: unsafe denied (`#![deny(unsafe_code)]`); dependency-status badge; scoped OWASP Agentic AI self-assessment at `docs/OWASP_AGENTIC_AI_COMPLIANCE.md`
 - **Benchmarks**: machine-readable claims in `benchmarks/public_claims.json` with CI drift check
 - **Independent reviews**: Ruach Tov Collective's five-tool comparison + mcp-gateway deep dive (linked in README)
 
@@ -136,10 +136,10 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 
 | Decision | Rationale | Do not |
 |---|---|---|
-| **Meta-MCP surface is compact** (14-16 tools target) | Context-token savings are the entire value proposition | Add meta-tools that could be dynamic-discovery tools |
+| **Meta-MCP surface is compact** (14-16 tools target) | Catalog capacity and on-demand routing are the value proposition | Add meta-tools that could be dynamic-discovery tools |
 | **mcp-gateway is NOT a chat / embeddings gateway** | Scope boundary; model calls stay with the connected client | Add OpenAI chat-completion proxying as a first-class feature |
 | **`#![deny(unsafe_code)]`** | Gateway sits on the trust path for every tool call | Introduce unsafe to chase performance |
-| **SHA-256 integrity pinning on every capability** | Supply-chain safety; capability tampering must be detectable | Load capabilities without hash verification |
+| **Optional SHA-256 capability pinning** | Pinned capability tampering must be detectable and fail closed | Accept a mismatched pin |
 | **OWASP Agentic AI Top 10 compliance** | Security posture is a shipped differentiator | Regress a covered control without an ADR |
 | **Dual MCP + A2A transport** | Cross-provider agent messaging (#145, MIK-2970) | Treat A2A as an afterthought; avoid compiling it out of default builds |
 | **Capability definitions public (mcp-gateway) / private (mcp-gateway-private)** | Public catalog for community; private API credentials / deploy configs | Mix private capabilities into the public catalog |
@@ -190,9 +190,9 @@ cargo fmt                            # auto-format
 
 ## Architecture
 
-Single-binary gateway: AI client -> compact Meta-MCP surface (13-16 tools) -> dynamic discovery of 500+ backend tools.
-~90% token savings by not loading all tool definitions into every request.
-OWASP Agentic AI Top 10: 10/10 covered. MCP + A2A dual-protocol.
+Single-binary gateway: AI client -> compact Meta-MCP surface (14 tools minimum; 16 in the README scenario) -> dynamic discovery of backend tools.
+The 89% figure is a schema-only first-request model; completed-task math also counts discovery turns and response history and can report a loss.
+OWASP Agentic AI Top 10: scoped in-tree self-assessment, not certification. MCP + A2A dual-protocol.
 
 Key modules: `gateway/` (core router, OAuth, streaming, UI), `provider/` (MCP/composite/capability),
 `capability/` (discovery, validation), `transport/` (HTTP, stdio), `security/` (firewall, mTLS, message signing, agent identity, memory scanner),

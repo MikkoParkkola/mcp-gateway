@@ -116,19 +116,6 @@ fn extract_u64_or_ignores_non_integer_values() {
     assert_eq!(extract_u64_or(&json!({"limit": "many"}), "limit", 10), 10);
 }
 
-// ── extract_f64_or ───────────────────────────────────────────────────
-
-#[test]
-fn extract_f64_or_respects_custom_value_and_default() {
-    assert!((extract_f64_or(&json!({"price": 3.5}), "price", 15.0) - 3.5).abs() < f64::EPSILON);
-    assert!((extract_f64_or(&json!({}), "price", 15.0) - 15.0).abs() < f64::EPSILON);
-}
-
-#[test]
-fn extract_f64_or_ignores_non_number_values() {
-    assert!((extract_f64_or(&json!({"price": "free"}), "price", 15.0) - 15.0).abs() < f64::EPSILON);
-}
-
 // ── build_initialize_result ─────────────────────────────────────────
 
 const TEST_INSTRUCTIONS: &str = "test instructions";
@@ -586,10 +573,10 @@ fn build_base_tools_all_have_object_input_schema() {
 }
 
 #[test]
-fn build_stats_tool_has_price_parameter() {
+fn build_stats_tool_has_no_unmeasured_savings_parameter() {
     let tool = build_stats_tool();
     assert_eq!(tool.name, "gateway_get_stats");
-    assert!(tool.input_schema["properties"]["price_per_million"].is_object());
+    assert_eq!(tool.input_schema["properties"], json!({}));
 }
 
 // ── tool_matches_query ──────────────────────────────────────────────
