@@ -896,7 +896,22 @@ full. If traffic stops, expired state persists indefinitely. The requirement
 abandonment arm holds under pressure, the lifetime arm does not hold at rest. `NFR.PERF.3`
 records the same gap and adds that no soak exists to observe it.
 
-## OPEN DECISION — is the revision on by default in 4.0.0?
+## RESOLVED — the revision IS on by default in 4.0.0
+
+**Corrected 2026-09-04.** This was never open. The operator ruled on 2026-09-02 that
+4.0.0 serves 2026-07-28 out of the box, and on 2026-09-03 retired `NFR.OBS.5`'s
+`default off` clause on the same ground. Both rulings are recorded in
+`RELEASE-4.0.0-blocking-rollup.md` cluster F. Re-asking a settled question and then
+reading the absence of a second answer as a block held clusters A, C and F behind a
+decision that already existed.
+
+What actually gates the flip is engineering, not a ruling: default-on makes every
+unwired gap in the continuation path a first-run defect, so cluster A must land first.
+Parking the legacy bridge is NOT an available reduction either — default-on is exactly
+what makes `Bridge::to_legacy_client` reachable. The text below is kept as the record of
+the error, not as a live question.
+
+### Superseded text
 
 Put to the operator on 2026-09-04 and not yet answered. Recorded here as a deferred
 question under the design process rather than settled by whoever needs an answer first:
