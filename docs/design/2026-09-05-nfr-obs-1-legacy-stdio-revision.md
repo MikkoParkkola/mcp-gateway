@@ -83,7 +83,7 @@ is not a fix.
 |---|---|---|---|
 | legacy stdio, post-handshake, records the revision | dispatch `initialize` at `2025-06-18`, then `ping` on the same session; assert `2025-06-18`/`session` on the second record | integration, real dispatcher under a scoped subscriber | yes — records `absent`/`none` |
 | the handshake request itself | dispatch `initialize` alone; assert `2025-06-18`/`handshake` from the body | integration | yes, if the new ordering breaks the existing fallback |
-| a re-handshake supersedes the slot | `initialize` at `2025-06-18`, then `initialize` at `2025-03-26`; assert the second records `2025-03-26`/`handshake` | integration | yes — this is the stale-precedence defect the review caught |
+| a re-handshake supersedes the slot | `initialize` at `2025-06-18`, `initialize` at `2025-03-26`, then `ping`; assert the second records `2025-03-26`/`handshake` **and the `ping` records `2025-03-26`/`session`** | integration | yes — the `ping` is what makes it fail; without it an implementation that never rewrites the slot passes on the body fallback alone |
 | modern stdio unaffected | `ac_obs_1_stdio_records_the_revision_and_that_meta_carried_it` still asserts `_meta` | integration | yes |
 | nothing declared anywhere | `ping` with no prior `initialize`; assert `absent`/`none` | unit | yes — a fix that invents a revision goes green wrongly |
 
