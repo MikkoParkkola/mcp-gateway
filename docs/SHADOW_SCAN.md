@@ -42,9 +42,10 @@ mcp-gateway doctor --shadow --shadow-format nginx
 mcp-gateway doctor --shadow --shadow-format yaml
 ```
 
-The `grep` output requires GNU grep with PCRE support (`grep -P`, or `ggrep -P`
-on macOS). The legacy `haproxy` format name is accepted as an alias for the
-Nginx renderer; it does not emit HAProxy configuration.
+The `grep` output uses portable extended regular expressions (`grep -E`) and
+works with the system grep on macOS and Linux. The legacy `haproxy` format name
+is accepted as an alias for the Nginx renderer; it does not emit HAProxy
+configuration.
 
 This command sits on the free/core product boundary and generates body-method
 and protocol-version patterns; `free_core` is not a commercial-use grant. The

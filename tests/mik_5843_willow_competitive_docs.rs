@@ -133,7 +133,7 @@ fn mik_5843_shipped_shadow_cli_matches_the_documented_scope() {
     assert!(output.contains("nginx log-phase map snippet"));
     assert!(output.contains("$request_body"));
     assert!(output.contains("\"~*("));
-    assert!(output.contains("\\\"method\\\"\\\\s{0,5}"));
+    assert!(output.contains("\\\"method\\\"[[:space:]]{0,5}"));
     assert!(output.contains("map directive belongs in the nginx http context"));
     assert!(output.contains("client_max_body_size 1m"));
     assert!(output.contains("client_body_buffer_size 1m"));
@@ -141,6 +141,17 @@ fn mik_5843_shipped_shadow_cli_matches_the_documented_scope() {
     assert!(!output.contains("if ($request_body"));
     assert!(!output.contains("httpHost"));
     assert!(!output.contains("httpRequestURI"));
+
+    let grep = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
+        .args(["doctor", "--shadow", "--shadow-format", "grep"])
+        .output()
+        .expect("run portable grep export");
+    assert!(grep.status.success());
+    let grep_output = String::from_utf8_lossy(&grep.stdout);
+    assert!(grep_output.contains("grep -E"));
+    assert!(grep_output.contains("[[:space:]]{0,5}"));
+    assert!(!grep_output.contains("grep -P"));
+    assert!(!grep_output.contains("\\s{0,5}"));
 }
 
 #[test]
@@ -176,7 +187,8 @@ fn mik_5843_shadow_docs_expose_static_rule_export_without_enterprise_overclaim()
     }
     assert!(docs.contains("does not inspect traffic or publish findings to a SIEM"));
     assert!(docs.contains("remain enterprise workflow capabilities"));
-    assert!(docs.contains("ggrep -P"));
+    assert!(docs.contains("system grep on macOS and Linux"));
+    assert!(docs.contains("`grep -E`"));
     assert!(docs.contains("not a commercial-use grant"));
     assert!(docs.contains("[`COMMERCIAL.md`](../COMMERCIAL.md)"));
 }

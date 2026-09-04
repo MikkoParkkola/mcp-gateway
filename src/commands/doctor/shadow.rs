@@ -25,61 +25,61 @@ pub const DLP_RULES: &[DlpRule] = &[
     DlpRule {
         name: "MCP Initialize Method",
         category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"initialize""#,
+        regex: r#""method"[[:space:]]{0,5}:[[:space:]]{0,5}"initialize""#,
         description: "MCP init handshake — first message in every MCP session",
     },
     DlpRule {
         name: "MCP Tools Call",
         category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"tools/call""#,
+        regex: r#""method"[[:space:]]{0,5}:[[:space:]]{0,5}"tools/call""#,
         description: "Tool invocation — present in every tool execution",
     },
     DlpRule {
         name: "MCP Tools List",
         category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"tools/list""#,
+        regex: r#""method"[[:space:]]{0,5}:[[:space:]]{0,5}"tools/list""#,
         description: "Tool enumeration — emitted by clients that pre-load schema",
     },
     DlpRule {
         name: "MCP Resources Read",
         category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"resources/read""#,
+        regex: r#""method"[[:space:]]{0,5}:[[:space:]]{0,5}"resources/read""#,
         description: "MCP resource read — file/blob access",
     },
     DlpRule {
         name: "MCP Resources List",
         category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"resources/list""#,
+        regex: r#""method"[[:space:]]{0,5}:[[:space:]]{0,5}"resources/list""#,
         description: "MCP resource listing",
     },
     DlpRule {
         name: "MCP Prompts List or Get",
         category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"prompts/(list|get)""#,
+        regex: r#""method"[[:space:]]{0,5}:[[:space:]]{0,5}"prompts/(list|get)""#,
         description: "MCP prompt enumeration or retrieval",
     },
     DlpRule {
         name: "MCP Sampling Create Message",
         category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"sampling/createMessage""#,
+        regex: r#""method"[[:space:]]{0,5}:[[:space:]]{0,5}"sampling/createMessage""#,
         description: "LLM sampling back-channel — high-privilege, monitor closely",
     },
     DlpRule {
         name: "MCP Protocol Version",
         category: "body",
-        regex: r#""protocolVersion"\s{0,5}:\s{0,5}"202[4-9]"#,
+        regex: r#""protocolVersion"[[:space:]]{0,5}:[[:space:]]{0,5}"202[4-9]"#,
         description: "MCP version negotiation — present in every initialize message",
     },
     DlpRule {
         name: "MCP Notifications Initialized",
         category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"notifications/initialized""#,
+        regex: r#""method"[[:space:]]{0,5}:[[:space:]]{0,5}"notifications/initialized""#,
         description: "Session ready notification sent after successful handshake",
     },
     DlpRule {
         name: "MCP Roots List",
         category: "body",
-        regex: r#""method"\s{0,5}:\s{0,5}"roots/list""#,
+        regex: r#""method"[[:space:]]{0,5}:[[:space:]]{0,5}"roots/list""#,
         description: "Client root-directory enumeration",
     },
 ];
@@ -94,7 +94,7 @@ pub(super) fn render_grep(rules: &[DlpRule]) -> String {
     out.push_str("# intercept outbound traffic. Deploy in your network-layer tooling.\n");
     out.push_str("#\n");
     out.push_str("# Usage example (stream log file):\n");
-    out.push_str("#   tail -f /var/log/proxy.log | grep -P 'PATTERN'\n");
+    out.push_str("#   tail -f /var/log/proxy.log | grep -E 'PATTERN'\n");
     out.push('\n');
 
     for rule in rules {
@@ -103,7 +103,7 @@ pub(super) fn render_grep(rules: &[DlpRule]) -> String {
             "# [{}] {} — {}",
             rule.category, rule.name, rule.description
         );
-        let _ = writeln!(out, "grep -P '{}'\n", rule.regex);
+        let _ = writeln!(out, "grep -E '{}'\n", rule.regex);
     }
     out
 }
