@@ -10,6 +10,7 @@
 //! plus a later `_meta` stamp cannot double-count.
 
 use std::collections::{BTreeMap, HashSet};
+use std::fmt::Write as _;
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::Value;
@@ -227,7 +228,7 @@ pub fn attribution_rate(snapshot: &Snapshot) -> f64 {
         return 0.0;
     }
     let attributed = snapshot.total.saturating_sub(snapshot.unattributed);
-    attributed as f64 / snapshot.total as f64
+    ratio(attributed, snapshot.total)
 }
 
 /// Revisions below 2% of total. Empty or under-attributed windows return none
@@ -236,11 +237,10 @@ pub fn retire_revisions(snapshot: &Snapshot) -> Vec<String> {
     if snapshot.total == 0 || attribution_rate(snapshot) < ATTRIBUTION_FLOOR {
         return Vec::new();
     }
-    let total = snapshot.total as f64;
     snapshot
         .by_revision
         .iter()
-        .filter(|(_, n)| (**n as f64 / total) < RETIRE_BELOW_SHARE)
+        .filter(|(_, n)| ratio(**n, snapshot.total) < RETIRE_BELOW_SHARE)
         .map(|(rev, _)| rev.clone())
         .collect()
 }
@@ -249,17 +249,18 @@ pub fn retire_revisions(snapshot: &Snapshot) -> Vec<String> {
 pub fn distribution_table(snapshot: &Snapshot) -> String {
     let mut rows = String::from("| revision | sessions | share |\n| --- | ---: | ---: |\n");
     for (rev, n) in &snapshot.by_revision {
-        rows.push_str(&format!(
-            "| {rev} | {n} | {:.1}% |\n",
-            share(*n, snapshot.total)
-        ));
+        writeln!(rows, "| {rev} | {n} | {:.1}% |", share(*n, snapshot.total))
+            .expect("writing to a String cannot fail");
     }
-    rows.push_str(&format!(
-        "| unattributed | {} | {:.1}% |\n",
+    writeln!(
+        rows,
+        "| unattributed | {} | {:.1}% |",
         snapshot.unattributed,
         share(snapshot.unattributed, snapshot.total)
-    ));
-    rows.push_str(&format!("| total | {} | 100% |\n", snapshot.total));
+    )
+    .expect("writing to a String cannot fail");
+    writeln!(rows, "| total | {} | 100% |", snapshot.total)
+        .expect("writing to a String cannot fail");
     rows
 }
 
@@ -267,8 +268,15 @@ fn share(n: u64, total: u64) -> f64 {
     if total == 0 {
         0.0
     } else {
-        (n as f64 / total as f64) * 100.0
+        ratio(n, total) * 100.0
     }
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn ratio(n: u64, total: u64) -> f64 {
+    // The counters remain exact integers; floating point is used only for
+    // human-facing shares and the pre-registered percentage threshold.
+    n as f64 / total as f64
 }
 
 fn global() -> &'static Mutex<Registry> {
@@ -284,7 +292,9 @@ pub fn observe_inbound(
 ) {
     let revision = requested_revision(initialize_params, request_meta);
     let client = client_identity(initialize_params, request_meta);
-    let mut reg = global().lock().unwrap_or_else(|e| e.into_inner());
+    let mut reg = global()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let recorded = reg.observe_session(session_id, revision.as_deref(), &client);
     drop(reg);
     if recorded {
@@ -294,7 +304,9 @@ pub fn observe_inbound(
 
 /// Shadow-log one `tools/list` on the process registry.
 pub fn observe_tools_list(filters: ListFilters) -> ToolsListShadow {
-    let mut reg = global().lock().unwrap_or_else(|e| e.into_inner());
+    let mut reg = global()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let shadow = reg.shadow_tools_list(filters);
     drop(reg);
     tracing::info!(
@@ -312,7 +324,7 @@ pub fn observe_tools_list(filters: ListFilters) -> ToolsListShadow {
 pub fn global_snapshot() -> Snapshot {
     global()
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .snapshot()
 }
 
@@ -320,7 +332,7 @@ pub fn global_snapshot() -> Snapshot {
 pub fn global_shadows() -> Vec<ToolsListShadow> {
     global()
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .shadows()
         .to_vec()
 }
