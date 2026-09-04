@@ -126,7 +126,6 @@ pub struct ToolsListShadow {
 #[derive(Debug, Clone, Copy)]
 struct SessionAttribution {
     requested_revision: Option<&'static str>,
-    negotiated_revision: &'static str,
     client: &'static str,
 }
 
@@ -135,7 +134,6 @@ struct SessionAttribution {
 pub struct Registry {
     /// Requested revisions. Kept as `by_revision` for the pre-registered table.
     by_revision: BTreeMap<String, u64>,
-    by_negotiated_revision: BTreeMap<String, u64>,
     by_client: BTreeMap<String, u64>,
     by_transport: BTreeMap<String, u64>,
     unattributed: u64,
@@ -148,17 +146,15 @@ pub struct Registry {
 /// Snapshot for `/metrics` tests and the Linear table.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
-    /// Sessions whose revision was named on the wire.
+    /// Requests whose revision was named on the wire.
     pub by_revision: BTreeMap<String, u64>,
-    /// Sessions grouped by the revision the gateway actually served.
-    pub by_negotiated_revision: BTreeMap<String, u64>,
-    /// Sessions grouped by client identity (includes `unattributed`).
+    /// Requests grouped by client identity (includes `unattributed`).
     pub by_client: BTreeMap<String, u64>,
-    /// Sessions grouped by the bounded transport label.
+    /// Requests grouped by the bounded transport label.
     pub by_transport: BTreeMap<String, u64>,
-    /// Sessions with no revision on either path. Own series, not a revision key.
+    /// Requests with no revision on either path. Own series, not a revision key.
     pub unattributed: u64,
-    /// All observed sessions, attributed or not.
+    /// All observed requests, attributed or not.
     pub total: u64,
 }
 
@@ -172,7 +168,6 @@ impl Registry {
     pub fn observe_request(
         &mut self,
         requested_revision: Option<&str>,
-        negotiated_revision: &str,
         client: &str,
         transport: Transport,
     ) {
@@ -182,11 +177,6 @@ impl Registry {
         *self
             .by_transport
             .entry(transport.as_str().to_string())
-            .or_insert(0) += 1;
-        let negotiated = revision_label(Some(negotiated_revision)).unwrap_or(OTHER_REVISION);
-        *self
-            .by_negotiated_revision
-            .entry(negotiated.to_string())
             .or_insert(0) += 1;
         match revision_label(requested_revision) {
             Some(rev) => {
@@ -233,7 +223,6 @@ impl Registry {
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             by_revision: self.by_revision.clone(),
-            by_negotiated_revision: self.by_negotiated_revision.clone(),
             by_client: self.by_client.clone(),
             by_transport: self.by_transport.clone(),
             unattributed: self.unattributed,
@@ -355,7 +344,7 @@ pub fn public_over_filtered(filters: ListFilters, scope: CacheScope) -> bool {
     scope == CacheScope::Public && filters.any()
 }
 
-/// Attributed sessions / total. Empty window is 0.0, not NaN.
+/// Attributed requests / total. Empty window is 0.0, not NaN.
 pub fn attribution_rate(snapshot: &Snapshot) -> f64 {
     if snapshot.total == 0 {
         return 0.0;
@@ -389,7 +378,7 @@ pub fn retire_revisions(snapshot: &Snapshot, elapsed: Duration) -> Vec<String> {
 
 /// Markdown table for the Linear comment. Unattributed is its own row, not a revision.
 pub fn distribution_table(snapshot: &Snapshot) -> String {
-    let mut rows = String::from("| revision | sessions | share |\n| --- | ---: | ---: |\n");
+    let mut rows = String::from("| revision | requests | share |\n| --- | ---: | ---: |\n");
     for (rev, n) in &snapshot.by_revision {
         writeln!(rows, "| {rev} | {n} | {:.1}% |", share(*n, snapshot.total))
             .expect("writing to a String cannot fail");
@@ -461,20 +450,6 @@ pub fn observe_inbound_request(
     } else {
         client_label(&explicit_client)
     };
-    let negotiated_label = if method == "initialize" {
-        let client_version = initialize_params
-            .and_then(|value| value.get("protocolVersion"))
-            .and_then(Value::as_str)
-            .unwrap_or(crate::protocol::PROTOCOL_VERSION);
-        revision_label(Some(crate::protocol::negotiate_version(client_version)))
-            .unwrap_or(OTHER_REVISION)
-    } else {
-        previous
-            .map(|item| item.negotiated_revision)
-            .or(requested_label)
-            .unwrap_or(OTHER_REVISION)
-    };
-
     if method == "initialize"
         && let Some(session_id) = session_id
     {
@@ -482,17 +457,15 @@ pub fn observe_inbound_request(
             session_id,
             SessionAttribution {
                 requested_revision: requested_label,
-                negotiated_revision: negotiated_label,
                 client,
             },
         );
     }
-    reg.observe_request(requested_label, negotiated_label, client, transport);
+    reg.observe_request(requested_label, client, transport);
     drop(reg);
-    emit_session_metrics(requested_label, negotiated_label, client, transport);
+    emit_request_metrics(requested_label, client, transport);
     tracing::info!(
         requested_revision = requested_label.unwrap_or("unattributed"),
-        negotiated_revision = negotiated_label,
         client,
         transport = transport.as_str(),
         "mcp728.u1 inbound request observation"
@@ -549,20 +522,14 @@ pub fn global_shadow_count(filters: ListFilters) -> u64 {
         .shadow_count(filters)
 }
 
-fn emit_session_metrics(
-    requested_revision: Option<&str>,
-    negotiated_revision: &str,
-    client: &str,
-    transport: Transport,
-) {
-    let _ = (requested_revision, negotiated_revision, client, transport);
+fn emit_request_metrics(requested_revision: Option<&str>, client: &str, transport: Transport) {
+    let _ = (requested_revision, client, transport);
     #[cfg(feature = "metrics")]
     {
         if let Some(rev) = requested_revision {
             telemetry_metrics::counter!(
                 "mcp_protocol_revision_observations_total",
                 "requested_revision" => rev.to_string(),
-                "negotiated_revision" => negotiated_revision.to_string(),
                 "client" => client.to_string(),
                 "transport" => transport.as_str()
             )
@@ -570,7 +537,6 @@ fn emit_session_metrics(
         } else {
             telemetry_metrics::counter!(
                 "mcp_protocol_revision_unattributed_observations_total",
-                "negotiated_revision" => negotiated_revision.to_string(),
                 "client" => client.to_string(),
                 "transport" => transport.as_str()
             )
@@ -623,18 +589,12 @@ mod tests {
     #[test]
     fn unattributed_is_its_own_series() {
         let mut reg = Registry::new();
-        reg.observe_request(
-            Some("2025-11-25"),
-            "2025-11-25",
-            "claude-desktop",
-            Transport::Http,
-        );
-        reg.observe_request(None, "2025-11-25", "unknown", Transport::Stdio);
+        reg.observe_request(Some("2025-11-25"), "claude-desktop", Transport::Http);
+        reg.observe_request(None, "unknown", Transport::Stdio);
         let snap = reg.snapshot();
         assert_eq!(snap.total, 2);
         assert_eq!(snap.unattributed, 1);
         assert_eq!(snap.by_revision.get("2025-11-25"), Some(&1));
-        assert_eq!(snap.by_negotiated_revision.get("2025-11-25"), Some(&2));
         assert_eq!(snap.by_client.get("claude"), Some(&1));
         assert_eq!(snap.by_client.get("other"), Some(&1));
         assert_eq!(snap.by_transport.get("http"), Some(&1));
@@ -652,7 +612,6 @@ mod tests {
         for i in 0..100 {
             reg.observe_request(
                 Some(&format!("attacker-revision-{i}")),
-                "attacker-negotiated",
                 &format!("attacker-client-{i}"),
                 Transport::Http,
             );
@@ -660,7 +619,6 @@ mod tests {
         let snapshot = reg.snapshot();
         assert_eq!(snapshot.by_revision.len(), 1);
         assert_eq!(snapshot.by_revision.get(OTHER_REVISION), Some(&100));
-        assert_eq!(snapshot.by_negotiated_revision.len(), 1);
         assert_eq!(snapshot.by_client.len(), 1);
         assert_eq!(snapshot.by_client.get("other"), Some(&100));
     }
@@ -687,8 +645,8 @@ mod tests {
         let empty = Registry::new().snapshot();
         assert!(retire_revisions(&empty, MIN_MEASUREMENT_WINDOW).is_empty());
         let mut low = Registry::new();
-        low.observe_request(Some("2025-06-18"), "2025-06-18", "c", Transport::Http);
-        low.observe_request(None, "2025-11-25", "c", Transport::Http);
+        low.observe_request(Some("2025-06-18"), "c", Transport::Http);
+        low.observe_request(None, "c", Transport::Http);
         // 50% attributed < 80% floor
         assert!(retire_revisions(&low.snapshot(), MIN_MEASUREMENT_WINDOW).is_empty());
     }
@@ -697,9 +655,9 @@ mod tests {
     fn two_percent_rule_retires_only_below_floor_when_attributed() {
         let mut reg = Registry::new();
         for _ in 0..99 {
-            reg.observe_request(Some("2025-11-25"), "2025-11-25", "c", Transport::Http);
+            reg.observe_request(Some("2025-11-25"), "c", Transport::Http);
         }
-        reg.observe_request(Some("2024-11-05"), "2024-11-05", "c", Transport::Http);
+        reg.observe_request(Some("2024-11-05"), "c", Transport::Http);
         assert!(retire_revisions(&reg.snapshot(), Duration::from_secs(1)).is_empty());
         let retired = retire_revisions(&reg.snapshot(), MIN_MEASUREMENT_WINDOW);
         assert!(retired.iter().any(|r| r == "2024-11-05"));

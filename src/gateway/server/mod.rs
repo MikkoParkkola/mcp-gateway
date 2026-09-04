@@ -2297,7 +2297,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stdio_initialize_records_requested_and_negotiated_revisions() {
+    async fn stdio_initialize_records_requested_revision() {
         let before = crate::protocol_revision_telemetry::global_snapshot();
         let response = Gateway::dispatch_single(
             &test_meta_mcp(),
@@ -2326,18 +2326,6 @@ mod tests {
         assert!(
             after.by_revision.get("2026-07-28").copied().unwrap_or(0)
                 > before.by_revision.get("2026-07-28").copied().unwrap_or(0)
-        );
-        assert!(
-            after
-                .by_negotiated_revision
-                .get("2025-06-18")
-                .copied()
-                .unwrap_or(0)
-                > before
-                    .by_negotiated_revision
-                    .get("2025-06-18")
-                    .copied()
-                    .unwrap_or(0)
         );
         assert!(
             after.by_transport.get("stdio").copied().unwrap_or(0)

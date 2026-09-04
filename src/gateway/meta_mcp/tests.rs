@@ -208,6 +208,22 @@ fn static_code_mode_does_not_claim_profile_or_session_filtering() {
 }
 
 #[test]
+fn restrictive_default_profile_is_recorded_as_filtered() {
+    use crate::protocol_revision_telemetry::{ListFilters, global_shadow_count};
+
+    let meta = make_meta_mcp_with_profiles();
+    let filtered = ListFilters {
+        profile: true,
+        ..ListFilters::default()
+    };
+    let before = global_shadow_count(filtered);
+
+    meta.handle_tools_list(RequestId::Number(7004));
+
+    assert!(global_shadow_count(filtered) > before);
+}
+
+#[test]
 fn new_matches_featureless_constructor_defaults() {
     let backends = Arc::new(BackendRegistry::new());
     let from_new = MetaMcp::new(Arc::clone(&backends));

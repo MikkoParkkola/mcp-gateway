@@ -37,6 +37,7 @@ fn allow_all_profile_has_unrestricted_description() {
     let profile = RoutingProfile::allow_all("open");
     // THEN: description communicates lack of restrictions
     assert!(!profile.description.is_empty());
+    assert!(!profile.is_restrictive());
 }
 
 // ── allow_tools list ─────────────────────────────────────────────────
@@ -52,6 +53,7 @@ fn allow_tools_exact_permits_listed_tool() {
 #[test]
 fn allow_tools_exact_blocks_unlisted_tool() {
     let p = profile_from(Some(&["brave_search"]), None, None, None);
+    assert!(p.is_restrictive());
     assert!(p.check("brave", "brave_suggest").is_err());
 }
 

@@ -1063,9 +1063,7 @@ impl MetaMcp {
                 crate::protocol_revision_telemetry::ListFilters::default(),
             );
         }
-        let default = self.profile_registry.default_name();
-        let profile = session_id
-            .is_some_and(|sid| self.session_profiles.get_profile_name(sid, default) != default);
+        let profile = self.active_profile(session_id).is_restrictive();
         #[cfg(feature = "spec-preview")]
         let session = !self.promoted_tools_for_session(session_id).is_empty();
         #[cfg(not(feature = "spec-preview"))]

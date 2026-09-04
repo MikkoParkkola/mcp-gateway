@@ -160,6 +160,12 @@ impl RoutingProfile {
         self.tool_filter.is_allowed(tool)
     }
 
+    /// Whether this profile can remove a backend or tool from discovery.
+    #[must_use]
+    pub fn is_restrictive(&self) -> bool {
+        !self.backend_filter.is_unrestricted() || !self.tool_filter.is_unrestricted()
+    }
+
     /// Human-readable summary of what this profile allows/denies.
     #[must_use]
     pub fn describe(&self) -> serde_json::Value {
@@ -202,6 +208,10 @@ impl PatternFilter {
             allow: None,
             deny: None,
         }
+    }
+
+    fn is_unrestricted(&self) -> bool {
+        self.allow.is_none() && self.deny.is_none()
     }
 
     /// Return `true` if `name` passes both the allow and deny stages.
