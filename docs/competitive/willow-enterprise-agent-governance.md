@@ -29,7 +29,7 @@ The remaining distinction is source visibility and operator-controlled config,
 not the mere existence of a self-hosted SKU.
 
 An ordinary audit log is useful. It is not the same object as an attestation receipt.
-mcp-gateway's receipt path is opt-in and does not cover every cache hit.
+mcp-gateway's receipt path is opt-in.
 
 ## Feature bar
 

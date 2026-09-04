@@ -102,10 +102,9 @@ fn mik_5843_shadow_ai_scope_and_implementation_anchors() {
 
 #[test]
 fn mik_5843_rfc_names_the_shipped_shadow_commands() {
-    let rfc = std::fs::read_to_string(
-        "docs/design/RFC-0132-cloudflare-enterprise-mcp-gap-analysis.md",
-    )
-    .expect("read RFC-0132");
+    let rfc =
+        std::fs::read_to_string("docs/design/RFC-0132-cloudflare-enterprise-mcp-gap-analysis.md")
+            .expect("read RFC-0132");
     assert!(rfc.contains("Shipped in `mcp-gateway cap discover --shadow`"));
     assert!(rfc.contains("Shipped in `mcp-gateway doctor --shadow`"));
     assert!(!rfc.contains("`mcp-gateway discover --shadow`"));
@@ -119,5 +118,14 @@ fn mik_5843_page_is_linked_from_the_competitive_index() {
     assert!(
         index.contains("willow-enterprise-agent-governance"),
         "competitive index does not reference willow-enterprise-agent-governance"
+    );
+}
+
+#[test]
+fn mik_5843_page_is_linked_from_the_project_readme() {
+    let readme = std::fs::read_to_string("README.md").expect("read README.md");
+    assert!(
+        readme.contains("docs/competitive/willow-enterprise-agent-governance.md"),
+        "project README does not reference the Willow comparison"
     );
 }
