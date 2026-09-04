@@ -937,10 +937,13 @@ flag at all is an engineering call, not something the ruling settled — it is w
 the revertibility clause has nothing else to hang on. The row moves from MET to unmet until the
 rewritten test is re-probed, and losing a MET row is the honest cost of the change.
 
-`NFR.COMPAT.1` has an ABSENT clause, `2026-07-28` served, because `SUPPORTED_VERSIONS` does not list
-the revision. Negotiation cannot select a revision the server does not advertise, so that clause is
-now on the critical path rather than beside it: it is the precondition for the ruling, not a
-parallel piece of work.
+`NFR.COMPAT.1` has an ABSENT clause, `2026-07-28` served, because nothing serves the revision
+yet — not because `SUPPORTED_VERSIONS` omits it. That constant stays legacy-only whatever the
+operator ruled, for the reason pinned at `src/protocol/mod.rs:69-88`: the 2026-07-28 lifecycle
+scopes `initialize` to "2025-11-25 and earlier", so adding the revision there would have a retired
+handshake negotiate a revision that has no handshake. The modern revision is advertised through
+`discover_document` and served on the stateless path, so the clause closes by serving it, and no
+part of the ruling waits on the constant.
 
 What this does not settle: how the downgrade behaves when a client announces a revision the gateway
 has never heard of, above or below its range, and whether `server/discover` advertises the full
