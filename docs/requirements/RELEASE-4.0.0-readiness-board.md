@@ -489,3 +489,179 @@ the one A wires [owner: cluster A]. `NFR.SEC.1` needs both a test and an operato
 ruling on which 3.5.0 controls are in scope; the ruling is requested first, because the
 test's population depends on the answer [owner: `sec-controls`, blocked on the
 operator].
+
+---
+
+## 2026-09-04 — recount, and three corrections to what this board said
+
+Everything below was counted or read at source today. Where it contradicts a cell
+above, this section is the later reading, not a second opinion.
+
+### The blocking count is 37, and four of them were invisible to every prior count
+
+`RELEASE-4.0.0-criteria-status.md` holds 158 criterion rows (plus 12 rows belonging
+to the setter table and the group summary, which are not criteria and are excluded
+here). Parsed by the column the header names `blocking`, not by transcription:
+
+| status | blocking rows |
+|---|---|
+| ABSENT | 17 |
+| PARTIAL | 9 |
+| UNWIRED | 7 |
+| UNTESTED | 4 |
+| **total open and blocking** | **37** |
+
+No blocking row is MET: the `blocking` column is maintained as *still blocking* and
+flipped to `no` on close, so `blocking=yes` and *open* are the same set. 109 rows
+read `blocking=no`; 99 of those are plain `MET`, 2 are `N/A`, 7 carry a qualified
+MET (`MET (structural)` x3, `MET (I)` x2, `MET (caveat)`, `MET (residual)`), and one
+— `NFR.OBS.5` — reads `REVISED, NOT MET` while marked non-blocking.
+
+**Four blocking rows do not survive a naive column parse.** `MIK-7212.MRTR.7a`,
+`MIK-7212.MRTR.7b`, `MIK-7272.EXT.1` (all `UNWIRED`) and `MIK-7246.CONFIRM.1a`
+(`PARTIAL`) carry an unescaped `|` inside their evidence cell, which shifts every
+column to its right. A count that reads a fixed column index reports 33 and is
+wrong by exactly these four. This reconciles the 37-vs-31 disagreement recorded
+earlier: neither number was a miscount of the same set, they were counts of
+different sets. Any future recount must compare each row's field count against its
+header's before trusting a column index.
+
+The seven qualified-MET spellings are a second hazard of the same kind — they are
+not in the file's stated status vocabulary, and a filter written for `MET` alone
+either drops them or, worse, a filter for `!= MET` promotes seven closed rows back
+into the gap list. They are all `blocking=no`; that is the only reason the count
+above is unaffected.
+
+### Corrections to items this board and the working plan carried
+
+- **The `MIK-7217` §1 DoD evidence comment was already posted**, at
+  `2026-09-04T11:05:01Z`, verified against the Linear API rather than recalled. It
+  was carried as outstanding work. It is not.
+- **`/tmp/body.md` is not the `MIK-7217` evidence body.** It is the
+  operator/consumer-plane-split problem statement behind GitHub issue 449. Posting
+  it as DoD evidence would have attached the wrong document to the wrong ticket.
+- **The four `UNWIRED`/`PARTIAL` `MIK-7217.DISCOVER` rows** were re-evidenced against
+  the live probe path and flipped to MET on 2026-09-04. No code changed; the
+  citations were re-verified and the status text replaced. They are inside the 99
+  above, not the 37.
+
+### Machine state, and why it stopped the work
+
+A disk exhaustion halted every build for part of the session and is worth recording
+because the diagnosis was wrong twice before it was right. Deleting 15 GiB of cargo
+target directories moved free space *down*, from 3.0 G to 121 MB, and the harness
+itself began failing with `ENOSPC`. There was no runaway writer — top CPU was a
+0.9% Python process. Local APFS snapshots were pinning the freed blocks, three from
+OS updates and one from the Arq backup agent. `tmutil thinlocalsnapshots / 21474836480 4`
+took free space from 121 MB to 19.5 G in one call, with no root and no mount
+juggling. Apparent size is not reclaimable space, and a delete that appears to do
+nothing may have worked perfectly.
+
+Consequence for anyone building here: `~/.cargo/registry` was cleared, so the first
+build after this re-downloads the whole dependency tree. A build that looks hung is
+probably fetching. 32.6 G free as of this entry; `cargo clippy --lib` exits 0.
+
+### Two agents share this worktree
+
+`cache-keying-tests` (holding `src/cache.rs`, `src/gateway/meta_mcp/invoke.rs`,
+`src/gateway/meta_mcp/support.rs`, `tests/mik_7213_acs.rs`) and `obs3-tests`
+(holding `tests/nfr_obs_3_era_observability.rs`) are both editing this tree and
+therefore share one git index. Their files are disjoint by luck, not isolation.
+Both have been told: stage by explicit path only, never `-a`/`-A`/`stash`/`reset`,
+and never bare `cargo fmt` — a whole-tree format rewrites the other agent's
+half-written file. **A full green baseline is unobtainable here until both commit**,
+and stashing is not available in a shared tree. `--all-targets` and `fmt --check`
+are deferred until their work lands rather than re-attempted.
+
+`obs3-tests` also carries a GPT review verdict of SHIP-WITH-FIXES on the OBS.3
+design and the conformance test — one HIGH (the design claims probe serialization
+prevents staleness, which is false: a detached re-probe can outlive `force_restart`)
+and one MEDIUM (the tracked-gap guard accepts zero matching rows, so deleting the
+exempted row leaves both coverage tests green).
+
+### Sequencing constraint that must not be lost
+
+The cluster order is **D → G → A → C → F**, and `NFR.COMPAT.1` in cluster F requires
+**both A and C merged** before it can be closed. Merging F earlier does not fail
+loudly; it produces a criterion closed against a tree that does not yet contain what
+it asserts.
+
+### The CodeQL `#90`/`#91` policy question — decided by the agent, under a stated assumption
+
+Asked of the operator twice, in plain language, with four options and a
+recommendation. Unanswered both times. Taken under §P1's *ask, then proceed*: the
+work below is delivered on the assumption recorded here, and the assumption is
+stated rather than buried so that reversing it costs one paragraph.
+
+**Decision: refuse a plain-`http` backend URL when a credential would ride on it,
+except when the host is loopback.** Loopback is `127.0.0.0/8`, `::1`, and the name
+`localhost` — the same set browsers treat as a secure context under RFC 6761. The
+name is included knowingly: `/etc/hosts` or DNS can point `localhost` elsewhere, and
+accepting it anyway is the cost of not breaking every local development setup and
+the part of the test suite that speaks plain HTTP to a local server.
+
+Why this option over the other three. Refusing outright breaks a loopback backend
+that plain HTTP serves correctly today, which is the deployment shape the original
+`won't fix` dismissal was reaching for and got wrong only in its scope. Warning and
+sending anyway leaves the credential in cleartext and leaves both alerts open, so it
+does not reach a clean release. Accepting the risk ships 4.0.0 with a documented way
+to leak a bearer token, and the same repository already refuses exactly this on the
+OIDC path (`src/key_server/oidc.rs:377`, `:592`) — shipping the asymmetry is harder
+to defend than closing it.
+
+**Where it goes: `validate_backend_urls` (`src/config/mod.rs:946-963`), not the
+transport.** The board's own source pass established that the two flagged sinks are
+operator-provenanced and that the one backend-supplied input is already pinned by
+`same_origin`. A transport-layer guard would therefore sit downstream of the real
+defect and fire after the operator has already been told the configuration is valid.
+Config validation is where an operator finds out, and it is where the OIDC precedent
+already lives.
+
+This is a §P3 design event and is named as one. It changes behaviour outside what
+the release scope declared FOR: a configuration that starts today will refuse to
+start after it. That is the point, and it is also why the escape hatch matters — an
+operator who genuinely wants cleartext on a trusted internal network needs a way to
+say so out loud rather than by accident, and the implementation carries an explicit
+opt-in for exactly that.
+
+If the operator later prefers another option, the reversal is this section plus one
+guard, not a redesign.
+
+### Two plan defects found by the workers, ruled on rather than re-litigated
+
+Both surfaced while orienting, both are defects in the work plan rather than in the
+work, and both are settled here so the next session does not re-open them.
+
+**Cluster C's commit 1 is an extension, not an introduction.** The plan's "replace
+both inline key sites" step is already done upstream: `response_cache_key_for`
+(`src/gateway/meta_mcp/support.rs:56`) is the one shared finished-key function and
+both invoke sites already call it, at `:1197` and `:1763` — not the plan's `:843`
+and `:1296`, which are wrong line numbers for work already landed. No second key
+function is to be created.
+
+**`policy_epoch: u64` and `protocol_revision: Option<&str>` are decisions the design
+did not make.** A monotonic `u64` is the right shape for a value whose job is to
+invalidate on a grant or profile change, so it is taken — but named as a §P3 design
+event rather than picked silently. Nothing in `src/` produces a policy epoch today
+(the only `epoch` matches are `epoch_millis_now` in `failsafe/circuit_breaker.rs`),
+and `declared_version` lives only at `src/gateway/router/handlers.rs:569` and never
+reaches the meta-MCP cache layer, so `None` is the honest value at every call site.
+Both fields land inert on purpose.
+
+**Consequence that must not be lost: the seam commit closes no criterion.** Accepting
+a `KeyContext` without mixing it into the key satisfies neither "keyed on every
+request-derived input that varies the response" nor "carries a policy epoch that
+invalidates it on a grant or profile change". A seam logged as progress toward MET is
+how a row gets closed against a tree that does not contain what it asserts — which is
+the same failure the four column-shifted rows above represent, arrived at from the
+other direction.
+
+**NFR.OBS.3's stepped clock is a production seam, ruled in.** The reviewed test plan
+requires the transition cases to assert equality against a stepped clock value.
+Presence-and-different is rejected: `era_probed_at` is second-precision, so two probes
+inside one second stamp identically and the assertion is flaky at best. Sleeping is
+worse. The seam is to be the narrowest one that works — a timestamp on the
+era-observation construction path in preference to an injection point on `Backend` —
+must not be `#[cfg(test)]`, since integration tests compile against the lib without
+that cfg and could not reach it, and is to be named as a §P3 design event where it is
+made.
