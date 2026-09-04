@@ -9,7 +9,7 @@
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
-[![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-self--assessed-blue.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
+[![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-10%2F10_self--assessed-blue.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
 [![MITRE F3](https://img.shields.io/badge/MITRE_F3-gateway_boundary_mapped-lightgrey.svg)](docs/compliance/MITRE-F3-MAPPING.md)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 [![Quality Score](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badges/score.svg)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
