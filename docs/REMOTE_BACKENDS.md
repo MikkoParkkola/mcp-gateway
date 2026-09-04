@@ -180,11 +180,11 @@ Credentials require TLS. An enabled backend whose `http_url` or `a2a_url` is
 `http://` against a host off this machine is refused at config load when its
 configuration is credential-bearing — an `oauth` section (including one with
 `enabled: false`), identity propagation, secret injection, any static header
-whatever its name, or userinfo or a query string in the URL itself. The test is
-blunt on purpose: `X-Trace-Id` and `?page=2` trip it as surely as a bearer token,
-because config load cannot tell which of them carries a secret. Such a credential is
-readable by every host on the path and replayable for as long as it is valid.
-Loopback is exempt. To accept the exposure knowingly — a link you terminate
+whatever its name, or userinfo or a query string in the URL itself. Such a
+credential is readable by every host on the path and replayable for as long as it
+is valid. The test is blunt on purpose: `X-Trace-Id` and `?page=2` trip it as
+surely as a bearer token, because config load cannot tell which of them carries a
+secret. Loopback is exempt. To accept the exposure knowingly — a link you terminate
 yourself, say — set `allow_cleartext_credentials: true` on that backend.
 
 See [`examples/gateway-full.yaml`](../examples/gateway-full.yaml) for the full
