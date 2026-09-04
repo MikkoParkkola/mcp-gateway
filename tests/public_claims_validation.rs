@@ -156,7 +156,9 @@ const PUBLIC_CLAIM_SURFACES: &[&str] = &[
     "codebase-map.md",
     "docs/show-hn.md",
     "docs/blog/sovereign-stack-2026-04.md",
+    "docs/blog/security-aware-mcp-gateway.md",
     "docs/design/RFC-0081-intelligent-tool-surfacing.md",
+    "CLAUDE.md",
     "docs/legal/dependency-licenses.tsv",
     "src/commands/mod.rs",
     "src/gateway/meta_mcp_helpers.rs",
@@ -174,7 +176,10 @@ const BANNED_PUBLIC_PHRASES: &[&str] = &[
     "~95%",
     "~500ms",
     "OWASP_Agentic_AI-10%2F10_covered",
+    "OWASP Agentic AI 10/10",
     "~95% context token savings",
+    "95% context tokens",
+    "95% savings",
 ];
 
 fn count_capability_yaml_files() -> usize {

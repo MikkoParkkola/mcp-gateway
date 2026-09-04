@@ -1,9 +1,10 @@
 {
-  "tools": [
-    {"name": "linear_get_issue", "purpose": "Read one Linear issue", "score": 0.97},
-    {"name": "linear_update_issue", "purpose": "Update one Linear issue", "score": 0.91},
-    {"name": "linear_add_comment", "purpose": "Add a comment to one Linear issue", "score": 0.86}
-  ],
   "query": "linear issue status",
-  "returned": 3
+  "matches": [
+    {"server": "fulcrum", "tool": "linear_get_issue", "description": "Read one Linear issue"},
+    {"server": "fulcrum", "tool": "linear_update_issue", "description": "Update one Linear issue"},
+    {"server": "fulcrum", "tool": "linear_add_comment", "description": "Add a comment to one Linear issue"}
+  ],
+  "total": 3,
+  "total_available": 3
 }

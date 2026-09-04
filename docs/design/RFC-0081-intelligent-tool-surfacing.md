@@ -301,7 +301,7 @@ The descriptions with Approach A become:
 | `gateway_invoke` | "Invoke a tool on a specific backend" | "Invoke any tool on any backend server. Routes through the gateway's auth, rate-limit, caching, and failsafe middleware. Use gateway_search_tools first to discover the right tool and server." |
 
 **Acceptance Criteria**:
-- AC-2.1: `gateway_search_tools` description contains actual tool count (not hardcoded "150+") and mentions "95% context tokens"
+- AC-2.1: `gateway_search_tools` description contains the actual tool count (not a hardcoded count) and describes schema-on-demand without an unqualified savings percentage
 - AC-2.2: `gateway_invoke` description mentions "gateway_search_tools first"
 - AC-2.3: All tool descriptions are non-empty and under 500 characters
 - AC-2.4: Descriptions update automatically when backends connect/disconnect (dynamic counts)
@@ -984,8 +984,8 @@ Expose all backend tools as lightweight stubs in `tools/list`: name + title +
 description only (no `inputSchema`). Implement `tools/resolve` handler: given
 tool name, return full `Tool` with `inputSchema`.
 
-Context math: ~50 tokens per stub x 150 tools = ~7,500 tokens (vs ~150,000
-for full schemas) = still 95% savings.
+Context math must be measured from the emitted schemas and completed request
+history; this design does not pre-register a fixed savings percentage.
 
 ```rust
 #[cfg(feature = "spec-preview")]

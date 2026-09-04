@@ -6,7 +6,7 @@ Status: Draft for launch
 
 ## TL;DR
 
-I built mcp-gateway. It replaces N direct MCP server connections with a compact Meta-MCP surface (12-15 tools), pins capability YAMLs by SHA-256, and runs every tool description through a validator that catches the Invariant Labs tool-poisoning patterns. It is a Rust single binary, MIT licensed, with 2888 passing tests at the time of this post.
+I built mcp-gateway. It replaces N direct MCP server connections with a compact Meta-MCP surface (14 tools minimum; 16 in the README scenario), supports optional SHA-256 pins for capability YAMLs, and runs every tool description through a validator that catches the Invariant Labs tool-poisoning patterns. It is a Rust single binary, source-available under PolyForm Noncommercial by default with a separately licensed MIT core, and had 2888 passing tests at the time of this post.
 
 This post walks through why that architecture exists, what attacks it defeats today, and what it still does not solve.
 
@@ -64,7 +64,7 @@ mcp-gateway sits between the agent and the backends:
 ┌──────────────────────────────────────┐
 │          MCP Gateway :39400          │
 │                                      │
-│  Meta-MCP surface (12-15 tools):     │
+│  Meta-MCP surface (14 minimum):      │
 │  list_servers, list_tools,           │
 │  search_tools, invoke, ...           │
 │                                      │
@@ -80,12 +80,12 @@ mcp-gateway sits between the agent and the backends:
   server    server    server
 ```
 
-The agent only ever sees the compact Meta-MCP surface (12 tools minimum, 14 in the README benchmark, 15 with webhook status). Backend tool definitions are fetched on demand through `gateway_search_tools` / `gateway_list_tools`, they flow through the validator first, and `gateway_invoke` is the only way to actually call one.
+The agent only ever sees the compact Meta-MCP surface (14 tools minimum, 16 in the README benchmark, 17 with webhook status). Backend tool definitions are fetched on demand through `gateway_search_tools` / `gateway_list_tools`, they flow through the validator first, and `gateway_invoke` is the only way to actually call one.
 
 The immediate wins:
 
 - **One audit surface.** Every description the agent will ever see passes through one Rust module. I can add a rule once and it covers every backend.
-- **No context-window tax.** The compact Meta-MCP surface costs ~1400 input tokens instead of ~15000. That is not just a cost win, it is what makes the structural fix possible at all.
+- **A smaller first request.** In the documented 100-tool schema-only model, the 16-tool Meta-MCP surface costs about 1,600 input tokens instead of about 15,000. Completed tasks also pay for discovery turns and response history, and the honest model can report a loss.
 - **Capability YAMLs.** A REST API becomes a small YAML file checked into the repo. Diff-able, grep-able, PR-reviewable, hash-pinnable. The audit surface is text a human can read, not a live stdio pipe.
 
 ## 4. What AX-010 actually catches
@@ -171,7 +171,7 @@ Birgitta Boeckeler writes at Fowler that the next-generation agentic dev tooling
 - **Phase 1: protocol refactor.** MCP is one of N protocols. A2A (agent-to-agent), GraphQL, gRPC, and CLI wrappers are all "turn a capability into something the agent can call". The capability YAML format is protocol-agnostic already; the router is not. Phase 1 factors the router so adding a new adapter is ~100 lines.
 - **Phase 2: upstream hash pinning.** An opt-in extension to MCP `tools/list` that ships a SHA-256 of the returned tool set, signed by the backend. Rug pulls become detectable at the protocol boundary, not just at the capability-YAML boundary.
 - **Phase 3: structured output contracts.** Per-tool JSON schemas for responses, enforced by the gateway, so the agent never sees a free-form string blob that could carry instructions.
-- **Phase 4: A2A support.** Agents calling agents through the same 4 meta-tool surface, with the same validator and the same hash-pinning story.
+- **Phase 4: A2A support.** Agents calling agents through the same compact Meta-MCP surface, with the same validator and the same optional hash-pinning story.
 
 I am not claiming this is done. I am claiming it is the right structural frame for the next two years of agent security, and the current commit is the first open-source MCP gateway that ships in that frame.
 

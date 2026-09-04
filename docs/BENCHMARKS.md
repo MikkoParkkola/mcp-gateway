@@ -18,7 +18,7 @@ Public quantitative claims are tracked in [benchmarks/public_claims.json](../ben
 | Built-in capability YAMLs | 119 total (marketed as 110+) | `benchmarks/public_claims.json` + `find capabilities -name '*.yaml' -not -path '*/examples/*' \| wc -l` |
 | Startup time | ~8ms | `hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'` |
 | README token-savings scenario | schema-only first-request: 100 tools → ~1600 gateway tokens → **89% savings** | `python benchmarks/token_savings.py --scenario readme` |
-| Honest task-token model | extra discovery turns counted; meta path can lose | `python benchmarks/token_savings.py --scenario honest` |
+| Honest task-token model | extra discovery turns and response history counted; meta path can lose | `python benchmarks/token_savings.py --scenario honest` |
 
 ## Startup Performance
 
@@ -48,7 +48,12 @@ Reference scenario assumptions:
 
 The base discovery quartet stays constant, and the README benchmark scenario adds stats, cost report, playbooks, profile controls, disabled-capability listing, and reload. Surfacing webhook status adds the 17th tool.
 
-This yields the schema-only first-request numbers: **~1600 gateway tokens**, **89% savings**, and **$201 saved per 1K requests**. Extra discovery turns (`gateway_search_tools` then `gateway_invoke`) reload that surface and carry accumulated discovery responses. The in-tree `honest_task_tokens` model counts both from `benchmarks/discovery_response_fixture.json` and is allowed to report a loss. Selection accuracy, latency, and task success are not measured here — those need a live agent run.
+This yields the schema-only first-request numbers: **~1600 gateway tokens**, **89% savings**, and **$201 saved per 1K requests**. Extra discovery turns (`gateway_search_tools` then `gateway_invoke`) reload that surface and carry accumulated discovery responses. The in-tree `honest_task_tokens` model counts both and is allowed to report a loss. `benchmarks/discovery_response_fixture.json` is a synthetic L0 lower-bound fixture with the exact `build_search_response` envelope, not a captured production response. Selection accuracy, latency, and task success are not measured here — those need a live agent run.
+
+With the current 100-token synthetic response fixture, the default completed-task
+case at 100 tools is 30,000 eager tokens versus 5,000 gateway tokens (83.3%
+savings). The registered 20-extra-turn loss case is 30,000 versus 54,500 tokens
+(-81.7% savings).
 
 ## Memory Usage
 

@@ -120,7 +120,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 - Published on crates.io + Homebrew + npm + ghcr.io container images + Glama + VS Code + Cursor one-click install
 - **Meta-MCP surface**: 14-16 tools in production scenarios (README benchmark scenario)
 - **Capability backends**: 110+ REST capabilities + MCP backends routed via the same surface
-- **Security**: unsafe denied (`#![deny(unsafe_code)]`); dependency-status badge; OWASP Agentic AI 10/10 docs at `docs/OWASP_AGENTIC_AI_COMPLIANCE.md`
+- **Security**: unsafe denied (`#![deny(unsafe_code)]`); dependency-status badge; scoped OWASP Agentic AI self-assessment at `docs/OWASP_AGENTIC_AI_COMPLIANCE.md`
 - **Benchmarks**: machine-readable claims in `benchmarks/public_claims.json` with CI drift check
 - **Independent reviews**: Ruach Tov Collective's five-tool comparison + mcp-gateway deep dive (linked in README)
 
@@ -190,8 +190,8 @@ cargo fmt                            # auto-format
 
 ## Architecture
 
-Single-binary gateway: AI client -> compact Meta-MCP surface (13-16 tools) -> dynamic discovery of 500+ backend tools.
-~90% token savings by not loading all tool definitions into every request.
+Single-binary gateway: AI client -> compact Meta-MCP surface (14 tools minimum; 16 in the README scenario) -> dynamic discovery of backend tools.
+The 89% figure is a schema-only first-request model; completed-task math also counts discovery turns and response history and can report a loss.
 OWASP Agentic AI Top 10: scoped in-tree self-assessment, not certification. MCP + A2A dual-protocol.
 
 Key modules: `gateway/` (core router, OAuth, streaming, UI), `provider/` (MCP/composite/capability),

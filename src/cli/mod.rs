@@ -224,7 +224,7 @@ pub enum Command {
     },
 
     /// Fetch live statistics from a running gateway instance
-    #[command(about = "Show invocation counts, cache hits, and token savings")]
+    #[command(about = "Show observed invocation counts and cache behavior")]
     Stats {
         /// Base URL of the running gateway (without /mcp suffix).
         ///
@@ -233,10 +233,6 @@ pub enum Command {
         /// when no config is found. An explicit `--url` always overrides both.
         #[arg(short, long)]
         url: Option<String>,
-
-        /// Token price per million (USD) for estimated cost savings
-        #[arg(short, long, default_value_t = 15.0)]
-        price: f64,
     },
 
     /// Lint capability YAMLs against agent-UX best practices

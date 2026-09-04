@@ -586,10 +586,10 @@ fn build_base_tools_all_have_object_input_schema() {
 }
 
 #[test]
-fn build_stats_tool_has_price_parameter() {
+fn build_stats_tool_has_no_unmeasured_savings_parameter() {
     let tool = build_stats_tool();
     assert_eq!(tool.name, "gateway_get_stats");
-    assert!(tool.input_schema["properties"]["price_per_million"].is_object());
+    assert_eq!(tool.input_schema["properties"], json!({}));
 }
 
 // ── tool_matches_query ──────────────────────────────────────────────

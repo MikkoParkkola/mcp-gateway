@@ -33,7 +33,9 @@ pub fn representative_discovery_response_tokens() -> u64 {
 
 fn accumulated_discovery_history_tokens(extra_discovery_turns: u64) -> u64 {
     let search_turns = extra_discovery_turns.saturating_sub(1);
-    let history_copies = search_turns.saturating_mul(search_turns.saturating_add(1)) / 2;
+    // Each search response is present in its immediate follow-up request and
+    // remains in every later request, including the final-answer request.
+    let history_copies = search_turns.saturating_mul(search_turns.saturating_add(3)) / 2;
     representative_discovery_response_tokens().saturating_mul(history_copies)
 }
 
@@ -157,7 +159,7 @@ mod tests {
         let schemas_only = README_META_TOOLS * META_TOKENS_PER_TOOL * 3;
         assert_eq!(
             row.meta_tokens,
-            schemas_only + representative_discovery_response_tokens()
+            schemas_only + 2 * representative_discovery_response_tokens()
         );
     }
 

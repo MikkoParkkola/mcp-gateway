@@ -120,10 +120,6 @@ async fn test_gateway_get_stats() {
         "Missing 'cache_hits' field"
     );
     assert!(
-        stats.get("tokens_saved").is_some(),
-        "Missing 'tokens_saved' field"
-    );
-    assert!(
         stats.get("top_tools").is_some(),
         "Missing 'top_tools' field"
     );
@@ -139,10 +135,8 @@ async fn test_gateway_get_stats() {
         stats.get("tools_available").is_some(),
         "Missing 'tools_available' field"
     );
-    assert!(
-        stats.get("estimated_savings_usd").is_some(),
-        "Missing 'estimated_savings_usd' field"
-    );
+    assert!(stats.get("tokens_saved").is_none());
+    assert!(stats.get("estimated_savings_usd").is_none());
 
     // Verify types
     assert!(
@@ -152,10 +146,6 @@ async fn test_gateway_get_stats() {
     assert!(
         stats["cache_hits"].is_number(),
         "cache_hits should be a number"
-    );
-    assert!(
-        stats["tokens_saved"].is_number(),
-        "tokens_saved should be a number"
     );
     assert!(
         stats["top_tools"].is_array(),

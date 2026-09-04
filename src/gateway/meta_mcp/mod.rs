@@ -453,7 +453,6 @@ impl MetaMcp {
                 cache_hit_rate: 0.0,
                 tools_discovered: 0,
                 tools_available: total_backend_tools,
-                tokens_saved: 0,
                 top_tools: vec![],
                 total_cached_tokens: 0,
                 cached_tokens_by_server: vec![],
