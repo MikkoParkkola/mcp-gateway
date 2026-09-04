@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -40,10 +40,14 @@ class TrialResult:
     errors: list[str]
     warnings: list[str]
     stderr_tail: str
+    turn_completed_events: int
 
 
-def parse_events(stdout: str) -> tuple[dict[str, int], str, list[str], list[str]]:
+def parse_events(
+    stdout: str,
+) -> tuple[dict[str, int], int, str, list[str], list[str]]:
     usage: dict[str, int] = {}
+    turn_completed_events = 0
     messages: list[str] = []
     errors: list[str] = []
     warnings: list[str] = []
@@ -53,7 +57,10 @@ def parse_events(stdout: str) -> tuple[dict[str, int], str, list[str], list[str]
         except json.JSONDecodeError:
             continue
         if event.get("type") == "turn.completed":
-            usage = event.get("usage") or {}
+            turn_completed_events += 1
+            for key, value in (event.get("usage") or {}).items():
+                if isinstance(value, int):
+                    usage[key] = usage.get(key, 0) + value
         item = event.get("item") or {}
         if (
             event.get("type") == "item.completed"
@@ -68,7 +75,7 @@ def parse_events(stdout: str) -> tuple[dict[str, int], str, list[str], list[str]
                 warnings.append(message)
             else:
                 errors.append(message)
-    return usage, "\n".join(messages), errors, warnings
+    return usage, turn_completed_events, "\n".join(messages), errors, warnings
 
 
 def read_calls(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
@@ -170,7 +177,9 @@ def run_trial(
         if isinstance(stderr, bytes):
             stderr = stderr.decode(errors="replace")
         elapsed_ms = (time.perf_counter() - started) * 1000
-        usage, final_message, event_errors, event_warnings = parse_events(stdout)
+        usage, turn_events, final_message, event_errors, event_warnings = parse_events(
+            stdout
+        )
         calls, call_log_errors = read_calls(call_log)
         selected_tool = next(
             (
@@ -211,6 +220,7 @@ def run_trial(
             errors=errors,
             warnings=event_warnings,
             stderr_tail=stderr.strip()[-500:],
+            turn_completed_events=turn_events,
         )
 
 
@@ -294,7 +304,7 @@ def main() -> None:
 
     report = {
         "schema_version": "mik-6977.live-agent.v1",
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "agent": {"runner": "codex exec", "model": args.model},
         "method": {
             "catalog_sizes": sizes,

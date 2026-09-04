@@ -3,7 +3,7 @@
 //! MIK-6977: honest task-token math and currently-checkable public claims.
 
 use mcp_gateway::honest_task_tokens::{
-    DEFAULT_EXTRA_TURNS, TOOL_COUNTS, default_matrix, schema_only_first_request, task_tokens,
+    DEFAULT_EXTRA_TURNS, TOOL_COUNTS, schema_only_first_request, task_token_matrix, task_tokens,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -24,12 +24,12 @@ fn read(path: &str) -> String {
 fn mik6977_bench_1_matrix_exists_and_can_lose() {
     assert_eq!(TOOL_COUNTS, [50, 100, 200, 500]);
     assert_eq!(DEFAULT_EXTRA_TURNS, 2);
-    let rows = default_matrix();
+    let rows = task_token_matrix(27_000);
     assert_eq!(rows.len(), 4);
-    let lose = task_tokens(100, 20);
+    let lose = task_tokens(100, 2, 27_000);
     assert!(
         !lose.meta_wins(),
-        "the honest model must be able to lose when extra turns dominate"
+        "the task model must count host context again on the extra request"
     );
     let schema = schema_only_first_request(100);
     assert!(schema.meta_wins());
@@ -71,6 +71,17 @@ fn mik6977_claim_2_hash_pin_and_owasp_are_not_overclaimed() {
         lower.contains("self-assessed") || lower.contains("self-attested"),
         "OWASP coverage must be labelled self-assessed"
     );
+    let show_hn = read("docs/show-hn.md").to_lowercase();
+    assert!(
+        show_hn.contains("unpinned files still load"),
+        "Show HN must not imply every capability is hash-pinned"
+    );
+    let sovereign = read("docs/blog/sovereign-stack-2026-04.md");
+    assert!(
+        sovereign.contains("PolyForm Noncommercial by default")
+            && sovereign.contains("separately licensed MIT core"),
+        "the sovereign-stack post must state the runnable gateway's mixed license"
+    );
 }
 
 #[test]
@@ -111,11 +122,16 @@ fn mik6977_bench_2_live_artifact_covers_the_matrix_and_can_lose() {
 
     let rows = artifact["summary"].as_array().expect("summary rows");
     assert_eq!(rows.len(), 4);
-    assert!(rows.iter().all(|row| {
-        row["measured_input_token_savings_percent"]
+    let benchmark_docs = read("docs/BENCHMARKS.md");
+    for row in rows {
+        let saving = row["measured_input_token_savings_percent"]
             .as_f64()
-            .is_some_and(|saving| saving < 0.0)
-    }));
+            .expect("measured input-token delta");
+        assert!(
+            benchmark_docs.contains(&format!("{saving:.2}%")),
+            "benchmark docs must track the checked-in measurement"
+        );
+    }
 }
 
 #[test]
@@ -129,4 +145,13 @@ fn mik6977_claim_3_compact_surfaces_match_the_canonical_tool_counts() {
     assert!(library_docs.contains("16 in the README benchmark scenario"));
     assert!(library_docs.contains("17 when webhook status is surfaced"));
     assert!(!library_docs.contains("12 tools minimum"));
+
+    let benchmark_docs = read("docs/BENCHMARKS.md");
+    assert!(benchmark_docs.contains("Direct mean total task tokens grew"));
+    assert!(benchmark_docs.contains("python3 benchmarks/live_agent_tool_selection.py"));
+    let runner = read("benchmarks/live_agent_tool_selection.py");
+    assert!(!runner.contains("from datetime import UTC"));
+    let token_script = read("benchmarks/token_savings.py");
+    assert!(token_script.contains("default=\"live\""));
+    assert!(token_script.contains("--host-context-tokens-per-request"));
 }

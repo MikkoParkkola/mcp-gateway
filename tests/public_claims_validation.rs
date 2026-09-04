@@ -40,9 +40,12 @@ struct StartupBenchmark {
 
 #[derive(Debug, Deserialize)]
 struct TokenSavingsClaim {
+    direct_tools: u64,
     direct_tokens_per_tool: u64,
     gateway_tools: u64,
     gateway_tokens_per_tool: u64,
+    requests: u64,
+    input_cost_per_million_usd: f64,
 }
 
 fn repo_file(path: &str) -> PathBuf {
@@ -107,6 +110,23 @@ fn live_meta_tool_counts() -> MetaToolClaims {
 
 fn capability_floor(count: usize) -> usize {
     (count / 10) * 10
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "claim inputs are far below the integer precision limit of f64"
+)]
+fn readme_savings_metrics(claims: &PublicClaims) -> (u64, f64, f64) {
+    let direct_tokens = claims.readme_token_savings.direct_tools
+        * claims.readme_token_savings.direct_tokens_per_tool;
+    let gateway_tokens = claims.readme_token_savings.gateway_tools
+        * claims.readme_token_savings.gateway_tokens_per_tool;
+    let savings_percent = (1.0 - gateway_tokens as f64 / direct_tokens as f64) * 100.0;
+    let savings_usd = ((direct_tokens - gateway_tokens) as f64
+        * claims.readme_token_savings.requests as f64
+        / 1_000_000.0)
+        * claims.readme_token_savings.input_cost_per_million_usd;
+    (gateway_tokens, savings_percent, savings_usd)
 }
 
 const PUBLIC_CLAIM_SURFACES: &[&str] = &[
@@ -342,6 +362,7 @@ fn honest_model_constants_match_canonical_claims() {
 fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     let claims = load_claims();
     let benchmarks = read_repo_file("docs/BENCHMARKS.md");
+    let (gateway_tokens, savings_percent, savings_usd) = readme_savings_metrics(&claims);
 
     assert!(
         benchmarks.contains("benchmarks/public_claims.json"),
@@ -385,11 +406,11 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
         "benchmark docs should include the canonical startup command"
     );
     assert!(
-        benchmarks.contains("python benchmarks/token_savings.py --scenario readme"),
+        benchmarks.contains("python3 benchmarks/token_savings.py --scenario readme"),
         "benchmark docs should describe how to reproduce the README token-savings scenario"
     );
     assert!(
-        benchmarks.contains("python benchmarks/live_agent_tool_selection.py"),
+        benchmarks.contains("python3 benchmarks/live_agent_tool_selection.py"),
         "benchmark docs should describe how to reproduce the live completed-task measurement"
     );
     assert!(
@@ -399,6 +420,21 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     assert!(
         benchmarks.contains("schema-only"),
         "benchmark docs must label 89% as schema-only first-request math"
+    );
+    assert!(
+        benchmarks.contains(&format!("~{gateway_tokens} gateway tokens")),
+        "benchmark docs should derive the gateway schema-token claim from public_claims.json"
+    );
+    assert!(
+        benchmarks.contains(&format!("**{}% smaller**", savings_percent.round() as u64)),
+        "benchmark docs should derive the rounded schema reduction from public_claims.json"
+    );
+    assert!(
+        benchmarks.contains(&format!(
+            "**${} per 1K requests**",
+            savings_usd.round() as u64
+        )),
+        "benchmark docs should derive the modeled request-cost delta from public_claims.json"
     );
     assert!(
         benchmarks.contains("honest_task_tokens"),

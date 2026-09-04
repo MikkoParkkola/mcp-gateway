@@ -18,7 +18,7 @@ Public quantitative claims are tracked in [benchmarks/public_claims.json](../ben
 | Built-in capability YAMLs | 119 total (marketed as 110+) | `benchmarks/public_claims.json` + `find capabilities -name '*.yaml' -not -path '*/examples/*' \| wc -l` |
 | Startup time | ~8ms | `hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'` |
 | Live agent task cost | no measured saving; the meta path cost more input tokens in all 8 matched pairs | `benchmarks/results/mik-6977-live-agent-2026-09-04.json` |
-| Schema-only model | 100 tools → ~1600 gateway schema tokens → 89% smaller first request; not completed-task cost | `python benchmarks/token_savings.py --scenario readme` |
+| Schema-only model | 100 tools → ~1600 gateway schema tokens → 89% smaller first request; not completed-task cost | `python3 benchmarks/token_savings.py --scenario readme` |
 
 ## Startup Performance
 
@@ -37,7 +37,7 @@ Benchmark: target/release/mcp-gateway --help
 On 2026-09-04, Codex with `gpt-5.6-luna` retrieved one exact item from generated
 catalogs of 50, 100, 200, and 500 permitted tools. Each size had two direct and
 two meta-surface trials. Both paths selected the correct tool and completed all
-eight tasks. Direct input grew from 70,211 to 79,949 tokens between 50 and 100
+eight tasks. Direct mean total task tokens grew from 70,211 to 79,949 between 50 and 100
 tools, then stayed near 80,000 at 200 and 500. The host compacted those larger
 lists, so only the 50- and 100-tool rows measure a direct catalog that still
 scaled with the configured size.
@@ -72,7 +72,7 @@ checked-in per-trial artifact to inspect the measurements; do not generalize
 them to other models or workloads.
 
 ```bash
-python benchmarks/live_agent_tool_selection.py \
+python3 benchmarks/live_agent_tool_selection.py \
   --sizes 50,100,200,500 --trials 2 --jobs 4 \
   --output-json benchmarks/results/mik-6977-live-agent-2026-09-04.json
 ```
@@ -80,8 +80,8 @@ python benchmarks/live_agent_tool_selection.py \
 ## Schema-only first-request model
 
 ```bash
-python benchmarks/token_savings.py --scenario readme
-python benchmarks/token_savings.py --scenario readme --json
+python3 benchmarks/token_savings.py --scenario readme
+python3 benchmarks/token_savings.py --scenario readme --json
 ```
 
 Reference scenario assumptions:
@@ -93,7 +93,11 @@ Reference scenario assumptions:
 
 The base discovery quartet stays constant, and the README benchmark scenario adds stats, cost report, playbooks, profile controls, disabled-capability listing, and reload. Surfacing webhook status adds the 17th tool.
 
-This yields the schema-only first-request numbers: **~1600 gateway tokens** and **89% smaller**, with a modeled **$201 per 1K requests**. It is not a completed-task saving. Extra discovery turns (`gateway_search_tools` then `gateway_invoke`) reload that surface and carry accumulated discovery responses. The in-tree `honest_task_tokens` model counts both and is allowed to report a loss. `benchmarks/discovery_response_fixture.json` is a synthetic L0 lower-bound fixture with the exact `build_search_response` envelope, not a captured production response. The live run above measures selection and task completion. It also records latency, turns, and task tokens.
+This yields the schema-only first-request numbers: **~1600 gateway tokens** and **89% smaller**, with a modeled **$201 per 1K requests**. It is not a completed-task saving. Discovery turns (`gateway_search_tools` then `gateway_invoke`) reload the host context and Meta-MCP surface while carrying earlier responses forward.
+
+At 50–100 tools, the direct-path observations imply roughly 24,900–27,500 non-schema host tokens per request. Using 27,000 puts the simple crossover near 107 tools: schema savings must cover both the extra request's host context and its carried discovery output. Catalog compaction invalidates the extrapolation above that boundary.
+
+The in-tree `honest_task_tokens` model therefore requires an explicit host-context size. Its discovery fixture is a synthetic L0 lower bound with the exact `build_search_response` envelope, not a production capture. Run `python3 benchmarks/token_savings.py` to see the checked-in live result, including selection, task completion, latency, turns, and task tokens.
 
 ## Memory Usage
 
@@ -120,10 +124,10 @@ cargo build --release
 hyperfine --shell=none --warmup 3 'target/release/mcp-gateway --help'
 
 # README token-savings scenario
-python benchmarks/token_savings.py --scenario readme
+python3 benchmarks/token_savings.py --scenario readme
 
 # Live agent comparison (requires authenticated Codex CLI access)
-python benchmarks/live_agent_tool_selection.py --output-json /tmp/mik-6977-live.json
+python3 benchmarks/live_agent_tool_selection.py --output-json /tmp/mik-6977-live.json
 
 # Code stats
 scc . --exclude-dir target --exclude-dir .git

@@ -32,7 +32,7 @@ The MCP ecosystem treats "connect N servers" as a feature. It's also the entire 
 
 - Exposes a **compact Meta-MCP surface** (14 tools minimum; 16 in the README scenario) instead of the raw N-server fanout. The 89% figure is a schema-only first-request model; completed-task math also counts discovery turns and responses.
 - Runs every backend tool description through a validator before it hits the agent's context. Rule **AX-010** (`src/validator/rules/tool_poisoning.rs`, 19 tests) catches the Invariant patterns: `<IMPORTANT>` tags, `~/.ssh`/`id_rsa`/`.env`/`/etc/passwd` paths, "sidenote" exfiltration, curl-to-HTTP, base64 in exfil context, zero-width and bidi-override Unicode.
-- Hash-pins capability YAMLs by SHA-256 and fail-closes on any post-load mutation (`RUG-PULL DETECTED`).
+- Can hash-pin capability YAMLs by SHA-256. A changed pinned file fails closed with `RUG-PULL DETECTED`; unpinned files still load.
 - Imports a full OpenAPI spec into validated capability YAMLs with one command (Petstore: 19 operations end-to-end).
 
 2888 tests passing, `#![deny(unsafe_code)]`, zero clippy warnings, ~8 ms startup. Source-available: PolyForm Noncommercial by default, with an MIT core and a separate commercial license. This is the most mature of the four repos and is what I planned to Show HN'd a week ago. Then I kept building.

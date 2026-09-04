@@ -10,7 +10,7 @@ Status: Draft for launch
 
 The stack, top to bottom:
 
-1. **[mcp-gateway](https://github.com/MikkoParkkola/mcp-gateway)**: the protocol boundary. Single Rust binary, compact Meta-MCP surface (14 tools minimum; 16 in the README scenario), tool-poisoning validator, and optional capability-YAML hash pins. MIT. 2888 tests.
+1. **[mcp-gateway](https://github.com/MikkoParkkola/mcp-gateway)**: the protocol boundary. Single Rust binary, compact Meta-MCP surface (14 tools minimum; 16 in the README scenario), tool-poisoning validator, and optional capability-YAML hash pins. PolyForm Noncommercial by default, with a separately licensed MIT core. 2888 tests.
 2. **[botnaut-client](https://github.com/MikkoParkkola/botnaut-client)** — the agent. Hard-fork of Goose v1.30.0 with Claude-Code-compatible hooks, YAML-frontmatter skills, two-pass plan mode, and a constitutional gate wired as `PreToolUse`. PolyForm-Non-commercial. 1155+ tests.
 3. **Constitutional compliance (`botnaut/formal/`)** — the alignment gate. Ed25519 receipt chain, TLA+ spec with 6 invariants, Z3 proofs of 5 runtime properties, owner-pinned signing, strict deny-by-default. Formally verified today.
 4. **MetaThinker (`metacognition/`)** — the meta-thinker. Fine-tuned-model design for bounded multi-turn Socratic dialogue across 12 named critical-thinking techniques. Prompt library and MCP schema shipped; checkpoint not yet trained.
@@ -41,11 +41,11 @@ Capability YAMLs can be SHA-256 pinned. A mutation of a pinned file trips `RUG-P
 Numbers, all from the repo:
 
 - 2888 tests, `#![deny(unsafe_code)]`, zero clippy warnings
-- 89% in the schema-only first-request model at 100 tools; completed-task math also counts discovery turns and responses (`benchmarks/token_savings.py`)
+- 89% in the schema-only first-request model at 100 tools; the checked-in completed-task run found no saving (`benchmarks/token_savings.py`)
 - ~8 ms startup (`hyperfine`, `docs/BENCHMARKS.md`)
 - 101 built-in REST capabilities across 16 categories
 
-**What's shipped:** everything above. MIT. Binary is ~12 MB.
+**What's shipped:** everything above. PolyForm Noncommercial by default, with a separately licensed MIT core. Binary is ~12 MB.
 
 ## 3. botnaut-client — a coding agent I trust to run unattended
 

@@ -2,9 +2,10 @@
 """
 MCP Gateway Context Benchmark
 
-Compares schema-only context reduction with an extra-turn task-token model.
-The default task model can report a loss; use an explicit scenario for the
-synthetic or README first-request calculations.
+Reports the checked-in live task result by default. Explicit scenarios cover
+schema-only context reduction and an extra-turn task-token model. The latter
+requires a caller-supplied per-request host-context size because omitting that
+context makes its percentage meaningless.
 
 Direct approach: Every backend's tools are individually registered in the
 LLM's system prompt, consuming context tokens proportional to the total
@@ -19,10 +20,10 @@ Surfacing webhook status raises that operational surface to 17 (the minimum
 stripped surface is 14).
 
 Usage:
-    python benchmarks/token_savings.py
-    python benchmarks/token_savings.py --backends 10 --tools-per-backend 30
-    python benchmarks/token_savings.py --scenario readme
-    python benchmarks/token_savings.py --scenario readme --json
+    python3 benchmarks/token_savings.py
+    python3 benchmarks/token_savings.py --scenario synthetic --backends 10 --tools-per-backend 30
+    python3 benchmarks/token_savings.py --scenario readme
+    python3 benchmarks/token_savings.py --scenario honest --host-context-tokens-per-request 27000
 """
 
 from __future__ import annotations
@@ -122,6 +123,9 @@ def generate_backend_tools(backend: str, n_tools: int) -> list[dict]:
 PUBLIC_CLAIMS_PATH = Path(__file__).with_name("public_claims.json")
 DISCOVERY_RESPONSE_FIXTURE_PATH = Path(__file__).with_name(
     "discovery_response_fixture.json"
+)
+LIVE_RESULTS_PATH = (
+    Path(__file__).with_name("results") / "mik-6977-live-agent-2026-09-04.json"
 )
 
 
@@ -506,11 +510,33 @@ def print_readme_results(results: dict) -> None:
     print()
 
 
-def honest_results() -> dict:
+def live_results() -> dict:
+    """Load the checked-in completed-task measurement."""
+    with LIVE_RESULTS_PATH.open(encoding="utf-8") as f:
+        return json.load(f)
+
+
+def print_live_results(results: dict) -> None:
+    print("Checked-in live completed-task result")
+    print("=====================================")
+    print("n_tools  direct_input  meta_input  measured_saving")
+    for row in results["summary"]:
+        print(
+            f"{row['n_tools']:7}  {row['direct']['input_tokens_mean']:12,.1f}  "
+            f"{row['meta']['input_tokens_mean']:10,.1f}  "
+            f"{row['measured_input_token_savings_percent']:15.2f}%"
+        )
+    print("Result: no completed-task token saving in any matched pair.")
+    print(f"Source: {LIVE_RESULTS_PATH}")
+    print()
+
+
+def honest_results(host_context_tokens_per_request: int) -> dict:
     """Completed-task token math. Must stay aligned with honest_task_tokens.rs.
 
-    Direct path: 2 requests, every tool definition on each.
-    Meta path: 1 + extra_discovery_turns requests, meta-surface only.
+    Direct path: 2 requests, every tool definition and host context on each.
+    Meta path: 1 + extra_discovery_turns requests, with the host context and
+    meta-surface carried on every request.
     extra=2 is search then invoke. extra=20 is a documented loss case.
     """
     extra = 2
@@ -530,12 +556,16 @@ def honest_results() -> dict:
         history_copies = search_turns * (search_turns + 3) // 2
         return (
             meta_tools * meta_tokens_per_tool * (1 + extra_turns)
+            + host_context_tokens_per_request * (1 + extra_turns)
             + discovery_response_tokens * history_copies
         )
 
     rows = []
     for n in (50, 100, 200, 500):
-        eager = n * direct_tokens_per_tool * eager_turns
+        eager = (
+            n * direct_tokens_per_tool * eager_turns
+            + host_context_tokens_per_request * eager_turns
+        )
         meta = meta_total(extra)
         savings = (1 - meta / eager) * 100
         rows.append(
@@ -543,6 +573,7 @@ def honest_results() -> dict:
                 "n_tools": n,
                 "eager_turns": eager_turns,
                 "meta_turns": meta_turns,
+                "host_context_tokens_per_request": host_context_tokens_per_request,
                 "eager_tokens": eager,
                 "meta_tokens": meta,
                 "savings_percent": savings,
@@ -553,24 +584,37 @@ def honest_results() -> dict:
         "n_tools": 100,
         "eager_turns": 2,
         "meta_turns": 21,
-        "eager_tokens": 100 * direct_tokens_per_tool * 2,
+        "host_context_tokens_per_request": host_context_tokens_per_request,
+        "eager_tokens": (
+            100 * direct_tokens_per_tool * 2 + host_context_tokens_per_request * 2
+        ),
         "meta_tokens": meta_total(20),
-        "savings_percent": (1 - meta_total(20) / (100 * direct_tokens_per_tool * 2))
+        "savings_percent": (
+            1
+            - meta_total(20)
+            / (100 * direct_tokens_per_tool * 2 + host_context_tokens_per_request * 2)
+        )
         * 100,
-        "meta_wins": meta_total(20) < 100 * direct_tokens_per_tool * 2,
+        "meta_wins": meta_total(20)
+        < 100 * direct_tokens_per_tool * 2 + host_context_tokens_per_request * 2,
     }
     return {
         "scenario": "honest",
         "discovery_response_fixture": str(DISCOVERY_RESPONSE_FIXTURE_PATH),
         "discovery_response_tokens": discovery_response_tokens,
+        "host_context_tokens_per_request": host_context_tokens_per_request,
         "rows": rows,
         "loss_case": lose,
     }
 
 
 def print_honest_results(results: dict) -> None:
-    print("Honest task-token model (can lose)")
-    print("==================================")
+    print("Task-token model with explicit host context")
+    print("===========================================")
+    print(
+        "Host context per request: "
+        f"{results['host_context_tokens_per_request']:,} tokens"
+    )
     print("n_tools  eager_turns  meta_turns  eager  meta  savings  wins")
     for row in results["rows"]:
         print(
@@ -593,9 +637,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--scenario",
-        choices=("synthetic", "readme", "honest"),
-        default="honest",
-        help="Benchmark scenario to run (default: honest extra-turn model)",
+        choices=("live", "synthetic", "readme", "honest"),
+        default="live",
+        help="Benchmark scenario to run (default: checked-in live result)",
     )
     parser.add_argument(
         "--backends",
@@ -610,20 +654,33 @@ def main() -> None:
         help="Number of tools per backend (default: 20)",
     )
     parser.add_argument(
+        "--host-context-tokens-per-request",
+        type=int,
+        help="Required by --scenario honest; non-schema context carried on every request",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Emit machine-readable JSON instead of the human-readable report.",
     )
     args = parser.parse_args()
-    if args.scenario == "readme":
+    if args.scenario == "live":
+        results = live_results()
+    elif args.scenario == "readme":
         results = readme_results()
     elif args.scenario == "honest":
-        results = honest_results()
+        if args.host_context_tokens_per_request is None:
+            parser.error("--scenario honest requires --host-context-tokens-per-request")
+        if args.host_context_tokens_per_request < 0:
+            parser.error("--host-context-tokens-per-request must be non-negative")
+        results = honest_results(args.host_context_tokens_per_request)
     else:
         results = synthetic_results(args.backends, args.tools_per_backend)
 
     if args.json:
         print(json.dumps(results, indent=2))
+    elif args.scenario == "live":
+        print_live_results(results)
     elif args.scenario == "readme":
         print_readme_results(results)
     elif args.scenario == "honest":

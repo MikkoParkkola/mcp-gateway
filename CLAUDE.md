@@ -104,7 +104,7 @@ To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.
 
 # mcp-gateway
 
-Universal MCP Gateway | Rust 1.88+ | Edition 2024 | ~101K LOC | MIT
+Universal MCP Gateway | Rust 1.88+ | Edition 2024 | ~101K LOC | PolyForm Noncommercial default, MIT core
 
 ## Product Vision
 

@@ -119,16 +119,13 @@ Sleep 200ms
 
 # ─── Scene 5: Token Savings ──────────────────────────────────────────────
 
-Type "# Token savings at scale (Claude Opus @ $15/M input tokens)"
+Type "# Measured task-token result"
 Enter
 Sleep 2s
 
-Type@20ms "cat /tmp/gw-demo/savings.txt"
+Type@20ms "python3 benchmarks/token_savings.py"
 Enter
 Sleep 6s
-
-Ctrl+L
-Sleep 200ms
 
 # ─── End Card ────────────────────────────────────────────────────────────
 
