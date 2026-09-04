@@ -133,6 +133,11 @@ fn mik_5843_shipped_shadow_cli_matches_the_documented_scope() {
     assert!(output.contains("nginx log-phase map snippet"));
     assert!(output.contains("$request_body"));
     assert!(output.contains("\"~*("));
+    assert!(output.contains("\\\"method\\\"\\\\s{0,5}"));
+    assert!(output.contains("map directive belongs in the nginx http context"));
+    assert!(output.contains("client_max_body_size 1m"));
+    assert!(output.contains("client_body_buffer_size 1m"));
+    assert!(output.contains("proxy_request_buffering on"));
     assert!(!output.contains("if ($request_body"));
     assert!(!output.contains("httpHost"));
     assert!(!output.contains("httpRequestURI"));

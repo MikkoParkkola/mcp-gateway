@@ -115,19 +115,30 @@ pub(super) fn render_nginx(rules: &[DlpRule]) -> String {
     out.push_str("# Source: RFC-0132 §Shadow-MCP-Detection Layer 3\n");
     out.push_str("#\n");
     out.push_str("# OPERATOR NOTE: Heuristic patterns only. These are NOT enforced by\n");
-    out.push_str("# mcp-gateway itself. Place in your nginx server/location block.\n");
+    out.push_str("# mcp-gateway itself. The map directive belongs in the nginx http context.\n");
     out.push_str("#\n");
     out.push_str("# Requires: nginx built with PCRE support (standard in most packages).\n");
-    out.push_str("# Add the map block in http {}, then reference $mcp_shadow in access_log.\n");
+    out.push_str("# $request_body is populated only after nginx reads the request body.\n");
+    out.push_str("# In the MCP location, proxy the request and keep the inspected body bounded\n");
+    out.push_str("# in memory, for example:\n");
+    out.push_str("#   client_max_body_size 1m;\n");
+    out.push_str("#   client_body_buffer_size 1m;\n");
+    out.push_str("#   proxy_request_buffering on;\n");
+    out.push_str("#   proxy_pass http://your_mcp_upstream;\n");
+    out.push_str("# Then reference $mcp_shadow from access_log in server or location context.\n");
     out.push('\n');
 
     let combined: Vec<&str> = rules.iter().map(|r| r.regex).collect();
     let combined_regex = combined.join("|");
+    // Nginx removes one layer of backslash escaping while parsing a quoted
+    // token. Preserve PCRE escapes such as `\s`, and prevent embedded JSON
+    // quotes from terminating the map key.
+    let nginx_regex = combined_regex.replace('\\', "\\\\").replace('"', "\\\"");
 
     out.push_str("# -- Combined map (1 = detected MCP traffic) --\n");
     out.push_str("map $request_body $mcp_shadow {\n");
     out.push_str("    default          0;\n");
-    let _ = writeln!(out, "    \"~*({combined_regex})\"  1;");
+    let _ = writeln!(out, "    \"~*({nginx_regex})\"  1;");
     out.push_str("}\n\n");
     out
 }

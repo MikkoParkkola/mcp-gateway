@@ -80,11 +80,12 @@ fn render_nginx_contains_map_block() {
 }
 
 #[test]
-fn render_nginx_contains_each_rule_as_if_block() {
+fn render_nginx_contains_each_escaped_rule_in_map() {
     let out = render_nginx(DLP_RULES);
     for rule in DLP_RULES {
+        let escaped = rule.regex.replace('\\', "\\\\").replace('"', "\\\"");
         assert!(
-            out.contains(rule.regex),
+            out.contains(&escaped),
             "nginx output missing regex for rule '{}'",
             rule.name
         );
