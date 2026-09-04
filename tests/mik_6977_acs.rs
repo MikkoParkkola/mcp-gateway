@@ -125,10 +125,7 @@ fn mik6977_bench_2_live_artifact_covers_the_matrix_and_can_lose() {
         );
         assert_eq!(trial["errors"].as_array().map(Vec::len), Some(0));
         let expected_tool = trial["expected_tool"].as_str().expect("expected tool");
-        let expected_index = expected_tool
-            .rsplit('_')
-            .next()
-            .expect("tool index");
+        let expected_index = expected_tool.rsplit('_').next().expect("tool index");
         let expected_response = format!(
             "BENCH_OK_{}_n{}_t{}: evidence bundle {} retrieved",
             trial["mode"].as_str().expect("mode"),
