@@ -132,11 +132,6 @@ pub(crate) fn extract_u64_or(args: &Value, key: &str, default: u64) -> u64 {
     args.get(key).and_then(Value::as_u64).unwrap_or(default)
 }
 
-/// Extract an optional floating-point parameter, defaulting when missing or wrong type.
-pub(crate) fn extract_f64_or(args: &Value, key: &str, default: f64) -> f64 {
-    args.get(key).and_then(Value::as_f64).unwrap_or(default)
-}
-
 /// Build the `InitializeResult` for a given negotiated protocol version.
 ///
 /// `instructions` is appended after the static preamble; pass an empty string

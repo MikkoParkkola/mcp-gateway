@@ -116,19 +116,6 @@ fn extract_u64_or_ignores_non_integer_values() {
     assert_eq!(extract_u64_or(&json!({"limit": "many"}), "limit", 10), 10);
 }
 
-// ── extract_f64_or ───────────────────────────────────────────────────
-
-#[test]
-fn extract_f64_or_respects_custom_value_and_default() {
-    assert!((extract_f64_or(&json!({"price": 3.5}), "price", 15.0) - 3.5).abs() < f64::EPSILON);
-    assert!((extract_f64_or(&json!({}), "price", 15.0) - 15.0).abs() < f64::EPSILON);
-}
-
-#[test]
-fn extract_f64_or_ignores_non_number_values() {
-    assert!((extract_f64_or(&json!({"price": "free"}), "price", 15.0) - 15.0).abs() < f64::EPSILON);
-}
-
 // ── build_initialize_result ─────────────────────────────────────────
 
 const TEST_INSTRUCTIONS: &str = "test instructions";
