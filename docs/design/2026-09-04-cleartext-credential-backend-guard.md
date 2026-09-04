@@ -267,3 +267,42 @@ compile failure proves nothing. Three commits:
 1. the field, inert — `BackendConfig` + `Default` + the redacting `Debug` impl;
 2. the tests — they compile, and rows 2/10/11/12/13/16 fail on the assertion;
 3. the guard — every row green.
+
+## Functional pass (D6:E2E) — 18/18 PASS
+
+DRIVEN: `cargo build --bin mcp-gateway` (debug) at `859be4e0`, branch
+`fix/mrtr2-continuation-handle`, driven as `serve -c <config>` against configs written
+for the run. The refusal fires at config load, before the listener binds, so the
+command line *is* the user-facing surface here — no client, no request, nothing to
+mock. Configs lived in a scratchpad; no repo file was touched by the run.
+
+DRIVER: a separate session, handed the acceptance criteria and how to launch and
+nothing else. It never saw the diff, the design, or this document. That isolation is
+the whole point: the author drives the path they designed and steers around the input
+that breaks it without noticing.
+
+RESULT: 18 of 18 PASS. No FAIL, no INVESTIGATE, no unlaunchable run.
+
+- 8 refusals, one per credential shape the guard claims to catch: `oauth` (enabled),
+  identity propagation, secret injection, a conventionally-named header, an
+  arbitrarily-named one (`X-Custom-Token`), userinfo in the URL, a bare query string,
+  and an `a2a_url`. The arbitrary header and the query string are the two that a
+  known-name list would have missed, which is why the test is blunt.
+- 9 acceptances covering both exits and every loopback spelling in the classifier:
+  `https`, `http` with no credential-bearing field, `127.0.0.1`, `127.0.0.2` (the whole
+  `/8`, not just `.1`), `[::1]`, `localhost`, `LOCALHOST`, the
+  `allow_cleartext_credentials` opt-out, and a disabled backend.
+- The message leaks nothing. Checked explicitly against a config carrying
+  `user:pw@203.0.113.5`: the refusal names the backend and the remedy, and contains no
+  host, no URL, no scheme, no credential.
+
+OBSERVATION, not a defect and not a ticket: `http://2130706433` is accepted as
+loopback. Verified at source rather than taken from the run — `reject_cleartext_credentials`
+reads `url.host_str()` (`src/config/mod.rs:1012`) from an already-parsed `url::Url`, and
+the WHATWG IPv4 parser canonicalises that integer to `127.0.0.1` before
+`is_loopback_host` (`src/gateway/router/well_known.rs:63`) sees it. The acceptance is
+correct: `2130706433` *is* loopback, and a request to it never leaves the machine, which
+is the only exposure this guard exists to prevent. `docs/REMOTE_BACKENDS.md` already says
+"Loopback is exempt", which is true of that input — so no doc change. Naming one
+alternate spelling would imply hex, octal and `127.1` are uncovered when the same
+normalisation covers them all.
