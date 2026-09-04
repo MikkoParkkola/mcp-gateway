@@ -176,6 +176,14 @@ backends:
       client_id: "env:GOOGLE_CLIENT_ID"
 ```
 
+Credentials require TLS. An enabled backend whose `http_url` or `a2a_url` is
+`http://` against a host off this machine is refused at config load when it
+carries a credential — OAuth, identity propagation, secret injection, any static
+header, or userinfo or a query string in the URL itself. Such a credential is
+readable by every host on the path and replayable for as long as it is valid.
+Loopback is exempt. To accept the exposure knowingly — a link you terminate
+yourself, say — set `allow_cleartext_credentials: true` on that backend.
+
 See [`examples/gateway-full.yaml`](../examples/gateway-full.yaml) for the full
 set of backend fields, including timeouts, idle hibernation, secret injection,
 and `passthrough` mode.

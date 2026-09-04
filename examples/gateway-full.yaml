@@ -241,6 +241,11 @@ backends:
   #   protocol_version: "2025-03-26"  # Override protocol version
   #   headers:
   #     Authorization: "Bearer ${API_TOKEN}"
+  #   allow_cleartext_credentials: false  # A credential sent over `http://` to a
+  #                               # host off this machine is refused at config
+  #                               # load; loopback (as above) is exempt. Set it
+  #                               # true to accept that the credential is
+  #                               # readable and replayable in transit.
 
   # Example: SSE backend
   # pieces:
