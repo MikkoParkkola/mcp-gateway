@@ -58,7 +58,7 @@ fn render_grep_contains_each_rule_regex() {
 #[test]
 fn render_grep_one_grep_command_per_rule() {
     let out = render_grep(DLP_RULES);
-    let grep_lines: Vec<&str> = out.lines().filter(|l| l.starts_with("grep -P")).collect();
+    let grep_lines: Vec<&str> = out.lines().filter(|l| l.starts_with("grep -E")).collect();
     assert_eq!(
         grep_lines.len(),
         DLP_RULES.len(),

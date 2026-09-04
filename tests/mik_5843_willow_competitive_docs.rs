@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-5843: Willow competitive landscape page must keep its claims.
 
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 fn willow_page() -> String {
     std::fs::read_to_string("docs/competitive/willow-enterprise-agent-governance.md")
@@ -152,6 +153,26 @@ fn mik_5843_shipped_shadow_cli_matches_the_documented_scope() {
     assert!(grep_output.contains("[[:space:]]{0,5}"));
     assert!(!grep_output.contains("grep -P"));
     assert!(!grep_output.contains("\\s{0,5}"));
+
+    let tools_call_pattern = grep_output
+        .lines()
+        .find(|line| line.contains("tools/call"))
+        .and_then(|line| line.strip_prefix("grep -E '"))
+        .and_then(|line| line.strip_suffix('\''))
+        .expect("tools/call grep pattern");
+    let mut system_grep = Command::new("grep")
+        .args(["-E", tools_call_pattern])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("run system grep -E");
+    system_grep
+        .stdin
+        .take()
+        .expect("grep stdin")
+        .write_all(br#"{"method": "tools/call"}"#)
+        .expect("write MCP request sample");
+    assert!(system_grep.wait().expect("wait for system grep").success());
 }
 
 #[test]
