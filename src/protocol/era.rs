@@ -243,8 +243,10 @@ impl EraCache {
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let observation = EraObservation::from_outcome(&outcome, trigger, chrono::Utc::now());
 
-        match outcome {
-            ProbeOutcome::Error(code) => tracing::debug!(
+        // Two call sites rather than an optional field: `error_code` is absent
+        // on the non-error rows, and `tracing` has no way to omit a field.
+        if let ProbeOutcome::Error(code) = &outcome {
+            tracing::debug!(
                 target: "mcp_gateway::observed",
                 backend = %self.name,
                 outcome = observation.era.as_str(),
@@ -252,15 +254,16 @@ impl EraCache {
                 error_code = code,
                 duration_ms,
                 trigger = trigger.as_str(),
-            ),
-            _ => tracing::debug!(
+            );
+        } else {
+            tracing::debug!(
                 target: "mcp_gateway::observed",
                 backend = %self.name,
                 outcome = observation.era.as_str(),
                 evidence = observation.evidence.as_str(),
                 duration_ms,
                 trigger = trigger.as_str(),
-            ),
+            );
         }
 
         *guard = observation;
