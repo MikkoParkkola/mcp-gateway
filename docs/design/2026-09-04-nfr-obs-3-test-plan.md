@@ -122,17 +122,20 @@ row is out of scope below: nothing clears the era on restart.
 The design's fourth record has no producing path, so the "stale outcome discarded"
 case is removed rather than written red.
 
-`ProtocolEra::resolve_with` takes the era mutex and holds it across the probe
-(`src/protocol/era.rs:152-163`), so concurrent resolution serialises onto a single
-probe and no second outcome can arrive stale. There is no generation or epoch
-counter to make one identifiable if it could. The design records the same fact
-against the cited event (the `‡` note under its event table).
+Nothing discards, which is why nothing produces the record. A late outcome is
+reachable — `BackendEra::reprobe_if_contradicted` (`src/backend/era.rs`) spawns a
+detached task holding an `Arc` clone of the transport it observed, and
+`Backend::force_restart` can replace that transport while the task is still
+probing — but `ProtocolEra` carries no generation or transport epoch, so the
+outcome is accepted rather than thrown away, and an event meaning *thrown away*
+never fires. The design records the same fact against the cited event (the `‡`
+note under its event table), and carries the race itself to `MIK-7217`.
 
 | field | value |
 |---|---|
 | owner | `MIK-7217` (era detection), carried forward with the record |
 | what would resolve it | a probe identity — generation counter or transport epoch — that makes a late outcome distinguishable from the live one |
-| when | when a second concurrent probe path is introduced; not before, because today there cannot be one |
+| when | when `MIK-7217` gives the era a transport identity — which the restart race already requires, independently of this record |
 | if it resolves badly | the cited record stays cited and stays marked unreachable; the design's amendment to its field set is withdrawn rather than left describing a branch nothing reaches |
 
 Nothing in this plan depends on it.

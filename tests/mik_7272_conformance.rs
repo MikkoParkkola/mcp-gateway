@@ -301,10 +301,10 @@ fn all_rows() -> Vec<&'static Row> {
 ///
 /// A gap belongs here or it is the finding: an untracked empty cell fails
 /// `matrix_has_no_empty_cells`, and an entry here whose row has since been
-/// covered fails `a_tracked_gap_is_still_empty`. A mistyped statement is
-/// caught by the first of those, because it exempts nothing. None of the three
-/// states can be reached by leaving the file alone, which is the point: a
-/// permanently red suite teaches everyone to ignore red, and a silent
+/// covered — or deleted — fails `a_tracked_gap_is_still_a_gap`. A mistyped
+/// statement is caught by the first of those, because it exempts nothing. None
+/// of those states can be reached by leaving the file alone, which is the
+/// point: a permanently red suite teaches everyone to ignore red, and a silent
 /// exemption teaches nobody anything.
 const TRACKED_GAPS: &[(&str, &str)] = &[(
     "1. extensions field on client and server capabilities",
@@ -317,11 +317,11 @@ fn matrix_has_no_empty_cells() {
     // The finding this file exists to produce. A statement listed with no test
     // naming it is an obligation nobody is holding — and it is invisible in a
     // green suite, because a test that does not exist cannot fail.
-    let empty: Vec<&str> = all_rows()
+    let empty: Vec<String> = all_rows()
         .iter()
         .filter(|row| row.evidence.is_empty())
-        .map(|row| row.statement)
-        .filter(|statement| !TRACKED_GAPS.iter().any(|(gap, _)| gap == statement))
+        .filter(|row| !TRACKED_GAPS.iter().any(|(gap, _)| *gap == row.statement))
+        .map(|row| format!("{} ({})", row.requirement, row.statement))
         .collect();
 
     assert!(
@@ -331,23 +331,29 @@ fn matrix_has_no_empty_cells() {
 }
 
 #[test]
-fn a_tracked_gap_is_still_empty() {
-    // The other half of the exemption. A gap that has been filled and left
-    // listed here is an exemption nothing needs, and it would silently absolve
-    // the next row that regresses into the same statement.
-    let filled: Vec<&str> = TRACKED_GAPS
-        .iter()
-        .filter(|(gap, _)| {
-            all_rows()
-                .iter()
-                .any(|row| row.statement == *gap && !row.evidence.is_empty())
-        })
-        .map(|(gap, _)| *gap)
-        .collect();
+fn a_tracked_gap_is_still_a_gap() {
+    // The other half of the exemption, and it fails two ways. A gap that has
+    // been filled and left listed here is an exemption nothing needs, and it
+    // would silently absolve the next row that regresses into the same
+    // statement. A gap naming no row at all is worse: the obligation has left
+    // the matrix and every other test here stays green, because they all
+    // iterate rows and there is no longer a row to iterate.
+    let rows = all_rows();
+    let mut stale: Vec<String> = Vec::new();
+
+    for (gap, _) in TRACKED_GAPS {
+        match rows.iter().find(|row| row.statement == *gap) {
+            None => stale.push(format!("names no row: {gap}")),
+            Some(row) if !row.evidence.is_empty() => {
+                stale.push(format!("now has evidence: {} ({gap})", row.requirement));
+            }
+            Some(_) => {}
+        }
+    }
 
     assert!(
-        filled.is_empty(),
-        "these gaps now have evidence and must leave TRACKED_GAPS: {filled:#?}"
+        stale.is_empty(),
+        "these tracked gaps no longer describe an empty row: {stale:#?}"
     );
 }
 

@@ -39,12 +39,16 @@ quoted here as the thing being audited, **cited not authored**:
 | `era_invalidated` | `backend`, `reason` ∈ {`restart`, `trigger`} |
 | `era_probe_discarded` ‡ | `backend` (amended below: the probe record, minus `error_code`) |
 
-‡ **Nothing produces this record today.** `ProtocolEra::resolve_with` takes the era mutex and
-holds it across the probe (`src/protocol/era.rs:152-163`), so concurrent resolution serialises
-onto a single probe and no second outcome can arrive stale; there is no generation or transport
-epoch that would make one identifiable if it could. The record is cited because the era design
-proposes it, and the amendment below is the shape it takes once an identity-checked path exists
-(MIK-7217). OBS.3 writes no case for it, and the test plan records that as a deferred dependency
+‡ **Nothing produces this record today, and the reason is that nothing discards.** A late outcome
+is reachable: `BackendEra::reprobe_if_contradicted` (`src/backend/era.rs`) spawns a detached task
+holding an `Arc` clone of the transport it observed, and `Backend::force_restart`
+(`src/backend/lifecycle.rs`) can replace that transport while the task is still probing. What comes
+back then describes the peer that was replaced. Nothing notices: `ProtocolEra` carries no generation
+or transport epoch, so the outcome is accepted rather than discarded, and a record whose meaning is
+*an outcome was thrown away* has no moment at which to fire. The record is cited because the era
+design proposes it, and the amendment below is the shape it takes once an identity-checked path
+exists (MIK-7217) — the same path that would repair the race, and era-design work outside this
+criterion. OBS.3 writes no case for it, and the test plan records that as a deferred dependency
 rather than a red test.
 
 OBS.3's job is to check that set against the criterion's three clauses. Two of the three are already
