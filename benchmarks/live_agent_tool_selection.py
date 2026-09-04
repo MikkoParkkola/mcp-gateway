@@ -107,6 +107,7 @@ def run_trial(
     expected_tool = f"archive_case_{expected_index:03d}"
     trial_id = f"{mode}_n{n_tools}_t{trial}"
     proof = f"BENCH_OK_{trial_id}"
+    expected_response = f"{proof}: evidence bundle {expected_index:03d} retrieved"
     with tempfile.TemporaryDirectory(prefix="mik6977-") as scratch:
         scratch_path = Path(scratch)
         call_log = scratch_path / "calls.jsonl"
@@ -191,7 +192,7 @@ def run_trial(
         )
         selection_correct = selected_tool == expected_tool
         task_success = (
-            selection_correct and proof in final_message and process_exit == 0
+            selection_correct and expected_response in final_message and process_exit == 0
         )
         errors = [*event_errors, *call_log_errors]
         if process_exit != 0 and stderr.strip():
@@ -316,7 +317,7 @@ def main() -> None:
             "host_configuration": "plugins and apps disabled; memories and host skill discovery disabled; the host may still report shortened-skill and under-development-feature warnings",
             "latency_scope": "full codex process wall time",
             "token_source": "codex turn.completed usage input_tokens and output_tokens",
-            "success_rule": "correct final tool plus exact returned proof marker in final answer",
+            "success_rule": "correct final tool plus full exact returned server response in final answer",
         },
         "summary": summarize(results),
         "trials": [asdict(result) for result in results],

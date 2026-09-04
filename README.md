@@ -217,7 +217,7 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 
 ## Why use MCP Gateway?
 
-- **Larger catalog, smaller exposed surface.** The agent loads a fixed meta-surface instead of every backend definition. In the checked-in live run, both paths completed every task, but the meta path used 1.3–16.0% more input tokens and added one turn. See [Benchmarks](docs/BENCHMARKS.md).
+- **Larger catalog, smaller exposed surface.** The agent loads a fixed meta-surface instead of every backend definition. In the checked-in live run, both paths completed every task, but the meta path used 1.2–16.1% more input tokens and added one turn. See [Benchmarks](docs/BENCHMARKS.md).
 - **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
 - **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 110+ capabilities ship built in.
 - **Per-user identity to backends.** Multitenant backends can receive the verified end-user identity with no gateway-stored long-lived credential. See [Multitenant identity](#end-user-identity-v31).
@@ -255,7 +255,7 @@ Every MCP tool you connect costs about 150 tokens of context overhead. Connect 2
 |---|----------------|--------------|
 | **Tools in context** | Every definition, every request | 16 meta-tools in the README benchmark (~1,600 tokens) |
 | **Schema footprint** | ~15,000 modeled tokens (100 tools) | ~1,600 modeled tokens before discovery; not completed-task cost |
-| **Measured task cost** | Direct path was lower at every tested size | Meta path used 1.3–16.0% more input tokens and one extra turn |
+| **Measured task cost** | Direct path was lower at every tested size | Meta path used 1.2–16.1% more input tokens and one extra turn |
 | **Practical tool limit** | 20 to 50 tools under context pressure | Unlimited, discovered on demand |
 | **Connect a new REST API** | Build an MCP server (days) | Drop a YAML file or import an OpenAPI spec (minutes) |
 | **Changing MCP config** | Restart the AI session, lose context | Restart gateway (~8ms), session stays alive |

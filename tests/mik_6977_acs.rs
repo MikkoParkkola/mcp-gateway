@@ -124,6 +124,27 @@ fn mik6977_bench_2_live_artifact_covers_the_matrix_and_can_lose() {
             "each trial must record the number of aggregated turn.completed events"
         );
         assert_eq!(trial["errors"].as_array().map(Vec::len), Some(0));
+        let expected_tool = trial["expected_tool"].as_str().expect("expected tool");
+        let expected_index = expected_tool
+            .rsplit('_')
+            .next()
+            .expect("tool index");
+        let expected_response = format!(
+            "BENCH_OK_{}_n{}_t{}: evidence bundle {} retrieved",
+            trial["mode"].as_str().expect("mode"),
+            trial["n_tools"].as_u64().expect("tool count"),
+            trial["trial"].as_u64().expect("trial number"),
+            expected_index
+        );
+        let recomputed_success = trial["selection_correct"] == true
+            && trial["process_exit"] == 0
+            && trial["final_message"]
+                .as_str()
+                .is_some_and(|message| message.contains(&expected_response));
+        assert_eq!(
+            trial["task_success"], recomputed_success,
+            "task success must be derived from the exact server response"
+        );
     }
 
     let rows = artifact["summary"].as_array().expect("summary rows");
@@ -143,7 +164,7 @@ fn mik6977_bench_2_live_artifact_covers_the_matrix_and_can_lose() {
 #[test]
 fn mik6977_claim_3_compact_surfaces_match_the_canonical_tool_counts() {
     let llms = read("llms.txt");
-    assert!(llms.contains("1.3-16.0% more input tokens"));
+    assert!(llms.contains("1.2-16.1% more input tokens"));
     assert!(!llms.contains("7.1-16.1% more input tokens"));
 
     let library_docs = read("src/lib.rs");

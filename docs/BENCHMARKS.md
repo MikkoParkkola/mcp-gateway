@@ -37,20 +37,20 @@ Benchmark: target/release/mcp-gateway --help
 On 2026-09-04, Codex with `gpt-5.6-luna` retrieved one exact item from generated
 catalogs of 50, 100, 200, and 500 permitted tools. Each size had two direct and
 two meta-surface trials. Both paths selected the correct tool and completed all
-eight tasks. Direct mean total task tokens grew from 70,132 to 79,826 between 50 and 100
+eight tasks. Direct mean total task tokens grew from 70,165 to 79,974 between 50 and 100
 tools, then stayed near 80,000 at 200 and 500. The host compacted those larger
 lists, so only the 50- and 100-tool rows measure a direct catalog that still
 scaled with the configured size.
 
 | Permitted tools | Direct mean total task tokens (range) | Meta mean total task tokens (range) | Meta input-token saving, mean | Direct / meta median latency | Extra meta turns |
 |---:|---:|---:|---:|---:|---:|
-| 50 | 70,132 (70,085–70,178) | 81,421 (81,360–81,482) | -16.01% | 16.0s / 20.5s | 1 |
-| 100 | 79,826 (79,820–79,831) | 81,327 (81,305–81,349) | -1.81% | 14.9s / 21.5s | 1 |
-| 200 | 80,252 (80,207–80,297) | 81,667 (81,377–81,957) | -1.56% | 15.6s / 23.4s | 1 |
-| 500 | 80,292 (80,256–80,327) | 81,354 (81,328–81,379) | -1.27% | 15.9s / 21.0s | 1 |
+| 50 | 70,165 (70,144–70,185) | 81,547 (81,545–81,548) | -16.11% | 19.6s / 26.7s | 1 |
+| 100 | 79,974 (79,957–79,990) | 89,888 (89,865–89,910) | -12.35% | 23.9s / 20.1s | 1 |
+| 200 | 80,496 (80,383–80,609) | 81,515 (81,509–81,521) | -1.22% | 16.7s / 22.7s | 1 |
+| 500 | 80,311 (80,287–80,334) | 81,579 (81,552–81,606) | -1.40% | 14.9s / 20.7s | 1 |
 
 This result does not support a completed-task token-savings claim. Across all
-tested sizes, the meta surface used 1.3–16.0% more input tokens and added one turn.
+tested sizes, the meta surface used 1.2–16.1% more input tokens and added one turn.
 It cost more input tokens in all eight matched pairs. The 200- and 500-tool rows
 are retained as host-compaction evidence, not as catalog-scaling measurements.
 It remains useful as a catalog-capacity boundary, but we do not lead with the

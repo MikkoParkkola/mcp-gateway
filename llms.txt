@@ -52,7 +52,7 @@ These four discovery tools are always present. The minimum operational surface h
 
 ## Key Features
 
-- Live task result: the checked-in 16-run sample found no completed-task token saving; across the 50-, 100-, 200-, and 500-tool rows, the meta path used 1.3-16.0% more input tokens
+- Live task result: the checked-in 16-run sample found no completed-task token saving; across the 50-, 100-, 200-, and 500-tool rows, the meta path used 1.2-16.1% more input tokens
 - REST API to MCP: drop a YAML capability file or import OpenAPI spec, no code needed
 - 100+ built-in capabilities: weather, Wikipedia, GitHub, stock quotes, package tracking
 - Hot reload: change config without losing AI session
