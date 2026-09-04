@@ -14,9 +14,8 @@ servers, call tools, mutate gateway config by default, or perform fleet/network
 range scans.
 
 Enterprise scope is intentionally separate: network range discovery, scheduled
-fleet inventory, drift evidence, SIEM export, owner assignment, and policy
-remediation are represented through the enterprise boundary contract and require
-enterprise licensing.
+fleet inventory, drift evidence, scheduled SIEM findings export, owner assignment,
+and policy remediation are represented through the enterprise boundary contract.
 
 ## Command
 
@@ -43,9 +42,16 @@ mcp-gateway doctor --shadow --shadow-format nginx
 mcp-gateway doctor --shadow --shadow-format yaml
 ```
 
-This free/core command generates body-method and protocol-version patterns; it
-does not inspect traffic or publish findings to a SIEM. Scheduled SIEM export,
-fleet inventory, and remediation remain enterprise workflow capabilities.
+The `grep` output requires GNU grep with PCRE support (`grep -P`, or `ggrep -P`
+on macOS). The legacy `haproxy` format name is accepted as an alias for the
+Nginx renderer; it does not emit HAProxy configuration.
+
+This command sits on the free/core product boundary and generates body-method
+and protocol-version patterns; `free_core` is not a commercial-use grant. The
+gateway does not inspect traffic or publish findings to a SIEM. Scheduled SIEM
+findings export, fleet inventory, and remediation remain enterprise workflow capabilities.
+Commercial use of the runnable gateway requires a license; see
+[`COMMERCIAL.md`](../COMMERCIAL.md).
 
 ## ShadowAsset JSON schema
 

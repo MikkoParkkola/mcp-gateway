@@ -94,7 +94,7 @@ pub(super) fn render_grep(rules: &[DlpRule]) -> String {
     out.push_str("# intercept outbound traffic. Deploy in your network-layer tooling.\n");
     out.push_str("#\n");
     out.push_str("# Usage example (stream log file):\n");
-    out.push_str("#   tail -f /var/log/proxy.log | grep -EP 'PATTERN'\n");
+    out.push_str("#   tail -f /var/log/proxy.log | grep -P 'PATTERN'\n");
     out.push('\n');
 
     for rule in rules {
@@ -103,7 +103,7 @@ pub(super) fn render_grep(rules: &[DlpRule]) -> String {
             "# [{}] {} — {}",
             rule.category, rule.name, rule.description
         );
-        let _ = writeln!(out, "grep -EP '{}'\n", rule.regex);
+        let _ = writeln!(out, "grep -P '{}'\n", rule.regex);
     }
     out
 }
@@ -127,7 +127,7 @@ pub(super) fn render_nginx(rules: &[DlpRule]) -> String {
     out.push_str("# -- Combined map (1 = detected MCP traffic) --\n");
     out.push_str("map $request_body $mcp_shadow {\n");
     out.push_str("    default          0;\n");
-    let _ = writeln!(out, "    ~*({combined_regex})  1;");
+    let _ = writeln!(out, "    ~*'({combined_regex})'  1;");
     out.push_str("}\n\n");
 
     out.push_str("# -- Or use individual if blocks inside location /mcp { ... } --\n");

@@ -132,6 +132,8 @@ fn mik_5843_shipped_shadow_cli_matches_the_documented_scope() {
     let output = String::from_utf8_lossy(&doctor.stdout);
     assert!(output.contains("nginx log_format / if-block snippets"));
     assert!(output.contains("$request_body"));
+    assert!(output.contains("~*'("));
+    assert!(!output.contains("~*("));
     assert!(!output.contains("httpHost"));
     assert!(!output.contains("httpRequestURI"));
 }
@@ -169,6 +171,9 @@ fn mik_5843_shadow_docs_expose_static_rule_export_without_enterprise_overclaim()
     }
     assert!(docs.contains("does not inspect traffic or publish findings to a SIEM"));
     assert!(docs.contains("remain enterprise workflow capabilities"));
+    assert!(docs.contains("ggrep -P"));
+    assert!(docs.contains("not a commercial-use grant"));
+    assert!(docs.contains("[`COMMERCIAL.md`](../COMMERCIAL.md)"));
 }
 
 #[test]

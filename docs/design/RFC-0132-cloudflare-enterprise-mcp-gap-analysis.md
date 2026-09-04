@@ -135,8 +135,9 @@ shadow MCP activity by other means:
 
 2. **Process-scanner shadow detection** — `src/discovery/process_scanner.rs` scans
    running MCP patterns for which it can infer a listening port. Port-resolvable
-   processes not originating from the gateway are shadow candidates; unported stdio
-   servers are outside the current scanner's coverage.
+   processes whose inferred names do not match configured backend names are shadow
+   candidates; the scan does not prove process origin. Unported stdio servers are
+   outside the current scanner's coverage.
 
 3. **Outbound request inspection** (partial) — for HTTP backends the gateway is the
    intermediary, so backend-to-server communication passes through it. But client-to-server
@@ -150,8 +151,8 @@ is limited to wider network and fleet visibility.
 
 #### Layer 1: Config-file scan (implemented)
 
-The shipped command scans the same sources as `AutoDiscovery` and compares them
-against `BackendRegistry`:
+The shipped command scans the same sources as `AutoDiscovery` and compares
+discovered names with backend names loaded from the selected gateway config:
 
 ```
 shadow_servers = discovered_servers - registered_backends
@@ -162,8 +163,10 @@ Report: server name, source (ClaudeDesktop / VsCode / etc.), transport config.
 #### Layer 2: Process scan (implemented for port-resolvable processes)
 
 `ProcessScanner` identifies running MCP patterns with an inferred listening port and
-cross-references them with `BackendRegistry`. Any such process not managed by the
-gateway is a shadow candidate. Unported stdio servers remain outside this layer.
+compares their inferred names with backend names from the selected config. A name
+that is absent from that config is a shadow candidate; name equality is not proof
+that the gateway started or owns the process. Unported stdio servers remain outside
+this layer.
 
 #### Layer 3: Regex-based MCP traffic detection (operator-side HTTP layer)
 

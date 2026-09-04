@@ -36,7 +36,7 @@ mcp-gateway's receipt path is opt-in.
 | Capability | mcp-gateway (this repo) | Willow / Webrix (public pages) | mcp-gateway verdict |
 | --- | --- | --- | --- |
 | Connectors | YAML capabilities + OpenAPI import; no 1000-item catalog | **1000+** connectors claimed | **LAG** |
-| IdP | OAuth / OIDC backends (`docs/OAUTH_CONFIG.md`); no first-class Okta / Entra / JumpCloud product | IdP integration claimed (Okta, Entra, JumpCloud-class enterprise SSO) | **LAG** |
+| IdP | Opt-in generic inbound OIDC token exchange and delegated-bearer verification; no packaged Okta / Entra / JumpCloud end-user SSO product | IdP integration claimed (Okta, Entra, JumpCloud-class enterprise SSO) | **LAG** on packaged IdP integrations and end-user SSO |
 | Shadow-AI / unmanaged MCP | Local passive scan: `src/discovery/config_scanner.rs`, `src/discovery/process_scanner.rs`, `mcp-gateway cap discover --shadow`. Not a network proxy. Not org-wide automatic discovery. Follow-up work is required before treating this as an enterprise product surface. | Organization-wide automatic discovery claimed | **LAG** (local scan exists; enterprise discovery does not) |
 | Runtime guards | Policy, firewall, circuit-breaker, rate-limit, schema validation | Runtime guards claimed | **MATCH** |
 | Audit | Structured tracing/telemetry; cache-hit paths can skip the invocation event; transparency log is optional | Every action logged and exportable (public claim) | **LAG** |
