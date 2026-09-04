@@ -549,6 +549,7 @@ impl Gateway {
         .with_secret_injector(secret_injector)
         .with_surfaced_tools(self.config.meta_mcp.surfaced_tools.clone())
         .with_exposed_meta_tools(&self.config.meta_mcp.exposed_meta_tools)
+        .with_prompts_resources_fetch_timeout(self.config.meta_mcp.prompts_resources_fetch_timeout)
         .with_trusted_identity_headers(
             self.config
                 .security
@@ -3174,8 +3175,10 @@ mod tests {
                     // tell them apart: an empty capture is the tracing harness never
                     // delivering, a non-empty one without the key is the record site
                     // itself omitting the field or the dispatcher returning early.
-                    let keys: Vec<Vec<&String>> =
-                        records.iter().map(|record| record.keys().collect()).collect();
+                    let keys: Vec<Vec<&String>> = records
+                        .iter()
+                        .map(|record| record.keys().collect())
+                        .collect();
                     panic!(
                         "a stdio request must be observed: {} record(s) captured, \
                          keys {:?}. Empty => the tracing capture never delivered; \

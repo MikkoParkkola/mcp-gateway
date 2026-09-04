@@ -13,6 +13,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`gateway_search` returns L0 by default** (MIK-7084): tool name, one-line purpose, and score. `detail=l1` adds signature, when-to-use, and required params; `detail=l2` returns the full `input_schema`. `include_schema=true` still maps to L2 and is deprecated, not removed. Ranking diagnostics (`ranking` reasons and signals) are omitted unless `explain=true`. `gateway_search_tools` also omits `ranking` unless `explain=true`.
 - **`meta_mcp.exposed_meta_tools` is now enforced** (GH issue 449): this config field was documented as an allow-list of meta-tools to expose but had no effect outside tests. It now restricts both `tools/list` and `tools/call` for every meta-tool built-in, including the two Code Mode tools (`gateway_search`, `gateway_execute`), which were an unlisted escape hatch — reaching every backend tool regardless of the allow-list. **Breaking for operators who already set this field**: a name that was accepted but ignored now actually removes that tool from the surface. An allow-list that omits `gateway_invoke` is logged as a warning, since it leaves backend tools unreachable through the gateway. `meta_mcp.surfaced_tools` (individually surfaced backend tools) is unaffected.
 
+### Fixed
+
+- **`prompts/list` and `resources/list` no longer stall on a slow or hung
+  backend.** Both handlers aggregated every backend sequentially, so a single
+  backend that was slow to answer held the whole request for its full transport
+  timeout (often 120s). On a gateway with 50+ backends this blew past client
+  connect timeouts on every (re)connect, and the gateway's late response
+  surfaced as an "unknown message ID" error. Backends are now fetched in
+  parallel and each fetch is bounded by a short timeout, so a slow or hung
+  backend is skipped instead of blocking the list. Reported and fixed by
+  [@terafin](https://github.com/terafin) from a 56-backend deployment, in
+  [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465).
+- **The aggregation timeout is configurable** via
+  `meta_mcp.prompts_resources_fetch_timeout` (default `10s`). Operators with
+  unusually slow backends can raise it without a code change.
+  ([@terafin](https://github.com/terafin), [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465))
+- **A cancelled transport request no longer strands its `pending` entry.**
+  When an outer timeout drops an in-flight stdio or WebSocket request before
+  the transport's own request timeout fires, a RAII guard removes the entry
+  from the transport's `pending` map on drop, so a late response finds no
+  dangling sender and the map does not grow across reconnect loops.
+  ([@terafin](https://github.com/terafin), [#465](https://github.com/MikkoParkkola/mcp-gateway/pull/465))
+
 ## [4.0.0] - 2026-08-29
 
 ### Changed

@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use futures::future::join_all;
 use serde_json::{Value, json};
 use tracing::warn;
 
@@ -241,13 +242,28 @@ impl MetaMcp {
         // Prepend gateway-owned guides (served inline, no backend required).
         let mut all_resources: Vec<Resource> = guide_resources().into();
 
-        for backend in self.backends.all() {
-            if self.meta_route_isolation_refused(&backend) {
-                continue;
+        // Fetch all backends in parallel; skip ones that fail or time out.
+        let backends: Vec<_> = self
+            .backends
+            .all()
+            .iter()
+            .filter(|backend| !self.meta_route_isolation_refused(backend))
+            .cloned()
+            .collect();
+        let timeout = self.prompts_resources_fetch_timeout;
+        let results = join_all(backends.iter().map(|backend| async move {
+            match tokio::time::timeout(timeout, backend.get_resources_shared()).await {
+                Ok(Ok(resources)) => Ok(resources.as_ref().clone()),
+                Ok(Err(e)) => Err(e),
+                Err(_elapsed) => Err(crate::Error::BackendTimeout(backend.name.clone())),
             }
-            match backend.get_resources_shared().await {
+        }))
+        .await;
+
+        for (backend, resources) in backends.iter().zip(results) {
+            match resources {
                 Ok(resources) => {
-                    for resource in resources.iter().cloned() {
+                    for resource in resources {
                         if let Some(clean) = sanitize_resource(resource, &backend.name) {
                             all_resources.push(clean);
                         }

@@ -36,7 +36,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use super::Transport;
+use super::{PendingRequestGuard, Transport};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
 };
@@ -509,24 +509,22 @@ impl Transport for WebSocketTransport {
 
         let (tx, rx) = oneshot::channel();
         self.inner.pending.insert(id.to_string(), tx);
+        // See StdioTransport::request: removing the entry is the guard's job
+        // so a request future dropped by an OUTER timeout or task abort does
+        // not strand its `pending` entry.
+        let _cleanup = PendingRequestGuard::new(&self.inner.pending, &id.to_string());
 
         let msg = McpFrame::Request(request).to_ws_message()?;
-        if let Err(e) = self.send_message(msg).await {
-            self.inner.pending.remove(&id.to_string());
-            return Err(e);
-        }
+        self.send_message(msg).await?;
 
         match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => Err(Error::Transport(
                 "WebSocket response channel closed".to_string(),
             )),
-            Err(_) => {
-                self.inner.pending.remove(&id.to_string());
-                Err(Error::BackendTimeout(
-                    "WebSocket request timed out".to_string(),
-                ))
-            }
+            Err(_) => Err(Error::BackendTimeout(
+                "WebSocket request timed out".to_string(),
+            )),
         }
     }
 

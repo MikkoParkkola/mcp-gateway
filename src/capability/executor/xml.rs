@@ -38,7 +38,7 @@ pub(super) fn xml_to_json(xml: &str) -> std::result::Result<Value, String> {
                 // Collect attributes
                 for attr in e.attributes().flatten() {
                     let key = format!("@{}", local_name(attr.key.as_ref()));
-                    let val = String::from_utf8_lossy(&attr.value).to_string();
+                    let val = attr.value.as_ref().to_string();
                     obj.insert(key, Value::String(val));
                 }
 
@@ -51,7 +51,7 @@ pub(super) fn xml_to_json(xml: &str) -> std::result::Result<Value, String> {
 
                 for attr in e.attributes().flatten() {
                     let key = format!("@{}", local_name(attr.key.as_ref()));
-                    let val = String::from_utf8_lossy(&attr.value).to_string();
+                    let val = attr.value.as_ref().to_string();
                     obj.insert(key, Value::String(val));
                 }
 
@@ -61,15 +61,18 @@ pub(super) fn xml_to_json(xml: &str) -> std::result::Result<Value, String> {
                 }
             }
             Ok(Event::Text(ref e)) => {
-                let text = e.decode().unwrap_or_default().trim().to_string();
+                // quick-xml 0.42: Text is already UTF-8 str; BytesText::decode is gone.
+                let text = e.trim();
                 if !text.is_empty()
                     && let Some(current) = stack.last_mut()
                 {
-                    current.1.insert("#text".to_string(), Value::String(text));
+                    current
+                        .1
+                        .insert("#text".to_string(), Value::String(text.to_string()));
                 }
             }
             Ok(Event::CData(ref e)) => {
-                let text = String::from_utf8_lossy(e.as_ref()).trim().to_string();
+                let text = e.as_ref().trim().to_string();
                 if !text.is_empty()
                     && let Some(current) = stack.last_mut()
                 {
@@ -133,11 +136,10 @@ fn insert_child(parent: &mut serde_json::Map<String, Value>, key: &str, value: V
 /// Extract the local name from a (possibly namespace-prefixed) XML tag.
 ///
 /// E.g. `gesmes:Envelope` -> `Envelope`, `Cube` -> `Cube`.
-fn local_name(raw: &[u8]) -> String {
-    let s = String::from_utf8_lossy(raw);
-    match s.rfind(':') {
-        Some(i) => s[i + 1..].to_string(),
-        None => s.to_string(),
+fn local_name(raw: &str) -> String {
+    match raw.rfind(':') {
+        Some(i) => raw[i + 1..].to_string(),
+        None => raw.to_string(),
     }
 }
 

@@ -296,6 +296,10 @@ pub struct MetaMcp {
     /// Consulted on both `tools/list` and `tools/call`. The default exposes every
     /// meta-tool, so an existing deployment is unaffected.
     pub(super) meta_tool_exposure: MetaToolExposure,
+    /// Per-backend bound for `prompts/list` and `resources/list`
+    /// aggregation. Configurable via `meta_mcp.prompts_resources_fetch_timeout`
+    /// (default 10s); overridable per-instance for tests.
+    pub(super) prompts_resources_fetch_timeout: std::time::Duration,
     /// Session-scoped dynamically promoted tools (SEP-1862 / Phase 3).
     ///
     /// Keyed by session ID.  Each entry is a list of `"server:tool"` strings
@@ -458,6 +462,7 @@ impl MetaMcp {
             surfaced_tools: Vec::new(),
             surfaced_tools_map: HashMap::new(),
             meta_tool_exposure: MetaToolExposure::expose_all(),
+            prompts_resources_fetch_timeout: std::time::Duration::from_secs(10),
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
             session_state: SessionStateStore::new(),
@@ -571,6 +576,16 @@ impl MetaMcp {
     /// than by an admin refusal that confirms the tool is real.
     pub(crate) fn exposes_meta_tool(&self, name: &str) -> bool {
         self.meta_tool_exposure.is_exposed(name)
+    }
+
+    /// Override the per-backend `prompts/list` and `resources/list` fetch
+    /// timeout. The default comes from
+    /// `meta_mcp.prompts_resources_fetch_timeout` (10s); this lets tests run
+    /// with a shorter bound.
+    #[must_use]
+    pub fn with_prompts_resources_fetch_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.prompts_resources_fetch_timeout = timeout;
+        self
     }
 
     /// Set the canonical response-projection rollout mode (MIK-5877).
