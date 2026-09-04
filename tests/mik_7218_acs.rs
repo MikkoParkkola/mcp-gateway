@@ -247,7 +247,8 @@ fn mcp728_u1_6_two_percent_rule_unadjusted_and_blocked_when_underattributed() {
     let retired = retire_revisions(&full.snapshot(), MIN_MEASUREMENT_WINDOW)
         .expect("full attributed window is actionable");
     assert!(retired.iter().any(|r| r == "2024-11-05"));
-    assert!(retired.iter().any(|r| r == "2024-10-07"));
+    // Zero-traffic stand-in: 4.0.0 dropped `2024-10-07` from the supported set.
+    assert!(retired.iter().any(|r| r == "2025-03-26"));
     assert!(!retired.iter().any(|r| r == "2025-11-25"));
 }
 
@@ -366,7 +367,7 @@ fn mcp728_u1_4_production_decision_intersects_http_and_stdio_windows() {
     .expect("evaluate production window")
     .expect("aligned windows are actionable");
     assert!(!candidates.iter().any(|revision| revision == "2024-11-05"));
-    assert!(candidates.iter().any(|revision| revision == "2024-10-07"));
+    assert!(candidates.iter().any(|revision| revision == "2025-03-26"));
 
     assert_eq!(
         production_retirement_decision_at(

@@ -1253,6 +1253,10 @@ impl MetaMcp {
         let session = false;
         crate::protocol_revision_telemetry::observe_tools_list(
             crate::protocol_revision_telemetry::ListFilters {
+                // No principal filter shapes this list. `multi_user` guards
+                // dispatch of a gateway-held token (ADR-008 INV-2); it does
+                // not remove a tool from the answer, so the constant is what
+                // the assembly did, not an assumption about the transport.
                 principal: false,
                 profile,
                 session,

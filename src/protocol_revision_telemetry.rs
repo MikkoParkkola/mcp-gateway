@@ -1309,7 +1309,10 @@ mod tests {
         let retired = retire_revisions(&reg.snapshot(), MIN_MEASUREMENT_WINDOW)
             .expect("full attributed window is actionable");
         assert!(retired.iter().any(|r| r == "2024-11-05"));
-        assert!(retired.iter().any(|r| r == "2024-10-07"));
+        // A supported revision with no traffic at all is retirable too. 4.0.0
+        // dropped `2024-10-07` from `SUPPORTED_VERSIONS`, so the zero-traffic
+        // stand-in is a revision the server still offers.
+        assert!(retired.iter().any(|r| r == "2025-03-26"));
         assert!(!retired.iter().any(|r| r == "2025-11-25"));
     }
 
