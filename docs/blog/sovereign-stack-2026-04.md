@@ -43,7 +43,7 @@ Numbers, all from the repo:
 - 2888 tests, `#![deny(unsafe_code)]`, zero clippy warnings
 - 89% in the schema-only first-request model at 100 tools; the checked-in completed-task run found no saving (`benchmarks/token_savings.py`)
 - ~8 ms startup (`hyperfine`, `docs/BENCHMARKS.md`)
-- 101 built-in REST capabilities across 16 categories
+- 110+ built-in REST capabilities across 15 categories
 
 **What's shipped:** everything above. PolyForm Noncommercial by default, with a separately licensed MIT core. Binary is ~12 MB.
 

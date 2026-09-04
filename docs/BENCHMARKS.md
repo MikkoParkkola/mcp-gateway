@@ -37,20 +37,20 @@ Benchmark: target/release/mcp-gateway --help
 On 2026-09-04, Codex with `gpt-5.6-luna` retrieved one exact item from generated
 catalogs of 50, 100, 200, and 500 permitted tools. Each size had two direct and
 two meta-surface trials. Both paths selected the correct tool and completed all
-eight tasks. Direct mean total task tokens grew from 70,211 to 79,949 between 50 and 100
+eight tasks. Direct mean total task tokens grew from 70,132 to 79,826 between 50 and 100
 tools, then stayed near 80,000 at 200 and 500. The host compacted those larger
 lists, so only the 50- and 100-tool rows measure a direct catalog that still
 scaled with the configured size.
 
 | Permitted tools | Direct mean total task tokens (range) | Meta mean total task tokens (range) | Meta input-token saving, mean | Direct / meta median latency | Extra meta turns |
 |---:|---:|---:|---:|---:|---:|
-| 50 | 70,211 (70,187–70,234) | 81,593 (81,478–81,707) | -16.08% | 15.1s / 21.3s | 1 |
-| 100 | 79,949 (79,930–79,967) | 85,638 (81,495–89,780) | -7.11% | 15.6s / 20.1s | 1 |
-| 200 | 80,358 (80,336–80,380) | 81,676 (81,514–81,838) | -1.47% | 18.3s / 21.9s | 1 |
-| 500 | 80,505 (80,402–80,608) | 81,566 (81,501–81,631) | -1.26% | 15.3s / 21.7s | 1 |
+| 50 | 70,132 (70,085–70,178) | 81,421 (81,360–81,482) | -16.01% | 16.0s / 20.5s | 1 |
+| 100 | 79,826 (79,820–79,831) | 81,327 (81,305–81,349) | -1.81% | 14.9s / 21.5s | 1 |
+| 200 | 80,252 (80,207–80,297) | 81,667 (81,377–81,957) | -1.56% | 15.6s / 23.4s | 1 |
+| 500 | 80,292 (80,256–80,327) | 81,354 (81,328–81,379) | -1.27% | 15.9s / 21.0s | 1 |
 
-This result does not support a completed-task token-savings claim. At 50 and
-100 tools, the meta surface used 7.1–16.1% more input tokens and added one turn.
+This result does not support a completed-task token-savings claim. Across all
+tested sizes, the meta surface used 1.3–16.0% more input tokens and added one turn.
 It cost more input tokens in all eight matched pairs. The 200- and 500-tool rows
 are retained as host-compaction evidence, not as catalog-scaling measurements.
 It remains useful as a catalog-capacity boundary, but we do not lead with the

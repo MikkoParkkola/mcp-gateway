@@ -339,7 +339,7 @@ Direct listing (when you know the backend):
 - gateway_list_servers -- list all backends with status
 
 Operator tools:
-- gateway_get_stats -- usage analytics and token savings
+- gateway_get_stats -- observed usage analytics and request statistics
 - gateway_set_profile / gateway_get_profile -- switch routing profiles
 ```
 
@@ -351,7 +351,7 @@ Operator tools:
 **Acceptance Criteria**:
 - AC-3.1: Initialize response instructions mention "gateway_search_tools FIRST"
 - AC-3.2: Instructions include the discovery pattern (search then invoke)
-- AC-3.3: Instructions mention token savings percentage
+- AC-3.3: Instructions distinguish observed task-token measurements from qualified schema-footprint estimates; they do not promise a fixed savings percentage
 
 ---
 

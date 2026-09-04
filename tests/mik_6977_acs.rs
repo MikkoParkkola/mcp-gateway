@@ -117,6 +117,12 @@ fn mik6977_bench_2_live_artifact_covers_the_matrix_and_can_lose() {
         assert!(trial["selection_correct"].as_bool().is_some());
         assert!(trial["task_success"].as_bool().is_some());
         assert!(trial["extra_turns"].as_u64().is_some());
+        assert!(
+            trial["turn_completed_events"]
+                .as_u64()
+                .is_some_and(|count| count > 0),
+            "each trial must record the number of aggregated turn.completed events"
+        );
         assert_eq!(trial["errors"].as_array().map(Vec::len), Some(0));
     }
 
@@ -137,8 +143,8 @@ fn mik6977_bench_2_live_artifact_covers_the_matrix_and_can_lose() {
 #[test]
 fn mik6977_claim_3_compact_surfaces_match_the_canonical_tool_counts() {
     let llms = read("llms.txt");
-    assert!(llms.contains("7.1-16.1% more input tokens"));
-    assert!(!llms.contains("1.3-16.1% more input tokens"));
+    assert!(llms.contains("1.3-16.0% more input tokens"));
+    assert!(!llms.contains("7.1-16.1% more input tokens"));
 
     let library_docs = read("src/lib.rs");
     assert!(library_docs.contains("14 tools minimum"));

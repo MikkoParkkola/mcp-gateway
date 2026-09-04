@@ -1,6 +1,6 @@
 {
   "schema_version": "mik-6977.live-agent.v1",
-  "generated_at": "2026-09-04T15:47:51.853407+00:00",
+  "generated_at": "2026-09-04T20:01:02.373024+00:00",
   "agent": {
     "runner": "codex exec",
     "model": "gpt-5.6-luna"
@@ -29,23 +29,23 @@
         "samples": 2,
         "selection_accuracy": 1.0,
         "task_success_rate": 1.0,
-        "latency_ms_median": 15073.3,
+        "latency_ms_median": 16003.2,
         "tool_calls_mean": 1,
         "extra_turns_mean": 0,
-        "input_tokens_mean": 70013.5,
-        "total_task_tokens_mean": 70210.5
+        "input_tokens_mean": 69913.5,
+        "total_task_tokens_mean": 70131.5
       },
       "meta": {
         "samples": 2,
         "selection_accuracy": 1.0,
         "task_success_rate": 1.0,
-        "latency_ms_median": 21331.3,
+        "latency_ms_median": 20457.3,
         "tool_calls_mean": 2,
         "extra_turns_mean": 1,
-        "input_tokens_mean": 81270.5,
-        "total_task_tokens_mean": 81592.5
+        "input_tokens_mean": 81108,
+        "total_task_tokens_mean": 81421
       },
-      "measured_input_token_savings_percent": -16.08
+      "measured_input_token_savings_percent": -16.01
     },
     {
       "n_tools": 100,
@@ -53,23 +53,23 @@
         "samples": 2,
         "selection_accuracy": 1.0,
         "task_success_rate": 1.0,
-        "latency_ms_median": 15588.0,
+        "latency_ms_median": 14944.2,
         "tool_calls_mean": 1,
         "extra_turns_mean": 0,
-        "input_tokens_mean": 79707,
-        "total_task_tokens_mean": 79948.5
+        "input_tokens_mean": 79599,
+        "total_task_tokens_mean": 79825.5
       },
       "meta": {
         "samples": 2,
         "selection_accuracy": 1.0,
         "task_success_rate": 1.0,
-        "latency_ms_median": 20118.2,
+        "latency_ms_median": 21541.2,
         "tool_calls_mean": 2,
         "extra_turns_mean": 1,
-        "input_tokens_mean": 85373,
-        "total_task_tokens_mean": 85637.5
+        "input_tokens_mean": 81040.5,
+        "total_task_tokens_mean": 81327
       },
-      "measured_input_token_savings_percent": -7.11
+      "measured_input_token_savings_percent": -1.81
     },
     {
       "n_tools": 200,
@@ -77,23 +77,23 @@
         "samples": 2,
         "selection_accuracy": 1.0,
         "task_success_rate": 1.0,
-        "latency_ms_median": 18324.3,
+        "latency_ms_median": 15589.0,
         "tool_calls_mean": 1,
         "extra_turns_mean": 0,
-        "input_tokens_mean": 80168.5,
-        "total_task_tokens_mean": 80358
+        "input_tokens_mean": 80035.5,
+        "total_task_tokens_mean": 80252
       },
       "meta": {
         "samples": 2,
         "selection_accuracy": 1.0,
         "task_success_rate": 1.0,
-        "latency_ms_median": 21947.9,
+        "latency_ms_median": 23422.0,
         "tool_calls_mean": 2,
         "extra_turns_mean": 1,
-        "input_tokens_mean": 81346.5,
-        "total_task_tokens_mean": 81676
+        "input_tokens_mean": 81286.5,
+        "total_task_tokens_mean": 81667
       },
-      "measured_input_token_savings_percent": -1.47
+      "measured_input_token_savings_percent": -1.56
     },
     {
       "n_tools": 500,
@@ -101,23 +101,23 @@
         "samples": 2,
         "selection_accuracy": 1.0,
         "task_success_rate": 1.0,
-        "latency_ms_median": 15321.5,
+        "latency_ms_median": 15887.3,
         "tool_calls_mean": 1,
         "extra_turns_mean": 0,
-        "input_tokens_mean": 80258.5,
-        "total_task_tokens_mean": 80505
+        "input_tokens_mean": 80048,
+        "total_task_tokens_mean": 80291.5
       },
       "meta": {
         "samples": 2,
         "selection_accuracy": 1.0,
         "task_success_rate": 1.0,
-        "latency_ms_median": 21695.8,
+        "latency_ms_median": 20967.0,
         "tool_calls_mean": 2,
         "extra_turns_mean": 1,
-        "input_tokens_mean": 81267.5,
-        "total_task_tokens_mean": 81566
+        "input_tokens_mean": 81065,
+        "total_task_tokens_mean": 81353.5
       },
-      "measured_input_token_savings_percent": -1.26
+      "measured_input_token_savings_percent": -1.27
     }
   ],
   "trials": [
@@ -131,19 +131,20 @@
       "task_success": true,
       "tool_calls": 1,
       "extra_turns": 0,
-      "latency_ms": 15235.6,
-      "input_tokens": 70014,
+      "latency_ms": 17380.8,
+      "input_tokens": 69937,
       "cached_input_tokens": 46336,
-      "output_tokens": 220,
-      "total_tokens": 70234,
+      "output_tokens": 241,
+      "total_tokens": 70178,
       "process_exit": 0,
-      "final_message": "I’ll use only the bench MCP tools and will stop only once I receive the required `BENCH_OK` proof marker.\nBENCH_OK_direct_n50_t0: evidence bundle 007 retrieved",
+      "final_message": "I\u2019m locating the bench retrieval tool and will use it exclusively for case 007.\nArchived compliance evidence for case 007 retrieved.\n\n`BENCH_OK_direct_n50_t0: evidence bundle 007 retrieved`",
       "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
       "warnings": [
         "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
         "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
+      ],
+      "stderr_tail": "Reading additional input from stdin...",
+      "turn_completed_events": 1
     },
     {
       "mode": "meta",
@@ -155,19 +156,20 @@
       "task_success": true,
       "tool_calls": 2,
       "extra_turns": 1,
-      "latency_ms": 21812.0,
-      "input_tokens": 81338,
+      "latency_ms": 20602.1,
+      "input_tokens": 81146,
       "cached_input_tokens": 58624,
-      "output_tokens": 369,
-      "total_tokens": 81707,
+      "output_tokens": 336,
+      "total_tokens": 81482,
       "process_exit": 0,
-      "final_message": "I’m locating the bench-only retrieval tool and will continue until it returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 007 retrieved.\n\n`BENCH_OK_meta_n50_t0: evidence bundle 007 retrieved`",
+      "final_message": "I\u2019m locating the bench-only evidence retrieval tools and will stop only once the system returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 007 retrieved.\n\n`BENCH_OK_meta_n50_t0: evidence bundle 007 retrieved`",
       "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
       "warnings": [
         "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
         "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
+      ],
+      "stderr_tail": "Reading additional input from stdin...\n2026-09-04T19:59:41.092075Z ERROR codex_skills_extension::host_service: failed to install system skills: io error while remove existing system skills dir: Directory not empty (os error 66)",
+      "turn_completed_events": 1
     },
     {
       "mode": "direct",
@@ -179,19 +181,20 @@
       "task_success": true,
       "tool_calls": 1,
       "extra_turns": 0,
-      "latency_ms": 14911.0,
-      "input_tokens": 70013,
-      "cached_input_tokens": 52480,
-      "output_tokens": 174,
-      "total_tokens": 70187,
+      "latency_ms": 14625.7,
+      "input_tokens": 69890,
+      "cached_input_tokens": 62720,
+      "output_tokens": 195,
+      "total_tokens": 70085,
       "process_exit": 0,
-      "final_message": "I’m locating the bench-only retrieval tool and will continue until it returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 038 retrieved successfully.\n\n`BENCH_OK_direct_n50_t1: evidence bundle 038 retrieved`",
+      "final_message": "I\u2019ll retrieve case 038 using only the available bench MCP tools and will stop only when a tool returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 038 retrieved successfully.\n\n`BENCH_OK_direct_n50_t1: evidence bundle 038 retrieved`",
       "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
       "warnings": [
         "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
         "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
+      ],
+      "stderr_tail": "Reading additional input from stdin...",
+      "turn_completed_events": 1
     },
     {
       "mode": "meta",
@@ -203,67 +206,70 @@
       "task_success": true,
       "tool_calls": 2,
       "extra_turns": 1,
-      "latency_ms": 20850.6,
-      "input_tokens": 81203,
+      "latency_ms": 20312.6,
+      "input_tokens": 81070,
+      "cached_input_tokens": 61440,
+      "output_tokens": 290,
+      "total_tokens": 81360,
+      "process_exit": 0,
+      "final_message": "I\u2019m locating the bench-only retrieval tool and will continue until it returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 038 retrieved.\n\n`BENCH_OK_meta_n50_t1: evidence bundle 038 retrieved`",
+      "errors": [],
+      "warnings": [
+        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
+        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
+      ],
+      "stderr_tail": "Reading additional input from stdin...\n2026-09-04T19:59:41.090022Z ERROR codex_skills_extension::host_service: failed to install system skills: io error while remove existing system skills dir: Directory not empty (os error 66)",
+      "turn_completed_events": 1
+    },
+    {
+      "mode": "direct",
+      "n_tools": 100,
+      "trial": 0,
+      "expected_tool": "archive_case_007",
+      "selected_tool": "archive_case_007",
+      "selection_correct": true,
+      "task_success": true,
+      "tool_calls": 1,
+      "extra_turns": 0,
+      "latency_ms": 15087.2,
+      "input_tokens": 79592,
+      "cached_input_tokens": 57600,
+      "output_tokens": 239,
+      "total_tokens": 79831,
+      "process_exit": 0,
+      "final_message": "I\u2019ll use only the available bench MCP tools and will stop once one returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 007 retrieved successfully.\n\n`BENCH_OK_direct_n100_t0: evidence bundle 007 retrieved`",
+      "errors": [],
+      "warnings": [
+        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
+        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
+      ],
+      "stderr_tail": "Reading additional input from stdin...",
+      "turn_completed_events": 1
+    },
+    {
+      "mode": "meta",
+      "n_tools": 100,
+      "trial": 0,
+      "expected_tool": "archive_case_007",
+      "selected_tool": "archive_case_007",
+      "selection_correct": true,
+      "task_success": true,
+      "tool_calls": 2,
+      "extra_turns": 1,
+      "latency_ms": 21066.3,
+      "input_tokens": 81030,
       "cached_input_tokens": 67584,
       "output_tokens": 275,
-      "total_tokens": 81478,
+      "total_tokens": 81305,
       "process_exit": 0,
-      "final_message": "I’m locating the bench-only evidence retrieval tool and will stop only once it returns the required `BENCH_OK` proof marker.\nBENCH_OK_meta_n50_t1: evidence bundle 038 retrieved",
+      "final_message": "I\u2019m locating the bench-only retrieval tools and will continue until the archive operation returns its required proof marker.\nBENCH_OK_meta_n100_t0: evidence bundle 007 retrieved",
       "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
       "warnings": [
         "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
         "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
-    },
-    {
-      "mode": "direct",
-      "n_tools": 100,
-      "trial": 0,
-      "expected_tool": "archive_case_007",
-      "selected_tool": "archive_case_007",
-      "selection_correct": true,
-      "task_success": true,
-      "tool_calls": 1,
-      "extra_turns": 0,
-      "latency_ms": 16760.6,
-      "input_tokens": 79693,
-      "cached_input_tokens": 67840,
-      "output_tokens": 237,
-      "total_tokens": 79930,
-      "process_exit": 0,
-      "final_message": "I’ll use only the available bench MCP tools and will stop only once one returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 007 retrieved successfully.\n\n`BENCH_OK_direct_n100_t0: evidence bundle 007 retrieved`",
-      "errors": [],
+      ],
       "stderr_tail": "Reading additional input from stdin...",
-      "warnings": [
-        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
-        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
-    },
-    {
-      "mode": "meta",
-      "n_tools": 100,
-      "trial": 0,
-      "expected_tool": "archive_case_007",
-      "selected_tool": "archive_case_007",
-      "selection_correct": true,
-      "task_success": true,
-      "tool_calls": 2,
-      "extra_turns": 1,
-      "latency_ms": 19001.9,
-      "input_tokens": 81221,
-      "cached_input_tokens": 58624,
-      "output_tokens": 274,
-      "total_tokens": 81495,
-      "process_exit": 0,
-      "final_message": "I’m locating the bench-only retrieval tool and will continue until it returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 007 retrieved successfully.\n\n`BENCH_OK_meta_n100_t0: evidence bundle 007 retrieved`",
-      "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
-      "warnings": [
-        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
-        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
+      "turn_completed_events": 1
     },
     {
       "mode": "direct",
@@ -275,211 +281,220 @@
       "task_success": true,
       "tool_calls": 1,
       "extra_turns": 0,
-      "latency_ms": 14415.5,
-      "input_tokens": 79721,
-      "cached_input_tokens": 57600,
-      "output_tokens": 246,
-      "total_tokens": 79967,
-      "process_exit": 0,
-      "final_message": "I’ll use only the bench MCP tools to locate case 038’s archived compliance evidence and will stop only once the tool returns its `BENCH_OK` proof marker.\nArchived compliance evidence for case 038 retrieved successfully.\n\n`BENCH_OK_direct_n100_t1: evidence bundle 038 retrieved`",
-      "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
-      "warnings": [
-        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
-        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
-    },
-    {
-      "mode": "meta",
-      "n_tools": 100,
-      "trial": 1,
-      "expected_tool": "archive_case_038",
-      "selected_tool": "archive_case_038",
-      "selection_correct": true,
-      "task_success": true,
-      "tool_calls": 2,
-      "extra_turns": 1,
-      "latency_ms": 21234.5,
-      "input_tokens": 89525,
-      "cached_input_tokens": 72704,
-      "output_tokens": 255,
-      "total_tokens": 89780,
-      "process_exit": 0,
-      "final_message": "I’m locating the bench-only retrieval tool and will continue until it returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 038 retrieved successfully.\n\n`BENCH_OK_meta_n100_t1: evidence bundle 038 retrieved`",
-      "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
-      "warnings": [
-        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
-        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
-    },
-    {
-      "mode": "direct",
-      "n_tools": 200,
-      "trial": 0,
-      "expected_tool": "archive_case_007",
-      "selected_tool": "archive_case_007",
-      "selection_correct": true,
-      "task_success": true,
-      "tool_calls": 1,
-      "extra_turns": 0,
-      "latency_ms": 21120.9,
-      "input_tokens": 80156,
-      "cached_input_tokens": 64768,
-      "output_tokens": 180,
-      "total_tokens": 80336,
-      "process_exit": 0,
-      "final_message": "I’m locating the bench-only retrieval and proof tools now. I’ll stop only once the bench returns the required `BENCH_OK` marker.\nArchived compliance evidence for case 007 retrieved successfully.\n\n`BENCH_OK_direct_n200_t0: evidence bundle 007 retrieved`",
-      "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
-      "warnings": [
-        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
-        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
-    },
-    {
-      "mode": "meta",
-      "n_tools": 200,
-      "trial": 0,
-      "expected_tool": "archive_case_007",
-      "selected_tool": "archive_case_007",
-      "selection_correct": true,
-      "task_success": true,
-      "tool_calls": 2,
-      "extra_turns": 1,
-      "latency_ms": 22232.8,
-      "input_tokens": 81237,
-      "cached_input_tokens": 77824,
-      "output_tokens": 277,
-      "total_tokens": 81514,
-      "process_exit": 0,
-      "final_message": "I’m locating the bench-only retrieval tool and will continue until it returns the required `BENCH_OK` proof marker.\nBENCH_OK_meta_n200_t0: evidence bundle 007 retrieved",
-      "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
-      "warnings": [
-        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
-        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
-    },
-    {
-      "mode": "direct",
-      "n_tools": 200,
-      "trial": 1,
-      "expected_tool": "archive_case_138",
-      "selected_tool": "archive_case_138",
-      "selection_correct": true,
-      "task_success": true,
-      "tool_calls": 1,
-      "extra_turns": 0,
-      "latency_ms": 15527.8,
-      "input_tokens": 80181,
-      "cached_input_tokens": 67840,
-      "output_tokens": 199,
-      "total_tokens": 80380,
-      "process_exit": 0,
-      "final_message": "I’ll use only the available bench MCP tools to retrieve case 138’s archived compliance evidence and will stop once a tool returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 138 retrieved successfully.\n\n`BENCH_OK_direct_n200_t1: evidence bundle 138 retrieved`",
-      "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
-      "warnings": [
-        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
-        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
-    },
-    {
-      "mode": "meta",
-      "n_tools": 200,
-      "trial": 1,
-      "expected_tool": "archive_case_138",
-      "selected_tool": "archive_case_138",
-      "selection_correct": true,
-      "task_success": true,
-      "tool_calls": 2,
-      "extra_turns": 1,
-      "latency_ms": 21663.0,
-      "input_tokens": 81456,
-      "cached_input_tokens": 74752,
-      "output_tokens": 382,
-      "total_tokens": 81838,
-      "process_exit": 0,
-      "final_message": "I’m locating the bench-only evidence retrieval operation and will stop only when it returns the required proof marker.\nArchived compliance evidence for case 138 retrieved.\n\n`BENCH_OK_meta_n200_t1: evidence bundle 138 retrieved`",
-      "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
-      "warnings": [
-        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
-        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
-    },
-    {
-      "mode": "direct",
-      "n_tools": 500,
-      "trial": 0,
-      "expected_tool": "archive_case_007",
-      "selected_tool": "archive_case_007",
-      "selection_correct": true,
-      "task_success": true,
-      "tool_calls": 1,
-      "extra_turns": 0,
-      "latency_ms": 14883.0,
-      "input_tokens": 80371,
-      "cached_input_tokens": 57600,
-      "output_tokens": 237,
-      "total_tokens": 80608,
-      "process_exit": 0,
-      "final_message": "I’m locating the bench-only retrieval tool and will continue until it returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 007 retrieved successfully.\n\n`BENCH_OK_direct_n500_t0: evidence bundle 007 retrieved`",
-      "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
-      "warnings": [
-        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
-        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
-    },
-    {
-      "mode": "meta",
-      "n_tools": 500,
-      "trial": 0,
-      "expected_tool": "archive_case_007",
-      "selected_tool": "archive_case_007",
-      "selection_correct": true,
-      "task_success": true,
-      "tool_calls": 2,
-      "extra_turns": 1,
-      "latency_ms": 22028.9,
-      "input_tokens": 81246,
-      "cached_input_tokens": 77824,
-      "output_tokens": 255,
-      "total_tokens": 81501,
-      "process_exit": 0,
-      "final_message": "I’m locating the bench-only retrieval and proof tools now, and I’ll stop only once the archive returns the required `BENCH_OK` marker.\nArchived compliance evidence for case 007 retrieved successfully.\n\n`BENCH_OK_meta_n500_t0: evidence bundle 007 retrieved`",
-      "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
-      "warnings": [
-        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
-        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
-    },
-    {
-      "mode": "direct",
-      "n_tools": 500,
-      "trial": 1,
-      "expected_tool": "archive_case_138",
-      "selected_tool": "archive_case_138",
-      "selection_correct": true,
-      "task_success": true,
-      "tool_calls": 1,
-      "extra_turns": 0,
-      "latency_ms": 15759.9,
-      "input_tokens": 80146,
+      "latency_ms": 14801.1,
+      "input_tokens": 79606,
       "cached_input_tokens": 48640,
-      "output_tokens": 256,
-      "total_tokens": 80402,
+      "output_tokens": 214,
+      "total_tokens": 79820,
       "process_exit": 0,
-      "final_message": "I’m locating the available bench MCP operation and will use it exclusively to retrieve case 138 and verify the required proof marker.\nArchived compliance evidence for case 138 retrieved successfully.\n\nBENCH_OK_direct_n500_t1: evidence bundle 138 retrieved",
+      "final_message": "I\u2019ll retrieve case 038 using only the available bench tools and will stop only once a tool returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 038 retrieved successfully.\n\n`BENCH_OK_direct_n100_t1: evidence bundle 038 retrieved`",
       "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
       "warnings": [
         "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
         "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
+      ],
+      "stderr_tail": "Reading additional input from stdin...",
+      "turn_completed_events": 1
+    },
+    {
+      "mode": "meta",
+      "n_tools": 100,
+      "trial": 1,
+      "expected_tool": "archive_case_038",
+      "selected_tool": "archive_case_038",
+      "selection_correct": true,
+      "task_success": true,
+      "tool_calls": 2,
+      "extra_turns": 1,
+      "latency_ms": 22016.0,
+      "input_tokens": 81051,
+      "cached_input_tokens": 77824,
+      "output_tokens": 298,
+      "total_tokens": 81349,
+      "process_exit": 0,
+      "final_message": "I\u2019ll use only the bench MCP tools and will stop only once I receive a `BENCH_OK` proof marker.\nArchived compliance evidence for case 038 retrieved successfully.\n\n`BENCH_OK_meta_n100_t1: evidence bundle 038 retrieved`",
+      "errors": [],
+      "warnings": [
+        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
+        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
+      ],
+      "stderr_tail": "Reading additional input from stdin...",
+      "turn_completed_events": 1
+    },
+    {
+      "mode": "direct",
+      "n_tools": 200,
+      "trial": 0,
+      "expected_tool": "archive_case_007",
+      "selected_tool": "archive_case_007",
+      "selection_correct": true,
+      "task_success": true,
+      "tool_calls": 1,
+      "extra_turns": 0,
+      "latency_ms": 14890.4,
+      "input_tokens": 80022,
+      "cached_input_tokens": 57600,
+      "output_tokens": 185,
+      "total_tokens": 80207,
+      "process_exit": 0,
+      "final_message": "I\u2019m locating the bench-only retrieval tool and will continue until it returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 007 retrieved successfully.\n\n`BENCH_OK_direct_n200_t0: evidence bundle 007 retrieved`",
+      "errors": [],
+      "warnings": [
+        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
+        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
+      ],
+      "stderr_tail": "Reading additional input from stdin...",
+      "turn_completed_events": 1
+    },
+    {
+      "mode": "meta",
+      "n_tools": 200,
+      "trial": 0,
+      "expected_tool": "archive_case_007",
+      "selected_tool": "archive_case_007",
+      "selection_correct": true,
+      "task_success": true,
+      "tool_calls": 2,
+      "extra_turns": 1,
+      "latency_ms": 20327.8,
+      "input_tokens": 81070,
+      "cached_input_tokens": 58624,
+      "output_tokens": 307,
+      "total_tokens": 81377,
+      "process_exit": 0,
+      "final_message": "I\u2019m locating the bench-only retrieval tool and will continue until it returns the required `BENCH_OK` proof marker.\nBENCH_OK_meta_n200_t0: evidence bundle 007 retrieved",
+      "errors": [],
+      "warnings": [
+        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
+        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
+      ],
+      "stderr_tail": "Reading additional input from stdin...",
+      "turn_completed_events": 1
+    },
+    {
+      "mode": "direct",
+      "n_tools": 200,
+      "trial": 1,
+      "expected_tool": "archive_case_138",
+      "selected_tool": "archive_case_138",
+      "selection_correct": true,
+      "task_success": true,
+      "tool_calls": 1,
+      "extra_turns": 0,
+      "latency_ms": 16287.7,
+      "input_tokens": 80049,
+      "cached_input_tokens": 48640,
+      "output_tokens": 248,
+      "total_tokens": 80297,
+      "process_exit": 0,
+      "final_message": "I\u2019m locating the bench-only retrieval tool and will continue until it returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 138 retrieved successfully.\n\n`BENCH_OK_direct_n200_t1: evidence bundle 138 retrieved`",
+      "errors": [],
+      "warnings": [
+        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
+        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
+      ],
+      "stderr_tail": "Reading additional input from stdin...",
+      "turn_completed_events": 1
+    },
+    {
+      "mode": "meta",
+      "n_tools": 200,
+      "trial": 1,
+      "expected_tool": "archive_case_138",
+      "selected_tool": "archive_case_138",
+      "selection_correct": true,
+      "task_success": true,
+      "tool_calls": 2,
+      "extra_turns": 1,
+      "latency_ms": 26516.3,
+      "input_tokens": 81503,
+      "cached_input_tokens": 58624,
+      "output_tokens": 454,
+      "total_tokens": 81957,
+      "process_exit": 0,
+      "final_message": "I\u2019ll retrieve case 138 using the bench MCP interface only and will stop once the required `BENCH_OK` proof marker is returned.\nArchived compliance evidence for case 138 retrieved successfully.\n\n`BENCH_OK_meta_n200_t1`",
+      "errors": [],
+      "warnings": [
+        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
+        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
+      ],
+      "stderr_tail": "Reading additional input from stdin...",
+      "turn_completed_events": 1
+    },
+    {
+      "mode": "direct",
+      "n_tools": 500,
+      "trial": 0,
+      "expected_tool": "archive_case_007",
+      "selected_tool": "archive_case_007",
+      "selection_correct": true,
+      "task_success": true,
+      "tool_calls": 1,
+      "extra_turns": 0,
+      "latency_ms": 15767.9,
+      "input_tokens": 80034,
+      "cached_input_tokens": 57600,
+      "output_tokens": 222,
+      "total_tokens": 80256,
+      "process_exit": 0,
+      "final_message": "I\u2019ll use only the available bench MCP tools and will stop only once one returns the required `BENCH_OK` proof marker.\nBENCH_OK_direct_n500_t0: evidence bundle 007 retrieved",
+      "errors": [],
+      "warnings": [
+        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
+        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
+      ],
+      "stderr_tail": "Reading additional input from stdin...",
+      "turn_completed_events": 1
+    },
+    {
+      "mode": "meta",
+      "n_tools": 500,
+      "trial": 0,
+      "expected_tool": "archive_case_007",
+      "selected_tool": "archive_case_007",
+      "selection_correct": true,
+      "task_success": true,
+      "tool_calls": 2,
+      "extra_turns": 1,
+      "latency_ms": 20958.2,
+      "input_tokens": 81067,
+      "cached_input_tokens": 58624,
+      "output_tokens": 312,
+      "total_tokens": 81379,
+      "process_exit": 0,
+      "final_message": "I\u2019m using only the available bench MCP tools and will stop once their response includes the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 007 retrieved successfully.\n\n`BENCH_OK_meta_n500_t0: evidence bundle 007 retrieved`",
+      "errors": [],
+      "warnings": [
+        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
+        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
+      ],
+      "stderr_tail": "Reading additional input from stdin...",
+      "turn_completed_events": 1
+    },
+    {
+      "mode": "direct",
+      "n_tools": 500,
+      "trial": 1,
+      "expected_tool": "archive_case_138",
+      "selected_tool": "archive_case_138",
+      "selection_correct": true,
+      "task_success": true,
+      "tool_calls": 1,
+      "extra_turns": 0,
+      "latency_ms": 16006.8,
+      "input_tokens": 80062,
+      "cached_input_tokens": 48640,
+      "output_tokens": 265,
+      "total_tokens": 80327,
+      "process_exit": 0,
+      "final_message": "I\u2019m locating the bench-only retrieval tool and will stop only once it returns the required `BENCH_OK` proof marker.\nArchived compliance evidence for case 138 retrieved successfully.\n\n`BENCH_OK_direct_n500_t1: evidence bundle 138 retrieved`",
+      "errors": [],
+      "warnings": [
+        "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
+        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
+      ],
+      "stderr_tail": "Reading additional input from stdin...",
+      "turn_completed_events": 1
     },
     {
       "mode": "meta",
@@ -491,19 +506,20 @@
       "task_success": true,
       "tool_calls": 2,
       "extra_turns": 1,
-      "latency_ms": 21362.8,
-      "input_tokens": 81289,
-      "cached_input_tokens": 77824,
-      "output_tokens": 342,
-      "total_tokens": 81631,
+      "latency_ms": 20975.7,
+      "input_tokens": 81063,
+      "cached_input_tokens": 57600,
+      "output_tokens": 265,
+      "total_tokens": 81328,
       "process_exit": 0,
-      "final_message": "I’m locating the bench-only tools and will use them exclusively to retrieve case 138 and verify the required proof marker.\nArchived compliance evidence for case 138 retrieved successfully.\n\n`BENCH_OK_meta_n500_t1: evidence bundle 138 retrieved`",
+      "final_message": "I\u2019m locating the bench-only retrieval tool and will stop only when it returns the required `BENCH_OK` proof marker.\nBENCH_OK_meta_n500_t1: evidence bundle 138 retrieved",
       "errors": [],
-      "stderr_tail": "Reading additional input from stdin...",
       "warnings": [
         "Under-development features enabled: skip_host_skill_discovery. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/mikko/.codex/config.toml.",
         "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-      ]
+      ],
+      "stderr_tail": "Reading additional input from stdin...",
+      "turn_completed_events": 1
     }
   ]
 }
