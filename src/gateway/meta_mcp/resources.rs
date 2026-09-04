@@ -116,7 +116,7 @@ Query current session cost with:
 
   gateway_cost_report()
 
-Query aggregate statistics (cache hit rate, token savings) with:
+Query aggregate observed statistics (invocations and cache hit rate) with:
 
   gateway_get_stats()
 

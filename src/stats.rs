@@ -3,7 +3,7 @@
 //! Usage statistics tracking for the gateway
 //!
 //! Tracks invocations, cache hits, tools discovered, cached token counts, and
-//! calculates token/cost savings.
+//! reports observed usage and cache behavior.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -115,16 +115,6 @@ impl UsageStats {
         let cache_hits = self.cache_hits.load(Ordering::Relaxed);
         let discovered = self.tools_discovered.load(Ordering::Relaxed);
 
-        // Calculate token savings
-        // Without gateway: each invocation would load ALL backend tools (~150 tokens each)
-        // With gateway: 4 meta-tools are loaded instead
-        // Savings = (total_backend_tools - 4) * 150 tokens * invocations
-        let tokens_saved = if total_backend_tools > 4 {
-            (total_backend_tools - 4) as u64 * 150 * invocations
-        } else {
-            0
-        };
-
         // Get top tools
         let mut tool_counts: Vec<(String, u64)> = self
             .tool_usage
@@ -175,18 +165,10 @@ impl UsageStats {
             cache_hit_rate,
             tools_discovered: discovered,
             tools_available: total_backend_tools,
-            tokens_saved,
             top_tools,
             total_cached_tokens,
             cached_tokens_by_server,
         }
-    }
-
-    /// Calculate estimated cost savings
-    #[allow(clippy::cast_precision_loss)]
-    pub fn cost_savings(&self, total_backend_tools: usize, price_per_million: f64) -> f64 {
-        let snapshot = self.snapshot(total_backend_tools);
-        snapshot.tokens_saved as f64 * price_per_million / 1_000_000.0
     }
 }
 
@@ -203,23 +185,12 @@ pub struct StatsSnapshot {
     pub tools_discovered: u64,
     /// Total tools available across backends
     pub tools_available: usize,
-    /// Estimated tokens saved by using gateway
-    pub tokens_saved: u64,
     /// Top 10 most-used tools
     pub top_tools: Vec<TopTool>,
     /// Total prompt-cached tokens observed across all backends
     pub total_cached_tokens: u64,
     /// Per-server prompt-cached token breakdown (sorted descending by token count)
     pub cached_tokens_by_server: Vec<CachedTokensEntry>,
-}
-
-impl StatsSnapshot {
-    /// Calculate estimated cost savings at a given token price
-    #[must_use]
-    #[allow(clippy::cast_precision_loss)]
-    pub fn estimated_savings_usd(&self, price_per_million: f64) -> f64 {
-        self.tokens_saved as f64 * price_per_million / 1_000_000.0
-    }
 }
 
 /// Top tool usage entry
@@ -274,23 +245,6 @@ mod tests {
         assert!((snapshot.cache_hit_rate - 0.333).abs() < 0.01);
         assert_eq!(snapshot.tools_discovered, 5);
         assert_eq!(snapshot.tools_available, 100);
-        // (100 - 4) * 150 * 3 = 43,200
-        assert_eq!(snapshot.tokens_saved, 43_200);
-    }
-
-    #[test]
-    fn test_cost_savings() {
-        let stats = UsageStats::new();
-        for _ in 0..100 {
-            stats.record_invocation("server1", "tool1");
-        }
-
-        // Price: $15/million input tokens (Claude Opus 4.6)
-        let savings = stats.cost_savings(100, 15.0);
-
-        // (100 - 4) * 150 * 100 = 1,440,000 tokens
-        // 1,440,000 * $15 / 1,000,000 = $21.60
-        assert!((savings - 21.6).abs() < 0.01);
     }
 
     #[test]
@@ -308,16 +262,6 @@ mod tests {
         assert_eq!(snapshot.top_tools[0].count, 3);
         assert_eq!(snapshot.top_tools[1].tool, "rare");
         assert_eq!(snapshot.top_tools[1].count, 1);
-    }
-
-    #[test]
-    fn test_no_savings_with_few_tools() {
-        let stats = UsageStats::new();
-        stats.record_invocation("s1", "t1");
-
-        // Only 3 tools available, gateway has 4 meta-tools
-        let snapshot = stats.snapshot(3);
-        assert_eq!(snapshot.tokens_saved, 0);
     }
 
     #[test]
@@ -349,19 +293,6 @@ mod tests {
 
         let snapshot = stats.snapshot(100);
         assert_eq!(snapshot.tools_discovered, 15);
-    }
-
-    #[test]
-    fn test_snapshot_estimated_savings() {
-        let stats = UsageStats::new();
-        stats.record_invocation("s1", "t1");
-
-        let snapshot = stats.snapshot(100);
-        let savings = snapshot.estimated_savings_usd(15.0);
-
-        // (100 - 4) * 150 * 1 = 14,400 tokens
-        // 14,400 * $15 / 1,000,000 = $0.216
-        assert!((savings - 0.216).abs() < 0.001);
     }
 
     #[test]

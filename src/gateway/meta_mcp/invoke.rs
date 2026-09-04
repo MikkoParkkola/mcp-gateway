@@ -112,8 +112,8 @@ use guarded::GuardedValue;
 
 use super::super::meta_mcp_helpers::{
     build_circuit_breaker_stats_json, build_server_safety_status, build_stats_response,
-    did_you_mean, extract_bool_or, extract_optional_str, extract_price_per_million,
-    extract_required_str, parse_tool_arguments,
+    did_you_mean, extract_bool_or, extract_optional_str, extract_required_str,
+    parse_tool_arguments,
 };
 use super::super::recovery::{ErrorCategory, RecoveryContext, attach_recovery, recovery_for};
 use super::super::trace;
@@ -2657,9 +2657,7 @@ impl MetaMcp {
     /// `gateway_get_stats` — gateway statistics with per-backend error budget
     /// and circuit-breaker status.
     #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)]
-    pub(super) async fn get_stats(&self, args: &Value, caller_is_admin: bool) -> Result<Value> {
-        let price_per_million = extract_price_per_million(args);
-
+    pub(super) async fn get_stats(&self, _args: &Value, caller_is_admin: bool) -> Result<Value> {
         let stats = self
             .stats
             .as_ref()
@@ -2676,7 +2674,7 @@ impl MetaMcp {
         }
 
         let snapshot = stats.snapshot(total_tools);
-        let mut response = build_stats_response(&snapshot, price_per_million);
+        let mut response = build_stats_response(&snapshot);
 
         let all_backends = self.backends.all();
 

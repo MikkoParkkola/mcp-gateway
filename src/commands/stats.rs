@@ -39,7 +39,7 @@ fn is_wildcard_bind(host: &str) -> bool {
 }
 
 /// Run the `stats` command against a running gateway.
-pub async fn run_stats_command(url: &str, price: f64) -> ExitCode {
+pub async fn run_stats_command(url: &str) -> ExitCode {
     use serde_json::json;
 
     let client = reqwest::Client::new();
@@ -49,7 +49,7 @@ pub async fn run_stats_command(url: &str, price: f64) -> ExitCode {
         "method": "tools/call",
         "params": {
             "name": "gateway_get_stats",
-            "arguments": { "price_per_million": price }
+            "arguments": {}
         }
     });
 
@@ -89,11 +89,6 @@ fn print_stats_body(body: &serde_json::Value, _url: &str) -> ExitCode {
         println!("Cache Hit Rate:    {}", stats["cache_hit_rate"]);
         println!("Tools Discovered:  {}", stats["tools_discovered"]);
         println!("Tools Available:   {}", stats["tools_available"]);
-        println!(
-            "Tokens Saved:      {}",
-            stats["tokens_saved"].as_u64().unwrap_or(0)
-        );
-        println!("Estimated Savings: {}", stats["estimated_savings_usd"]);
         print_top_tools(&stats);
         return ExitCode::SUCCESS;
     }

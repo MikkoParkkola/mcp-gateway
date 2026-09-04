@@ -17,7 +17,8 @@ Public quantitative claims are tracked in [benchmarks/public_claims.json](../ben
 | Meta-tools exposed to the AI | 14 minimum / 16 README benchmark / 17 with webhook status | `benchmarks/public_claims.json` |
 | Built-in capability YAMLs | 119 total (marketed as 110+) | `benchmarks/public_claims.json` + `find capabilities -name '*.yaml' -not -path '*/examples/*' \| wc -l` |
 | Startup time | ~8ms | `hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'` |
-| README token-savings scenario | 100 tools → ~1600 gateway tokens → **89% savings** | `python benchmarks/token_savings.py --scenario readme` |
+| Live agent task cost | no measured saving; the meta path cost more input tokens in all 8 matched pairs | `benchmarks/results/mik-6977-live-agent-2026-09-04.json` |
+| Schema-only model | 100 tools → ~1600 gateway schema tokens → 89% smaller first request; not completed-task cost | `python3 benchmarks/token_savings.py --scenario readme` |
 
 ## Startup Performance
 
@@ -31,11 +32,56 @@ Benchmark: target/release/mcp-gateway --help
 
 **Startup time: ~8ms** - Fast enough for CLI and server use.
 
-## README Token-Savings Scenario
+## Live agent result
+
+On 2026-09-04, Codex with `gpt-5.6-luna` retrieved one exact item from generated
+catalogs of 50, 100, 200, and 500 permitted tools. Each size had two direct and
+two meta-surface trials. Both paths selected the correct tool and completed all
+eight tasks. Direct mean total task tokens grew from 70,165 to 79,974 between 50 and 100
+tools, then stayed near 80,000 at 200 and 500. The host compacted those larger
+lists, so only the 50- and 100-tool rows measure a direct catalog that still
+scaled with the configured size.
+
+| Permitted tools | Direct mean total task tokens (range) | Meta mean total task tokens (range) | Meta input-token saving, mean | Direct / meta median latency | Extra meta turns |
+|---:|---:|---:|---:|---:|---:|
+| 50 | 70,165 (70,144–70,185) | 81,547 (81,545–81,548) | -16.11% | 19.6s / 26.7s | 1 |
+| 100 | 79,974 (79,957–79,990) | 89,888 (89,865–89,910) | -12.35% | 23.9s / 20.1s | 1 |
+| 200 | 80,496 (80,383–80,609) | 81,515 (81,509–81,521) | -1.22% | 16.7s / 22.7s | 1 |
+| 500 | 80,311 (80,287–80,334) | 81,579 (81,552–81,606) | -1.40% | 14.9s / 20.7s | 1 |
+
+This result does not support a completed-task token-savings claim. Across all
+tested sizes, the meta surface used 1.2–16.1% more input tokens and added one turn.
+It cost more input tokens in all eight matched pairs. The 200- and 500-tool rows
+are retained as host-compaction evidence, not as catalog-scaling measurements.
+It remains useful as a catalog-capacity boundary, but we do not lead with the
+schema-only 89% model as a task result.
+
+The benchmark is deliberately narrow. It uses one agent and model with two
+trials per cell; the ranges above show both observations. Four trials ran
+concurrently, so the latency values are exploratory. An isolated benchmark MCP
+server generated the catalog around an exact numeric target. The mcp-gateway
+binary was not in the request path. The direct path exposed all generated tools;
+the meta path exposed only
+the synthetic `gateway_search_tools` and `gateway_invoke` pair, not the 14–17
+tool product surface. Search extracted the requested number and otherwise fell
+back to the expected index supplied by the runner. Plugins and apps were
+disabled, as were memories and host skill discovery. The recorded warnings note the
+under-development flag and shortened skill descriptions. There is no real
+backend latency. Total task tokens include the Codex host context. Use the
+checked-in per-trial artifact to inspect the measurements; do not generalize
+them to other models or workloads.
 
 ```bash
-python benchmarks/token_savings.py --scenario readme
-python benchmarks/token_savings.py --scenario readme --json
+python3 benchmarks/live_agent_tool_selection.py \
+  --sizes 50,100,200,500 --trials 2 --jobs 4 \
+  --output-json benchmarks/results/mik-6977-live-agent-2026-09-04.json
+```
+
+## Schema-only first-request model
+
+```bash
+python3 benchmarks/token_savings.py --scenario readme
+python3 benchmarks/token_savings.py --scenario readme --json
 ```
 
 Reference scenario assumptions:
@@ -47,7 +93,11 @@ Reference scenario assumptions:
 
 The base discovery quartet stays constant, and the README benchmark scenario adds stats, cost report, playbooks, profile controls, disabled-capability listing, and reload. Surfacing webhook status adds the 17th tool.
 
-This yields the README headline numbers: **~1600 gateway tokens**, **89% savings**, and **$201 saved per 1K requests**.
+This yields the schema-only first-request numbers: **~1600 gateway tokens** and **89% smaller**, with a modeled **$201 per 1K requests**. It is not a completed-task saving. Discovery turns (`gateway_search_tools` then `gateway_invoke`) reload the host context and Meta-MCP surface while carrying earlier responses forward.
+
+At 50–100 tools, the direct-path observations imply roughly 24,900–27,500 non-schema host tokens per request. Using 27,000 puts the simple crossover near 107 tools: schema savings must cover both the extra request's host context and its carried discovery output. Catalog compaction invalidates the extrapolation above that boundary.
+
+The in-tree `honest_task_tokens` model therefore requires an explicit host-context size. Its discovery fixture is a synthetic L0 lower bound with the exact `build_search_response` envelope, not a production capture. Run `python3 benchmarks/token_savings.py` to see the checked-in live result, including selection, task completion, latency, turns, and task tokens.
 
 ## Memory Usage
 
@@ -74,7 +124,10 @@ cargo build --release
 hyperfine --shell=none --warmup 3 'target/release/mcp-gateway --help'
 
 # README token-savings scenario
-python benchmarks/token_savings.py --scenario readme
+python3 benchmarks/token_savings.py --scenario readme
+
+# Live agent comparison (requires authenticated Codex CLI access)
+python3 benchmarks/live_agent_tool_selection.py --output-json /tmp/mik-6977-live.json
 
 # Code stats
 scc . --exclude-dir target --exclude-dir .git

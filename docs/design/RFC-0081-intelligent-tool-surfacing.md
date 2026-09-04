@@ -13,7 +13,7 @@
 When mcp-gateway coexists alongside directly-connected MCP servers, LLMs prefer
 direct tools (full schemas visible in `tools/list`, one-hop invocation) over
 gateway meta-tools (two-hop discovery via `gateway_search_tools` then
-`gateway_invoke`). The gateway's core value proposition is ~95% context token
+`gateway_invoke`). The gateway's core value proposition is a compact context
 savings through the Meta-MCP pattern -- exposing 4-15 meta-tools instead of 150+
 full tool schemas.
 
@@ -24,7 +24,7 @@ are also connected.
 ### Specific Weaknesses
 
 1. **Meta-tool descriptions are functional, not persuasive** -- "Search for tools
-   across all backends by keyword" does not communicate the value of ~95% token
+   across all backends by keyword" does not communicate the value of compact-context
    savings or the breadth of 150+ tools across 20+ servers.
 
 2. **Initialize instructions mention meta-tools but do not emphasize the
@@ -249,7 +249,7 @@ pub(crate) fn build_base_tools(tool_count: usize, server_count: usize) -> Vec<To
             title: Some(format!("Search {} Tools", tool_count)),
             description: Some(format!(
                 "Search {} tools across {} servers by keyword -- returns only relevant \
-                 matches with full schemas, saving ~95% context tokens vs loading all \
+                 matches with full schemas, reducing context vs loading all \
                  tool definitions. Supports multi-word queries and synonym expansion.",
                 tool_count, server_count
             )),
@@ -295,13 +295,13 @@ The descriptions with Approach A become:
 
 | Tool | Current Description | New Description (dynamic) |
 |------|-------------------|--------------------------|
-| `gateway_search_tools` | "Search for tools across all backends by keyword" | "Search {N} tools across {M} servers by keyword. Returns ranked matches with full schemas, saving ~95% context tokens vs loading all tool definitions. Supports multi-word queries (e.g., 'batch research') and synonym expansion." |
+| `gateway_search_tools` | "Search for tools across all backends by keyword" | "Search {N} tools across {M} servers by keyword. Returns ranked matches with full schemas, reducing context vs loading all tool definitions. Supports multi-word queries (e.g., 'batch research') and synonym expansion." |
 | `gateway_list_tools` | "List tools from a backend server. Omit server to list ALL tools across all backends." | "List tools from a specific backend, or omit server to list all {N} tools across {M} backends. Returns names and descriptions -- use gateway_search_tools for ranked results with full schemas." |
 | `gateway_list_servers` | "List all available MCP backend servers" | "List all {M} connected MCP backend servers with their status, tool count, and circuit-breaker state." |
 | `gateway_invoke` | "Invoke a tool on a specific backend" | "Invoke any tool on any backend server. Routes through the gateway's auth, rate-limit, caching, and failsafe middleware. Use gateway_search_tools first to discover the right tool and server." |
 
 **Acceptance Criteria**:
-- AC-2.1: `gateway_search_tools` description contains actual tool count (not hardcoded "150+") and mentions "95% context tokens"
+- AC-2.1: `gateway_search_tools` description contains the actual tool count (not a hardcoded count) and describes schema-on-demand without an unqualified savings percentage
 - AC-2.2: `gateway_invoke` description mentions "gateway_search_tools first"
 - AC-2.3: All tool descriptions are non-empty and under 500 characters
 - AC-2.4: Descriptions update automatically when backends connect/disconnect (dynamic counts)
@@ -328,7 +328,7 @@ New dynamic preamble (pass counts from the `MetaMcp` struct that calls
 ```
 This server manages {N} tools across {M} backends.
 Use gateway_search_tools FIRST to find relevant tools by keyword before invoking.
-Tool schemas are not listed directly to save context (~95% token reduction).
+Tool schemas are not listed directly, keeping the initial context compact.
 
 Discovery pattern:
 1. gateway_search_tools(query="your keyword") -- find tools matching your need
@@ -339,7 +339,7 @@ Direct listing (when you know the backend):
 - gateway_list_servers -- list all backends with status
 
 Operator tools:
-- gateway_get_stats -- usage analytics and token savings
+- gateway_get_stats -- observed usage analytics and request statistics
 - gateway_set_profile / gateway_get_profile -- switch routing profiles
 ```
 
@@ -351,7 +351,7 @@ Operator tools:
 **Acceptance Criteria**:
 - AC-3.1: Initialize response instructions mention "gateway_search_tools FIRST"
 - AC-3.2: Instructions include the discovery pattern (search then invoke)
-- AC-3.3: Instructions mention token savings percentage
+- AC-3.3: Instructions distinguish observed task-token measurements from qualified schema-footprint estimates; they do not promise a fixed savings percentage
 
 ---
 
@@ -984,8 +984,8 @@ Expose all backend tools as lightweight stubs in `tools/list`: name + title +
 description only (no `inputSchema`). Implement `tools/resolve` handler: given
 tool name, return full `Tool` with `inputSchema`.
 
-Context math: ~50 tokens per stub x 150 tools = ~7,500 tokens (vs ~150,000
-for full schemas) = still 95% savings.
+Context math must be measured from the emitted schemas and completed request
+history; this design does not pre-register a fixed savings percentage.
 
 ```rust
 #[cfg(feature = "spec-preview")]

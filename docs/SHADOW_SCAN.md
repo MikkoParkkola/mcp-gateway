@@ -1,5 +1,8 @@
 # ShadowRadar Passive Discovery
 
+Enterprise-governance comparison (Willow / Webrix, MIK-5843):
+[docs/competitive/willow-enterprise-agent-governance.md](competitive/willow-enterprise-agent-governance.md).
+
 ShadowRadar is the local, passive inventory path for unmanaged MCP servers. It
 helps operators find MCP endpoints that exist in client configs, environment
 hints, local process metadata, or gateway-adjacent discovery output before
@@ -11,9 +14,8 @@ servers, call tools, mutate gateway config by default, or perform fleet/network
 range scans.
 
 Enterprise scope is intentionally separate: network range discovery, scheduled
-fleet inventory, drift evidence, SIEM export, owner assignment, and policy
-remediation are represented through the enterprise boundary contract and require
-enterprise licensing.
+fleet inventory, drift evidence, scheduled SIEM findings export, owner assignment,
+and policy remediation are represented through the enterprise boundary contract.
 
 ## Command
 
@@ -31,6 +33,26 @@ mcp-gateway cap discover --shadow --write-config
 
 The write path only adopts findings classified as local and adoptable. Findings
 that require owner review, quarantine, or enterprise workflow are skipped.
+
+Export static network-detection rules for operator-managed tooling:
+
+```bash
+mcp-gateway doctor --shadow --shadow-format grep
+mcp-gateway doctor --shadow --shadow-format nginx
+mcp-gateway doctor --shadow --shadow-format yaml
+```
+
+The `grep` output uses portable extended regular expressions (`grep -E`) and
+works with the system grep on macOS and Linux. The legacy `haproxy` format name
+is accepted as an alias for the Nginx renderer; it does not emit HAProxy
+configuration.
+
+This command sits on the free/core product boundary and generates body-method
+and protocol-version patterns; `free_core` is not a commercial-use grant. The
+gateway does not inspect traffic or publish findings to a SIEM. Scheduled SIEM
+findings export, fleet inventory, and remediation remain enterprise workflow capabilities.
+Commercial use of the runnable gateway requires a license; see
+[`COMMERCIAL.md`](../COMMERCIAL.md).
 
 ## ShadowAsset JSON schema
 

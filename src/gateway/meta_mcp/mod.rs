@@ -529,7 +529,6 @@ impl MetaMcp {
                 cache_hit_rate: 0.0,
                 tools_discovered: 0,
                 tools_available: total_backend_tools,
-                tokens_saved: 0,
                 top_tools: vec![],
                 total_cached_tokens: 0,
                 cached_tokens_by_server: vec![],
@@ -1163,7 +1162,6 @@ impl MetaMcp {
             negotiated = negotiated_version,
             "Protocol version negotiation"
         );
-
         let profile_hint = header_profile.or_else(|| {
             params
                 .and_then(|p| p.get("profile"))
@@ -1235,12 +1233,41 @@ impl MetaMcp {
         self.handle_tools_list_for_session(id, None)
     }
 
+    fn shadow_tools_list_assembly(
+        &self,
+        session_id: Option<&str>,
+        request_variant: bool,
+    ) -> crate::protocol_revision_telemetry::ToolsListShadow {
+        // Static Code Mode returns the same two meta-tools only on the standard
+        // path. A spec-preview query returns filtered backend tools instead.
+        if self.code_mode_enabled && !request_variant {
+            return crate::protocol_revision_telemetry::observe_tools_list(
+                crate::protocol_revision_telemetry::ListFilters::default(),
+            );
+        }
+        let profile = self.active_profile(session_id).is_restrictive()
+            && (request_variant || !self.surfaced_tools.is_empty());
+        #[cfg(feature = "spec-preview")]
+        let session = !self.promoted_tools_for_session(session_id).is_empty();
+        #[cfg(not(feature = "spec-preview"))]
+        let session = false;
+        crate::protocol_revision_telemetry::observe_tools_list(
+            crate::protocol_revision_telemetry::ListFilters {
+                principal: false,
+                profile,
+                session,
+                request: request_variant,
+            },
+        )
+    }
+
     /// Session-aware variant of `handle_tools_list` used by the router.
     pub fn handle_tools_list_for_session(
         &self,
         id: RequestId,
         session_id: Option<&str>,
     ) -> JsonRpcResponse {
+        self.shadow_tools_list_assembly(session_id, false);
         let tools = if self.code_mode_enabled {
             self.meta_tool_exposure.filter(build_code_mode_tools())
         } else {
@@ -1338,6 +1365,12 @@ impl MetaMcp {
         let effective_code_mode = self.code_mode_enabled || url_override;
         if effective_code_mode && !self.code_mode_enabled {
             // URL-activated Code Mode: return the two fixed tools directly.
+            crate::protocol_revision_telemetry::observe_tools_list(
+                crate::protocol_revision_telemetry::ListFilters {
+                    request: true,
+                    ..crate::protocol_revision_telemetry::ListFilters::default()
+                },
+            );
             // Still filtered - a URL parameter must not widen what the
             // operator exposed.
             let tools = self.meta_tool_exposure.filter(build_code_mode_tools());

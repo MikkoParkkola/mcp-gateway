@@ -649,6 +649,18 @@ pub(super) async fn meta_mcp_handler(
         }
     };
 
+    let protocol_header = headers
+        .get("mcp-protocol-version")
+        .and_then(|value| value.to_str().ok());
+    crate::protocol_revision_telemetry::observe_inbound_request(
+        &request,
+        params.as_ref(),
+        &method,
+        protocol_header,
+        Some(session_id.as_str()),
+        crate::protocol_revision_telemetry::Transport::Http,
+    );
+
     // Which protocol generation is this request written against? Decided per
     // request, not per connection: 2026-07-28 removed the handshake precisely so
     // one connection can carry both.

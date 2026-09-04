@@ -6,7 +6,7 @@
 //!
 //! # Features
 //!
-//! - **Meta-MCP Mode**: 12 tools minimum, 14 in the README benchmark scenario, 15 when webhook status is surfaced
+//! - **Meta-MCP Mode**: 14 tools minimum; 16 in the README benchmark scenario; 17 when webhook status is surfaced
 //! - **Streaming**: Real-time notifications via SSE (MCP 2025-03-26 Streamable HTTP)
 //! - **Notification Multiplexer**: Routes backend notifications to connected clients
 //! - **Multi-Transport**: stdio, Streamable HTTP, SSE support
@@ -49,6 +49,7 @@ pub mod failsafe;
 mod fs_lock;
 pub mod gateway;
 mod hashing;
+pub mod honest_task_tokens;
 pub mod idempotency;
 pub mod identity_grants;
 pub mod identity_propagation;
@@ -63,6 +64,7 @@ pub mod playbook;
 pub mod projection;
 pub mod protocol;
 pub mod protocol_imports;
+pub mod protocol_revision_telemetry;
 pub mod provider;
 pub mod ranking;
 pub mod registry;

@@ -84,6 +84,24 @@ git -C "$repo" add .gitignore scripts/dev/check-public-repo-hygiene.sh
 git -C "$repo" add -f docs/competitive/scan.md
 assert_fail_contains "$repo" "tracked files remain under private strategy paths"
 
+repo="$(make_repo named-public-comparison)"
+cat >>"$repo/.gitignore" <<'EOF'
+!docs/competitive/
+docs/competitive/*
+!docs/competitive/README.md
+!docs/competitive/willow-enterprise-agent-governance.md
+EOF
+mkdir -p "$repo/docs/competitive"
+cat >"$repo/docs/competitive/README.md" <<'EOF'
+# Public comparisons
+EOF
+cat >"$repo/docs/competitive/willow-enterprise-agent-governance.md" <<'EOF'
+# Willow feature comparison for users
+EOF
+git -C "$repo" add .gitignore scripts/dev/check-public-repo-hygiene.sh
+git -C "$repo" add docs/competitive/README.md docs/competitive/willow-enterprise-agent-governance.md
+assert_pass "$repo"
+
 blocked_markers=(
   "Status: DRAFT. Not ready to publish"
   "competitive scan"

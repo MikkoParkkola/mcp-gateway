@@ -183,19 +183,12 @@ pub(crate) fn build_stats_tool() -> Tool {
         name: "gateway_get_stats".to_string(),
         title: Some("Get Gateway Statistics".to_string()),
         description: Some(
-            "Get usage statistics including invocations, cache hits, \
-         token savings, and top tools"
+            "Get observed usage statistics including invocations, cache hits, and top tools"
                 .to_string(),
         ),
         input_schema: json!({
             "type": "object",
-            "properties": {
-                "price_per_million": {
-                    "type": "number",
-                    "description": "Token price per million for cost calculations (default 15.0 for Opus 4.6)",
-                    "default": 15.0
-                }
-            },
+            "properties": {},
             "required": []
         }),
         output_schema: None,

@@ -72,7 +72,7 @@ Source files live in `src/`. Each module is split to 800 LOC or fewer.
 | **ranking** | `ranking/` | Safety-aware adaptive search ranking, explanations, local feedback persistence |
 | **registry** | `registry/` | Capability registry: install, search, list from local and remote sources |
 | **secrets** | `secrets/` | Keychain integration (macOS/Linux), env var resolution, session caching |
-| **stats** | `stats/` | Invocation counters, cache hit rates, token savings estimation |
+| **stats** | `stats/` | Observed invocation counters and cache hit rates |
 | **validator** | `validator/` | Input validation for tool arguments against JSON Schema |
 | **cli** | `cli/` | CLI argument parsing: `serve`, `stats`, `cap` subcommands |
 | **error** | `error.rs` | Unified error types with `thiserror` |

@@ -39,7 +39,10 @@ const TOP_COMMANDS: &[(&str, &str)] = &[
     ("cap", "Capability management commands"),
     ("tls", "Certificate lifecycle management"),
     ("init", "Create a new gateway configuration file"),
-    ("stats", "Show invocation counts and token savings"),
+    (
+        "stats",
+        "Show observed invocation counts and cache behavior",
+    ),
     ("validate", "Validate capability definitions"),
     ("tool", "Invoke gateway tools directly from the CLI"),
 ];

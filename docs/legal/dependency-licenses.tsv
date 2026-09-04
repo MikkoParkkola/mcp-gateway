@@ -181,7 +181,7 @@ loom	0.7.2	Carl Lerche <me@carllerche.com>	https://github.com/tokio-rs/loom	MIT	
 lru-slab	0.1.2	Benjamin Saunders <ben.e.saunders@gmail.com>	https://github.com/Ralith/lru-slab	Apache-2.0 OR MIT OR Zlib		Pre-allocated storage with constant-time LRU tracking
 matchers	0.2.0	Eliza Weisman <eliza@buoyant.io>	https://github.com/hawkw/matchers	MIT		Regex matching on character and byte streams.
 matchit	0.8.4	Ibraheem Ahmed <ibraheem@ibraheem.ca>	https://github.com/ibraheemdev/matchit	BSD-3-Clause AND MIT		A high performance, zero-copy URL router.
-mcp-gateway	3.3.0	Mikko Parkkola <mikko.parkkola@iki.fi>	https://github.com/MikkoParkkola/mcp-gateway		LICENSES.md	Universal MCP Gateway - Single-port multiplexing with Meta-MCP for ~95% context token savings
+mcp-gateway	3.3.0	Mikko Parkkola <mikko.parkkola@iki.fi>	https://github.com/MikkoParkkola/mcp-gateway		LICENSES.md	Universal MCP Gateway - Single-port multiplexing with a compact Meta-MCP surface
 memchr	2.8.0	Andrew Gallant <jamslam@gmail.com>|bluss	https://github.com/BurntSushi/memchr	MIT OR Unlicense		Provides extremely fast (uses SIMD on x86_64, aarch64 and wasm32) routines for 1, 2 or 3 byte search and single substring search.
 metrics	0.24.6	Toby Lawrence <toby@nuclearfurnace.com>	https://github.com/metrics-rs/metrics	MIT		A lightweight metrics facade.
 metrics-exporter-prometheus	0.18.3	Toby Lawrence <toby@nuclearfurnace.com>	https://github.com/metrics-rs/metrics	Apache-2.0 AND MIT		A metrics-compatible exporter for sending metrics to Prometheus.

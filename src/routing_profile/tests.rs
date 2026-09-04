@@ -37,6 +37,21 @@ fn allow_all_profile_has_unrestricted_description() {
     let profile = RoutingProfile::allow_all("open");
     // THEN: description communicates lack of restrictions
     assert!(!profile.description.is_empty());
+    assert!(!profile.is_restrictive());
+}
+
+#[test]
+fn wildcard_allowlist_and_empty_denylist_are_unrestricted() {
+    let profile = profile_from(Some(&["*"]), Some(&[]), Some(&["*"]), Some(&[]));
+    assert!(!profile.is_restrictive());
+    assert!(profile.check("any-backend", "any-tool").is_ok());
+}
+
+#[test]
+fn empty_allowlist_is_restrictive() {
+    let profile = profile_from(Some(&[]), None, None, None);
+    assert!(profile.is_restrictive());
+    assert!(profile.check("any-backend", "any-tool").is_err());
 }
 
 // ── allow_tools list ─────────────────────────────────────────────────
@@ -52,6 +67,7 @@ fn allow_tools_exact_permits_listed_tool() {
 #[test]
 fn allow_tools_exact_blocks_unlisted_tool() {
     let p = profile_from(Some(&["brave_search"]), None, None, None);
+    assert!(p.is_restrictive());
     assert!(p.check("brave", "brave_suggest").is_err());
 }
 

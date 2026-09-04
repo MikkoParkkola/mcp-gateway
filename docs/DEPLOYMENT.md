@@ -454,7 +454,7 @@ setting for that backend stops the leak at the cost of keeping it resident.
 ### Live Statistics / Web Dashboard
 
 ```bash
-mcp-gateway stats --url http://127.0.0.1:39400 --price 15.0
+mcp-gateway stats --url http://127.0.0.1:39400
 ```
 
 Built-in dashboards: `/ui` (tool list, health, read-only control plane, config) and `/dashboard` (health matrix, cache rates, top tools), which is admin-only — see [Opening the dashboard](#opening-the-dashboard). Auto-refresh every 5s.

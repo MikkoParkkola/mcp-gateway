@@ -777,7 +777,10 @@ impl Gateway {
 
         // Install Prometheus metrics recorder (no-op when feature is disabled).
         #[cfg(feature = "metrics")]
-        crate::metrics::install();
+        {
+            crate::metrics::install();
+            crate::protocol_revision_telemetry::register_metrics();
+        }
 
         // ── Shared MetaMcp initialisation ────────────────────────────────────
         let BuiltMetaMcp {
@@ -1504,8 +1507,21 @@ impl Gateway {
             meta_mcp,
             tool_policy,
             mtls_policy,
+            data_dir,
             ..
         } = self.build_meta_mcp().await?;
+        let mut protocol_telemetry_sink =
+            match crate::protocol_revision_telemetry::DurableTelemetrySink::open(&data_dir) {
+                Ok(sink) => Some(sink),
+                Err(error) => {
+                    warn!(
+                        %error,
+                        data_dir = %data_dir.display(),
+                        "stdio protocol-revision telemetry is not durable; do not start the measurement window"
+                    );
+                    None
+                }
+            };
 
         if self.config.capabilities.enabled {
             let executor = Arc::new(CapabilityExecutor::new().with_env(Arc::clone(&self.env)));
@@ -1585,14 +1601,16 @@ impl Gateway {
 
             // Handle batch requests (array of JSON-RPC calls)
             if request.is_array() {
-                let responses = Self::dispatch_batch(
+                let responses = Self::dispatch_batch_with_sink(
                     &meta_mcp,
                     &tool_policy,
                     &mtls_policy,
                     request,
                     session_id,
+                    &mut protocol_telemetry_sink,
                 )
                 .await;
+                Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
                 if !responses.is_empty() {
                     let batch_resp = serde_json::Value::Array(responses);
                     Self::write_response(&mut stdout, &batch_resp).await;
@@ -1601,9 +1619,16 @@ impl Gateway {
             }
 
             // Single request
-            let response_opt =
-                Self::dispatch_single(&meta_mcp, &tool_policy, &mtls_policy, &request, session_id)
-                    .await;
+            let response_opt = Self::dispatch_single_with_sink(
+                &meta_mcp,
+                &tool_policy,
+                &mtls_policy,
+                &request,
+                session_id,
+                protocol_telemetry_sink.as_mut(),
+            )
+            .await;
+            Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
 
             if let Some(response) = response_opt {
                 Self::write_response(&mut stdout, &response).await;
@@ -1611,6 +1636,7 @@ impl Gateway {
         }
 
         info!("stdio: EOF reached, shutting down");
+        Self::persist_stdio_protocol_telemetry(&mut protocol_telemetry_sink);
         // Stop sweeping and probing before tearing the backends down. Both tasks
         // hold an Arc on the registry and have no shutdown channel in this mode,
         // so leaving either running keeps the registry alive after run_stdio
@@ -1626,6 +1652,19 @@ impl Gateway {
         warm_start_tasks.cancel().await;
         self.backends.stop_all().await;
         Ok(())
+    }
+
+    fn persist_stdio_protocol_telemetry(
+        sink: &mut Option<crate::protocol_revision_telemetry::DurableTelemetrySink>,
+    ) {
+        if let Some(sink) = sink
+            && let Err(error) = sink.persist_global()
+        {
+            warn!(
+                %error,
+                "failed to persist stdio protocol-revision telemetry; measurement window is incomplete"
+            );
+        }
     }
 
     /// Write a JSON-RPC response to stdout followed by a newline.
@@ -1654,12 +1693,36 @@ impl Gateway {
     /// Dispatch a single JSON-RPC request through `MetaMcp`.
     ///
     /// Returns `None` for notifications (no response expected per JSON-RPC spec).
+    #[cfg(test)]
     async fn dispatch_single(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
         _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         request: &serde_json::Value,
         session_id: &str,
+    ) -> Option<serde_json::Value> {
+        Self::dispatch_single_with_sink(
+            meta_mcp,
+            tool_policy,
+            _mtls_policy,
+            request,
+            session_id,
+            None,
+        )
+        .await
+    }
+
+    /// Dispatch one stdio request, durably recording its inbound observation
+    /// before any handler can await, fail, or terminate the process.
+    async fn dispatch_single_with_sink(
+        meta_mcp: &Arc<MetaMcp>,
+        tool_policy: &Arc<crate::security::ToolPolicy>,
+        _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
+        request: &serde_json::Value,
+        session_id: &str,
+        protocol_telemetry_sink: Option<
+            &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
+        >,
     ) -> Option<serde_json::Value> {
         use super::router::helpers::{extract_tools_call_params, parse_request};
         use crate::protocol::JsonRpcResponse;
@@ -1678,6 +1741,22 @@ impl Gateway {
         // revision split and this change does not move it. Recording is what
         // was missing, and recording is what this adds.
         crate::protocol::meta::classify_and_observe(&method, params.as_ref(), None);
+        crate::protocol_revision_telemetry::observe_inbound_request(
+            request,
+            params.as_ref(),
+            &method,
+            None,
+            Some(session_id),
+            crate::protocol_revision_telemetry::Transport::Stdio,
+        );
+        if let Some(sink) = protocol_telemetry_sink
+            && let Err(error) = sink.persist_global()
+        {
+            warn!(
+                %error,
+                "failed to persist inbound stdio protocol-revision observation; measurement window is incomplete"
+            );
+        }
 
         // Notifications have no id — send no response
         if method.starts_with("notifications/") {
@@ -1809,12 +1888,35 @@ impl Gateway {
     }
 
     /// Dispatch a JSON-RPC batch request.
+    #[cfg(test)]
     async fn dispatch_batch(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
         mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         batch: serde_json::Value,
         session_id: &str,
+    ) -> Vec<serde_json::Value> {
+        let mut sink = None;
+        Self::dispatch_batch_with_sink(
+            meta_mcp,
+            tool_policy,
+            mtls_policy,
+            batch,
+            session_id,
+            &mut sink,
+        )
+        .await
+    }
+
+    async fn dispatch_batch_with_sink(
+        meta_mcp: &Arc<MetaMcp>,
+        tool_policy: &Arc<crate::security::ToolPolicy>,
+        mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
+        batch: serde_json::Value,
+        session_id: &str,
+        protocol_telemetry_sink: &mut Option<
+            crate::protocol_revision_telemetry::DurableTelemetrySink,
+        >,
     ) -> Vec<serde_json::Value> {
         let Some(requests) = batch.as_array() else {
             return vec![
@@ -1832,8 +1934,15 @@ impl Gateway {
 
         let mut responses = Vec::new();
         for req in requests {
-            if let Some(resp) =
-                Self::dispatch_single(meta_mcp, tool_policy, mtls_policy, req, session_id).await
+            if let Some(resp) = Self::dispatch_single_with_sink(
+                meta_mcp,
+                tool_policy,
+                mtls_policy,
+                req,
+                session_id,
+                protocol_telemetry_sink.as_mut(),
+            )
+            .await
             {
                 responses.push(resp);
             }
@@ -2395,6 +2504,98 @@ mod tests {
 
         assert_eq!(response["error"]["code"], -32600);
         assert_eq!(response["error"]["message"], "Missing id");
+    }
+
+    #[tokio::test]
+    async fn stdio_initialize_records_requested_revision() {
+        let before = crate::protocol_revision_telemetry::global_snapshot();
+        let response = Gateway::dispatch_single(
+            &test_meta_mcp(),
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 7218,
+                "method": "initialize",
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientInfo": {"name": "Claude Code"}
+                },
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "clientInfo": {"name": "ignored-by-meta"}
+                }
+            }),
+            "stdio-session-mik-7218",
+        )
+        .await
+        .expect("initialize returns a response");
+
+        assert_eq!(response["result"]["protocolVersion"], "2025-06-18");
+        let after = crate::protocol_revision_telemetry::global_snapshot();
+        assert!(
+            after.by_revision.get("2026-07-28").copied().unwrap_or(0)
+                > before.by_revision.get("2026-07-28").copied().unwrap_or(0)
+        );
+        assert!(
+            after.by_transport.get("stdio").copied().unwrap_or(0)
+                > before.by_transport.get("stdio").copied().unwrap_or(0)
+        );
+        assert!(
+            after.by_client.get("claude").copied().unwrap_or(0)
+                > before.by_client.get("claude").copied().unwrap_or(0)
+        );
+    }
+
+    #[tokio::test]
+    async fn stdio_dispatch_persists_operator_readable_protocol_counters() {
+        let data_dir = tempfile::tempdir().expect("temporary data directory");
+        let mut sink = Some(
+            crate::protocol_revision_telemetry::DurableTelemetrySink::open(data_dir.path())
+                .expect("open durable telemetry sink"),
+        );
+        Gateway::persist_stdio_protocol_telemetry(&mut sink);
+
+        Gateway::dispatch_single_with_sink(
+            &test_meta_mcp(),
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 7219,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "clientInfo": {"name": "Codex"}
+                }
+            }),
+            "stdio-durable-window-test",
+            sink.as_mut(),
+        )
+        .await
+        .expect("initialize returns a response");
+
+        let window = crate::protocol_revision_telemetry::load_durable_window(data_dir.path())
+            .expect("load durable stdio aggregate");
+        assert!(window.snapshot.total >= 1);
+        assert!(
+            window
+                .snapshot
+                .by_transport
+                .get("stdio")
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        );
+        assert!(
+            window
+                .snapshot
+                .by_revision
+                .get("2025-11-25")
+                .copied()
+                .unwrap_or(0)
+                >= 1
+        );
     }
 
     // -- MIK-7246.CONFIRM.1a: the destructive gate over stdio ---------------

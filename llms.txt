@@ -1,8 +1,8 @@
 # mcp-gateway
 
-> Universal MCP gateway. README benchmark keeps 14 Meta-MCP tools in context (~1400 tokens, 91% token savings).
+> Universal MCP gateway. The README schema-only first-request model keeps 16 Meta-MCP tools in context (~1600 tokens, 89% savings); completed-task results also count discovery turns and responses.
 
-MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface (12 tools minimum, 14 in the README benchmark scenario, 15 when webhook status is surfaced) and discovers the right backend tool on demand.
+MCP Gateway sits between your AI client and your tools. Instead of loading hundreds of tool definitions into every request, the AI gets a compact Meta-MCP surface (14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced) and discovers the right backend tool on demand.
 
 ## Install
 
@@ -38,7 +38,7 @@ Add to MCP config:
 
 ## Base Discovery Tools (4)
 
-These four discovery tools are always present. The README benchmark scenario adds operator helpers for stats, cost reporting, playbooks, profile controls, disabled-capability listing, and reload to reach 14 tools. Surfacing webhook status brings the total to 15.
+These four discovery tools are always present. The minimum operational surface has 14 tools. The README benchmark scenario has 16, or 17 when webhook status is surfaced.
 
 - gateway_search_tools(query) -- Semantic search across all backend tools by keyword
 - gateway_invoke(server, tool, arguments) -- Execute a tool on any backend
@@ -52,7 +52,7 @@ These four discovery tools are always present. The README benchmark scenario add
 
 ## Key Features
 
-- Token savings: README benchmark keeps 14 Meta-MCP tools (~1400 tokens) vs loading all tool definitions (~15K tokens for 100 tools)
+- Live task result: the checked-in 16-run sample found no completed-task token saving; across the 50-, 100-, 200-, and 500-tool rows, the meta path used 1.2-16.1% more input tokens
 - REST API to MCP: drop a YAML capability file or import OpenAPI spec, no code needed
 - 100+ built-in capabilities: weather, Wikipedia, GitHub, stock quotes, package tracking
 - Hot reload: change config without losing AI session

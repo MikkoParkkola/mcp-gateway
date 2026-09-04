@@ -133,11 +133,6 @@ pub(crate) fn extract_u64_or(args: &Value, key: &str, default: u64) -> u64 {
     args.get(key).and_then(Value::as_u64).unwrap_or(default)
 }
 
-/// Extract an optional floating-point parameter, defaulting when missing or wrong type.
-pub(crate) fn extract_f64_or(args: &Value, key: &str, default: f64) -> f64 {
-    args.get(key).and_then(Value::as_f64).unwrap_or(default)
-}
-
 /// Build the `InitializeResult` for a given negotiated protocol version.
 ///
 /// `instructions` is appended after the static preamble; pass an empty string
@@ -611,24 +606,14 @@ pub(crate) fn parse_tool_arguments(args: &Value) -> Result<Value> {
     Ok(arguments)
 }
 
-/// Extract the price per million from stats arguments, defaulting to 15.0.
-pub(crate) fn extract_price_per_million(args: &Value) -> f64 {
-    extract_f64_or(args, "price_per_million", 15.0)
-}
-
 /// Build the stats response JSON from a snapshot.
-#[allow(clippy::cast_precision_loss)]
-pub(crate) fn build_stats_response(snapshot: &StatsSnapshot, price_per_million: f64) -> Value {
-    let estimated_savings = snapshot.estimated_savings_usd(price_per_million);
-
+pub(crate) fn build_stats_response(snapshot: &StatsSnapshot) -> Value {
     json!({
         "invocations": snapshot.invocations,
         "cache_hits": snapshot.cache_hits,
         "cache_hit_rate": format!("{:.1}%", snapshot.cache_hit_rate * 100.0),
         "tools_discovered": snapshot.tools_discovered,
         "tools_available": snapshot.tools_available,
-        "tokens_saved": snapshot.tokens_saved,
-        "estimated_savings_usd": format!("${:.2}", estimated_savings),
         "top_tools": snapshot.top_tools,
         "total_cached_tokens": snapshot.total_cached_tokens,
         "cached_tokens_by_server": snapshot.cached_tokens_by_server
