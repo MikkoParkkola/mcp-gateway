@@ -231,6 +231,10 @@ pub struct MetaMcp {
     /// Pre-built from `surfaced_tools` so `handle_tools_call` only pays one
     /// `HashMap` lookup instead of a linear scan on every call.
     pub(super) surfaced_tools_map: HashMap<String, String>,
+    /// Per-backend bound for `prompts/list` and `resources/list`
+    /// aggregation. Configurable via `meta_mcp.prompts_resources_fetch_timeout`
+    /// (default 10s); overridable per-instance for tests.
+    pub(super) prompts_resources_fetch_timeout: std::time::Duration,
     /// Session-scoped dynamically promoted tools (SEP-1862 / Phase 3).
     ///
     /// Keyed by session ID.  Each entry is a list of `"server:tool"` strings
@@ -391,6 +395,7 @@ impl MetaMcp {
             cost_registry: None,
             surfaced_tools: Vec::new(),
             surfaced_tools_map: HashMap::new(),
+            prompts_resources_fetch_timeout: std::time::Duration::from_secs(10),
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
             session_state: SessionStateStore::new(),
@@ -473,6 +478,16 @@ impl MetaMcp {
     #[must_use]
     pub fn with_code_mode(mut self, enabled: bool) -> Self {
         self.code_mode_enabled = enabled;
+        self
+    }
+
+    /// Override the per-backend `prompts/list` and `resources/list` fetch
+    /// timeout. The default comes from
+    /// `meta_mcp.prompts_resources_fetch_timeout` (10s); this lets tests run
+    /// with a shorter bound.
+    #[must_use]
+    pub fn with_prompts_resources_fetch_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.prompts_resources_fetch_timeout = timeout;
         self
     }
 

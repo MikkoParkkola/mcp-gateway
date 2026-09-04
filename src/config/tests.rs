@@ -350,6 +350,52 @@ meta_mcp:
     assert!(config.meta_mcp.surfaced_tools.is_empty());
 }
 
+// ── meta_mcp.prompts_resources_fetch_timeout (PR #465 aggregation bound) ─────
+
+#[test]
+fn meta_mcp_prompts_resources_fetch_timeout_deserializes_from_yaml() {
+    // GIVEN: a YAML with an explicit aggregation timeout
+    let yaml = r"
+meta_mcp:
+  prompts_resources_fetch_timeout: 5s
+";
+    // WHEN: parsing as Config
+    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    // THEN: the timeout is read as a humantime Duration
+    assert_eq!(
+        config.meta_mcp.prompts_resources_fetch_timeout,
+        Duration::from_secs(5)
+    );
+}
+
+#[test]
+fn meta_mcp_prompts_resources_fetch_timeout_defaults_to_ten_seconds() {
+    // GIVEN: no prompts_resources_fetch_timeout in config
+    // WHEN: a default config is created
+    let config = Config::default();
+    // THEN: the bound falls back to the documented 10s default
+    assert_eq!(
+        config.meta_mcp.prompts_resources_fetch_timeout,
+        Duration::from_secs(10)
+    );
+}
+
+#[test]
+fn meta_mcp_prompts_resources_fetch_timeout_omitted_in_yaml_keeps_default() {
+    // GIVEN: a YAML with meta_mcp but no aggregation timeout key
+    let yaml = r"
+meta_mcp:
+  cache_ttl: 60s
+";
+    // WHEN: parsing
+    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    // THEN: the default is applied
+    assert_eq!(
+        config.meta_mcp.prompts_resources_fetch_timeout,
+        Duration::from_secs(10)
+    );
+}
+
 #[test]
 fn surfaced_tool_config_serializes_roundtrip() {
     // GIVEN: a SurfacedToolConfig

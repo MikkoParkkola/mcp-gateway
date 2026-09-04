@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`gateway_search` returns L0 by default** (MIK-7084): tool name, one-line purpose, and score. `detail=l1` adds signature, when-to-use, and required params; `detail=l2` returns the full `input_schema`. `include_schema=true` still maps to L2 and is deprecated, not removed. Ranking diagnostics (`ranking` reasons and signals) are omitted unless `explain=true`. `gateway_search_tools` also omits `ranking` unless `explain=true`.
+### Fixed
+
+- **`prompts/list` and `resources/list` no longer stall on a slow or hung
+  backend.** Both handlers aggregated every backend sequentially, so a single
+  backend that was slow to answer held the whole request for its full transport
+  timeout (often 120s). On a gateway with 50+ backends this blew past client
+  connect timeouts on every (re)connect, and the gateway's late response
+  surfaced as an "unknown message ID" error. Backends are now fetched in
+  parallel and each fetch is bounded by a short timeout, so a slow or hung
+  backend is skipped instead of blocking the list.
+- **The aggregation timeout is configurable** via
+  `meta_mcp.prompts_resources_fetch_timeout` (default `10s`). Operators with
+  unusually slow backends can raise it without a code change.
+- **A cancelled transport request no longer strands its `pending` entry.**
+  When an outer timeout drops an in-flight stdio or WebSocket request before
+  the transport's own request timeout fires, a RAII guard removes the entry
+  from the transport's `pending` map on drop, so a late response finds no
+  dangling sender and the map does not grow across reconnect loops.
 
 ## [3.5.0] - 2026-08-28
 
