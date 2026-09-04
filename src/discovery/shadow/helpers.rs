@@ -345,7 +345,14 @@ pub(super) fn is_loopback_url(raw: &str) -> bool {
     let Some(host) = parsed.host_str() else {
         return false;
     };
-    host == "localhost" || host == "::1" || host.starts_with("127.")
+    // Delegated, not re-decided here. This answer feeds `local_only`, which
+    // feeds `auth_exposure`, which decides `network_exposed` in
+    // `classify_severity` — so a host that classifies loopback has its severity
+    // downgraded. The string test this replaced said `host.starts_with("127.")`,
+    // which is true of any registrable DNS name beginning `127.`: an attacker
+    // who registers one gets their own ungoverned server marked local, which is
+    // the exact finding shadow discovery exists to raise.
+    crate::gateway::is_loopback_host(host)
 }
 
 pub(super) fn executable_name(command: &str) -> Option<String> {

@@ -352,3 +352,17 @@ fn enterprise_shadow_scan_extension_point_is_gated() {
             .all(|export| export.requires_enterprise_license)
     );
 }
+
+// The two cases the string test got wrong. Kept as regressions rather than as a
+// note on the helper: the wrong answer here is a severity downgrade on exactly
+// the finding the scan exists to raise, and nothing else in the module would
+// notice it come back.
+#[test]
+fn a_dns_name_beginning_127_is_not_loopback() {
+    assert!(!is_loopback_url("http://127.attacker.example.com/mcp"));
+}
+
+#[test]
+fn a_bracketed_ipv6_loopback_literal_is_loopback() {
+    assert!(is_loopback_url("http://[::1]:8080/"));
+}
