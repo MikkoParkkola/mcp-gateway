@@ -40,6 +40,16 @@ pub const MEASURED_REVISIONS: &[&str] = &[
 ];
 /// Label for a present but unknown or malformed revision.
 pub const OTHER_REVISION: &str = "other";
+const MEASURED_CLIENTS: &[&str] = &[
+    UNATTRIBUTED_CLIENT,
+    "claude",
+    "codex",
+    "cursor",
+    "vscode",
+    "chatgpt",
+    "other",
+];
+const MEASURED_TRANSPORTS: &[Transport] = &[Transport::Http, Transport::Stdio, Transport::Internal];
 
 /// Inbound transport for a negotiated session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -527,6 +537,70 @@ fn emit_tools_list_metrics(filters: ListFilters, scope: CacheScope) {
         "would_emit_cache_scope" => scope.as_str()
     )
     .increment(1);
+}
+
+/// Register every bounded protocol-revision and list-shadow metric series at zero.
+///
+/// Call this after installing the recorder and before taking the baseline scrape
+/// for a measurement window. Zero registration prevents an unused revision or
+/// client family from disappearing from `increase()` queries.
+pub fn register_metrics() {
+    #[cfg(feature = "metrics")]
+    {
+        for revision in MEASURED_REVISIONS
+            .iter()
+            .copied()
+            .chain(std::iter::once(OTHER_REVISION))
+        {
+            for client in MEASURED_CLIENTS {
+                for transport in MEASURED_TRANSPORTS {
+                    telemetry_metrics::counter!(
+                        "mcp_protocol_revision_observations_total",
+                        "requested_revision" => revision,
+                        "client" => *client,
+                        "transport" => transport.as_str()
+                    )
+                    .increment(0);
+                }
+            }
+        }
+
+        for client in MEASURED_CLIENTS {
+            for transport in MEASURED_TRANSPORTS {
+                telemetry_metrics::counter!(
+                    "mcp_protocol_revision_unattributed_observations_total",
+                    "client" => *client,
+                    "transport" => transport.as_str()
+                )
+                .increment(0);
+            }
+        }
+
+        for principal in [false, true] {
+            for profile in [false, true] {
+                for session in [false, true] {
+                    for request in [false, true] {
+                        let filters = ListFilters {
+                            principal,
+                            profile,
+                            session,
+                            request,
+                        };
+                        let scope = cache_scope_decision(filters);
+                        telemetry_metrics::counter!(
+                            "mcp_tools_list_cache_scope_shadow_total",
+                            "principal" => principal.to_string(),
+                            "profile" => profile.to_string(),
+                            "session" => session.to_string(),
+                            "request" => request.to_string(),
+                            "would_emit_cache_scope" => scope.as_str()
+                        )
+                        .increment(0);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Process snapshot for the measurement table.

@@ -10,6 +10,23 @@ use mcp_gateway::protocol_revision_telemetry::{
 };
 use serde_json::json;
 
+#[cfg(feature = "metrics")]
+#[test]
+fn mcp728_u1_7_metric_series_exist_before_first_request() {
+    mcp_gateway::metrics::install();
+    mcp_gateway::protocol_revision_telemetry::register_metrics();
+    let rendered = mcp_gateway::metrics::render();
+
+    for revision in mcp_gateway::protocol_revision_telemetry::MEASURED_REVISIONS {
+        assert!(
+            rendered.contains(&format!("requested_revision=\"{revision}\"")),
+            "missing zero-valued series for {revision}"
+        );
+    }
+    assert!(rendered.contains("mcp_protocol_revision_unattributed_observations_total"));
+    assert!(rendered.contains("mcp_tools_list_cache_scope_shadow_total"));
+}
+
 #[test]
 fn mcp728_u1_1_initialize_and_meta_paths_record_revision_and_client() {
     let init = json!({

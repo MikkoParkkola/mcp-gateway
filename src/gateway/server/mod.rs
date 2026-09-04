@@ -744,7 +744,10 @@ impl Gateway {
 
         // Install Prometheus metrics recorder (no-op when feature is disabled).
         #[cfg(feature = "metrics")]
-        crate::metrics::install();
+        {
+            crate::metrics::install();
+            crate::protocol_revision_telemetry::register_metrics();
+        }
 
         // ── Shared MetaMcp initialisation ────────────────────────────────────
         let BuiltMetaMcp {

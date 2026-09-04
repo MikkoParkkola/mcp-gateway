@@ -87,7 +87,9 @@ prevents uncertainty from making a revision look safe to remove. Revisions with
 zero observations are still evaluated from the gateway's explicit
 `SUPPORTED_VERSIONS` table.
 
-**Production window: not started.** Record these fields after deployment:
+**Production window: not started.** Start it from a baseline scrape taken after
+the process has pre-registered every bounded metric series at zero. Record these
+fields after deployment:
 
 - start timestamp and the timestamp seven full days later;
 - Prometheus counter increases over that exact interval; and
