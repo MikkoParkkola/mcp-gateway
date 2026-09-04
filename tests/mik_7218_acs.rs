@@ -75,7 +75,7 @@ fn mcp728_u1_4_measurement_window_table_and_stop_criterion() {
     // snapshot must not freeze Decision 2.
     let production = Registry::new().snapshot();
     assert_eq!(production.total, 0);
-    assert_eq!(attribution_rate(&production), 0.0);
+    assert!(attribution_rate(&production).abs() <= f64::EPSILON);
     assert!(
         attribution_rate(&production) < ATTRIBUTION_FLOOR,
         "empty window is not fit to decide on"
@@ -122,7 +122,7 @@ fn mcp728_u1_5_public_over_filtered_is_detectable() {
 
 #[test]
 fn mcp728_u1_6_two_percent_rule_unadjusted_and_blocked_when_underattributed() {
-    assert_eq!(RETIRE_BELOW_SHARE, 0.02);
+    assert!((RETIRE_BELOW_SHARE - 0.02).abs() <= f64::EPSILON);
     let mut under = Registry::new();
     under.observe_session(Some("2024-11-05"), "2024-11-05", "c", Transport::Http);
     under.observe_session(None, "2025-11-25", "c", Transport::Http);

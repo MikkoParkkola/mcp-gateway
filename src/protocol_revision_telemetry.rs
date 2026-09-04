@@ -491,7 +491,10 @@ fn emit_session_metrics(
 #[cfg(test)]
 #[allow(dead_code)]
 pub(crate) fn reset_global_for_tests() {
-    global().lock().unwrap_or_else(|e| e.into_inner()).reset();
+    global()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .reset();
 }
 
 #[cfg(test)]
