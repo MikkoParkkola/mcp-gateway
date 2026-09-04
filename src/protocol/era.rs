@@ -17,8 +17,11 @@
 //! So the rule is asymmetric, and getting it backwards is the easy mistake:
 //! evidence of modernity must be positive, and everything else is legacy.
 
+use serde_json::json;
+
 /// What a peer speaks, as far as we have been able to establish.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Era {
     /// Speaks 2026-07-28 or later: stateless, per-request `_meta`, no handshake.
     Modern,
@@ -199,4 +202,130 @@ fn names_a_modern_version(doc: &serde_json::Value) -> bool {
                 .filter_map(serde_json::Value::as_str)
                 .any(|version| crate::protocol::meta::MODERN_VERSIONS.contains(&version))
         })
+}
+
+// ============================================================================
+// NFR.OBS.3 — what an operator can see about the era determination
+// ============================================================================
+
+/// Why we believe what we believe about a peer's era.
+///
+/// A closed set, because the criterion's "by what evidence" clause is only a
+/// claim if the answers are enumerable. One enum serves both observability
+/// surfaces — the operator read and the `era_probe` event — so the two cannot
+/// drift into describing the same probe differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EraEvidence {
+    /// No probe has run. The era is the safe default, not a finding.
+    NeverProbed,
+    /// A discovery document naming a revision we can speak statelessly.
+    DiscoverModern,
+    /// A discovery document naming no revision we can speak statelessly —
+    /// including a dual-era peer that offered only 2025 revisions.
+    DiscoverNotModern,
+    /// A JSON-RPC error only a 2026-07-28 peer knows how to raise.
+    ///
+    /// Covers all three modern-only codes. They collapse deliberately: the era
+    /// consequence is identical, and the raw code rides the event's
+    /// `error_code` field for anyone who needs to tell them apart.
+    ModernErrorCode,
+    /// `-32601` — the honest legacy answer to an unknown method.
+    MethodNotFound,
+    /// Some other error code. Not evidence of modernity.
+    OtherError,
+    /// Deadline expiry, transport failure, or an unparseable result.
+    ///
+    /// Distinct from every error variant because silence is not a finding:
+    /// the probe ran and told us nothing, so the era stays assumed even though
+    /// `era_probed_at` is set.
+    NoAnswer,
+}
+
+/// Whether the era was established or merely assumed.
+///
+/// Carries the distinction `Option<Era>` used to carry implicitly: a peer that
+/// never answered is `Assumed` on the legacy default, and must not be pinned to
+/// that verdict for the life of the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EraSource {
+    /// The default, held because nothing has contradicted it.
+    Assumed,
+    /// The peer told us, and we recorded what it said.
+    Probed,
+}
+
+/// What caused the probe whose outcome is recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeTrigger {
+    /// The backend start path, before the first request.
+    Start,
+    /// An ordinary response contradicted the cached verdict.
+    Reprobe,
+}
+
+/// Everything an operator can see about one backend's era determination.
+///
+/// The five fields are one value rather than five cells so that no reader can
+/// observe a half-updated determination — an `era` from the latest probe beside
+/// an `era_evidence` from the previous one is internally inconsistent and no
+/// per-field assertion would see it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EraObservation {
+    /// The era to act on now.
+    pub era: Era,
+    /// Whether [`Self::era`] was established or defaulted.
+    pub source: EraSource,
+    /// What produced [`Self::era`].
+    pub evidence: EraEvidence,
+    /// What caused the probe. `None` until one has run.
+    pub trigger: Option<ProbeTrigger>,
+    /// When the probe completed. `None` until one has run.
+    pub probed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl EraObservation {
+    /// The determination held before any probe has run.
+    #[must_use]
+    pub const fn never_probed() -> Self {
+        Self {
+            era: Era::Legacy,
+            source: EraSource::Assumed,
+            evidence: EraEvidence::NeverProbed,
+            trigger: None,
+            probed_at: None,
+        }
+    }
+
+    /// The operator-facing fields, for merging into a `gateway_list_servers`
+    /// entry.
+    ///
+    /// Absent rather than null when a probe has not run: a `gateway_list_servers`
+    /// reader distinguishes "no probe" from "probed and unknown", and `null`
+    /// collapses them.
+    ///
+    /// The raw JSON-RPC error code is deliberately not here. It is an event
+    /// field; putting it on the operator read would widen the surface past what
+    /// the design fixed, and every positive assertion would still pass.
+    #[must_use]
+    pub fn render(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut fields = serde_json::Map::new();
+        fields.insert("era".into(), json!(self.era));
+        fields.insert("era_source".into(), json!(self.source));
+        fields.insert("era_evidence".into(), json!(self.evidence));
+        if let Some(trigger) = self.trigger {
+            fields.insert("era_probe_trigger".into(), json!(trigger));
+        }
+        if let Some(at) = self.probed_at {
+            // Second precision, UTC, `Z` suffix — one shape, so an operator
+            // diffing two reads compares timestamps rather than formats.
+            fields.insert(
+                "era_probed_at".into(),
+                json!(at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            );
+        }
+        fields
+    }
 }
