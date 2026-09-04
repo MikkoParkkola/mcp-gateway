@@ -617,7 +617,11 @@ them, permanently: the 2026-07-28 lifecycle scopes `initialize` to "`2025-11-25`
 `MODERN_VERSIONS` (`src/protocol/meta.rs:219`) names the modern revision alone, for the stateless
 path that serves it. `COMPAT.1` requires the modern revision be *served*, which the legacy list
 cannot do and was never going to. The row's single gate is the `server.modern_protocol` default
-(`src/config/mod.rs:1174`), today `false`. GPT's era finding reaches the same wall from the other
+(`impl Default for ServerConfig`, `src/config/mod.rs`), today `false`. Serving it by default is not
+one edit: the field also carries a redundant field-level `#[serde(default)]` that shadows the
+struct's container-level one with `bool::default()`, so a config file with a `server:` section that
+omits the flag deserializes to `false` whatever the struct default says. GPT's era finding reaches
+the same wall from the other
 direction: a test cannot exercise a modern-shaped request while no modern request path exists.
 Work that assumes a served modern revision is blocked behind the header and era increments, so
 `COMPAT.1` is a dependency of them, not a parallel item.
