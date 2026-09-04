@@ -497,12 +497,18 @@ pub fn requested_revision(
 }
 
 /// Client name from initialize `clientInfo` or 2026 `_meta` clientInfo.
+///
+/// MIK-6704: label only. The name is a metric label and a display string; it
+/// reaches no authorization decision, and any caller can write any value there.
 pub fn client_identity(initialize_params: Option<&Value>, request_meta: Option<&Value>) -> String {
+    // MIK-6704: label only.
     client_info_name(request_meta.and_then(|m| m.get(META_CLIENT_INFO)))
         .or_else(|| client_info_name(initialize_params.and_then(|p| p.get("clientInfo"))))
         .unwrap_or_else(|| UNATTRIBUTED_CLIENT.to_string())
 }
 
+// MIK-6704: label only — extracted for telemetry attribution, never for a
+// decision.
 fn client_info_name(value: Option<&Value>) -> Option<String> {
     let name = value?.get("name")?.as_str()?.trim();
     if name.is_empty() {
@@ -957,6 +963,7 @@ pub fn observe_inbound_request(
         .or_else(|| requested_revision(initialize_params, None))
         .or_else(|| protocol_header.map(str::trim).map(str::to_string))
         .filter(|value| !value.is_empty());
+    // MIK-6704: label only — attributes the observation, gates nothing.
     let explicit_client = client_info_name(request_meta_value(request, params, META_CLIENT_INFO))
         .or_else(|| client_info_name(initialize_params.and_then(|p| p.get("clientInfo"))))
         .unwrap_or_else(|| UNATTRIBUTED_CLIENT.to_string());

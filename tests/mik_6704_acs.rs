@@ -138,6 +138,8 @@ fn ac_ident_2_a_null_capability_is_not_a_declaration() {
 fn ac_ident_1_no_code_outside_the_parser_reads_the_self_asserted_name() {
     use std::path::Path;
 
+    const LABEL_ONLY_MARKER: &str = "MIK-6704: label only";
+
     fn scan(dir: &Path, hits: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir)
             .expect("source tree readable")
@@ -152,8 +154,18 @@ fn ac_ident_1_no_code_outside_the_parser_reads_the_self_asserted_name() {
                     continue;
                 }
                 let text = std::fs::read_to_string(&path).unwrap_or_default();
-                for (n, line) in text.lines().enumerate() {
-                    if line.contains("client_info_name") {
+                let lines: Vec<&str> = text.lines().collect();
+                for (n, line) in lines.iter().enumerate() {
+                    if !line.contains("client_info_name") {
+                        continue;
+                    }
+                    // A read declared at the site as a label is allowed; the
+                    // marker is what makes the use reviewable. An undeclared
+                    // read is the finding, wherever it lives.
+                    let declared = lines[n.saturating_sub(3)..=n]
+                        .iter()
+                        .any(|l| l.contains(LABEL_ONLY_MARKER));
+                    if !declared {
                         hits.push(format!("{}:{}", path.display(), n + 1));
                     }
                 }
@@ -171,7 +183,7 @@ fn ac_ident_1_no_code_outside_the_parser_reads_the_self_asserted_name() {
         hits.is_empty(),
         "the client's self-asserted name is now read at {hits:?}. It is \
          identification, not authentication — any caller writes any value there. \
-         If this is a log or a display, say so at the site and narrow this test. \
+         If this is a log or a display, mark the site `MIK-6704: label only`. \
          If it reaches an authorization decision, that is the impersonation \
          MIK-7250 was filed for, arriving by a different door."
     );
