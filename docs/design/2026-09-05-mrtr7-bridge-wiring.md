@@ -159,6 +159,14 @@ open list until its own design is reviewed.
 | stdio serial dispatch deadlocks a bridged call (GPT, HIGH, CERTAIN) | confirmed at source. Second blocker, above |
 | reply projection is not request-kind-aware; params forwarded unvalidated (GPT) | out of this scope — defects in `input_bridge.rs` itself, not in wiring it. Filed rather than fixed here |
 | store as an injected trait (Kimi) | declined. A trait with one implementation is an abstraction nothing asked for. `BridgeObserver` earns its trait because production genuinely passes a no-op; a capability store does not |
+| store has no eviction or ownership (both vendors, HIGH) — **re-raised on the amended design** (GPT, HIGH) | confirmed twice. The first answer, `SessionLifecycle`, has no production caller at all; declarations live in `ClientSession` instead, where removal and TTL reaping already drop them. Open question 3 |
+| bridge retries invoke the backend outside cost accounting (GPT, HIGH, LIKELY) | confirmed at source: `invoke.rs:1246,1369,1394` each fire once around the single dispatch at :1327. In scope — this change creates the second invocation. One dispatch helper, change surface above |
+| the merge widens MRTR.9 for modern callers while the table says it does not (Kimi, MEDIUM, CERTAIN) | confirmed at source: the gate at `invoke.rs:1518` is shape-blind. Merge scoped to `Legacy` only, option C above |
+| construction-site census says five and lists seven (Kimi, LOW) | confirmed. Count was wrong, list was right; re-enumerated by role |
+| timed-out client prompt discarded, backend retried without the answer (GPT, HIGH, LIKELY) | out of this scope — a defect inside `input_bridge.rs`, filed with the other two, not fixed by a wiring change |
+| pending-response map grows if the outer timeout cancels after registration (GPT, HIGH) | out of this scope, same file, filed |
+| production-path HTTP test beyond trait fakes (GPT, MEDIUM) | accepted. The acceptance rows are fake-driven; one end-to-end HTTP test is the honest evidence and belongs in the test plan |
+| compact legacy-or-modern discriminator instead of full `RequestShape` (GPT, both passes) | accepted. Recorded as the field's intended shape; `RequestShape` was shorthand, not a requirement |
 
 ### One capability value, two consumers
 
@@ -206,6 +214,16 @@ Wiring one call is the smallest part of this.
   said "five" while listing seven; the count was wrong, the list was right.
 - `shape` threaded to each of those sites, and production implementations of
   the bridge's three traits, which today exist only as test fakes.
+- **one dispatch path, not two.** `record_invocation`
+  (`invoke.rs:1246`), `record_error_budget` (:1369) and `record_spend` (:1394)
+  each fire exactly once, around the single `dispatch_to_backend` at :1327. A
+  bridged retry invokes the backend a *second* time, after all three — so
+  without this, a paid backend is called twice and billed once, and a
+  configured budget is exceeded with no record. Factor the backend attempt and
+  its accounting into one helper that the initial invocation and every bridge
+  retry both go through. Stated as elimination rather than patch: adding a
+  second accounting call would leave "a dispatch path that is not accounted
+  for" still describable; one path leaves it undescribable.
 - `CallerContext::input_capabilities` currently documents itself as "what this
   caller declared on **this** request". That contract changes to the merged
   value; the comment changes with it.
@@ -253,15 +271,23 @@ Wiring one call is the smallest part of this.
    `src/security/firewall/mod.rs:680` — and `anomaly.rs:129` states in its own
    words that nothing reclaims a session.
 
-   So "bind eviction to the existing session lifecycle", which both reviewers
-   independently recommended and which this design accepted, would have written
-   a comment claiming eviction while shipping the leak they flagged. The hook
-   must be *wired* before anything can hang off it, and the leak is already
-   shared: the firewall's anomaly tracker is waiting on the same callback.
-   Wiring it is a prerequisite of this change and benefits more than this
-   change. Verified by search on the write side, which is where an absent
-   caller is visible: no non-test `register` call, no production
-   `remove_session` call.
+   So "bind eviction to the existing session lifecycle" — which both reviewers
+   recommended and which an earlier revision of this design accepted — would
+   have written a comment claiming eviction while shipping the leak they
+   flagged. Verified on the write side, which is where an absent caller is
+   visible: no non-test `register` call, no production `remove_session` call.
+
+   **The declarations therefore live in `ClientSession`**
+   (`src/gateway/streaming.rs:47`) — the HTTP transport's own per-session
+   struct, which already carries `created_at` for TTL reaping and is dropped
+   whole on removal (`streaming.rs:219`). Eviction is then not a mechanism this
+   change adds; it is a field going out of scope with the session that owns it,
+   on replacement, on `DELETE`, and on reaping alike. Nothing hangs off the
+   dead hook, so wiring `SessionLifecycle` is **not** a prerequisite of this
+   change. Its absence stays recorded here because it is the reason the obvious
+   answer was the wrong one, and because the firewall's anomaly tracker
+   (`src/security/firewall/anomaly.rs:129`) is still waiting on that same
+   callback — a leak this change neither causes nor fixes.
 
 ## What is not claimed
 
