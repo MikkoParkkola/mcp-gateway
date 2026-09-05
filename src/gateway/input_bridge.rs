@@ -130,12 +130,14 @@ impl ServerRequest {
 /// is added to one of them, and the drift fails as a caller timeout that names
 /// neither the missing prefix nor the request it stranded.
 ///
-/// The body is still the pair of literals lifted out of `handlers.rs`: this
-/// commit moves the condition without changing what it admits, so the move is
-/// reviewable as a move.
+/// The body reads [`ServerRequestKind::ALL`] rather than naming prefixes, so
+/// the admitted set is the minted set by construction. A kind added to the
+/// enum is admitted on the way back with no second edit.
 #[must_use]
 pub fn is_bridge_reply_id(id: &str) -> bool {
-    id.starts_with("sampling-") || id.starts_with("elicitation-")
+    ServerRequestKind::ALL
+        .iter()
+        .any(|kind| id.starts_with(kind.prefix()))
 }
 
 /// Why one relayed request did not produce an answer.
