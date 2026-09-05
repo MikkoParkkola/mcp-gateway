@@ -131,7 +131,7 @@ who owns the work.
 | D response-cache keying | `cache-34` |
 | E performance vs 3.5.0 | run on `spark` 2026-09-03; `NFR.PERF.2` closed, `NFR.PERF.1` needs an end-to-end harness that does not exist |
 | F compat and surface facts | the operator settled the surface questions on 2026-09-02: `NFR.COMPAT.1` became a code change and `NFR.COMPAT.3` was waived on the record. What is left is work, not a decision — the default flip and the dual-role matrix |
-| G stdio dispatch path | unowned. Row 1 landed in `d306c7e8`; the two telemetry rows have no branch and no agent |
+| G stdio dispatch path | unowned. Row 1 landed in `d306c7e8` and `NFR.OBS.2` in `f7781df8`; `NFR.OBS.1` has no branch and no agent |
 | — residue | `residue-r` takes the decision rows; `HEADER.9` belongs to the header increment and waits on B |
 
 ### Ownership status, 2026-09-02: named everywhere, in flight nowhere
