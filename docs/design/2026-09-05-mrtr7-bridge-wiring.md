@@ -1,6 +1,7 @@
 # MRTR.7 — wiring `InputBridge::run` into the production path
 
-Status: design, not implemented. Reviewed by: (pending).
+Status: design, not implemented. Reviewed by: GPT-5.x and Kimi K2, both
+SHIP-WITH-FIXES, both naming the same blocker. Findings disposed below.
 Change: `fix/mrtr2-continuation-handle`, HEAD `33f64798`.
 
 ## Problem
@@ -87,6 +88,93 @@ Recommendation: **C**. Deriving the discriminator from `Declared` conflates
 "declared nothing" with "cannot understand `input_required`", and those two
 need opposite handling.
 
+## Second blocker — stdio cannot answer a question it is being asked
+
+Both reviewers returned SHIP-WITH-FIXES. One finding is fatal to the feature on
+the transport it exists for, and it is verified at source rather than accepted
+on the reviewer's word.
+
+`src/gateway/server/mod.rs:1581` is `while let Ok(Some(line)) =
+reader.next_line().await { … dispatch … }` — one reader, strictly serial, the
+next line read only after the current dispatch returns. A bridged call blocks
+inside that dispatch waiting for the client's answer, and the answer arrives on
+the stdin nobody is reading. Every legacy stdio bridge deadlocks until
+`BridgeBounds::DEFAULT` expires it: 30 s per prompt, 120 s aggregate.
+
+This is not a defect in the bridge. It is the transport lacking the concurrency
+the bridge presupposes, and no placement of the call inside `invoke.rs` avoids
+it. Two honest responses, and the choice is not engineering's to make alone:
+
+- **Make stdio concurrent** — dispatch off the read loop, route replies by id
+  before dispatch, one serialized writer, an `initialize` barrier. A transport
+  rewrite, several times the size of the wiring this design is for.
+- **Bridge only where the concurrency already exists** — the HTTP transports
+  have in-flight request correlation (`ProxyManager`'s pending-response path).
+  Legacy stdio callers keep the MRTR.9 refusal they get today.
+
+## Review findings, disposed
+
+| finding | disposal |
+|---|---|
+| gate refuses before the bridge is reached (both vendors, HIGH) | confirmed as a **documentation** gap, not a mechanism one — see below |
+| read side never verified: does the bridge site hold the session id (Kimi, HIGH) | **died at source.** The lookup belongs at `CallerContext` construction, where `session_id` is already in scope on both transports. Nothing new reaches `invoke.rs`, and the suggested fix — threading a store into the invoke path — is unnecessary |
+| absent session capabilities leave the default unspecified (Kimi, HIGH) | confirmed. Pinned fail-closed below |
+| store has no eviction or ownership (both vendors, HIGH) | confirmed. Bound to session lifecycle below |
+| no production `ClientChannel` / `BackendInvoker` / `BridgeObserver` (GPT, HIGH, CERTAIN) | confirmed. This design understated its own change surface; see below |
+| stdio serial dispatch deadlocks a bridged call (GPT, HIGH, CERTAIN) | confirmed at source. Second blocker, above |
+| reply projection is not request-kind-aware; params forwarded unvalidated (GPT) | out of this scope — defects in `input_bridge.rs` itself, not in wiring it. Filed rather than fixed here |
+| store as an injected trait (Kimi) | declined. A trait with one implementation is an abstraction nothing asked for. `BridgeObserver` earns its trait because production genuinely passes a no-op; a capability store does not |
+
+### One capability value, two consumers
+
+The gate at `invoke.rs:1514` reads `caller.input_capabilities`. So does the
+bridge. Feeding that one field from the merged value — session store
+authoritative, per-request slice narrowing — makes the gate consult the merged
+set by construction, with no second consumer to keep in step. Stating it is the
+fix; changing the gate would be the defect.
+
+The merge happens where `CallerContext` is built, not where it is read:
+`src/gateway/router/handlers.rs:705,1164` (HTTP, `session_id` in scope at :707)
+and `src/gateway/server/mod.rs:1827` (stdio, `session_id` in scope from :1722,
+constant `"stdio-session"` at :1579).
+
+**Absent is fail-closed.** No captured capabilities for a session — evicted,
+pre-store, restarted — means the client declared nothing, and the question is
+refused. The rejected option B is exactly what a fail-open default would
+reintroduce through the back door.
+
+**The store is not a store.** Declarations are co-owned by each transport's
+existing session state and cleared or replaced atomically on `initialize`,
+disconnect, session `DELETE` and reap. A session id is client-supplied and
+reusable; a declaration that outlives its session is inherited permission.
+
+### Change surface, stated
+
+Wiring one call is the smallest part of this.
+
+- `Declared::parse` (`src/protocol/meta.rs:367`) already takes a plain
+  capabilities map of exactly the `initialize` shape, and already reads the 2026
+  elicitation modes from it — an empty `elicitation` object declares form mode.
+  It is **private**. Making it reachable widens visibility, which is a design
+  decision rather than a convenience edit.
+- a write in `MetaMcp::handle_initialize`, a read at each of the five
+  `CallerContext` construction sites (`handlers.rs:705,1164`,
+  `invoke.rs:3816,3846,3881`, `server/mod.rs:1827,2619`).
+- `shape` threaded to each of those sites, and production implementations of
+  the bridge's three traits, which today exist only as test fakes.
+- `CallerContext::input_capabilities` currently documents itself as "what this
+  caller declared on **this** request". That contract changes to the merged
+  value; the comment changes with it.
+
+### Decision table
+
+| shape | declared | outcome |
+|---|---|---|
+| modern | yes | continuation minted, as today |
+| modern | no | refused by MRTR.9, as today |
+| legacy | yes (from `initialize`) | bridged |
+| legacy | no | refused by MRTR.9, as today |
+
 ## Unknowns, scheduled
 
 1. Does the gateway see `initialize` on every transport that can be bridged
@@ -104,6 +192,13 @@ need opposite handling.
    readiness doc's owner. Resolves when a counter design exists. Nothing here
    depends on it: `BridgeObserver` is a trait, and production can pass a no-op
    until the name is chosen, which is honest rather than inventing a literal.
+
+3. Which existing session state should carry the declarations, on each
+   transport? — read the session lifecycle the HTTP router already maintains
+   (`rg -n "session" src/gateway/router/session*.rs src/gateway/router/mod.rs`)
+   and name the owner before writing one. Blocking: nothing may be implemented
+   against a store whose lifetime owner is unnamed, because that is how the
+   eviction finding comes back.
 
 ## What is not claimed
 
