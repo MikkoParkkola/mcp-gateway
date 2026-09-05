@@ -677,6 +677,7 @@ mod tests {
         let proxy = ProxyManager::new(mux);
 
         let params = ElicitationCreateParams {
+            mode: None,
             message: "Please provide your API key".to_string(),
             requested_schema: Some(json!({
                 "type": "object",
@@ -684,6 +685,7 @@ mod tests {
                     "api_key": { "type": "string" }
                 }
             })),
+            url: None,
         };
 
         assert!(!proxy.forward_elicitation("nonexistent-session", &params));
@@ -696,8 +698,10 @@ mod tests {
         let proxy = ProxyManager::new(Arc::clone(&mux));
 
         let params = ElicitationCreateParams {
+            mode: None,
             message: "Enter name".to_string(),
             requested_schema: None,
+            url: None,
         };
 
         assert!(proxy.forward_elicitation(&session_id, &params));
@@ -896,8 +900,10 @@ mod tests {
         let mux = make_multiplexer();
         let proxy = ProxyManager::new(mux);
         let params = ElicitationCreateParams {
+            mode: None,
             message: "Confirm?".to_string(),
             requested_schema: Some(json!({"type": "object"})),
+            url: None,
         };
 
         // WHEN: delivery to a session that does not exist fails

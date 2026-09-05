@@ -274,12 +274,14 @@ pub async fn require_destructive_confirmation(
 /// Build the [`ElicitationCreateParams`] for a destructive-action confirmation.
 fn build_confirmation_params(action_desc: &str) -> ElicitationCreateParams {
     ElicitationCreateParams {
+        mode: None,
         message: format!(
             "Are you sure you want to {action_desc}? \
              This is destructive and cannot be undone. \
              Reply 'accept' to confirm or 'decline' to cancel."
         ),
         requested_schema: None,
+        url: None,
     }
 }
 

@@ -489,11 +489,21 @@ pub struct RootsListResult {
 /// Elicitation create request params (server->client)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElicitationCreateParams {
+    /// How the client should render this: `form` or `url`.
+    ///
+    /// Carried rather than assumed. A `url`-mode question rendered as a form
+    /// asks the user to type what they were meant to go and do, and the mode is
+    /// the only field that says which one it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
     /// Human-readable message describing what input is needed
     pub message: String,
     /// JSON Schema for the requested input (form mode)
     #[serde(rename = "requestedSchema", skip_serializing_if = "Option::is_none")]
     pub requested_schema: Option<Value>,
+    /// Where the client should send the user (url mode).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// Elicitation create result (client->server response)
@@ -804,10 +814,12 @@ mod tests {
     #[test]
     fn elicitation_create_params_with_schema() {
         let params = ElicitationCreateParams {
+            mode: None,
             message: "Enter your name".to_string(),
             requested_schema: Some(
                 json!({"type": "object", "properties": {"name": {"type": "string"}}}),
             ),
+            url: None,
         };
         let json = serde_json::to_value(&params).unwrap();
         assert_eq!(json["message"], "Enter your name");
@@ -817,8 +829,10 @@ mod tests {
     #[test]
     fn elicitation_create_params_without_schema() {
         let params = ElicitationCreateParams {
+            mode: None,
             message: "Confirm action".to_string(),
             requested_schema: None,
+            url: None,
         };
         let json = serde_json::to_value(&params).unwrap();
         assert!(json.get("requestedSchema").is_none());

@@ -137,3 +137,193 @@ impl ServerRequest {
 pub fn is_bridge_reply_id(id: &str) -> bool {
     id.starts_with("sampling-") || id.starts_with("elicitation-")
 }
+
+/// Why one relayed request did not produce an answer.
+///
+/// Several cases rather than one, because the bridge's job is to say which of
+/// them happened: a person who declined, a client that refused, a client that
+/// answered something unreadable and a client that never answered are four
+/// different facts, and a single "failed" collapses the distinction the
+/// `NFR.OBS.4` counters exist to keep.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeliveryError {
+    /// The client answered, and the answer was a refusal by the person at it.
+    /// Carries the action verbatim so `decline` and `cancel` stay distinct.
+    Declined {
+        /// The `action` the client sent.
+        action: String,
+    },
+    /// The client answered with an `action` outside the declared set. Not a
+    /// refusal — nobody said no, the reply is unreadable.
+    UnknownAction {
+        /// The unrecognised `action`.
+        action: String,
+    },
+    /// The client answered with a JSON-RPC `error` member.
+    ClientRefused {
+        /// The client's own error code.
+        code: i64,
+        /// The client's own message.
+        message: String,
+    },
+    /// The client accepted and the accepted body is unusable.
+    Malformed,
+    /// The reply carried neither a `result` nor an `error` member.
+    NoReplyMember,
+    /// There is no client session to reach.
+    NoSession,
+    /// Nothing came back inside the per-prompt wait.
+    TimedOut,
+}
+
+/// Why the whole bridged call failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BridgeError {
+    /// An entry could not be put to this client at all, and nothing was sent.
+    Refused {
+        /// The backend's own key for the entry.
+        key: String,
+        /// Which refusal this is.
+        reason: crate::protocol::mrtr::Refusal,
+    },
+    /// A request was sent and did not come back as an answer.
+    Delivery {
+        /// The backend's own key for the entry.
+        key: String,
+        /// What went wrong with it.
+        error: DeliveryError,
+    },
+    /// The backend kept asking past the retry bound.
+    RoundsExhausted,
+    /// The backend asked for more requests in total than the bound allows.
+    RequestBudgetExhausted,
+    /// The aggregate wall-clock budget for the call ran out.
+    Deadline,
+}
+
+/// The bounds on what a backend can make the gateway ask a client.
+///
+/// Each is on the original call rather than on a round. Capping rounds alone
+/// does not cap prompts: one interim result may carry an arbitrary number of
+/// entries, so a single round reaches the same abuse with a larger array.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BridgeBounds {
+    /// Retries after the first call, so at most `rounds + 1` backend
+    /// invocations.
+    pub rounds: u32,
+    /// Requests in total across the call, counting every entry whatever
+    /// variant it projects into.
+    pub requests: u32,
+    /// Wall-clock budget for the whole call.
+    pub aggregate: std::time::Duration,
+    /// Ceiling on one prompt's wait. The actual wait is the lesser of this and
+    /// what is left of `aggregate`.
+    pub per_prompt: std::time::Duration,
+}
+
+impl BridgeBounds {
+    /// The shipped values.
+    ///
+    /// `per_prompt` is deliberately not the 120-second elicitation constant in
+    /// `destructive_confirmation`, which is the same number as the aggregate:
+    /// reusing it would let one unanswered prompt consume the entire budget, so
+    /// the bound that exists to cap a sequence would never bind until the
+    /// sequence was already over.
+    pub const DEFAULT: Self = Self {
+        rounds: 3,
+        requests: 8,
+        aggregate: std::time::Duration::from_secs(120),
+        per_prompt: std::time::Duration::from_secs(30),
+    };
+}
+
+/// One observation the bridge emits.
+///
+/// The labels are an open map because the counter contract is a label set, not
+/// a struct: what must be asserted is that `phase` is present and that nothing
+/// a person typed ever is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BridgeRecord {
+    /// Which counter this increments.
+    pub counter: String,
+    /// The label set it carries.
+    pub labels: std::collections::BTreeMap<String, String>,
+}
+
+/// The client end of the bridge: one request out, one answer back.
+///
+/// A whole JSON-RPC envelope comes back rather than a projected answer, because
+/// projecting it is the bridge's own job and the cases that matter most are the
+/// ones where the envelope is not what the projection expects.
+#[async_trait::async_trait]
+pub trait ClientChannel: Send + Sync {
+    /// Put one request on the client's own connection and wait for its reply.
+    async fn send_request(
+        &self,
+        session_id: &str,
+        id: &str,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, DeliveryError>;
+}
+
+/// The backend end: re-invoke the tool call with the answers collected so far.
+#[async_trait::async_trait]
+pub trait BackendInvoker: Send + Sync {
+    /// Retry the original call with these params, yielding its raw result.
+    async fn invoke(&self, retry_params: Value) -> Value;
+}
+
+/// Where the bridge's counters go.
+///
+/// A seam rather than a metrics call because the requirement is about what the
+/// records contain — the label set, and the absence of any answer body — and
+/// that is assertable only against captured records.
+pub trait BridgeObserver: Send + Sync {
+    /// Record one counter increment.
+    fn record(&self, record: BridgeRecord);
+}
+
+/// One bridged call: a backend's questions, put to one legacy client.
+pub struct InputBridge<'a> {
+    /// The client to ask.
+    pub channel: &'a dyn ClientChannel,
+    /// The backend to retry.
+    pub backend: &'a dyn BackendInvoker,
+    /// Where the counters go.
+    pub observer: &'a dyn BridgeObserver,
+    /// The bounds this call runs under.
+    pub bounds: BridgeBounds,
+}
+
+impl InputBridge<'_> {
+    /// Collect answers for `first`, retrying the backend until it completes.
+    ///
+    /// `declared` is the session store's value and is authoritative; `slice` is
+    /// the per-request capability slice, which may only narrow it, and `None`
+    /// means the request said nothing rather than that the client can do
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reason the bridged call failed: a refused entry, a delivery
+    /// that produced no answer, or a bound the call ran past.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the stub awaits nothing yet; the async signature is the contract the acceptance rows drive, and the expectation lapses the moment a real await lands"
+    )]
+    pub async fn run(
+        &self,
+        session_id: &str,
+        declared: crate::protocol::meta::Declared,
+        slice: Option<&[String]>,
+        first: &crate::protocol::mrtr::InputRequired,
+    ) -> Result<Value, BridgeError> {
+        let _ = (session_id, declared, slice, first);
+        let _ = (self.channel, self.backend, self.observer, self.bounds);
+        Err(BridgeError::Delivery {
+            key: String::new(),
+            error: DeliveryError::NoSession,
+        })
+    }
+}
