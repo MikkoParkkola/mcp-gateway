@@ -957,13 +957,11 @@ impl MetaMcp {
     }
 
     /// Override the error-budget configuration.
-    #[allow(dead_code)]
     pub fn set_error_budget_config(&self, config: ErrorBudgetConfig) {
         *self.error_budget_config.write() = config;
     }
 
     /// Override the per-capability error-budget configuration.
-    #[allow(dead_code)]
     pub fn set_capability_budget_config(&self, config: CapabilityErrorBudgetConfig) {
         *self.capability_budget_config.write() = config;
     }

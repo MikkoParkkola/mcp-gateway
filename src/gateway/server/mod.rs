@@ -590,6 +590,12 @@ impl Gateway {
         );
         meta_mcp.set_transition_tracker(Arc::clone(&transition_tracker));
 
+        // Apply the operator's `error_budget:` section to the running budgets
+        // (GH #475). Absent keys keep the values that have been shipping, so a
+        // config without the section leaves both budgets exactly as before.
+        meta_mcp.set_error_budget_config(self.config.error_budget.backend_config());
+        meta_mcp.set_capability_budget_config(self.config.error_budget.capability_config());
+
         // ── Transparency log (issue #133, D3) ─────────────────────────────────
         // The opened `Arc` is kept as `transparency_log` (not just handed to
         // `MetaMcp`) so `AppState` can hold a second clone — the direct
@@ -3430,5 +3436,50 @@ mod tests {
                  have come from `_meta`"
             );
         }
+    }
+
+    /// GH475.CFG.5 + CFG.5b — the operator's `error_budget:` section reaches the
+    /// running meta-MCP budgets. Deliberately never calls either setter: the
+    /// point is that the boot path calls them, and the two setters are separate,
+    /// so the capability half is asserted independently of the backend half.
+    #[tokio::test]
+    async fn gh475_cfg_5_error_budget_section_reaches_running_meta_mcp() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        std::fs::write(
+            &path,
+            "error_budget:\n  threshold: 0.25\n  window_size: 40\n  window_duration: 30s\n  \
+             min_samples: 4\n  capability:\n    threshold: 0.35\n    window_size: 12\n    \
+             window_duration: 90s\n    min_samples: 2\n    cooldown: 45s\n",
+        )
+        .expect("write config");
+        let config = Config::load(Some(&path)).expect("configured error_budget must load");
+
+        let gateway = Gateway::new(config).await.unwrap();
+        let built = gateway.build_meta_mcp().await.unwrap();
+
+        let backend = built.meta_mcp.error_budget_config.read().clone();
+        assert!(
+            (backend.threshold - 0.25).abs() < f64::EPSILON,
+            "backend threshold must come from the config, got {}",
+            backend.threshold
+        );
+        assert_eq!(backend.window_size, 40);
+        assert_eq!(backend.window_duration, std::time::Duration::from_secs(30));
+        assert_eq!(backend.min_samples, 4);
+
+        let capability = built.meta_mcp.capability_budget_config.read().clone();
+        assert!(
+            (capability.threshold - 0.35).abs() < f64::EPSILON,
+            "capability threshold must come from the config, got {}",
+            capability.threshold
+        );
+        assert_eq!(capability.window_size, 12);
+        assert_eq!(
+            capability.window_duration,
+            std::time::Duration::from_secs(90)
+        );
+        assert_eq!(capability.min_samples, 2);
+        assert_eq!(capability.cooldown, std::time::Duration::from_secs(45));
     }
 }

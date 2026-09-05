@@ -18,7 +18,7 @@ use crate::kill_switch::budget::{CapabilityErrorBudgetConfig, ErrorBudgetConfig}
 /// Largest accepted sliding window, in calls.
 ///
 /// The window is a `VecDeque` of samples per backend and per capability, so an
-/// unbounded value is an allocation an operator typo can ask for. 100_000 calls
+/// unbounded value is an allocation an operator typo can ask for. `100_000` calls
 /// is far past any window that still reacts in useful time.
 const MAX_WINDOW_SIZE: usize = 100_000;
 

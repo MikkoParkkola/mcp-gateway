@@ -2899,3 +2899,31 @@ fn a_rotated_attestation_key_is_reported_although_no_config_field_names_it() {
         "a startup-only key nothing references must still be reported"
     );
 }
+
+/// GH475.CFG.6 — an `error_budget:` edit is reported as needing a restart.
+///
+/// The section is read once while the meta-MCP server is built, so a hot
+/// reload cannot apply it; the honest answer is "restart required", not
+/// silence.
+#[test]
+fn gh475_cfg_6_error_budget_change_needs_restart() {
+    let running = Config::default();
+
+    let mut wanted = Config::default();
+    wanted.error_budget.threshold = Some(0.25);
+    let pending = super::pending_restart_fields(&running, &wanted);
+    assert!(
+        pending.contains(&"error_budget"),
+        "a backend threshold edit must be reported: {pending:?}"
+    );
+
+    // The nested half separately: a capability-only edit must not be swallowed
+    // by the backend half comparing equal.
+    let mut nested = Config::default();
+    nested.error_budget.capability.cooldown = Some(std::time::Duration::from_secs(30));
+    let pending = super::pending_restart_fields(&running, &nested);
+    assert!(
+        pending.contains(&"error_budget"),
+        "a capability-only edit must be reported: {pending:?}"
+    );
+}

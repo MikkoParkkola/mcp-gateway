@@ -622,6 +622,7 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
         "marketplace" => marketplace,
         "streaming" => streaming,
         "failsafe" => failsafe,
+        "error_budget" => error_budget,
         "cache" => cache,
         "runtime" => runtime,
         "cost_governance" => cost_governance,
@@ -694,6 +695,10 @@ struct MetaFields {
     meta_mcp: String,
     streaming: String,
     failsafe: String,
+    /// Error-budget thresholds (GH #475). Read once when the meta-MCP server
+    /// is built, so an edit here is detected and reported as restart-required
+    /// rather than silently ignored.
+    error_budget: String,
     capabilities: String,
     cache: String,
     playbooks: String,
@@ -730,6 +735,7 @@ impl MetaFields {
             meta_mcp: canonical_json(&c.meta_mcp),
             streaming: canonical_json(&c.streaming),
             failsafe: canonical_json(&c.failsafe),
+            error_budget: canonical_json(&c.error_budget),
             capabilities: canonical_json(&c.capabilities),
             cache: canonical_json(&c.cache),
             playbooks: canonical_json(&c.playbooks),
