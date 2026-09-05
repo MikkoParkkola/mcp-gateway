@@ -136,6 +136,16 @@ impl AutoDiscovery {
         }
     }
 
+    /// Resolve the environment scan against the live environment.
+    ///
+    /// Without one the scan reads the process environment alone, which is what
+    /// an instance built without an environment has always done.
+    #[must_use]
+    pub fn with_env(mut self, env: std::sync::Arc<crate::config::LiveEnv>) -> Self {
+        self.config_scanner = self.config_scanner.with_env(env);
+        self
+    }
+
     /// Discover all MCP servers from all sources
     ///
     /// # Errors

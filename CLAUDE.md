@@ -116,7 +116,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 
 ## Current Status
 
-- **v3.5.1** · Rust 1.95+ · Edition 2024 · ~101K LOC · MIT core + PolyForm Noncommercial EE
+- **v4.0.0** · Rust 1.95+ · Edition 2024 · ~101K LOC · MIT core + PolyForm Noncommercial EE
 - Published on crates.io + Homebrew + npm + ghcr.io container images + Glama + VS Code + Cursor one-click install
 - **Meta-MCP surface**: 14-16 tools in production scenarios (README benchmark scenario)
 - **Capability backends**: 110+ REST capabilities + MCP backends routed via the same surface
@@ -174,7 +174,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 | A2A transport | `src/a2a/` |
 | Benchmarks + claims | `docs/BENCHMARKS.md` + `benchmarks/public_claims.json` |
 | OWASP compliance | `docs/OWASP_AGENTIC_AI_COMPLIANCE.md` |
-| Upgrade migrations | `commands/upgrade/` |
+| Upgrade migrations | `src/commands/upgrade.rs` |
 
 ## Build & Test
 
@@ -197,7 +197,7 @@ OWASP Agentic AI Top 10: scoped in-tree self-assessment, not certification. MCP 
 Key modules: `gateway/` (core router, OAuth, streaming, UI), `provider/` (MCP/composite/capability),
 `capability/` (discovery, validation), `transport/` (HTTP, stdio), `security/` (firewall, mTLS, message signing, agent identity, memory scanner),
 `cost_accounting/`, `scheduler/`, `skills/`, `tool_profiles/`, `config_reload/`, `a2a/` (A2A transport adapter),
-`commands/upgrade` (post-upgrade migration framework).
+`commands/upgrade.rs` (post-upgrade migration framework).
 
 ## Features (Cargo)
 

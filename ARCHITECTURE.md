@@ -53,8 +53,8 @@ The gateway advertises 14 to 17 meta-tools to connecting clients. The base set o
 | `gateway_run_playbook` | yes | Execute a multi-step playbook as a single call |
 | `gateway_kill_server` | yes | Operator kill switch: immediately disable routing to a backend |
 | `gateway_revive_server` | yes | Re-enable a killed backend and reset its error budget |
-| `gateway_set_profile` | yes | Switch the active routing profile for this session |
-| `gateway_get_profile` | yes | Show the active routing profile and what it allows or denies |
+| `gateway_set_profile` | yes | Switch the active routing profile for this session. Refused on MCP 2026-07-28, which has no sessions |
+| `gateway_get_profile` | yes | Show the active routing profile and what it allows or denies. Refused on MCP 2026-07-28, which has no sessions |
 | `gateway_list_disabled_capabilities` | yes | List capabilities auto-disabled for a high error rate |
 | `gateway_list_profiles` | yes | List available routing profiles |
 | `gateway_set_state` | yes | Transition the session to a new workflow state |

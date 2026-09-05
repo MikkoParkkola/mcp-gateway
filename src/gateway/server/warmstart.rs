@@ -738,6 +738,46 @@ mod tests {
         );
     }
 
+    /// MIK-7217.DISCOVER.6 — warm-start keeps its existing retry schedule when
+    /// `server/discover` replaces the probe.
+    ///
+    /// Absolute values on purpose. The tests either side of this one assert
+    /// RELATIONSHIPS (`gap == p.initial_gap`, `gap == p.initial_gap * 2`), so
+    /// they hold no matter what the defaults become — changing `initial_gap`
+    /// from two seconds to sixty passes every one of them. Discovery makes each
+    /// probe cheaper, which is exactly the argument someone will use for
+    /// probing more often; this is what makes that a decision rather than a
+    /// drift.
+    #[test]
+    fn ac_discover_6_the_retry_schedule_is_pinned_in_seconds() {
+        let p = WarmStartPolicy::default();
+
+        assert_eq!(p.fast_deadline, Duration::from_secs(180));
+        assert_eq!(p.initial_gap, Duration::from_secs(2));
+        assert_eq!(p.max_gap, Duration::from_secs(30));
+        assert_eq!(p.slow_gap, Duration::from_secs(60));
+        assert_eq!(p.attempt_timeout, Duration::from_secs(120));
+
+        // The fast phase, attempt by attempt, before jitter.
+        let fast: Vec<u64> = (1..=8)
+            .map(|n| gap_before_attempt(&p, n, Duration::ZERO).as_secs())
+            .collect();
+        assert_eq!(
+            fast,
+            vec![0, 2, 4, 8, 16, 30, 30, 30],
+            "the fast phase doubles from two seconds and holds at the cap"
+        );
+
+        // And after the deadline, one gap regardless of attempt number.
+        for n in [2, 5, 50] {
+            assert_eq!(
+                gap_before_attempt(&p, n, p.fast_deadline).as_secs(),
+                60,
+                "past the deadline every gap is the slow gap"
+            );
+        }
+    }
+
     #[test]
     fn past_the_deadline_the_schedule_switches_to_the_slow_gap() {
         // The switch is keyed on ELAPSED time, not attempt count: an attempt

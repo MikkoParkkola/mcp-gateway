@@ -33,6 +33,19 @@ use tower::ServiceExt;
 use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targets_for_call};
 
 fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Arc<AppState> {
+    test_router_app_state_with(streaming_config, crate::config::Config::default())
+}
+
+/// The fixture, with the configuration left to the caller.
+///
+/// Split out because the protocol era is a config field: a test that wants the
+/// modern path has to be able to turn it on, and one that reaches it through
+/// the default config is not testing the modern path at all — it is reading an
+/// `unsupported protocol version` refusal and finding it agreeable.
+fn test_router_app_state_with(
+    streaming_config: StreamingConfig,
+    config: crate::config::Config,
+) -> Arc<AppState> {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -45,6 +58,8 @@ fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Ar
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
+        env: None,
         backends,
         meta_mcp,
         meta_mcp_enabled: true,
@@ -67,12 +82,13 @@ fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Ar
         firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config::Config::default(),
-        )),
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(config)),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
+        subscriptions: Arc::new(
+            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
+        ),
     })
 }
 
@@ -94,6 +110,8 @@ fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
+        env: None,
         backends,
         meta_mcp,
         meta_mcp_enabled: true,
@@ -122,6 +140,9 @@ fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
+        subscriptions: Arc::new(
+            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
+        ),
     })
 }
 
@@ -139,6 +160,8 @@ fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
+        env: None,
         backends,
         meta_mcp,
         meta_mcp_enabled: true,
@@ -167,6 +190,9 @@ fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
+        subscriptions: Arc::new(
+            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
+        ),
     })
 }
 
@@ -203,6 +229,8 @@ fn test_router_app_state_with_provenance_backend(backend: Arc<Backend>) -> Arc<A
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
+        env: None,
         backends,
         meta_mcp,
         meta_mcp_enabled: true,
@@ -231,6 +259,9 @@ fn test_router_app_state_with_provenance_backend(backend: Arc<Backend>) -> Arc<A
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
+        subscriptions: Arc::new(
+            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
+        ),
     })
 }
 
@@ -279,6 +310,8 @@ fn test_router_app_state_minting_without_route_audit(backend: Arc<Backend>) -> A
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
+        env: None,
         backends,
         meta_mcp,
         meta_mcp_enabled: true,
@@ -307,6 +340,9 @@ fn test_router_app_state_minting_without_route_audit(backend: Arc<Backend>) -> A
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
+        subscriptions: Arc::new(
+            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
+        ),
     })
 }
 
@@ -327,6 +363,8 @@ fn test_router_app_state_with_ssrf(
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
+        env: None,
         backends,
         meta_mcp,
         meta_mcp_enabled: true,
@@ -355,6 +393,9 @@ fn test_router_app_state_with_ssrf(
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
+        subscriptions: Arc::new(
+            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
+        ),
     })
 }
 
@@ -389,6 +430,8 @@ fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
+        env: None,
         backends,
         meta_mcp,
         meta_mcp_enabled: true,
@@ -417,6 +460,9 @@ fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
+        subscriptions: Arc::new(
+            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
+        ),
     })
 }
 
@@ -2333,6 +2379,9 @@ async fn run_step_with_identity(
         grant_subject: None,
         verified_identity: None,
         is_admin: client.admin,
+        input_capabilities: crate::protocol::meta::Declared::NONE,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     };
     state
         .meta_mcp
@@ -2532,6 +2581,9 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
+        input_capabilities: crate::protocol::meta::Declared::NONE,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     };
     let response = state
         .meta_mcp
@@ -2887,6 +2939,9 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         grant_subject: None,
         verified_identity: None,
         is_admin: false,
+        input_capabilities: crate::protocol::meta::Declared::NONE,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     };
     let response = state
         .meta_mcp
@@ -3070,5 +3125,130 @@ async fn sampling_without_a_live_stream_fails_instead_of_hanging() {
             .unwrap_or_default()
             .contains("No sampling-capable client connected"),
         "body: {body}"
+    );
+}
+
+/// The fixture with the 2026 era switched on.
+///
+/// Without it every modern request stops at `unsupported protocol version`,
+/// and a test asserting an absence — no session header, no profile switch —
+/// passes on the refusal rather than on the behaviour it names.
+fn modern_router_app_state() -> Arc<AppState> {
+    let mut config = crate::config::Config::default();
+    config.server.modern_protocol = true;
+    test_router_app_state_with(StreamingConfig::default(), config)
+}
+
+/// A modern request gets no session, even when it offers one.
+///
+/// The pin under `meta_mcp::session_key`, which reads an empty session id as
+/// "no session" and refuses the routing-profile meta-tools on that basis. That
+/// reading is only sound while this branch holds: mint a session here and the
+/// profile becomes per-connection state again, silently reopening ORDER.2
+/// (`docs/requirements/RELEASE-4.0.0-requirements.md`). The response header is
+/// the observable side of it — `attach_session_header` emits nothing for an
+/// empty id, so a minted session would show up here as a header.
+#[tokio::test]
+async fn ac_order_2_a_modern_request_is_given_no_session_even_when_it_offers_one() {
+    let router = create_router(modern_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        // The modern path requires the method in a header as well as the body.
+        .header("mcp-method", "tools/list")
+        // Offered deliberately: the modern path must decline it, not adopt it.
+        .header("mcp-session-id", "sess-offered-by-client")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": {
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {}
+                    }
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    let session_header = response.headers().get("mcp-session-id").cloned();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    // The request must actually REACH modern dispatch. An earlier draft of this
+    // test omitted the mcp-method header and params._meta; the router rejected
+    // it before dispatch, and a rejection carries no session header either — so
+    // the assertion below passed while proving nothing. Pin the success first.
+    assert!(
+        json["result"]["tools"].is_array(),
+        "the request must reach modern dispatch and list tools, or the header \
+         assertion below is satisfied by a rejection instead of by the \
+         behaviour under test: {json}"
+    );
+    assert!(
+        session_header.is_none(),
+        "a 2026-07-28 caller has no session; answering with one would give it \
+         per-connection state its own revision removed"
+    );
+}
+
+/// A modern caller cannot switch the routing profile, through the real stack.
+///
+/// The unit tests for this live in `meta_mcp::tests` and call the meta-tool
+/// directly; this one goes in at the wire, so the refusal is known to survive
+/// dispatch rather than only being reachable from inside. Which outcome is
+/// asserted matters: "the tool set did not change" is satisfied both by a
+/// closed path and by a write that silently landed somewhere useless, and only
+/// the refusal tells the two apart.
+#[tokio::test]
+async fn ac_order_2_a_modern_caller_is_refused_gateway_set_profile() {
+    let router = create_router(modern_router_app_state());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        // The modern path requires the method in a header as well as the body.
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "gateway_set_profile")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_set_profile",
+                    "arguments": { "profile": "research" },
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {}
+                    }
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    // The refusal must arrive as a JSON-RPC error, not as a successful result
+    // that happens to mention a session: the design decision is that the call
+    // BREAKS for a modern client, and the shape is what the client sees.
+    let message = json["error"]["message"].as_str().unwrap_or_else(|| {
+        panic!("gateway_set_profile must be refused with a JSON-RPC error: {json}")
+    });
+    assert!(
+        message.contains("no session"),
+        "the refusal must say why, and the reason must be the true one — the \
+         old text told the caller to send a session header, which on this path \
+         cannot help: {message}"
     );
 }

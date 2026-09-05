@@ -18,7 +18,7 @@ use tracing::{debug, error, info, warn};
 use url::Url;
 
 use super::callback;
-use super::metadata::{self, AuthorizationServerMetadata, ProtectedResourceMetadata};
+use super::metadata::{self, AuthorizationServerMetadata, IssuerSource, ProtectedResourceMetadata};
 use super::storage::{TokenInfo, TokenStorage};
 use crate::security::{request_error_category, safe_oauth_http_error, safe_reqwest_message};
 use crate::{Error, Result};
@@ -39,6 +39,80 @@ enum ClientIdSource {
     /// Obtained via Dynamic Client Registration, a generated fallback, or a
     /// load of a previously dynamically-registered id from storage.
     Registered,
+}
+
+/// The Dynamic Client Registration body this gateway sends.
+///
+/// A free function so it can be asserted without a live authorization server:
+/// these fields are what every server the gateway registers with sees, and they
+/// were previously observable only by running one.
+///
+/// `application_type` is required by MCP 2026-07-28 and is not cosmetic.
+/// `OpenID` Connect defaults an unstated value to `web`, which constrains
+/// redirect URIs to https and forbids a literal loopback address — exactly what
+/// a locally-running gateway registers. Saying `native` makes the registration
+/// describe this client.
+#[must_use]
+pub fn registration_body(backend_name: &str, redirect_uri: &str) -> serde_json::Value {
+    serde_json::json!({
+        "client_name": format!("MCP Gateway - {backend_name}"),
+        "application_type": "native",
+        "redirect_uris": [redirect_uri],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none"
+    })
+}
+
+/// Check the `iss` an authorization server returned against the one recorded.
+///
+/// MCP 2026-07-28, adopting RFC 9207: authorization servers **SHOULD** include
+/// `iss` in the authorization response, and MCP clients **MUST** validate a
+/// present `iss` against the recorded issuer before redeeming the code.
+///
+/// The attack is mix-up. A client that talks to several authorization servers
+/// receives codes at one redirect endpoint and cannot otherwise tell which
+/// server sent one; an attacker who controls a server it trusts can obtain a
+/// code from a different one and have the client redeem it at the wrong token
+/// endpoint. `state` does not close this — the attacker's own flow carries a
+/// state the client itself issued.
+///
+/// Absence is allowed, deliberately. The specification makes including `iss` a
+/// SHOULD and validating a **present** one a MUST; refusing its absence would
+/// be a stricter rule than the specification states, imposed on servers this
+/// gateway does not control and many of which have not adopted RFC 9207.
+///
+/// # Errors
+///
+/// Returns the mismatch when a present `iss` is not the recorded issuer.
+pub fn validate_issuer(returned: Option<&str>, recorded: &str) -> std::result::Result<(), String> {
+    match returned {
+        None => Ok(()),
+        // Exact string comparison, as issuer identifiers are defined. A
+        // trailing slash, a case change or an explicit default port makes a
+        // different identifier, and normalising any of them would reopen the
+        // mix-up through a URL that merely looks the same.
+        Some(iss) if iss == recorded => Ok(()),
+        Some(iss) => Err(format!(
+            "authorization response came from issuer '{iss}', not the recorded '{recorded}'; \
+             the code was not redeemed"
+        )),
+    }
+}
+
+/// The storage key for a credential, keyed by the issuer that granted it.
+///
+/// MCP 2026-07-28: a client **MUST** key persisted credentials by the issuer
+/// identifier, **MUST NOT** reuse them with a different authorization server,
+/// and **MUST** re-register when the authorization server changes.
+///
+/// Keyed by backend alone, moving a backend from one authorization server to
+/// another silently reuses a client id the new server never issued — and the
+/// failure surfaces as a confusing rejection later rather than as the
+/// re-registration it should have been.
+#[must_use]
+pub fn storage_key(backend_name: &str, issuer: &str) -> String {
+    format!("{backend_name}\u{0}{issuer}")
 }
 
 /// OAuth client for a specific backend
@@ -231,6 +305,14 @@ impl OAuthClient {
     pub async fn initialize(&mut self) -> Result<()> {
         let base_url = metadata::base_url(&self.resource_url)?;
 
+        // Which kind of issuer string this ends up with decides how exactly the
+        // discovered metadata is held to it: an identifier the resource server
+        // published is the authorization server's own spelling, while
+        // `base_url()` is one this gateway synthesised. Recorded at each
+        // assignment rather than inferred later, because by then only the
+        // string is left and the two are indistinguishable.
+        let mut issuer_source = IssuerSource::Origin;
+
         // Try to discover protected resource metadata first
         match ProtectedResourceMetadata::discover(&self.http_client, &base_url).await {
             Ok(meta) => {
@@ -239,6 +321,7 @@ impl OAuthClient {
                 // Get authorization server from metadata
                 if let Some(auth_server) = meta.authorization_server() {
                     self.oauth_base_url = Some(auth_server.to_string());
+                    issuer_source = IssuerSource::Advertised;
                 } else {
                     // Fallback to same base URL
                     self.oauth_base_url = Some(base_url.clone());
@@ -259,11 +342,19 @@ impl OAuthClient {
 
         // Discover authorization server metadata
         let auth_base = self.oauth_base_url.as_ref().unwrap();
-        self.auth_metadata =
-            Some(AuthorizationServerMetadata::discover(&self.http_client, auth_base).await?);
+        let previous_issuer = self.auth_metadata.as_ref().map(|m| m.issuer.clone());
+        self.auth_metadata = Some(
+            AuthorizationServerMetadata::discover(&self.http_client, auth_base, issuer_source)
+                .await?,
+        );
+
+        self.drop_credentials_from_other_issuer(previous_issuer.as_deref());
 
         // Load any cached token
-        if let Some(token) = self.storage.load(&self.backend_name, &self.resource_url) {
+        if let Some(token) = self
+            .storage
+            .load(&self.credential_key()?, &self.resource_url)
+        {
             *self.current_token.write() = Some(token);
         }
 
@@ -276,6 +367,25 @@ impl OAuthClient {
         Ok(())
     }
 
+    /// The storage key this client's credentials belong under.
+    ///
+    /// One owner, because the alternative is seven call sites each free to
+    /// forget the issuer — and a credential saved under one key and read
+    /// under another is not a loud failure, it is a silent re-registration
+    /// loop or, worse, a client id presented to a server that never issued
+    /// it.
+    ///
+    /// An error before the authorization server has been discovered: a
+    /// credential cannot be attributed to an issuer that is not yet known.
+    /// There is deliberately no unqualified key to fall back to, because
+    /// falling back is precisely the reuse this keying exists to prevent.
+    fn credential_key(&self) -> Result<String> {
+        let meta = self.auth_metadata.as_ref().ok_or_else(|| {
+            Error::OAuth("OAuth not initialized: no issuer to key credentials by".to_string())
+        })?;
+        Ok(storage_key(&self.backend_name, &meta.issuer))
+    }
+
     /// Load a previously-registered dynamic `client_id` from storage into
     /// memory, tagging its provenance as [`ClientIdSource::Registered`].
     ///
@@ -286,14 +396,40 @@ impl OAuthClient {
     /// Dynamic Client Registration, never operator config (Defect 2,
     /// MIK-6750 r7) — safe to mark `Registered` so a later `invalid_client`
     /// rejection may purge it.
+    /// Drop in-memory credentials when re-initializing lands on a different
+    /// authorization server.
+    ///
+    /// Keying storage by issuer stops the *disk* from crossing that line.
+    /// In-memory state crosses it too unless it is dropped here, and a
+    /// retained client id additionally makes
+    /// [`restore_persisted_client_id`](Self::restore_persisted_client_id) a
+    /// no-op for the new issuer. A configured client id belongs to the
+    /// operator rather than to an issuer, so it stays.
+    fn drop_credentials_from_other_issuer(&self, previous_issuer: Option<&str>) {
+        let Some(previous) = previous_issuer else {
+            return;
+        };
+        let Some(current) = self.auth_metadata.as_ref().map(|m| m.issuer.as_str()) else {
+            return;
+        };
+        if previous == current {
+            return;
+        }
+        *self.current_token.write() = None;
+        if *self.client_id_source.read() == Some(ClientIdSource::Registered) {
+            *self.client_id.write() = None;
+            *self.client_id_source.write() = None;
+        }
+    }
+
     fn restore_persisted_client_id(&self) {
         if self.client_id.read().is_some() {
             return;
         }
-        if let Some(cid) = self
-            .storage
-            .load_client_id(&self.backend_name, &self.resource_url)
-        {
+        let Ok(key) = self.credential_key() else {
+            return;
+        };
+        if let Some(cid) = self.storage.load_client_id(&key, &self.resource_url) {
             *self.client_id.write() = Some(cid);
             *self.client_id_source.write() = Some(ClientIdSource::Registered);
         }
@@ -445,7 +581,7 @@ impl OAuthClient {
         );
 
         self.storage
-            .save(&self.backend_name, &self.resource_url, &token)?;
+            .save(&self.credential_key()?, &self.resource_url, &token)?;
         *self.current_token.write() = Some(token.clone());
 
         info!(backend = %self.backend_name, "Token renewed via client_credentials");
@@ -709,6 +845,16 @@ impl OAuthClient {
 
         debug!(code = %callback_result.code, "Received authorization code");
 
+        // RFC 9207, before the code is redeemed: a code that came from another
+        // authorization server must not be sent to this one's token endpoint.
+        validate_issuer(callback_result.iss.as_deref(), &auth_meta.issuer).map_err(|mismatch| {
+            warn!(
+                event = "oauth.callback.issuer_mismatch",
+                "authorization response named an issuer other than the recorded one"
+            );
+            Error::OAuth(mismatch)
+        })?;
+
         // Exchange code for token
         let token = self
             .exchange_code(&callback_result.code, &actual_callback_url, &code_verifier)
@@ -716,7 +862,7 @@ impl OAuthClient {
 
         // Store and cache the token
         self.storage
-            .save(&self.backend_name, &self.resource_url, &token)?;
+            .save(&self.credential_key()?, &self.resource_url, &token)?;
         *self.current_token.write() = Some(token.clone());
 
         Ok(token.access_token)
@@ -848,7 +994,7 @@ impl OAuthClient {
 
         // Store and cache
         self.storage
-            .save(&self.backend_name, &self.resource_url, &token)?;
+            .save(&self.credential_key()?, &self.resource_url, &token)?;
         *self.current_token.write() = Some(token.clone());
 
         info!(backend = %self.backend_name, "Token refreshed successfully");
@@ -874,8 +1020,9 @@ impl OAuthClient {
                     // Persist immediately: registration succeeded even if the
                     // browser authorize step below never completes. Without this
                     // every connection re-registers and opens a new OAuth tab.
+                    let credential_key = self.credential_key()?;
                     match self.storage.save_client_id(
-                        &self.backend_name,
+                        &credential_key,
                         &self.resource_url,
                         &client_id,
                     ) {
@@ -895,7 +1042,7 @@ impl OAuthClient {
                             // that persistence failed.
                             let client_file = self
                                 .storage
-                                .client_path(&self.backend_name, &self.resource_url);
+                                .client_path(&credential_key, &self.resource_url);
                             error!(
                                 backend = %self.backend_name,
                                 error = %e,
@@ -954,23 +1101,25 @@ impl OAuthClient {
         );
         *self.client_id.write() = None;
         *self.client_id_source.write() = None;
-        if let Err(e) = self
-            .storage
-            .delete_client_id(&self.backend_name, &self.resource_url)
-        {
-            warn!(backend = %self.backend_name, error = %e, "Failed to delete stale client_id file");
+        match self.credential_key() {
+            Ok(key) => {
+                if let Err(e) = self.storage.delete_client_id(&key, &self.resource_url) {
+                    warn!(backend = %self.backend_name, error = %e, "Failed to delete stale client_id file");
+                }
+            }
+            Err(e) => {
+                warn!(backend = %self.backend_name, error = %e, "Cannot locate stale client_id file without a discovered issuer");
+            }
         }
     }
 
     /// Register a new client dynamically with the specified redirect URI
     async fn register_client(&self, endpoint: &str, redirect_uri: &str) -> Result<String> {
-        let body = serde_json::json!({
-            "client_name": format!("MCP Gateway - {}", self.backend_name),
-            "redirect_uris": [redirect_uri],
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
-            "token_endpoint_auth_method": "none"
-        });
+        // Built by the free function above, not inline. Inline, the body a test
+        // asserts and the body the gateway sends are two objects that merely
+        // resemble each other — and this exact split shipped once already this
+        // release, in a discovery document every test passed against.
+        let body = registration_body(&self.backend_name, redirect_uri);
 
         let response = self
             .http_client

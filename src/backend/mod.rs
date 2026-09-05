@@ -15,6 +15,7 @@ use crate::runtime::RuntimePlan;
 
 mod annotations;
 mod cached_metadata;
+mod era;
 mod lifecycle;
 mod metadata;
 mod ops;
@@ -24,7 +25,7 @@ mod registry;
 use cached_metadata::CachedMetadata;
 use pool::{PoolKey, PooledEntry};
 
-pub(crate) use annotations::normalize_tool_annotations;
+pub(crate) use annotations::prepare_tool_metadata;
 pub use lifecycle::runtime_plan_for_backend;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,
@@ -50,6 +51,11 @@ pub struct Backend {
     /// fix 1). The per-backend `Failsafe` this replaced is gone; every slot,
     /// including Shared, now owns one.
     failsafe_config: crate::config::FailsafeConfig,
+    /// Protocol era of the peer on the other end of this backend's
+    /// transport (MIK-7217). Resolved once per start by a `server/discover`
+    /// probe and shared with the detached re-probe task, which outlives the
+    /// request that triggered it — hence `Arc`.
+    era: Arc<crate::protocol::era::EraCache>,
     /// Cached tools
     tools_cache: CachedMetadata<Vec<Tool>>,
     /// Cached resources

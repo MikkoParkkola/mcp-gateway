@@ -10,7 +10,7 @@ use serde_json::Value;
 use tracing::debug;
 
 use super::Backend;
-use super::annotations::normalize_tool_annotations;
+use super::annotations::prepare_tool_metadata;
 use super::cached_metadata::CachedMetadata;
 use crate::Error;
 use crate::Result;
@@ -136,7 +136,7 @@ impl Backend {
     pub async fn get_tools_shared(&self) -> Result<Arc<Vec<Tool>>> {
         self.get_cached_list_shared(&self.tools_cache, "tools/list", "tools", |result| {
             let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
-            normalize_tool_annotations(&self.name, &mut tools);
+            prepare_tool_metadata(&self.name, &mut tools);
             Ok(tools)
         })
         .await

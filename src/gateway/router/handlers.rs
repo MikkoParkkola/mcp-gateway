@@ -24,9 +24,6 @@ use super::helpers::{
     parse_elicitation_params, parse_request, parse_sampling_params,
 };
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::destructive_confirmation::{
-    ConfirmationOutcome, is_destructive_meta_tool, require_destructive_confirmation,
-};
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::streaming::create_sse_response;
@@ -149,12 +146,119 @@ fn session_owner(client: Option<&AuthenticatedClient>) -> String {
     )
 }
 
+/// The stable identity of a caller with no session.
+///
+/// Empty when the caller is unauthenticated: that is not an identity, and the
+/// controls that key on this refuse rather than pool every anonymous caller
+/// into one bucket.
+fn session_owner_key(client: Option<&AuthenticatedClient>) -> String {
+    client.map_or_else(String::new, |c| {
+        if c.authenticated && !c.principal.is_empty() {
+            format!("credential:{}", c.principal)
+        } else {
+            String::new()
+        }
+    })
+}
+
+/// The stateless path's answer to a protocol version this build cannot serve.
+///
+/// The client is told which revisions it *could* retry on rather than left to
+/// guess. Shared by the POST classifier and the `GET /mcp` era gate so the two
+/// cannot drift into giving one client two different answers.
+fn unsupported_version_error(
+    id: Option<crate::protocol::RequestId>,
+    version: &str,
+    modern_enabled: bool,
+) -> JsonRpcResponse {
+    let supported: &[&str] = if modern_enabled {
+        crate::protocol::meta::MODERN_VERSIONS
+    } else {
+        &[]
+    };
+    JsonRpcResponse::error_with_data(
+        id,
+        crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION,
+        format!("unsupported protocol version '{version}'"),
+        serde_json::json!({ "supportedVersions": supported }),
+    )
+}
+
+/// The refusal a `GET /mcp` earns from the era it declares, if any.
+///
+/// `None` means the caller did not declare the 2026 era, and keeps the stream
+/// it has always had.
+///
+/// Every token of every field line is examined, and the first that declares the
+/// modern era decides. Two properties fall out of that, and both are the point:
+///
+/// RFC 9110 lets any intermediary fold two field lines into one comma-separated
+/// value, so a caller reaching the modern era through `2025-06-18, 2026-07-28`
+/// must be refused on its second token. Reading only the first, or refusing the
+/// whole request as a duplicate, would either serve it or break the legacy
+/// caller that sends its own version twice -- a path this change does not own.
+///
+/// Tokenising the raw bytes is what makes the scan honest. A `HeaderValue` may
+/// carry `obs-text` (bytes above 0x7F), and `HeaderValue::to_str` refuses the
+/// *whole* value when it does; a caller could then hide a modern token behind
+/// one high byte and be served the legacy stream. Splitting first and decoding
+/// each token separately discards only the token that is actually undecodable.
+fn get_era_refusal(state: &AppState, headers: &HeaderMap) -> Option<axum::response::Response> {
+    let version = headers
+        .get_all("mcp-protocol-version")
+        .iter()
+        .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
+        .filter_map(|token| std::str::from_utf8(token).ok())
+        .map(str::trim)
+        // Broader than the served list on purpose: a 2026 revision this build
+        // does not serve is still stateless, so it is not a legacy caller.
+        // Which refusal it gets is the served list's question, below.
+        .find(|token| crate::protocol::meta::declares_modern_era(token))?;
+
+    let modern_enabled = state.live_config.running().server.modern_protocol;
+    if modern_enabled && crate::protocol::meta::MODERN_VERSIONS.contains(&version) {
+        // The status is the specification's, not a choice: "HTTP GET or DELETE
+        // to the MCP endpoint: respond with `405 Method Not Allowed`". RFC 9110
+        // then requires a 405 to name the methods that do work, so `Allow`
+        // carries POST rather than leaving the caller to guess.
+        let mut response = build_http_error_response(
+            None,
+            crate::error::rpc_codes::INVALID_REQUEST,
+            "GET /mcp was removed in MCP 2026-07-28; use subscriptions/listen",
+            StatusCode::METHOD_NOT_ALLOWED,
+        )
+        .into_response();
+        response.headers_mut().insert(
+            axum::http::header::ALLOW,
+            axum::http::HeaderValue::from_static("POST"),
+        );
+        return Some(response);
+    }
+
+    // Naming `subscriptions/listen` here would send the caller to a method that
+    // refuses this same version, so it gets the POST path's answer instead.
+    Some(
+        build_http_response(
+            &unsupported_version_error(None, version, modern_enabled),
+            StatusCode::BAD_REQUEST,
+        )
+        .into_response(),
+    )
+}
+
 pub(super) async fn mcp_sse_handler(
     State(state): State<Arc<AppState>>,
     client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let client = client.map(|axum::Extension(c)| c);
+
+    // Before the streaming and Accept checks, and before any session work: a
+    // refusal that ran later would mint a session per refused caller and
+    // overwrite the resumption point of whoever owns the id it presented.
+    if let Some(refusal) = get_era_refusal(&state, &headers) {
+        return refusal;
+    }
     // Check if streaming is enabled
     if !state.streaming_config.enabled {
         return build_http_error_response(
@@ -441,19 +545,57 @@ pub(super) async fn meta_mcp_handler(
             .into_response();
     }
 
+    // 2026-07-28 removed protocol-level sessions, so a request written against
+    // it gets none — and answering it with a session header would hand a
+    // stateless client state the revision deleted, and an intermediary a value
+    // to route on.
+    //
+    // Decided from the header, before the body is parsed, because the session
+    // is created before the body is parsed. That is sound rather than a
+    // shortcut: the mirrored-header check refuses a modern request that omits
+    // `MCP-Protocol-Version`, so every modern request that survives carries it.
+    // Any modern declaration, not only a version this build serves. A client
+    // naming an unsupported 2026 revision is still a stateless client: minting
+    // it a session hands it state its own revision deleted and grows a table on
+    // behalf of a caller that is about to be refused.
+    // Read duplicate-safe, and read ONCE. `headers.get` returns the FIRST
+    // value, so a request sending the header twice — legacy first, modern
+    // second — would be classified legacy here and modern by the check further
+    // down, and the disagreement mints a session for a request that is about to
+    // be refused. Two occurrences is not a request to interpret; it is one to
+    // refuse, so an ambiguous header takes the modern reading and reaches the
+    // refusal with no session behind it.
+    let mut version_headers = headers.get_all("mcp-protocol-version").iter();
+    let declared_version = match (version_headers.next(), version_headers.next()) {
+        (Some(only), None) => only.to_str().ok(),
+        (None, _) => None,
+        (Some(_), Some(_)) => Some(crate::protocol::meta::MODERN_VERSIONS[0]),
+    };
+    let declares_modern_by_header =
+        declared_version.is_some_and(crate::protocol::meta::declares_modern_era);
+
     // Get or create session for this client
     let existing_session_id = headers
         .get("mcp-session-id")
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let (session_id, session_rx) = state.multiplexer.get_or_create_session_for(
-        existing_session_id.as_deref(),
-        // The identity that owns the session. Every caller is "anonymous"
-        // when authentication is off, so a single-user gateway behaves
-        // exactly as before.
-        &session_owner(client.as_ref()),
-    );
+    let (session_id, session_rx) = if declares_modern_by_header {
+        // No session, and none minted. Minting one per request grew a table of
+        // sessions nothing could reach, and handed the sequence-anomaly
+        // detector a fresh identity every call — a detector that sees a first
+        // request every time keeps running and stops protecting.
+        (String::new(), None)
+    } else {
+        let (id, rx) = state.multiplexer.get_or_create_session_for(
+            existing_session_id.as_deref(),
+            // The identity that owns the session. Every caller is "anonymous"
+            // when authentication is off, so a single-user gateway behaves
+            // exactly as before.
+            &session_owner(client.as_ref()),
+        );
+        (id, Some(rx))
+    };
     // This handler is not a stream reader. Holding the subscription would make
     // a server-to-client prompt look deliverable to a caller with no live SSE
     // stream: the send succeeds into a receiver nobody polls, and the caller
@@ -485,7 +627,7 @@ pub(super) async fn meta_mcp_handler(
     if request.get("method").is_none()
         && (request.get("result").is_some() || request.get("error").is_some())
         && let Some(resp_id) = request.get("id").and_then(|v| v.as_str())
-        && (resp_id.starts_with("sampling-") || resp_id.starts_with("elicitation-"))
+        && crate::gateway::input_bridge::is_bridge_reply_id(resp_id)
     {
         debug!(id = %resp_id, body = %request, "Received sampling/elicitation response POST-back");
         let resolved = state
@@ -519,9 +661,174 @@ pub(super) async fn meta_mcp_handler(
         crate::protocol_revision_telemetry::Transport::Http,
     );
 
+    // Which protocol generation is this request written against? Decided per
+    // request, not per connection: 2026-07-28 removed the handshake precisely so
+    // one connection can carry both.
+    //
+    // The header is read here as well as the body. A request declaring
+    // `2026-07-28` in the header an upstream routes on, while carrying no body
+    // metadata, would otherwise classify as legacy and pass the feature gate
+    // and every mirrored-header check behind it.
+    // Read duplicate-safe. `headers.get` returns the FIRST value, so a request
+    // sending the header twice — legacy first, modern second — could hide its
+    // modern declaration behind the legacy one and be classified legacy, which
+    // is the bypass this argument exists to close. Two occurrences is not a
+    // request to interpret; it is one to refuse, and the mirrored-header check
+    // below refuses it. The value is read once, above the session decision, so
+    // the two readings cannot disagree.
+    // NFR.OBS.1 is recorded by the classifier itself, so the HTTP and stdio
+    // dispatchers cannot drift apart on what a request declared.
+    let shape = crate::protocol::meta::classify_and_observe(
+        &method,
+        params.as_ref(),
+        declared_version,
+        // HTTP echoes the revision in a header on every request, so there
+        // is nothing for a session lookup to add.
+        None,
+    );
+    if let crate::protocol::meta::RequestShape::Malformed { ref missing } = shape {
+        // Declared itself modern and then omitted a required field. The
+        // specification is specific about both halves of the answer: -32602,
+        // and 400 on HTTP.
+        return build_error_response(
+            id,
+            -32602,
+            format!("missing required request metadata: {}", missing.join(", ")),
+            &session_id,
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    let is_modern = matches!(shape, crate::protocol::meta::RequestShape::Modern(_));
+
+    // Derived alongside `is_modern` so every shape-derived fact is read once,
+    // here, rather than re-classified where the caller context is built. This
+    // is not the per-method capability check further down: that one answers
+    // "did the client declare the capability THIS method needs" for a method
+    // the *client* called; this one is consulted before the gateway asks the
+    // *client* for something. Owned rather than borrowed because `shape` is
+    // moved by the per-method check below, ~100 lines before the caller context
+    // is built.
+    let declared_capabilities = shape.declared_capabilities();
+
     debug!(method = %method, session_id = %session_id, "Meta-MCP request");
 
-    // Handle notifications (no id) - return 202 Accepted with empty body
+    if let crate::protocol::meta::RequestShape::Modern(ref fields) = shape {
+        // A version we cannot serve statelessly. The client is told which ones
+        // we can, so it can retry on a shared revision rather than guess.
+        let modern_enabled = state.live_config.running().server.modern_protocol;
+        if !modern_enabled
+            || !crate::protocol::meta::MODERN_VERSIONS.contains(&fields.protocol_version.as_str())
+        {
+            return build_response(
+                unsupported_version_error(id.clone(), &fields.protocol_version, modern_enabled),
+                &session_id,
+                StatusCode::BAD_REQUEST,
+            );
+        }
+
+        // Header against body, before anything acts on either. The
+        // specification's own rationale for this check is a load balancer
+        // routing on the header while the server executes on the body — which
+        // is this gateway with the check missing.
+        //
+        // The mirrored field is chosen by the method, never searched for: a
+        // `resources/read` executes on `uri`, and validating a `name` it happens
+        // to carry would authorise a decoy while reading something else.
+        let body_name = crate::protocol::headers::mcp_name_body_field(&method)
+            .and_then(|field| params.as_ref().and_then(|p| p.get(field)))
+            .and_then(serde_json::Value::as_str);
+
+        // Exactly one occurrence, or none. Two lines of the same header let one
+        // intermediary route on the first and another act on the second, and
+        // the disagreement between them is the bypass — the same class of
+        // defect the body/header check closes, arriving through the header
+        // list instead of past it.
+        let single_header = |name: &'static str| -> Result<Option<&str>, &'static str> {
+            let mut values = headers.get_all(name).iter();
+            match (values.next(), values.next()) {
+                (Some(only), None) => Ok(only.to_str().ok()),
+                (None, _) => Ok(None),
+                (Some(_), Some(_)) => Err(name),
+            }
+        };
+        let duplicated = |name: &'static str| {
+            build_error_response(
+                id.clone(),
+                -32020,
+                format!("{name} appears more than once"),
+                &session_id,
+                StatusCode::BAD_REQUEST,
+            )
+        };
+        // Three explicit calls rather than a collected array: the conversion
+        // back out of a collection needs a fallback, and the only fallback
+        // available here blanks the headers, which passes the check it was
+        // meant to run.
+        let header_protocol_version = match single_header("mcp-protocol-version") {
+            Ok(value) => value,
+            Err(name) => return duplicated(name),
+        };
+        let header_method = match single_header("mcp-method") {
+            Ok(value) => value,
+            Err(name) => return duplicated(name),
+        };
+        let header_name = match single_header("mcp-name") {
+            Ok(value) => value,
+            Err(name) => return duplicated(name),
+        };
+        let check = crate::protocol::headers::HeaderCheck {
+            header_protocol_version,
+            body_protocol_version: Some(fields.protocol_version.as_str()),
+            header_method,
+            body_method: method.as_str(),
+            header_name,
+            body_name,
+        };
+        if let Err(mismatch) = check.validate() {
+            return build_error_response(
+                id.clone(),
+                -32020,
+                mismatch.to_string(),
+                &session_id,
+                StatusCode::BAD_REQUEST,
+            );
+        }
+
+        // A capability the client never declared. Checked before dispatch:
+        // a handler that discovers this halfway through has already acted.
+        if let Some(capability) = crate::protocol::meta::required_capability(&method)
+            && !fields.declares_capability(capability)
+        {
+            let mut rpc = crate::protocol::JsonRpcResponse::error(
+                id.clone(),
+                -32021,
+                format!("client did not declare the '{capability}' capability"),
+            );
+            if let Some(ref mut error) = rpc.error {
+                error.data = Some(serde_json::json!({
+                    "requiredCapabilities": [capability],
+                }));
+            }
+            return build_response(rpc, &session_id, StatusCode::BAD_REQUEST);
+        }
+
+        // Methods this revision removed. Refusing them is the difference
+        // between claiming the revision and speaking it.
+        if crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method.as_str()) {
+            return build_error_response(
+                id.clone(),
+                -32601,
+                format!("method '{method}' was removed in MCP 2026-07-28"),
+                &session_id,
+                StatusCode::NOT_FOUND,
+            );
+        }
+    }
+
+    // Validated first, answered second. A notification carries no id and gets no
+    // response body, but "no body" is not "no checks": returning 202 before the
+    // era, version, mirrored-header and removed-method checks ran accepted a
+    // malformed or disabled modern notification as though it had been honoured.
     if method.starts_with("notifications/") {
         debug!(notification = %method, "Handling notification");
         return build_accepted_response(&session_id);
@@ -536,24 +843,174 @@ pub(super) async fn meta_mcp_handler(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
+    if !is_modern && crate::protocol::meta::ADDED_IN_2026_07_28.contains(&method.as_str()) {
+        // A 2026 method reached by a 2025 client. Serving it would tell that
+        // client the gateway speaks a revision it cannot hold up its end of.
+        return build_error_response(
+            Some(id.clone()),
+            -32601,
+            format!("method '{method}' requires MCP 2026-07-28"),
+            &session_id,
+            StatusCode::NOT_FOUND,
+        );
+    }
+
     // Route to appropriate handler
     let response = match method.as_str() {
+        "subscriptions/listen" => {
+            // The single long-lived stream that replaces the GET endpoint.
+            //
+            // Returns EARLY with an SSE body rather than falling through to the
+            // ordinary response builder: the specification's response to this
+            // method is a stream that stays open, and an acknowledgement that
+            // closes is a subscription the client waits on forever.
+            let Some(request) =
+                crate::protocol::subscriptions::ListenRequest::from_params(params.as_ref())
+            else {
+                // No `notifications` filter at all. An *empty* filter is valid
+                // and opens a quiet stream; this is a request that never said
+                // what it wanted.
+                return build_error_response(
+                    Some(id),
+                    -32602,
+                    "subscriptions/listen requires a 'notifications' filter",
+                    &session_id,
+                    StatusCode::BAD_REQUEST,
+                );
+            };
+
+            // The permit IS the admission. A caller may open streams and walk
+            // away — the specification says a server must not assume otherwise
+            // — so this ceiling is a resource bound, and one checked as a count
+            // before subscribing can be raced past by concurrent callers.
+            let Some(listener) = state.subscriptions.subscribe() else {
+                return build_error_response(
+                    Some(id),
+                    -32003,
+                    "too many open subscriptions",
+                    &session_id,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                );
+            };
+
+            // The request's own id, never minted: the specification defines the
+            // subscription id as the JSON-RPC id of the listen request, and it
+            // is how a client correlates a notification with the subscription
+            // that asked for it.
+            let subscription =
+                crate::protocol::subscriptions::SubscriptionId::of_request(id.clone());
+            let acknowledgement = crate::protocol::JsonRpcResponse::success(
+                id,
+                serde_json::json!({
+                    "_meta": {
+                        "io.modelcontextprotocol/subscriptionId": subscription.as_value(),
+                    },
+                }),
+            );
+            debug!(
+                empty = request.is_empty(),
+                resources = request.resource_uris().len(),
+                "subscriptions/listen opened"
+            );
+
+            return crate::gateway::streaming::subscription_stream(
+                listener,
+                request,
+                subscription,
+                &acknowledgement,
+                state.streaming_config.keep_alive_interval,
+            );
+        }
+        // 2026-07-28 MUST. Deliberately ahead of `initialize`: discovery is what
+        // a peer calls when it has no handshake to make.
+        "server/discover" => crate::protocol::JsonRpcResponse::success_serialized(
+            id,
+            state
+                .meta_mcp
+                .discover_document(state.live_config.running().server.modern_protocol),
+        ),
         "initialize" => state.meta_mcp.handle_initialize(
             id,
             params.as_ref(),
             Some(session_id.as_str()),
             header_profile.as_deref(),
         ),
-        "tools/list" => state.meta_mcp.handle_tools_list_with_url_override(
-            id,
-            params.as_ref(),
-            Some(session_id.as_str()),
-            code_mode_url_active,
-        ),
+        "tools/list" => {
+            // NFR.OBS.2. The inputs that decide this surface, and the
+            // cacheScope the response will carry — recorded before the list is
+            // built, so the record cannot be written from the answer it exists
+            // to check.
+            //
+            // Inputs, not applied filters. The branching lives behind a file
+            // boundary this change does not cross, so a record naming filters
+            // that "ran" would be this site's guess about another module's
+            // control flow — and it guessed wrong: it named a session profile
+            // on every request, including those carrying none. Each field below
+            // is read from the value it names, so a reader can check the record
+            // against the request rather than against an assumption.
+            let query_present = params
+                .as_ref()
+                .and_then(|p| p.get("query"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|query| !query.is_empty());
+            info!(
+                target: "mcp_gateway::observed",
+                profile = header_profile.as_deref().unwrap_or("none"),
+                code_mode = state.meta_mcp.code_mode_enabled || code_mode_url_active,
+                query_present,
+                cache_scope = crate::protocol::cacheable::scope_for_method("tools/list").as_str(),
+                // A legacy result carries no `cacheScope`, so a record naming
+                // one without saying whether it reaches the client would be
+                // reporting a field that was never sent.
+                cache_scope_advertised = is_modern,
+                "tools/list surface inputs and cache scope"
+            );
+            state.meta_mcp.handle_tools_list_with_url_override(
+                id,
+                params.as_ref(),
+                Some(session_id.as_str()),
+                code_mode_url_active,
+            )
+        }
         "tools/call" => {
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
 
-            if is_admin_meta_tool(tool_name)
+            // A multi-round-trip retry carries `inputResponses` and
+            // `requestState` as siblings of `name` and `arguments` (MIK-7212).
+            // They are read here and travel to the invoke funnel on the caller
+            // context, which is the only scope that can act on them: redeeming
+            // the continuation reproduces the digest sealed at mint time, and
+            // that digest is over the *backend's* server, tool and argument
+            // object. Here `tool_name` is the gateway-facing name and
+            // `arguments` the wrapper carrying them, so a binding check
+            // attempted at this site would refuse every honest retry.
+            //
+            // What cannot wait is the malformed shape, refused below before
+            // anything dispatches.
+            let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
+            if retry.is_malformed() {
+                // Neither a usable retry nor a fresh call. Running it as a fresh
+                // call would repeat whatever the first attempt already did, and
+                // for a destructive tool that is the whole risk.
+                return build_error_response(
+                    Some(id),
+                    -32602,
+                    format!("malformed request fields: {}", retry.malformed.join(", ")),
+                    &session_id,
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+            // Exposure decides before admin does, here as well as in the
+            // dispatcher. The dispatcher orders these two correctly for its own
+            // callers, and this pre-check runs earlier still, so on the HTTP
+            // path an unexposed admin tool used to be answered by an admin
+            // refusal -- which confirms the tool exists to exactly the caller
+            // the allow-list hides it from, while stdio answered with the
+            // unrecognised-tool refusal. Declining to pre-check what we will
+            // not confirm leaves the dispatcher the single owner of that
+            // refusal instead of asking two sites to word one answer alike.
+            if state.meta_mcp.exposes_meta_tool(tool_name)
+                && is_admin_meta_tool(tool_name)
                 && let Err(e) = require_admin_tool_access(client.as_ref(), tool_name)
             {
                 return build_error_response(Some(id), e.code, e.message, &session_id, e.status);
@@ -599,12 +1056,27 @@ pub(super) async fn meta_mcp_handler(
                 if let Some(ref fw) = state.firewall {
                     let target = target.as_target();
                     let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
+                    // The key the per-caller controls are scored on. A session
+                    // when there is one; otherwise the validated credential.
+                    //
+                    // Never the display name: it is operator-configured, two
+                    // API keys may share one, and every unauthenticated caller
+                    // presents the same one — so scoring on it lets one caller
+                    // poison another's sequence history or trigger its blocks.
+                    // Empty means no identity at all, which the firewall
+                    // refuses rather than scores.
+                    let control_identity = if session_id.is_empty() {
+                        session_owner_key(client.as_ref())
+                    } else {
+                        session_id.clone()
+                    };
                     let verdict = fw.check_request(
                         &session_id,
                         target.server,
                         target.tool,
                         target.arguments,
                         caller_name,
+                        &control_identity,
                     );
                     if verdict.action == FirewallAction::Warn {
                         warn!(
@@ -653,44 +1125,22 @@ pub(super) async fn meta_mcp_handler(
                 oauth_agent_identity.as_ref(),
             );
 
-            // Destructive meta-tool confirmation. NOT the control — the admin
-            // requirement is, and `gateway_kill_server`, the only tool carrying
-            // `destructiveHint: true`, is in the admin set. This is the prompt
-            // an honest client shows its user before proceeding.
-            //
-            // Deliberately not labelled OWASP ASI09 here. An earlier version
-            // was, and `destructive_confirmation`'s own header was corrected to
-            // say why: the citation reads as a control and invites over-trust in
-            // a prompt that a client may simply not support, in which case the
-            // action proceeds after a warning.
-            // Non-destructive tools and all backend tool calls skip this check.
-            if is_destructive_meta_tool(tool_name) {
-                let action_desc = describe_destructive_action(tool_name, params.as_ref());
-                let outcome = require_destructive_confirmation(
-                    &state.proxy_manager,
-                    &session_id,
-                    &action_desc,
-                )
-                .await;
-                if outcome == ConfirmationOutcome::Declined {
-                    return build_response(
-                        JsonRpcResponse::error(
-                            Some(id),
-                            -32001,
-                            format!("Operator declined: {action_desc}"),
-                        ),
-                        &session_id,
-                        StatusCode::OK,
-                    );
-                }
-                // Confirmed or Unsupported → fall through to execute
-            }
+            // Destructive-action confirmation is decided at the dispatcher,
+            // for every transport. What this edge owns is the one fact the
+            // dispatcher cannot see: which era the request was written
+            // against, and therefore what to do when nobody can be asked.
+            // Handed over finished, so the shape is read once, here.
+            let confirmation_policy = if is_modern {
+                crate::gateway::destructive_confirmation::ConfirmationPolicy::for_modern()
+            } else {
+                crate::gateway::destructive_confirmation::ConfirmationPolicy::for_legacy()
+            };
 
-            // The same policy the pre-check above applied, handed to the
-            // dispatch chokepoint so the shapes the pre-check cannot see — a
-            // playbook step, whose targets are not in the request — face it
-            // too. Constructed concretely rather than taken as a parameter, so
-            // the weaker stdio authorizer cannot reach the network path.
+            // Authorization is handed to the dispatch chokepoint rather than
+            // applied here, so the shapes an edge cannot see — a playbook
+            // step, whose targets are not in the request — face it too.
+            // Constructed concretely rather than taken as a parameter, so the
+            // weaker stdio authorizer cannot reach the network path.
             let router_authorizer = RouterAuthorizer {
                 state: state.as_ref(),
                 client: client.as_ref(),
@@ -717,6 +1167,18 @@ pub(super) async fn meta_mcp_handler(
                         grant_subject,
                         verified_identity: verified_identity.as_ref(),
                         is_admin: client.as_ref().is_some_and(|c| c.admin),
+                        input_capabilities: declared_capabilities,
+                        retry: &retry,
+                        // Always `Elicit`, including when no session was
+                        // presented. HTTP can carry an asker; whether one
+                        // answered is what `policy` decides. Mapping a
+                        // sessionless request to `Unavailable` would refuse the
+                        // legacy caller this path deliberately still warns.
+                        confirmation:
+                            crate::gateway::destructive_confirmation::ConfirmationChannel::Elicit {
+                                proxy: &state.proxy_manager,
+                                policy: confirmation_policy,
+                            },
                     },
                 )
                 .await;
@@ -856,7 +1318,14 @@ pub(super) async fn meta_mcp_handler(
     )
     .increment(1);
 
-    if let Some(ref client) = client {
+    // A confirmation refusal is the gate working, not the client
+    // misbehaving. It is excluded from BOTH arms, not just the failure one:
+    // `record_client_success` resets the consecutive-failure count, so
+    // treating a refusal as a success would clear a breaker the caller had
+    // genuinely tripped.
+    if let Some(ref client) = client
+        && !response.confirmation_refusal
+    {
         if response.error.is_some() {
             state.auth_config.record_client_failure(&client.name);
         } else {
@@ -870,7 +1339,102 @@ pub(super) async fn meta_mcp_handler(
     // it 200 tells every caller and intermediary the call succeeded. The status
     // travels on the error precisely so this line can honour it.
     let status = refusal_status(&response).unwrap_or(StatusCode::OK);
+    if is_modern {
+        // An unimplemented method is 404 on this revision, not 200-with-error.
+        // The status is what a client uses to tell "this server does not have
+        // that method" from "this is not a modern endpoint at all" — and the
+        // JSON-RPC body is what tells it apart from a legacy transport's bare
+        // 404. Both halves are needed; neither alone decides it.
+        let status = if response
+            .error
+            .as_ref()
+            .is_some_and(|error| error.code == -32601)
+        {
+            StatusCode::NOT_FOUND
+        } else {
+            status
+        };
+        // A stateless client has no handshake in which to learn who answered,
+        // so every result says. And it holds no session, so it is sent no
+        // session header — the legacy path below keeps both unchanged.
+        return build_modern_response(response, status, &method);
+    }
     build_response(response, &session_id, status)
+}
+
+/// Build a response for a request written against 2026-07-28.
+///
+/// Two differences from the legacy path, and they are the same difference: the
+/// connection carries no state. There is no `Mcp-Session-Id`, because the
+/// revision deleted protocol sessions; and the result names the server, because
+/// there was no handshake in which to say so.
+/// The methods whose results carry `ttlMs` and `cacheScope`.
+///
+/// Five, from the `CacheableResult` interface. `server/discover` supports
+/// caching too, but is not in this list — its document is built elsewhere and
+/// the fields are added there when its own scope is decided.
+const CACHEABLE_METHODS: &[&str] = &[
+    "tools/list",
+    "prompts/list",
+    "resources/list",
+    "resources/read",
+    "resources/templates/list",
+];
+
+/// How long a client may consider a list fresh. A freshness hint, not a
+/// promise: `listChanged` notifications remain the authority on change, and
+/// this only stops a client re-listing on every turn.
+const LIST_TTL_MS: u64 = 60_000;
+
+fn build_modern_response(
+    mut response: crate::protocol::JsonRpcResponse,
+    status: StatusCode,
+    method: &str,
+) -> axum::response::Response {
+    if let Some(ref mut result) = response.result
+        && let Some(object) = result.as_object_mut()
+    {
+        // Required on every result in this revision, and supplied here only
+        // when the result does not already carry one.
+        //
+        // Inserting unconditionally overwrote the discriminator that the
+        // multi-round-trip path had just set: an `input_required` result was
+        // relabelled `complete` on its way out, so a client saw a finished call
+        // where the server was waiting for an answer and could no longer supply
+        // one. The comment said this value was safe because interim results own
+        // their own; the code then overwrote exactly those.
+        object
+            .entry("resultType")
+            .or_insert_with(|| serde_json::Value::String("complete".to_string()));
+
+        if CACHEABLE_METHODS.contains(&method) {
+            object.insert("ttlMs".to_string(), serde_json::json!(LIST_TTL_MS));
+            // Per method, from the table that records which ones were
+            // assessed. Answering with one method's decision for all five
+            // would make `resources/read` inherit `tools/list`'s reasoning.
+            object.insert(
+                "cacheScope".to_string(),
+                serde_json::Value::String(
+                    crate::protocol::cacheable::scope_for_method(method)
+                        .as_str()
+                        .to_string(),
+                ),
+            );
+        }
+        let meta = object
+            .entry("_meta")
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(meta) = meta.as_object_mut() {
+            meta.insert(
+                crate::protocol::meta::KEY_SERVER_INFO.to_string(),
+                serde_json::json!({
+                    "name": "mcp-gateway",
+                    "version": env!("CARGO_PKG_VERSION"),
+                }),
+            );
+        }
+    }
+    (status, axum::Json(response)).into_response()
 }
 
 /// The HTTP status a response deserves when it carries an authorization
@@ -892,22 +1456,6 @@ pub(super) fn refusal_status(response: &JsonRpcResponse) -> Option<StatusCode> {
 }
 
 // ── destructive-confirmation helpers ─────────────────────────────────────────
-
-/// Build a human-readable description of the destructive action for the
-/// elicitation message.  Extracts the relevant argument(s) from `params`.
-fn describe_destructive_action(tool_name: &str, params: Option<&Value>) -> String {
-    match tool_name {
-        "gateway_kill_server" => {
-            let server = params
-                .and_then(|p| p.get("arguments"))
-                .and_then(|a| a.get("server"))
-                .and_then(Value::as_str)
-                .unwrap_or("<unknown>");
-            format!("kill server '{server}'")
-        }
-        other => format!("execute destructive meta-tool '{other}'"),
-    }
-}
 
 /// GET /metrics — Prometheus text exposition format scrape endpoint.
 ///
@@ -1035,5 +1583,62 @@ mod caller_identity_tests {
         assert_eq!(subject.authority, "https://issuer.example");
         assert_eq!(subject.subject, "oidc-subject");
         assert_eq!(subject.label.as_deref(), Some("owner@example.com"));
+    }
+}
+
+#[cfg(test)]
+mod cacheable_field_tests {
+    use super::{CACHEABLE_METHODS, build_modern_response};
+    use crate::protocol::{JsonRpcResponse, RequestId};
+    use axum::http::StatusCode;
+
+    /// CACHE.1a and CACHE.1b claim both fields on **all five** methods. The
+    /// HTTP acceptance test can only reach four of them -- `resources/read`
+    /// needs a backend serving a URI, and an error result carries nothing to
+    /// decorate. Driving the builder directly covers the fifth, and iterating
+    /// the constant rather than a hand-copied list means a sixth method cannot
+    /// be added without this test demanding its fields too.
+    #[tokio::test]
+    async fn every_cacheable_method_gets_both_fields() {
+        // "All five" is half the claim; iterating the constant alone would
+        // still pass if a method were dropped from it.
+        assert_eq!(
+            CACHEABLE_METHODS.len(),
+            5,
+            "the criterion names five methods: {CACHEABLE_METHODS:?}"
+        );
+        for method in CACHEABLE_METHODS {
+            let response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
+            let built = build_modern_response(response, StatusCode::OK, method);
+            let bytes = axum::body::to_bytes(built.into_body(), usize::MAX)
+                .await
+                .expect("the builder produces a complete in-memory body");
+            let body: serde_json::Value =
+                serde_json::from_slice(&bytes).expect("the body is JSON-RPC");
+
+            assert!(
+                body["result"]["ttlMs"].as_u64().is_some_and(|ttl| ttl > 0),
+                "{method} must carry a positive ttlMs: {body}"
+            );
+            assert!(
+                body["result"]["cacheScope"].as_str().is_some(),
+                "{method} must carry a cacheScope: {body}"
+            );
+        }
+    }
+
+    /// The mirror: a method outside the list gets neither field. Without this,
+    /// a builder that decorated everything would pass the case above.
+    #[tokio::test]
+    async fn a_non_cacheable_method_gets_neither_field() {
+        let response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
+        let built = build_modern_response(response, StatusCode::OK, "server/discover");
+        let bytes = axum::body::to_bytes(built.into_body(), usize::MAX)
+            .await
+            .expect("the builder produces a complete in-memory body");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("the body is JSON-RPC");
+
+        assert!(body["result"].get("ttlMs").is_none(), "{body}");
+        assert!(body["result"].get("cacheScope").is_none(), "{body}");
     }
 }

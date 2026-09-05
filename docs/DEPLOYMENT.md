@@ -121,6 +121,34 @@ mcp-gateway setup export --target all --config gateway.yaml
 
 Applied exports print any backup file and a rollback command. Use that rollback command before deleting or hand-editing a generated client config.
 
+## Replica Count and `server.modern_protocol`
+
+**A single replica is no longer required while `server.modern_protocol` is on —
+but a retry only succeeds on the replica that minted the continuation.** The
+consumed-continuation ledger and the mint counter are process-local. Each
+process now generates its own continuation key at startup and shares it with
+nobody, so a continuation opens only on the replica that minted it and no other
+replica can spend it a second time — but a retry that lands elsewhere is
+refused rather than served, and a restart invalidates every continuation
+outstanding against the process it replaced.
+
+This trade-off binds only on the modern protocol path. `server.modern_protocol`
+is off by default, and with it off there is no such consideration at all: scale
+horizontally as the rest of this document describes.
+
+The shipped Helm chart and Kubernetes manifests default to two replicas, and that
+default stays correct with the switch on. Set `replicaCount: 1` only if you need
+every retry to be served rather than origin-pinned; it is a trade, not a fix.
+
+If you need both horizontal scale and the 2026-07-28 revision: MIK-7312 settled
+the mechanism as per-process key material rather than the shared store this
+document previously pointed at, so a multi-replica deployment refuses a retry on
+every replica but the minting one instead of serving it twice. Whether that is
+acceptable is a deployment decision, not a correctness one. Do not work around it
+with a sticky-session load balancer: continuations are presented by whichever
+client holds one, they travel in the request body, and session affinity does not
+constrain which replica that reaches.
+
 ## Kubernetes Enterprise Alpha
 
 The enterprise-alpha Kubernetes package lives in
@@ -186,6 +214,20 @@ Config merges from three sources (later overrides earlier):
 Nested values: `MCP_GATEWAY_SERVER__PORT=8080` sets `server.port`.
 
 Config values support `${VAR}` and `${VAR:-default}` expansion. Use `env_files:` in config to load `.env` files (supports `~` expansion; missing files silently skipped).
+
+A **malformed** line in an env file is not skipped: it fails startup, naming the file,
+the line number and the category of fault. The offending line is never echoed, because
+the offending line is the secret. A `~` in an `env_files` path resolves once, at startup,
+against the home directory in force at that moment; each file is applied before the next
+is expanded, so a file that sets `HOME` moves where a later `~` points.
+
+Env files supply values to configuration references, and also the attestation signing
+key: `GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_KEY_ID` are read through the same
+overlay under those fixed names, rather than named in a config file through a
+`{env.VAR}` reference. Injecting them from the deployment — a systemd unit, a
+Kubernetes secret — still works and is still the recommendation for an operational
+secret; an env file is now an alternative rather than a value that silently has no
+effect.
 
 ## TLS / mTLS
 
@@ -604,11 +646,12 @@ public_url host your-tunnel.example.com: ...
 
 The refusal names two things it did not do — no backend was started or stopped,
 and no configuration was published — and claims nothing beyond them. Reading a
-config file applies any `env_files` it names to the process environment before
-the file is validated, so a refused reload is not a complete no-op. If a
-capability resolves its credential from an environment variable, check that one
-after a refused reload. This is true of every failed reload rather than only
-this one.
+config file no longer leaks its `env_files` into the process environment. A
+refused reload leaves the environment exactly as the last accepted configuration
+left it, so a capability that resolves its credential from an environment
+variable still resolves the value it had before the refused edit. Earlier
+releases applied env files before validating the file, which made a refused
+reload a partial no-op; that is fixed.
 
 Enabling `auth.enabled` in the same edit does not get it through, and that is
 deliberate rather than an oversight: authentication is applied at startup, so
@@ -697,6 +740,19 @@ cross-site, and it is marked `Secure` when the listener speaks TLS.
 With `auth.enabled = false` every caller **over HTTP** is anonymous and holds
 **no admin**. A stdio caller is treated as admin: the client spawned the
 process, so it already holds whatever the operator holds.
+
+Admin is not the whole story for the destructive tools. `gateway_kill_server`
+carries `destructiveHint: true`, and the gateway asks the operator to confirm
+such a call before running it. That ask travels over the elicitation channel,
+which only the HTTP transport has — stdio speaks to one process over two pipes
+and can reach nobody. **A destructive tool called over stdio is therefore
+refused**, with `-32001` and a message naming the action; it is not silently
+executed and not silently dropped. Earlier revisions ran it. Reach the
+management tools over the HTTP listener with a client that answers
+`elicitation/create`, or change the backend's configuration directly. Today
+`gateway_kill_server` is the only meta-tool carrying the hint, so it is the only
+one this gate refuses; the list below is the separate admin control, which a
+stdio caller already satisfies.
 Ordinary tools work, so a local MCP client needs no configuration. These do not:
 
 - `gateway_kill_server`, `gateway_revive_server`, `gateway_reload_config`,
@@ -743,6 +799,25 @@ failsafe:
 cache:
   default_ttl: 60s             # Higher = fewer calls, staler data
   max_entries: 10000           # In-memory; scale with available RAM
+error_budget:
+  threshold: 0.8               # Failure rate that disables a backend
+  window_size: 100             # Calls in the sliding window
+  window_duration: 5m          # Age at which a call leaves the window
+  min_samples: 10              # Calls needed before the budget is judged
+  capability:                  # Same knobs, per capability
+    threshold: 0.8
+    window_size: 50
+    window_duration: 5m
+    min_samples: 5
+    cooldown: 5m               # How long a disabled capability stays off
 ```
+
+Every `error_budget` key is optional and any key left out keeps the value shown
+above. Values are validated at startup and a bad one is refused by name rather
+than clamped — `min_samples` above `window_size`, for instance, describes a
+budget that can never be evaluated. The section is read when the gateway
+starts, so an edit takes effect on restart, not on reload. Rate-limited
+responses are excluded from both budgets: a throttled backend is not a failing
+one.
 
 Each stdio backend uses 3 file descriptors. Set `LimitNOFILE=65536` in systemd for large deployments.

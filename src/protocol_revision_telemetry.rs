@@ -151,6 +151,10 @@ pub struct ToolsListShadow {
 struct SessionAttribution {
     requested_revision: Option<&'static str>,
     client: &'static str,
+    /// What the handshake ANSWERED, as opposed to what the client asked for.
+    /// The two diverge whenever the ask is unsupported (`negotiate_version`
+    /// falls back), and a session is served under the answer.
+    negotiated_revision: Option<&'static str>,
 }
 
 /// Process-wide counters. Every metric key is normalized to a finite label set.
@@ -383,6 +387,26 @@ impl Registry {
         self.session_attributions.insert(key, attribution);
     }
 
+    /// Record the revision this session's handshake settled on, leaving the
+    /// request-derived fields alone. Separate from `bind_session` because the
+    /// two are written by different sites: the ask is read off the inbound
+    /// message, the answer is known only once negotiation has run.
+    fn bind_negotiated_revision(&mut self, session_id: &str, negotiated: &'static str) {
+        let key = session_key(session_id);
+        if let Some(entry) = self.session_attributions.get_mut(&key) {
+            entry.negotiated_revision = Some(negotiated);
+            return;
+        }
+        self.bind_session(
+            session_id,
+            SessionAttribution {
+                requested_revision: None,
+                client: UNATTRIBUTED_CLIENT,
+                negotiated_revision: Some(negotiated),
+            },
+        );
+    }
+
     fn session_attribution(&self, session_id: Option<&str>) -> Option<SessionAttribution> {
         self.session_attributions
             .get(&session_key(session_id?))
@@ -497,12 +521,18 @@ pub fn requested_revision(
 }
 
 /// Client name from initialize `clientInfo` or 2026 `_meta` clientInfo.
+///
+/// MIK-6704: label only. The name is a metric label and a display string; it
+/// reaches no authorization decision, and any caller can write any value there.
 pub fn client_identity(initialize_params: Option<&Value>, request_meta: Option<&Value>) -> String {
+    // MIK-6704: label only.
     client_info_name(request_meta.and_then(|m| m.get(META_CLIENT_INFO)))
         .or_else(|| client_info_name(initialize_params.and_then(|p| p.get("clientInfo"))))
         .unwrap_or_else(|| UNATTRIBUTED_CLIENT.to_string())
 }
 
+// MIK-6704: label only — extracted for telemetry attribution, never for a
+// decision.
 fn client_info_name(value: Option<&Value>) -> Option<String> {
     let name = value?.get("name")?.as_str()?.trim();
     if name.is_empty() {
@@ -519,6 +549,34 @@ fn meta_string(meta: Option<&Value>, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+/// Record the revision a session's handshake answered.
+///
+/// Called from the one site where negotiation happens, so the stored value is
+/// the one the client was told -- never a second derivation of it.
+pub fn bind_session_revision(session_id: Option<&str>, negotiated: &'static str) {
+    let Some(session_id) = session_id else {
+        return;
+    };
+    global()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .bind_negotiated_revision(session_id, negotiated);
+}
+
+/// The revision this session's handshake answered, if it has had one.
+///
+/// `None` before any `initialize`, which is what lets the observation record
+/// report `absent`/`none` for a message that arrives first rather than
+/// fabricating a revision for it.
+#[must_use]
+pub fn session_negotiated_revision(session_id: Option<&str>) -> Option<&'static str> {
+    global()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .session_attribution(session_id)
+        .and_then(|item| item.negotiated_revision)
 }
 
 fn revision_label(revision: Option<&str>) -> Option<&'static str> {
@@ -957,6 +1015,7 @@ pub fn observe_inbound_request(
         .or_else(|| requested_revision(initialize_params, None))
         .or_else(|| protocol_header.map(str::trim).map(str::to_string))
         .filter(|value| !value.is_empty());
+    // MIK-6704: label only — attributes the observation, gates nothing.
     let explicit_client = client_info_name(request_meta_value(request, params, META_CLIENT_INFO))
         .or_else(|| client_info_name(initialize_params.and_then(|p| p.get("clientInfo"))))
         .unwrap_or_else(|| UNATTRIBUTED_CLIENT.to_string());
@@ -983,6 +1042,9 @@ pub fn observe_inbound_request(
             SessionAttribution {
                 requested_revision: requested_label,
                 client,
+                // A second `initialize` on one session re-asks; until it is
+                // answered the session is still served under the last answer.
+                negotiated_revision: previous.and_then(|item| item.negotiated_revision),
             },
         );
     }
@@ -1309,7 +1371,10 @@ mod tests {
         let retired = retire_revisions(&reg.snapshot(), MIN_MEASUREMENT_WINDOW)
             .expect("full attributed window is actionable");
         assert!(retired.iter().any(|r| r == "2024-11-05"));
-        assert!(retired.iter().any(|r| r == "2024-10-07"));
+        // A supported revision with no traffic at all is retirable too. 4.0.0
+        // dropped `2024-10-07` from `SUPPORTED_VERSIONS`, so the zero-traffic
+        // stand-in is a revision the server still offers.
+        assert!(retired.iter().any(|r| r == "2025-03-26"));
         assert!(!retired.iter().any(|r| r == "2025-11-25"));
     }
 

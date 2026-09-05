@@ -555,7 +555,7 @@ fn sample_tool(name: &str) -> Tool {
 fn normalize_tool_annotations_fills_missing_hints() {
     let mut tools = vec![sample_tool("search_messages"), sample_tool("send_message")];
 
-    normalize_tool_annotations("beeper", &mut tools);
+    prepare_tool_metadata("beeper", &mut tools);
 
     let search = tools[0].annotations.as_ref().unwrap();
     assert_eq!(search.read_only_hint, Some(true));
@@ -582,7 +582,7 @@ fn normalize_tool_annotations_preserves_existing_true_hints_and_adds_false_hints
     });
     let mut tools = vec![tool];
 
-    normalize_tool_annotations("hebb", &mut tools);
+    prepare_tool_metadata("hebb", &mut tools);
 
     let annotations = tools[0].annotations.as_ref().unwrap();
     assert_eq!(annotations.read_only_hint, Some(true));
@@ -603,7 +603,7 @@ fn normalize_tool_annotations_preserves_downstream_annotation_title_and_hints() 
     });
     let mut tools = vec![tool];
 
-    normalize_tool_annotations("remote-api", &mut tools);
+    prepare_tool_metadata("remote-api", &mut tools);
 
     let annotations = tools[0].annotations.as_ref().unwrap();
     assert_eq!(annotations.title.as_deref(), Some("Remote Write"));
@@ -741,4 +741,180 @@ async fn get_tools_does_not_cache_json_rpc_error_response() {
     assert!(result.is_err());
     assert!(!backend.has_cached_tools());
     assert_eq!(transport.requests.load(Ordering::SeqCst), 1);
+}
+
+// --- MIK-7214.HEADER.8 — tools violating an `x-mcp-header` constraint are
+// excluded from `tools/list`, on the same tool-metadata path as the
+// destructive-annotation gate.
+
+fn tool_with_schema(name: &str, input_schema: serde_json::Value) -> Tool {
+    let mut tool = sample_tool(name);
+    tool.input_schema = input_schema;
+    tool
+}
+
+#[test]
+fn prepare_tool_metadata_keeps_a_well_formed_annotation() {
+    // GIVEN one tool whose `x-mcp-header` meets every constraint
+    let mut tools = vec![tool_with_schema(
+        "search",
+        json!({"type": "object", "properties": {
+            "tenant": {"type": "string", "x-mcp-header": "Tenant"}
+        }}),
+    )];
+
+    // WHEN the tool-metadata path filters the list
+    prepare_tool_metadata("beeper", &mut tools);
+
+    // THEN it survives
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name, "search");
+}
+
+#[test]
+fn prepare_tool_metadata_drops_only_the_violating_tool() {
+    // GIVEN a valid tool beside one annotating a `number` property
+    let mut tools = vec![
+        tool_with_schema("keep", json!({"type": "object", "properties": {}})),
+        tool_with_schema(
+            "drop",
+            json!({"type": "object", "properties": {
+                "ratio": {"type": "number", "x-mcp-header": "Ratio"}
+            }}),
+        ),
+    ];
+
+    prepare_tool_metadata("beeper", &mut tools);
+
+    // THEN exclusion is per-tool, never per-backend
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name, "keep");
+}
+
+#[test]
+fn prepare_tool_metadata_drops_a_crlf_injection_attempt() {
+    let mut tools = vec![tool_with_schema(
+        "inject",
+        json!({"type": "object", "properties": {
+            "tenant": {"type": "string", "x-mcp-header": "T\r\nX-Injected: 1"}
+        }}),
+    )];
+
+    prepare_tool_metadata("beeper", &mut tools);
+
+    assert!(
+        tools.is_empty(),
+        "a control character must exclude the tool"
+    );
+}
+
+#[test]
+fn prepare_tool_metadata_leaves_unannotated_tools_untouched() {
+    let mut tools = vec![sample_tool("plain"), sample_tool("also_plain")];
+
+    prepare_tool_metadata("beeper", &mut tools);
+
+    assert_eq!(tools.len(), 2);
+}
+
+#[test]
+fn prepare_tool_metadata_excludes_and_annotates_in_one_pass() {
+    // GIVEN a violating tool beside one that needs its hints inferred
+    let mut tools = vec![
+        tool_with_schema(
+            "bad",
+            json!({"type": "object", "properties": {
+                "tenant": {"type": "string", "x-mcp-header": "Tenant Id"}
+            }}),
+        ),
+        tool_with_schema("get_thing", json!({"type": "object"})),
+    ];
+
+    // WHEN the single tool-metadata entry point runs
+    prepare_tool_metadata("beeper", &mut tools);
+
+    // THEN both steps happened: neither caller can get one without the other
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name, "get_thing");
+    assert_eq!(
+        tools[0].annotations.as_ref().and_then(|a| a.read_only_hint),
+        Some(true)
+    );
+}
+
+/// Transport whose every request fails with a caller-supplied error, so a test
+/// can drive the real dispatch path and watch what it records.
+struct ErroringTransport {
+    error_text: String,
+}
+
+#[async_trait]
+impl Transport for ErroringTransport {
+    async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        Err(Error::Transport(self.error_text.clone()))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Err(Error::Transport(self.error_text.clone()))
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+async fn dispatch_failing_request(error_text: &str) -> Arc<Backend> {
+    let backend = Arc::new(Backend::new(
+        "test",
+        BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(Arc::new(ErroringTransport {
+        error_text: error_text.to_string(),
+    }) as Arc<dyn Transport>);
+    let result = backend.request("tools/list", None).await;
+    assert!(result.is_err(), "the mock transport always fails");
+    backend
+}
+
+/// GH475.RL.3 — a rate-limited dispatch is not a circuit-breaker failure.
+#[tokio::test]
+async fn rate_limited_dispatch_is_not_a_breaker_failure() {
+    let backend = dispatch_failing_request("API returned 429 Too Many Requests").await;
+
+    let stats = backend.circuit_breaker_stats();
+    assert_eq!(
+        stats.current_failures, 0,
+        "a throttled backend is not a failing backend"
+    );
+    assert_eq!(stats.state, crate::failsafe::CircuitState::Closed);
+    assert_eq!(backend.health_metrics().failure_count, 0);
+}
+
+/// GH475.RL.13 — a `429` still proves the backend is reachable.
+#[tokio::test]
+async fn rate_limited_dispatch_records_transport_health() {
+    let backend = dispatch_failing_request("rate limit exceeded, slow down").await;
+
+    let metrics = backend.health_metrics();
+    assert_eq!(
+        metrics.success_count, 1,
+        "a 429 is a reachable backend, so health records a success"
+    );
+    assert_eq!(metrics.consecutive_failures, 0);
+}
+
+/// GH475.RL.7 — an ordinary failure is still a failure at both recorders.
+#[tokio::test]
+async fn ordinary_dispatch_failure_still_counts() {
+    let backend = dispatch_failing_request("HTTP 500: internal error, request id 4291a").await;
+
+    assert_eq!(backend.circuit_breaker_stats().current_failures, 1);
+    assert_eq!(backend.health_metrics().failure_count, 1);
+    assert_eq!(backend.health_metrics().success_count, 0);
 }

@@ -4,9 +4,11 @@
 //! (read-only / destructive / idempotent / open-world) that a backend did not
 //! declare itself, from naming conventions.
 
+use crate::protocol::param_headers::mirrored_params;
 use crate::protocol::{Tool, ToolAnnotations};
+use tracing::warn;
 
-pub(crate) fn normalize_tool_annotations(server: &str, tools: &mut [Tool]) {
+fn normalize_tool_annotations(server: &str, tools: &mut [Tool]) {
     for tool in tools {
         let inferred_read_only = infer_read_only_tool(&tool.name);
         let annotations = tool
@@ -112,4 +114,42 @@ fn infer_open_world_tool(server: &str, name: &str) -> bool {
     }
 
     true
+}
+
+/// Drops every tool whose `inputSchema` breaches an `x-mcp-header` constraint
+/// (MIK-7214.HEADER.8).
+///
+/// Exclusion changes the surfaced tool set, so it runs on the same
+/// tool-metadata path as the destructive-annotation gate rather than in a
+/// second filter of its own. A violation is per-tool: the rest of the
+/// backend's list is unaffected.
+fn exclude_invalid_header_tools(server: &str, tools: &mut Vec<Tool>) {
+    tools.retain(|tool| match mirrored_params(&tool.input_schema) {
+        Ok(_) => true,
+        Err(violation) => {
+            warn!(
+                server = %server,
+                tool = %tool.name,
+                reason = %violation,
+                "Excluding tool from tools/list: invalid x-mcp-header annotation"
+            );
+            false
+        }
+    });
+}
+
+/// Prepares one backend's `tools/list` for a client: drops tools whose
+/// `x-mcp-header` declarations breach a constraint, then fills the annotation
+/// hints the backend omitted.
+///
+/// This is the ONLY entry point, and both steps are private behind it, because
+/// the two callers — the cached backend metadata every aggregate path reads,
+/// and the direct passthrough response — must not be able to disagree about
+/// which of the two ran. They already did: exclusion reached the passthrough
+/// response only, so an invalid tool stayed visible through
+/// `BackendMetadata::get_tools_shared`. Order is load-bearing: a tool that is
+/// about to be dropped is not worth annotating.
+pub(crate) fn prepare_tool_metadata(server: &str, tools: &mut Vec<Tool>) {
+    exclude_invalid_header_tools(server, tools);
+    normalize_tool_annotations(server, tools);
 }

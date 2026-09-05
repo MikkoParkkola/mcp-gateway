@@ -27,8 +27,9 @@ use super::Transport;
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
 use crate::protocol::{
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
-    is_version_mismatch_error, negotiate_best_version, parse_supported_versions_from_error,
+    JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
+    RequestId, is_version_mismatch_error, negotiate_best_version,
+    parse_supported_versions_from_error,
 };
 use crate::security::http_diagnostics::{
     SESSION_EXPIRED_MARKER, safe_http_status_error, safe_request_error,
@@ -219,6 +220,38 @@ enum HeaderMode<'a> {
 fn bearer_header_value(token: &str) -> Result<header::HeaderValue> {
     header::HeaderValue::from_str(&format!("Bearer {token}"))
         .map_err(|_| Error::OAuth("OAuth token is not a valid HTTP header value".into()))
+}
+
+/// Extract and deserialize the JSON-RPC response carried by an SSE body.
+///
+/// A server may interleave notifications on a request's own stream ahead of the
+/// final response, so every `data:` line is classified and non-response frames
+/// are skipped rather than taken as the answer. An inbound *request* is refused:
+/// it is a call addressed to this client, never this call's result.
+///
+/// Returns a transport error when the body carries no response frame, or when a
+/// payload does not deserialize as a JSON-RPC message.
+fn parse_sse_response(text: &str) -> Result<JsonRpcResponse> {
+    for line in text.lines() {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let message: JsonRpcMessage = serde_json::from_str(data.trim())
+            .map_err(|e| Error::Transport(format!("Failed to parse SSE data: {e}")))?;
+        match message {
+            JsonRpcMessage::Response(response) => return Ok(response),
+            JsonRpcMessage::Notification(notification) => {
+                debug!(method = %notification.method, "Skipping notification on response stream");
+            }
+            JsonRpcMessage::Request(request) => {
+                return Err(Error::Transport(format!(
+                    "Peer sent request '{}' on the response stream",
+                    request.method
+                )));
+            }
+        }
+    }
+    Err(Error::Transport("No data in SSE response".to_string()))
 }
 
 impl HttpTransport {
@@ -893,15 +926,7 @@ impl HttpTransport {
                 .await
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e))?;
 
-            // Find the data line and extract JSON
-            for line in text.lines() {
-                if let Some(data) = line.strip_prefix("data:") {
-                    let json_str = data.trim();
-                    return serde_json::from_str(json_str)
-                        .map_err(|e| Error::Transport(format!("Failed to parse SSE data: {e}")));
-                }
-            }
-            Err(Error::Transport("No data in SSE response".to_string()))
+            parse_sse_response(&text)
         } else {
             // Parse JSON response
             response

@@ -209,6 +209,8 @@ async fn add_backend(
         }
     };
 
+    state.announce_tools_changed();
+
     (
         StatusCode::CREATED,
         Json(json!({"status": "created", "name": req.name, "reload": reload})),
@@ -258,6 +260,8 @@ async fn remove_backend(
         }
     }
 
+    state.announce_tools_changed();
+
     (StatusCode::NO_CONTENT, Json(json!({}))).into_response()
 }
 
@@ -287,6 +291,9 @@ async fn revive_backend(
     let outcome = backend.force_restart().await;
     let rebuilt = matches!(outcome, Ok(crate::backend::RestartOutcome::Rebuilt));
     let status = if rebuilt { "revived" } else { "not_revived" };
+    if rebuilt {
+        state.announce_tools_changed();
+    }
 
     (
         StatusCode::OK,

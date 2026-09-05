@@ -8,10 +8,9 @@
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::idempotency::{IdempotencyCache, derive_key};
+use crate::idempotency::IdempotencyCache;
 use crate::playbook::ToolInvoker;
 
-use super::super::meta_mcp_helpers::extract_optional_str;
 use super::MetaMcp;
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
 
@@ -19,30 +18,63 @@ use crate::gateway::meta_mcp::MetaMcpCallerContext;
 // Idempotency
 // ============================================================================
 
-/// Resolve the idempotency key for a `gateway_invoke` call.
+/// Build the idempotency key for a `gateway_invoke` call.
 ///
-/// Priority:
-/// 1. Explicit `"idempotency_key"` string in `args` — used verbatim.
-/// 2. Auto-derived from `(server, tool, arguments)` when an `IdempotencyCache`
-///    is active.  This protects against exact-duplicate LLM retries even when
-///    the client supplies no key.
+/// `client_key` is the key the client sent in `params._meta`; there is no other
+/// source. A call without one is not protected, and that is the correct
+/// outcome: a key the client never chose cannot express which repeats are
+/// deliberate, so deriving one from `(server, tool, arguments)` made an
+/// identical second call — a retry the user asked for — silently return the
+/// first result instead of running.
 ///
-/// Returns `None` when no idempotency cache is configured.
-pub(super) fn resolve_idempotency_key(
-    args: &Value,
-    server: &str,
-    tool: &str,
-    arguments: &Value,
+/// The suffixes are the ADR-008 INV-3 binding. They stay part of the key so one
+/// caller's stored result is never served to another under the same client key.
+///
+/// Returns `None` when no idempotency cache is configured, or when the client
+/// sent no key.
+pub(super) fn idempotency_key_for(
+    client_key: Option<&str>,
+    projection_key_suffix: &str,
+    identity_suffix: &str,
     idem_cache: Option<&std::sync::Arc<IdempotencyCache>>,
 ) -> Option<String> {
     idem_cache?;
-    // Explicit key takes precedence.
-    if let Some(key) = extract_optional_str(args, "idempotency_key") {
-        return Some(key.to_string());
-    }
-    // Auto-derive from (server, tool, arguments) — stable, deterministic.
-    let combined = format!("{server}:{tool}");
-    Some(derive_key(&combined, arguments))
+    let key = client_key?;
+    Some(format!("{key}{projection_key_suffix}{identity_suffix}"))
+}
+
+/// Build the response-cache key for a `gateway_invoke` call.
+///
+/// One function rather than the expression repeated at the read and the write:
+/// a key derived in two places is a key that can be derived two ways, and a
+/// write that lands under a key no read computes is a cache that never hits
+/// while looking exactly like one that does.
+///
+/// The retry discriminator is the MRTR.10 binding. A retry reuses the original
+/// call's arguments, so without it two continuations answering the same gate
+/// differently share one entry and the first answer is served for the second.
+///
+/// `context` is forwarded, not consumed here: the routing profile, protocol
+/// revision and policy generation belong to the key the cache layer derives,
+/// so this passes them down rather than mixing a discriminator of its own.
+pub(super) fn response_cache_key_for(
+    server: &str,
+    tool: &str,
+    arguments: &Value,
+    projection_key_suffix: &str,
+    principal: Option<&str>,
+    retry: &crate::protocol::mrtr::RetryFields,
+    context: crate::cache::KeyContext<'_>,
+) -> String {
+    let base = crate::cache::ResponseCache::response_key(
+        server,
+        tool,
+        arguments,
+        projection_key_suffix,
+        principal,
+        context,
+    );
+    format!("{base}{}", retry.key_discriminator())
 }
 
 // ============================================================================
@@ -140,6 +172,44 @@ pub(super) fn ranked_results_to_code_mode_json(
                 })
         })
         .collect()
+}
+
+/// Signals that are the same for every tool in every response.
+///
+/// Measured 2026-07-31 on a live `gateway_search` call: 13 of 16 signals were
+/// the constant `1.0`. A signal that never varies distinguishes nothing — it is
+/// scoring-engine diagnostics shipped to a consumer that cannot act on it, on
+/// the repository whose stated value proposition is token savings.
+const CONSTANT_SIGNALS: &[&str] = &[
+    "cost_efficiency",
+    "freshness",
+    "grant",
+    "latency",
+    "organization_preference",
+    "permission_fit",
+    "policy_fit",
+    "risk",
+    "runtime_health",
+    "safety",
+    "success_rate",
+    "trust",
+    "user_preference",
+];
+
+/// Drop the signals that carry no information.
+///
+/// Named rather than a value test, deliberately. Dropping every field that
+/// happens to equal `1.0` would drop a real score sitting at its maximum —
+/// `relevance` does that legitimately — and the caller would lose the one
+/// number that told it something. The list is what was measured, not what a
+/// heuristic guessed.
+#[must_use]
+pub fn prune_constant_signals(ranking: &Value) -> Value {
+    let mut pruned = ranking.clone();
+    if let Some(signals) = pruned.get_mut("signals").and_then(Value::as_object_mut) {
+        signals.retain(|name, _| !CONSTANT_SIGNALS.contains(&name.as_str()));
+    }
+    pruned
 }
 
 // ============================================================================
@@ -425,5 +495,85 @@ mod tests {
     fn internal_invoke_args_preserves_non_object_arguments() {
         let args = internal_invoke_args("s", "t", json!("scalar"));
         assert_eq!(args["arguments"], json!("scalar"));
+    }
+
+    /// MRTR.10: two continuations of one call that differ only in the answers
+    /// the user gave MUST NOT share a response-cache entry. Removing the retry
+    /// argument from `response_cache_key_for` makes this assertion fail — which
+    /// is what stops that wiring being dropped by a later edit.
+    #[test]
+    fn response_cache_key_separates_two_answers_to_one_gate() {
+        use crate::protocol::mrtr::RetryFields;
+        let args = json!({"flight": "AY1337"});
+        let key_for = |answer: serde_json::Value| {
+            let retry = RetryFields {
+                input_responses: Some(answer),
+                request_state: Some("st-1".to_string()),
+                idempotency_key: None,
+                malformed: Vec::new(),
+            };
+            super::response_cache_key_for(
+                "air",
+                "book",
+                &args,
+                "",
+                None,
+                &retry,
+                crate::cache::KeyContext::default(),
+            )
+        };
+        assert_ne!(
+            key_for(json!({"confirm": "accept"})),
+            key_for(json!({"confirm": "decline"})),
+            "a declined booking must not be served the accepted booking's result"
+        );
+    }
+
+    /// A call with no retry fields MUST derive exactly the key the
+    /// principal-scoped builder derives on its own, or the upgrade silently
+    /// empties every cache. What is actually under test is that
+    /// `NO_RETRY.key_discriminator()` contributes nothing: any non-empty
+    /// discriminator on an ordinary call fails this.
+    #[test]
+    fn response_cache_key_is_unchanged_for_an_ordinary_call() {
+        let args = json!({"q": 1});
+        let key = super::response_cache_key_for(
+            "srv",
+            "tool",
+            &args,
+            "|proj",
+            Some("actor-1"),
+            &crate::protocol::mrtr::NO_RETRY,
+            crate::cache::KeyContext::default(),
+        );
+        let before = crate::cache::ResponseCache::response_key(
+            "srv",
+            "tool",
+            &args,
+            "|proj",
+            Some("actor-1"),
+            crate::cache::KeyContext::default(),
+        );
+        assert_eq!(key, before);
+    }
+
+    /// The principal is part of the key, not decoration: two callers must not
+    /// share one entry. Guards the property HEAD added and the MRTR key
+    /// builder now inherits rather than replaces.
+    #[test]
+    fn response_cache_key_separates_two_principals() {
+        let args = json!({"q": 1});
+        let k = |p| {
+            super::response_cache_key_for(
+                "srv",
+                "tool",
+                &args,
+                "",
+                Some(p),
+                &crate::protocol::mrtr::NO_RETRY,
+                crate::cache::KeyContext::default(),
+            )
+        };
+        assert_ne!(k("actor-1"), k("actor-2"));
     }
 }

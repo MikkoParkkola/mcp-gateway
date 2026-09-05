@@ -32,6 +32,14 @@ use dashmap::DashMap;
 
 use crate::transition::TransitionTracker;
 
+/// The most callers whose last tool is remembered at once.
+///
+/// A ceiling rather than a policy: the mechanism that should reclaim these on
+/// disconnect is not wired, and a stateless caller has no disconnect to reclaim
+/// on. Sized well above any plausible concurrent caller count so eviction is a
+/// backstop and not an ordinary event.
+const MAX_TRACKED_IDENTITIES: usize = 100_000;
+
 /// Per-session anomaly detector backed by transition probability data.
 pub struct AnomalyDetector {
     tracker: Arc<TransitionTracker>,
@@ -42,7 +50,55 @@ pub struct AnomalyDetector {
     last_tool: DashMap<String, String>,
 }
 
+/// What the detector could establish about one call.
+///
+/// An enum rather than an `f64` sentinel, and that is the whole design. Every
+/// comparison downstream reads `score > threshold`; a sentinel like `-1.0` or
+/// `NaN` compares `false` against any threshold, so "I could not look" would be
+/// indistinguishable from "I looked and it was fine" at every call site, in
+/// silence. A variant forces each caller to say what it does when the control
+/// cannot see.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Observation {
+    /// A score in `[0.0, 1.0]`; 1.0 means never observed before.
+    Scored(f64),
+    /// No identity to key on, so no transition could be established.
+    ///
+    /// Under MCP 2026-07-28 there is no session. A detector keyed on one sees a
+    /// first request every time and returns its neutral score forever — it
+    /// keeps running and stops protecting, which is the failure this variant
+    /// exists to make visible.
+    Unobservable,
+}
+
+impl Observation {
+    /// The score, or `None` when nothing could be observed.
+    #[must_use]
+    pub const fn score(self) -> Option<f64> {
+        match self {
+            Self::Scored(value) => Some(value),
+            Self::Unobservable => None,
+        }
+    }
+}
+
 impl AnomalyDetector {
+    /// Score a call against the caller's own recent history.
+    ///
+    /// `identity` is the stable per-caller key — the authenticated principal
+    /// after the migration, the session before it. `None` means the caller
+    /// could not be identified, and the honest answer is then
+    /// [`Observation::Unobservable`] rather than a passing score.
+    ///
+    /// Per caller, never globally: one caller's ordinary sequence must not make
+    /// another's unusual one look ordinary.
+    pub fn observe(&self, identity: Option<&str>, server: &str, tool: &str) -> Observation {
+        let Some(identity) = identity else {
+            return Observation::Unobservable;
+        };
+        Observation::Scored(self.score_transition(identity, server, tool))
+    }
+
     /// Create a new detector.
     ///
     /// `threshold` is the score above which a transition is considered
@@ -62,32 +118,63 @@ impl AnomalyDetector {
     pub fn score_transition(&self, session_id: &str, server: &str, tool: &str) -> f64 {
         let current = format!("{server}:{tool}");
 
-        let score = match self.last_tool.get(session_id) {
-            None => {
-                // First tool in this session — no prior context.
+        // The read of the predecessor and the write of the successor are one
+        // operation, held under a single entry guard. As a separate `get` and
+        // `insert` they could interleave: two concurrent calls for one identity
+        // both observed the same predecessor and both overwrote it, so a
+        // sequence could be walked in parallel with every step scored as though
+        // it were the first — which is precisely the sequence a detector exists
+        // to notice.
+        // Bounded. Every distinct identity leaves a predecessor behind, and
+        // nothing reclaims one: `SessionLifecycle` was built to fire cleanup on
+        // disconnect and is not wired to anything (recorded as its own issue),
+        // and a stateless caller never disconnects because it never connected.
+        // Without a ceiling this map is a memory-exhaustion vector reachable by
+        // anyone who can present distinct credentials.
+        //
+        // Evicting an arbitrary entry costs that one caller its predecessor —
+        // its next call scores as a first call — which is a far smaller loss
+        // than unbounded growth, and is why the ceiling is generous.
+        if self.last_tool.len() >= MAX_TRACKED_IDENTITIES
+            && !self.last_tool.contains_key(session_id)
+        {
+            // The victim is chosen in its OWN statement so the iterator — and
+            // the shard lock it holds — is dropped before the removal asks for
+            // that same shard as a writer. Written as one `if let`, the guard
+            // outlives the `remove` inside it and the thread deadlocks against
+            // itself: the map is sharded, so this only bites once the ceiling
+            // is actually reached, which no ordinary test run does.
+            let victim = self.last_tool.iter().next().map(|e| e.key().clone());
+            if let Some(victim) = victim {
+                self.last_tool.remove(&victim);
+            }
+        }
+
+        match self.last_tool.entry(session_id.to_string()) {
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                // First tool for this identity — no prior context.
+                slot.insert(current);
                 0.5
             }
-            Some(prev) => {
+            dashmap::mapref::entry::Entry::Occupied(mut slot) => {
+                let previous = slot.get().clone();
                 // Ask the tracker for the likely successors of the previous tool.
                 // min_confidence=0.0 and min_count=0 → return all successors.
-                let predictions = self.tracker.predict_next(prev.as_str(), 0.0, 0);
+                let predictions = self.tracker.predict_next(previous.as_str(), 0.0, 0);
 
-                if predictions.is_empty() {
+                let score = if predictions.is_empty() {
                     // Cold start for this predecessor: no data → neutral.
                     0.5
                 } else {
                     match predictions.iter().find(|p| p.tool == current) {
                         Some(p) => 1.0 - p.confidence,
-                        None => 0.95, // Never seen after prev_tool.
+                        None => 0.95, // Never seen after the previous tool.
                     }
-                }
+                };
+                slot.insert(current);
+                score
             }
-        };
-
-        // Update last_tool for this session.
-        self.last_tool.insert(session_id.to_string(), current);
-
-        score
+        }
     }
 
     /// The configured anomaly threshold.
@@ -107,6 +194,27 @@ impl AnomalyDetector {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_identity_map_is_bounded() {
+        // Every distinct identity leaves a predecessor behind and nothing
+        // reclaims one: the cleanup registry is not wired to anything, and a
+        // stateless caller never disconnects because it never connected. Without
+        // a ceiling this is a memory-exhaustion vector reachable by anyone who
+        // can present distinct credentials.
+        let tracker = Arc::new(TransitionTracker::new());
+        let detector = AnomalyDetector::new(tracker, 0.7);
+
+        for n in 0..(MAX_TRACKED_IDENTITIES + 500) {
+            detector.score_transition(&format!("caller-{n}"), "srv", "tool");
+        }
+
+        assert!(
+            detector.last_tool.len() <= MAX_TRACKED_IDENTITIES,
+            "the identity map must hold its ceiling, got {}",
+            detector.last_tool.len()
+        );
+    }
     use super::*;
 
     fn empty_tracker() -> Arc<TransitionTracker> {

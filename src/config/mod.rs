@@ -6,18 +6,19 @@
 //! Feature-specific types live in the [`features`] sub-module and are
 //! re-exported here so callers use `crate::config::KeyServerConfig`, etc.
 
+mod env_overlay;
 mod features;
 
 use std::{
-    collections::HashMap,
-    env,
+    collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use figment::{
-    Figment,
-    providers::{Env, Format, Yaml},
+    Figment, Metadata, Profile, Provider,
+    providers::{Format, Yaml},
+    value::{Dict, Map, Tag, Value},
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -27,16 +28,18 @@ use crate::routing_profile::RoutingProfileConfig;
 use crate::security::verify_remote_server_provenance;
 use crate::{Error, Result};
 
+pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
+
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
-    CacheConfig, CapabilityConfig, CircuitBreakerConfig, CodeModeConfig, ContextIntegrityConfig,
-    ContextIntegrityPresetConfig, FailsafeConfig, HealthCheckConfig, IdentityGrantsConfig,
-    KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
-    PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig,
-    RemoteServerSigningConfig, ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig,
-    RuntimeConfig, RuntimeProfileConfig, SecurityConfig, StreamingConfig, ToolContractConfig,
-    WebhookConfig,
+    CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
+    CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, ErrorBudgetSection,
+    FailsafeConfig, HealthCheckConfig, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
+    KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
+    PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
+    RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
+    StreamingConfig, ToolContractConfig, WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -60,6 +63,8 @@ pub struct Config {
     pub streaming: StreamingConfig,
     /// Failsafe configuration.
     pub failsafe: FailsafeConfig,
+    /// Error-budget / kill-switch thresholds (GH #475).
+    pub error_budget: ErrorBudgetSection,
     /// Backend configurations.
     pub backends: HashMap<String, BackendConfig>,
     /// Capability configuration (direct REST API integration).
@@ -117,6 +122,121 @@ fn default_prompts_resources_fetch_timeout() -> Duration {
 #[serde(default)]
 struct EnvFileConfig {
     env_files: Vec<String>,
+}
+
+/// How a malformed env file is treated during evaluation.
+///
+/// An enum rather than a bool so the call site says which behaviour it wants
+/// without the reader opening the signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tolerance {
+    /// Warn and carry on — what [`Config::load`] has always done.
+    Warn,
+    /// Refuse the load, for callers that can decline to start.
+    Fail,
+}
+
+/// Figment provider reading `MCP_GATEWAY_*` from the overlay, then the process
+/// environment.
+///
+/// Replaces `Env::prefixed(..)`, which reads the process environment only and
+/// would therefore ignore every assignment made by an env file that is no
+/// longer exported into the process.
+struct OverlayEnv<'a> {
+    overlay: &'a EnvOverlay,
+}
+
+impl<'a> OverlayEnv<'a> {
+    const PREFIX: &'static str = "MCP_GATEWAY_";
+
+    fn new(overlay: &'a EnvOverlay) -> Self {
+        Self { overlay }
+    }
+
+    /// The variables the provider sees: `base` overlaid with the env files.
+    ///
+    /// `base` is the process environment as `OsString` pairs, converted the way
+    /// `Env` converts them. Reading it through `std::env::vars` instead would
+    /// panic the process on a single non-UTF-8 variable belonging to someone
+    /// else, which is a startup failure `Env` never had.
+    fn merged_vars<I>(&self, base: I) -> std::collections::BTreeMap<String, String>
+    where
+        I: Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    {
+        let mut merged: std::collections::BTreeMap<String, String> = base
+            .filter(|(key, _)| !key.is_empty())
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+        // Process environment first so an env-file assignment wins, which is
+        // the precedence `EnvOverlay::resolve` states.
+        merged.extend(self.overlay.effective_vars());
+        merged
+    }
+
+    /// Places `value` at the path `parts` names, creating dictionaries on the
+    /// way down — the nesting `__` in a key stands for.
+    fn insert_nested(dict: &mut Dict, parts: &[String], value: String) {
+        match parts {
+            [] => {}
+            [leaf] => {
+                // Parsed, not stored as a string: `Env` reads `9090` as a
+                // number and `[a, b]` as a list, and `Figment::extract` does
+                // not coerce a string into either. Inserting the raw string
+                // would fail every non-string field an operator can override.
+                dict.insert(leaf.clone(), value.parse().expect("infallible"));
+            }
+            [head, tail @ ..] => {
+                let entry = dict
+                    .entry(head.clone())
+                    .or_insert_with(|| Value::Dict(Tag::Default, Dict::new()));
+                let mut inner = match entry {
+                    Value::Dict(_, existing) => std::mem::take(existing),
+                    _ => Dict::new(),
+                };
+                Self::insert_nested(&mut inner, tail, value);
+                *entry = Value::Dict(Tag::Default, inner);
+            }
+        }
+    }
+}
+
+impl Provider for OverlayEnv<'_> {
+    fn metadata(&self) -> Metadata {
+        Metadata::named("environment variable(s)")
+    }
+
+    fn data(&self) -> figment::Result<Map<Profile, Dict>> {
+        let mut dict = Dict::new();
+        for (key, value) in self.merged_vars(std::env::vars_os()) {
+            let Some(rest) = key.strip_prefix(Self::PREFIX) else {
+                continue;
+            };
+            let parts: Vec<String> = rest.split("__").map(str::to_lowercase).collect();
+            if parts.iter().any(String::is_empty) {
+                continue;
+            }
+            Self::insert_nested(&mut dict, &parts, value);
+        }
+        Ok(Profile::Default.collect(dict))
+    }
+}
+
+/// Whether a load substitutes the environment into the config it returns.
+///
+/// A config destined for a rewrite must stay [`Expansion::Literal`]: the write
+/// path serialises the whole struct, so a substituted secret becomes a
+/// plaintext secret on disk.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Expansion {
+    /// Resolve `env:` references and expand `${VAR}` patterns.
+    Resolve,
+    /// Leave every reference exactly as the file spells it.
+    Literal,
 }
 
 impl Config {
@@ -179,7 +299,11 @@ impl Config {
     ///
     /// Returns an error if an explicit `path` is supplied but does not exist,
     /// or if the config file cannot be parsed.
-    pub fn load(path: Option<&Path>) -> Result<Self> {
+    /// Select the config file and prove it is readable before any load.
+    ///
+    /// Shared by every entry point so that "no such file" and "cannot read it"
+    /// stay one diagnostic rather than one per loader.
+    fn prepare(path: Option<&Path>) -> Result<Option<PathBuf>> {
         // Resolve the config file: explicit path takes priority; otherwise
         // search well-known fallback locations.
         let resolved: Option<PathBuf> = match path {
@@ -217,20 +341,203 @@ impl Config {
             )));
         }
 
-        let env_file_config: EnvFileConfig = Self::figment(resolved.as_deref())
+        Ok(resolved)
+    }
+
+    /// Load the config, warning on (rather than refusing) a malformed env file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Config`] when the file is missing, unreadable or does
+    /// not parse, and [`Error::ConfigValidation`] when it parses but is invalid.
+    pub fn load(path: Option<&Path>) -> Result<Self> {
+        let resolved = Self::prepare(path)?;
+        Ok(Self::evaluate(
+            resolved.as_deref(),
+            &SystemHome,
+            Tolerance::Warn,
+            Expansion::Resolve,
+        )?
+        .config)
+    }
+
+    /// Load the config exactly as it is written, leaving `env:` references and
+    /// `${VAR}` patterns unexpanded.
+    ///
+    /// Every read-modify-write of the config file goes through this. A loader
+    /// that resolves secrets in memory turns the next write into a plaintext
+    /// dump of every credential the file merely referenced, because the whole
+    /// struct is serialised back.
+    ///
+    /// # Errors
+    ///
+    /// As [`Config::load`].
+    pub fn load_literal(path: Option<&Path>) -> Result<Self> {
+        let resolved = Self::prepare(path)?;
+        Ok(Self::evaluate(
+            resolved.as_deref(),
+            &SystemHome,
+            Tolerance::Warn,
+            Expansion::Literal,
+        )?
+        .config)
+    }
+
+    /// The overlay this config's own `env_files` produce.
+    ///
+    /// Lets a config that was never evaluated — one built in memory, or loaded
+    /// literally — still be validated against the environment it declares.
+    #[must_use]
+    pub fn env_overlay(&self) -> EnvOverlay {
+        let mut overlay = EnvOverlay::none();
+        for entry in &self.env_files {
+            let resolved = Self::expand_home(entry, &overlay, &SystemHome);
+            overlay.apply_file_tolerant(&resolved);
+        }
+        overlay
+    }
+
+    /// Load a config together with the environment it was evaluated against.
+    ///
+    /// The fallible sibling of [`Config::load`]: a malformed env file is an
+    /// error here, where the caller can refuse to start, rather than a warning
+    /// that leaves the gateway running against half an env file.
+    pub fn load_evaluated(path: Option<&Path>) -> Result<Evaluated> {
+        Self::load_evaluated_with_home(path, &SystemHome)
+    }
+
+    /// As [`Config::load_evaluated`], with `~` resolved through `home`.
+    pub fn load_evaluated_with_home(
+        path: Option<&Path>,
+        home: &dyn HomeResolver,
+    ) -> Result<Evaluated> {
+        let resolved = Self::prepare(path)?;
+        Self::evaluate(
+            resolved.as_deref(),
+            home,
+            Tolerance::Fail,
+            Expansion::Resolve,
+        )
+    }
+
+    /// Re-evaluate against env files the running process already recorded.
+    ///
+    /// Takes `env_paths` rather than the config's raw `env_files` spellings on
+    /// purpose: `~` resolved once, at startup, and a reload that resolved again
+    /// could silently open a different file. The overlay is built from those
+    /// files alone — nothing carries over from the overlay it replaces, so a
+    /// deleted assignment stops resolving when the reload lands.
+    pub(crate) fn load_with_overlay(
+        path: Option<&Path>,
+        env_paths: &ResolvedEnvFiles,
+    ) -> Result<Evaluated> {
+        let resolved = Self::prepare(path)?;
+        let overlay = EnvOverlay::from_paths_checked(env_paths.as_paths())?;
+        Self::finish(
+            resolved.as_deref(),
+            overlay,
+            env_paths.clone(),
+            Expansion::Resolve,
+        )
+    }
+
+    /// Resolve `~` and apply env files in sequence, then build the config.
+    ///
+    /// Sequential by construction: each entry is applied to the overlay before
+    /// the next entry's `~` is expanded, so a `HOME` assignment in one file
+    /// moves where the next file is looked for. Resolving the whole list up
+    /// front would agree with itself and read a file nothing watches.
+    fn evaluate(
+        path: Option<&Path>,
+        home: &dyn HomeResolver,
+        tolerance: Tolerance,
+        expansion: Expansion,
+    ) -> Result<Evaluated> {
+        let spec: EnvFileConfig = Self::figment(path, &EnvOverlay::none())
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
 
-        Self::load_env_files_from_paths(&env_file_config.env_files);
+        let mut overlay = EnvOverlay::none();
+        let mut paths = Vec::with_capacity(spec.env_files.len());
+        let tilde = spec.env_files.iter().any(|e| e.starts_with('~'));
+        for entry in &spec.env_files {
+            let resolved = Self::expand_home(entry, &overlay, home);
+            match tolerance {
+                Tolerance::Fail => overlay.apply_file(&resolved)?,
+                Tolerance::Warn => overlay.apply_file_tolerant(&resolved),
+            }
+            paths.push(resolved);
+        }
+        Self::finish(
+            path,
+            overlay,
+            ResolvedEnvFiles::new(paths, tilde),
+            expansion,
+        )
+    }
 
-        let mut config: Self = Self::figment(resolved.as_deref())
+    /// Substitutes a leading `~` with the home in force at this point in the
+    /// sequence. A home that cannot be determined leaves the entry verbatim,
+    /// which then simply does not exist and is skipped.
+    fn expand_home(entry: &str, so_far: &EnvOverlay, home: &dyn HomeResolver) -> PathBuf {
+        let Some(rest) = entry.strip_prefix('~') else {
+            return PathBuf::from(entry);
+        };
+        match home.home_dir(so_far) {
+            Some(dir) => PathBuf::from(format!("{}{rest}", dir.display())),
+            None => PathBuf::from(entry),
+        }
+    }
+
+    fn finish(
+        path: Option<&Path>,
+        overlay: EnvOverlay,
+        env_paths: ResolvedEnvFiles,
+        expansion: Expansion,
+    ) -> Result<Evaluated> {
+        // Both entry points funnel through here, so the refusal lives here
+        // rather than at each of them: startup accepted a cross-file
+        // substitution silently for as long as only the reload path checked.
+        //
+        // `dotenvy` expands a reference against the process environment and the
+        // keys already read from the same file. Nothing writes the process
+        // environment now, so a reference to a key another env file defines
+        // expands to nothing and the value is lost without an edit.
+        if let Some((path, key)) = overlay.substitution_naming_owned_key() {
+            return Err(Error::Config(format!(
+                "Refusing to load config: env file {} substitutes {key}, a key only another \
+                 env file defines. Each env file is expanded on its own, so that reference is \
+                 resolved from the process environment, which the gateway does not write: it \
+                 would expand to nothing and the value would be lost without an edit. Inline \
+                 the value, or move the assignment into this same file above the reference.",
+                path.display()
+            )));
+        }
+
+        let figment = match expansion {
+            Expansion::Resolve => Self::figment(path, &overlay),
+            // A rewrite path round-trips the FILE. Merging `MCP_GATEWAY_*`
+            // here would materialise onto the struct a value nothing spells in
+            // YAML, and the next write would persist it: the same defect as a
+            // resolved secret, arriving through the prefix rather than through
+            // `env:`.
+            Expansion::Literal => Self::yaml(path),
+        };
+        let mut config: Self = figment
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
-        config.expand_env_vars();
-        config.validate()?;
-        Self::warn_on_retired_keys(resolved.as_deref());
-
-        Ok(config)
+        let secret_refs = match expansion {
+            Expansion::Resolve => config.expand_env_vars(&overlay),
+            Expansion::Literal => BTreeSet::new(),
+        };
+        config.validate_with_env(&overlay)?;
+        Self::warn_on_retired_keys(path);
+        Ok(Evaluated {
+            config,
+            overlay: std::sync::Arc::new(overlay),
+            env_paths,
+            secret_refs,
+        })
     }
 
     /// Configuration keys that were removed. Left loadable on purpose: parsing
@@ -295,70 +602,86 @@ impl Config {
         }
     }
 
-    /// Load environment files into the process environment.
-    /// Supports `~` expansion. Files are processed in order, and later files
-    /// override earlier values. Files that don't exist are silently skipped.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn load_env_files(&self) {
-        Self::load_env_files_from_paths(&self.env_files);
-    }
-
-    fn figment(path: Option<&Path>) -> Figment {
+    /// The config file alone, with no environment layered over it.
+    fn yaml(path: Option<&Path>) -> Figment {
         let mut figment = Figment::new();
         if let Some(path) = path {
             figment = figment.merge(Yaml::file(path));
         }
-
-        figment.merge(Env::prefixed("MCP_GATEWAY_").split("__"))
+        figment
     }
 
-    fn load_env_files_from_paths(env_files: &[String]) {
-        for path_str in env_files {
-            let expanded = if path_str.starts_with('~') {
-                if let Some(home) = dirs::home_dir() {
-                    path_str.replacen('~', &home.display().to_string(), 1)
-                } else {
-                    path_str.clone()
-                }
-            } else {
-                path_str.clone()
-            };
-
-            let path = Path::new(&expanded);
-            if path.exists() {
-                match dotenvy::from_path_override(path) {
-                    Ok(()) => tracing::info!("Loaded env file: {expanded}"),
-                    Err(e) => tracing::warn!("Failed to load env file {expanded}: {e}"),
-                }
-            } else {
-                tracing::debug!("Env file not found (skipped): {expanded}");
-            }
-        }
+    fn figment(path: Option<&Path>, overlay: &EnvOverlay) -> Figment {
+        Self::yaml(path).merge(OverlayEnv::new(overlay))
     }
 
     /// Expand `${VAR}` and `${VAR:-default}` patterns in config values.
-    fn expand_env_vars(&mut self) {
+    fn expand_env_vars(&mut self, overlay: &EnvOverlay) -> BTreeSet<String> {
         let re = Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}").unwrap();
 
         for backend in self.backends.values_mut() {
             for value in backend.headers.values_mut() {
-                *value = Self::expand_string(&re, value);
+                *value = Self::expand_string(&re, value, overlay);
             }
             for value in backend.env.values_mut() {
-                *value = Self::expand_string(&re, value);
+                *value = Self::expand_string(&re, value, overlay);
             }
         }
 
         for dir in &mut self.capabilities.directories {
-            *dir = Self::expand_string(&re, dir);
+            *dir = Self::expand_string(&re, dir, overlay);
         }
+
+        self.resolve_secret_refs(overlay)
     }
 
-    fn expand_string(re: &Regex, value: &str) -> String {
+    /// Substitute `env:NAME` secret references with the value the overlay holds.
+    ///
+    /// Done here, once, rather than at each holder's construction: an env file
+    /// no longer reaches the process environment, so a holder built from a bare
+    /// `AuthConfig` has nothing to look the name up in. Resolving at evaluation
+    /// time also makes the startup-only nature of these secrets explicit — the
+    /// value a holder captured is the value the file held when the process
+    /// started, and a reload cannot revise it.
+    ///
+    /// A name the overlay cannot resolve is left verbatim. `validate_with_env`
+    /// reports it as a missing reference, which is a better diagnostic than a
+    /// silently empty secret.
+    fn resolve_secret_refs(&mut self, overlay: &EnvOverlay) -> BTreeSet<String> {
+        let mut seen = BTreeSet::new();
+        let mut subst = |slot: &mut String| {
+            if let Some(name) = slot.strip_prefix("env:") {
+                seen.insert(name.to_string());
+                if let Some(value) = overlay.resolve(name) {
+                    *slot = value;
+                }
+            }
+        };
+
+        if let Some(token) = self.auth.bearer_token.as_mut() {
+            subst(token);
+        }
+        for key in &mut self.auth.api_keys {
+            subst(&mut key.key);
+        }
+        for agent in &mut self.agent_auth.agents {
+            if let Some(secret) = agent.hs256_secret.as_mut() {
+                subst(secret);
+            }
+        }
+        if let Some(token) = self.key_server.admin_token.as_mut() {
+            subst(token);
+        }
+        seen
+    }
+
+    fn expand_string(re: &Regex, value: &str, overlay: &EnvOverlay) -> String {
         re.replace_all(value, |caps: &regex::Captures| {
             let var_name = &caps[1];
             let default = caps.get(2).map_or("", |m| m.as_str());
-            env::var(var_name).unwrap_or_else(|_| default.to_string())
+            overlay
+                .resolve(var_name)
+                .unwrap_or_else(|| default.to_string())
         })
         .into_owned()
     }
@@ -381,6 +704,19 @@ impl Config {
     ///
     /// Returns [`Error::ConfigValidation`] describing the first violation found.
     pub fn validate(&self) -> Result<()> {
+        self.validate_with_env(&EnvOverlay::none())
+    }
+
+    /// As [`Config::validate`], resolving `env:` references through `overlay`.
+    ///
+    /// A separate entry point rather than a field on `Config`: validation runs
+    /// against the environment the load produced, and that environment is not
+    /// part of the config it validates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ConfigValidation`] describing the first violation found.
+    pub fn validate_with_env(&self, overlay: &EnvOverlay) -> Result<()> {
         // Port 0 is technically valid (OS assigns an ephemeral port).
         // No upper bound needed — u16 already caps at 65535.
         if self.server.port == 0 {
@@ -389,14 +725,15 @@ impl Config {
         self.validate_backend_names()?;
         self.validate_backend_urls()?;
         self.validate_remote_backend_provenance()?;
-        self.validate_required_env_references()?;
+        self.validate_required_env_references(overlay)?;
         self.runtime.validate()?;
         self.validate_backend_runtime_profiles()?;
         self.validate_stop_when_idle_ownership()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
-        self.validate_agent_key_material()?;
+        self.validate_agent_key_material(overlay)?;
         self.key_server.validate()?;
+        self.error_budget.validate()?;
         Ok(())
     }
 
@@ -417,7 +754,7 @@ impl Config {
     /// Every enabled agent, not merely one of them: a caller forges the WEAKEST
     /// agent's token and gets that agent's scopes, so one sound definition
     /// beside a forgeable one protects nothing.
-    fn validate_agent_key_material(&self) -> Result<()> {
+    fn validate_agent_key_material(&self, overlay: &EnvOverlay) -> Result<()> {
         /// Shortest HS256 secret accepted, in bytes. A shorter shared secret is
         /// brute-forceable rather than merely inadvisable, and this is the
         /// length this project's own guidance already asks for.
@@ -456,7 +793,7 @@ impl Config {
                 )));
             };
             let resolved = match raw.strip_prefix("env:") {
-                Some(var) => std::env::var(var).map_err(|_| {
+                Some(var) => overlay.resolve(var).ok_or_else(|| {
                     Error::ConfigValidation(format!(
                         "agent_auth.agents['{}'].hs256_secret references missing \
                          environment variable '{var}'",
@@ -622,7 +959,7 @@ impl Config {
                             "Backend '{name}' has an empty http_url"
                         )));
                     }
-                    url::Url::parse(http_url).map_err(|e| {
+                    let url = url::Url::parse(http_url).map_err(|e| {
                         Error::ConfigValidation(format!(
                             // The URL is not echoed: a malformed one still carries its
                             // userinfo and query, and a validation error is printed on
@@ -630,6 +967,7 @@ impl Config {
                             "Backend '{name}' has an invalid http_url: {e}"
                         ))
                     })?;
+                    Self::reject_cleartext_credentials(name, backend, &url)?;
                 }
                 #[cfg(feature = "a2a")]
                 TransportConfig::A2a { a2a_url, .. } => {
@@ -638,13 +976,14 @@ impl Config {
                             "Backend '{name}' has an empty a2a_url"
                         )));
                     }
-                    url::Url::parse(a2a_url).map_err(|e| {
+                    let url = url::Url::parse(a2a_url).map_err(|e| {
                         Error::ConfigValidation(format!(
                             // Twin of the http_url line above. Fixing one spelling of a
                             // leak and not the other is how the first fix stops mattering.
                             "Backend '{name}' has an invalid a2a_url: {e}"
                         ))
                     })?;
+                    Self::reject_cleartext_credentials(name, backend, &url)?;
                 }
                 TransportConfig::Stdio { .. } => {}
             }
@@ -652,20 +991,73 @@ impl Config {
         Ok(())
     }
 
-    fn validate_required_env_references(&self) -> Result<()> {
+    /// Refuse a backend that would put a credential on a cleartext wire.
+    ///
+    /// A credential sent over `http://` to a host off this machine is readable
+    /// by everything on the path and replayable forever, so config load treats
+    /// the combination as a mistake unless the operator has said otherwise in
+    /// `allow_cleartext_credentials`.
+    ///
+    /// Runs only for an enabled backend: a disabled one opens no connection, so
+    /// it leaks nothing. The skip covers this predicate alone — an empty or
+    /// malformed URL still fails above, whatever `enabled` says.
+    fn reject_cleartext_credentials(
+        name: &str,
+        backend: &BackendConfig,
+        url: &url::Url,
+    ) -> Result<()> {
+        if !backend.enabled || backend.allow_cleartext_credentials || url.scheme() != "http" {
+            return Ok(());
+        }
+        // Loopback never leaves the machine. Decided by the classifier the
+        // Origin gate already uses, so the two cannot drift; `host_str` hands it
+        // a bare host, brackets and all for an IPv6 literal.
+        let host = url.host_str().unwrap_or_default();
+        if crate::gateway::is_loopback_host(host) {
+            return Ok(());
+        }
+        // Five ways a credential reaches this backend. Any static header counts:
+        // a known-name list would miss `X-Custom-Token` and every other spelling
+        // an operator picks. A query counts because it is operator-supplied
+        // material on the wire and its sensitivity is not decidable here.
+        let credential_bearing = backend.oauth.is_some()
+            || backend.identity_propagation.is_some()
+            || !backend.secrets.is_empty()
+            || !backend.headers.is_empty()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some();
+        if !credential_bearing {
+            return Ok(());
+        }
+        // The message names the backend and nothing else. It is printed on
+        // startup and pasted into support threads, and the URL it would
+        // otherwise echo is exactly the credential-bearing one (MIK-7221).
+        Err(Error::ConfigValidation(format!(
+            "Backend '{name}' would send credentials in cleartext to a host off this \
+             machine. Use TLS, or set allow_cleartext_credentials on this backend to \
+             accept that the credentials are readable and replayable in transit."
+        )))
+    }
+
+    fn validate_required_env_references(&self, overlay: &EnvOverlay) -> Result<()> {
         if self.auth.enabled {
             if let Some(token) = self.auth.bearer_token.as_deref() {
-                Self::validate_env_reference("auth.bearer_token", token)?;
+                Self::validate_env_reference("auth.bearer_token", token, overlay)?;
             }
             for key in &self.auth.api_keys {
-                Self::validate_env_reference("auth.api_keys[].key", &key.key)?;
+                Self::validate_env_reference("auth.api_keys[].key", &key.key, overlay)?;
             }
         }
 
         if self.agent_auth.enabled {
             for agent in &self.agent_auth.agents {
                 if let Some(secret) = agent.hs256_secret.as_deref() {
-                    Self::validate_env_reference("agent_auth.agents[].hs256_secret", secret)?;
+                    Self::validate_env_reference(
+                        "agent_auth.agents[].hs256_secret",
+                        secret,
+                        overlay,
+                    )?;
                 }
             }
         }
@@ -673,13 +1065,13 @@ impl Config {
         if self.key_server.enabled
             && let Some(token) = self.key_server.admin_token.as_deref()
         {
-            Self::validate_env_reference("key_server.admin_token", token)?;
+            Self::validate_env_reference("key_server.admin_token", token, overlay)?;
         }
 
         Ok(())
     }
 
-    fn validate_env_reference(field: &str, value: &str) -> Result<()> {
+    fn validate_env_reference(field: &str, value: &str, overlay: &EnvOverlay) -> Result<()> {
         let Some(var_name) = value.strip_prefix("env:") else {
             return Ok(());
         };
@@ -690,15 +1082,9 @@ impl Config {
             )));
         }
 
-        let Some(value) = env::var_os(var_name) else {
+        if overlay.resolve(var_name).is_none() {
             return Err(Error::ConfigValidation(format!(
                 "{field} references missing environment variable '{var_name}'"
-            )));
-        };
-
-        if value.to_str().is_none() {
-            return Err(Error::ConfigValidation(format!(
-                "{field} references environment variable '{var_name}' with non-UTF-8 contents"
             )));
         }
 
@@ -782,6 +1168,24 @@ fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static st
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
+    /// Serve requests written against MCP revision 2026-07-28.
+    ///
+    /// **On by default.** The gateway serves the latest revision and negotiates
+    /// down to the highest revision a client declares, so a legacy peer is
+    /// unaffected by the default.
+    ///
+    /// Setting it to `false` is the operator escape hatch NFR.OBS.5 hangs its
+    /// revertibility clause on: a request declaring 2026-07-28 is then refused
+    /// with `UnsupportedProtocolVersion` — the answer a client can act on — and
+    /// `server/discover` stops advertising the revision. The revert is
+    /// restart-scoped, because the whole `server` section is restart-required
+    /// (`pending_restart_fields`, `src/config_reload/mod.rs`).
+    ///
+    /// No field-level `#[serde(default)]` here, deliberately: it would resolve
+    /// to `bool::default()` and shadow the container-level `#[serde(default)]`
+    /// on `ServerConfig`, so a config file with a `server:` section that omits
+    /// the flag would silently deserialize to `false`.
+    pub modern_protocol: bool,
     /// Host to bind to.
     pub host: String,
     /// Port to listen on.
@@ -827,6 +1231,9 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            // The latest revision is what a gateway serves unless an operator
+            // reverts it; older peers are reached by negotiating down.
+            modern_protocol: true,
             host: "127.0.0.1".to_string(),
             port: 39400,
             ws_port: None,
@@ -928,6 +1335,21 @@ pub struct MetaMcpConfig {
     /// split between projected (treatment) and raw (control).
     #[serde(default)]
     pub projection_mode: crate::projection::ProjectionMode,
+    /// Meta-tools to expose in `tools/list` (GH issue 449).
+    ///
+    /// Empty — the default — exposes every meta-tool, so an existing
+    /// deployment is unaffected. A non-empty list is an allow-list: only the
+    /// named tools are listed, and a tool that is not listed is not callable
+    /// either. Failing closed is deliberate; a meta-tool added in a later
+    /// release stays hidden from operators who pin a list until they opt in.
+    ///
+    /// Unrecognised names are logged and dropped rather than aborting startup
+    /// (same policy as `surfaced_tools`).
+    ///
+    /// The list is read once at startup, so an edit takes effect on restart
+    /// rather than on `gateway_reload_config` (same as `surfaced_tools`).
+    #[serde(default)]
+    pub exposed_meta_tools: Vec<String>,
 }
 
 impl Default for MetaMcpConfig {
@@ -940,6 +1362,7 @@ impl Default for MetaMcpConfig {
             warm_start: Vec::new(),
             surfaced_tools: Vec::new(),
             projection_mode: crate::projection::ProjectionMode::default(),
+            exposed_meta_tools: Vec::new(),
         }
     }
 }
@@ -991,6 +1414,17 @@ pub struct BackendConfig {
     /// fully-trusted internal backends. Default: `false`.
     #[serde(default)]
     pub passthrough: bool,
+    /// Permit this backend to carry credentials over cleartext `http://` to a
+    /// non-loopback host.
+    ///
+    /// **Security warning**: a credential sent to a non-loopback `http://`
+    /// endpoint is readable by every host on the path and is replayable
+    /// forever. Config load REFUSES that combination unless this is set, which
+    /// makes the exception a recorded operator decision rather than a typo.
+    /// Loopback is exempt without the flag: the packet does not leave the
+    /// machine. Default: `false`.
+    #[serde(default)]
+    pub allow_cleartext_credentials: bool,
     /// Runtime profile name resolved from top-level `runtime.profiles`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_profile: Option<String>,
@@ -1023,6 +1457,10 @@ impl std::fmt::Debug for BackendConfig {
             .field("oauth", &self.oauth)
             .field("secrets", &format!("<{} rules>", self.secrets.len()))
             .field("passthrough", &self.passthrough)
+            .field(
+                "allow_cleartext_credentials",
+                &self.allow_cleartext_credentials,
+            )
             .field("runtime_profile", &self.runtime_profile)
             .field("identity_propagation", &self.identity_propagation)
             .finish()
@@ -1042,6 +1480,7 @@ impl Default for BackendConfig {
             oauth: None,
             secrets: Vec::new(),
             passthrough: false,
+            allow_cleartext_credentials: false,
             runtime_profile: None,
             identity_propagation: None,
         }
@@ -1393,5 +1832,268 @@ mod cwe532_debug_redaction {
             dbg.contains("client-123"),
             "client_id should stay visible: {dbg}"
         );
+    }
+}
+
+#[cfg(test)]
+mod cleartext_credential_guard {
+    use super::*;
+    use crate::identity_propagation::{
+        IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+    };
+
+    // A registrable DNS name, not a reserved one: the point of most rows here
+    // is a host the gateway must treat as remote.
+    const REMOTE: &str = "internal-host";
+
+    fn http_backend(url: &str) -> BackendConfig {
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: url.to_string(),
+                streamable_http: false,
+                protocol_version: None,
+            },
+            ..Default::default()
+        }
+    }
+
+    fn with_oauth(mut backend: BackendConfig) -> BackendConfig {
+        backend.oauth = Some(OAuthConfig {
+            enabled: true,
+            scopes: Vec::new(),
+            client_id: None,
+            client_secret: None,
+            callback_host: None,
+            callback_port: None,
+            callback_path: None,
+            token_refresh_buffer_secs: 300,
+            shared_account: false,
+        });
+        backend
+    }
+
+    fn config_with(backend: BackendConfig) -> Config {
+        let mut config = Config::default();
+        config.backends.insert("b".to_string(), backend);
+        config
+    }
+
+    // Every row drives the whole validator rather than the private helper: the
+    // guard is only worth anything if it is reached from the entry point that
+    // config load actually calls.
+    fn validate(backend: BackendConfig) -> Result<()> {
+        config_with(backend).validate()
+    }
+
+    fn refusal(backend: BackendConfig) -> String {
+        match validate(backend) {
+            Err(error) => error.to_string(),
+            Ok(()) => panic!("expected the config to be refused, it was accepted"),
+        }
+    }
+
+    // Row 1 — the guard must not fire on TLS. A guard that refuses everything
+    // passes every REFUSED row and is still wrong.
+    #[test]
+    fn https_non_loopback_with_credential_passes() {
+        let backend = with_oauth(http_backend(&format!("https://{REMOTE}:8080")));
+        assert!(validate(backend).is_ok());
+    }
+
+    // Row 2 — the case the whole change exists for.
+    #[test]
+    fn cleartext_non_loopback_with_credential_is_refused() {
+        let backend = with_oauth(http_backend(&format!("http://{REMOTE}:8080")));
+        let message = refusal(backend);
+        assert!(
+            message.contains("cleartext"),
+            "refusal should say what is wrong: {message}"
+        );
+    }
+
+    // Row 3 — cleartext alone is a posture, not a leak. Refusing it would break
+    // every plain internal backend that carries no credential at all.
+    #[test]
+    fn cleartext_non_loopback_without_credential_passes() {
+        let backend = http_backend(&format!("http://{REMOTE}:8080"));
+        assert!(validate(backend).is_ok());
+    }
+
+    // Rows 4-8, 21 — the loopback carve-out, one row per way of spelling it.
+    // 127.0.0.2 and the decimal form are the rows that a `== "127.0.0.1"`
+    // comparison fails; LOCALHOST is the row a case-sensitive compare fails.
+    #[test]
+    fn loopback_spellings_with_credential_pass() {
+        for url in [
+            "http://127.0.0.1:8080",
+            "http://127.0.0.2:8080",
+            "http://[::1]:8080",
+            "http://localhost:8080",
+            "http://LOCALHOST:8080",
+            "http://2130706433/",
+        ] {
+            let backend = with_oauth(http_backend(url));
+            assert!(
+                validate(backend).is_ok(),
+                "{url} is loopback and must not be refused"
+            );
+        }
+    }
+
+    // Row 9 — the opt-out is the whole reason a refusal is acceptable. If this
+    // row fails the guard is a wall, not a gate.
+    #[test]
+    fn explicit_opt_in_permits_cleartext_credentials() {
+        let mut backend = with_oauth(http_backend(&format!("http://{REMOTE}:8080")));
+        backend.allow_cleartext_credentials = true;
+        assert!(validate(backend).is_ok());
+    }
+
+    // Row 10 — identity propagation mints a per-user credential for this
+    // backend, so the backend is credential-bearing whether or not oauth is set.
+    #[test]
+    fn identity_propagation_counts_as_a_credential() {
+        let mut backend = http_backend(&format!("http://{REMOTE}"));
+        backend.identity_propagation = Some(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::SignedAssertion,
+            audience: "https://backend.invalid".to_string(),
+            required: false,
+            session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
+        });
+        let message = refusal(backend);
+        assert!(
+            message.contains("cleartext"),
+            "identity propagation is a credential path: {message}"
+        );
+    }
+
+    // Row 11 — secret injection puts the credential on the wire by definition.
+    #[test]
+    fn secret_injection_counts_as_a_credential() {
+        let mut backend = http_backend(&format!("http://{REMOTE}"));
+        backend.secrets = vec![crate::secret_injection::CredentialRule {
+            name: "api_key".to_string(),
+            credential_type: crate::secret_injection::CredentialType::ApiKey,
+            value: "env:SOME_KEY".to_string(),
+            inject_as: crate::secret_injection::InjectTarget::Header,
+            inject_key: "Authorization".to_string(),
+            tools: vec!["*".to_string()],
+        }];
+        let message = refusal(backend);
+        assert!(
+            message.contains("cleartext"),
+            "secret injection is a credential path: {message}"
+        );
+    }
+
+    // Rows 12-13 — any static header, not a known-name list. A guard that only
+    // knows `Authorization` misses the header half of the real deployments,
+    // which is why row 13 is separate from row 12.
+    #[test]
+    fn any_static_header_counts_as_a_credential() {
+        for header in ["Authorization", "X-Custom-Token"] {
+            let mut backend = http_backend(&format!("http://{REMOTE}"));
+            backend.headers = HashMap::from([(header.to_string(), "value".to_string())]);
+            let message = refusal(backend);
+            assert!(
+                message.contains("cleartext"),
+                "header {header} is a credential path: {message}"
+            );
+        }
+    }
+
+    // Row 14 — userinfo IS the credential; reqwest turns it into a Basic header.
+    // No other credential is configured on this backend.
+    #[test]
+    fn url_userinfo_alone_counts_as_a_credential() {
+        let backend = http_backend(&format!("http://user:pw@{REMOTE}"));
+        let message = refusal(backend);
+        assert!(
+            message.contains("cleartext"),
+            "userinfo is a credential path: {message}"
+        );
+    }
+
+    // Row 15 — a disabled backend connects to nothing, so it leaks nothing.
+    #[test]
+    fn disabled_backend_skips_the_cleartext_guard() {
+        let mut backend = with_oauth(http_backend(&format!("http://{REMOTE}:8080")));
+        backend.enabled = false;
+        assert!(validate(backend).is_ok());
+    }
+
+    // Row 18 — and the skip drops ONLY the new predicate. An empty or malformed
+    // URL on a disabled backend keeps failing exactly as it does today,
+    // otherwise the skip has quietly widened what config load accepts.
+    #[test]
+    fn disabled_backend_still_fails_the_existing_url_checks() {
+        for url in ["", "not a url"] {
+            let mut backend = http_backend(url);
+            backend.enabled = false;
+            assert!(
+                validate(backend).is_err(),
+                "a disabled backend with url {url:?} must still be refused"
+            );
+        }
+    }
+
+    // Rows 19, 19b — a query string on a backend URL is operator-supplied
+    // per-request material sent in cleartext. Whether it is benign is not
+    // decidable here, so both spellings are refused.
+    #[test]
+    fn url_query_counts_as_a_credential() {
+        for url in [
+            &format!("http://{REMOTE}/mcp?tenant=acme"),
+            &format!("http://{REMOTE}/mcp?api_key=secret"),
+        ] {
+            let message = refusal(http_backend(url));
+            assert!(
+                message.contains("cleartext"),
+                "a query is credential-bearing material: {message}"
+            );
+        }
+    }
+
+    // Row 20 — MIK-7221: the refusal is printed on startup and pasted into
+    // support threads. It may name the backend and nothing else. An implementer
+    // who copies `OidcError::InsecureJwksUri`, which echoes the URL, fails here.
+    #[test]
+    fn refusal_message_names_the_backend_and_leaks_nothing() {
+        let message = refusal(http_backend(&format!("http://user:pw@{REMOTE}")));
+        // The quoted name, not a bare `b`: the word "backend" appears in the
+        // remediation sentence, so a substring check on the letter alone would
+        // pass on a message that names nothing.
+        assert!(
+            message.contains("'b'"),
+            "the refusal must name the backend: {message}"
+        );
+        for leaked in ["user:pw", REMOTE, "http://"] {
+            assert!(
+                !message.contains(leaked),
+                "refusal leaked {leaked:?}: {message}"
+            );
+        }
+    }
+
+    // Rows 16-17 — the a2a transport is the second spelling of the same URL.
+    // Guarding one and not the other is how the first guard stops mattering.
+    #[cfg(feature = "a2a")]
+    #[test]
+    fn a2a_url_is_guarded_on_the_same_terms() {
+        let a2a = |url: &str| BackendConfig {
+            transport: TransportConfig::A2a {
+                a2a_url: url.to_string(),
+                a2a_agent_card_path: None,
+            },
+            ..Default::default()
+        };
+        let message = refusal(with_oauth(a2a(&format!("http://{REMOTE}"))));
+        assert!(
+            message.contains("cleartext"),
+            "a2a carries credentials over the same wire: {message}"
+        );
+        assert!(validate(with_oauth(a2a(&format!("https://{REMOTE}")))).is_ok());
     }
 }

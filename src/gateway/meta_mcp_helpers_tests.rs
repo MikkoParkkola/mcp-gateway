@@ -182,7 +182,7 @@ fn build_initialize_result_passes_instructions_through() {
 
 #[test]
 fn discovery_preamble_contains_all_four_meta_tools() {
-    let preamble = build_discovery_preamble(10, 2);
+    let preamble = build_discovery_preamble(10, 2, &MetaToolExposure::expose_all());
     assert!(preamble.contains("gateway_search_tools"));
     assert!(preamble.contains("gateway_list_tools"));
     assert!(preamble.contains("gateway_list_servers"));
@@ -194,7 +194,7 @@ fn discovery_preamble_contains_first_keyword() {
     // GIVEN: any tool/server counts
     // WHEN: building the preamble
     // THEN: "FIRST" appears to emphasize search-before-invoke pattern
-    let preamble = build_discovery_preamble(0, 0);
+    let preamble = build_discovery_preamble(0, 0, &MetaToolExposure::expose_all());
     assert!(
         preamble.contains("FIRST"),
         "preamble must include FIRST to guide agent behavior"
@@ -204,7 +204,7 @@ fn discovery_preamble_contains_first_keyword() {
 #[test]
 fn discovery_preamble_includes_tool_count() {
     // GIVEN: 42 tools across 3 backends
-    let preamble = build_discovery_preamble(42, 3);
+    let preamble = build_discovery_preamble(42, 3, &MetaToolExposure::expose_all());
     // THEN: the count appears in the text
     assert!(
         preamble.contains("42 tools"),
@@ -215,7 +215,7 @@ fn discovery_preamble_includes_tool_count() {
 #[test]
 fn discovery_preamble_includes_server_count() {
     // GIVEN: 42 tools across 3 backends
-    let preamble = build_discovery_preamble(42, 3);
+    let preamble = build_discovery_preamble(42, 3, &MetaToolExposure::expose_all());
     assert!(
         preamble.contains("3 backends"),
         "preamble must include backend/server count"
@@ -225,7 +225,7 @@ fn discovery_preamble_includes_server_count() {
 #[test]
 fn discovery_preamble_with_zero_counts_is_valid() {
     // GIVEN: no tools or backends yet (empty gateway)
-    let preamble = build_discovery_preamble(0, 0);
+    let preamble = build_discovery_preamble(0, 0, &MetaToolExposure::expose_all());
     assert!(preamble.contains("0 tools"));
     assert!(preamble.contains("0 backends"));
 }
@@ -720,6 +720,38 @@ fn ranked_results_to_json_converts_correctly() {
 }
 
 #[test]
+fn ranked_results_to_json_prunes_the_constant_signals() {
+    // MIK-7084.SURFACE.1b. The code-mode emitter pruned; this one, which
+    // serves the ordinary `gateway_search` path, shipped all sixteen signals.
+    // Asserted on the emitter rather than on the pruner, because a pruner that
+    // prunes proves nothing about a caller that never calls it.
+    let results = vec![SearchResult {
+        server: "s1".to_string(),
+        tool: "t1".to_string(),
+        description: "desc1".to_string(),
+        score: 0.95,
+        ..SearchResult::new("s1", "t1", "desc1")
+    }];
+    let shown = ranked_results_to_json(results, true);
+    let signals = shown[0]["ranking"]["signals"]
+        .as_object()
+        .expect("explain carries the signals object");
+    for constant in ["safety", "trust", "policy_fit", "risk", "latency"] {
+        assert!(
+            !signals.contains_key(constant),
+            "{constant} is the same for every tool in every response and must \
+             not be emitted: {:?}",
+            signals.keys().collect::<Vec<_>>()
+        );
+    }
+    assert!(
+        signals.contains_key("relevance"),
+        "pruning must not take the signals that vary: {:?}",
+        signals.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn ranked_results_to_json_omits_ranking_unless_explain() {
     let results = vec![SearchResult {
         server: "s1".to_string(),
@@ -739,4 +771,69 @@ fn ranked_results_to_json_omits_ranking_unless_explain() {
 fn ranked_results_to_json_empty_input() {
     let json_results = ranked_results_to_json(vec![], false);
     assert!(json_results.is_empty());
+}
+
+#[test]
+fn expose_all_reproduces_the_unfiltered_preamble() {
+    // The conditional assembly must be byte-identical to the single `format!`
+    // it replaced. Every other assertion here is `contains`, so a dropped line
+    // or a lost newline on the default path would pass all of them.
+    let expected = "This server manages 42 tools across 3 backends.\n\
+         Use gateway_search_tools FIRST to find relevant tools by keyword before invoking.\n\
+         Tool schemas are not listed directly so the prompt stays compact.\n\
+         \n\
+         Discovery pattern:\n\
+         1. gateway_search_tools(query=\"your keyword\") -- find tools matching your need\n\
+         2. gateway_invoke(server=\"X\", tool=\"Y\", arguments={...}) -- call the tool\n\
+         \n\
+         Direct listing (when you know the backend):\n\
+         - gateway_list_tools(server=\"brave\") -- list tools from a specific backend\n\
+         - gateway_list_servers -- list all backends with status\n";
+
+    assert_eq!(
+        build_discovery_preamble(42, 3, &MetaToolExposure::expose_all()),
+        expected
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Extensions capability (`io.modelcontextprotocol/extensions`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn extensions_reach_the_wire_when_the_gateway_implements_one() {
+    // `build_server_capabilities` takes the extension source as a parameter for
+    // exactly this assertion: perturb the input, observe the serialized value.
+    // Without it, a capabilities struct left at its `Default` is indistinguishable
+    // from one that is correctly populated, because both are empty today.
+    let mut implemented = std::collections::HashMap::new();
+    implemented.insert(
+        "io.modelcontextprotocol/tasks".to_string(),
+        serde_json::json!({}),
+    );
+
+    let wire = serde_json::to_value(build_server_capabilities(implemented)).unwrap();
+
+    assert_eq!(
+        wire.get("extensions")
+            .and_then(|e| e.get("io.modelcontextprotocol/tasks")),
+        Some(&serde_json::json!({})),
+        "an implemented extension must appear in the serialized capabilities; \
+         it is how a client learns the mechanism is honoured"
+    );
+}
+
+#[test]
+fn empty_extensions_are_omitted_so_discovery_stays_additive() {
+    // MIK-7217 AC discover-3 requires the initialize result to be unchanged for a
+    // client asking for an already-supported revision. An always-present
+    // `"extensions": {}` breaks that: a key that appears for every client is a
+    // handshake change, not an additive one. Serializing it unconditionally is
+    // what turned that AC red, so this pins the omission rather than the default.
+    let wire = serde_json::to_value(build_server_capabilities(implemented_extensions())).unwrap();
+
+    assert!(
+        wire.get("extensions").is_none(),
+        "capabilities must not carry an extensions key while none is implemented, got: {wire}"
+    );
 }

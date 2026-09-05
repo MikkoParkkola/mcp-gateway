@@ -9,7 +9,7 @@
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
 [![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25-green.svg)](https://modelcontextprotocol.io)
-[![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-self--assessed-blue.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
+[![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-10%2F10_self--assessed-blue.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
 [![MITRE F3](https://img.shields.io/badge/MITRE_F3-gateway_boundary_mapped-lightgrey.svg)](docs/compliance/MITRE-F3-MAPPING.md)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
 [![Quality Score](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badges/score.svg)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
@@ -328,6 +328,7 @@ Embedded web UI at `/ui`: live status, searchable tools, server health, a read-o
 | **Cross-site protection** | `Origin`, `Host` and `Sec-Fetch-Site` validation refuses web pages reaching the local port. A client that sends no `Origin` is not refused for that, but the `Host` check applies to every request, so a client reaching the gateway by a name it does not answer to is refused whether or not it is a browser | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#browser-access-to-the-gateway-port) |
 | **End-user identity propagation** | Three configured strategies (`identity_propagation` config): gateway-signed assertion, client-token passthrough, and RFC 8693 token exchange. Fails closed when a backend requires identity. Per-user cache isolation. Enforced on dispatch, Code Mode, and direct routes. | [docs/adr/ADR-007-identity-propagation.md](docs/adr/ADR-007-identity-propagation.md) |
 | **Per-user OAuth isolation** | Fail-closed default (v3.0): a backend that requires a per-user OAuth identity refuses a call that lacks one instead of serving a shared stored token. Opt into the previous shared-credential behavior with `auth.single_user: true` (personal gateway) or `oauth.shared_account: true` (a specific backend). Upgrading from 2.x backs up `gateway.yaml` and prints a one-time posture notice; no config changes automatically. | [docs/adr/ADR-008-multi-user-oauth-isolation.md](docs/adr/ADR-008-multi-user-oauth-isolation.md), [docs/UPGRADING-3.0.md](docs/UPGRADING-3.0.md) |
+| **Cleartext credential refusal** | A backend whose configuration is credential-bearing — an `oauth` section, identity propagation, injected secrets, any static header whatever its name, or userinfo or a query in the URL — over plain `http://` to a host off this machine is refused at config load rather than started. Loopback is exempt; `allow_cleartext_credentials: true` on that backend accepts the exposure knowingly | [docs/REMOTE_BACKENDS.md](docs/REMOTE_BACKENDS.md#authenticated-remote-backends) |
 | **Per-client tool scopes** | Allowlist or denylist tools per API key with glob patterns | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
 | **Security firewall** | Credential redaction, prompt-injection detection, and shell/SQL/path-traversal scanning | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
 | **Cost governance** | Per-tool, per-key, daily budgets with alert thresholds (log/notify/block) | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
@@ -511,7 +512,7 @@ command that changes behaviour, is a breaking change.
 modularity and testing, not as a supported embedding API, and they may change
 in any release. The crate ships a binary; at the time of writing crates.io
 reports zero reverse dependencies. If you embed the library, pin an exact
-version (`=3.5.1`) rather than a caret range.
+version (`=4.0.0`) rather than a caret range.
 
 This is stated explicitly because "removing a `pub` field" and "breaking a
 supported API" are only the same thing when the API is supported. Here it is
@@ -567,6 +568,6 @@ Full model: [LICENSES.md](LICENSES.md).
 
 ## Credits
 
-Created by [Mikko Parkkola](https://github.com/MikkoParkkola). Implements [Model Context Protocol](https://modelcontextprotocol.io/) version 2025-11-25.
+Created by [Mikko Parkkola](https://github.com/MikkoParkkola). Implements [Model Context Protocol](https://modelcontextprotocol.io/) version 2025-11-25, with 2026-07-28 available behind a switch.
 
 [Changelog](CHANGELOG.md) | [Releases](https://github.com/MikkoParkkola/mcp-gateway/releases)

@@ -1,0 +1,507 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! In-memory environment overlay (MIK-7256).
+//!
+//! Env files used to be applied straight to the process environment, so a
+//! config that was later rejected had already mutated the process it was
+//! rejected by. Reading them into an overlay that is published only on a
+//! successful load makes the mutation follow the decision instead of preceding
+//! it.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
+
+use crate::{Error, Result};
+
+/// The env-file paths a running process actually opened.
+///
+/// A wrapper rather than a bare `Vec<PathBuf>` because these are the paths a
+/// reload must reuse: `~` resolves exactly once, at startup, and the recorded
+/// sequence is the only record of what it resolved to.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedEnvFiles {
+    paths: Vec<PathBuf>,
+    /// Whether any entry was spelled with a leading `~`.
+    ///
+    /// Kept because the resolved path cannot be asked: `/home/a/x.env` is the
+    /// same string whether it was written that way or expanded from `~/x.env`,
+    /// and only the second is moved by a later `HOME` assignment.
+    tilde: bool,
+}
+
+impl ResolvedEnvFiles {
+    /// Records paths already resolved, in application order.
+    pub(crate) fn new(paths: Vec<PathBuf>, tilde: bool) -> Self {
+        Self { paths, tilde }
+    }
+
+    /// Whether a `HOME` assignment could move where a restart reads.
+    #[must_use]
+    pub fn has_tilde_entry(&self) -> bool {
+        self.tilde
+    }
+
+    /// The recorded paths, in the order they were applied.
+    #[must_use]
+    pub fn as_paths(&self) -> &[PathBuf] {
+        &self.paths
+    }
+}
+
+/// Where `~` resolves to, injected so the resolution point is observable.
+///
+/// `so_far` is load-bearing: startup applies each env file before expanding the
+/// next, so an entry's home is whatever the overlay under construction says at
+/// that moment. A resolver blind to it cannot reproduce that ordering.
+pub trait HomeResolver {
+    /// The home directory to substitute for `~`, given the overlay built so far.
+    fn home_dir(&self, so_far: &EnvOverlay) -> Option<PathBuf>;
+}
+
+/// The platform's own answer, consulting the overlay first exactly as the
+/// expansion path does.
+pub struct SystemHome;
+
+impl HomeResolver for SystemHome {
+    fn home_dir(&self, so_far: &EnvOverlay) -> Option<PathBuf> {
+        so_far
+            .resolve("HOME")
+            .filter(|h| !h.is_empty())
+            .map(PathBuf::from)
+            .or_else(dirs::home_dir)
+    }
+}
+
+/// Environment as the gateway sees it: env-file assignments layered over the
+/// process environment, without touching the process environment.
+#[derive(Debug, Clone, Default)]
+pub struct EnvOverlay {
+    /// Assignments made by this overlay's own env files.
+    vars: HashMap<String, String>,
+    /// Keys this overlay's files assign. Distinct from `vars`' key set only in
+    /// intent, but the intent is what the restart notice is decided from.
+    owned: BTreeSet<String>,
+    /// The exact bytes each file was parsed from, in application order.
+    ///
+    /// Kept so the substitution scan and the parser cannot disagree. Reopening
+    /// a path re-reads whatever is there at that moment, and a reload is
+    /// triggered by a watcher on exactly these paths, so a rewrite between the
+    /// two reads is the expected interleaving rather than an exotic one.
+    sources: Vec<(PathBuf, String)>,
+}
+
+/// The 1-based line number where the parser's buffer begins in `text`.
+///
+/// Whole-line equality, not a substring search: a valid `A=this is not a pair`
+/// earlier in the file contains the malformed line's text and would otherwise
+/// be named instead. The first match is the right one — an identical line
+/// earlier in the file would itself have failed first, so the parser never
+/// reached this one.
+fn line_number_of(text: &str, buffer: &str) -> Option<usize> {
+    let first = buffer.lines().next()?;
+    text.lines().position(|line| line == first).map(|i| i + 1)
+}
+
+/// The name of a substitution in `path` that refers to a key `defined`
+/// contains, if there is one.
+///
+/// `dotenvy` expands `${K}` and `$K` against the process environment and the
+/// keys it has already read from the same file. Nothing in this crate writes
+/// the process environment, so a reference to a key another env file assigns
+/// resolves to nothing on a reload while it resolved to a value at startup,
+/// when the loader this change replaced still exported it. The config would
+/// change meaning without anyone editing it, which is why a reload carrying
+/// one is refused rather than repaired.
+///
+/// Only a substitution the parser would actually expand counts: a whole-line
+/// comment, a single-quoted region, an escaped `\$` and a trailing comment are
+/// all inert.
+///
+/// Scanned by logical line, not physical line. `dotenvy` joins the physical
+/// lines inside an unbalanced quote into one value, so a substitution on a
+/// continuation line is expanded like any other — and a `#` beginning such a
+/// line is part of the value rather than a comment.
+pub(crate) fn substitution_naming_defined_key(
+    text: &str,
+    defined: &BTreeSet<String>,
+) -> Option<String> {
+    // A key this same file has already assigned resolves within the file:
+    // dotenvy substitutes from earlier lines of the buffer it is reading. So
+    // each assignment drops its own key as the scan passes it, and what
+    // remains is the set this file never supplies. Comparing against every
+    // key all the files own refused `A=1` followed by `B=${A}` -- a
+    // configuration that resolves exactly as written.
+    let mut unresolved_here = defined.clone();
+    let mut pending: Option<(Option<String>, String)> = None;
+    for line in text.lines() {
+        let (key, value) = if let Some((key, mut open)) = pending.take() {
+            open.push('\n');
+            open.push_str(line);
+            (key, open)
+        } else {
+            let line = line.trim_start();
+            if line.starts_with('#') {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            // `dotenvy` reads the key, skips whitespace, then looks for the
+            // `=` (`parse.rs:48-58`), so ANY whitespace separates the optional
+            // `export` prefix from the key it qualifies. Matching only the
+            // literal `"export "` recorded a tab-separated assignment under the
+            // key `export\tKEY`, so the `KEY` it defines still looked
+            // undefined and a later `${KEY}` in the same file was refused.
+            // `export` is also a legal key on its own, which is why the prefix
+            // only counts when whitespace follows it.
+            let key = key.trim();
+            let key = key
+                .strip_prefix("export")
+                .filter(|rest| rest.starts_with(char::is_whitespace))
+                .unwrap_or(key)
+                .trim()
+                .to_string();
+            (Some(key), value.trim_start().to_string())
+        };
+        // Rescanning the whole value on each continuation keeps the quote
+        // state in one place; env-file values are short enough for that to
+        // cost nothing.
+        let (found, unbalanced) = first_expanded_substitution(&value, &unresolved_here);
+        if found.is_some() {
+            return found;
+        }
+        if unbalanced {
+            pending = Some((key, value));
+            continue;
+        }
+        if let Some(key) = key {
+            unresolved_here.remove(&key);
+        }
+    }
+    None
+}
+
+/// The first `${K}` or `$K` in `value` that the parser would expand and that
+/// names a key in `defined`, and whether `value` ends inside an open quote.
+///
+/// The second half is what tells the caller the value continues onto the next
+/// physical line.
+///
+/// One walk, because quoting decides three things at once: a single-quoted
+/// region is inert, a double-quoted region is not, and a trailing comment only
+/// begins outside both. Judging a value inert because it *starts* with a quote
+/// misses `K='literal'$OTHER`, which the parser expands — measured against
+/// `dotenvy` rather than assumed.
+fn first_expanded_substitution(value: &str, defined: &BTreeSet<String>) -> (Option<String>, bool) {
+    let chars: Vec<char> = value.chars().collect();
+    let mut i = 0;
+    let mut single = false;
+    let mut double = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if single {
+            if c == '\'' {
+                single = false;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '\\' => {
+                i += 2;
+                continue;
+            }
+            '\'' => {
+                single = true;
+                i += 1;
+                continue;
+            }
+            '"' => {
+                double = !double;
+                i += 1;
+                continue;
+            }
+            ' ' | '\t' if !double && chars.get(i + 1) == Some(&'#') => return (None, false),
+            '$' => {}
+            _ => {
+                i += 1;
+                continue;
+            }
+        }
+        let mut j = i + 1;
+        // A braced name runs to the closing brace, whatever it contains:
+        // `dotenvy` accepts a `.` in a key and expands `${BASE.URL}` as the
+        // whole dotted name. Stopping at the first non-word character would
+        // look for `BASE` and find nothing.
+        let braced = chars.get(j) == Some(&'{');
+        if braced {
+            j += 1;
+        }
+        let start = j;
+        // An unbraced name is alphanumeric only. `dotenvy` ends it at the
+        // first other character, so `$A_B` expands `A` and leaves `_B`
+        // literal. Accepting `_` here would both miss that expansion and
+        // refuse a reload over `$A_B` when `A_B` is the key that happens to be
+        // defined — measured against `dotenvy`, not assumed.
+        while chars.get(j).is_some_and(|c| {
+            if braced {
+                *c != '}'
+            } else {
+                c.is_alphanumeric()
+            }
+        }) {
+            j += 1;
+        }
+        let name: String = chars[start..j].iter().collect();
+        if !name.is_empty() && defined.contains(&name) {
+            return (Some(name), single || double);
+        }
+        i = j.max(i + 1);
+    }
+    (None, single || double)
+}
+
+impl EnvOverlay {
+    /// No env files: every lookup falls through to the process environment.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// The single resolver. Env-file assignment first, then the process
+    /// environment.
+    ///
+    /// An overlay carries nothing forward from the one it replaces. A reload
+    /// re-reads the same recorded files, so every env-file value is derived
+    /// again; the only thing carrying the old overlay forward could add is a
+    /// key whose line was deleted, which is exactly what a reload must revoke.
+    ///
+    /// The fall-through is the baseline, not an approximation of one: nothing
+    /// in this crate writes the process environment, so a key's pre-overlay
+    /// value is still there to be read after any number of reloads.
+    #[must_use]
+    pub fn resolve(&self, name: &str) -> Option<String> {
+        self.vars
+            .get(name)
+            .cloned()
+            .or_else(|| std::env::var(name).ok())
+    }
+
+    /// True when this overlay's own files assign `name`.
+    ///
+    /// Ownership, never value: this answers "did these files say so", which is
+    /// what `~` expansion needs mid-sequence, where `resolve`'s fall-through to
+    /// the process environment would answer for a home no file named. Deciding
+    /// whether a *restart* would read differently needs BOTH — a file that
+    /// assigns `HOME` can move where a later `~` entry is looked for while the
+    /// value standing at the end is unchanged — see `changed_startup_env_keys`.
+    #[must_use]
+    pub fn assigns(&self, name: &str) -> bool {
+        self.owned.contains(name)
+    }
+
+    /// The keys this overlay's files assign.
+    #[must_use]
+    pub fn owned_keys(&self) -> &BTreeSet<String> {
+        &self.owned
+    }
+
+    /// Everything the overlay contributes, for consumers that need a map rather
+    /// than point lookups.
+    #[must_use]
+    pub fn effective_vars(&self) -> BTreeMap<String, String> {
+        self.vars
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    /// Overlay for already-resolved paths.
+    ///
+    /// Unreadable or malformed files are warned about and skipped, matching the
+    /// tolerance the process-mutating loader had.
+    #[must_use]
+    pub fn from_paths(paths: &[PathBuf]) -> Self {
+        let mut overlay = Self::default();
+        for path in paths {
+            overlay.apply_file_tolerant(path);
+        }
+        overlay
+    }
+
+    /// As [`EnvOverlay::from_paths`], but a malformed file is an error.
+    ///
+    /// The diagnostic is rebuilt rather than forwarded: `dotenvy`'s own
+    /// `Display` echoes the offending line, which would put a secret into a log
+    /// line written because a secret was mistyped.
+    pub fn from_paths_checked(paths: &[PathBuf]) -> Result<Self> {
+        let mut overlay = Self::default();
+        for path in paths {
+            overlay.apply_file(path)?;
+        }
+        Ok(overlay)
+    }
+
+    /// Applies one env file, warning rather than failing on malformed content.
+    pub(crate) fn apply_file_tolerant(&mut self, path: &Path) {
+        if let Err(error) = self.apply_file(path) {
+            tracing::warn!("Failed to load env file {}: {error}", path.display());
+        }
+    }
+
+    /// Applies one env file. A missing file is not an error — the old loader
+    /// skipped it silently and configs rely on that for optional files.
+    pub(crate) fn apply_file(&mut self, path: &Path) -> Result<()> {
+        if !path.exists() {
+            tracing::debug!("Env file not found (skipped): {}", path.display());
+            return Ok(());
+        }
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| Self::describe(path, &dotenvy::Error::Io(e), None))?;
+        let iter = dotenvy::from_read_iter(std::io::Cursor::new(text.as_bytes()));
+        for entry in iter {
+            let (key, value) = entry.map_err(|e| Self::describe(path, &e, Some(&text)))?;
+            self.insert(key, value);
+        }
+        self.sources.push((path.to_path_buf(), text));
+        tracing::info!("Loaded env file: {}", path.display());
+        Ok(())
+    }
+
+    /// The first env file whose own bytes substitute a key these same files
+    /// define, with the key named.
+    ///
+    /// Scans the buffers the parser consumed, never the paths again.
+    #[must_use]
+    pub(crate) fn substitution_naming_owned_key(&self) -> Option<(PathBuf, String)> {
+        self.sources.iter().find_map(|(path, text)| {
+            substitution_naming_defined_key(text, &self.owned).map(|key| (path.clone(), key))
+        })
+    }
+
+    fn insert(&mut self, key: String, value: String) {
+        self.owned.insert(key.clone());
+        self.vars.insert(key, value);
+    }
+
+    /// File, line and category — never the line's content.
+    ///
+    /// The line number is derived from the parser's own buffer rather than read
+    /// off the error: `dotenvy`'s `LineParse` carries a byte offset *within* the
+    /// offending line, and reporting that as the line number named line 6 of a
+    /// two-line file.
+    fn describe(path: &Path, error: &dotenvy::Error, text: Option<&str>) -> Error {
+        let where_ = path.display();
+        match error {
+            dotenvy::Error::LineParse(line, _) => {
+                match text.and_then(|text| line_number_of(text, line)) {
+                    Some(number) => Error::Config(format!(
+                        "Failed to parse env file {where_} line {number}: the line is not a \
+                         KEY=value assignment. The offending text is withheld because env files \
+                         carry secrets."
+                    )),
+                    None => Error::Config(format!(
+                        "Failed to parse env file {where_}: a line is not a KEY=value assignment. \
+                         The offending text is withheld because env files carry secrets."
+                    )),
+                }
+            }
+            dotenvy::Error::Io(io) => {
+                Error::Config(format!("Cannot read env file {where_}: {}", io.kind()))
+            }
+            _ => Error::Config(format!("Cannot load env file {where_}: malformed content.")),
+        }
+    }
+}
+
+/// The environment a running gateway resolves against.
+///
+/// A cell rather than a captured `Arc<EnvOverlay>`: a reload replaces the
+/// overlay, and a holder that captured the `Arc` would keep answering from the
+/// one it captured. `get` is on the request path, `set` only on reload.
+#[derive(Debug)]
+pub struct LiveEnv {
+    overlay: RwLock<Arc<EnvOverlay>>,
+    startup: Arc<EnvOverlay>,
+    env_paths: ResolvedEnvFiles,
+}
+
+impl Default for LiveEnv {
+    /// The process environment and nothing else: every lookup falls through,
+    /// which is what a consumer built outside the gateway's startup path had
+    /// before an overlay existed.
+    fn default() -> Self {
+        Self::new(Arc::new(EnvOverlay::none()), ResolvedEnvFiles::default())
+    }
+}
+
+impl LiveEnv {
+    #[must_use]
+    /// The environment a successful load produced, ready to be published.
+    pub fn new(overlay: Arc<EnvOverlay>, env_paths: ResolvedEnvFiles) -> Self {
+        Self {
+            startup: Arc::clone(&overlay),
+            overlay: RwLock::new(overlay),
+            env_paths,
+        }
+    }
+
+    /// The overlay in force. Cheap enough for the request path.
+    #[must_use]
+    pub fn get(&self) -> Arc<EnvOverlay> {
+        self.overlay
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Publishes a new overlay. Called only once a load has succeeded.
+    pub fn set(&self, overlay: Arc<EnvOverlay>) {
+        *self
+            .overlay
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = overlay;
+    }
+
+    /// The overlay startup published, which never changes.
+    ///
+    /// What a holder built once at startup actually captured. A restart
+    /// requirement is outstanding until the process restarts, so it must be
+    /// measured against this rather than against the last published overlay —
+    /// comparing against the latter reports a rotation on the reload that
+    /// carried it and then silently forgets it.
+    #[must_use]
+    pub fn startup(&self) -> &Arc<EnvOverlay> {
+        &self.startup
+    }
+
+    /// The paths startup recorded. A reload reuses these; it never resolves
+    /// `env_files` again.
+    #[must_use]
+    pub fn env_paths(&self) -> &ResolvedEnvFiles {
+        &self.env_paths
+    }
+}
+
+/// A config plus the environment it was evaluated against.
+///
+/// One resolution, one result: startup and reload both produce this, so the
+/// paths a reload opens are the paths startup recorded rather than a second
+/// resolution that happens to agree.
+#[derive(Debug, Clone)]
+pub struct Evaluated {
+    /// The configuration itself.
+    pub config: super::Config,
+    /// The environment it was evaluated against.
+    pub overlay: Arc<EnvOverlay>,
+    /// The env-file paths that were opened, in order.
+    pub env_paths: ResolvedEnvFiles,
+    /// Names the config referenced as `env:NAME`.
+    ///
+    /// Recorded before substitution, because after it the config holds the
+    /// value and the reference is gone. A reload compares these names across
+    /// overlays to report a rotation no running holder can take.
+    // ci-allow-secret-debug: names only, recorded before substitution; values live in `config`.
+    pub secret_refs: std::collections::BTreeSet<String>,
+}

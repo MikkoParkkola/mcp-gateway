@@ -298,6 +298,12 @@ pub struct Gateway {
     backends: Arc<BackendRegistry>,
     /// Shutdown flag
     shutdown_tx: Option<tokio::sync::broadcast::Sender<()>>,
+    /// The environment the config was evaluated against.
+    ///
+    /// Every lazy reader — capability credentials, the reload transaction, the
+    /// file watcher — resolves through this rather than the process
+    /// environment, which no env file is written to.
+    env: Arc<crate::config::LiveEnv>,
 }
 
 /// Shared components produced by [`Gateway::build_meta_mcp`].
@@ -326,6 +332,20 @@ struct BuiltMetaMcp {
     /// `MetaMcp`, can also write identity-propagation audit events into the
     /// same tamper-evident chain (MIK-6740).
     transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
+}
+
+/// The provenance signing key and its key id.
+///
+/// Read through the env overlay rather than `std::env`: env files load into an
+/// in-memory overlay, so a key an env file assigns never reaches the process
+/// environment and a `std::env` read would leave the signer uninstalled.
+fn provenance_key(env: &crate::config::EnvOverlay) -> (String, String) {
+    (
+        env.resolve(crate::attestation::ATTESTATION_SIGNING_KEY_ENV)
+            .unwrap_or_default(),
+        env.resolve(crate::attestation::ATTESTATION_KEY_ID_ENV)
+            .unwrap_or_else(|| "gateway".to_string()),
+    )
 }
 
 /// Decide whether to install a provenance-receipt signer for runtime
@@ -414,7 +434,19 @@ impl Gateway {
             config_path,
             backends,
             shutdown_tx: None,
+            env: Arc::new(crate::config::LiveEnv::default()),
         })
+    }
+
+    /// Resolve env-file-supplied values through `env`.
+    ///
+    /// Set from the startup evaluation. Without it the gateway falls back to
+    /// the process environment, which is what a caller building a `Config` in
+    /// memory wants and what an env file no longer reaches.
+    #[must_use]
+    pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
+        self.env = env;
+        self
     }
 
     /// Build [`MetaMcp`] and all supporting components shared between HTTP and
@@ -478,7 +510,8 @@ impl Gateway {
             &self.config.default_routing_profile,
         );
         let secret_injector =
-            crate::secret_injection::SecretInjector::from_backend_configs(&self.config.backends);
+            crate::secret_injection::SecretInjector::from_backend_configs(&self.config.backends)
+                .with_env(Arc::clone(&self.env));
 
         // ── Cost governance (feature-gated) ──────────────────────────────────
         #[cfg(feature = "cost-governance")]
@@ -515,6 +548,7 @@ impl Gateway {
         .with_projection_mode(self.config.meta_mcp.projection_mode)
         .with_secret_injector(secret_injector)
         .with_surfaced_tools(self.config.meta_mcp.surfaced_tools.clone())
+        .with_exposed_meta_tools(&self.config.meta_mcp.exposed_meta_tools)
         .with_prompts_resources_fetch_timeout(self.config.meta_mcp.prompts_resources_fetch_timeout)
         .with_trusted_identity_headers(
             self.config
@@ -533,7 +567,9 @@ impl Gateway {
         // Default posture is OBSERVE: audit every presented token at the
         // `gateway_invoke` boundary but never block a call. `off` attaches no
         // validator (pure no-op). Enforce is intentionally not yet a wired mode.
-        if let Some((validator, mode)) = crate::attestation::attestation_wiring_from_env() {
+        if let Some((validator, mode)) =
+            crate::attestation::attestation_wiring_from_overlay(&self.env.get())
+        {
             info!(
                 ?mode,
                 "Per-action attestation wired at gateway_invoke boundary"
@@ -553,6 +589,31 @@ impl Gateway {
             "Context integrity policy configured"
         );
         meta_mcp.set_transition_tracker(Arc::clone(&transition_tracker));
+
+        // Apply the operator's `error_budget:` section to the running budgets
+        // (GH #475). Absent keys keep the values that have been shipping, so a
+        // config without the section leaves both budgets exactly as before.
+        let backend_budget = self.config.error_budget.backend_config();
+        let capability_budget = self.config.error_budget.capability_config();
+        // Logged because the budgets are otherwise unobservable: nothing emits a
+        // metric or an event carrying the effective threshold, so a gateway
+        // running a configured value and one running the default are
+        // indistinguishable from outside, and a regression that silently ignored
+        // the section would produce no signal at all.
+        info!(
+            backend_threshold = backend_budget.threshold,
+            backend_window_size = backend_budget.window_size,
+            backend_min_samples = backend_budget.min_samples,
+            backend_window_duration_secs = backend_budget.window_duration.as_secs(),
+            capability_threshold = capability_budget.threshold,
+            capability_window_size = capability_budget.window_size,
+            capability_min_samples = capability_budget.min_samples,
+            capability_window_duration_secs = capability_budget.window_duration.as_secs(),
+            capability_cooldown_secs = capability_budget.cooldown.as_secs(),
+            "Error budgets configured"
+        );
+        meta_mcp.set_error_budget_config(backend_budget);
+        meta_mcp.set_capability_budget_config(capability_budget);
 
         // ── Transparency log (issue #133, D3) ─────────────────────────────────
         // The opened `Arc` is kept as `transparency_log` (not just handed to
@@ -588,10 +649,7 @@ impl Gateway {
         // `_meta.provenance` on every aggregated tool result, reusing the
         // gateway's attestation signing key (one signing identity, B4-PLATFORM).
         if self.config.security.provenance_stamping {
-            let key =
-                std::env::var(crate::attestation::ATTESTATION_SIGNING_KEY_ENV).unwrap_or_default();
-            let key_id = std::env::var(crate::attestation::ATTESTATION_KEY_ID_ENV)
-                .unwrap_or_else(|_| "gateway".to_string());
+            let (key, key_id) = provenance_key(&self.env.get());
             match resolve_provenance_signer(&key, &key_id) {
                 Some(signer) => {
                     Arc::get_mut(&mut meta_mcp)
@@ -695,7 +753,7 @@ impl Gateway {
             } else {
                 None
             };
-            let fw = Arc::new(Firewall::from_config(fw_cfg, fw_tt));
+            let fw = Arc::new(Firewall::from_config(fw_cfg, fw_tt).with_env(Arc::clone(&self.env)));
             if fw_enabled {
                 info!("Security firewall enabled (RFC-0071)");
             }
@@ -806,15 +864,15 @@ impl Gateway {
         }
 
         // Create webhook registry
-        let webhook_registry = Arc::new(parking_lot::RwLock::new(WebhookRegistry::new(
-            self.config.webhooks.clone(),
-        )));
+        let webhook_registry = Arc::new(parking_lot::RwLock::new(
+            WebhookRegistry::new(self.config.webhooks.clone()).with_env(Arc::clone(&self.env)),
+        ));
 
         // Load capabilities if enabled. Capability directories can be large;
         // when webhook route construction does not depend on them, populate the
         // backend in the background so health/MCP endpoints bind promptly.
         let _capability_watcher: Option<CapabilityWatcher> = if self.config.capabilities.enabled {
-            let executor = Arc::new(CapabilityExecutor::new());
+            let executor = Arc::new(CapabilityExecutor::new().with_env(Arc::clone(&self.env)));
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
                 executor,
@@ -940,13 +998,16 @@ impl Gateway {
         // bind-origin snapshot reads `live_config` while it still equals the
         // config the listener binds — no startup reload race (MIK-6750 r4).
         if let Some(ref path) = self.config_path {
-            let reload_ctx = Arc::new(ReloadContext::new(
-                path.clone(),
-                Arc::clone(&live_config),
-                Arc::clone(&self.backends),
-                self.config.failsafe.clone(),
-                self.config.meta_mcp.cache_ttl,
-            ));
+            let reload_ctx = Arc::new(
+                ReloadContext::new(
+                    path.clone(),
+                    Arc::clone(&live_config),
+                    Arc::clone(&self.backends),
+                    self.config.failsafe.clone(),
+                    self.config.meta_mcp.cache_ttl,
+                )
+                .with_env(Arc::clone(&self.env)),
+            );
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
         }
 
@@ -1122,7 +1183,7 @@ impl Gateway {
             } else {
                 None
             };
-            let fw = Arc::new(Firewall::from_config(fw_cfg, tt));
+            let fw = Arc::new(Firewall::from_config(fw_cfg, tt).with_env(Arc::clone(&self.env)));
             if fw_enabled {
                 info!("Security firewall enabled (RFC-0071)");
             }
@@ -1137,6 +1198,11 @@ impl Gateway {
             build_control_plane_store(&self.config, self.config_path.as_deref());
 
         let state = Arc::new(AppState {
+            // Shared, not minted: the invoke path mints continuations against
+            // `meta_mcp`'s keyring, so a second one here would be a keyring
+            // that opens nothing this gateway ever sealed.
+            continuation: meta_mcp.continuation(),
+            env: Some(Arc::clone(&self.env)),
             backends: Arc::clone(&self.backends),
             meta_mcp,
             meta_mcp_enabled: self.config.meta_mcp.enabled,
@@ -1163,6 +1229,11 @@ impl Gateway {
             firewall: firewall_arc,
             agent_identity_config: self.config.security.agent_identity.clone(),
             control_plane_store,
+            subscriptions: Arc::new(
+                crate::gateway::subscription_registry::SubscriptionRegistry::new(
+                    crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
+                ),
+            ),
             live_config: Arc::clone(&live_config),
             export_status,
             transparency_log,
@@ -1207,6 +1278,7 @@ impl Gateway {
                 Arc::clone(&live_config),
                 Arc::clone(&self.backends),
                 &self.config,
+                Arc::clone(&self.env),
                 shutdown_tx.subscribe(),
             ) {
                 Ok(w) => {
@@ -1477,7 +1549,7 @@ impl Gateway {
             };
 
         if self.config.capabilities.enabled {
-            let executor = Arc::new(CapabilityExecutor::new());
+            let executor = Arc::new(CapabilityExecutor::new().with_env(Arc::clone(&self.env)));
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
                 executor,
@@ -1650,14 +1722,14 @@ impl Gateway {
     async fn dispatch_single(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
-        _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
+        mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         request: &serde_json::Value,
         session_id: &str,
     ) -> Option<serde_json::Value> {
         Self::dispatch_single_with_sink(
             meta_mcp,
             tool_policy,
-            _mtls_policy,
+            mtls_policy,
             request,
             session_id,
             None,
@@ -1685,6 +1757,24 @@ impl Gateway {
             Err(response) => return Some(response.to_value_lossy()),
         };
 
+        // NFR.OBS.1. Recorded here, above every early return below, so a
+        // stdio session is observed on the same terms an HTTP one is. Stdio
+        // carries no headers, so the transport declares no revision and a
+        // modern request can only have sourced its own from `_meta`.
+        //
+        // The shape is not consumed yet: stdio's method dispatch predates the
+        // revision split and this change does not move it. Recording is what
+        // was missing, and recording is what this adds.
+        crate::protocol::meta::classify_and_observe(
+            &method,
+            params.as_ref(),
+            None,
+            // Stdio carries no header, so the revision this session negotiated
+            // at `initialize` is the only thing a later legacy request can be
+            // sourced to. `None` until the handshake happens, which is what
+            // keeps the pre-handshake record at `absent`/`none`.
+            crate::protocol_revision_telemetry::session_negotiated_revision(Some(session_id)),
+        );
         crate::protocol_revision_telemetry::observe_inbound_request(
             request,
             params.as_ref(),
@@ -1715,6 +1805,20 @@ impl Gateway {
         };
 
         let response = match method.as_str() {
+            // 2026-07-28 MUST. Answered before anything else and without a
+            // handshake, because on stdio this is also the backward-compatibility
+            // probe: a legacy server answers it with an error, not a document.
+            "server/discover" => {
+                JsonRpcResponse::success_serialized(
+                    id, // Always the legacy list on stdio. This dispatcher has no
+                    // access to the running config, and the stateless revision is
+                    // specified over streamable HTTP; advertising it on a transport
+                    // whose modern path is not wired would be a claim the gateway
+                    // cannot honour. Recorded as a limitation, not a decision that
+                    // stdio is excluded.
+                    meta_mcp.discover_document(false),
+                )
+            }
             "initialize" => meta_mcp.handle_initialize(id, params.as_ref(), Some(session_id), None),
             "tools/list" => {
                 meta_mcp.handle_tools_list_with_params(id, params.as_ref(), Some(session_id))
@@ -1752,10 +1856,22 @@ impl Gateway {
                             // alone, so stdio was never checked and the default
                             // non-admin context went unnoticed.
                             is_admin: true,
+                            // stdio carries no per-request capability
+                            // declaration to read, and absent means absent.
+                            input_capabilities: crate::protocol::meta::Declared::NONE,
+                            retry: &crate::protocol::mrtr::NO_RETRY,
                             api_key_name: None,
                             agent_id: None,
                             grant_subject: None,
                             verified_identity: None,
+                            // stdio speaks to one process over two pipes and
+                            // has no elicitation channel: there is no operator
+                            // this transport can reach, so a destructive call
+                            // it cannot confirm is refused rather than asked
+                            // about. Not "found no session" -- no asker can
+                            // exist here at all.
+                            confirmation:
+                                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
                         },
                     )
                     .await
@@ -2060,7 +2176,9 @@ mod tests {
     use chrono::{Duration, Utc};
     use serde_json::json;
 
-    use super::{Gateway, load_configured_identity_grants, resolve_provenance_signer};
+    use super::{
+        Gateway, load_configured_identity_grants, provenance_key, resolve_provenance_signer,
+    };
     use crate::{
         backend::BackendRegistry,
         config::{
@@ -2489,6 +2607,238 @@ mod tests {
         );
     }
 
+    // -- MIK-7246.CONFIRM.1a: the destructive gate over stdio ---------------
+    //
+    // In-crate and at the dispatcher, deliberately. `MetaMcpCallerContext`
+    // borrows a `pub(crate)` trait object, so it cannot be built from `tests/`
+    // -- and widening that visibility to let it would be the wrong trade
+    // twice: a visibility change is a design shift, and a hand-built context
+    // is one no production caller constructs. `dispatch_single` is what the
+    // stdio read loop calls, so this is the path a spawned client takes.
+    //
+    // Stdio refuses unconditionally rather than consulting `is_modern`. The
+    // reason `for_modern()` refuses is not that the request is modern; it is
+    // that no asker can exist. On HTTP the revision is what removed the asker,
+    // so the revision is a serviceable proxy. Stdio reaches the same condition
+    // by a different route -- there is no session and never will be -- and the
+    // criterion is written about the condition, not the route.
+    // Row 19: the marker that keeps a refusal out of failure accounting is
+    // internal, and internal has to mean both directions. A stamp inside
+    // `error.data` would satisfy the accounting and leak the gateway's own
+    // bookkeeping to the caller; a plain field that serde still reads would let
+    // a caller mint the marker by sending its name.
+    #[tokio::test]
+    async fn ac_confirm_1a_the_refusal_marker_never_reaches_the_wire() {
+        let meta = test_meta_mcp();
+        let tool_policy = test_tool_policy();
+        let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
+            tool_policy: tool_policy.as_ref(),
+        };
+        // Built by the gate itself, not by hand: a hand-made response would
+        // only prove that serde skips a field, never that the refusal the
+        // gateway actually emits carries it.
+        let marked = meta
+            .handle_tools_call(
+                RequestId::Number(19),
+                "gateway_kill_server",
+                json!({ "server": "row19-sentinel" }),
+                Some("stdio-session"),
+                crate::gateway::meta_mcp::MetaMcpCallerContext {
+                    authorizer: &authorizer,
+                    api_key_name: None,
+                    agent_id: None,
+                    grant_subject: None,
+                    verified_identity: None,
+                    is_admin: true,
+                    input_capabilities: crate::protocol::meta::Declared::NONE,
+                    retry: &crate::protocol::mrtr::NO_RETRY,
+                    confirmation:
+                        crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+                },
+            )
+            .await;
+
+        // (b) in-process, the accounting can see it.
+        assert!(
+            marked.confirmation_refusal,
+            "the gate's refusal must be marked, or failure accounting cannot              tell it from a client error"
+        );
+
+        // (a) on the wire, nothing can. Two responses differing only in the
+        // marker serialize identically.
+        let mut unmarked = marked.clone();
+        unmarked.confirmation_refusal = false;
+        assert_eq!(
+            serde_json::to_string(&marked).expect("a refusal must serialize"),
+            serde_json::to_string(&unmarked).expect("a refusal must serialize"),
+            "the marker must not be observable in the response the caller reads"
+        );
+
+        // (c) inbound, a wire key of that name cannot set it. Read back the
+        // frame the gateway just emitted, with the key added.
+        let mut frame: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&marked).expect("serialize"))
+                .expect("a refusal must be valid JSON");
+        frame["confirmation_refusal"] = json!(true);
+        let ingested: crate::protocol::JsonRpcResponse =
+            serde_json::from_value(frame).expect("a response frame must deserialize");
+        assert!(
+            !ingested.confirmation_refusal,
+            "a caller must not be able to mint the marker by naming it"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm() {
+        // Bound rather than inlined: the kill switch is the execution sentinel,
+        // and reading it afterwards requires the same instance the call ran on.
+        let meta = test_meta_mcp();
+        let response = Gateway::dispatch_single(
+            &meta,
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 16,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_kill_server",
+                    // `describe_destructive_action` reads `arguments.server`
+                    // (router/handlers.rs:1582). Passing `name` instead yields
+                    // the generic fallback, and the verbatim assertion below
+                    // would then fail for a fixture reason rather than a real
+                    // one.
+                    "arguments": { "server": "row16-sentinel" }
+                }
+            }),
+            "stdio-session",
+        )
+        .await
+        .expect("a tools/call carrying an id must return a response");
+
+        assert_eq!(
+            response
+                .pointer("/error/code")
+                .and_then(serde_json::Value::as_i64),
+            Some(-32001),
+            "stdio has nobody to elicit over, so a destructive call cannot be \
+             confirmed and must be refused: {response}"
+        );
+        let message = response
+            .pointer("/error/message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            message.starts_with(
+                "Destructive action requires confirmation and none could be obtained:"
+            ),
+            "the refusal must be the unconfirmable branch, worded as the HTTP \
+             path words it -- one gate, one string: {message}"
+        );
+        assert!(
+            message.contains("row16-sentinel"),
+            "the refusal must name what it refused to act on: {message}"
+        );
+        assert!(
+            response.get("result").is_none(),
+            "a refused destructive call must not also return a result: {response}"
+        );
+        // The sentinel, and the point of the row: a gate that answers -32001
+        // after the tool has already run has refused nothing.
+        assert!(
+            !meta.kill_switch().is_killed("row16-sentinel"),
+            "the backend must be untouched by a refused call: {response}"
+        );
+    }
+
+    // ── MIK-7217: server/discover over stdio ───────────────────────────────
+    //
+    // Dispatcher-level on purpose. Both dispatchers call one builder, so a test
+    // that calls the builder proves nothing about whether either `match` routes
+    // to it — and a missing arm is exactly the regression this guards.
+
+    #[tokio::test]
+    async fn ac_discover_1_stdio_dispatch_answers_server_discover() {
+        let response = Gateway::dispatch_single(
+            &test_meta_mcp(),
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "server/discover"}),
+            "stdio-session",
+        )
+        .await
+        .expect("server/discover must return a response");
+
+        assert!(
+            response.get("error").is_none(),
+            "server/discover must not error on stdio: {response}"
+        );
+        let result = &response["result"];
+        assert!(
+            result.get("supportedVersions").is_some(),
+            "discovery must advertise supportedVersions: {response}"
+        );
+        assert!(
+            result.get("capabilities").is_some(),
+            "discovery must advertise capabilities: {response}"
+        );
+        assert!(
+            result["_meta"]["io.modelcontextprotocol/serverInfo"].is_object(),
+            "discovery must identify the server in _meta: {response}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ac_discover_2_stdio_discovery_needs_no_prior_initialize() {
+        // The session argument is what the transport supplies today; the point
+        // is that no `initialize` ran before this call, and discovery answers
+        // anyway. Under 2026-07-28 there is no handshake to run.
+        let response = Gateway::dispatch_single(
+            &test_meta_mcp(),
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({"jsonrpc": "2.0", "id": 7, "method": "server/discover"}),
+            "never-initialized",
+        )
+        .await
+        .expect("discovery must answer without a handshake");
+
+        assert!(
+            response["result"].get("supportedVersions").is_some(),
+            "discovery must answer on a connection that never handshook: {response}"
+        );
+    }
+
+    // NFR.OBS.2, stdio. The record of which filters shaped a `tools/list`
+    // lives at the site that assembles the list
+    // (`MetaMcp::shadow_tools_list_assembly`), not at each transport, so it
+    // reads the profile the session actually resolves rather than a constant
+    // the transport asserts. This pins that a stdio dispatch reaches that
+    // site; which filters it reports for a given profile is pinned beside the
+    // assembly itself, in `gateway::meta_mcp::tests`.
+    #[tokio::test]
+    async fn stdio_tools_list_is_observed_at_the_assembly_site() {
+        use crate::protocol_revision_telemetry::{ListFilters, global_shadow_count};
+
+        let unfiltered = ListFilters::default();
+        let before = global_shadow_count(unfiltered);
+
+        Gateway::dispatch_single(
+            &test_meta_mcp(),
+            &test_tool_policy(),
+            &test_mtls_policy(),
+            &json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}),
+            "stdio-session-obs-2",
+        )
+        .await
+        .expect("tools/list must answer over stdio");
+
+        assert!(
+            global_shadow_count(unfiltered) > before,
+            "a stdio `tools/list` must be observed where the list is assembled"
+        );
+    }
+
     // ── MIK-7252: stdio authorization ──────────────────────────────────────
     //
     // Before this change stdio checked the tool policy for `gateway_invoke`
@@ -2708,6 +3058,35 @@ mod tests {
         }
     }
 
+    /// GH475.CFG.5 — a configured threshold reaches the running budget, and a
+    /// key the operator left out keeps the value that has been shipping.
+    #[tokio::test]
+    async fn build_meta_mcp_applies_the_error_budget_section() {
+        let mut config = Config::default();
+        config.error_budget.threshold = Some(0.42);
+        config.error_budget.capability.cooldown = Some(std::time::Duration::from_secs(90));
+
+        let gateway = Gateway::new(config).await.unwrap();
+        let built = gateway.build_meta_mcp().await.unwrap();
+        let (backend, capability) = built.meta_mcp.budget_configs();
+
+        assert!(
+            (backend.threshold - 0.42).abs() < f64::EPSILON,
+            "the configured backend threshold never reached the running budget: {}",
+            backend.threshold
+        );
+        assert_eq!(
+            capability.cooldown,
+            std::time::Duration::from_secs(90),
+            "the configured capability cooldown never reached the running budget"
+        );
+        assert_eq!(
+            backend.window_size,
+            crate::kill_switch::budget::ErrorBudgetConfig::default().window_size,
+            "a key the operator did not write must keep the shipped default"
+        );
+    }
+
     #[tokio::test]
     async fn build_meta_mcp_applies_context_integrity_team_shared_preset() {
         let mut config = Config::default();
@@ -2779,13 +3158,40 @@ mod tests {
     // These exercise `resolve_provenance_signer` directly rather than driving
     // `Gateway::build_meta_mcp` end-to-end: the bootstrap path also reads
     // `GATEWAY_ATTESTATION_SIGNING_KEY` for the unrelated attestation-validator
-    // wiring (`attestation_wiring_from_env`, above), so mutating that
+    // wiring (`attestation_wiring_from_overlay`, above), so mutating that
     // process-global env var here would race against every other test in
     // this binary that constructs a `Gateway`. `resolve_provenance_signer`
     // is the pure decision core with no process-environment reads, which
     // makes it deterministic to test directly and is exactly the seam
     // `resolve_attestation_wiring` (src/attestation/wiring.rs) already
     // established for the same class of problem.
+
+    #[test]
+    fn provenance_key_reads_a_key_an_env_file_assigns() {
+        // Env files load into an in-memory overlay rather than into the process
+        // environment, so a signing key an env file assigns is invisible to
+        // `std::env::var` — reading it there left the signer uninstalled and
+        // silently disabled a configured feature.
+        let dir = tempfile::tempdir().unwrap();
+        let env_file = dir.path().join(".env");
+        std::fs::write(
+            &env_file,
+            format!(
+                "{}=from-the-overlay\n{}=overlay-key-id\n",
+                crate::attestation::ATTESTATION_SIGNING_KEY_ENV,
+                crate::attestation::ATTESTATION_KEY_ID_ENV
+            ),
+        )
+        .unwrap();
+        // `none()` as the inherited base: whatever the developer's own
+        // environment holds cannot decide this test either way.
+        let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
+
+        let (key, key_id) = provenance_key(&overlay);
+
+        assert_eq!(key, "from-the-overlay");
+        assert_eq!(key_id, "overlay-key-id");
+    }
 
     #[test]
     fn resolve_provenance_signer_fails_closed_on_empty_key() {
@@ -2900,5 +3306,354 @@ mod tests {
             "with no shutdown channel the loop must keep probing until aborted"
         );
         handle.abort();
+    }
+    // ── MIK-7212 OBS.1: the observation record on the stdio path ───────────
+    //
+    // Both record sites live in the HTTP handler (`router/handlers.rs:716` for
+    // the revision, `:990` for the tools/list surface). `dispatch_single` is
+    // what the stdio read loop calls and it passes neither, so a stdio session
+    // is observed by nothing. This module pins that gap as a failing assertion
+    // rather than describing it in prose: a criterion nobody can run is a
+    // criterion nobody checks.
+    //
+    // RED ON ARRIVAL, deliberately. The repair is to emit the record from a
+    // place both dispatchers reach; adding the emit is not this change's job.
+    mod stdio_observation {
+        use super::*;
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+        use tracing::field::{Field, Visit};
+        use tracing_subscriber::Registry;
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
+        type Record = HashMap<String, String>;
+
+        #[derive(Default)]
+        struct Fields(Record);
+
+        impl Visit for Fields {
+            fn record_str(&mut self, field: &Field, value: &str) {
+                self.0.insert(field.name().to_string(), value.to_string());
+            }
+
+            fn record_bool(&mut self, field: &Field, value: bool) {
+                self.0.insert(field.name().to_string(), value.to_string());
+            }
+
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                self.0
+                    .insert(field.name().to_string(), format!("{value:?}"));
+            }
+        }
+
+        struct Collector(Arc<Mutex<Vec<Record>>>);
+
+        impl<S: tracing::Subscriber> Layer<S> for Collector {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                if event.metadata().target() != "mcp_gateway::observed" {
+                    return;
+                }
+                let mut fields = Fields::default();
+                event.record(&mut fields);
+                self.0.lock().expect("collector lock").push(fields.0);
+            }
+        }
+
+        /// A field value with any `Debug` quoting removed, so a record written
+        /// through `record_str` and one written through `record_debug` compare
+        /// the same. The test is about which revision was observed, not about
+        /// which `Visit` method the emit site happened to reach.
+        fn value<'a>(record: &'a Record, name: &str) -> &'a str {
+            record.get(name).map_or("", |v| v.trim_matches('"'))
+        }
+
+        /// Runs one request through the real stdio dispatcher under a scoped
+        /// subscriber and returns every `mcp_gateway::observed` record it
+        /// emitted.
+        ///
+        /// Scoped, not global: `with_default` is thread-local and a
+        /// current-thread runtime polls on this thread, so the capture needs no
+        /// process-wide lock and cannot collide with a sibling test.
+        fn records_for(request: &serde_json::Value) -> Vec<Record> {
+            records_for_session("stdio-session", std::slice::from_ref(request))
+        }
+
+        /// Runs a SEQUENCE of requests through the real stdio dispatcher on one
+        /// session id and returns the records emitted by the LAST one.
+        ///
+        /// A session-scoped fact cannot be observed by a single-request test: the
+        /// handshake and the request that reports it are two different messages.
+        /// The session id is a parameter because the revision store is
+        /// process-wide, so two tests sharing a literal would observe each
+        /// other's handshake.
+        fn records_for_session(session_id: &str, requests: &[serde_json::Value]) -> Vec<Record> {
+            // `tracing` caches each callsite's interest process-wide. A sibling
+            // test that reaches the emit site while no subscriber is installed
+            // caches `never`, and every later capture on every thread is then
+            // skipped -- measured at 2 failures in 8 full-suite runs before this
+            // line existed. A global subscriber that is interested keeps the
+            // cached interest at `sometimes`, so the thread-local subscriber
+            // below decides each event. Interest, not delivery: this one
+            // discards, `with_default` still owns what the test sees.
+            static INTEREST: std::sync::Once = std::sync::Once::new();
+            INTEREST.call_once(|| {
+                let _ = tracing::subscriber::set_global_default(
+                    Registry::default().with(tracing::level_filters::LevelFilter::DEBUG),
+                );
+            });
+
+            let captured = Arc::new(Mutex::new(Vec::new()));
+            let subscriber = Registry::default()
+                .with(Collector(Arc::clone(&captured)))
+                .with(tracing::level_filters::LevelFilter::DEBUG);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a current-thread runtime");
+            tracing::subscriber::with_default(subscriber, || {
+                runtime.block_on(async {
+                    let meta = test_meta_mcp();
+                    for request in requests {
+                        // Cleared per message: the caller asked for the LAST
+                        // request's records, and a test asserting "the record"
+                        // must not be handed the handshake's as well.
+                        captured.lock().expect("collector lock").clear();
+                        Gateway::dispatch_single(
+                            &meta,
+                            &test_tool_policy(),
+                            &test_mtls_policy(),
+                            request,
+                            session_id,
+                        )
+                        .await;
+                    }
+                });
+            });
+            captured.lock().expect("collector lock").clone()
+        }
+
+        // The capture's own proof. Without it, "no records" is
+        // indistinguishable from "the collector never saw anything", and the
+        // red row below would be pinning a broken fixture instead of a real
+        // gap. Emits the same target the handler emits and asserts it lands.
+        #[test]
+        fn the_capture_sees_a_record_emitted_under_it() {
+            let captured = Arc::new(Mutex::new(Vec::new()));
+            let subscriber = Registry::default()
+                .with(Collector(Arc::clone(&captured)))
+                .with(tracing::level_filters::LevelFilter::DEBUG);
+            tracing::subscriber::with_default(subscriber, || {
+                tracing::info!(
+                    target: "mcp_gateway::observed",
+                    protocol_revision = "2026-07-28",
+                    revision_source = "_meta",
+                    "protocol revision observed"
+                );
+            });
+
+            let records = captured.lock().expect("collector lock").clone();
+            let record = records
+                .iter()
+                .find(|record| record.contains_key("protocol_revision"))
+                .expect("the collector must see a record emitted in its scope");
+            assert_eq!(value(record, "protocol_revision"), "2026-07-28");
+            assert_eq!(value(record, "revision_source"), "_meta");
+        }
+
+        // OBS.1, row 1. A modern stdio request carries its revision in `_meta`,
+        // so the record must name both the revision and the place it came from.
+        // `revision_source` has four values -- `_meta`, `header`, `handshake`,
+        // `none` (`protocol::meta::classify_and_observe`) -- and stdio has no
+        // headers, so `_meta` is the only one a well-formed modern stdio
+        // request can produce.
+        #[test]
+        fn ac_obs_1_stdio_records_the_revision_and_that_meta_carried_it() {
+            let records = records_for(&json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "ping",
+                "params": {
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {}
+                    }
+                }
+            }));
+
+            let revision = records
+                .iter()
+                .find(|record| record.contains_key("protocol_revision"))
+                .unwrap_or_else(|| {
+                    // Two different defects reach this line and the message has to
+                    // tell them apart: an empty capture is the tracing harness never
+                    // delivering, a non-empty one without the key is the record site
+                    // itself omitting the field or the dispatcher returning early.
+                    let keys: Vec<Vec<&String>> = records
+                        .iter()
+                        .map(|record| record.keys().collect())
+                        .collect();
+                    panic!(
+                        "a stdio request must be observed: {} record(s) captured, \
+                         keys {:?}. Empty => the tracing capture never delivered; \
+                         non-empty => the record site ran without `protocol_revision`",
+                        records.len(),
+                        keys,
+                    )
+                });
+            assert_eq!(
+                value(revision, "protocol_revision"),
+                "2026-07-28",
+                "the record must carry the revision the request declared"
+            );
+            assert_eq!(
+                value(revision, "revision_source"),
+                "_meta",
+                "stdio has no headers, so a modern request's revision can only \
+                 have come from `_meta`"
+            );
+        }
+
+        /// The record a two-message session must produce, or a panic naming
+        /// which of the two defects produced no record at all.
+        fn revision_record_after(session_id: &str, requested: &str) -> Record {
+            let records = records_for_session(
+                session_id,
+                &[
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": requested,
+                            "clientInfo": {"name": "row-20", "version": "0"},
+                            "capabilities": {}
+                        }
+                    }),
+                    // Legacy shape on purpose: no `_meta`, and stdio has no
+                    // header, so the session is the ONLY place the revision can
+                    // come from. A modern fixture would pass without the store.
+                    json!({"jsonrpc": "2.0", "id": 2, "method": "ping", "params": {}}),
+                ],
+            );
+            records
+                .iter()
+                .find(|record| record.contains_key("protocol_revision"))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "the request after `initialize` must be observed: {} record(s) captured",
+                        records.len()
+                    )
+                })
+                .clone()
+        }
+
+        // OBS.1, row 20. A stdio session settles its revision at `initialize`
+        // and every later request is served under it. The record must say so,
+        // and must say where it learned it -- `handshake`, the fourth
+        // `revision_source` value, decided in the design note rather than
+        // invented here.
+        #[test]
+        fn ac_obs_1_stdio_records_the_revision_the_handshake_negotiated() {
+            let record = revision_record_after("stdio-row-20", "2025-06-18");
+            assert_eq!(
+                value(&record, "protocol_revision"),
+                "2025-06-18",
+                "a request after the handshake must carry the negotiated revision, \
+                 not `absent`"
+            );
+            assert_eq!(
+                value(&record, "revision_source"),
+                "handshake",
+                "the revision came from the session's handshake, and the record \
+                 must name that source rather than leaving it `none`"
+            );
+        }
+
+        // OBS.1, row 21. Ask and answer diverge whenever the ask is
+        // unsupported: `negotiate_version` falls back to `PROTOCOL_VERSION`.
+        // The record reports what the server ANSWERED. Recording the ask would
+        // be cluster G row 2's defect again -- a record asserting one thing
+        // while the code resolved another.
+        #[test]
+        fn ac_obs_1_stdio_records_the_answer_not_the_ask() {
+            let record = revision_record_after("stdio-row-21", "2019-01-01");
+            assert_eq!(
+                value(&record, "protocol_revision"),
+                crate::protocol::PROTOCOL_VERSION,
+                "an unsupported request is answered with the fallback revision, \
+                 and the record must carry the answer"
+            );
+            assert_ne!(
+                value(&record, "protocol_revision"),
+                "2019-01-01",
+                "the client's ask is not the session's revision"
+            );
+        }
+
+        // OBS.1 / MRTR, the stdio retry gap -- NOT closed by this change and
+        // deliberately left red rather than pinned as correct. See
+        // `docs/design/2026-09-02-cluster-g-stdio-dispatch-parity.md` §P3,
+        // "`NO_RETRY` on stdio -- declared OUT, with something watching it":
+        // closing it needs `RetryFields` built at the convergence point and
+        // malformed retry fields refused pre-dispatch on both transports, which
+        // is its own change with its own test rows.
+        #[test]
+        #[ignore = "stdio hardcodes `retry: &NO_RETRY` (server/mod.rs); out of scope for cluster G, watched here so the defect is not pinned as correct"]
+        fn stdio_should_present_a_retry_when_the_context_declares_one() {
+            let source = include_str!("mod.rs");
+            // Split so this assertion is not itself the occurrence it looks
+            // for: a watcher that can never go green watches nothing.
+            let hardcoded = concat!("retry: &", "NO_RETRY");
+            assert!(
+                !source.contains(hardcoded),
+                "the stdio context must build its retry fields at the convergence \
+                 point instead of hardcoding an absent retry"
+            );
+        }
+    }
+
+    /// GH475.CFG.5 + CFG.5b — the operator's `error_budget:` section reaches the
+    /// running meta-MCP budgets. Deliberately never calls either setter: the
+    /// point is that the boot path calls them, and the two setters are separate,
+    /// so the capability half is asserted independently of the backend half.
+    #[tokio::test]
+    async fn gh475_cfg_5_error_budget_section_reaches_running_meta_mcp() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        std::fs::write(
+            &path,
+            "error_budget:\n  threshold: 0.25\n  window_size: 40\n  window_duration: 30s\n  \
+             min_samples: 4\n  capability:\n    threshold: 0.35\n    window_size: 12\n    \
+             window_duration: 90s\n    min_samples: 2\n    cooldown: 45s\n",
+        )
+        .expect("write config");
+        let config = Config::load(Some(&path)).expect("configured error_budget must load");
+
+        let gateway = Gateway::new(config).await.unwrap();
+        let built = gateway.build_meta_mcp().await.unwrap();
+
+        let backend = built.meta_mcp.error_budget_config.read().clone();
+        assert!(
+            (backend.threshold - 0.25).abs() < f64::EPSILON,
+            "backend threshold must come from the config, got {}",
+            backend.threshold
+        );
+        assert_eq!(backend.window_size, 40);
+        assert_eq!(backend.window_duration, std::time::Duration::from_secs(30));
+        assert_eq!(backend.min_samples, 4);
+
+        let capability = built.meta_mcp.capability_budget_config.read().clone();
+        assert!(
+            (capability.threshold - 0.35).abs() < f64::EPSILON,
+            "capability threshold must come from the config, got {}",
+            capability.threshold
+        );
+        assert_eq!(capability.window_size, 12);
+        assert_eq!(
+            capability.window_duration,
+            std::time::Duration::from_secs(90)
+        );
+        assert_eq!(capability.min_samples, 2);
+        assert_eq!(capability.cooldown, std::time::Duration::from_secs(45));
     }
 }

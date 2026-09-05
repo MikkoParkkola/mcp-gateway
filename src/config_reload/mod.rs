@@ -20,7 +20,7 @@
 //! ```no_run
 //! use std::{path::PathBuf, sync::Arc};
 //! use tokio::sync::broadcast;
-//! use mcp_gateway::{config::Config, config_reload::{ConfigWatcher, LiveConfig}};
+//! use mcp_gateway::{config::{Config, LiveEnv}, config_reload::{ConfigWatcher, LiveConfig}};
 //! use mcp_gateway::backend::BackendRegistry;
 //!
 //! # tokio_test::block_on(async {
@@ -28,12 +28,16 @@
 //! let config = Config::default();
 //! let live = Arc::new(LiveConfig::new(config.clone()));
 //! let registry = Arc::new(BackendRegistry::new());
+//! // The overlay and the paths startup actually opened; `default` is the
+//! // empty one, which is what a gateway started without env files carries.
+//! let env = Arc::new(LiveEnv::default());
 //!
 //! let _watcher = ConfigWatcher::start(
 //!     PathBuf::from("config.yaml"),
 //!     live,
 //!     registry,
 //!     &config,
+//!     env,
 //!     shutdown_tx.subscribe(),
 //! );
 //! # });
@@ -53,7 +57,9 @@ use tracing::{info, warn};
 
 use crate::Result;
 use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
-use crate::config::{BackendConfig, Config, RuntimeConfig, ServerConfig};
+use crate::config::{
+    BackendConfig, Config, EnvOverlay, LiveEnv, ResolvedEnvFiles, RuntimeConfig, ServerConfig,
+};
 
 // ============================================================================
 // Public types
@@ -129,6 +135,13 @@ pub struct ReloadOutcome {
     /// Stable machine-readable reason for `restart_required`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub restart_reason: Option<&'static str>,
+    /// The fields still awaiting a restart, named rather than only summarised.
+    ///
+    /// `changes` already carries them in prose; a caller that has to parse a
+    /// sentence to find out whether `HOME` moved is a caller that will stop
+    /// checking.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pending_restart_fields: Vec<String>,
 }
 
 impl ConfigPatch {
@@ -204,6 +217,7 @@ impl ConfigPatch {
             changes: self.summary(),
             restart_required: self.restart_required(),
             restart_reason: self.restart_reason(),
+            pending_restart_fields: Vec::new(),
         }
     }
 }
@@ -216,6 +230,7 @@ impl ReloadOutcome {
             changes: NO_CHANGES_SUMMARY.to_string(),
             restart_required: false,
             restart_reason: None,
+            pending_restart_fields: Vec::new(),
         }
     }
 }
@@ -377,8 +392,10 @@ mod restart_required_tests {
                 changes: "auth.enabled".to_string(),
                 restart_required: false,
                 restart_reason: None,
+                pending_restart_fields: Vec::new(),
             },
             &live,
+            Vec::new(),
         );
         assert!(
             warned.restart_required,
@@ -400,8 +417,10 @@ mod restart_required_tests {
                 changes: "auth.enabled".to_string(),
                 restart_required: false,
                 restart_reason: None,
+                pending_restart_fields: Vec::new(),
             },
             &local,
+            Vec::new(),
         );
         assert!(
             !quiet.changes.contains("would not start"),
@@ -603,6 +622,7 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
         "marketplace" => marketplace,
         "streaming" => streaming,
         "failsafe" => failsafe,
+        "error_budget" => error_budget,
         "cache" => cache,
         "runtime" => runtime,
         "cost_governance" => cost_governance,
@@ -675,6 +695,10 @@ struct MetaFields {
     meta_mcp: String,
     streaming: String,
     failsafe: String,
+    /// Error-budget thresholds (GH #475). Read once when the meta-MCP server
+    /// is built, so an edit here is detected and reported as restart-required
+    /// rather than silently ignored.
+    error_budget: String,
     capabilities: String,
     cache: String,
     playbooks: String,
@@ -711,6 +735,7 @@ impl MetaFields {
             meta_mcp: canonical_json(&c.meta_mcp),
             streaming: canonical_json(&c.streaming),
             failsafe: canonical_json(&c.failsafe),
+            error_budget: canonical_json(&c.error_budget),
             capabilities: canonical_json(&c.capabilities),
             cache: canonical_json(&c.cache),
             playbooks: canonical_json(&c.playbooks),
@@ -922,26 +947,6 @@ enum ReloadTrigger {
     EnvFile(PathBuf),
 }
 
-/// Expand a leading `~` to the current user's home directory.
-///
-/// Returns the path unchanged if it does not start with `~` or if the home
-/// directory cannot be determined.
-fn expand_tilde(path_str: &str) -> PathBuf {
-    if path_str.starts_with('~')
-        && let Some(home) = dirs::home_dir()
-    {
-        return PathBuf::from(path_str.replacen('~', &home.display().to_string(), 1));
-    }
-    PathBuf::from(path_str)
-}
-
-/// Resolve a list of raw env-file path strings (supports `~`) into
-/// canonical [`PathBuf`]s, deduplicating by parent directory while
-/// preserving the full path for event filtering.
-fn resolve_env_file_paths(raw: &[String]) -> Vec<PathBuf> {
-    raw.iter().map(|s| expand_tilde(s)).collect()
-}
-
 /// Returns `true` for create/modify events on the watched config file.
 fn is_config_event(event: &Event, config_paths: &[PathBuf]) -> bool {
     matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
@@ -1003,13 +1008,20 @@ impl ConfigWatcher {
         live_config: Arc<LiveConfig>,
         registry: Arc<BackendRegistry>,
         initial_config: &Config,
+        env: Arc<LiveEnv>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<Self> {
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(32);
 
         let config_path = absolute_watch_path(config_path);
-        let env_file_paths: Vec<PathBuf> = resolve_env_file_paths(&initial_config.env_files)
-            .into_iter()
+        // The paths startup recorded, never `initial_config.env_files`: a `~`
+        // entry resolved once, and resolving the spelling again could watch a
+        // different file than the one the gateway reads.
+        let env_file_paths: Vec<PathBuf> = env
+            .env_paths()
+            .as_paths()
+            .iter()
+            .cloned()
             .map(absolute_watch_path)
             .collect();
 
@@ -1024,6 +1036,7 @@ impl ConfigWatcher {
             registry,
             failsafe_cfg,
             cache_ttl,
+            env,
             event_rx,
             shutdown_rx,
         );
@@ -1127,6 +1140,7 @@ impl ConfigWatcher {
         registry: Arc<BackendRegistry>,
         failsafe_cfg: crate::config::FailsafeConfig,
         cache_ttl: Duration,
+        env: Arc<LiveEnv>,
         mut event_rx: tokio::sync::mpsc::Receiver<ReloadTrigger>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) {
@@ -1143,7 +1157,8 @@ impl ConfigWatcher {
             // points: an edit that moved the lock here alone would not have
             // failed a single test.
             let ctx =
-                ReloadContext::new(config_path, live_config, registry, failsafe_cfg, cache_ttl);
+                ReloadContext::new(config_path, live_config, registry, failsafe_cfg, cache_ttl)
+                    .with_env(env);
 
             loop {
                 tokio::select! {
@@ -1230,20 +1245,112 @@ fn log_reload_trigger(trigger: &ReloadTrigger) {
     }
 }
 
+/// A candidate config, evaluated against the recorded env files.
+struct EvaluatedReload {
+    config: Config,
+    /// May be empty: the env files can change while the config file does not.
+    patch: ConfigPatch,
+    overlay: Arc<EnvOverlay>,
+    /// Every `env:NAME` the config references, resolved or not.
+    secret_refs: std::collections::BTreeSet<String>,
+}
+
 fn load_config_patch(
     config_path: &std::path::Path,
     live_config: &Arc<LiveConfig>,
-) -> std::result::Result<Option<(Config, ConfigPatch)>, String> {
+    env: &LiveEnv,
+) -> std::result::Result<EvaluatedReload, String> {
     let old_config = live_config.get();
-    let new_config =
-        Config::load(Some(config_path)).map_err(|e| format!("Failed to parse config: {e}"))?;
-    let patch = compute_diff(&old_config, &new_config);
+    // The recorded paths, never `new_config.env_files`: `~` resolved once at
+    // startup, and resolving the spelling again could open a different file.
+    // A malformed line is an error here rather than a warning, so a reload
+    // against a half-read env file is refused instead of published.
+    let evaluated = Config::load_with_overlay(Some(config_path), env.env_paths())
+        .map_err(|e| format!("Failed to parse config: {e}"))?;
+    let patch = compute_diff(&old_config, &evaluated.config);
 
-    if patch.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some((new_config, patch)))
+    Ok(EvaluatedReload {
+        config: evaluated.config,
+        patch,
+        overlay: evaluated.overlay,
+        secret_refs: evaluated.secret_refs,
+    })
+}
+
+/// Startup-only environment keys no config field names.
+///
+/// The attestation signer is built once, during startup, straight off the
+/// overlay — these names appear in no config file, so a rotation is invisible
+/// both to the config diff and to the config's own `env:` references.
+const IMPLICIT_STARTUP_ENV_KEYS: &[&str] = &[
+    crate::attestation::wiring::ATTESTATION_MODE_ENV,
+    crate::attestation::wiring::ATTESTATION_SIGNING_KEY_ENV,
+    crate::attestation::wiring::ATTESTATION_KEY_ID_ENV,
+];
+
+/// Startup-only environment keys a restart would read differently.
+///
+/// Two kinds, and neither is visible in the config diff:
+///
+/// * a rotated `env:NAME` secret. The holder that consumed it — a
+///   `ResolvedAuthConfig`, an agent's HS256 key — is built once at startup and
+///   nothing rebuilds it, so the running process keeps the old value.
+/// * a `HOME` that no longer resolves where it did at startup, when an env-file
+///   entry was spelled with `~`. A restart resolves that entry against the new
+///   home and opens a different file.
+///
+/// The `HOME` rule is deliberately conservative: any assignment of `HOME` by
+/// either run's env files, or any change in the value they leave standing, is
+/// reported. The notice is never absent when a restart would read different
+/// files, and it does not clear: a config whose env files assign `HOME` beside
+/// a `~` entry reports `HOME` on every reload, and restarting does not settle
+/// it, because the next startup's env files assign it again. It says a restart
+/// *could* read different files, never that one is outstanding.
+///
+/// It has to be, because the question the rule is really answering — would a
+/// restart open different files than startup did — cannot be answered from
+/// values. `~` in entry N is expanded against the `HOME` in force at THAT point
+/// in the sequence (`Config::evaluate`), so an env file can move where a later
+/// entry is read while a file after it restores the final value, leaving both
+/// runs equal on every value comparison. Answering exactly would mean expanding
+/// `~` a second time, which the design forbids. Both runs' assignments count:
+/// deleting the move leaves nothing to notice on the reload side, and the
+/// restored value can equal the process environment's, so only startup's own
+/// assignment records that the expansion base was ever moved.
+///
+/// The accepted cost is a notice that fires when nothing moved — re-stating an
+/// unchanged `HOME` beside a `~` entry (ENVFILE.19g). Reordering is not this
+/// rule's to catch: an edit to the `env_files` list is reported as `env_files`.
+///
+/// Names only. The values are secrets and a reload report is not a place to
+/// print one.
+fn changed_startup_env_keys(env: &LiveEnv, evaluated: &EvaluatedReload) -> Vec<String> {
+    let startup = env.startup();
+    let keys: std::collections::BTreeSet<String> = evaluated
+        .secret_refs
+        .iter()
+        .map(String::as_str)
+        .chain(IMPLICIT_STARTUP_ENV_KEYS.iter().copied())
+        .filter(|name| startup.resolve(name) != evaluated.overlay.resolve(name))
+        .map(ToString::to_string)
+        .collect();
+    let mut keys: Vec<String> = keys.into_iter().collect();
+    // A `~` entry is expanded against the `HOME` in force AT THAT POINT in the
+    // sequence (`Config::evaluate`), not the one left standing at the end, so
+    // an env file can move where a LATER entry reads while the final value is
+    // restored and compares equal (ENVFILE.19i). Comparing values alone cannot
+    // see that, and neither can the reload overlay alone: deleting the move
+    // leaves nothing there to notice, and the value it restored may be the
+    // process environment's own (ENVFILE.19j). Either run's assignment counts,
+    // so the notice never clears for such a config — see the fn doc.
+    if env.env_paths().has_tilde_entry()
+        && (startup.assigns("HOME")
+            || evaluated.overlay.assigns("HOME")
+            || startup.resolve("HOME") != evaluated.overlay.resolve("HOME"))
+    {
+        keys.push("HOME".to_string());
     }
+    keys
 }
 
 // ============================================================================
@@ -1266,6 +1373,12 @@ pub struct ReloadContext {
     pub failsafe_config: crate::config::FailsafeConfig,
     /// Cache TTL forwarded from startup config.
     pub cache_ttl: Duration,
+    /// The environment in force, and the env-file paths startup recorded.
+    ///
+    /// A reload re-reads those paths; it never resolves `config.env_files`
+    /// again, because `~` resolved once, at startup, and resolving it a second
+    /// time can silently open a different file.
+    env: Arc<LiveEnv>,
 }
 
 impl ReloadContext {
@@ -1284,7 +1397,37 @@ impl ReloadContext {
             registry,
             failsafe_config,
             cache_ttl,
+            // No env files until told otherwise: every lookup then falls
+            // through to the process environment, which is what a context
+            // built without one has always done.
+            env: Arc::new(LiveEnv::new(
+                Arc::new(EnvOverlay::none()),
+                ResolvedEnvFiles::default(),
+            )),
         }
+    }
+
+    /// Attach the environment startup published.
+    ///
+    /// Consuming builder rather than a constructor argument: every existing
+    /// call site keeps working, and the one that has a `LiveEnv` says so.
+    #[must_use]
+    pub fn with_env(mut self, env: Arc<LiveEnv>) -> Self {
+        self.env = env;
+        self
+    }
+
+    /// The env-file paths a reload re-reads.
+    #[must_use]
+    pub fn env_paths(&self) -> &ResolvedEnvFiles {
+        self.env.env_paths()
+    }
+
+    /// The live environment, for callers resolving a value the way the gateway
+    /// does.
+    #[must_use]
+    pub fn live_env(&self) -> &Arc<LiveEnv> {
+        &self.env
     }
 
     /// Reload the config file and apply the diff.
@@ -1439,16 +1582,31 @@ impl ReloadContext {
     /// The reload transaction itself. The caller must already hold the reload
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
-        let Some((new_config, patch)) = load_config_patch(&self.config_path, &self.live_config)?
-        else {
+        let evaluated = load_config_patch(&self.config_path, &self.live_config, &self.env)?;
+        // Measured against the overlay startup captured, so a requirement stays
+        // reported on every reload until the process actually restarts.
+        let env_restart_keys = changed_startup_env_keys(&self.env, &evaluated);
+        let EvaluatedReload {
+            config: new_config,
+            patch,
+            overlay,
+            ..
+        } = evaluated;
+
+        if patch.is_empty() {
+            // The env files can rotate under an unchanged config file, so the
+            // overlay is published even here — a resolver reading the old one
+            // would serve a value the operator has already replaced.
+            self.env.set(overlay);
             // No difference from the published snapshot does not mean nothing is
             // outstanding: a restart-only edit was published on an earlier
             // reload and the running process still has not applied it.
             return Ok(with_pending_restart(
                 ReloadOutcome::no_changes(),
                 &self.live_config,
+                env_restart_keys,
             ));
-        };
+        }
 
         // Before `apply_patch`, which stops and starts backends: a refusal that
         // ran after it could not say nothing was applied. And before the
@@ -1521,9 +1679,16 @@ impl ReloadContext {
             return Err(SHUTDOWN_ABORTED_ERROR.to_string());
         }
 
+        // Published together: a resolver that read the new config against the
+        // old overlay would resolve an `env:` reference the reload just changed.
         self.live_config.set(new_config);
+        self.env.set(overlay);
 
-        Ok(with_pending_restart(outcome, &self.live_config))
+        Ok(with_pending_restart(
+            outcome,
+            &self.live_config,
+            env_restart_keys,
+        ))
     }
 }
 
@@ -1533,12 +1698,24 @@ impl ReloadContext {
 /// alone cannot carry this: publishing a restart-only edit into the snapshot
 /// removes it from every later diff, so the operator who enables authentication
 /// and is distracted would never be told again.
-fn with_pending_restart(mut outcome: ReloadOutcome, live: &LiveConfig) -> ReloadOutcome {
-    let pending = live.pending_restart_fields();
+fn with_pending_restart(
+    mut outcome: ReloadOutcome,
+    live: &LiveConfig,
+    env_keys: Vec<String>,
+) -> ReloadOutcome {
+    let mut pending: Vec<String> = live
+        .pending_restart_fields()
+        .iter()
+        .map(|field| (*field).to_string())
+        .collect();
+    pending.extend(env_keys);
     if pending.is_empty() {
         return outcome;
     }
     outcome.restart_required = true;
+    outcome
+        .pending_restart_fields
+        .extend(pending.iter().cloned());
     // Never overwrite an existing reason: it is documented as stable and
     // machine-readable, so a consumer keying on `server_address_changed` must
     // keep seeing it. Only fill it in when the patch had none.

@@ -68,8 +68,27 @@ jobs:
       - name: Run CWE-532 leak lint
         run: python3 scripts/dev/cwe532-leak-lint.py src crates
 
+  # Third release backstop, alongside security-gate and secret-leak-lint: the
+  # release-criteria ledger's header counts must match its rows. The ledger
+  # (docs/requirements/RELEASE-4.0.0-criteria-status.md) is what "is this
+  # release ready" is read from, and its summary line has drifted from its own
+  # table before — a transcribed count survives edits that a derived one would
+  # not. ci.yml runs the same script report-only on every PR, because the
+  # ledger is edited mid-flight; here it blocks, because a tag is the point
+  # after which a wrong count is a published claim. `verify` needs: this gate,
+  # and every publishing job is transitively needs:-ed to `verify`.
+  release-criteria:
+    name: Release criteria ledger (header matches rows)
+    runs-on: avrea-ubuntu-latest-4-vcpu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test the counter (fail on parser regression)
+        run: python3 scripts/release/test_count_release_criteria.py
+      - name: Check the release-criteria ledger header against its rows
+        run: python3 scripts/release/count-release-criteria.py --check
+
   verify:
-    needs: [security-gate, secret-leak-lint]
+    needs: [security-gate, secret-leak-lint, release-criteria]
     runs-on: avrea-ubuntu-latest-4-vcpu
 
     steps:

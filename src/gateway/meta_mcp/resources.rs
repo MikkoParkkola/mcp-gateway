@@ -32,6 +32,23 @@ use crate::security::sanitize_resource_metadata;
 use super::super::meta_mcp_helpers::{extract_nested_optional_str, missing_parameter_response};
 use super::MetaMcp;
 
+/// JSON-RPC 2.0 standard "Invalid params" code.
+const INVALID_PARAMS: i32 = -32602;
+
+/// Error response for a URI no backend owns, shared by every resource route.
+///
+/// The 2026 protocol classifies an unresolvable resource URI as bad input, so
+/// this returns the standard JSON-RPC `-32602` (invalid params) rather than the
+/// legacy MCP `-32002`, which sits in the implementation-defined server band and
+/// carries no meaning to a spec-conformant client (MIK-7272.ERROR.2).
+fn resource_not_found(id: RequestId, uri: &str) -> JsonRpcResponse {
+    JsonRpcResponse::error(
+        Some(id),
+        INVALID_PARAMS,
+        format!("No backend found for resource URI: {uri}"),
+    )
+}
+
 // ============================================================================
 // Gateway-owned guide resources (served inline — no backend required)
 // ============================================================================
@@ -289,11 +306,7 @@ impl MetaMcp {
 
         // Find which backend owns this resource URI
         let Some(backend) = self.find_resource_owner(uri).await else {
-            return JsonRpcResponse::error(
-                Some(id),
-                -32002,
-                format!("No backend found for resource URI: {uri}"),
-            );
+            return resource_not_found(id, uri);
         };
 
         // INV-2 (ADR-008): on a multi-user gateway, never forward a gateway-held
@@ -364,11 +377,7 @@ impl MetaMcp {
         };
 
         let Some(backend) = self.find_resource_owner(uri).await else {
-            return JsonRpcResponse::error(
-                Some(id),
-                -32002,
-                format!("No backend found for resource URI: {uri}"),
-            );
+            return resource_not_found(id, uri);
         };
 
         // INV-2 (ADR-008): fail closed on a multi-user gateway — see handle_resources_read.
@@ -402,11 +411,7 @@ impl MetaMcp {
         };
 
         let Some(backend) = self.find_resource_owner(uri).await else {
-            return JsonRpcResponse::error(
-                Some(id),
-                -32002,
-                format!("No backend found for resource URI: {uri}"),
-            );
+            return resource_not_found(id, uri);
         };
 
         // INV-2 (ADR-008): fail closed on a multi-user gateway — see handle_resources_read.

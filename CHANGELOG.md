@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The kill-switch error budgets are tunable from the config file** (GH #475).
+  An `error_budget:` section sets the backend failure-rate `threshold`,
+  `window_size`, `window_duration` and `min_samples`, and an
+  `error_budget.capability:` sub-section sets the same four plus a recovery
+  `cooldown` for the per-capability budget. Every key is optional and an absent
+  key keeps the value that has been shipping, so a config without the section
+  behaves exactly as before. Values are validated at load and refused with the
+  offending field named rather than clamped: a threshold outside `(0.0, 1.0]`
+  (`.nan` included), a window of zero or of more than 100000 calls, a zero
+  `window_duration` or `cooldown`, and a `min_samples` above its own
+  `window_size`, which describes a budget that can never be evaluated. An
+  unknown key at either level is refused too, so a typo is not read as a
+  default. The section is read when the meta-MCP server is built, so an edit to
+  it is reported as restart-required rather than appearing to take effect.
+
 ### Removed
 
 - Removed the ungrounded savings estimates from gateway statistics: the
@@ -25,7 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A backend that would send credentials in cleartext is refused at config load** (code-scanning alerts #90, #91): an enabled backend whose `http_url` or `a2a_url` is `http://` against a host off this machine, and whose configuration is credential-bearing — an `oauth` section (including one with `enabled: false`), identity propagation, secret injection, any static header whatever its name, or userinfo or a query string in the URL — no longer starts the gateway. The predicate is deliberately blunt: a header named `X-Trace-Id` and a query of `?page=2` trip it too, because whether a given header or query carries a secret is not decidable at config load, and a name list would only catch the operators who guessed the same names we did. Such a credential is readable by every host on the path and replayable for as long as it is valid, and a config typo should not be what decides that. Loopback is exempt, decided by the same classifier the Origin gate uses. **Breaking for operators pointing any of that configuration at a plain-`http` internal host**: use TLS, or set `allow_cleartext_credentials: true` on that backend to accept the exposure. The refusal names the backend and never echoes the URL, which is the credential-bearing string.
+- **Destructive meta-tools are refused over stdio** (MIK-7246): `gateway_kill_server` carries `destructiveHint: true`, and the gateway asks the operator to confirm such a call before running it. That ask travels over the elicitation channel, which only the HTTP transport has — stdio speaks to one process over two pipes and can reach nobody. A destructive tool called over stdio is now refused with `-32001` and a message naming the action, rather than executed with a warning. **Breaking for stdio operators who kill backends through the gateway**: reach the management tools over the HTTP listener with a client that answers `elicitation/create`, or change the backend's configuration directly. Neither an unobtainable confirmation nor an operator decline counts against the caller's failure budget — the gate working is not the client misbehaving.
 - **`gateway_search` returns L0 by default** (MIK-7084): tool name, one-line purpose, and score. `detail=l1` adds signature, when-to-use, and required params; `detail=l2` returns the full `input_schema`. `include_schema=true` still maps to L2 and is deprecated, not removed. Ranking diagnostics (`ranking` reasons and signals) are omitted unless `explain=true`. `gateway_search_tools` also omits `ranking` unless `explain=true`.
+- **`meta_mcp.exposed_meta_tools` is now enforced** (GH issue 449): this config field was documented as an allow-list of meta-tools to expose but had no effect outside tests. It now restricts both `tools/list` and `tools/call` for every meta-tool built-in, including the two Code Mode tools (`gateway_search`, `gateway_execute`), which were an unlisted escape hatch — reaching every backend tool regardless of the allow-list. **Breaking for operators who already set this field**: a name that was accepted but ignored now actually removes that tool from the surface. An allow-list that omits `gateway_invoke` is logged as a warning, since it leaves backend tools unreachable through the gateway. `meta_mcp.surfaced_tools` (individually surfaced backend tools) is unaffected.
+
 ### Fixed
 
 - **`prompts/list` and `resources/list` no longer stall on a slow or hung
@@ -56,6 +77,196 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Glob L0 ranking drops disabled tools** and still assigns a score, so
   search results do not advertise tools the operator turned off.
   ([#470](https://github.com/MikkoParkkola/mcp-gateway/pull/470))
+
+## [4.0.0] - 2026-08-29
+
+### Changed
+
+- **OAuth credentials are keyed by the authorization server that granted
+  them.** MCP 2026-07-28 requires a client to key persisted credentials by the
+  issuer identifier, to not reuse them with a different authorization server,
+  and to re-register when that server changes. Tokens and dynamically
+  registered client ids were keyed on the backend name alone, so moving a
+  backend to a new authorization server presented it a client id it never
+  issued — surfacing later as a confusing rejection rather than the
+  re-registration it should have been.
+
+  **On upgrade, backends using OAuth re-authenticate once.** Credentials stored
+  by an earlier version carry no issuer and so cannot be attributed to one;
+  they are not served to any. Reading them under the old key would defeat the
+  separation this change exists to enforce, so the gateway re-registers and
+  re-authorizes instead. No configuration change is needed.
+
+### Fixed
+
+- **A throttled backend no longer looks like a failing one.** A rate-limited
+  response counted against the backend error budget, the per-capability budget
+  and the circuit breaker exactly as a `500` did, so a caller fast enough to be
+  throttled could open a circuit on a backend that was answering correctly.
+  `429`, `too many requests`, `rate limit`, `RESOURCE_EXHAUSTED` and `throttled`
+  now record the backend as reachable and contribute no budget sample at all —
+  neither success nor failure, because a throttle says nothing about health.
+  Every exclusion increments `mcp_error_budget_suppressed_total`, so the
+  suppression is visible rather than inferred.
+
+- **A failed config load no longer leaks its env files into the process.**
+  Reading a config file used to apply every `env_files` entry it named to the
+  process environment before validating the file, so a refused reload changed
+  the environment a capability resolved its credentials from and a refused
+  reload was only a partial no-op. Env files now resolve into an overlay that a
+  failed load discards, so the environment is left exactly as the last accepted
+  configuration left it.
+
+  A **malformed** line now fails startup rather than being skipped, naming the
+  file, the line number and the category of fault. The offending line is never
+  echoed, because the offending line is the secret. A `~` in an `env_files`
+  path resolves exactly once, at startup; each file is applied before the next
+  is expanded, so a file that sets `HOME` moves where a later `~` points, and a
+  reload reuses the paths startup recorded rather than resolving them again.
+  Assigning `HOME` in a reloaded env file reports `restart required` instead.
+
+  Capability credentials resolve through that overlay. An `env:` key on a
+  capability used to read the process environment directly, so a value an env
+  file supplied reached a `${VAR}` expansion in the config but not the
+  credential a capability sent upstream. Both now read the same value, and the
+  process environment is still the last place looked.
+
+  `GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_KEY_ID` read the same overlay,
+  under fixed variable names rather than through a `{env.VAR}` reference in
+  configuration. An env file can supply them, and the process environment is
+  still the last place looked.
+
+- **A `{env.VAR}` secret now reads the env-file overlay.** Env files no longer
+  load into the process environment, and secret resolution still read only that
+  environment, so a webhook secret or capability credential written as
+  `{env.VAR}` and supplied by an env file expanded to the empty string. The
+  resolver now consults the overlay first and the process environment after,
+  matching how `env:` credential keys already resolved.
+
+- **A webhook secret that resolves to nothing is refused.** An empty HMAC key is
+  one anyone can compute, so every forged signature verified. An empty resolved
+  secret is now rejected the same way a missing one is, whatever made it empty.
+
+- **The provenance signing key reads the env-file overlay.** Runtime provenance
+  stamping took `GATEWAY_ATTESTATION_SIGNING_KEY` from the process environment, so
+  a key supplied by an env file no longer reached it and the signer stayed
+  uninstalled. The key and its id now resolve through the overlay.
+
+- **A config rewrite no longer persists a resolved secret.** Every
+  read-modify-write path — the admin UI and the CLI commands that edit
+  `gateway.yaml` — used to load the config with `env:` references and `${VAR}`
+  placeholders already resolved, then serialise the result back to disk in
+  plaintext. Those paths now load the file literally: references are preserved
+  as written, and a value an env file or an `MCP_GATEWAY_*` variable supplies
+  never reaches the struct that is written out. A write is still validated,
+  against the env files the config being written names.
+
+- **A reload is no longer refused over a reference the parser would ignore.**
+  Env files are no longer applied to the process, so a `${K}` or `$K` reference
+  to a key another env file defines can no longer expand on a reload, and the
+  gateway refuses the reload rather than silently substituting nothing. That
+  refusal now matches `dotenvy`'s own grammar: an unbraced name ends at the
+  first non-alphanumeric character, a tab before `#` starts a trailing comment,
+  and comments, single-quoted values and escaped `\$` are inert as they always
+  were. Scanning is per logical line, as the parser reads them.
+
+### Added
+
+- **First start after upgrading to 4.0.0 prints what changed underneath it.**
+  The release re-keys OAuth credentials, refuses a malformed `env_files` line at
+  startup instead of ignoring it, stops advertising protocol revision
+  2024-10-07 and stops counting rate limiting against error budgets. Each is
+  announced once, on the first start from a 3.x install; the notice reads no
+  configuration and writes none.
+
+- **MCP protocol revision 2026-07-28, behind `server.modern_protocol`.** The
+  revision removes the `initialize` handshake, protocol sessions and the
+  `Mcp-Session-Id` header, `ping`, `logging/setLevel` and server-initiated
+  requests; it adds `server/discover`, per-request metadata, multi-round-trip
+  requests, required result and cacheability fields, and the standard request
+  headers.
+
+  **The switch is off by default and stays off until the revision is served
+  completely.** With it off, a client asking for 2026-07-28 is refused with
+  `UnsupportedProtocolVersion` — an answer it can act on — rather than served
+  half a revision, where the half that works hides the half that does not.
+  Clients on 2025-11-25 and earlier are unaffected either way, and the gateway
+  serves both generations on one endpoint.
+
+  `server/discover` is answered regardless of the switch, on stdio and
+  Streamable HTTP. It is additive, and it is the only probe that works in both
+  directions once the handshake is gone.
+
+  **With the switch on, a retry reaches one replica.** The consumed-continuation
+  ledger and the mint counter are process-local, and so is the continuation key
+  each process generates at startup: an envelope opens only on the replica that
+  minted it, which is what makes a continuation single-use across replicas
+  without a shared store. The cost is that a retry landing on any other replica
+  is refused, and a restart invalidates the continuations outstanding against
+  the process it replaced. This binds only when `server.modern_protocol` is on;
+  with it off, scale as before.
+
+  **The tasks extension is not implemented.** `io.modelcontextprotocol/tasks` is
+  never advertised, so no client negotiates it. The types in the tree are short
+  of the specification — three statuses of five, two required fields missing, a
+  string where a JSON-RPC error object belongs — and turning the advertisement
+  on before that is fixed would break a client that trusted the identifier.
+  MIK-7311 owns the conformant implementation.
+
+### Changed
+
+- **`2024-10-07` is no longer advertised as a supported protocol version.** It
+  is not a revision the specification has ever defined; it was introduced with
+  the first version-negotiation commit in January and has been offered to every
+  client since. It was inert for negotiation — no conforming client can request
+  a revision that does not exist — but `server/discover` publishes this list as
+  the gateway's own statement of what it speaks, which turns an unused constant
+  into a claim.
+
+- **`gateway_search` no longer emits ranking signals that never vary.** Thirteen
+  of sixteen were the constant `1.0` in every response. The per-tool ranking
+  block falls from 534 to 304 bytes.
+
+### Security
+
+- **Anomaly detection reports when it cannot see, instead of scoring a call
+  neutral.** It was keyed on the session, and a per-request session makes every
+  call look like a first call — scoring 0.5 against a 0.7 threshold, forever.
+  The control kept running and stopped protecting.
+
+- **Per-caller state is reclaimed on a deadline as well as on disconnect.** The
+  disconnect trigger fires on an SSE close or `DELETE /mcp`, neither of which
+  exists in the new revision, so every registered cleanup handler would simply
+  never run.
+
+- **A destructive call that cannot be confirmed is refused on the modern path.**
+  The gate proceeded on a warning when elicitation was unsupported *or there was
+  no session*; with sessions removed, every modern destructive call would take
+  that branch. The legacy path keeps its documented behaviour. The governed set
+  now comes from the `destructiveHint` annotation rather than one hardcoded
+  name.
+
+- **Multi-round-trip continuations are sealed, bound and single-use.** A
+  backend's opaque state is encrypted inside the gateway's own envelope rather
+  than handed to the client, bound to the caller and the original request, and
+  redeemable once.
+
+  **Retry forwarding is not implemented in this release.** The minting,
+  sealing and single-use ledger exist and are tested; unsealing a continuation
+  and forwarding the retry to the backend does not. A well-formed retry is
+  refused with `-32602` and "retry forwarding is not available on this build"
+  rather than being run as a fresh call, because running it fresh would repeat
+  whatever the first attempt already did. MIK-7325 owns the forwarding path.
+
+- **`tools/call` no longer drops a retry's `inputResponses` and
+  `requestState`.** Both were silently discarded, so an elicitation could never
+  complete and the destructive-confirmation gate ran without the answer it
+  exists to collect.
+
+- **Dynamic client registration declares `application_type`, and a returned
+  `iss` is validated before an authorization code is redeemed** (RFC 9207).
+  Persisted credentials gain an issuer-keyed storage key, since a credential is
+  not valid with an authorization server that never issued it.
 
 ## [3.5.0] - 2026-08-28
 
@@ -339,6 +550,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   escape hatch is most often reached from.
 
 ### Fixed
+
+- **A backend that was not listening when the gateway started is no longer
+  invisible for the rest of the process.** Warm-start made one attempt, and a
+  backend that missed it kept an empty tool cache forever. Discovery skips a
+  backend with an empty cache and a semantic query never fills one, so
+  `gateway_search` could not see a backend that `gateway_execute` reached
+  perfectly well. Warm-start now retries on a slow cadence, re-resolving the
+  backend by name each attempt so a config reload is respected.
+
+- **An empty tool list is no longer believed the first time.** A backend that
+  answered with no tools had that emptiness cached like any other answer, so an
+  earlier bounded retry re-read the same cached emptiness within microseconds
+  and never reached the backend again. The cache entry is now invalidated
+  between attempts, so the retry asks the question it was written to ask.
+
+- **A mistyped backend command is reported instead of retried forever.** A
+  spawn failure lost its error kind at the transport boundary, so a command
+  that does not exist looked exactly like a port that was not listening yet —
+  and warm-start respawned it once a minute for the life of the process with
+  nothing saying the configuration was wrong. A missing command and a
+  non-executable file are now permanent failures that stop both retry
+  predicates. HTTP statuses are deliberately left unclassified: this protocol
+  overloads 404 and 400 to mean the session expired, so a status-only
+  classifier would be unsafe.
+
+- **stdio mode has a health loop.** It never had one, so a backend that died
+  while the gateway ran in stdio mode stayed dead until restart. The loop is
+  now shared with the HTTP path. Both background tasks — the reaper and the
+  health loop — are aborted through a guard on every exit path; previously the
+  reaper was aborted only on the EOF path, and a dropped task handle detaches
+  rather than stops, so a host cancelling `run_stdio` left both holding the
+  backend registry alive.
+
+- **Retry backoff is jittered, as it was already documented to be.** The module
+  described full-jitter backoff and slept the plain exponential, so callers
+  backing off from one failure woke together and hit the recovering service as
+  a single burst — precisely the thundering herd the jitter was named for.
+
+- **The Homebrew formula no longer mutates quarantine attributes during
+  install.** It also emits an explicit release version rather than inferring
+  one.
 
 - **A config file reached through a symlink now reloads when its target is
   written.** The watcher followed the path it was given and nothing else, so a

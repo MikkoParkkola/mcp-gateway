@@ -124,8 +124,8 @@ mod tests {
 
     #[test]
     fn negotiate_picks_only_common_version() {
-        let server = vec!["2024-10-07".to_string()];
-        assert_eq!(negotiate_best_version(&server), Some("2024-10-07"));
+        let server = vec!["2024-11-05".to_string()];
+        assert_eq!(negotiate_best_version(&server), Some("2024-11-05"));
     }
 
     #[test]

@@ -397,7 +397,7 @@ fn purge_clears_dynamically_registered_client_on_invalid_client() {
     // longer represents "dynamic" after the provenance fix.
     let dir = tempfile::tempdir().unwrap();
     let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
-    let client = OAuthClient::new(
+    let mut client = OAuthClient::new(
         Client::new(),
         "dyn".to_string(),
         "http://localhost".to_string(),
@@ -409,8 +409,13 @@ fn purge_clears_dynamically_registered_client_on_invalid_client() {
             ..Default::default()
         },
     );
+    // Credentials are keyed by the issuer that granted them, so this client
+    // has to have discovered one before it can find its own on disk. What is
+    // under test here is provenance, not keying.
+    client.auth_metadata = Some(test_auth_metadata("https://as.invalid-test"));
+    let key = storage_key("dyn", "https://as.invalid-test");
     storage
-        .save_client_id("dyn", "http://localhost", "dynamic-id")
+        .save_client_id(&key, "http://localhost", "dynamic-id")
         .unwrap();
     *client.client_id.write() = Some("dynamic-id".to_string());
     *client.client_id_source.write() = Some(ClientIdSource::Registered);
@@ -425,7 +430,7 @@ fn purge_clears_dynamically_registered_client_on_invalid_client() {
         "dynamic client_id must be purged from memory"
     );
     assert_eq!(
-        storage.load_client_id("dyn", "http://localhost"),
+        storage.load_client_id(&key, "http://localhost"),
         None,
         "dynamic client_id file must be deleted"
     );
@@ -439,9 +444,13 @@ fn restore_persisted_client_id_tags_loaded_id_as_registered_and_purgeable() {
     let dir = tempfile::tempdir().unwrap();
     let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
     storage
-        .save_client_id("dyn", "http://localhost", "persisted-dyn-id")
+        .save_client_id(
+            &storage_key("dyn", "https://as.invalid-test"),
+            "http://localhost",
+            "persisted-dyn-id",
+        )
         .unwrap();
-    let client = OAuthClient::new(
+    let mut client = OAuthClient::new(
         Client::new(),
         "dyn".to_string(),
         "http://localhost".to_string(),
@@ -453,6 +462,7 @@ fn restore_persisted_client_id_tags_loaded_id_as_registered_and_purgeable() {
             ..Default::default()
         },
     );
+    client.auth_metadata = Some(test_auth_metadata("https://as.invalid-test"));
     assert!(
         client.client_id.read().is_none(),
         "precondition: no operator-configured client_id"
@@ -735,4 +745,342 @@ fn client_credentials_params_include_resource() {
         Some("https://canonical.example.test/"),
         "client_credentials must send the RFC 8707 resource indicator"
     );
+}
+
+// =========================================================================
+// Credentials are keyed by the issuer that granted them (MCP 2026-07-28)
+// =========================================================================
+
+/// Build a client whose authorization server has already been discovered.
+///
+/// `initialize` is what normally sets `auth_metadata`, and it needs a live
+/// authorization server. These tests are about which key the storage calls
+/// use once discovery has happened, so they set the outcome of discovery
+/// directly rather than standing a server up to produce it.
+fn test_auth_metadata(issuer: &str) -> AuthorizationServerMetadata {
+    serde_json::from_value(serde_json::json!({
+        "issuer": issuer,
+        "authorization_endpoint": format!("{issuer}/authorize"),
+        "token_endpoint": format!("{issuer}/token"),
+    }))
+    .unwrap()
+}
+
+fn client_at_issuer(dir: &std::path::Path, issuer: &str) -> OAuthClient {
+    let storage = Arc::new(TokenStorage::new(dir.to_path_buf()).unwrap());
+    let mut client = OAuthClient::new(
+        Client::new(),
+        "test-backend".to_string(),
+        "https://backend.example.com/mcp".to_string(),
+        vec![],
+        storage,
+        OAuthClientConfig::default(),
+    );
+    client.auth_metadata = Some(test_auth_metadata(issuer));
+    client
+}
+
+#[test]
+fn a_client_id_is_read_back_under_the_issuer_that_registered_it() {
+    // The stable half. Keying must not drift between runs, or the gateway
+    // re-registers on every restart and pops a browser tab each time.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
+    let issuer = "https://auth.example.com";
+
+    let client = client_at_issuer(&dir, issuer);
+    client
+        .storage
+        .save_client_id(
+            &storage_key("test-backend", issuer),
+            "https://backend.example.com/mcp",
+            "cid-from-this-issuer",
+        )
+        .unwrap();
+
+    client.restore_persisted_client_id();
+
+    assert_eq!(
+        client.client_id.read().clone(),
+        Some("cid-from-this-issuer".to_string()),
+        "a registration made against this issuer must be found again"
+    );
+}
+
+#[test]
+fn a_client_id_from_another_issuer_is_not_reused() {
+    // The rule this exists for: a client MUST NOT reuse a credential with a
+    // different authorization server, and MUST re-register when it changes.
+    // Keyed by backend alone, moving a backend to a new authorization server
+    // silently presents a client id that server never issued.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
+
+    let other = client_at_issuer(&dir, "https://auth.example.com");
+    other
+        .storage
+        .save_client_id(
+            &storage_key("test-backend", "https://auth.example.com"),
+            "https://backend.example.com/mcp",
+            "cid-from-the-old-issuer",
+        )
+        .unwrap();
+
+    let client = client_at_issuer(&dir, "https://auth.other-as.test");
+    client.restore_persisted_client_id();
+
+    assert_eq!(
+        client.client_id.read().clone(),
+        None,
+        "the same backend behind a different authorization server must \
+         re-register, not inherit the previous server's client id"
+    );
+}
+
+#[test]
+fn a_client_id_stored_without_an_issuer_is_not_reused() {
+    // Upgrade behaviour, stated so it is a decision rather than a surprise:
+    // a credential written by a version that keyed on the backend alone
+    // cannot be attributed to any issuer, so it is not served to one. The
+    // gateway re-registers, which is what the specification asks for.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
+
+    let client = client_at_issuer(&dir, "https://auth.example.com");
+    client
+        .storage
+        .save_client_id(
+            "test-backend",
+            "https://backend.example.com/mcp",
+            "cid-from-before-the-upgrade",
+        )
+        .unwrap();
+
+    client.restore_persisted_client_id();
+
+    assert_eq!(client.client_id.read().clone(), None);
+}
+
+// =============================================================================
+// Re-initializing onto a different authorization server (gpt-review, v4.0.0)
+// =============================================================================
+
+fn injected_token() -> TokenInfo {
+    TokenInfo::from_response(
+        "token-from-the-previous-issuer".to_string(),
+        Some("Bearer".to_string()),
+        Some("refresh-from-the-previous-issuer".to_string()),
+        Some(3600),
+        None,
+    )
+}
+
+#[test]
+fn a_different_issuer_drops_the_previous_issuers_token_and_registered_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_at_issuer(dir.path(), "https://as-two.invalid-test");
+    *client.current_token.write() = Some(injected_token());
+    *client.client_id.write() = Some("cid-registered-with-as-one".to_string());
+    *client.client_id_source.write() = Some(ClientIdSource::Registered);
+
+    client.drop_credentials_from_other_issuer(Some("https://as-one.invalid-test"));
+
+    assert!(
+        client.current_token.read().is_none(),
+        "a token issued by the previous authorization server must not survive the change"
+    );
+    assert!(
+        client.client_id.read().is_none(),
+        "a client id registered with the previous server must not survive the change"
+    );
+}
+
+#[test]
+fn the_same_issuer_keeps_the_credentials_it_already_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_at_issuer(dir.path(), "https://as-one.invalid-test");
+    *client.current_token.write() = Some(injected_token());
+
+    client.drop_credentials_from_other_issuer(Some("https://as-one.invalid-test"));
+
+    assert!(
+        client.current_token.read().is_some(),
+        "an unchanged issuer must not cost the caller its token"
+    );
+}
+
+#[test]
+fn a_configured_client_id_belongs_to_the_operator_and_survives() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_at_issuer(dir.path(), "https://as-two.invalid-test");
+    *client.client_id.write() = Some("cid-the-operator-configured".to_string());
+    *client.client_id_source.write() = Some(ClientIdSource::Configured);
+
+    client.drop_credentials_from_other_issuer(Some("https://as-one.invalid-test"));
+
+    assert_eq!(
+        client.client_id.read().as_deref(),
+        Some("cid-the-operator-configured"),
+        "a configured client id is not the previous issuer's to take away"
+    );
+}
+
+// =========================================================================
+// Issuer provenance through `initialize`
+// =========================================================================
+
+/// What the protected-resource document says, which is what decides where
+/// `initialize` gets its issuer string from. Three states because there are
+/// three assignment sites, and an `Option` collapses two of them.
+#[derive(Clone)]
+enum ResourceDocument {
+    /// No document at all: the endpoint answers 404.
+    Absent,
+    /// A valid document that names no authorization server.
+    WithoutAuthorizationServer,
+    /// A valid document advertising this authorization server identifier.
+    Advertising(String),
+}
+
+/// Serve both well-known documents from one address: the protected-resource
+/// document described by `resource_document`, and authorization-server
+/// metadata claiming `issuer_claimed`.
+///
+/// Serving address and claimed identity are separate parameters so a test can
+/// make them differ by exactly one character.
+async fn serve_oauth_documents(
+    base: &str,
+    resource_document: ResourceDocument,
+    issuer_claimed: &str,
+) -> String {
+    use axum::{Router, response::IntoResponse, routing::get};
+
+    let addr: std::net::SocketAddr = base.trim_start_matches("http://").parse().unwrap();
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+
+    let as_body = serde_json::json!({
+        "issuer": issuer_claimed,
+        "authorization_endpoint": format!("{issuer_claimed}authorize"),
+        "token_endpoint": format!("{issuer_claimed}token"),
+    });
+    let resource = base.to_string();
+    let prm_body = match resource_document {
+        ResourceDocument::Absent => None,
+        ResourceDocument::WithoutAuthorizationServer => {
+            Some(serde_json::json!({ "resource": resource }))
+        }
+        ResourceDocument::Advertising(auth_server) => Some(
+            serde_json::json!({ "resource": resource, "authorization_servers": [auth_server] }),
+        ),
+    };
+
+    let app = Router::new()
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(move || {
+                let body = as_body.clone();
+                async move { axum::Json(body) }
+            }),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(move || {
+                let body = prm_body.clone();
+                async move {
+                    // No document is the fallback path, not an empty one: an
+                    // empty body would parse into metadata advertising nothing.
+                    body.map_or_else(
+                        || axum::http::StatusCode::NOT_FOUND.into_response(),
+                        |b| axum::Json(b).into_response(),
+                    )
+                }
+            }),
+        );
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    base.to_string()
+}
+
+fn client_for(resource_url: &str, dir: &std::path::Path) -> OAuthClient {
+    OAuthClient::new(
+        Client::new(),
+        "issuer-provenance".to_string(),
+        resource_url.to_string(),
+        vec![],
+        Arc::new(TokenStorage::new(dir.to_path_buf()).unwrap()),
+        OAuthClientConfig::default(),
+    )
+}
+
+async fn free_addr() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    format!("http://{addr}")
+}
+
+/// The comparison arm is only half the control: which arm runs is decided by
+/// three assignments in `initialize`, and a mis-tagged advertised identifier
+/// would leave every metadata test green. Driven end to end from the resource
+/// URL so the classification itself is under test.
+#[tokio::test]
+async fn an_issuer_advertised_by_protected_resource_metadata_is_compared_exactly() {
+    let base = free_addr().await;
+    let served = serve_oauth_documents(
+        &base,
+        ResourceDocument::Advertising(base.clone()),
+        &format!("{base}/"),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client_for(&format!("{served}/mcp"), dir.path());
+
+    let err = client
+        .initialize()
+        .await
+        .expect_err("an advertised identifier differing by a trailing slash must be refused");
+    assert!(
+        err.to_string().contains("issuer mismatch"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Same documents, minus the advertisement. Nothing then reflects the server's
+/// own spelling, so the synthesised origin tolerates the slash and an Auth0-
+/// shaped server stays reachable.
+#[tokio::test]
+async fn an_issuer_reached_by_the_origin_fallback_tolerates_a_trailing_slash() {
+    let base = free_addr().await;
+    let served = serve_oauth_documents(&base, ResourceDocument::Absent, &format!("{base}/")).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client_for(&format!("{served}/mcp"), dir.path());
+
+    client
+        .initialize()
+        .await
+        .expect("the origin fallback tolerates a trailing slash");
+}
+
+/// The third assignment site: a valid protected-resource document that names no
+/// authorization server. It reaches the same fallback as a missing document,
+/// but by a different branch, and a mis-tag there would be invisible to both
+/// tests above.
+#[tokio::test]
+async fn resource_metadata_naming_no_authorization_server_falls_back_to_the_origin() {
+    let base = free_addr().await;
+    let served = serve_oauth_documents(
+        &base,
+        ResourceDocument::WithoutAuthorizationServer,
+        &format!("{base}/"),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client_for(&format!("{served}/mcp"), dir.path());
+
+    client
+        .initialize()
+        .await
+        .expect("a document naming no authorization server falls back to the origin");
 }

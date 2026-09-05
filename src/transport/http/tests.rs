@@ -90,9 +90,9 @@ fn parse_supported_versions_from_paren_format() {
 #[test]
 fn parse_supported_versions_from_supported_colon() {
     use crate::protocol::parse_supported_versions_from_error;
-    let msg = "Supported: 2024-11-05, 2024-10-07";
+    let msg = "Supported: 2024-11-05, 2025-03-26";
     let versions = parse_supported_versions_from_error(msg).unwrap();
-    assert_eq!(versions, vec!["2024-11-05", "2024-10-07"]);
+    assert_eq!(versions, vec!["2024-11-05", "2025-03-26"]);
 }
 
 #[test]
@@ -1086,6 +1086,7 @@ fn session_expired_response_detection_matches_known_signatures() {
             message: message.to_string(),
             data: None,
         }),
+        confirmation_refusal: false,
     };
 
     // MIK-6040: 200 + JSON-RPC error shapes a remote may use for session expiry.
@@ -1113,6 +1114,7 @@ fn session_expired_response_detection_matches_known_signatures() {
         id: None,
         result: Some(serde_json::json!({"ok": true})),
         error: None,
+        confirmation_refusal: false,
     }));
 }
 
@@ -1601,4 +1603,52 @@ fn no_diagnostic_helper_passes_a_canary_through() {
     } else {
         panic!("a cross-origin redirect must be rejected");
     }
+}
+
+/// The SSE body may carry a server-to-client *request* rather than the answer
+/// to the call in flight. Handing that back to the caller as its response is
+/// the defect this guards.
+#[test]
+fn parse_sse_response_rejects_inbound_request_frame() {
+    // GIVEN: an SSE body whose first data line is a request, not a response
+    let body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"sampling/createMessage\",\"params\":{}}\n\n";
+
+    // WHEN: the transport parses it
+    let outcome = parse_sse_response(body);
+
+    // THEN: it is refused, never returned as an empty successful response
+    assert!(
+        outcome.is_err(),
+        "a frame carrying `method` must not parse as a response, got {outcome:?}"
+    );
+}
+
+/// Guard the extraction: a genuine response still parses.
+#[test]
+fn parse_sse_response_accepts_response_frame() {
+    let body = "data: {\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"tools\":[]}}\n";
+    let parsed = parse_sse_response(body).expect("valid response must parse");
+    assert!(parsed.result.is_some());
+    assert!(parsed.error.is_none());
+}
+
+/// A server may send notifications on a request's own stream before the final
+/// response. Neither frame may end the scan: the notification is not the answer,
+/// and refusing the body outright would fail a conforming server's call.
+#[test]
+fn parse_sse_response_skips_notification_preceding_the_response() {
+    // GIVEN: a progress notification ahead of the answer on one stream
+    let body = concat!(
+        "event: message\n",
+        "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":1}}\n",
+        "\n",
+        "event: message\n",
+        "data: {\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"tools\":[]}}\n",
+    );
+
+    // WHEN: the transport parses it
+    let parsed = parse_sse_response(body).expect("the response after a notification must parse");
+
+    // THEN: the caller receives the response, not the notification
+    assert!(parsed.result.is_some(), "must return the response frame");
 }

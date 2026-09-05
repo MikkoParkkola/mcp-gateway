@@ -41,7 +41,11 @@ pub struct JsonRpcNotification {
 }
 
 /// JSON-RPC response
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Deserialize` is implemented by hand rather than derived: a frame carrying
+/// `method` is a request or a notification, and accepting one here is what let
+/// an inbound `sampling/createMessage` reach a waiting caller as its answer.
+#[derive(Debug, Clone, Serialize)]
 pub struct JsonRpcResponse {
     /// JSON-RPC version (always "2.0")
     pub jsonrpc: String,
@@ -53,6 +57,47 @@ pub struct JsonRpcResponse {
     /// Error (on failure)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
+    /// Internal marker: this response refuses a destructive action, either
+    /// because its confirmation could not be obtained or because the operator
+    /// declined it.
+    ///
+    /// `#[serde(skip)]` in both directions: it is never written to the wire,
+    /// and a wire key of this name can never set it. Read only by the
+    /// dispatcher, to keep a refusal out of client failure accounting.
+    #[serde(skip)]
+    pub confirmation_refusal: bool,
+}
+
+impl<'de> Deserialize<'de> for JsonRpcResponse {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        /// Mirrors [`JsonRpcResponse`] and additionally observes `method`, the
+        /// field that marks a frame as a request or a notification.
+        #[derive(Deserialize)]
+        struct Shadow {
+            jsonrpc: String,
+            id: Option<RequestId>,
+            result: Option<Value>,
+            error: Option<JsonRpcError>,
+            method: Option<serde::de::IgnoredAny>,
+        }
+
+        let shadow = Shadow::deserialize(deserializer)?;
+        if shadow.method.is_some() {
+            return Err(serde::de::Error::custom(
+                "frame carries `method`: a request or notification, not a response",
+            ));
+        }
+        Ok(Self {
+            jsonrpc: shadow.jsonrpc,
+            id: shadow.id,
+            result: shadow.result,
+            error: shadow.error,
+            confirmation_refusal: false,
+        })
+    }
 }
 
 impl JsonRpcResponse {
@@ -64,6 +109,7 @@ impl JsonRpcResponse {
             id: Some(id),
             result: Some(result),
             error: None,
+            confirmation_refusal: false,
         }
     }
 
@@ -96,6 +142,7 @@ impl JsonRpcResponse {
                 message: message.into(),
                 data: None,
             }),
+            confirmation_refusal: false,
         }
     }
 
@@ -132,6 +179,7 @@ impl JsonRpcResponse {
                 message: message.into(),
                 data: Some(data),
             }),
+            confirmation_refusal: false,
         }
     }
 }
@@ -441,11 +489,21 @@ pub struct RootsListResult {
 /// Elicitation create request params (server->client)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElicitationCreateParams {
+    /// How the client should render this: `form` or `url`.
+    ///
+    /// Carried rather than assumed. A `url`-mode question rendered as a form
+    /// asks the user to type what they were meant to go and do, and the mode is
+    /// the only field that says which one it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
     /// Human-readable message describing what input is needed
     pub message: String,
     /// JSON Schema for the requested input (form mode)
     #[serde(rename = "requestedSchema", skip_serializing_if = "Option::is_none")]
     pub requested_schema: Option<Value>,
+    /// Where the client should send the user (url mode).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// Elicitation create result (client->server response)
@@ -504,6 +562,43 @@ pub struct SamplingCreateMessageResult {
 
 #[cfg(test)]
 mod tests {
+    /// A frame carrying `method` is a request or notification. Deserializing it
+    /// as a response is what let an inbound `sampling/createMessage` be handed
+    /// back to a waiting caller as its (empty) answer.
+    #[test]
+    fn response_deser_rejects_frame_carrying_method() {
+        let frame = r#"{"jsonrpc":"2.0","id":5,"method":"sampling/createMessage","params":{}}"#;
+        let outcome = serde_json::from_str::<JsonRpcResponse>(frame);
+        assert!(
+            outcome.is_err(),
+            "expected rejection, got {:?}",
+            outcome.ok()
+        );
+    }
+
+    /// The stricter impl must not shift how the untagged `JsonRpcMessage` enum
+    /// classifies either frame shape.
+    #[test]
+    fn message_enum_still_classifies_both_frame_shapes() {
+        let req = r#"{"jsonrpc":"2.0","id":5,"method":"tools/list","params":{}}"#;
+        assert!(matches!(
+            serde_json::from_str::<JsonRpcMessage>(req).unwrap(),
+            JsonRpcMessage::Request(_)
+        ));
+
+        let res = r#"{"jsonrpc":"2.0","id":5,"result":{"tools":[]}}"#;
+        assert!(matches!(
+            serde_json::from_str::<JsonRpcMessage>(res).unwrap(),
+            JsonRpcMessage::Response(_)
+        ));
+
+        let note = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+        assert!(matches!(
+            serde_json::from_str::<JsonRpcMessage>(note).unwrap(),
+            JsonRpcMessage::Notification(_)
+        ));
+    }
+
     use super::*;
     use serde_json::json;
 
@@ -719,10 +814,12 @@ mod tests {
     #[test]
     fn elicitation_create_params_with_schema() {
         let params = ElicitationCreateParams {
+            mode: None,
             message: "Enter your name".to_string(),
             requested_schema: Some(
                 json!({"type": "object", "properties": {"name": {"type": "string"}}}),
             ),
+            url: None,
         };
         let json = serde_json::to_value(&params).unwrap();
         assert_eq!(json["message"], "Enter your name");
@@ -732,8 +829,10 @@ mod tests {
     #[test]
     fn elicitation_create_params_without_schema() {
         let params = ElicitationCreateParams {
+            mode: None,
             message: "Confirm action".to_string(),
             requested_schema: None,
+            url: None,
         };
         let json = serde_json::to_value(&params).unwrap();
         assert!(json.get("requestedSchema").is_none());

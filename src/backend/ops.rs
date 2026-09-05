@@ -12,6 +12,7 @@ use super::registry::{BackendLifecycle, BackendRuntimeState, BackendRuntimeStatu
 use crate::config::TransportConfig;
 use crate::failsafe::with_retry;
 use crate::protocol::JsonRpcResponse;
+use crate::protocol::param_headers::{is_param_header, mirror_headers};
 use crate::{Error, Result};
 
 impl Backend {
@@ -88,6 +89,51 @@ impl Backend {
             .is_some_and(|o| o.enabled && !o.shared_account)
     }
 
+    /// Builds the outbound header set for one call: the caller's own headers
+    /// minus anything in the gateway-owned `Mcp-Param-` namespace, plus the
+    /// mirrors this `tools/call` declares (MIK-7214.HEADER.5).
+    ///
+    /// The strip runs on every method, so a caller-supplied `Mcp-Param-*`
+    /// header can never reach a backend as though a schema had declared it —
+    /// the annotation is a server-side declaration, not a caller-supplied
+    /// parameter.
+    ///
+    /// The schema is read from the tool cache without blocking: a `tools/call`
+    /// is always preceded by discovery, which populates it. A cold or expired
+    /// cache mirrors nothing rather than issuing a `tools/list` while this
+    /// request holds its semaphore permit, which a concurrency-limited backend
+    /// could not satisfy.
+    fn param_header_set(
+        &self,
+        method: &str,
+        params: Option<&Value>,
+        extra_headers: &[(String, String)],
+    ) -> Vec<(String, String)> {
+        let mut headers: Vec<(String, String)> = extra_headers
+            .iter()
+            .filter(|(name, _)| !is_param_header(name))
+            .cloned()
+            .collect();
+
+        if method != "tools/call" {
+            return headers;
+        }
+        let Some(params) = params else {
+            return headers;
+        };
+        let (Some(name), Some(arguments)) = (
+            params.get("name").and_then(Value::as_str),
+            params.get("arguments"),
+        ) else {
+            return headers;
+        };
+        let Some(tool) = self.get_cached_tool(name) else {
+            return headers;
+        };
+        headers.extend(mirror_headers(&tool.input_schema, arguments));
+        headers
+    }
+
     /// Send a request, adding per-request outbound headers (e.g. a propagated
     /// end-user identity credential -- MIK-6704). The headers are forwarded by
     /// value to the transport's `request_with_headers`, never stored on the
@@ -110,6 +156,13 @@ impl Backend {
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
+
+        // SEP-2243 (MIK-7214.HEADER.5): mirror the arguments a tool's schema
+        // declares onto `Mcp-Param-*` headers. This sits here, not in each
+        // dispatcher, because every tools/call — the MCP provider, meta-MCP
+        // invoke, the router's direct backend route — funnels through this one
+        // function, so a per-caller mirror would leave the siblings unmirrored.
+        let extra_headers = self.param_header_set(method, params.as_ref(), extra_headers);
 
         // Derive the per-identity pool slot FIRST (MIK-6735 fix 1, adversarial
         // review of commit bfd62b91). Each slot owns its own circuit breaker +
@@ -166,7 +219,7 @@ impl Backend {
             let transport = std::sync::Arc::clone(&transport);
             let method = method.to_string();
             let params = params.clone();
-            let extra_headers = extra_headers.to_vec();
+            let extra_headers = extra_headers.clone();
             let identity_key = identity_key.clone();
             async move {
                 transport
@@ -184,26 +237,51 @@ impl Backend {
         // symmetric even if a concurrent idle-eviction later replaces this
         // slot's `PooledEntry` for `key` (MIK-6735 fix 1).
         match &result {
-            Ok(_) => {
+            Ok(response) => {
                 tracing::info!(
                     latency_ms = latency.as_millis(),
                     "Request completed successfully"
                 );
-                entry.failsafe.record_success(latency);
+                // A throttle can arrive as a successful JSON-RPC response
+                // carrying `isError: true`, not only as a transport error.
+                // Reaching `record_success` with one would break a real
+                // failure streak and could close a half-open circuit.
+                let throttled = response.result.as_ref().is_some_and(|result| {
+                    result
+                        .get("isError")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                        && crate::gateway::recovery::is_rate_limited(&result.to_string())
+                });
+                if throttled {
+                    tracing::warn!(latency_ms = latency.as_millis(), "Request rate limited");
+                    entry.failsafe.record_rate_limited("rate limited", latency);
+                } else {
+                    entry.failsafe.record_success(latency);
+                }
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
-                    "status" => "ok"
+                    "status" => if throttled { "rate_limited" } else { "ok" }
                 )
                 .increment(1);
             }
             Err(e) => {
-                tracing::error!(error = %e, latency_ms = latency.as_millis(), "Request failed");
-                entry.failsafe.record_failure(&e.to_string(), latency);
+                let text = e.to_string();
+                let rate_limited = entry.failsafe.record_dispatch_failure(&text, latency);
+                if rate_limited {
+                    tracing::warn!(
+                        error = %e,
+                        latency_ms = latency.as_millis(),
+                        "Request rate limited"
+                    );
+                } else {
+                    tracing::error!(error = %e, latency_ms = latency.as_millis(), "Request failed");
+                }
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
-                    "status" => "error"
+                    "status" => if rate_limited { "rate_limited" } else { "error" }
                 )
                 .increment(1);
             }
@@ -213,6 +291,14 @@ impl Backend {
             "backend" => self.name.clone()
         )
         .record(latency.as_secs_f64());
+
+        // An ordinary answer can contradict the era we probed for: a peer that
+        // rejects this call with a 2026-only code is modern whatever its
+        // `server/discover` did. Correct the verdict off the request path.
+        if let Ok(response) = &result {
+            self.reprobe_if_contradicted(method, response, &transport)
+                .await;
+        }
 
         result
     }
@@ -319,12 +405,21 @@ impl Backend {
                 .increment(1);
             }
             Err(e) => {
-                tracing::error!(error = %e, latency_ms = latency.as_millis(), "Notification failed");
-                entry.failsafe.record_failure(&e.to_string(), latency);
+                let text = e.to_string();
+                let rate_limited = entry.failsafe.record_dispatch_failure(&text, latency);
+                if rate_limited {
+                    tracing::warn!(
+                        error = %e,
+                        latency_ms = latency.as_millis(),
+                        "Notification rate limited"
+                    );
+                } else {
+                    tracing::error!(error = %e, latency_ms = latency.as_millis(), "Notification failed");
+                }
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
-                    "status" => "error"
+                    "status" => if rate_limited { "rate_limited" } else { "error" }
                 )
                 .increment(1);
             }

@@ -729,3 +729,133 @@ pub(crate) fn build_code_mode_tools() -> Vec<Tool> {
 #[cfg(test)]
 #[path = "meta_mcp_tool_defs_tests.rs"]
 mod tests;
+
+// ============================================================================
+// Meta-tool exposure (GH issue 449)
+// ============================================================================
+
+/// Every meta-tool name `build_meta_tools` can produce.
+///
+/// Derived from the builder with all optional features on, so it cannot drift
+/// from what the gateway actually lists. Deliberately not a hard-coded roster:
+/// three hand-maintained copies already exist elsewhere and two of them list
+/// Code Mode tools this builder never emits.
+fn governed_meta_tool_names() -> &'static std::collections::HashSet<String> {
+    static NAMES: std::sync::OnceLock<std::collections::HashSet<String>> =
+        std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        // Every built-in the dispatcher recognises, from *both* builders. Code
+        // Mode's `gateway_execute` reaches every backend tool, so leaving it
+        // outside the governed set left an operator allow-list with an escape
+        // hatch: the tool stayed callable whatever the operator named.
+        build_meta_tools(true, true, true, true, 0, 0)
+            .into_iter()
+            .chain(build_code_mode_tools())
+            .map(|t| t.name)
+            .collect()
+    })
+}
+
+/// Which meta-tools an operator has chosen to expose.
+///
+/// One predicate, consumed by both `tools/list` and `tools/call`. Hiding a
+/// tool from the list while still executing it is security theatre, so the
+/// listed set is *derived from* this predicate rather than maintained beside
+/// it — the two cannot disagree.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MetaToolExposure {
+    /// `None` exposes everything. `Some` is an allow-list of meta-tool names.
+    allowed: Option<std::collections::HashSet<String>>,
+}
+
+impl MetaToolExposure {
+    /// Expose every meta-tool — the behaviour of a gateway that configures none.
+    pub(crate) fn expose_all() -> Self {
+        Self { allowed: None }
+    }
+
+    /// Build the predicate from `meta_mcp.exposed_meta_tools`.
+    ///
+    /// Empty means expose-all. Unrecognised names are warned about and dropped
+    /// rather than aborting startup, matching `surfaced_tools`: a typo must not
+    /// take a production gateway down.
+    pub(crate) fn from_names(names: &[String]) -> Self {
+        if names.is_empty() {
+            return Self::expose_all();
+        }
+        let governed = governed_meta_tool_names();
+        let allowed: std::collections::HashSet<String> = names
+            .iter()
+            .filter(|name| {
+                let known = governed.contains(*name);
+                if !known {
+                    tracing::warn!(
+                        meta_tool = %name,
+                        "meta_mcp.exposed_meta_tools names an unrecognised meta-tool; dropping it"
+                    );
+                }
+                known
+            })
+            .cloned()
+            .collect();
+        // A dropped `surfaced_tools` entry costs one pinned tool. An allow-list
+        // that was meant to name gateway_invoke and missed leaves a gateway that
+        // can list backends and invoke nothing, which is worth saying out loud.
+        if !allowed.contains("gateway_invoke") {
+            tracing::warn!(
+                "meta_mcp.exposed_meta_tools omits gateway_invoke; \
+                 backend tools will be unreachable through this gateway"
+            );
+        }
+        Self {
+            allowed: Some(allowed),
+        }
+    }
+
+    /// Whether `name` may be listed and called.
+    ///
+    /// Names outside the builders' roster are always exposed: surfaced backend
+    /// tools are not meta-tools, and an operator's meta-tool allow-list has
+    /// nothing to say about them.
+    pub(crate) fn is_exposed(&self, name: &str) -> bool {
+        match &self.allowed {
+            None => true,
+            Some(allowed) => allowed.contains(name) || !governed_meta_tool_names().contains(name),
+        }
+    }
+
+    /// Drop from `tools` everything this gateway does not expose.
+    ///
+    /// Every list path goes through here, so a builder added later is filtered
+    /// by construction rather than by remembering to filter it.
+    pub(crate) fn filter(&self, tools: Vec<Tool>) -> Vec<Tool> {
+        tools
+            .into_iter()
+            .filter(|t| self.is_exposed(&t.name))
+            .collect()
+    }
+}
+
+/// `build_meta_tools`, restricted to what the operator exposes.
+///
+/// The filter is the whole difference: the listed set is the predicate's
+/// output, so `tools/list` and `tools/call` cannot disagree about a tool.
+#[allow(clippy::fn_params_excessive_bools)]
+pub(crate) fn build_meta_tools_filtered(
+    stats_enabled: bool,
+    webhooks_enabled: bool,
+    reload_enabled: bool,
+    cost_report_enabled: bool,
+    tool_count: usize,
+    server_count: usize,
+    exposure: &MetaToolExposure,
+) -> Vec<Tool> {
+    exposure.filter(build_meta_tools(
+        stats_enabled,
+        webhooks_enabled,
+        reload_enabled,
+        cost_report_enabled,
+        tool_count,
+        server_count,
+    ))
+}

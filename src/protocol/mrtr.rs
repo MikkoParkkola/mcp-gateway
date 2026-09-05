@@ -1,0 +1,491 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: MIT
+
+//! Multi-round-trip requests: the fields a retry carries.
+//!
+//! MCP 2026-07-28 replaced server-initiated requests. Instead of a server
+//! asking the client something mid-call, it returns an `InputRequiredResult`
+//! naming what it needs, and the client **retries the original request** with
+//! the answers attached:
+//!
+//! ```json
+//! {
+//!   "name": "book_flight",
+//!   "arguments": { … },
+//!   "inputResponses": { "confirm": { "action": "accept", … } },
+//!   "requestState": "opaque, meaningful only to the server"
+//! }
+//! ```
+//!
+//! Those two fields are siblings of `name` and `arguments`, and the gateway's
+//! extraction returned only the latter pair — so both were dropped in silence.
+//! A modern client's elicitation never completed, and the confirmation gate on
+//! a destructive tool ran without the answer it exists to collect.
+
+use crate::protocol::meta::{Declared, ElicitationMode};
+use serde_json::Value;
+
+/// The `params._meta` key carrying a client's idempotency key.
+///
+/// Reverse-DNS-ish and gateway-scoped, as the specification requires of any
+/// `_meta` key an implementation invents: an unprefixed `idempotency-key` would
+/// be claimed by the next implementation to want one.
+pub const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
+
+/// The out-of-band fields of a `tools/call` — the retry pair, and the
+/// idempotency key.
+///
+/// Separate from `(name, arguments)` rather than folded into it: the existing
+/// extraction is called from four places, and widening its return type would
+/// have every caller silently ignore the new half. A caller that wants the
+/// retry fields asks for them, and one that does not is unchanged.
+///
+/// Widened beyond the retry pair deliberately (SUB.4): this type is the only
+/// value derived from the whole params object that reaches the invoke funnel,
+/// so a sibling of `arguments` — which `_meta` is — has no other way in. The
+/// alternative was a new field on the caller context, which is a wider change
+/// to a type every call site constructs.
+#[derive(Debug, Default, Clone)]
+pub struct RetryFields {
+    /// The client's answers to what the server asked for, keyed by the
+    /// server-assigned identifiers it used.
+    pub input_responses: Option<Value>,
+    /// The server's own opaque state, echoed back verbatim.
+    ///
+    /// Verbatim is the contract: clients **MUST NOT** inspect, parse, modify or
+    /// assume anything about it. For this gateway it is its own sealed
+    /// envelope, which is why nothing here tries to read it.
+    pub request_state: Option<String>,
+    /// The client's idempotency key, from `params._meta`.
+    ///
+    /// `_meta` and not an argument: an argument of that name would collide with
+    /// a backend parameter and would be forwarded upstream. Spec-native, and it
+    /// reaches a stdio client, which an HTTP header cannot.
+    pub idempotency_key: Option<String>,
+    /// Fields that were present and unusable, named so a caller can refuse.
+    ///
+    /// Without this the two fields failed differently for the same mistake: a
+    /// malformed `inputResponses` was carried through as a retry, while a
+    /// malformed `requestState` vanished and the call became a fresh one. A
+    /// retry that silently becomes a fresh call is how one side effect becomes
+    /// two. An unusable idempotency key is named here for the same reason: run
+    /// unprotected, it is the duplicate the client asked to be spared.
+    pub malformed: Vec<&'static str>,
+}
+
+/// The absence of any retry fields.
+///
+/// A `static` rather than `Default::default()` so a borrowing caller context
+/// can hold it for `'static`: the overwhelming majority of call sites are fresh
+/// calls, and `Vec::new()` has a destructor, so a `const` would only ever be a
+/// temporary that dies at the end of the statement that names it.
+pub static NO_RETRY: RetryFields = RetryFields {
+    input_responses: None,
+    request_state: None,
+    idempotency_key: None,
+    malformed: Vec::new(),
+};
+
+impl RetryFields {
+    /// Read the retry fields from a `tools/call` params object.
+    #[must_use]
+    pub fn from_params(params: Option<&Value>) -> Self {
+        let Some(params) = params else {
+            return Self::default();
+        };
+        let mut malformed = Vec::new();
+
+        // An object keyed by the identifiers the server asked with. Anything
+        // else is a client that did not answer the question it was asked.
+        let input_responses = match params.get("inputResponses") {
+            None => None,
+            Some(value) if value.is_object() => Some(value.clone()),
+            Some(_) => {
+                malformed.push("inputResponses");
+                None
+            }
+        };
+        if params
+            .get("requestState")
+            .is_some_and(|value| !value.is_string())
+        {
+            malformed.push("requestState");
+        }
+
+        // A non-string key is refused rather than ignored: ignoring it runs the
+        // call unprotected, which is the outcome the client asked to prevent.
+        let idempotency_key = match params
+            .get("_meta")
+            .and_then(|m| m.get(IDEMPOTENCY_KEY_META))
+        {
+            None => None,
+            Some(Value::String(key)) if !key.is_empty() => Some(key.clone()),
+            Some(_) => {
+                malformed.push(IDEMPOTENCY_KEY_META);
+                None
+            }
+        };
+
+        Self {
+            input_responses,
+            // Only a string. A client sending an object has not echoed the
+            // state it was given, and coercing it would put a shape the gateway
+            // invented where the backend's own opaque value belongs.
+            request_state: params
+                .get("requestState")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            idempotency_key,
+            malformed,
+        }
+    }
+
+    /// Whether the call carried a retry field it could not use.
+    ///
+    /// Distinct from `is_retry`: a malformed retry is not a fresh call, and
+    /// treating it as one repeats whatever the first attempt already did.
+    #[must_use]
+    pub fn is_malformed(&self) -> bool {
+        !self.malformed.is_empty()
+    }
+
+    /// Whether this call continues an earlier one.
+    ///
+    /// Either field alone is enough. The specification requires a server to
+    /// include **at least one** of `inputRequests` or `requestState`, so a
+    /// retry may legitimately carry back only one — and demanding both would
+    /// drop the state-only retry, which is what a server sends when it needs no
+    /// further input from the user.
+    #[must_use]
+    pub const fn is_retry(&self) -> bool {
+        self.input_responses.is_some() || self.request_state.is_some()
+    }
+
+    /// What distinguishes one continuation of a request from another, as a
+    /// suffix for a cache or idempotency key.
+    ///
+    /// A retry reuses the original call's `name`, `arguments` and idempotency
+    /// key — it *is* the same logical request — so every input the existing
+    /// derivations hash is identical across continuations. Only the retry pair
+    /// differs, and without it the answers to a confirmation gate collapse onto
+    /// one key: a user who accepts, then declines, is served the acceptance.
+    ///
+    /// Empty for a fresh call, so that every key derived before this existed is
+    /// derived byte-identically now. A discriminator that was merely *constant*
+    /// for fresh calls would still change the format, and changing the format
+    /// silently discards every warm entry in every running deployment.
+    ///
+    /// The NUL separator is the same device `idempotency::derive_key` uses, and
+    /// holds for the same reason: canonical JSON escapes control characters, so
+    /// no encoded value can contain the byte that divides the two fields.
+    #[must_use]
+    pub fn key_discriminator(&self) -> String {
+        if !self.is_retry() {
+            return String::new();
+        }
+        let responses = self
+            .input_responses
+            .as_ref()
+            .map(crate::hashing::canonical_json)
+            .unwrap_or_default();
+        let state = self.request_state.as_deref().unwrap_or_default();
+        let digest =
+            crate::hashing::sha256_hex_chunks([responses.as_bytes(), &b"\0"[..], state.as_bytes()]);
+        format!("|mrtr:{digest}")
+    }
+}
+
+/// A backend's interim result: it needs something before it can finish.
+#[derive(Debug, Clone)]
+pub struct InputRequired {
+    /// What the server asked for, keyed by the identifiers it assigned.
+    ///
+    /// Its keys, not ours. The server will look for exactly these again on the
+    /// retry, so an answer returned under a different key is lost as surely as
+    /// one that was never collected.
+    pub requests: Vec<(String, Value)>,
+    /// The server's opaque state, to be echoed back untouched.
+    pub request_state: Option<String>,
+}
+
+/// The `resultType` value marking a result as an unfinished round.
+///
+/// Wire value from the MCP multi-round tool-result spec, so it is named rather
+/// than spelled out: a second spelling is a discriminator that can disagree
+/// with itself.
+const RESULT_TYPE_INPUT_REQUIRED: &str = "input_required";
+
+impl InputRequired {
+    /// Read an interim result, or `None` if the result is a completed one.
+    ///
+    /// `resultType` is the discriminator. A result omitting it is complete by
+    /// the client rule, which is what every pre-2026 backend sends — so an
+    /// ordinary legacy answer must never be mistaken for a question.
+    #[must_use]
+    pub fn from_result(result: &Value) -> Option<Self> {
+        if result.get("resultType").and_then(Value::as_str)? != RESULT_TYPE_INPUT_REQUIRED {
+            return None;
+        }
+        // Absence and malformed presence are different backend faults and must
+        // not collapse into the same empty map: a result carrying
+        // `"inputRequests": "surprise"` would otherwise be read as asking
+        // nothing, and a state-carrying one would then be relayed as a valid
+        // exchange without a single request ever passing the capability gate.
+        // Refusing to classify it leaves the result to travel back as the
+        // ordinary result it failed to be. Reporting an upstream fault
+        // distinctly is a separate open question about what a refusal tells a
+        // client, deliberately not answered here.
+        let requests: Vec<(String, Value)> = match result.get("inputRequests") {
+            None => Vec::new(),
+            Some(Value::Object(map)) => map
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            Some(_) => return None,
+        };
+        let request_state = result
+            .get("requestState")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        // An exchange with no question and no state can be advanced by nobody:
+        // the client has nothing to answer and the retry would carry nothing
+        // back to the backend. Classifying it as interim anyway mints a
+        // continuation that occupies the keyring until it expires and can
+        // never be redeemed. A state-only result is a different case and stays
+        // valid — the backend wants another turn without asking the user
+        // anything, which `ac_mrtr_7_a_state_only_interim_result_needs_no_client_round_trip`
+        // fixes as a requirement. Refusing here is what makes the unresumable
+        // shape unconstructible rather than a check every caller must repeat.
+        if requests.is_empty() && request_state.is_none() {
+            return None;
+        }
+        Some(Self {
+            requests,
+            request_state,
+        })
+    }
+
+    /// Whether the backend claimed to be asking, whatever else the result got
+    /// wrong.
+    ///
+    /// `from_result` answers a narrower question — can this result be turned
+    /// into an exchange the gateway can carry — and declines several shapes
+    /// that do claim `input_required`: a malformed `inputRequests`, and a round
+    /// with neither a question nor a state. Both are unusable, and neither is
+    /// the backend saying it acted. A caller that needs "did the backend
+    /// finish" must ask this rather than reading `from_result`'s `None`, which
+    /// folds "completed" together with "asked badly".
+    #[must_use]
+    pub fn claims_input_required(result: &Value) -> bool {
+        result.get("resultType").and_then(Value::as_str) == Some(RESULT_TYPE_INPUT_REQUIRED)
+    }
+
+    /// The first request this client cannot be asked, if there is one.
+    ///
+    /// A server **MUST NOT** send an `inputRequests` entry of a type the client
+    /// has not declared support for. Checked per entry rather than per result:
+    /// a client that declared `elicitation` and not `sampling` may legitimately
+    /// be sent the one and not the other, and a whole-result verdict cannot
+    /// tell those apart.
+    ///
+    /// A method carrying no recognised capability is refused too. The
+    /// declaration vocabulary *is* the gateway's own set, so a method outside
+    /// it cannot have been declared, and relaying a question the gateway
+    /// cannot classify asks the client for a permission it was never given the
+    /// chance to withhold.
+    ///
+    /// An elicitation mode is checked the same way and for the same reason: a
+    /// client that declared `elicitation` in one mode has declared nothing
+    /// about the other, and a declaration read one level shallower than the
+    /// request is written is a gate that cannot see what it is passing.
+    #[must_use]
+    pub fn undeclared(&self, declared: Declared) -> Option<Undeclared<'_>> {
+        self.requests.iter().find_map(|(key, request)| {
+            let method = request.get("method").and_then(Value::as_str).unwrap_or("");
+            let reason = Self::refusal(method, request.get("params"), declared)?;
+            Some(Undeclared {
+                key,
+                method,
+                reason,
+            })
+        })
+    }
+
+    /// Why this one entry cannot be relayed, or `None` when it can.
+    ///
+    /// The mode arm runs *after* the capability arm because the two refusals
+    /// are answered differently: a client that never declared `elicitation`
+    /// can be told which capability to add, and one that declared it in a
+    /// single mode cannot — it already has the capability the first arm would
+    /// have named.
+    fn refusal(method: &str, params: Option<&Value>, declared: Declared) -> Option<Refusal> {
+        let Some(capability) = crate::protocol::meta::required_capability(method) else {
+            return Some(Refusal::UnrecognisedMethod);
+        };
+        if !declared.has(capability) {
+            return Some(Refusal::Capability(capability));
+        }
+        if method != "elicitation/create" {
+            return None;
+        }
+        match ElicitationMode::from_params(params) {
+            None => Some(Refusal::UnrecognisedMode),
+            Some(mode) if declared.has_elicitation_mode(mode) => None,
+            Some(mode) => Some(Refusal::Mode(mode)),
+        }
+    }
+}
+
+/// A question that cannot be put to this client.
+///
+/// Carries the method and the capability separately because the two refusals
+/// are not the same refusal: a known method the client did not declare can name
+/// the capability it would have had to declare, and an unrecognised method has
+/// no capability to name. Collapsing them to one string would report the second
+/// as if the client had merely omitted a declaration it could still add.
+#[derive(Debug, Clone, Copy)]
+pub struct Undeclared<'a> {
+    /// The server's own key for the entry, so a refusal names which question
+    /// was refused rather than only its type.
+    pub key: &'a str,
+    /// The method the entry asked with. Empty when the entry carried none.
+    pub method: &'a str,
+    /// Which of the four refusals this is.
+    pub reason: Refusal,
+}
+
+/// Why an entry cannot be put to this client.
+///
+/// Four cases rather than one string, because each meets the client
+/// differently: only the first names something the client could add to its
+/// declaration and retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// A capability this revision defines and the client did not declare.
+    Capability(&'static str),
+    /// A method the gateway cannot classify, so no capability can cover it.
+    UnrecognisedMethod,
+    /// An elicitation mode the gateway can service and the client did not
+    /// declare. The capability itself *was* declared.
+    Mode(ElicitationMode),
+    /// An elicitation `mode` value this gateway cannot read as a mode at all.
+    UnrecognisedMode,
+}
+
+/// The caller binding sealed into a continuation, or `None` when this caller
+/// cannot be bound at full strength.
+///
+/// `None` is a refusal, not a fallback. A continuation names who may redeem it,
+/// and the only honest answer for a caller the gateway cannot name is that it
+/// has none: an anonymous caller shares its non-identity with every other
+/// anonymous caller, so a fingerprint standing in for one would satisfy
+/// [`Payload::redeemable_by`](crate::protocol::continuation::Payload::redeemable_by)
+/// while binding nothing. An under-binding nobody can see is worse than a
+/// refusal everybody can.
+///
+/// Only the verified-agent scheme is constructible today, which is why this
+/// takes an identity rather than a whole caller. The other two schemes the
+/// design names are not yet reachable at the mint site: the presented API key
+/// is not retained past validation, and only a truncated 48-bit digest of it
+/// survives — hashing that again does not restore the entropy the truncation
+/// dropped — and the client certificate's DER is read and dropped before the
+/// caller context is built. Both arrive with the credential plumbing that
+/// retains them, and until then their callers are refused rather than bound
+/// weakly.
+///
+/// Scheme-tagged so two schemes can never collide on one value, and derived
+/// from `VerifiedIdentity::stable_actor_id` rather than a second
+/// length-prefixed encoding of the same pair: a second spelling of an
+/// unambiguous encoding is how one caller acquires two fingerprints.
+#[must_use]
+pub fn principal_fingerprint(
+    identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+) -> Option<String> {
+    let identity = identity?;
+    Some(crate::hashing::sha256_hex(
+        format!("agent:{}", identity.stable_actor_id()).as_bytes(),
+    ))
+}
+
+/// Which request a continuation continues.
+///
+/// Computed over the original call and nothing else. The retry's own
+/// `inputResponses` and `requestState` are excluded because they do not exist
+/// on the first call, so including them would produce a digest that could never
+/// match the one sealed at mint.
+///
+/// Delegates to the idempotency key derivation rather than repeating its shape:
+/// both hash a tool name and a canonical rendering of the same arguments, and
+/// two spellings of one canonical form is how a digest silently stops matching.
+/// Qualified by server because a bare tool name is ambiguous across backends.
+#[must_use]
+pub fn original_request_digest(server: &str, tool: &str, arguments: &Value) -> String {
+    crate::idempotency::derive_key(&format!("{server}:{tool}"), arguments)
+}
+
+/// One question, translated for a client that expects to be asked directly.
+#[derive(Debug, Clone)]
+pub struct OutboundRequest {
+    /// The server's identifier for this question, carried so the answer can be
+    /// returned under it.
+    pub key: String,
+    /// The legacy server-initiated method, e.g. `elicitation/create`.
+    pub method: String,
+    /// Its params, verbatim.
+    pub params: Value,
+}
+
+/// Translating between the two generations of asking a question.
+///
+/// A **modern** server returns an interim result and waits to be retried. A
+/// **legacy** client expects the server to ask it something mid-call. Neither
+/// can be changed, so the gateway sits between them: it holds the backend's
+/// continuation, asks the client the way that client understands, and retries
+/// the backend with what comes back. The client never learns a retry happened.
+///
+/// This is the likelier direction in practice — backends adopt a revision
+/// before every client does — which is why it gets a contract of its own rather
+/// than being called mechanical.
+pub struct Bridge;
+
+impl Bridge {
+    /// The questions to put to a legacy client, in the shape it expects.
+    #[must_use]
+    pub fn to_legacy_client(interim: &InputRequired) -> Vec<OutboundRequest> {
+        interim
+            .requests
+            .iter()
+            .map(|(key, request)| OutboundRequest {
+                key: key.clone(),
+                method: request
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                params: request.get("params").cloned().unwrap_or(Value::Null),
+            })
+            .collect()
+    }
+
+    /// The params for retrying the backend, once the client has answered.
+    ///
+    /// The state is echoed verbatim and the answers go back under the server's
+    /// own keys. When nothing was asked, nothing is sent: an empty
+    /// `inputResponses` would tell the server it received answers to questions
+    /// it never posed.
+    #[must_use]
+    pub fn retry_params(interim: &InputRequired, answers: Vec<(String, Value)>) -> Value {
+        let mut params = serde_json::Map::new();
+        if let Some(ref state) = interim.request_state {
+            params.insert("requestState".to_string(), Value::String(state.clone()));
+        }
+        if !answers.is_empty() {
+            let mut responses = serde_json::Map::new();
+            for (key, answer) in answers {
+                responses.insert(key, answer);
+            }
+            params.insert("inputResponses".to_string(), Value::Object(responses));
+        }
+        Value::Object(params)
+    }
+}

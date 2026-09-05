@@ -303,6 +303,28 @@ fn window_counts_returns_successes_and_failures() {
     assert_eq!(f, 1);
 }
 
+#[test]
+fn window_failure_count_survives_size_and_age_eviction() {
+    // The window keeps its failure count incrementally, so a miscounted
+    // eviction would silently skew every error rate. Both eviction paths run
+    // here, and the counts are checked against the entries themselves.
+    let mut w = BudgetWindow::new(3, Duration::from_millis(40));
+    w.record(false);
+    w.record(false);
+    w.record(true);
+    w.record(false); // evicts the oldest failure on the size cap
+    assert_eq!(w.counts(), (1, 2), "size eviction must drop one failure");
+
+    std::thread::sleep(Duration::from_millis(60));
+    w.record(true); // every earlier entry is now older than max_age
+    assert_eq!(w.counts(), (1, 0), "age eviction must drop both failures");
+    assert!((w.error_rate() - 0.0).abs() < f64::EPSILON);
+
+    w.record(false);
+    w.reset();
+    assert_eq!(w.counts(), (0, 0), "reset must clear the failure count");
+}
+
 // ── BudgetWindow ─────────────────────────────────────────────────────────
 
 #[test]

@@ -17,7 +17,7 @@ use tracing::{debug, error, warn};
 use super::AppState;
 use super::authorization::{ToolTarget, authorize_tool_target};
 use super::helpers::{build_http_error_response, build_http_response, parse_request};
-use crate::backend::normalize_tool_annotations;
+use crate::backend::prepare_tool_metadata;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
@@ -97,7 +97,16 @@ fn apply_backend_tool_call_security(
         let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
         let session_id = format!("direct:{backend_name}");
         let verdict =
-            fw.check_request(&session_id, backend_name, tool_name, arguments, caller_name);
+            // A direct backend call always has this synthetic per-backend key,
+            // so the per-caller controls have a stable identity to score on.
+            fw.check_request(
+                &session_id,
+                backend_name,
+                tool_name,
+                arguments,
+                caller_name,
+                &session_id,
+            );
         if verdict.action == FirewallAction::Warn {
             warn!(
                 backend = %backend_name,
@@ -161,17 +170,39 @@ fn normalize_tools_list_response(backend_name: &str, response: &mut JsonRpcRespo
         return;
     };
 
-    let Ok(mut tools) = serde_json::from_value::<Vec<Tool>>(tools_value.clone()) else {
-        warn!(backend = %backend_name, "Backend tools/list result could not be normalized");
+    let Some(items) = tools_value.as_array() else {
+        warn!(backend = %backend_name, "Backend tools/list result is not an array");
         return;
     };
 
-    normalize_tool_annotations(backend_name, &mut tools);
+    // Parsed element by element on purpose. A single descriptor the `Tool`
+    // shape cannot accept used to abort the whole pass and forward the list
+    // verbatim — which handed a backend a one-element bypass for the exclusion
+    // applied to all of its siblings. An unparseable element is now carried
+    // through untouched (dropping it would hide a tool the client may already
+    // depend on) while every element we can read is still filtered.
+    let mut tools = Vec::with_capacity(items.len());
+    let mut unparsed = Vec::new();
+    for item in items {
+        match serde_json::from_value::<Tool>(item.clone()) {
+            Ok(tool) => tools.push(tool),
+            Err(e) => {
+                warn!(backend = %backend_name, error = %e, "Backend tools/list entry could not be normalized");
+                unparsed.push(item.clone());
+            }
+        }
+    }
+
+    prepare_tool_metadata(backend_name, &mut tools);
 
     let server_id = format!("backend:{backend_name}");
     let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
 
     match serde_json::to_value(tools) {
+        Ok(Value::Array(mut normalized)) => {
+            normalized.extend(unparsed);
+            *tools_value = Value::Array(normalized);
+        }
         Ok(normalized_tools) => *tools_value = normalized_tools,
         Err(e) => {
             warn!(backend = %backend_name, error = %e, "Failed to serialize normalized tools/list");

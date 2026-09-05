@@ -62,7 +62,7 @@ Source files live in `src/`. Each module is split to 800 LOC or fewer.
 | **identity_grants** | `identity_grants.rs` | Per-subject and per-agent grant contract for personal capabilities |
 | **backend** | `backend/` | Backend lifecycle: spawn, connect, health tracking, tool caching |
 | **transport** | `transport/` | Wire protocols: stdio subprocess I/O, HTTP client, SSE streaming |
-| **protocol** | `protocol/` | MCP JSON-RPC types, version negotiation (2024-10-07 through 2025-11-25) |
+| **protocol** | `protocol/` | MCP JSON-RPC types, version negotiation (2024-11-05 through 2025-11-25) |
 | **config** | `config.rs` | YAML + env config loading via figment, env file support, `${VAR}` expansion |
 | **capability** | `capability/` | REST-to-MCP bridge: load YAML definitions, execute HTTP calls, hot-reload |
 | **cache** | `cache.rs` | Response cache with TTL eviction and per-capability overrides |

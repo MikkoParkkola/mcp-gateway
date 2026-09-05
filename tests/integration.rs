@@ -20,7 +20,10 @@ fn test_protocol_version() {
     assert!(SUPPORTED_VERSIONS.contains(&"2025-06-18"));
     assert!(SUPPORTED_VERSIONS.contains(&"2025-03-26"));
     assert!(SUPPORTED_VERSIONS.contains(&"2024-11-05"));
-    assert!(SUPPORTED_VERSIONS.contains(&"2024-10-07"));
+    // `2024-10-07` was listed here until 4.0.0 and is not a revision the
+    // specification defines. The list must carry real revisions only, because
+    // `server/discover` publishes it as the gateway's own claim (MIK-7217).
+    assert!(!SUPPORTED_VERSIONS.contains(&"2024-10-07"));
 }
 
 #[test]
@@ -30,7 +33,8 @@ fn test_version_negotiation() {
     assert_eq!(negotiate_version("2025-06-18"), "2025-06-18");
     assert_eq!(negotiate_version("2025-03-26"), "2025-03-26");
     assert_eq!(negotiate_version("2024-11-05"), "2024-11-05");
-    assert_eq!(negotiate_version("2024-10-07"), "2024-10-07");
+    // No longer offered, so it falls back like any other unknown string.
+    assert_eq!(negotiate_version("2024-10-07"), "2025-11-25");
 
     // Client requests unknown version - gets latest as fallback
     assert_eq!(negotiate_version("2023-01-01"), "2025-11-25");

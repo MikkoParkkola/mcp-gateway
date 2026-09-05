@@ -33,8 +33,25 @@ jobs:
             --recursive
             ./
 
+  # The same gate release.yml runs. A tag push starts this workflow and release.yml
+  # independently, so a `needs:` in release.yml cannot reach the image build: without
+  # this job an invalid ledger blocks the crates.io release and publishes the container
+  # anyway. Duplicated deliberately — a workflow cannot depend on another workflow's job.
+  release-criteria:
+    name: Release criteria ledger (header matches rows)
+    runs-on: avrea-ubuntu-latest-4-vcpu
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test the counter (fail on parser regression)
+        run: python3 scripts/release/test_count_release_criteria.py
+      - name: Check the release-criteria ledger header against its rows
+        run: python3 scripts/release/count-release-criteria.py --check
+
   build:
-    needs: security-gate
+    needs: [security-gate, release-criteria]
     runs-on: avrea-ubuntu-latest-4-vcpu
     permissions:
       contents: read

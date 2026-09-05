@@ -78,6 +78,11 @@ pub struct Migration {
     pub description: &'static str,
     /// Apply the migration; receives the gateway data directory (`~/.mcp-gateway/`).
     pub apply: fn(&Path) -> std::io::Result<()>,
+    /// `true` when the migration only tells the operator something and leaves
+    /// every file alone. A notice earns no config backup. It is addressed to a
+    /// person and goes to stderr, so `--quiet` does NOT silence it: the startup
+    /// path always runs quiet, and suppressing notices there delivered none.
+    pub notice: bool,
 }
 
 /// All registered migrations in ascending `applies_below` order.
@@ -94,11 +99,20 @@ pub struct Migration {
 ///     apply: |dir| { /* patch gateway.yaml */ Ok(()) },
 /// }
 /// ```
-static MIGRATIONS: &[Migration] = &[Migration {
-    applies_below: "3.0.0",
-    description: "v3.0.0: informational per-user OAuth isolation notice (config unchanged)",
-    apply: migrate_3_0_0_multi_user_notice,
-}];
+static MIGRATIONS: &[Migration] = &[
+    Migration {
+        applies_below: "3.0.0",
+        description: "v3.0.0: informational per-user OAuth isolation notice (config unchanged)",
+        apply: migrate_3_0_0_multi_user_notice,
+        notice: true,
+    },
+    Migration {
+        applies_below: "4.0.0",
+        description: "v4.0.0: informational breaking-change notice (config unchanged)",
+        apply: migrate_4_0_0_release_notice,
+        notice: true,
+    },
+];
 
 // ── 3.0.0 migration: multi-user-default posture notice ─────────────────────────
 //
@@ -203,10 +217,64 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
     };
 
     match detect_multi_user_posture(&yaml) {
-        MultiUserPosture::Undeclared => tracing::warn!("{NOTICE_MULTI_USER_DEFAULT}"),
-        MultiUserPosture::AuthDisabled => tracing::warn!("{NOTICE_AUTH_DISABLED}"),
+        // Printed for the same reason as the 4.0.0 notice: a log filter must
+        // not be able to swallow a one-time message addressed to a person.
+        MultiUserPosture::Undeclared => eprintln!("{NOTICE_MULTI_USER_DEFAULT}"),
+        MultiUserPosture::AuthDisabled => eprintln!("{NOTICE_AUTH_DISABLED}"),
         MultiUserPosture::AlreadyDeclared => tracing::info!("{NOTICE_ALREADY_CONFIGURED}"),
     }
+    Ok(())
+}
+
+// ── 4.0.0 migration: breaking-change notice ───────────────────────────────────
+//
+// v4.0.0 carries four changes an operator can be surprised by, none of which a
+// config edit can pre-empt: two need an action (re-authenticate, fix an env
+// file), one removes an advertised protocol version, and one changes what the
+// error budgets count. A 3.x `gateway.yaml` loads unchanged, so this migration
+// never edits the file — it reports, once, on the first 4.0.0 start.
+
+/// The four 4.0.0 changes, in the order they are printed.
+///
+/// Pinned as a slice rather than prose so a test can assert the notice still
+/// carries every item: a release note that quietly loses one is worse than
+/// none, because the operator has already read it.
+const NOTICE_4_0_0_ITEMS: &[&str] = &[
+    "OAuth credentials are now stored per issuer. Stored tokens from 3.x are not \
+migrated: each OAuth backend re-authenticates once, on its next use. Expect one \
+authorization prompt per backend; no config change is needed.",
+    "A malformed line in an `env_files` file now FAILS STARTUP instead of being \
+skipped silently. A typo that used to cost one missing variable now costs a \
+refused start, and says which line.",
+    "Protocol version 2024-10-07 is no longer advertised. Clients that only \
+speak it must upgrade; 2025-03-26 and later are unaffected.",
+    "Rate-limited backend responses (HTTP 429 and equivalents) no longer count \
+against the error budgets or the circuit breaker (GH #475). A throttled backend \
+is no longer auto-killed for being busy.",
+];
+
+/// Emit the one-time 4.0.0 notice.
+///
+/// Takes the data directory for signature parity with the other migrations; it
+/// reads nothing, because none of the four items depends on what the config
+/// says.
+///
+/// The `Result` is dictated by `Migration::apply`, not by anything this can fail at.
+#[allow(clippy::unnecessary_wraps)]
+fn migrate_4_0_0_release_notice(_data_dir: &Path) -> std::io::Result<()> {
+    let body = NOTICE_4_0_0_ITEMS
+        .iter()
+        .enumerate()
+        .map(|(i, item)| format!("    {}. {item}", i + 1))
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Printed to stderr, not logged: `--log-level error` or a RUST_LOG filter
+    // would swallow a warn event while the version stamp advances, and the
+    // notice fires exactly once. stderr so `--quiet` can suppress progress
+    // chatter on stdout without suppressing the warning itself.
+    eprintln!(
+        "v4.0.0: four changes need your attention. No config was changed automatically.\n{body}"
+    );
     Ok(())
 }
 
@@ -346,7 +414,10 @@ impl UpgradeContext<'_> {
         let migrations = self.applicable_migrations();
         let count = migrations.len();
 
-        if !self.dry_run && count > 0 {
+        // A notice writes nothing, so backing the config up would leave an
+        // unexplained gateway.yaml.bak.<version> behind for an upgrade that
+        // touched only the version stamp.
+        if !self.dry_run && migrations.iter().any(|m| !m.notice) {
             backup_config(self.data_dir, &self.old_ver.to_string())?;
         }
 
@@ -779,15 +850,17 @@ mod tests {
     // ── applicable_migrations ─────────────────────────────────────────────────
 
     #[test]
-    fn migrations_registry_has_exactly_one_3_0_0_entry() {
+    fn migrations_registry_registers_each_ceiling_once() {
         // GIVEN: the MIGRATIONS registry
-        // WHEN/THEN: it carries exactly the 3.0.0 multi-user notice migration
-        assert_eq!(MIGRATIONS.len(), 1);
+        // WHEN/THEN: one entry per release that needs a migration, in order.
+        // A ceiling registered twice would run its notice twice on one upgrade.
+        assert_eq!(MIGRATIONS.len(), 2);
         assert_eq!(MIGRATIONS[0].applies_below, "3.0.0");
+        assert_eq!(MIGRATIONS[1].applies_below, "4.0.0");
     }
 
     #[test]
-    fn pre_3_0_0_stamp_has_one_applicable_migration() {
+    fn pre_3_0_0_stamp_has_every_migration_applicable() {
         // GIVEN: an install stamped below 3.0.0
         let dir = TempDir::new().unwrap();
         let ctx = UpgradeContext {
@@ -798,12 +871,12 @@ mod tests {
             quiet: true,
         };
         // WHEN: applicable migrations are collected
-        // THEN: the 3.0.0 notice migration applies
-        assert_eq!(ctx.applicable_migrations().len(), 1);
+        // THEN: both notices apply — the install predates each ceiling
+        assert_eq!(ctx.applicable_migrations().len(), 2);
     }
 
     #[test]
-    fn stamp_already_at_3_0_0_has_zero_applicable_migrations() {
+    fn stamp_at_3_0_0_leaves_only_the_4_0_0_notice_applicable() {
         // GIVEN: an install already stamped at 3.0.0 (the migration's own ceiling)
         let dir = TempDir::new().unwrap();
         let ctx = UpgradeContext {
@@ -814,8 +887,11 @@ mod tests {
             quiet: true,
         };
         // WHEN: applicable migrations are collected
-        // THEN: none — `applies_below` is a strict upper bound (idempotency guard)
-        assert_eq!(ctx.applicable_migrations().len(), 0);
+        // THEN: the 3.0.0 notice is done with — `applies_below` is a strict upper
+        // bound (idempotency guard) — and only the 4.0.0 notice remains
+        let applicable = ctx.applicable_migrations();
+        assert_eq!(applicable.len(), 1);
+        assert_eq!(applicable[0].applies_below, "4.0.0");
     }
 
     // ── what's new ───────────────────────────────────────────────────────────
@@ -892,18 +968,18 @@ mod tests {
 
     #[test]
     fn no_backup_when_zero_migrations() {
-        // GIVEN: a data dir with gateway.yaml already stamped at 3.0.0, so the
-        // registered 3.0.0 migration's `applies_below` ceiling no longer matches.
+        // GIVEN: a data dir with gateway.yaml stamped above every registered
+        // `applies_below` ceiling, so no migration matches.
         let dir = TempDir::new().unwrap();
         let yaml = dir.path().join("gateway.yaml");
         std::fs::write(&yaml, "server:\n  port: 39400\n").unwrap();
-        write_stamp(&stamp_path(dir.path()), "3.0.0").unwrap();
+        write_stamp(&stamp_path(dir.path()), "4.0.0").unwrap();
 
         // WHEN: upgrade runs (stamp already satisfies every registered migration)
         let ctx = UpgradeContext {
             data_dir: dir.path(),
-            old_ver: SemVer::parse("3.0.0").unwrap(),
-            new_ver: SemVer::parse("3.0.1").unwrap(),
+            old_ver: SemVer::parse("4.0.0").unwrap(),
+            new_ver: SemVer::parse("4.0.1").unwrap(),
             dry_run: false,
             quiet: true,
         };
@@ -911,7 +987,7 @@ mod tests {
 
         // THEN: no migrations applied, no backup file created
         assert_eq!(n, 0);
-        let bak = dir.path().join("gateway.yaml.bak.3.0.0");
+        let bak = dir.path().join("gateway.yaml.bak.4.0.0");
         assert!(
             !bak.exists(),
             "backup should NOT be created when 0 migrations apply"
@@ -1069,22 +1145,106 @@ mod tests {
         assert_eq!(content_after_second, original);
     }
 
+    /// GH475.MIG.4 — the notice carries all four items, each named by the
+    /// action or removal it announces. Pinned so a later edit cannot quietly
+    /// drop one: an operator reads this once.
     #[test]
-    fn migration_registered_for_3_0_0_triggers_config_backup() {
+    fn notice_4_0_0_carries_all_four_items() {
+        assert_eq!(NOTICE_4_0_0_ITEMS.len(), 4);
+        let all = NOTICE_4_0_0_ITEMS.join(" ").to_ascii_lowercase();
+        for expected in ["re-authenticate", "fails startup", "2024-10-07", "429"] {
+            assert!(
+                all.contains(expected),
+                "the 4.0.0 notice no longer mentions {expected}: {all}"
+            );
+        }
+    }
+
+    /// GH475.MIG.1 / GH475.MIG.2 — upgrading from 3.9.0 advances the stamp and
+    /// leaves the operator's config byte-identical, and the second start is a
+    /// no-op. The stamp is the only file the upgrade may write.
+    #[test]
+    fn migration_4_0_0_advances_the_stamp_without_touching_the_config() {
+        let dir = TempDir::new().unwrap();
+        let yaml = dir.path().join("gateway.yaml");
+        let original = "auth:\n  enabled: true\n  single_user: true\n";
+        std::fs::write(&yaml, original).unwrap();
+        write_stamp(&stamp_path(dir.path()), "3.9.0").unwrap();
+
+        check_upgrade(dir.path()).unwrap();
+        assert_eq!(
+            read_stamp(&stamp_path(dir.path())).unwrap().unwrap(),
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(std::fs::read_to_string(&yaml).unwrap(), original);
+
+        check_upgrade(dir.path()).unwrap();
+        assert_eq!(
+            read_stamp(&stamp_path(dir.path())).unwrap().unwrap(),
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&yaml).unwrap(),
+            original,
+            "the second start must change nothing at all"
+        );
+    }
+
+    #[test]
+    fn notice_only_upgrade_leaves_no_config_backup() {
         // GIVEN: a pre-3.0.0 install with a gateway.yaml present
         let dir = TempDir::new().unwrap();
         let yaml = dir.path().join("gateway.yaml");
         std::fs::write(&yaml, "auth:\n  enabled: true\n  single_user: true\n").unwrap();
         write_stamp(&stamp_path(dir.path()), "2.10.0").unwrap();
 
-        // WHEN: check_upgrade runs, triggering the registered 3.0.0 migration
+        // WHEN: check_upgrade runs, and every applicable migration is a notice
         check_upgrade(dir.path()).unwrap();
 
-        // THEN: the existing backup path fired because >=1 migration applied
+        // THEN: nothing was copied, because nothing was changed. A backup file
+        // for an upgrade that only advanced the version stamp is an unexplained
+        // artefact the operator has to reason about.
         let bak = dir.path().join("gateway.yaml.bak.2.10.0");
         assert!(
-            bak.exists(),
-            "backup should be created once a real migration is registered and applies"
+            !bak.exists(),
+            "a notice-only upgrade must not write a config backup"
         );
+        assert!(
+            MIGRATIONS.iter().all(|m| m.notice),
+            "this test is only meaningful while every registered migration is a notice"
+        );
+    }
+
+    /// GH475.MIG.4 — every command a notice tells an operator to run must exist.
+    ///
+    /// The 4.0.0 notice shipped `mcp-gateway auth login <backend>` for a binary
+    /// that has no `auth` subcommand, so the one item requiring operator action
+    /// gave an instruction that exits 2. Asserting the notice *names its four
+    /// items* did not catch it, because the text was present and wrong.
+    ///
+    /// Checked against clap's own subcommand list rather than a hand-kept
+    /// spelling, so a renamed or removed subcommand fails here instead of in an
+    /// operator's terminal.
+    #[test]
+    fn every_command_a_notice_prints_is_a_real_subcommand() {
+        use clap::CommandFactory;
+
+        let cli = mcp_gateway::cli::Cli::command();
+        let known: Vec<&str> = cli.get_subcommands().map(clap::Command::get_name).collect();
+
+        for item in NOTICE_4_0_0_ITEMS {
+            for (offset, _) in item.match_indices("mcp-gateway ") {
+                let rest = &item[offset + "mcp-gateway ".len()..];
+                let sub = rest
+                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                    .next()
+                    .unwrap_or("");
+                assert!(
+                    !sub.is_empty() && known.contains(&sub),
+                    "the notice tells the operator to run `mcp-gateway {sub}`, \
+which is not one of the binary's subcommands: {known:?}"
+                );
+            }
+        }
     }
 }

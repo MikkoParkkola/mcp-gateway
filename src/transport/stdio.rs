@@ -24,8 +24,9 @@ use tracing::{debug, error, info, warn};
 
 use super::{PendingRequestGuard, Transport};
 use crate::protocol::{
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
-    is_version_mismatch_error, negotiate_best_version, parse_supported_versions_from_error,
+    JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
+    RequestId, is_version_mismatch_error, negotiate_best_version,
+    parse_supported_versions_from_error,
 };
 use crate::{Error, Result};
 
@@ -421,9 +422,26 @@ impl StdioTransport {
     }
 
     /// Handle a response line from stdout
+    ///
+    /// The line is classified before it is routed. A peer notification is
+    /// accepted and ignored; a peer *request* is refused, because routing one to
+    /// a pending caller would answer that caller with a frame carrying neither
+    /// `result` nor `error`.
     fn handle_response(&self, line: &str) -> Result<()> {
         debug!(line = %line, "Parsing response");
-        let response: JsonRpcResponse = serde_json::from_str(line)?;
+        let response = match serde_json::from_str::<JsonRpcMessage>(line)? {
+            JsonRpcMessage::Response(response) => response,
+            JsonRpcMessage::Notification(notification) => {
+                debug!(method = %notification.method, "Ignoring peer notification");
+                return Ok(());
+            }
+            JsonRpcMessage::Request(request) => {
+                return Err(Error::Protocol(format!(
+                    "Peer sent request '{}' on the response stream",
+                    request.method
+                )));
+            }
+        };
 
         if let Some(ref id) = response.id {
             let key = id.to_string();
@@ -678,6 +696,32 @@ mod tests {
 
         let response = rx.try_recv().unwrap();
         assert!(response.result.is_some());
+    }
+
+    /// An inbound request that happens to carry an `id` must never be routed to
+    /// a pending caller as if it were that caller's answer. The frame is a
+    /// server-to-client request (`sampling/createMessage`), not a response.
+    #[test]
+    fn handle_response_rejects_inbound_request_and_leaves_caller_pending() {
+        // GIVEN: a caller waiting on id 5
+        let t = make_transport("echo");
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        t.pending.insert("5".to_string(), tx);
+
+        // WHEN: the peer sends a *request* that reuses that id
+        let json = r#"{"jsonrpc":"2.0","id":5,"method":"sampling/createMessage","params":{}}"#;
+        let outcome = t.handle_response(json);
+
+        // THEN: the frame is refused, and the caller is still waiting
+        assert!(
+            outcome.is_err(),
+            "a frame carrying `method` must not parse as a response"
+        );
+        assert!(rx.try_recv().is_err(), "caller must not be completed");
+        assert!(
+            t.pending.contains_key("5"),
+            "caller must remain pending, not be silently consumed"
+        );
     }
 
     #[test]

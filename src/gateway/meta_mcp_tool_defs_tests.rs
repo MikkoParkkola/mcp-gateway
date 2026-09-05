@@ -376,3 +376,119 @@ fn all_code_mode_tools_have_descriptions() {
         );
     }
 }
+
+// ── meta-tool exposure (GH issue 449) ───────────────────────────────
+
+/// 449.EXPOSE.1 — an empty allow-list is "expose everything", so an existing
+/// deployment that never sets the field keeps today's roster exactly.
+#[test]
+fn empty_allow_list_exposes_the_whole_roster() {
+    let exposure = MetaToolExposure::from_names(&[]);
+    let all = build_meta_tools(true, true, true, true, 42, 3);
+    let filtered = build_meta_tools_filtered(true, true, true, true, 42, 3, &exposure);
+    assert_eq!(
+        filtered.len(),
+        all.len(),
+        "empty allow-list must not drop any meta-tool"
+    );
+}
+
+/// 449.EXPOSE.2 — a non-empty allow-list yields only the named tools.
+#[test]
+fn allow_list_yields_only_the_named_tools() {
+    let exposure = MetaToolExposure::from_names(&[
+        "gateway_invoke".to_string(),
+        "gateway_list_servers".to_string(),
+    ]);
+    let filtered = build_meta_tools_filtered(true, true, true, true, 42, 3, &exposure);
+    let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["gateway_list_servers", "gateway_invoke"],
+        "allow-list must yield exactly the named tools"
+    );
+}
+
+/// 449.EXPOSE.3 — the predicate the list path uses is the same one the call
+/// path consults, so it must answer for an omitted tool directly.
+#[test]
+fn predicate_hides_an_omitted_tool_and_keeps_a_named_one() {
+    let exposure = MetaToolExposure::from_names(&["gateway_invoke".to_string()]);
+    assert!(exposure.is_exposed("gateway_invoke"));
+    assert!(
+        !exposure.is_exposed("gateway_kill_server"),
+        "a meta-tool absent from the allow-list must not be callable"
+    );
+}
+
+/// 449.EXPOSE.4 — the allow-list governs every name a builder can produce, and
+/// nothing else. Surfaced backend tools pass through untouched; Code Mode's
+/// `gateway_execute` is a built-in, so an allow-list that omits it hides it.
+#[test]
+fn predicate_governs_the_builder_roster_and_nothing_else() {
+    let exposure = MetaToolExposure::from_names(&["gateway_invoke".to_string()]);
+    assert!(
+        exposure.is_exposed("some_backend_tool"),
+        "surfaced backend tools are not meta-tools"
+    );
+    assert!(
+        !exposure.is_exposed("gateway_execute"),
+        "Code Mode reaches every backend tool, so an omitted gateway_execute \
+         must not stay callable"
+    );
+}
+
+/// 449.EXPOSE.5 — an unrecognised name is dropped with a warning, never fatal
+/// (precedent: surfaced.rs:31-33). The recognised entries still apply.
+#[test]
+fn unrecognised_configured_name_is_dropped_not_fatal() {
+    let exposure = MetaToolExposure::from_names(&[
+        "gateway_invoke".to_string(),
+        "gateway_typo_not_a_tool".to_string(),
+    ]);
+    assert!(exposure.is_exposed("gateway_invoke"));
+    assert!(!exposure.is_exposed("gateway_kill_server"));
+}
+
+/// 449.EXPOSE.6 — the unfiltered builder keeps its existing six-argument form
+/// and its existing output, so the call site in `meta_mcp/mod.rs` still compiles.
+#[test]
+fn unfiltered_builder_is_unchanged_by_the_exposure_work() {
+    let tools = build_meta_tools(false, false, false, false, 42, 3);
+    assert_eq!(tools.len(), 13);
+}
+
+/// 449.EXPOSE.7 — the config default exposes everything, so upgrading without
+/// touching config.yaml changes nothing.
+#[test]
+fn config_default_exposes_every_meta_tool() {
+    let config = crate::config::MetaMcpConfig::default();
+    assert!(
+        config.exposed_meta_tools.is_empty(),
+        "default must be expose-all"
+    );
+    let exposure = MetaToolExposure::from_names(&config.exposed_meta_tools);
+    assert!(exposure.is_exposed("gateway_kill_server"));
+}
+
+/// Every built-in the gateway can dispatch must be governed by the exposure
+/// predicate. A builder added later and left out of `governed_meta_tool_names`
+/// produces a tool that no allow-list can restrict, which is how
+/// `gateway_execute` escaped.
+#[test]
+fn every_builder_contributes_to_the_governed_set() {
+    let exposure = MetaToolExposure::from_names(&["gateway_invoke".to_string()]);
+    for tool in build_meta_tools(true, true, true, true, 0, 0)
+        .into_iter()
+        .chain(build_code_mode_tools())
+    {
+        if tool.name == "gateway_invoke" {
+            continue;
+        }
+        assert!(
+            !exposure.is_exposed(&tool.name),
+            "{} escapes an allow-list that does not name it",
+            tool.name
+        );
+    }
+}

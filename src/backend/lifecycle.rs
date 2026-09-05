@@ -131,6 +131,7 @@ impl Backend {
                 pool
             },
             failsafe_config: failsafe_config.clone(),
+            era: Arc::new(crate::protocol::era::EraCache::for_backend(name)),
             tools_cache: CachedMetadata::new(),
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),
@@ -224,6 +225,11 @@ impl Backend {
             // Reconcile: did the evictor remove this exact entry while we
             // were building its transport?
             if let Some(transport) = self.reconcile_after_start(key, &entry, transport).await {
+                // Resolve the peer's protocol era on the start path, so the
+                // first request already knows which dialect to speak. Runs
+                // under this slot's `start_lock`; see `Backend::resolve_era`
+                // for the lock order that imposes.
+                self.resolve_era(&transport).await;
                 return Ok(transport);
             }
             // Lost the race: `reconcile_after_start` already closed the
@@ -883,7 +889,14 @@ impl Backend {
         // nothing to take back. A start that failed for THAT reason is not a
         // fault worth reporting as one.
         match self.start_entry(&PoolKey::Shared, &entry).await {
-            Ok(_) => Ok(RestartOutcome::Rebuilt),
+            Ok(transport) => {
+                // Same obligation as the cold start path: the era describes the
+                // process on the other end, and this one has just been
+                // replaced. Runs under the `start_lock` taken above, which is
+                // the order `Backend::resolve_era` documents.
+                self.resolve_era(&transport).await;
+                Ok(RestartOutcome::Rebuilt)
+            }
             Err(error) => {
                 if self.replaced_transport_cleanups.lock().stopping {
                     Ok(RestartOutcome::SkippedStopping)

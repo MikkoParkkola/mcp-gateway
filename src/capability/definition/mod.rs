@@ -1304,4 +1304,40 @@ mod caller_addressed_state_tests {
         );
         assert!(!creates_caller_addressed_external_state(&d));
     }
+    #[test]
+    fn a_declared_registration_wins_over_the_name_heuristic() {
+        // MIK-7262. `gws_gmail_watch` registers a Pub/Sub topic: the destination
+        // is not a URL and the name carries no keyword, so inference alone
+        // misses it. A capability author saying so must beat the heuristic, or
+        // the declaration is decoration.
+        let mut d = named_def(
+            "notion_create_page",
+            "POST",
+            &serde_json::json!({"properties": {"title": {"type": "string"}}}),
+        );
+        assert!(
+            !creates_caller_addressed_external_state(&d),
+            "inference alone must not flag this, or the test proves nothing"
+        );
+        d.metadata.registers_external_callback = Some(true);
+        assert!(creates_caller_addressed_external_state(&d));
+    }
+
+    #[test]
+    fn a_declared_non_registration_wins_over_the_name_heuristic() {
+        // The other direction, and the one that costs a user a tool: a name and
+        // a schema that both read as a webhook, on a capability whose author
+        // says it registers nothing.
+        let mut d = named_def(
+            "linear_create_webhook",
+            "POST",
+            &serde_json::json!({"properties": {"url": {"type": "string"}}}),
+        );
+        assert!(
+            creates_caller_addressed_external_state(&d),
+            "inference alone must flag this, or the test proves nothing"
+        );
+        d.metadata.registers_external_callback = Some(false);
+        assert!(!creates_caller_addressed_external_state(&d));
+    }
 }

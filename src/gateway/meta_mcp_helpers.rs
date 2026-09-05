@@ -8,6 +8,7 @@
 use serde_json::{Value, json};
 
 use crate::failsafe::CircuitBreakerStats;
+use crate::gateway::meta_mcp_tool_defs::MetaToolExposure;
 use crate::protocol::{
     Content, Info, InitializeResult, JsonRpcResponse, PromptsCapability, RequestId,
     ResourcesCapability, ServerCapabilities, Tool, ToolsCallResult, ToolsCapability,
@@ -132,6 +133,50 @@ pub(crate) fn extract_u64_or(args: &Value, key: &str, default: u64) -> u64 {
     args.get(key).and_then(Value::as_u64).unwrap_or(default)
 }
 
+/// Extensions this gateway implements and honours today
+/// (`io.modelcontextprotocol/extensions`).
+///
+/// Empty: no extension is wired end-to-end yet. Populated from
+/// implemented-and-enabled handlers only, never from a static list of known
+/// identifiers — see
+/// `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata.md` §3.1a.
+/// TASK.1 adds the first entry (`io.modelcontextprotocol/tasks`) in the same
+/// change that makes task-augmented requests behave differently from an
+/// ordinary `tools/call`; adding the identifier here without that behaviour
+/// would advertise a mechanism the gateway does not honour.
+pub(crate) fn implemented_extensions() -> std::collections::HashMap<String, Value> {
+    std::collections::HashMap::new()
+}
+
+/// Build `ServerCapabilities` from an explicit extension source.
+///
+/// Split out from [`build_initialize_result`] so the extension source is an
+/// injectable parameter rather than a value read from a module-level
+/// constant: a test can perturb `extensions` here and observe the wire value
+/// change, which is the only way to prove the populate is wired rather than
+/// left at its `Default` (design test plan §5.1, §4.1).
+pub(crate) fn build_server_capabilities(
+    extensions: std::collections::HashMap<String, Value>,
+) -> ServerCapabilities {
+    ServerCapabilities {
+        tools: Some(ToolsCapability {
+            list_changed: true,
+            #[cfg(feature = "spec-preview")]
+            filtering: Some(true),
+            #[cfg(feature = "spec-preview")]
+            resolve: Some(true),
+        }),
+        resources: Some(ResourcesCapability {
+            subscribe: true,
+            list_changed: true,
+        }),
+        prompts: Some(PromptsCapability { list_changed: true }),
+        logging: Some(std::collections::HashMap::new()),
+        extensions,
+        ..Default::default()
+    }
+}
+
 /// Build the `InitializeResult` for a given negotiated protocol version.
 ///
 /// `instructions` is appended after the static preamble; pass an empty string
@@ -142,22 +187,7 @@ pub(crate) fn build_initialize_result(
 ) -> InitializeResult {
     InitializeResult {
         protocol_version: negotiated_version.to_string(),
-        capabilities: ServerCapabilities {
-            tools: Some(ToolsCapability {
-                list_changed: true,
-                #[cfg(feature = "spec-preview")]
-                filtering: Some(true),
-                #[cfg(feature = "spec-preview")]
-                resolve: Some(true),
-            }),
-            resources: Some(ResourcesCapability {
-                subscribe: true,
-                list_changed: true,
-            }),
-            prompts: Some(PromptsCapability { list_changed: true }),
-            logging: Some(std::collections::HashMap::new()),
-            ..Default::default()
-        },
+        capabilities: build_server_capabilities(implemented_extensions()),
         server_info: Info {
             name: "mcp-gateway".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -180,29 +210,66 @@ pub(crate) fn build_initialize_result(
 ///
 /// * `tool_count`   — total number of tools currently cached across all backends
 /// * `server_count` — number of registered backends (running or not)
+/// * `exposure`     — the meta-tool allow-list; only exposed tools are named
 ///
 /// # Examples
 ///
 /// ```ignore
-/// let preamble = build_discovery_preamble(42, 3);
+/// let preamble = build_discovery_preamble(42, 3, &MetaToolExposure::expose_all());
 /// assert!(preamble.contains("42 tools"));
 /// assert!(preamble.contains("3 backends"));
 /// assert!(preamble.contains("FIRST"));
 /// ```
-pub(crate) fn build_discovery_preamble(tool_count: usize, server_count: usize) -> String {
-    format!(
-        "This server manages {tool_count} tools across {server_count} backends.\n\
-         Use gateway_search_tools FIRST to find relevant tools by keyword before invoking.\n\
-         Tool schemas are not listed directly so the prompt stays compact.\n\
-         \n\
-         Discovery pattern:\n\
-         1. gateway_search_tools(query=\"your keyword\") -- find tools matching your need\n\
-         2. gateway_invoke(server=\"X\", tool=\"Y\", arguments={{...}}) -- call the tool\n\
-         \n\
-         Direct listing (when you know the backend):\n\
-         - gateway_list_tools(server=\"brave\") -- list tools from a specific backend\n\
-         - gateway_list_servers -- list all backends with status\n"
-    )
+pub(crate) fn build_discovery_preamble(
+    tool_count: usize,
+    server_count: usize,
+    exposure: &MetaToolExposure,
+) -> String {
+    // Only name tools the operator actually exposed. `initialize` reaches every
+    // client before any `tools/list`, so an unfiltered preamble would announce
+    // the existence of tools the allow-list hides - the same disclosure the
+    // refusal path is worded to avoid - and would steer clients into calls the
+    // gateway then refuses.
+    let mut out =
+        format!("This server manages {tool_count} tools across {server_count} backends.\n");
+    let search = exposure.is_exposed("gateway_search_tools");
+    let invoke = exposure.is_exposed("gateway_invoke");
+    let list_tools = exposure.is_exposed("gateway_list_tools");
+    let list_servers = exposure.is_exposed("gateway_list_servers");
+
+    if search {
+        out.push_str(
+            "Use gateway_search_tools FIRST to find relevant tools by keyword before invoking.\n",
+        );
+    }
+    out.push_str("Tool schemas are not listed directly so the prompt stays compact.\n");
+
+    if search || invoke {
+        out.push_str("\nDiscovery pattern:\n");
+        if search {
+            out.push_str(
+                "1. gateway_search_tools(query=\"your keyword\") -- find tools matching your need\n",
+            );
+        }
+        if invoke {
+            out.push_str(
+                "2. gateway_invoke(server=\"X\", tool=\"Y\", arguments={...}) -- call the tool\n",
+            );
+        }
+    }
+
+    if list_tools || list_servers {
+        out.push_str("\nDirect listing (when you know the backend):\n");
+        if list_tools {
+            out.push_str(
+                "- gateway_list_tools(server=\"brave\") -- list tools from a specific backend\n",
+            );
+        }
+        if list_servers {
+            out.push_str("- gateway_list_servers -- list all backends with status\n");
+        }
+    }
+    out
 }
 
 /// Build dynamic routing instructions from capability metadata.

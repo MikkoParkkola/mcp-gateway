@@ -8,6 +8,12 @@
 # nameOverride: ""
 # fullnameOverride: ""
 
+# Two replicas are correct for the default configuration, and remain correct with
+# the gateway's `server.modern_protocol` switch on. Continuation key material is
+# generated per process and never shared, so a continuation cannot be spent twice
+# across replicas. The cost is that a retry succeeds only on the replica that minted
+# it and is refused elsewhere; set this to 1 if you need every retry to be served.
+# See docs/DEPLOYMENT.md, "Replica Count and `server.modern_protocol`".
 replicaCount: 2
 
 image:
@@ -15,7 +21,7 @@ image:
   repository: mikkoparkkola/mcp-gateway
   # Prefer a digest for immutable, supply-chain-safe deploys (set by A5/6684).
   # When `digest` is set it takes precedence over `tag`.
-  tag: "3.5.1"
+  tag: "4.0.0"
   digest: ""
   pullPolicy: IfNotPresent
 
