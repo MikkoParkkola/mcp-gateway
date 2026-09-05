@@ -6,7 +6,11 @@ Reviewed twice, adversarially, by two vendors: `gpt-review` (Codex/GPT-5.x) and
 `synthetic-review` (the open-weights leg, `glm-5.3` alias — the wrapper formerly
 called `kimi-review`; earlier revisions of this file misattributed it to Kimi K2,
 which did not run). Round 2 ran against `08c0b9c9` and both returned
-SHIP-WITH-FIXES, each naming a doc-level fix inside this design. Findings
+SHIP-WITH-FIXES, each naming a doc-level fix inside this design. A third,
+confirmation pass ran against `b645491e`: `gpt-review` returned SHIP-WITH-FIXES
+naming three defects this wiring would activate rather than inherit, amended
+below. The open-weights leg of that pass produced an empty run file — no verdict
+row, so it is recorded as MISSING and re-run, never as a pass. Findings
 disposed below.
 
 ## Problem
@@ -253,6 +257,55 @@ names it.
 Row 2 is the one an unconditional merge would flip: a modern client that
 declared at `initialize` and omitted `_meta` would start being asked, which is
 the per-request gate MRTR.9 exists to enforce. It stays refused.
+
+## Round-3 amendments — three defects the wiring would activate
+
+The confirmation pass (`gpt-review`, `b645491e`, SHIP-WITH-FIXES) found three
+things that are not bridge-internal and not out of scope: each one is created,
+or first made reachable, by this change. All three verified at source before
+being accepted. Each is eliminated rather than patched — after the amendment the
+finding can no longer be stated.
+
+**1. The bridge gate is a conjunction, and that is what makes it transport-safe.**
+The reviewer read the design as "legacy shape -> bridge" and objected that every
+stdio request is legacy-shaped, so the HTTP-only scope would not survive contact
+with stdio. Correct about the shape, and the design did not say the second half
+out loud. The gate is `Legacy` shape **and** a declaration present for this
+session in the HTTP session store. Stdio never writes that store — the store is
+owned by the streaming session manager and stdio has no session in it — so a
+stdio request finds no declaration and takes the existing fail-closed refusal.
+No transport enum, no `is_http` flag: the scope boundary is the store's
+membership, which already had to be checked. Row 3 of the decision table is this
+case and it stays refused.
+
+**2. Post-dispatch verdicts are computed from the final result, not the first.**
+`invoke.rs:1475` reads `stopped_to_ask` once, from the first dispatch result,
+and two later gates depend on it: the idempotency settle at `:1499` and the
+response gate at `:1769`. A bridge retry that succeeds leaves that verdict
+saying the backend stopped to ask when it has since acted — the key is never
+settled and the response is judged on a stale verdict. Confirmed at source.
+The dispatch helper named in the change surface therefore returns the *settled*
+result, and `interim` and `stopped_to_ask` are derived after it returns. One
+result value in scope means a stale verdict has nowhere to live.
+
+**3. The declaration store is owned by the session manager, not by `ClientSession`.**
+Open question 3 answered "declarations live in `ClientSession`". `ClientSession`
+is private to `src/gateway/streaming.rs:47` and constructed only there
+(`:188`, `:202`), and that file never sees an `initialize` message — it builds
+sessions from transport state. `MetaMcp::handle_initialize`
+(`src/gateway/meta_mcp/mod.rs:1151`) is the only place the declaration exists,
+and it already carries `session_id: Option<&str>`. So the writer and the owner
+are real but in different modules, and the earlier answer would not have
+compiled. Amended: the store is keyed by session id and owned by the streaming
+session manager, reached through two methods on it rather than by making the
+struct public. Removal and TTL reaping stay where they already are, which is
+what open question 3 was for.
+
+Not amended, still out of scope: the aggregate deadline not bounding backend
+retries, prompt parameters forwarded without typed validation, and reply
+projection ignoring request kind. All three are inside `input_bridge.rs`, none
+is created by the call site, and MIK-7388 is where bridge-internal defects go.
+MIK-7388 blocking MIK-7212 is what keeps them from shipping live.
 
 ## Unknowns, scheduled
 
