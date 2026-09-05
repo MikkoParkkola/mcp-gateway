@@ -15,6 +15,18 @@ Verified 2026-09-03 against the worktree at `fix/mrtr2-continuation-handle`
 row. A cell reading **no** means a search found nothing, not that nobody intends
 to do it.
 
+**Not a cluster, and the decision is open (2026-09-05).** The upgrade path — what
+an operator meets when they move a 3.x install to 4.0.0 — has a requirement
+(`NFR.DOC.2`) and driven criteria (`GH475.MIG.*`, `GH475.NOTICE.1`,
+`docs/design/2026-09-05-error-budget-test-plan.md`), but no row here, and
+`RELEASE-4.0.0-blocking-rollup.md` contains no occurrence of *upgrade*, *notice*
+or *migrat*. So this board cannot answer how far along that path is. It is
+recorded here rather than made an eighth cluster because minting release scope is
+the release owner's call, not an agent's. The cost of leaving it: the printed
+upgrade notice was telling operators to run `auth login`, a subcommand this binary
+does not have, and no cluster on this board would have surfaced that — it was
+found by driving the binary for a criterion that lives in a design document.
+
 | # | cluster | rows | design | test plan | plan reviewed | code | the one thing blocking |
 |---|---|---|---|---|---|---|---|
 | A | continuation envelope (MIK-7212) | 6 | yes — `2026-08-30-mrtr-wiring.md`, `2026-08-30-shared-continuation-state.md`, `2026-09-01-continuation-telemetry.md`, `2026-09-03-mrtr-9a-declared-modes.md` | yes — `2026-09-02-mrtr-test-plan.md` | yes | **yes** — the route is wired and redeemed on the tool-invoke path (`redeem_retry`, `src/gateway/meta_mcp/invoke.rs:529`, called at `:1301`); `cargo test --test mik_7212_mrtr_component_acs` gives **18 passed, 0 failed** and `--test mik_7215_acs` **25 passed, 0 failed**, both at `b5d4ce7f` | evidence, not mechanism. `MRTR.4`, `MRTR.5`, `MRTR.6` and `MRTR.9` are met and have left the cluster — `MRTR.9a` last, once a client's declaration stopped flattening to the capability *name* and carried its elicitation modes, so a url-mode request is refused rather than passing the gate by construction. `NFR.SEC.2` and `NFR.SEC.4` left it on 2026-09-04 — the fixtures existed and now assert the reason each refusal gives, and the confidentiality test reads the decoded envelope instead of the base64 text. What remains is the observability and performance evidence over a path that already exists: `NFR.SEC.3`, `NFR.OBS.4`, `NFR.PERF.3`, and the `MRTR.7a/7b` legacy-client bridge, which is the one row group in this cluster that is still unwired |
