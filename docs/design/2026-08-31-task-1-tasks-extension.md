@@ -56,7 +56,7 @@ only one and produced the wrong conclusion. The draft at `.../specification/draf
 |---|---|---|
 | `src/protocol/tasks.rs:1-111` | `TaskStatus` = `Working \| Completed \| Failed`; `Task { id, tool, status, result, error }`; `error: Option<String>` at `:37`; id is `format!("task-{}", Uuid::new_v4())` | three of the spec's five statuses; no `createdAt`, `lastUpdatedAt`, `ttlMs`; the failure payload is a string where the spec requires a JSON-RPC error object |
 | `src/protocol/extensions.rs:30,38,46,52-56` | `Extension::Tasks -> "io.modelcontextprotocol/tasks"`, `ExtensionSet`, `gateway_declares()`; `from_capabilities` rejects non-object values | the declaration path exists and is unwired ("Nothing calls this in 4.0.0") |
-| `src/protocol/meta.rs:247` | `ADDED_IN_2026_07_28 = ["subscriptions/listen", "tasks/get", "tasks/update"]` | short by `tasks/cancel` and `notifications/tasks/status` |
+| `src/protocol/meta.rs:247` | `ADDED_IN_2026_07_28 = ["subscriptions/listen", "tasks/get", "tasks/update"]` | short by `tasks/cancel` and `notifications/tasks` |
 | `src/gateway/router/handlers.rs:828` | `if !is_modern && ADDED_IN_2026_07_28.contains(&method)` -> `-32601` | a 2025-era client can reach `tasks/cancel` today, because the list does not name it |
 | `src/gateway/router/handlers.rs:842` | `"subscriptions/listen"` returns an SSE stream, ack first | the stream a task's notifications must ride, and must not carry progress/message |
 | `src/protocol/headers.rs:36-52` | `mcp_name_required` / `mcp_name_body_field`, "exactly these three" | the extension adds a fourth..sixth: `tasks/get\|update\|cancel` mirror `taskId`, not `name` |
@@ -71,7 +71,7 @@ never on the response body, which the cache will happily replay.
 
 Correction to the tree: the doc comment at `extensions.rs:52-56` says the gap is "two statuses,
 two required fields and the shape of the failure payload". Measured against the pinned blob it is also
-a third method (`tasks/cancel`), a notification (`notifications/tasks/status`), a required
+a third method (`tasks/cancel`), a notification (`notifications/tasks`), a required
 nullable `ttlMs`, and an optional `pollIntervalMs`. That comment is part of the change.
 
 ## 3. The design
@@ -116,7 +116,7 @@ Five pieces, in dependency order.
    `data.requiredCapabilities.extensions["io.modelcontextprotocol/tasks"]`.
 
 4. **Method registration.** `ADDED_IN_2026_07_28` gains `tasks/cancel` and
-   `notifications/tasks/status`; `handlers.rs` gains the four arms;
+   `notifications/tasks`; `handlers.rs` gains the four arms;
    `mcp_name_body_field` gains three entries mirroring `taskId`.
 
 5. **Declaration.** *Corrected after designB2's EXT.1 note
@@ -256,7 +256,7 @@ entry — a duplicate-suppression deadlock for that exact `(server, tool, argume
 `subscriptions/listen` already returns a real multiplexed SSE body (`handlers.rs:842`). The spec
 forbids `notifications/progress` and `notifications/message` on a *task's* stream. So the filter
 is not a TASK.1 detail bolted on later: `subscriptions/listen` with `taskIds` present is a
-task-scoped stream and carries `notifications/tasks/status` only. SUB.2's design owns request-
+task-scoped stream and carries `notifications/tasks` only. SUB.2's design owns request-
 scoped notification routing; this is a constraint on it, recorded here because TASK.1 is what
 makes it reachable.
 
@@ -335,7 +335,7 @@ go green against any stub — that is stated, not papered over.
 | `MIK-7272.TASK.1.6` | a `failed` task carries the JSON-RPC `error` **object**; a tool result with `isError: true` is `completed` with `result`, never `failed` | unit: construct both, assert the serialised shapes | unit | **Yes, red now, for a real reason.** `tasks.rs:37` is `error: Option<String>`; an object cannot be represented, so the first half fails to compile. The second half is a classification assertion that has no implementation to agree with it. |
 | `MIK-7272.TASK.1.7` | `Mcp-Name` on `tasks/get\|update\|cancel` mirrors `params.taskId` | unit on `mcp_name_body_field` for the three methods | unit | **Yes, red now, for a real reason.** `headers.rs:36-52` returns `None` for all three ("exactly these three" methods), so the case fails on today's code with no dispatcher involved. |
 | `MIK-7272.TASK.1.8` | a retried identical task-augmented call returns the **same** `taskId` and runs the backend **once**; the `CreateTaskResult` is never written to the response cache and never marked idempotency-completed | integration with `config.cache.enabled = false` and a mutation counter on the mock tool; assert the counter is 1 and both responses carry the same `taskId` | integration | **Yes for the guards, no for the dedupe.** The two guard halves are falsifiable against the existing `is_final` gates today. The same-`taskId` half needs the store. Fixture rule is binding: the response cache is written at `invoke.rs:1291`, after the backend result and before the client stream, so a fixture that leaves it enabled passes vacuously — assert the counter, never the body. |
-| `MIK-7272.TASK.1.9` | a `subscriptions/listen` carrying `taskIds` emits `notifications/tasks/status` and no `notifications/progress` or `notifications/message` | integration: drive a task that would emit progress, read the stream | integration | **No — vacuous until both TASK.1 and SUB.2 land.** Nothing emits task notifications, so an empty stream passes. Recorded as a constraint on SUB.2 (§5) so it is not discovered late. |
+| `MIK-7272.TASK.1.9` | a `subscriptions/listen` carrying `taskIds` emits `notifications/tasks` and no `notifications/progress` or `notifications/message` | integration: drive a task that would emit progress, read the stream | integration | **No — vacuous until both TASK.1 and SUB.2 land.** Nothing emits task notifications, so an empty stream passes. Recorded as a constraint on SUB.2 (§5) so it is not discovered late. |
 | `MIK-7272.TASK.1.11` | a retrieval call naming a task created by a different principal is answered as not-found, identically to a `taskId` that never existed | integration: create as principal A, retrieve as principal B, assert the response is byte-identical to retrieving an unknown id as B | integration | **No — vacuous until the dispatcher exists**, and it is the row most likely to be dropped as a nicety. Recorded here so the authorisation check lands with the dispatcher rather than after a review round. The byte-identical half is what makes it a test rather than a sentiment. |
 | `MIK-7272.TASK.1.10` | the capabilities EXT.1 builds advertise `extensions["io.modelcontextprotocol/tasks"] = {}`, on both `initialize` and `server/discover` | unit on `gateway_declares()` output, plus EXT.1's discovery integration case | unit | **No, and it is not TASK.1's to close.** `gateway_declares()` already returns the entry (`extensions.rs:52-56`); the unit case is green today. It cannot go red until EXT.1 adds `extensions` to `ServerCapabilities` and populates it in `build_initialize_result` — the field does not exist yet, so this is blocked on a struct change, not on a caller. Listed so the split is visible, not to claim it. |
 
@@ -412,3 +412,133 @@ it records the shape the spec forbids, so it is rewritten rather than kept or de
   restating them, and this note holds under either answer to the retire question. TASK.1 touches
   no correlation or trace surface, so that note's three-trace-surfaces finding does not reach
   this design.
+
+---
+
+## 10. Verification pass, 2026-09-06 — spec conformance re-checked against the pinned artifacts
+
+Appended, not replaced (H2 UPDATE>CREATE). A separate `2026-09-06-task1-tasks-extension.md`
+was commissioned this session; it was NOT written, because this file already exists and
+`RELEASE-4.0.0-readiness-board.md:45` says in terms that "a fifth design would be an
+H1/H2/H3 triple-fail; the missing artifact is code." The commission's premise — that no
+TASK.1 design exists because prior owners hit 404s on the core spec repo — is wrong. §1
+above already corrected that on 2026-08-31.
+
+What this section adds: an independent re-fetch of the authoritative artifacts, a
+conformance table against §2/§3, and the feasibility verdict for 4.0.0 that no section
+above states.
+
+### 10.1 Artifacts re-fetched (V)
+
+Fetched 2026-09-06 via `gh api repos/modelcontextprotocol/ext-tasks/contents/<path> --jq .content | base64 -d`:
+
+| artifact | size | what it is |
+|---|---|---|
+| `schema/2026-07-28/schema.ts` | 8,708 B, 350 lines | the tasks-only TypeScript delta; source of truth for wire types |
+| `specification/2026-07-28/tasks.md` | 34,148 B, 911 lines | normative prose; matches the blob §1 pinned byte-for-byte on size and line count |
+
+`modelcontextprotocol/modelcontextprotocol @ schema/2026-07-28/schema.ts` (3,197 lines) has
+zero task types and zero `tasks/*` methods — three case-insensitive matches, all comments
+referencing the extension. §1's conclusion holds: tasks are versioned separately from the core
+revision.
+
+### 10.2 CORRECTION — the notification method is `notifications/tasks`, not `notifications/tasks/status`
+
+§2's "Correction to the tree" paragraph names the missing notification
+`notifications/tasks/status`. That name does not exist in either artifact.
+
+- `schema.ts` `TaskStatusNotification`: `method: "notifications/tasks"` (V, schema.ts type
+  `TaskStatusNotification`).
+- `tasks.md` L896: "The `tasks/` method prefix and `notifications/tasks/` notification **prefix**
+  are reserved for this extension."
+
+The reserved *prefix* is `notifications/tasks/`; the *method* is `notifications/tasks`, with no
+trailing segment. Confusing the reserved prefix for the method name is what produced the wrong
+name, and naming that distinction here is what stops it recurring. `rg -n 'notifications/tasks'`
+over the prose returns 22 hits, none of them `notifications/tasks/status`.
+
+Code consequence, not edited here: `src/protocol/meta.rs:247` `ADDED_IN_2026_07_28` is short by
+`tasks/cancel` and by `notifications/tasks` — under the correct name. §2 already flags the list
+as short; this fixes what it is short *of*.
+
+The five in-body occurrences are corrected **in place** (§2 table row, §2 prose, §3 piece 4, §5,
+AC `MIK-7272.TASK.1.9`) rather than only annotated here — a correction section sitting under five
+uncorrected uses is the two-documents-disagree failure §0 was written about. The wrong name now
+appears in this file only inside this subsection, as a quotation.
+
+Corroboration (V, second independent in-tree source): `RELEASE-4.0.0-dod-check.md:670` already
+names the notification `notifications/tasks`. The design was the outlier, not the tree.
+
+### 10.3 Conformance of §3 against the pinned artifacts
+
+Every row checked against `schema.ts` and `tasks.md` this session.
+
+| spec fact | §3 | verdict |
+|---|---|---|
+| 5 statuses `working\|input_required\|completed\|failed\|cancelled` | piece 1 | matches |
+| `taskId: string`, `createdAt`/`lastUpdatedAt` ISO 8601 required | piece 1 | matches |
+| `ttlMs: number \| null` REQUIRED and `@nullable` | piece 1 ("present-and-nullable, not absent") | matches, and the distinction is the one the schema draws |
+| `pollIntervalMs?: number`, integer ms, MAY change over the task's life | piece 1 | matches; the MAY-change clause is not stated, and the store must not treat it as write-once |
+| `failed` carries `error` as a JSON-RPC error **object** | piece 1, AC `.6` | matches |
+| `completed` carries `result`, shape = the original request's result type; `isError: true` is still `completed` | AC `.6` | matches the terminal-state MUST at `tasks.md:890-891` |
+| `CreateTaskResult = Result & Task & {resultType: "task"}`, flat | §3 opening, AC `.1` | matches |
+| `tasks/get` -> `Result & DetailedTask & {resultType: "complete"}` | AC `.2` | matches |
+| `tasks/update` / `tasks/cancel` -> empty ack, `resultType: "complete"`; each `inputResponses` key MUST match an outstanding `inputRequest` | piece 4, AC `.3` | **design is silent** on the key-matching MUST and on the empty-ack shape. Neither changes the design; both belong in the AC `.3` case, which today says only "advances `lastUpdatedAt`" |
+| cancellation is cooperative and eventually consistent | — | **design is silent.** Worth one line: it licenses `tasks/cancel` returning before the backend call actually stops, which is the only implementable behaviour here anyway |
+| no `tasks/list`, deliberately, for cross-caller correlation (`tasks.md:904`) | §3 "two non-spec structs", §3 piece 6 | matches, and is load-bearing in both places |
+| negotiation: client per-request `_meta["io.modelcontextprotocol/clientCapabilities"].extensions`; server `result.capabilities.extensions`; empty object = support | pieces 3 and 5 | matches |
+| creation is **server-directed** per request | §3 opening | matches |
+| `-32021` + `data.requiredCapabilities.extensions` | piece 3, AC `.4` | matches; §6 already proved `-32021` against `era.rs:39-40` |
+| task IDs MAY be bearer tokens -> entropy requirement | piece 1 (v4 UUID) | matches |
+| auth MUST be checked on **each** task-related request | piece 6, AC `.11` | matches; this is `MIK-7272.TASK.1.9`'s CRITICAL leak, and it is dispositioned, not open |
+| `notifications/tasks` is optional; clients subscribe via `subscriptions/listen` | §5, AC `.9` | matches after §10.2's rename |
+| `TaskSubscriptionNotifications{taskIds?}` / `TaskSubscriptionAcknowledgedNotifications{taskIds?}` | §5 | matches |
+| reserved: `tasks/` prefix, `notifications/tasks/` prefix, `resultType: "task"`, the label itself | — | **design is silent.** No action: the gateway defines nothing under those prefixes |
+
+Three silences, no contradictions. None of them moves the design; two (the `inputResponses` key
+MUST, the cooperative-cancel licence) belong in the test plan when AC `.3` is written.
+
+### 10.4 Verdict — the disposition already recorded stands; this session did not reopen it
+
+**The feasibility question was already decided, and not by this design.** §0 records the operator's
+full-scope direction of 2026-08-31, which overturned `dod-check.md:557-584`'s "4.0.0 does not
+advertise the tasks extension". `RELEASE-4.0.0-plan.md:110-112` carries the overturn. Re-issuing a
+GO/DEFER verdict here would be a fourth status document on one question — the exact failure §0
+describes. So: **GO, confirmed, not re-decided.**
+
+What the re-fetch adds is that the *middle* option does not exist, which is worth stating because it
+is the option a reader under schedule pressure reaches for. Advertise-only — declaring
+`extensions["io.modelcontextprotocol/tasks"] = {}` without serving `tasks/get` — is not a
+reduced-scope landing, it is a false declaration. Creation is server-directed per request (the
+client signals support; "the server decides on a per-request basis whether to materialize a task"),
+so a server that advertises and never materialises anything is conformant only trivially; and a
+server that *returns* a `CreateTaskResult` whose `taskId` no method resolves violates the durability
+MUST behind AC `.1`. The choice is binary: land the three methods plus the lifecycle, or defer the
+whole criterion. There is no half.
+
+**A defer would strand `MIK-7272.SUB.4`, and this is where that is recorded.** SUB.4
+(`criteria-status.md:220`) requires a re-issued side-effecting call to be protected "by an
+idempotency key **or** the tasks extension". Both halves are dead today:
+`MetaMcp::idempotency_cache` initialises `None` (`meta_mcp/mod.rs:393`), `MetaMcp::enable_idempotency`
+(`:580`) carries `#[allow(dead_code)]` with zero callers, the enforcement site
+(`meta_mcp/invoke.rs:801-803`) always takes the `None` branch, and `POST /mcp/{name}` bypasses
+`invoke_tool_traced` by ADR-008 rung-2 design (`backend_handlers.rs:724`). If TASK.1 defers, SUB.4's
+"or" collapses and the idempotency half stops being an alternative and becomes mandatory. A defer
+that does not say so is a handoff wearing a verdict.
+
+### 10.5 Unknowns after this pass
+
+Unchanged in count: **five resolved** (§6, each with a recorded answer), **two deferred** with all
+four fields (the two non-spec capability structs; the `dod-check.md` §0 disposition, owned by the
+first TASK.1 code commit). This pass resolved one more by re-fetch — *is the design pinned to the
+artifact that is actually normative?* — command: `gh api` against the `ext-tasks` repository's
+contents endpoint for `specification/2026-07-28/tasks.md`; answer: yes, 911 lines / 34,148 B,
+matching pinned blob `5d6a202e`; what it changed: nothing in §1, and one method name in §2, §3, §5
+and §8 (see §10.2). It adds no new deferred unknown.
+
+### 10.6 What this pass did NOT do
+
+No implementation code was written; TASK.1 remains ABSENT in
+`RELEASE-4.0.0-criteria-status.md:226`. `src/protocol/meta.rs` is **not** edited here — the
+`ADDED_IN_2026_07_28` correction is a code consequence recorded for the implementing commit, and
+§P0 keeps it out of a design-only change. No fifth design file was created.
