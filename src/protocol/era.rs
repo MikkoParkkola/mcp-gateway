@@ -293,6 +293,10 @@ impl EraCache {
                 reason = "restart",
             );
         }
+        // A restart always probes: the verdict it might have reused has just been
+        // discarded. The miss is recorded for the same reason the start path records
+        // one -- an era resolved by probing must never read as a cache hit.
+        tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = false);
         self.probe_and_store(&mut guard, ProbeTrigger::Start, probe)
             .await
     }
