@@ -11,21 +11,21 @@ Design:
 
 | AC | criterion | case | level | type | home |
 |---|---|---|---|---|---|
-| GH475.RL.1 | a rate-limited response records nothing in the backend budget | drive the recorder with `IgnoredRateLimit`; assert sample count unchanged | unit | behaviour | `src/kill_switch/tests.rs` |
-| GH475.RL.2 | …nor in the capability budget | same, capability recorder | unit | behaviour | `src/kill_switch/tests.rs` |
-| GH475.RL.3 | …nor as a circuit-breaker failure | dispatch returns a rate-limited `Err`; assert `circuit_breaker_stats()` failure count unchanged and state `Closed` | unit | behaviour | `src/backend/ops.rs` tests |
+| GH475.RL.1 | a rate-limited response records nothing in the backend budget | drive the recorder with `IgnoredRateLimit`; assert sample count unchanged | unit | behaviour | `src/gateway/meta_mcp/invoke.rs` mod `error_budget_tests` (`:4396`) |
+| GH475.RL.2 | …nor in the capability budget | same, capability recorder | unit | behaviour | same |
+| GH475.RL.3 | …nor as a circuit-breaker failure | dispatch returns a rate-limited `Err`; assert `circuit_breaker_stats()` failure count unchanged and state `Closed` | unit | behaviour | `src/backend/tests.rs:885` (the prod site is `backend/ops.rs`) |
 | GH475.RL.4 | a digit run inside a larger token is not a rate limit | `500` body quoting request id `4291a` → counts as failure | unit | boundary | `src/gateway/meta_mcp/invoke.rs` tests |
 | GH475.RL.5 | the `throttl` stem does not exempt | `"throttling disabled"` → counts as failure | unit | boundary | same |
 | GH475.RL.6 | the four accepted phrases do exempt | standalone `429`, `too many requests`, `rate limit`/`rate-limit`/`ratelimit`, `RESOURCE_EXHAUSTED` | unit | boundary | same |
-| GH475.RL.7 | an ordinary failure is unaffected | plain `500` → failure in both budgets and the breaker | unit | regression | `src/kill_switch/tests.rs` |
-| GH475.RL.8 | a success is still a success | `BudgetOutcome::Success` → success sample | unit | regression | same |
+| GH475.RL.7 | an ordinary failure is unaffected | plain `500` → failure in both budgets and the breaker | unit | regression | `src/backend/tests.rs:912` |
+| GH475.RL.8 | a success is still a success | `BudgetOutcome::Success` → success sample | unit | regression | `src/gateway/meta_mcp/invoke.rs` mod `error_budget_tests` — but see the note under this table: the case carrying the tag asserts RL.7's property, so RL.8 has no assertion of its own |
 | GH475.RL.9 | a backend returning only `429`s neither opens its circuit nor exhausts a budget | end-to-end invoke against a stub backend emitting `429` past both thresholds | integration | behaviour | `tests/` |
 | GH475.CFG.1 | the documented YAML parses | full `error_budget:` block → expected struct | unit | round-trip | `src/config/tests.rs` |
 | GH475.CFG.2 | a partial section merges field-by-field | `error_budget: {threshold: 0.5}` → threshold 0.5, other four at today's defaults | unit | boundary | same |
 | GH475.CFG.3 | a partial `capability:` merges the same way | `capability: {min_samples: 2}` → other four unchanged | unit | boundary | same |
 | GH475.CFG.4 | absent section = today's behaviour (D4) | empty config → both `Default` impls, value for value | unit | regression | same |
-| GH475.CFG.5 | **a configured backend threshold reaches the running budget** | boot the gateway from a YAML file carrying a non-default threshold; **the test may not call either setter** — it drives invoke and asserts the backend auto-kill fires at the configured rate, not 0.8 | integration | wiring | `tests/` |
-| GH475.CFG.5b | **a configured capability threshold reaches the running capability budget** | same YAML-boot path, asserting capability disable at the configured rate; a green CFG.5 says nothing about it, because the two setters are separate and separately callerless | integration | wiring | `tests/` |
+| GH475.CFG.5 | **a configured backend threshold reaches the running budget** | boot the gateway from a YAML file carrying a non-default threshold; **the test may not call either setter** — it drives invoke and asserts the backend auto-kill fires at the configured rate, not 0.8 | integration | wiring | `src/gateway/server/mod.rs:3061` |
+| GH475.CFG.5b | **a configured capability threshold reaches the running capability budget** | same YAML-boot path, asserting capability disable at the configured rate; a green CFG.5 says nothing about it, because the two setters are separate and separately callerless | integration | wiring | `src/gateway/server/mod.rs:3615` |
 | GH475.CFG.6 | a reload reports the section as restart-required | edit `error_budget`, reload → `pending_restart_fields` contains `error_budget` | unit | behaviour | `src/config_reload/` tests |
 | GH475.VAL.1 | out-of-range threshold rejected, field named | `1.5`, `0.0`, `-1.0` → error naming `threshold` | unit | negative | `src/config/tests.rs` |
 | GH475.VAL.2 | `.nan` rejected | YAML `.nan` → rejected, not accepted-and-inert | unit | negative | same |
@@ -35,11 +35,11 @@ Design:
 | GH475.OBS.1 | each exclusion is observable | N throttled responses through the gateway **plus a success control and an ordinary-failure control**; assert the suppression counter rose by exactly N and neither control moved it | integration | behaviour | `tests/` |
 | GH475.RL.10 | a typed rate-limit outcome needs no text | a capability `429` observed at `jsonrpc.rs` is excluded with the error text scrubbed to an unrelated string | integration | behaviour | `src/capability/executor/` tests |
 | GH475.RL.11 | both recorders route through one predicate | one signal table (the RL.4–RL.6 inputs) driven through **both real call paths** — backend dispatch and `MetaMCP` invoke — asserting an identical exempt/count verdict per input | unit | wiring | both call-site test modules |
-| GH475.RL.13 | a `429` records transport-health reachability | drive a `429` through **backend dispatch**, not a hand-built `Failsafe`; assert the production failsafe gains one health success, no circuit-breaker failure, and no budget sample | integration | behaviour | `src/backend/ops.rs` tests |
+| GH475.RL.13 | a `429` records transport-health reachability | drive a `429` through **backend dispatch**, not a hand-built `Failsafe`; assert the production failsafe gains one health success, no circuit-breaker failure, and no budget sample | integration | behaviour | `src/backend/tests.rs:899` |
 | GH475.VAL.6 | `window_size` above the upper bound is rejected | `window_size: 100001` → refused with the field named | unit | negative | same |
 | GH475.VAL.7 | every VAL row repeats under `capability:` | the same rejected values nested one level down are refused, naming the nested field | unit | negative | same |
 | GH475.VAL.8 | the accepted side of each boundary is accepted | `threshold: 1.0`, `window_size: 1`, `min_samples: 1`, `min_samples == window_size`, `window_duration: 1s`, `window_size: 100000` all parse | unit | boundary | same |
-| GH475.OBS.2 | the suppression debug event is emitted | one throttled response → one debug event naming the backend and the excluded outcome | unit | behaviour | `src/kill_switch/tests.rs` |
+| GH475.OBS.2 | the suppression debug event is emitted | one throttled response → one debug event naming the backend and the excluded outcome | unit | behaviour | `src/gateway/meta_mcp/invoke.rs` mod `error_budget_tests`, beside the emit site at `invoke.rs:1908` |
 | GH475.CFG.7 | the shipped example config parses | the `error_budget:` block shipped in the example file, uncommented, loads and validates | unit | round-trip | `src/config/tests.rs` |
 | GH475.MIG.4 | the notice says what the four changes are | the emitted text names all four items, the re-authentication and the startup-refusal consequences | unit | behaviour | `src/commands/upgrade.rs` tests |
 | GH475.MIG.1 | the 4.0.0 notice fires below 4.0.0 and writes nothing | stamp `3.9.0` → notice emitted, config file byte-identical | unit | behaviour | `src/commands/upgrade.rs` tests |
@@ -48,6 +48,17 @@ Design:
 | GH475.RL.14 | a backend reporting a `429` the MCP way is exempt | a rate-limit envelope arriving as `isError: true` inside a successful JSON-RPC result is excluded, while a non-rate-limit `isError: true` still counts | unit | boundary | `src/gateway/meta_mcp/invoke.rs` tests |
 | GH475.NOTICE.1 | a quiet upgrade still delivers the breaking-change notices | the built binary is run with `--quiet` over a 2.x data directory; the notices appear on stderr and the progress chatter does not appear on stdout | integration | wiring | `tests/gh475_quiet_upgrade_still_warns.rs` |
 
+The `home` column was re-read against the tree on 2026-09-05 and nine cells
+were wrong in three ways. Five named `src/kill_switch/tests.rs`, which carries
+no `GH475` tag at all. Two named `tests/` for boot-path cases that live in the
+crate. Two named `src/backend/ops.rs`, which is the production site — the cases
+are in `src/backend/tests.rs`. The cases are where the column now says. One row is not a citation error: the case
+tagged `GH475.RL.8` at `src/gateway/meta_mcp/invoke.rs:4425` asserts RL.7's
+property, and `src/backend/tests.rs:912` already asserts that same property
+under the correct tag — so RL.8's own clause, that a success is recorded as a
+success, is asserted nowhere. Retagging `:4425` would close the appearance and
+not the hole.
+
 Every criterion carries either a case or a recorded reason it has none, and the
 reasons are in **Rows without a case** below. The `GH475.*` identifiers are
 published in the tracking comment on GH #475, so closure evidence cites the same
@@ -55,19 +66,26 @@ strings the reporter can read (DoR B4).
 
 ## Rows without a case
 
-Six rows were planned and are not implemented. Each names behaviour this change
-does not add, so a case for it would assert against a fixture rather than the
-gateway — which is the failure mode this plan exists to prevent. They are
-recorded here rather than deleted, because deleting them would make the plan
-read as complete.
+Six rows were planned and are not implemented. They are recorded here rather
+than deleted, because deleting them would make the plan read as complete.
+
+The reasons were re-read against the tree on 2026-09-05 and two were false.
+OBS.1 and OBS.2 said the counter and the debug event do not exist; both have
+existed since the implementation landed, at `invoke.rs:1902` and `:1908`. A
+plan asserting that a mechanism is absent is not a stale sentence — the next
+reader takes it as a work item and builds the thing twice. What those two rows
+are missing is an assertion, which is a smaller and differently-owned job than
+what the old wording described. The remaining four are unchanged: each names
+behaviour this change genuinely does not add, so a case for it would assert
+against a fixture rather than the gateway.
 
 | row | why there is no case | disposal |
 |---|---|---|
 | GH475.RL.9 | an end-to-end `429`-only backend needs a stub MCP backend harness that does not exist; RL.3, RL.7 and RL.13 cover the same predicate at the dispatch call site | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
 | GH475.RL.10 | the capability executor does not classify rate limits at all — `src/capability/executor/` has no call to the shared predicate. The criterion presupposes an exclusion that was never built | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
 | GH475.RL.11 | the property is structural rather than tested: `src/gateway/recovery.rs:281` is the single predicate and both call sites (`backend/ops.rs:254`, `meta_mcp/invoke.rs:2976`) reach it. No test drives one signal table through both | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
-| GH475.OBS.1 | there is no suppression counter to assert against; no metric is emitted when an outcome is excluded | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
-| GH475.OBS.2 | same cause — no debug event is emitted on exclusion | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
+| GH475.OBS.1 | the counter exists and nothing asserts it. `src/gateway/meta_mcp/invoke.rs:1902` increments `mcp_error_budget_suppressed_total` with `reason => "rate_limited"` on every exclusion; what is missing is a case driving N throttled responses plus the two controls through the gateway. UNTESTED, not absent — the distinction is the difference between asserting a mechanism and building one | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
+| GH475.OBS.2 | same correction — the debug event is emitted at `invoke.rs:1908`, naming the server, the tool and the exclusion. No case captures it | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
 | GH475.MIG.3 | the notice guard compares against `4.0.0` and no case pins the direction, so an inverted comparison would not be caught | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
 
 
@@ -76,10 +94,16 @@ read as complete.
 Two rows carry the free failure that proves the rest are honest, because both
 name behaviour that does not exist yet:
 
-- **GH475.CFG.5 fails today for the reason #475 was filed.** Both setters have
-  no callers (`src/gateway/meta_mcp/mod.rs:961`, `:967`), so no configured value
-  can reach a running budget. A green CFG.5 before the wiring exists means the
-  test is asserting against its own fixture, not the gateway.
+- **GH475.CFG.5 failed for the reason #475 was filed, and now passes.** At the
+  red run neither setter had a caller, so no configured value could reach a
+  running budget, and a green CFG.5 before the wiring existed would have meant
+  the test was asserting against its own fixture. The wiring landed with this
+  change: `src/gateway/server/mod.rs:615` and `:616` call
+  `set_error_budget_config` and `set_capability_budget_config`
+  (`src/gateway/meta_mcp/mod.rs:972`, `:977` — the line numbers this paragraph
+  carried until 2026-09-05 were stale by eleven lines and, read today, said the
+  wiring was still missing). Both halves are asserted from the boot path at
+  `src/gateway/server/mod.rs:3061` and `:3615`, neither calling a setter.
 - **GH475.RL.3 fails today**: `src/backend/ops.rs:255` records every dispatch
   `Err` unconditionally.
 
