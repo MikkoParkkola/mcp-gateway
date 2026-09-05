@@ -34,6 +34,9 @@ answers "no, it is fine, you are asking too fast".
 | The defaults are therefore the only reachable values | follows from the two rows above |
 | Both setters were already recorded as dead, disposed without a ticket | `docs/requirements/RELEASE-4.0.0-criteria-status.md:278-279` |
 | The rest of the config parses durations as `5m` via `humantime_serde` | `src/config/mod.rs:1196`, `:1301`, `:1392`; module at `:1676` |
+| The backend failsafe records a dispatch `Err` as a circuit-breaker failure, independently of the budget | `src/backend/ops.rs:255`, `:384` (`entry.failsafe.record_failure(&e.to_string(), latency)`) |
+| HTTP status codes are deliberately NOT classified in the error type; a status-only classifier was tried and refused by two tests (#247 overloads 404/400 to mean "session expired") | `src/error.rs:120-126` |
+| `tracked_sections` is a hand-maintained list; a section absent from it reports as unchanged on reload | `src/config_reload/mod.rs:610-628` |
 | Existing tests pin both `Default` impls | `src/kill_switch/tests.rs:251`, `:345-370` |
 | No YAML or example config uses an `error_budget` key today | `rg error_budget --glob '*.yaml' --glob '*.yml'` — zero hits |
 
@@ -77,6 +80,35 @@ suppressed response, so an operator can confirm D1 is firing, quantify how much
 throttling a backend is doing, and see the blind spot rather than infer it. This
 is also the measurement that answers the deferred per-backend-override question.
 
+**D1 covers two recorders, not one.** This is leg 2's blocking finding, and it
+is confirmed at source. The kill-switch budget is not the only thing that reads
+a `429` as ill health: `src/backend/ops.rs:255` and `:384` hand every dispatch
+`Err` straight to `entry.failsafe.record_failure(&e.to_string(), latency)`,
+which feeds the circuit breaker and the health tracker. That path never consults
+the budget. Excluding a `429` from the budget alone would leave the reported
+symptom — a tripped breaker, five minutes of recovery — exactly where it is.
+
+So the same exclusion applies at both sites: a response determined to be rate
+limited records **neither** success nor failure, in the budget and in the
+failsafe. One predicate, shared, so the two sites cannot drift into disagreeing
+about what a `429` is.
+
+**Rejected: classify by HTTP status instead.** Leg 2 proposed preserving the
+status as a typed rate-limit outcome at the transport boundary. That is refused
+by a recorded decision, not by preference: `src/error.rs:120-126` states that
+status codes are deliberately unclassified, that a first pass marking 4xx
+permanent was refused by two existing tests, and why — this protocol overloads
+both `404` and `400` to mean "your MCP session expired, reinitialise and retry"
+(#247). "Classifying an HTTP failure needs the body, not just the code." The
+narrowed free-text match above is therefore not a shortcut around a better
+signal; it is the signal this codebase has, and the reason is written down.
+
+**The contract is an outcome, not a category.** `ErrorCategory` contains only
+failure variants, so it cannot express a successful call — and the budget needs
+successes to compute a failure rate at all. The recorder takes
+`BudgetOutcome::{Success, Failure(ErrorCategory), IgnoredRateLimit}`. The third
+variant is what the counter above observes.
+
 Why not count it as a success: that dilutes the measured failure rate, so a
 backend that is both throttling and genuinely failing looks healthier than it
 is. Why not count it as a failure: that is the reported bug.
@@ -110,6 +142,15 @@ threshold and leaves the other four alone. A section-level default would zero
 them and quietly break D4's guarantee for exactly the operator most likely to
 write one. The shipped example config gains a commented `error_budget:` block —
 the knob was asked for because it was invisible.
+
+A new top-level section is invisible to reload unless it is registered.
+`tracked_sections` (`src/config_reload/mod.rs:610-628`) is a hand-maintained
+macro list, and a section missing from it is reported as unchanged — an operator
+edits `error_budget:`, reloads, and is told nothing needs restarting while the
+old thresholds keep running. `error_budget` is added to that list, so the change
+is reported as restart-required. It is not wired into the live reload
+transaction: the budget windows are constructed at startup, and a half-applied
+window is worse than an honest "restart to apply".
 
 **D3 — validated at load, rejected with the field named, never clamped.**
 Stated as acceptance, not rejection: `threshold.is_finite() && threshold > 0.0
@@ -177,8 +218,10 @@ Nothing in this change depends on that answer, so implementation proceeds.
 ## What this changes for a reader of the release notes
 
 One behaviour change and one new configuration surface. Rate limiting no longer
-counts against backend health; every threshold that governs it is now writable,
-validated, and defaulted exactly as before.
+counts against backend health — not in either error budget, and not in the
+backend circuit breaker; every threshold that governs it is now writable,
+validated, and defaulted exactly as before. Changing one takes effect on
+restart, and `gateway_reload_config` says so.
 
 ## D5 — the upgrade path
 
@@ -203,9 +246,10 @@ identical, so nothing needs migrating — only announcing.
 
 ```
 applies_below: "4.0.0"
-description: rate-limited responses no longer count against backend or
-             capability error budgets; every budget threshold is now
-             configurable under `error_budget:` (config unchanged)
+description: rate-limited responses no longer count against backend health —
+             neither the error budgets nor the backend circuit breaker; every
+             budget threshold is now configurable under `error_budget:`
+             (config unchanged, restart required to apply)
 ```
 
 Two properties this inherits from the existing entry and must keep: it never
@@ -217,7 +261,7 @@ second `upgrade` run says nothing a second time.
 | leg | vendor | verdict | state |
 |---|---|---|---|
 | 1 | Claude Code CLI / synthetic-review | SHIP-WITH-FIXES | findings incorporated below |
-| 2 | Codex / GPT | — | running; verdict not yet recorded |
+| 2 | Codex / GPT | SHIP-WITH-FIXES | findings incorporated below |
 
 Leg 1 raised two blocking findings, both verified at source before acting on
 them and both accepted:
@@ -236,5 +280,29 @@ Three improvements accepted as written: the exclusion is observable, partial YAM
 sections merge field-by-field via per-field serde defaults, and the example
 config gains a commented block.
 
-This change ships no code yet, so no leg has reviewed an implementation. Leg 2's
-verdict and any resulting amendment land before that starts.
+Leg 2 raised one HIGH and three MEDIUM findings. Each was verified at source
+before acting; two changed the design, one was accepted in a different form, and
+one prescribed a fix this codebase has already refused:
+
+- **D1 misses the backend failsafe** (HIGH). Confirmed: `src/backend/ops.rs:255`
+  and `:384` record a dispatch `Err` against the circuit breaker without
+  consulting the budget. D1 now covers both recorders through one shared
+  predicate. Without this the reported symptom survives the fix.
+- **`ErrorCategory` cannot express success** (MEDIUM). Confirmed by reading the
+  enum. Accepted as written: the recorder takes a `BudgetOutcome` with a
+  `Success` variant.
+- **Derive the verdict from typed transport status** (MEDIUM). The concern —
+  free text exempting unrelated failures — was already the reason D1 narrows the
+  matcher, and that narrowing stands. The prescribed *fix* is refused at source:
+  `src/error.rs:120-126` records that status-only classification was tried and
+  rejected here, with the two tests that refused it.
+- **`error_budget` absent from the reload inventory** (MEDIUM). Confirmed:
+  `tracked_sections` is a hand list. Registered as restart-required under D2,
+  which is the first of the two options the finding offered.
+
+Both improvements accepted: an end-to-end `429` regression covering the failsafe
+and both budgets is in the test plan, and the ignored-rate-limit path returns
+before taking either configuration lock.
+
+This change ships no code yet, so no leg has reviewed an implementation. Both
+design legs have now returned; implementation starts against this text.
