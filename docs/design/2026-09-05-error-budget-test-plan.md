@@ -45,10 +45,31 @@ Design:
 | GH475.MIG.1 | the 4.0.0 notice fires below 4.0.0 and writes nothing | stamp `3.9.0` → notice emitted, config file byte-identical | unit | behaviour | `src/commands/upgrade.rs` tests |
 | GH475.MIG.2 | it is idempotent, and the first run advances the stamp | start at stamp `3.9.0`, run the upgrade **twice**; assert exactly one notice total and stamp `4.0.0` after the first run | unit | behaviour | same |
 | GH475.MIG.3 | the comparison direction is pinned | stamp `4.1.0` → silent; an inverted comparison makes this row fire | unit | negative | same |
+| GH475.RL.14 | a backend reporting a `429` the MCP way is exempt | a rate-limit envelope arriving as `isError: true` inside a successful JSON-RPC result is excluded, while a non-rate-limit `isError: true` still counts | unit | boundary | `src/gateway/meta_mcp/invoke.rs` tests |
+| GH475.NOTICE.1 | a quiet upgrade still delivers the breaking-change notices | the built binary is run with `--quiet` over a 2.x data directory; the notices appear on stderr and the progress chatter does not appear on stdout | integration | wiring | `tests/gh475_quiet_upgrade_still_warns.rs` |
 
-No criterion is without a case. No case is without a criterion. The `GH475.*`
-identifiers are published in the tracking comment on GH #475, so closure evidence
-cites the same strings the reporter can read (DoR B4).
+Every criterion carries either a case or a recorded reason it has none, and the
+reasons are in **Rows without a case** below. The `GH475.*` identifiers are
+published in the tracking comment on GH #475, so closure evidence cites the same
+strings the reporter can read (DoR B4).
+
+## Rows without a case
+
+Six rows were planned and are not implemented. Each names behaviour this change
+does not add, so a case for it would assert against a fixture rather than the
+gateway — which is the failure mode this plan exists to prevent. They are
+recorded here rather than deleted, because deleting them would make the plan
+read as complete.
+
+| row | why there is no case | disposal |
+|---|---|---|
+| GH475.RL.9 | an end-to-end `429`-only backend needs a stub MCP backend harness that does not exist; RL.3, RL.7 and RL.13 cover the same predicate at the dispatch call site | ticket |
+| GH475.RL.10 | the capability executor does not classify rate limits at all — `src/capability/executor/` has no call to the shared predicate. The criterion presupposes an exclusion that was never built | ticket |
+| GH475.RL.11 | the property is structural rather than tested: `src/gateway/recovery.rs:281` is the single predicate and both call sites (`backend/ops.rs:254`, `meta_mcp/invoke.rs:2976`) reach it. No test drives one signal table through both | ticket |
+| GH475.OBS.1 | there is no suppression counter to assert against; no metric is emitted when an outcome is excluded | ticket |
+| GH475.OBS.2 | same cause — no debug event is emitted on exclusion | ticket |
+| GH475.MIG.3 | the notice guard compares against `4.0.0` and no case pins the direction, so an inverted comparison would not be caught | ticket |
+
 
 ## Can each case actually fail?
 
@@ -75,7 +96,6 @@ must turn it red instead, run once against a deliberately broken build:
 | GH475.RL.7 | make the predicate return `true` unconditionally — a plain `500` must then fail this row |
 | GH475.RL.8 | route `Success` into the failure arm |
 | GH475.MIG.2 | remove the stamp write — the second run must then emit a second notice |
-| GH475.MIG.3 | invert the version comparison — stamp `4.1.0` must then emit |
 
 One review fix was refused, and the refusal is recorded so it is not re-raised:
 a case requiring the backend rows to carry a rate-limit **status** rather than
@@ -83,8 +103,8 @@ rate-limit text. `src/error.rs:120-126` refuses status-only classification with
 its own reason — this protocol overloads `404` and `400` to mean "session
 expired, reinitialise" — and `backend/ops.rs` has only the `Error`, the status
 having been discarded upstream. Text is the signal that path has. The capability
-executor is different and is covered separately: `jsonrpc.rs:198` still holds the
-status, which is what GH475.RL.12 exercises.
+executor is different: `jsonrpc.rs:198` still holds the status, so a status-based
+exclusion is possible there. It is not built, and GH475.RL.10 above records that.
 
 Two shapes explicitly refused in this plan:
 

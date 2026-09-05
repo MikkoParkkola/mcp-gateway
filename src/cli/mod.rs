@@ -459,7 +459,8 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
 
-        /// Suppress all output except errors (useful for Homebrew `post_install`)
+        /// Suppress progress output; errors and breaking-change notices are
+        /// still written to stderr (useful for Homebrew `post_install`)
         #[arg(long, short)]
         quiet: bool,
 
