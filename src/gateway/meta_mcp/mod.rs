@@ -960,14 +960,6 @@ impl MetaMcp {
     ///
     /// Test-only: the budgets are read inside dispatch, so a caller outside
     /// this module has no other way to observe what startup applied.
-    #[cfg(test)]
-    pub(crate) fn budget_configs(&self) -> (ErrorBudgetConfig, CapabilityErrorBudgetConfig) {
-        (
-            self.error_budget_config.read().clone(),
-            self.capability_budget_config.read().clone(),
-        )
-    }
-
     /// Override the error-budget configuration.
     pub fn set_error_budget_config(&self, config: ErrorBudgetConfig) {
         *self.error_budget_config.write() = config;

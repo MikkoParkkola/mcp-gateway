@@ -2958,9 +2958,27 @@ impl BudgetOutcome {
     /// Rate limiting is recognised through the same predicate the backend
     /// circuit breaker uses, so the two cannot disagree about what a throttled
     /// response is.
-    pub(super) fn of<T>(result: &Result<T>) -> Self {
+    ///
+    /// MCP carries tool-level failures *inside* a successful response
+    /// (`isError: true`), so a throttled backend can answer `Ok`. Reading only
+    /// the `Result` shape would sample that as a healthy call and defeat RL.1
+    /// for every backend that reports its 429 the protocol's own way.
+    pub(super) fn of(result: &Result<Value>) -> Self {
         match result {
-            Ok(_) => Self::Success,
+            Ok(response) => {
+                let is_error = response
+                    .get("isError")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                // Scanning the whole envelope is safe only because `isError`
+                // gates it: on a successful result the same text is ordinary
+                // payload and must not exempt anything.
+                if is_error && crate::gateway::recovery::is_rate_limited(&response.to_string()) {
+                    Self::IgnoredRateLimit
+                } else {
+                    Self::Success
+                }
+            }
             Err(error) => {
                 if crate::gateway::recovery::is_rate_limited(&error.to_string()) {
                     Self::IgnoredRateLimit
@@ -4354,6 +4372,8 @@ mod identity_propagation_enforcement_tests {
 mod error_budget_tests {
     use std::sync::Arc;
 
+    use serde_json::{Value, json};
+
     use super::{BudgetOutcome, MetaMcp};
     use crate::Error;
     use crate::backend::BackendRegistry;
@@ -4396,7 +4416,7 @@ mod error_budget_tests {
     #[test]
     fn budget_outcome_classifies_only_unambiguous_rate_limits() {
         assert_eq!(
-            BudgetOutcome::of(&Ok::<_, Error>(())),
+            BudgetOutcome::of(&Ok::<_, Error>(json!({"content": []}))),
             BudgetOutcome::Success
         );
         for text in [
@@ -4405,17 +4425,55 @@ mod error_budget_tests {
             "RESOURCE_EXHAUSTED: quota",
         ] {
             assert_eq!(
-                BudgetOutcome::of(&Err::<(), _>(Error::Protocol(text.to_string()))),
+                BudgetOutcome::of(&Err::<Value, _>(Error::Protocol(text.to_string()))),
                 BudgetOutcome::IgnoredRateLimit,
                 "{text} must be excluded"
             );
         }
         assert_eq!(
-            BudgetOutcome::of(&Err::<(), _>(Error::Protocol(
+            BudgetOutcome::of(&Err::<Value, _>(Error::Protocol(
                 "500 internal server error (request 4291a)".to_string()
             ))),
             BudgetOutcome::Failure,
             "a 429 inside a request id is not a rate limit"
+        );
+    }
+
+    /// GH475.RL.14 — a backend that reports its 429 the MCP way, as a
+    /// successful response carrying `isError: true`, is excluded too.
+    ///
+    /// Classifying on the `Result` shape alone sampled this as a healthy call:
+    /// not ill-health, but still a sample, and RL.1 asks for none.
+    #[test]
+    fn an_is_error_rate_limit_envelope_records_no_sample() {
+        let throttled = json!({
+            "isError": true,
+            "content": [{"type": "text", "text": "429 Too Many Requests"}],
+        });
+        assert_eq!(
+            BudgetOutcome::of(&Ok::<_, Error>(throttled)),
+            BudgetOutcome::IgnoredRateLimit
+        );
+
+        // The same text in a SUCCESSFUL envelope is ordinary payload — a tool
+        // that returns documentation about rate limits is not being throttled.
+        let payload = json!({
+            "isError": false,
+            "content": [{"type": "text", "text": "429 Too Many Requests"}],
+        });
+        assert_eq!(
+            BudgetOutcome::of(&Ok::<_, Error>(payload)),
+            BudgetOutcome::Success
+        );
+
+        // An `isError` envelope that is not a rate limit still counts.
+        let broken = json!({
+            "isError": true,
+            "content": [{"type": "text", "text": "500 internal server error"}],
+        });
+        assert_eq!(
+            BudgetOutcome::of(&Ok::<_, Error>(broken)),
+            BudgetOutcome::Success
         );
     }
 }
