@@ -849,3 +849,494 @@ async fn ac_mrtr_7b_content_violating_the_requested_schema_is_forwarded_unchange
         "the answer must reach the backend byte for byte, wrong type and extra field included"
     );
 }
+
+// ── MRTR.7b — the bounds, the batch, and the projection ──────────────────────
+
+/// A backend result that asks again, under these keys.
+///
+/// The wire shape rather than [`interim`]'s parsed struct: `first` arrives
+/// already parsed, but every later round arrives as whatever the backend's
+/// `invoke` returned, so a row driving more than one round has to hand the
+/// bridge the same bytes a real backend would.
+fn asking(entries: &[(&str, Value)]) -> Value {
+    let mut requests = serde_json::Map::new();
+    for (key, value) in entries {
+        requests.insert((*key).to_string(), value.clone());
+    }
+    json!({
+        "resultType": "input_required",
+        "inputRequests": requests,
+        "requestState": "state-1",
+    })
+}
+
+/// One elicitation entry carrying this message.
+fn ask(message: &str) -> Value {
+    entry(
+        "elicitation/create",
+        &json!({"mode": "form", "message": message}),
+    )
+}
+
+/// `count` client replies, each accepting with the same content.
+///
+/// Built by iterator rather than `vec![_; n]` because [`Reply`] is not `Clone`.
+fn accepts(count: usize, content: &Value) -> Vec<Reply> {
+    (0..count).map(|_| accepted(content)).collect()
+}
+
+/// Row 318 — a backend that keeps asking is cut off after three retries, and
+/// its neighbour that asks exactly three times still completes.
+///
+/// Both halves, in one test, because neither is worth much alone. The failing
+/// half passes against a bridge that cuts off at two retries, and the
+/// completing half passes against a bridge with no bound at all; only the pair
+/// pins the boundary to the one value that satisfies both. The count asserted
+/// is retries — the invocation that produced `first` happened before the bridge
+/// was entered, so `rounds: 3` is three calls through this backend and four
+/// backend invocations in total.
+#[tokio::test]
+async fn ac_mrtr_7b_the_retry_bound_cuts_off_after_three_retries() {
+    let content = json!({"branch": "main"});
+
+    // The half that must be cut off: every retry asks again.
+    let client = FakeClient::new(accepts(6, &content));
+    let backend = FakeBackend::new(vec![asking(&[("k", ask("again?"))]); 6]);
+    let records = Records::default();
+    let outcome = bridge(
+        &client,
+        &backend,
+        &records,
+        declared_all(),
+        None,
+        &interim(&[("k", ask("first?"))]),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        Err(BridgeError::RoundsExhausted),
+        "a backend that never stops asking must be cut off by the retry bound"
+    );
+    assert_eq!(
+        backend.calls().len(),
+        3,
+        "three retries, so four backend invocations counting the one that produced the first ask"
+    );
+
+    // The neighbour: three asks in total, answered on the fourth invocation.
+    let client = FakeClient::new(accepts(3, &content));
+    let backend = FakeBackend::new(vec![
+        asking(&[("k", ask("second?"))]),
+        asking(&[("k", ask("third?"))]),
+        completed(),
+    ]);
+    let records = Records::default();
+    let outcome = bridge(
+        &client,
+        &backend,
+        &records,
+        declared_all(),
+        None,
+        &interim(&[("k", ask("first?"))]),
+    )
+    .await;
+
+    assert!(
+        outcome.is_ok(),
+        "a backend that asks exactly three times must complete: {outcome:?}"
+    );
+    assert_eq!(
+        backend.calls().len(),
+        3,
+        "the last retry is the one that completes, not one over the bound"
+    );
+}
+
+/// Row 319 — the request budget is spent before a batch is sent, not while it
+/// is being sent.
+///
+/// `client.frames().len()` is the assertion that separates the two readings. A
+/// bridge checking the budget after each send stops partway through the
+/// offending batch and still reports `RequestBudgetExhausted`, so an assertion
+/// on the error alone passes it; only the frame count says whether the three
+/// requests that could never have been afforded were put to a person anyway.
+/// The neighbour spends the budget exactly and must be sent whole.
+#[tokio::test]
+async fn ac_mrtr_7b_the_request_budget_is_checked_before_a_batch_is_sent() {
+    let content = json!({"ok": true});
+    let five = [
+        ("a", ask("a?")),
+        ("b", ask("b?")),
+        ("c", ask("c?")),
+        ("d", ask("d?")),
+        ("e", ask("e?")),
+    ];
+
+    // Five, then six: the second batch cannot fit in the eight that remain.
+    let client = FakeClient::new(accepts(11, &content));
+    let backend = FakeBackend::new(vec![asking(&[
+        ("f", ask("f?")),
+        ("g", ask("g?")),
+        ("h", ask("h?")),
+        ("i", ask("i?")),
+        ("j", ask("j?")),
+        ("k", ask("k?")),
+    ])]);
+    let records = Records::default();
+    let outcome = bridge(
+        &client,
+        &backend,
+        &records,
+        declared_all(),
+        None,
+        &interim(&five),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        Err(BridgeError::RequestBudgetExhausted),
+        "a batch that cannot fit the budget must fail the call"
+    );
+    assert_eq!(
+        client.frames().len(),
+        5,
+        "not one request of the unaffordable batch may be put to the client"
+    );
+
+    // The neighbour: five then three is exactly eight, and all eight are sent.
+    let client = FakeClient::new(accepts(8, &content));
+    let backend = FakeBackend::new(vec![
+        asking(&[("f", ask("f?")), ("g", ask("g?")), ("h", ask("h?"))]),
+        completed(),
+    ]);
+    let records = Records::default();
+    let outcome = bridge(
+        &client,
+        &backend,
+        &records,
+        declared_all(),
+        None,
+        &interim(&five),
+    )
+    .await;
+
+    assert!(
+        outcome.is_ok(),
+        "eight requests exactly is inside the budget: {outcome:?}"
+    );
+    assert_eq!(
+        client.frames().len(),
+        8,
+        "a batch that fits must be sent in full"
+    );
+}
+
+/// Row 320 — a prompt nobody answers ends its round at the per-prompt bound,
+/// and the rounds still remaining run.
+///
+/// The second round is what makes this row worth writing. A bridge that turns
+/// one unanswered prompt into a failed call satisfies "abandoned at the
+/// per-prompt bound" perfectly and fails here, on the round that never ran. The
+/// elapsed floor is asserted so that a bridge abandoning immediately — which
+/// would also let the second round run — cannot pass: the wait has to be the
+/// bound's, and the fixture never times itself out.
+///
+/// Scaled bounds, in milliseconds, so the suite stays fast. The relation is
+/// what is asserted; the shipped literals are pinned elsewhere.
+#[tokio::test]
+async fn ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call() {
+    let bounds = BridgeBounds {
+        aggregate: Duration::from_millis(400),
+        per_prompt: Duration::from_millis(60),
+        ..BridgeBounds::DEFAULT
+    };
+    let content = json!({"branch": "main"});
+    let client = FakeClient::new(vec![Reply::Silent, accepted(&content)]);
+    let backend = FakeBackend::new(vec![asking(&[("k2", ask("second?"))]), completed()]);
+    let records = Records::default();
+
+    let started = std::time::Instant::now();
+    let outcome = bridge_with(
+        &client,
+        &backend,
+        &records,
+        declared_all(),
+        None,
+        &interim(&[("k1", ask("first?"))]),
+        bounds,
+    )
+    .await;
+    let elapsed = started.elapsed();
+
+    assert!(
+        outcome.is_ok(),
+        "one unanswered prompt must not end the call: {outcome:?}"
+    );
+    assert!(
+        elapsed >= bounds.per_prompt,
+        "the wait must be ended by the per-prompt bound, not sooner: waited {elapsed:?}"
+    );
+    assert_eq!(
+        client.frames().len(),
+        2,
+        "the round after the abandoned one must still put its question"
+    );
+    assert_eq!(
+        backend.calls().len(),
+        2,
+        "the abandoned round retries the backend, and the answered one retries it again"
+    );
+}
+
+/// Row 321 — rounds each answered inside the per-prompt bound are still ended
+/// by the aggregate deadline.
+///
+/// The only row that can observe the aggregate bound at all. A single
+/// unanswered prompt is abandoned at the per-prompt bound and can never reach
+/// it, so unless several answered rounds are driven the aggregate is a number
+/// no test touches. Each reply lands comfortably inside `per_prompt`; their sum
+/// passes `aggregate`, and the call must end on the budget rather than on any
+/// one prompt.
+#[tokio::test]
+async fn ac_mrtr_7b_answered_rounds_are_ended_by_the_aggregate_deadline() {
+    let bounds = BridgeBounds {
+        rounds: 12,
+        requests: 20,
+        aggregate: Duration::from_millis(300),
+        per_prompt: Duration::from_millis(100),
+    };
+    let envelope =
+        json!({"jsonrpc": "2.0", "result": {"action": "accept", "content": {"ok": true}}});
+    let client = FakeClient::new(
+        (0..12)
+            .map(|_| Reply::After(Duration::from_millis(80), envelope.clone()))
+            .collect(),
+    );
+    let backend = FakeBackend::new(vec![asking(&[("k", ask("again?"))]); 12]);
+    let records = Records::default();
+
+    let outcome = bridge_with(
+        &client,
+        &backend,
+        &records,
+        declared_all(),
+        None,
+        &interim(&[("k", ask("first?"))]),
+        bounds,
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        Err(BridgeError::Deadline),
+        "the aggregate budget must end a call whose rounds each answer in time"
+    );
+    assert!(
+        backend.calls().len() >= 2,
+        "the deadline must be reached across several answered rounds, not on one prompt: {} retries",
+        backend.calls().len()
+    );
+}
+
+/// Row 322 — three questions in one batch, all answered, produce one retry
+/// carrying three answers, each under the key that asked it.
+///
+/// The row no other 7b row implies. A bridge that resolves on the first answer
+/// and retries immediately satisfies every bound row, every projection row and
+/// every refusal row, because none of them names a batch that succeeds. The
+/// answers are echoed rather than scripted positionally: prompt order within a
+/// batch is unspecified, so a positional script would assert the order the
+/// implementation happened to choose, and each answer has to be derivable from
+/// its own question instead.
+#[tokio::test]
+async fn ac_mrtr_7b_a_batch_of_three_answers_arrives_in_one_retry() {
+    let client = FakeClient::new(vec![Reply::Echo, Reply::Echo, Reply::Echo]);
+    let backend = FakeBackend::new(vec![completed()]);
+    let records = Records::default();
+
+    let outcome = bridge(
+        &client,
+        &backend,
+        &records,
+        declared_all(),
+        None,
+        &interim(&[
+            ("one", ask("one?")),
+            ("two", ask("two?")),
+            ("three", ask("three?")),
+        ]),
+    )
+    .await;
+
+    assert!(
+        outcome.is_ok(),
+        "an answered batch must complete: {outcome:?}"
+    );
+    let calls = backend.calls();
+    assert_eq!(
+        calls.len(),
+        1,
+        "one batch, one retry — not one retry per answer"
+    );
+    for (key, message) in [("one", "one?"), ("two", "two?"), ("three", "three?")] {
+        assert_eq!(
+            calls[0].pointer(&format!("/inputResponses/{key}/echo/message")),
+            Some(&json!(message)),
+            "the answer filed under {key} must be the one that key's question drew"
+        );
+    }
+    assert_eq!(
+        calls[0]
+            .pointer("/inputResponses")
+            .and_then(Value::as_object)
+            .map(serde_json::Map::len),
+        Some(3),
+        "three questions must produce three answers and nothing else"
+    );
+}
+
+/// Row 327 — a cancel, an unrecognised action and a reply with no member each
+/// fail as themselves, and none of them reaches the backend.
+///
+/// Three cases in one test because what the row asserts is that they stay
+/// distinct: each alone passes against a bridge that collapses every non-accept
+/// onto one error. The dangerous arm is the unmatched one — an `action` the
+/// bridge cannot name, falling through to the accept path, forwards a body
+/// nobody agreed to — so `UnknownAction` is asserted apart from `Declined`
+/// rather than merged with it. `FakeBackend::never` makes the no-retry half a
+/// fact about the fixture rather than a count that happens to be zero.
+#[tokio::test]
+async fn ac_mrtr_7b_cancel_unnamed_action_and_no_member_fail_distinguishably() {
+    let cases: Vec<(&str, Reply, DeliveryError)> = vec![
+        (
+            "a cancel",
+            result(&json!({"action": "cancel"})),
+            DeliveryError::Declined {
+                action: "cancel".to_string(),
+            },
+        ),
+        (
+            "an action outside the declared set",
+            result(&json!({"action": "teleport"})),
+            DeliveryError::UnknownAction {
+                action: "teleport".to_string(),
+            },
+        ),
+        (
+            "a reply carrying neither result nor error",
+            Reply::Now(json!({"jsonrpc": "2.0"})),
+            DeliveryError::NoReplyMember,
+        ),
+    ];
+
+    for (name, reply, expected) in cases {
+        let client = FakeClient::new(vec![reply]);
+        let backend = FakeBackend::never();
+        let records = Records::default();
+
+        let outcome = bridge(
+            &client,
+            &backend,
+            &records,
+            declared_all(),
+            None,
+            &interim(&[("k1", ask("Which branch?"))]),
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            Err(BridgeError::Delivery {
+                key: "k1".to_string(),
+                error: expected,
+            }),
+            "{name} must fail as itself"
+        );
+        assert!(
+            backend.calls().is_empty(),
+            "{name} must not re-invoke the backend"
+        );
+    }
+}
+
+/// Row 328 — a bridged round is counted with `phase="bridge"`, and no part of
+/// what a person answered appears in any record.
+///
+/// The counter's name is not fixed by any shipped constant yet, so the row is
+/// asserted on the two halves it actually names: the `phase` label, and the
+/// absence. The absence is the half that rots — a label added later to carry
+/// "what was answered" breaks nothing and fails nothing — so it is asserted
+/// against the captured records rather than by reading the emit sites, over
+/// every counter name and every label key and value. The sentinel is
+/// distinctive enough that a substring match cannot collide with an ordinary
+/// label.
+#[tokio::test]
+async fn ac_mrtr_7ab_a_bridged_round_is_counted_without_the_answer_body() {
+    const SENTINEL: &str = "sentinel-answer-body-mrtr7";
+
+    let client = FakeClient::new(vec![accepted(&json!({"branch": SENTINEL}))]);
+    let backend = FakeBackend::new(vec![completed()]);
+    let records = Records::default();
+
+    let outcome = bridge(
+        &client,
+        &backend,
+        &records,
+        declared_all(),
+        None,
+        &interim(&[("k1", ask("Which branch?"))]),
+    )
+    .await;
+
+    assert!(outcome.is_ok(), "the round must complete: {outcome:?}");
+    let observed = records.all();
+    assert!(
+        observed
+            .iter()
+            .any(|record| record.labels.get("phase").map(String::as_str) == Some("bridge")),
+        "a bridged round must be counted with phase=\"bridge\": {observed:?}"
+    );
+    for record in &observed {
+        assert!(
+            !record.counter.contains(SENTINEL),
+            "an answer body must not reach a counter name: {:?}",
+            record.counter
+        );
+        for (key, value) in &record.labels {
+            assert!(
+                !key.contains(SENTINEL) && !value.contains(SENTINEL),
+                "an answer body must not reach a label: {key}={value}"
+            );
+        }
+    }
+}
+
+/// The control for rows 318-321: the fixture those rows retry with is the shape
+/// the parser actually reads.
+///
+/// Every multi-round row drives its later rounds through [`asking`], and a
+/// bridge is observable as looping only if the parser classifies what the
+/// backend returned as another question. A fixture the parser refuses to
+/// classify is indistinguishable, from outside, from a bridge that never loops:
+/// both end the call after one round, and the row would then be failing for a
+/// reason that has nothing to do with the bound it names. This asserts the
+/// fixture rather than the bridge, so unlike its neighbours it may legitimately
+/// pass while the bridge is still a stub.
+#[test]
+fn ac_mrtr_7b_the_asking_fixture_is_what_the_parser_reads() {
+    let parsed = InputRequired::from_result(&asking(&[("k1", ask("Which branch?"))]))
+        .expect("the retry fixture must parse as an unfinished round");
+
+    assert_eq!(
+        parsed.requests,
+        vec![("k1".to_string(), ask("Which branch?"))],
+        "the fixture must carry the backend's own key and its entry verbatim"
+    );
+    assert_eq!(
+        parsed.request_state.as_deref(),
+        Some("state-1"),
+        "the fixture must carry the state a retry has to echo back"
+    );
+}
