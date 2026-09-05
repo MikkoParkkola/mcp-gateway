@@ -64,6 +64,7 @@ So the delta below is entirely at the **call site**, and one row is end-to-end.
 | `MIK-7212.WIRE.8` | The whole path composes over real HTTP | one test: `initialize` declaring a capability, a backend that asks, delivery over live SSE, the answer POSTed back and correlated, the backend retried with it, then session cleanup | system | end-to-end | every fake in rows 1-7 is replaced by the production transport; this is the only row that can fail because an adapter was never constructed |
 | `MIK-7212.WIRE.9` | A successful bridge retry is judged on its own result | a backend that asks once and then succeeds; assert the idempotency key is settled as completed, the response is returned, and the settled result is cached — an equivalent follow-up call carrying a *different* idempotency key and the same response-cache key is served without a further backend invocation, since the cache gate at `invoke.rs:1769` is the second consumer of the same verdict. The two assertions are separate on purpose: a follow-up reusing the settled key would be answered by the idempotency entry and would pass without the cache gate running at all | integration | regression | `invoke.rs:1475` computes `stopped_to_ask` from the *first* result, so a passing test here proves the verdict is re-derived after the retry — against today's tree the key stays unsettled and the row fails |
 | `MIK-7212.WIRE.10` | An initialized stdio caller is still refused | stdio session declares elicitation at `initialize`, backend asks; assert the MRTR.9 refusal is returned immediately, no client request is sent, and no retry occurs | integration | regression | this row is not `#[ignore]`d: the refusal is stdio's behaviour until MIK-7387 lands, and a transport-scope regression would turn it into a 30–120s stall |
+| `MIK-7212.WIRE.11` | The production `ClientChannel` strands no pending entry when the prompt's outer timeout cancels the send | spawn `send_request` against a client that never answers; wait until the pending map holds the id (precondition asserted, not slept for), abort the task so the future is dropped mid-await, then assert the map is empty for that id | integration | negative | an impl that inserts into the map and awaits without an RAII guard passes every other row here and fails only this one — neither the success nor the error path runs on cancellation, so the entry leaks for the life of the connection. Mirrors `cancelled_request_does_not_strand_pending_entry` (`src/transport/stdio.rs:815`) |
 
 `WIRE.8` is the row the reviewers asked for and the only one that proves the new
 call site exists. Rows 1-7 would all pass against a well-tested function nobody
@@ -72,7 +73,7 @@ calls; `WIRE.8` would not.
 ## The two questions a plan review answers
 
 **Does every acceptance criterion have a case, or a stated reason it has none?**
-Yes, with one qualifier. The ten `MIK-7212.WIRE.*` rows above each carry a case.
+Yes, with one qualifier. The eleven `MIK-7212.WIRE.*` rows above each carry a case.
 The criteria this change does not add a case for are named in the section below,
 each with its reason, not skipped. The qualifier is gone: the twenty-one existing
 MRTR.7 rows in `tests/mik_7212_mrtr7_bridge_acs.rs` are now mapped by name in
@@ -85,7 +86,11 @@ is that answer, per row, and it is the reason the column exists. Five rows fail
 against today's tree for a reason stated at source (`WIRE.5`, `WIRE.6`,
 `WIRE.9`, and the two halves of the gate in `WIRE.1`/`WIRE.3`), which is the
 strongest form of the answer: the case fails now and passing it is what the
-change buys. No row's fixture constructs the condition it then asserts, and no
+change buys. `WIRE.11` is the sixth and is stated differently on purpose: the
+type it drives does not exist yet, so today it does not compile. Once it does,
+it fails against the obvious implementation — insert into the map, then await —
+and only an RAII guard turns it green, which is the property being pinned rather
+than the absence of the type. No row's fixture constructs the condition it then asserts, and no
 row is staged so that its assertion is true before the production code runs —
 the failure mode `test-plan-honesty` exists to catch. `WIRE.8` is the one row
 whose failure would be an environment failure as easily as a defect, because it
@@ -97,12 +102,17 @@ its diagnosis cost is the price of that proof.
 - **MRTR.7a/7b on legacy stdio** — no drivable surface in this change. The three
   rows exist in `tests/mik_7212_mrtr7_stdio_acs.rs`, are `#[ignore]`d against
   MIK-7387, and become that package's acceptance evidence.
-- **The two `input_bridge.rs` defects** (`:430`, `:454`) — confirmed, out of
-  scope for a wiring change, and disposed in the design's finding table. They are
-  **MIK-7388**, which merges before this wiring, and their acceptance cases
-  belong to that ticket rather than to this plan. The two findings once counted
-  alongside them (`:433`, `:409`) died at requirement rows 320 and 308; the
-  design says where.
+- **The `input_bridge.rs` reply-projection defect** (`:454`) — confirmed, out of
+  scope for a wiring change, and disposed in the design's finding table. It is
+  **MIK-7388**, which merges before this wiring, and its acceptance case belongs
+  to that ticket rather than to this plan. The two findings once counted
+  alongside it (`:433`, `:409`) died at requirement rows 320 and 308; the design
+  says where.
+- **MIK-7388's stranded-pending-entry defect** (`:430`) — *not* absent from this
+  plan. It was filed against `input_bridge.rs`, which holds no pending state; the
+  obligation belongs to the `ClientChannel` implementor this change creates, per
+  the trait's cancellation contract at `src/gateway/input_bridge.rs:268-287`.
+  `WIRE.11` above is its case, and the design records the call.
 
 ## What this plan does not claim
 
