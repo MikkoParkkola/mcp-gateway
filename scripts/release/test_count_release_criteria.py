@@ -331,6 +331,35 @@ def test_a_mistyped_criterion_id_is_reported_rather_than_read_as_a_real_one():
     assert counter.rows("\n".join(table)) == ([], ["MIK-7212.MRTR.1abc"])
 
 
+def test_a_github_issue_id_is_read_as_a_criterion():
+    # The third family. A criterion set published on an issue before it has a
+    # Linear ticket is cited by the identifier the reporter can read.
+    table = [
+        "| id | criterion | method | blocking |",
+        "| --- | --- | --- | --- |",
+        "| GH475.RL.1 | a rate-limited response records nothing | T | yes |",
+        "| GH475.CFG.5b | the capability threshold reaches the budget | T | yes |",
+    ]
+    criteria, malformed = counter.rows("\n".join(table))
+    assert malformed == []
+    assert criteria == [
+        ("GH475.RL.1", "yes", "GH475.RL.1"),
+        ("GH475.CFG.5", "yes", "GH475.CFG.5b"),
+    ]
+
+
+def test_a_mistyped_github_criterion_id_is_reported_rather_than_read_as_a_real_one():
+    # Widening the grammar must not widen what it accepts loosely: the same
+    # both-ends anchor that catches `MRTR.1abc` has to catch this one too, or
+    # the new family arrives with the defect the old one had removed.
+    table = [
+        "| id | criterion | method | blocking |",
+        "| --- | --- | --- | --- |",
+        "| GH475.RL.1abc | mistyped | T | yes |",
+    ]
+    assert counter.rows("\n".join(table)) == ([], ["GH475.RL.1abc"])
+
+
 def test_the_live_documents_agree_with_the_ledger():
     criteria, _ = counter.rows(counter.STATUS.read_text())
     assert counter.rollup_membership(criteria, counter.ROLLUP.read_text()) == []

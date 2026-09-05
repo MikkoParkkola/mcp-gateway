@@ -21,14 +21,18 @@ REQUIREMENTS = ROOT / "docs/requirements/RELEASE-4.0.0-requirements.md"
 PLAN = ROOT / "docs/requirements/RELEASE-4.0.0-plan.md"
 ROLLUP = ROOT / "docs/requirements/RELEASE-4.0.0-blocking-rollup.md"
 BOARD = ROOT / "docs/requirements/RELEASE-4.0.0-readiness-board.md"
+# Three identifier families: Linear tickets, non-functional requirements, and
+# GitHub issues. `GH<n>` is admitted because a criterion set can be published
+# on an issue before it has a Linear ticket, and the identifier the reporter
+# reads is the one closure evidence has to cite.
 # Anchored at BOTH ends. Unanchored, a typo carries: `MRTR.1abc` matches as
 # far as `MRTR.1a` and is counted as that criterion, so a mistyped row is
 # silently attributed to a real one rather than reported.
-ID = re.compile(r"^((?:MIK-\d+|NFR)\.[A-Z0-9]+\.\d+)([a-z]?)$")
+ID = re.compile(r"^((?:MIK-\d+|NFR|GH\d+)\.[A-Z0-9]+\.\d+)([a-z]?)$")
 
 # The claim, separate from the parse. Anything opening like a criterion id
 # is one for the purpose of being counted or reported.
-ID_PREFIX = re.compile(r"^(?:MIK-\d+|NFR)\.")
+ID_PREFIX = re.compile(r"^(?:MIK-\d+|NFR|GH\d+)\.")
 # The verification-method vocabulary: test, measurement, inspection, demonstration.
 METHOD = re.compile(r"^[TMID](, ?[TMID])*$")
 # The headline sentence this script owns. Nothing else in the file may state totals.
@@ -40,7 +44,7 @@ HEADLINE = re.compile(
 # Tokens that carry a number without claiming a count: a version, a ticket or
 # criterion ID, a date.
 NOT_A_COUNT = re.compile(
-    r"v?\d+(?:\.\d+)+|(?:MIK-\d+|NFR)(?:\.[A-Z0-9]+\.\d+[a-z]?)?|\d{4}-\d{2}-\d{2}"
+    r"v?\d+(?:\.\d+)+|(?:MIK-\d+|NFR|GH\d+)(?:\.[A-Z0-9]+\.\d+[a-z]?)?|\d{4}-\d{2}-\d{2}"
 )
 # What a heading's number may say next. `10 criteria`, `7 of 17`, `3 of 3`.
 SAYS_WHAT_IT_COUNTS = re.compile(r"(?:\bof\s+)?\b\d{1,3}\b(?:\s+(?:criteri\w*|of\b))?")
@@ -228,7 +232,7 @@ CLUSTER_CELLS = 5
 
 # A criterion key as a rollup cluster names it: optionally MIK-prefixed, and
 # possibly a range (`MRTR.1-8`) standing for the rows between its endpoints.
-NAMED = re.compile(r"`((?:MIK-\d+\.|NFR\.)?[A-Z][A-Z0-9]*\.\d+[a-z]?)(?:-(\d+))?`")
+NAMED = re.compile(r"`((?:MIK-\d+\.|NFR\.|GH\d+\.)?[A-Z][A-Z0-9]*\.\d+[a-z]?)(?:-(\d+))?`")
 
 
 def rollup_membership(criteria, text):
@@ -458,7 +462,7 @@ def main():
     # A requirement declaring `.1a` and `.1b` declares TWO criteria; reading
     # them as one made every split invisible to this count.
     declared = set(
-        re.findall(r"\|\s*((?:MIK-\d+|NFR)\.[A-Z0-9]+\.\d+[a-z]?)\s*\|", requirements)
+        re.findall(r"\|\s*((?:MIK-\d+|NFR|GH\d+)\.[A-Z0-9]+\.\d+[a-z]?)\s*\|", requirements)
     )
     methods, unreadable = required_methods(requirements)
     if unreadable:
