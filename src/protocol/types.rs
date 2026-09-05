@@ -237,14 +237,22 @@ pub struct ServerCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<HashMap<String, Value>>,
     /// Extensions this gateway implements and honours today (`io.modelcontextprotocol/extensions`).
-    /// Always present, even when empty: an empty object is a declaration that this gateway
-    /// speaks the extensions mechanism and currently supports none, distinct from omitting the
-    /// field entirely. Populated from implemented-and-enabled handlers only, never from a
-    /// static list of known identifiers — see docs/design/2026-08-31-cluster-b-capability-and-trace-metadata.md §3.1a.
-    /// `default` on deserialize only: this type is public API and JSON written before the field
+    /// Populated from implemented-and-enabled handlers only, never from a static list of known
+    /// identifiers — see docs/design/2026-08-31-cluster-b-capability-and-trace-metadata.md §3.1a.
+    ///
+    /// Omitted when empty, like every sibling field. An earlier revision serialized it
+    /// unconditionally so that `{}` could mean "speaks the mechanism, supports nothing" as
+    /// distinct from silence. That distinction is not available to us: MIK-7217 AC discover-3
+    /// requires the initialize result to be byte-identical for a client that asks for an
+    /// already-supported protocol version, so a new always-present key is a breaking change to
+    /// the handshake no matter how empty it is. Discovery has to be additive, and a key that
+    /// appears for every client is not additive. A gateway with no extensions is therefore
+    /// indistinguishable from one that predates the field, which is the correct trade.
+    ///
+    /// `default` covers deserialize: this type is public API and JSON written before the field
     /// existed must still parse. It is the sole non-`Option` field, so without this a missing
     /// key is a hard error where every sibling field tolerates absence.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub extensions: HashMap<String, Value>,
     /// Logging capability
     #[serde(skip_serializing_if = "Option::is_none")]

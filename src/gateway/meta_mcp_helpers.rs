@@ -133,50 +133,6 @@ pub(crate) fn extract_u64_or(args: &Value, key: &str, default: u64) -> u64 {
     args.get(key).and_then(Value::as_u64).unwrap_or(default)
 }
 
-/// Extensions this gateway implements and honours today
-/// (`io.modelcontextprotocol/extensions`).
-///
-/// Empty: no extension is wired end-to-end yet. Populated from
-/// implemented-and-enabled handlers only, never from a static list of known
-/// identifiers — see
-/// `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata.md` §3.1a.
-/// TASK.1 adds the first entry (`io.modelcontextprotocol/tasks`) in the same
-/// change that makes task-augmented requests behave differently from an
-/// ordinary `tools/call`; adding the identifier here without that behaviour
-/// would advertise a mechanism the gateway does not honour.
-pub(crate) fn implemented_extensions() -> std::collections::HashMap<String, Value> {
-    std::collections::HashMap::new()
-}
-
-/// Build `ServerCapabilities` from an explicit extension source.
-///
-/// Split out from [`build_initialize_result`] so the extension source is an
-/// injectable parameter rather than a value read from a module-level
-/// constant: a test can perturb `extensions` here and observe the wire value
-/// change, which is the only way to prove the populate is wired rather than
-/// left at its `Default` (design test plan §5.1, §4.1).
-pub(crate) fn build_server_capabilities(
-    extensions: std::collections::HashMap<String, Value>,
-) -> ServerCapabilities {
-    ServerCapabilities {
-        tools: Some(ToolsCapability {
-            list_changed: true,
-            #[cfg(feature = "spec-preview")]
-            filtering: Some(true),
-            #[cfg(feature = "spec-preview")]
-            resolve: Some(true),
-        }),
-        resources: Some(ResourcesCapability {
-            subscribe: true,
-            list_changed: true,
-        }),
-        prompts: Some(PromptsCapability { list_changed: true }),
-        logging: Some(std::collections::HashMap::new()),
-        extensions,
-        ..Default::default()
-    }
-}
-
 /// Build the `InitializeResult` for a given negotiated protocol version.
 ///
 /// `instructions` is appended after the static preamble; pass an empty string
@@ -187,7 +143,22 @@ pub(crate) fn build_initialize_result(
 ) -> InitializeResult {
     InitializeResult {
         protocol_version: negotiated_version.to_string(),
-        capabilities: build_server_capabilities(implemented_extensions()),
+        capabilities: ServerCapabilities {
+            tools: Some(ToolsCapability {
+                list_changed: true,
+                #[cfg(feature = "spec-preview")]
+                filtering: Some(true),
+                #[cfg(feature = "spec-preview")]
+                resolve: Some(true),
+            }),
+            resources: Some(ResourcesCapability {
+                subscribe: true,
+                list_changed: true,
+            }),
+            prompts: Some(PromptsCapability { list_changed: true }),
+            logging: Some(std::collections::HashMap::new()),
+            ..Default::default()
+        },
         server_info: Info {
             name: "mcp-gateway".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
