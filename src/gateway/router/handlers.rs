@@ -627,7 +627,7 @@ pub(super) async fn meta_mcp_handler(
     if request.get("method").is_none()
         && (request.get("result").is_some() || request.get("error").is_some())
         && let Some(resp_id) = request.get("id").and_then(|v| v.as_str())
-        && (resp_id.starts_with("sampling-") || resp_id.starts_with("elicitation-"))
+        && crate::gateway::input_bridge::is_bridge_reply_id(resp_id)
     {
         debug!(id = %resp_id, body = %request, "Received sampling/elicitation response POST-back");
         let resolved = state
