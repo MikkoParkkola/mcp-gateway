@@ -122,20 +122,19 @@ impl Backend {
         let Some(error) = response.error.as_ref() else {
             return;
         };
-        let contradicted = match self.cached_era().await {
-            Some(Era::Legacy) => contradicts_legacy(error.code),
-            Some(Era::Modern) => contradicts_modern(method, error.code),
-            None => false,
-        };
-        if !contradicted {
+        // Judging the verdict and dropping it are one locked step, and only the task that
+        // dropped it probes. Reading the era and clearing it separately would let two answers
+        // arriving at once both find the stale verdict and each fan out a detached probe.
+        let discarded = self
+            .era
+            .discard_if(|era| match era {
+                Era::Legacy => contradicts_legacy(error.code),
+                Era::Modern => contradicts_modern(method, error.code),
+            })
+            .await;
+        if !discarded {
             return;
         }
-
-        // Dropped before the spawn, not inside it. A burst of contradicting answers would
-        // otherwise each observe the stale verdict still cached and fan out into one detached
-        // probe apiece; with the verdict already gone, every later answer in the burst reads
-        // `None` and takes the arm that decides nothing.
-        self.era.invalidate().await;
 
         let era = Arc::clone(&self.era);
         let transport = Arc::clone(transport);

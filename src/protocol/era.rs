@@ -204,6 +204,30 @@ impl EraCache {
         );
     }
 
+    /// Discard a determined era when `contradicted` judges it disproved, and report
+    /// whether *this* call is the one that discarded it.
+    ///
+    /// The judgement and the discard happen under one lock because the caller acts on
+    /// the answer: a re-probe is spawned only by the task that returns `true`. Reading
+    /// the era and clearing it as two locked steps lets two answers arriving at once
+    /// both see the stale verdict, both judge it contradicted, and each spawn a probe
+    /// of its own. Deciding and clearing together makes that impossible rather than
+    /// unlikely: the second caller finds nothing cached and takes the arm that decides
+    /// nothing.
+    pub async fn discard_if(&self, contradicted: impl FnOnce(Era) -> bool) -> bool {
+        let mut observation = self.observation.lock().await;
+        if observation.source != EraSource::Probed || !contradicted(observation.era) {
+            return false;
+        }
+        *observation = EraObservation::never_probed();
+        tracing::info!(
+            target: "mcp_gateway::observed",
+            backend = %self.name,
+            reason = "trigger",
+        );
+        true
+    }
+
     /// Return the cached era, or determine it by probing on the start path.
     pub async fn resolve_with<F, Fut>(&self, probe: F) -> Era
     where
@@ -585,5 +609,33 @@ mod tests {
              determination made about the process it replaced"
         );
         assert_eq!(cache.cached().await, Some(Era::Legacy));
+    }
+
+    /// Exactly one caller may discard a given determination.
+    ///
+    /// This is the property the re-probe path spends: it spawns a probe only when
+    /// `discard_if` returns `true`, so a second answer contradicting the same verdict
+    /// must be told `false` rather than be handed a second licence to probe. The
+    /// concurrent interleaving itself is not test-reachable here for the same reason as
+    /// the restart above — the fix was structural — so what is pinned is the invariant
+    /// that makes the interleaving harmless.
+    #[tokio::test]
+    async fn only_the_caller_that_discards_a_verdict_is_told_it_did() {
+        let cache = Arc::new(EraCache::for_backend("contradicted-peer"));
+        cache.resolve_with(|| async { modern_document() }).await;
+
+        assert!(
+            !cache.discard_if(|_| false).await,
+            "a verdict its observer does not contradict must survive"
+        );
+        assert_eq!(cache.cached().await, Some(Era::Modern));
+
+        assert!(cache.discard_if(|era| era == Era::Modern).await);
+        assert_eq!(cache.cached().await, None);
+        assert!(
+            !cache.discard_if(|_| true).await,
+            "the second observer of the same contradiction must not be told it discarded \
+             a determination that was already gone"
+        );
     }
 }
