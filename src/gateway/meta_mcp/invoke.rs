@@ -937,6 +937,23 @@ impl MetaMcp {
             )));
         }
 
+        // Identity grants are the same decision as the authorizer above: whether
+        // this caller may reach this tool at all. They are taken here, with
+        // every other refusal, because the response cache and the idempotency
+        // short-circuit both return below this point — a gate under a cache
+        // read decides nothing on a hit, and hands the refused caller the
+        // answer the admitted one paid for. Resolved from the definition, so a
+        // capability added later inherits the rule.
+        if let Some(cap) = self.get_capabilities()
+            && server == cap.name
+            && cap.has_capability(tool)
+        {
+            let cap_def = cap
+                .get(tool)
+                .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
+            self.enforce_identity_grants(&cap_def, tool, api_key_name, agent_id, caller_identity)?;
+        }
+
         let mut arguments = parse_tool_arguments(args)?;
         // `_full` is a gateway directive (opt out of response projection), not
         // an upstream parameter. Capture and strip it BEFORE the argument hash
@@ -1332,8 +1349,6 @@ impl MetaMcp {
                 prompt_cache_key.as_deref(),
                 want_full,
                 session_id,
-                api_key_name,
-                agent_id,
                 caller_identity,
                 &caller_credential.headers,
                 caller_credential.cache_binding.as_deref(),
@@ -2412,8 +2427,10 @@ impl MetaMcp {
         prompt_cache_key: Option<&str>,
         want_full: bool,
         session_id: Option<&str>,
-        api_key_name: Option<&str>,
-        agent_id: Option<&str>,
+        // Identity that reaches the capability executor. The grant that admits
+        // it was decided at the authorization chokepoint, so nothing here
+        // re-decides it — this is the value the call is made *with*, not the
+        // one it is checked against.
         caller_identity: Option<&GrantSubject>,
         // Pre-resolved per-user propagation headers (empty = none). Resolved
         // once in `invoke_tool_traced` so the cache key and this dispatch share
@@ -2431,10 +2448,12 @@ impl MetaMcp {
             && server == cap.name
             && cap.has_capability(tool)
         {
+            // The grant was decided at the authorization chokepoint, above the
+            // caches. The definition is resolved again here only for the
+            // response transform below.
             let cap_def = cap
                 .get(tool)
                 .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
-            self.enforce_identity_grants(&cap_def, tool, api_key_name, agent_id, caller_identity)?;
             let result =
                 call_capability_tool_with_identity(&cap, tool, arguments, caller_identity).await?;
             let mut response = serde_json::to_value(result)?;

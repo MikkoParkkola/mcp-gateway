@@ -644,13 +644,16 @@ providers:
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
         )
-        .await
-        .unwrap();
+        .await;
 
-    assert_eq!(result["isError"], true);
-    let text = result["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("Identity grant denied"));
-    assert!(text.contains("OwnerMismatch"));
+    // The grant is decided at the authorization chokepoint, above the response
+    // and idempotency caches, so its refusal carries the same shape as the
+    // authorizer's: an error, not a result envelope a caller could read past.
+    let text = result
+        .expect_err("a mismatched identity must not receive a result")
+        .to_string();
+    assert!(text.contains("Identity grant denied"), "{text}");
+    assert!(text.contains("OwnerMismatch"), "{text}");
 }
 
 #[tokio::test]
@@ -4250,4 +4253,178 @@ async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
         names.contains(&"fast/quick"),
         "fast backend's prompt returned"
     );
+}
+
+// ===========================================================================
+// MIK-7213.CACHE.4 — a refused caller is refused on a cache hit.
+//
+// The response cache is read before dispatch. An authorization gate placed
+// inside dispatch therefore decides nothing on a hit: the entry is returned
+// above it. Staging the entry rather than filling it from a first call keeps
+// the backend, and its network, out of the case — what is under test is the
+// ORDER of the grant check against the cache read, and nothing else.
+// ===========================================================================
+
+/// A capability whose grant admits exactly one agent, a gateway with a
+/// response cache, and that cache already holding the answer.
+///
+/// Returns the gateway and the body staged under the key the invoke path
+/// derives, so a test can assert on the body by identity rather than by shape.
+async fn meta_with_staged_cache_entry(dir: &tempfile::TempDir) -> (MetaMcp, String) {
+    use crate::capability::{CapabilityBackend, CapabilityExecutor};
+    use crate::identity_grants::{
+        GrantAgent, GrantScope, GrantSubject, IdentityGrant, LocalIdentityGrantStore,
+    };
+
+    let subject = GrantSubject::new("cloudflare_access", "user-123", None);
+    let grant = IdentityGrant {
+        grant_id: "grant-user-123-calendar".to_string(),
+        subject: subject.clone(),
+        agent: GrantAgent::Exact("agent-1".to_string()),
+        capability: "calendar_read".to_string(),
+        tool: Some("calendar_read".to_string()),
+        scope: GrantScope::Execute,
+        owner: Some(subject),
+        expires_at: Some(chrono::Utc::now() + chrono::Duration::minutes(5)),
+        revoked_at: None,
+        provenance: "unit-test".to_string(),
+        reason: "prove a cache hit does not outrank the grant".to_string(),
+    };
+
+    std::fs::write(
+        dir.path().join("calendar_read.yaml"),
+        r#"
+fulcrum: "1.0"
+name: calendar_read
+description: Read a personal calendar
+schema:
+  input:
+    type: object
+    properties: {}
+  output:
+    type: object
+    properties:
+      ok:
+        type: boolean
+metadata:
+  exposure: personal
+  identity_owner:
+    authority: cloudflare_access
+    subject: user-123
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: "https://example.invalid"
+      path: /calendar
+      method: GET
+"#,
+    )
+    .unwrap();
+
+    let cap_backend = Arc::new(CapabilityBackend::new(
+        "personal_caps",
+        Arc::new(CapabilityExecutor::new()),
+    ));
+    cap_backend
+        .load_from_directory(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    let cache = Arc::new(crate::cache::ResponseCache::new());
+    let meta = MetaMcp::with_features(
+        Arc::new(BackendRegistry::new()),
+        Some(Arc::clone(&cache)),
+        None,
+        None,
+        Duration::from_secs(300),
+    )
+    .with_identity_grants(LocalIdentityGrantStore::from_grants(vec![grant]));
+    meta.set_capabilities(cap_backend);
+
+    // Derived through the same helper the read site uses, with the same inputs
+    // that call produces: a key computed a second way would stage an entry no
+    // read ever looks for, and the case would pass without proving anything.
+    let profile = meta.active_profile(Some("session-1"));
+    let key = super::support::response_cache_key_for(
+        "personal_caps",
+        "calendar_read",
+        &json!({}),
+        &crate::projection::projection_key_suffix(meta.projection_mode, Some("session-1")),
+        None,
+        &crate::protocol::mrtr::NO_RETRY,
+        crate::cache::KeyContext {
+            routing_profile: &profile.name,
+            protocol_revision: None,
+            policy_epoch: 0,
+        },
+    );
+    let body = "STAGED-CACHED-CALENDAR-BODY";
+    assert!(
+        cache.set(
+            &key,
+            json!({"content": [{"type": "text", "text": body}], "isError": false}),
+            Duration::from_secs(300),
+        ),
+        "the staged entry must be accepted, or the control below proves nothing"
+    );
+    (meta, body.to_string())
+}
+
+fn grant_ctx(agent_id: &'static str) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        agent_id: Some(agent_id),
+        grant_subject: Some(crate::identity_grants::GrantSubject::new(
+            "cloudflare_access",
+            "user-123",
+            None,
+        )),
+        ..allow_all_ctx()
+    }
+}
+
+#[tokio::test]
+async fn a_cached_entry_is_live_for_the_agent_the_grant_admits() {
+    // The control for the case below. Without it, a denial there is equally
+    // explained by a key nothing reads, which is the failure mode a staged
+    // fixture invites.
+    let dir = tempfile::TempDir::new().unwrap();
+    let (meta, body) = meta_with_staged_cache_entry(&dir).await;
+    let result = meta
+        .invoke_tool(
+            &json!({"server": "personal_caps", "tool": "calendar_read", "arguments": {}}),
+            Some("session-1"),
+            &grant_ctx("agent-1"),
+        )
+        .await
+        .unwrap();
+    assert!(
+        serde_json::to_string(&result).unwrap().contains(&body),
+        "the staged entry must be served to the admitted agent, or the key is \
+         wrong and the denial case proves nothing: {result:#}"
+    );
+}
+
+#[tokio::test]
+async fn a_denied_agent_is_not_served_the_cached_body() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let (meta, body) = meta_with_staged_cache_entry(&dir).await;
+    let result = meta
+        .invoke_tool(
+            &json!({"server": "personal_caps", "tool": "calendar_read", "arguments": {}}),
+            Some("session-1"),
+            &grant_ctx("agent-2"),
+        )
+        .await;
+
+    // A refusal, not a body. The grant is now decided beside the authorizer's
+    // own refusal, so it carries the authorizer's shape: an error the caller
+    // cannot mistake for an answer, rather than a result envelope.
+    let err = result.expect_err("a refused caller must not receive a result");
+    let text = err.to_string();
+    assert!(
+        !text.contains(&body),
+        "an agent the grant refuses was handed the cached answer: {text}"
+    );
+    assert!(text.contains("Identity grant denied"), "{text}");
 }
