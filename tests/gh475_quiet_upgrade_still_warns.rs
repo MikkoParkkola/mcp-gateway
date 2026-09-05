@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! GH475.NOTICE.1 — an automatic upgrade runs quiet, and the quiet flag must not
 //! silence the notices the upgrade exists to deliver.
 //!
