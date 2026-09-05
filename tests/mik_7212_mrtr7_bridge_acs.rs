@@ -1058,16 +1058,23 @@ async fn ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call() {
     let records = Records::default();
 
     let started = std::time::Instant::now();
-    let outcome = bridge_with(
-        &client,
-        &backend,
-        &records,
-        declared_all(),
-        None,
-        &interim(&[("k1", ask("first?"))]),
-        bounds,
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(3),
+        bridge_with(
+            &client,
+            &backend,
+            &records,
+            declared_all(),
+            None,
+            &interim(&[("k1", ask("first?"))]),
+            bounds,
+        ),
     )
-    .await;
+    .await
+    .expect(
+        "a bridge with no per-prompt bound waits on the fixture's own 86_400s silence, \
+             which is a hung suite rather than a failing row: the bound is what must end it",
+    );
     let elapsed = started.elapsed();
 
     assert!(
@@ -1077,6 +1084,13 @@ async fn ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call() {
     assert!(
         elapsed >= bounds.per_prompt,
         "the wait must be ended by the per-prompt bound, not sooner: waited {elapsed:?}"
+    );
+    assert!(
+        elapsed < bounds.per_prompt * 3,
+        "the wait must be the per-prompt bound's, not merely under the aggregate: a bridge \
+         abandoning at a multiple of the bound still leaves room for round 2 and would \
+         otherwise pass; waited {elapsed:?} against a bound of {:?}",
+        bounds.per_prompt
     );
     assert_eq!(
         client.frames().len(),
@@ -1104,14 +1118,14 @@ async fn ac_mrtr_7b_answered_rounds_are_ended_by_the_aggregate_deadline() {
     let bounds = BridgeBounds {
         rounds: 12,
         requests: 20,
-        aggregate: Duration::from_millis(300),
-        per_prompt: Duration::from_millis(100),
+        aggregate: Duration::from_millis(500),
+        per_prompt: Duration::from_millis(200),
     };
     let envelope =
         json!({"jsonrpc": "2.0", "result": {"action": "accept", "content": {"ok": true}}});
     let client = FakeClient::new(
         (0..12)
-            .map(|_| Reply::After(Duration::from_millis(80), envelope.clone()))
+            .map(|_| Reply::After(Duration::from_millis(50), envelope.clone()))
             .collect(),
     );
     let backend = FakeBackend::new(vec![asking(&[("k", ask("again?"))]); 12]);
@@ -1137,6 +1151,15 @@ async fn ac_mrtr_7b_answered_rounds_are_ended_by_the_aggregate_deadline() {
         backend.calls().len() >= 2,
         "the deadline must be reached across several answered rounds, not on one prompt: {} retries",
         backend.calls().len()
+    );
+    assert!(
+        backend
+            .calls()
+            .iter()
+            .any(|retry| retry.to_string().contains("\"k\"")),
+        "a retry must carry the answer it collected: a bridge timing every prompt out early \
+         also reaches the deadline after several backend calls, so the round count alone \
+         cannot tell an answered round from an abandoned one"
     );
 }
 
