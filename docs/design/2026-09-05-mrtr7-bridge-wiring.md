@@ -90,9 +90,16 @@ need opposite handling.
 ## Unknowns, scheduled
 
 1. Does the gateway see `initialize` on every transport that can be bridged
-   (stdio, SSE, streamable HTTP), or only some? — read the initialize handlers
-   in `src/gateway/server/mod.rs` and `router/handlers.rs` — UNANSWERED, and it
-   blocks where option A's store can live.
+   (stdio, SSE, streamable HTTP), or only some? — read the two production
+   dispatch sites — RESOLVED: both reach one shared handler,
+   `MetaMcp::handle_initialize` (`src/gateway/meta_mcp/mod.rs:1151`), from
+   `src/gateway/server/mod.rs:1788` (stdio serve loop) and
+   `src/gateway/router/handlers.rs:926` (HTTP router). It already receives both
+   values a per-session store needs: the `initialize` `params`, which carry the
+   client's `capabilities` object, and a `session_id` that both call sites pass
+   as `Some(..)`, never `None`. Changed the design: option A's store goes
+   inside that handler, one write site covering every bridgeable transport, not
+   one per transport as the option feared.
 2. Is the `NFR.OBS.4` counter name decided anywhere? — deferred. Owner: the
    readiness doc's owner. Resolves when a counter design exists. Nothing here
    depends on it: `BridgeObserver` is a trait, and production can pass a no-op
@@ -100,7 +107,14 @@ need opposite handling.
 
 ## What is not claimed
 
-The 21 bridge rows are reported green by two peer sessions (21 passed, 0
-failed, 0.50s). This session could not run them: the test command is refused by
-a circumvention guard latched on an earlier disk-pressure block. Evidence level
-I — one independent run, reported — not V.
+The 21 bridge rows are reported green by a peer session (21 passed, 0 failed,
+0.50s). This session has not reproduced that run, so the evidence level is I —
+one run, reported — not V.
+
+The obstacle was disk, and it is fixed: the root filesystem stood at 4.4 GB
+free (99% used), below the fail-fast threshold that halts the build. Cleaning
+this worktree's `target/` returned 6.9 GB, leaving 10.9 GB. The test command
+itself remains refused until 13:41 UTC by a circumvention latch recorded
+against the earlier disk block, which expires on a four-hour timer. Re-running
+both acceptance suites after that expiry is what raises this to V; nothing in
+this design should be implemented on the strength of the reported run alone.
