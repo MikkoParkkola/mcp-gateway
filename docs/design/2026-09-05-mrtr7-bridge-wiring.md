@@ -9,9 +9,11 @@ which did not run). Round 2 ran against `08c0b9c9` and both returned
 SHIP-WITH-FIXES, each naming a doc-level fix inside this design. A third,
 confirmation pass ran against `b645491e`: `gpt-review` returned SHIP-WITH-FIXES
 naming three defects this wiring would activate rather than inherit, amended
-below. The open-weights leg of that pass produced an empty run file — no verdict
-row, so it is recorded as MISSING and re-run, never as a pass. Findings
-disposed below.
+below. The open-weights leg returned SHIP-WITH-FIXES on the same revision and is
+amended alongside it. Its run file read as zero bytes while the process was
+still running — the wrapper writes the file at completion, so an empty read is a
+race, not a missing verdict, and this document briefly recorded it as the
+latter. Findings disposed below.
 
 ## Problem
 
@@ -35,12 +37,30 @@ in 4.0.0 is decided after that design exists and carries an effort estimate,
 not now. Deferring it here is a sequencing decision, not a decision to drop it.
 
 Also out: the row-308 SSE delivery half (its
-own deferral, trigger is this commit); the `NFR.OBS.4` counter name
+own deferral, trigger is this commit) — which is a deferral of that release
+row's own evidence, **not** permission for this change to skip delivery. A
+legacy HTTP client that cannot actually receive the bridge's question has not
+been bridged, so delivery over the live stream is inside FOR and
+`MIK-7212.WIRE.8` is the row that finds out whether it works; the `NFR.OBS.4` counter name
 (`RELEASE-4.0.0-cluster-a-readiness.md:44` — "No design, no counters"); any
 change to the MRTR.9 refusal or to the continuation mint for modern callers; the
-two defects the review raised inside `input_bridge.rs` itself (unvalidated
-params, request-kind-blind reply projection), which are that file's bugs and not
-this change's wiring.
+four defects the reviews raised inside `input_bridge.rs` itself: a timed-out
+client answer discarded and the backend retried without it (`:433`), a pending
+entry stranded when the outer timeout cancels registration (`:430`), backend
+prompt parameters forwarded without typed validation (`:409`), and reply
+projection that reads any result containing `action` as an elicitation reply
+(`:454`). Earlier revisions called two different pairs "the two defects"; there
+are four, they are that file's bugs rather than this change's wiring, and they
+are filed together as **MIK-7388**.
+
+That deferral is scheduled, not merely recorded. Owner: MIK-7388, priority 2,
+already related to MIK-7212 as `blocks`. What resolves it: the three acceptance
+criteria on that ticket, each a test that fails against today's tree. When: it
+merges **before** this wiring does — that is what the `blocks` edge means here,
+because wiring is what first makes the defects reachable. If it resolves badly —
+the defects prove deeper than a bounded fix, or the ticket stalls — this change
+does not ship on its own; it waits, because a call site that activates four
+known HIGH defects is worse than the UNWIRED row it replaces.
 
 Consequence, stated rather than discovered later: rows :130 and :131 go green
 for the HTTP transports only. Whether that reads as met, or as met with a named
@@ -225,6 +245,11 @@ Wiring one call is the smallest part of this.
   five passing `Declared::NONE` today (`invoke.rs:3816,3846,3881` — tests —
   and `server/mod.rs:1827,2619` — stdio). An earlier revision of this document
   said "five" while listing seven; the count was wrong, the list was right.
+  The read is the *same* read at all seven, which is what makes it safe to add
+  at the stdio sites: the store is written only at the HTTP `initialize` call
+  site, so a stdio read finds no declaration and the conjunction in amendment 1
+  refuses. Nothing at `server/mod.rs:1827,2619` needs a transport check, and
+  the deadlock the descope exists to prevent stays unreachable.
 - `shape` threaded to each of those sites, and production implementations of
   the bridge's three traits, which today exist only as test fakes.
 - **one dispatch path, not two.** `record_invocation`
@@ -337,6 +362,10 @@ MIK-7388 blocking MIK-7212 is what keeps them from shipping live.
    readiness doc's owner. Resolves when a counter design exists. Nothing here
    depends on it: `BridgeObserver` is a trait, and production can pass a no-op
    until the name is chosen, which is honest rather than inventing a literal.
+   When: at the counter design, which is `RELEASE-4.0.0-cluster-a-readiness.md`
+   work, not this change's. If it resolves badly — no counter is ever named —
+   the no-op observer ships permanently and the release row stays unmet on
+   observability grounds alone, which is a reporting outcome, not a bridge one.
 
 3. Which existing session state should carry the declarations? — RESOLVED, and
    the answer is not the one both reviewers assumed. `SessionStateStore`
