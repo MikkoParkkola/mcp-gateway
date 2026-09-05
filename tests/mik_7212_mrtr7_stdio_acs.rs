@@ -19,6 +19,23 @@
 //! Every read is bounded and the child is killed on every exit path, including
 //! a panicking assertion, so a missing reply fails an assertion rather than
 //! hanging the suite.
+//!
+//! Two limits, stated rather than discovered later.
+//!
+//! The stagings that rows 323 and 324 depend on — a backend slow enough to put
+//! a question beside the `initialize` response, and a frame large enough that
+//! an unlocked writer can be caught interleaving — cannot be shown to work
+//! while `InputBridge::run` is a stub. No bridged request is written at all,
+//! so the ordering and the framing are both unobservable. Each staging removes
+//! a known reason its row could not fail; neither is yet evidence that the row
+//! now can. Re-check both against the first working bridge.
+//!
+//! Row 308 wants a legacy client **on an SSE session** to receive its
+//! `elicitation/create` on its own connection. No row covers that: this file
+//! drives stdio, the sibling file drives trait fakes, and the projection test
+//! in `mik_7212_acs.rs` calls `Bridge::to_legacy_client` in process. The SSE
+//! half of row 308 is uncovered, and closing it needs a row of its own here
+//! rather than a wider assertion on an existing one.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -56,12 +73,16 @@ fn saw_method(received: &Received, method: &str) -> bool {
 
 /// A question body large enough that one frame cannot be written atomically.
 ///
-/// Row 324 asserts that concurrent outbound frames are not interleaved, and on
-/// a pipe a single `write_all` below `PIPE_BUF` is atomic already — at the
-/// fixture's original ~100 bytes the assertion could not fire whatever the
-/// writer did, so an unlocked writer passed the row written to catch it. The
-/// size is the test: a frame past the buffer takes several writes, and two
-/// unserialized writers then produce a line that does not parse.
+/// Row 324 asserts that concurrent outbound frames are not interleaved, and a
+/// frame small enough to clear the pipe in one go never gives an unlocked
+/// writer the chance to interleave: at the fixture's original ~100 bytes the
+/// assertion could not fire whatever the writer did, so an unlocked writer
+/// passed the row written to catch it. The size is the test. It is chosen
+/// against the pipe's **capacity** (64 KiB on this platform) rather than
+/// against `PIPE_BUF`, which `getconf` reports as 512 and which bounds only
+/// the guaranteed-atomic write: past the capacity a write blocks partway and
+/// must be resumed, and two unserialized writers resuming into one pipe
+/// produce a line that does not parse.
 const QUESTION_BYTES: usize = 96 * 1024;
 
 /// The backend's delay before answering `initialize`.

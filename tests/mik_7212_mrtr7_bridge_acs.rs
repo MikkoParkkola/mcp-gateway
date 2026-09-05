@@ -443,16 +443,24 @@ fn ac_mrtr_7b_the_shipped_bounds_are_the_documented_ones() {
 /// alone, and must reach the client — so the second half's silence is the
 /// capability gate and not a fixture that never speaks.
 ///
-/// The empty slice is the trap §6 names: `&[]` means the request said nothing,
-/// not that the client can do nothing. Read as a denial it refuses the
-/// neighbour too, which is how a bridge that looks correct asks nobody.
+/// `Some(&[])` and `None` are different states and the row's word "empty"
+/// reaches both, so each is pinned separately. `None` is the request saying
+/// nothing and leaves `declared` standing — row 325 drives that direction.
+/// `Some(&[])` is the request declaring an empty set, and it narrows to
+/// nothing: reading an explicit empty declaration as "no narrowing requested"
+/// is the fail-open direction, and it is the one an implementer reaches for
+/// because it keeps the neighbour speaking. The neighbour therefore runs on a
+/// slice that names `elicitation`, which proves the bridge speaks without
+/// deciding the empty case, and the empty case is asserted on its own at the
+/// end.
 #[tokio::test]
 async fn ac_mrtr_7a_an_undeclared_variant_is_not_asked_under_an_empty_slice() {
     let elicitation_only = declared(&json!({"elicitation": {"form": {}}}));
     let empty: [String; 0] = [];
-    let slice = Some(&empty[..]);
+    let naming = ["elicitation".to_string()];
+    let slice = Some(&naming[..]);
 
-    // The neighbour: what the client did declare is asked, empty slice and all.
+    // The neighbour: what the client declared, and the slice names, is asked.
     let client = FakeClient::new(vec![accepted(&json!({"ok": true}))]);
     let backend = FakeBackend::new(vec![completed()]);
     let records = Records::default();
@@ -478,7 +486,7 @@ async fn ac_mrtr_7a_an_undeclared_variant_is_not_asked_under_an_empty_slice() {
     assert_eq!(
         client.methods(),
         vec!["elicitation/create".to_string()],
-        "an empty slice must not narrow anything"
+        "a slice naming the declared capability must not narrow it away"
     );
 
     // The row: the same batch plus a variant the client never declared.
@@ -524,6 +532,40 @@ async fn ac_mrtr_7a_an_undeclared_variant_is_not_asked_under_an_empty_slice() {
         client.methods()
     );
     assert!(backend.calls().is_empty(), "backend must not be retried");
+
+    // The empty case on its own: an explicitly empty slice declares an empty
+    // set, so even the capability the session declared is not asked. Only the
+    // silence is asserted, not which error names it — the row is about what
+    // reaches the client, and pinning a variant here would invent a contract
+    // the design does not state.
+    let client = FakeClient::mute();
+    let backend = FakeBackend::never();
+    let records = Records::default();
+    let outcome = bridge(
+        &client,
+        &backend,
+        &records,
+        elicitation_only,
+        Some(&empty[..]),
+        &interim(&[(
+            "k1",
+            entry(
+                "elicitation/create",
+                &json!({"mode": "form", "message": "Which branch?"}),
+            ),
+        )]),
+    )
+    .await;
+
+    assert!(
+        outcome.is_err(),
+        "an empty slice declares an empty set, so the round cannot complete: {outcome:?}"
+    );
+    assert!(
+        client.frames().is_empty(),
+        "an empty slice narrows to nothing, so nothing is asked: {:?}",
+        client.methods()
+    );
 }
 
 /// Row 325 — a capability declared in the session is asked for when the
@@ -1156,10 +1198,10 @@ async fn ac_mrtr_7b_answered_rounds_are_ended_by_the_aggregate_deadline() {
         backend
             .calls()
             .iter()
-            .any(|retry| retry.to_string().contains("\"k\"")),
-        "a retry must carry the answer it collected: a bridge timing every prompt out early \
-         also reaches the deadline after several backend calls, so the round count alone \
-         cannot tell an answered round from an abandoned one"
+            .any(|retry| retry.pointer("/inputResponses/k").is_some()),
+        "a retry must carry the answer it collected, looked up structurally rather than as a \
+         substring: the key `k` also appears in the question this retry echoes, so a text \
+         search passes against a bridge that timed every prompt out and filed nothing"
     );
 }
 
@@ -1284,23 +1326,48 @@ async fn ac_mrtr_7b_cancel_unnamed_action_and_no_member_fail_distinguishably() {
     }
 }
 
-/// Row 328 — a bridged round is counted with `phase="bridge"`, and no part of
-/// what a person answered appears in any record.
+/// Row 328 — *each* bridged round is counted with `phase="bridge"`, and no part
+/// of what a person answered appears in any record.
 ///
-/// The counter's name is not fixed by any shipped constant yet, so the row is
-/// asserted on the two halves it actually names: the `phase` label, and the
-/// absence. The absence is the half that rots — a label added later to carry
-/// "what was answered" breaks nothing and fails nothing — so it is asserted
-/// against the captured records rather than by reading the emit sites, over
-/// every counter name and every label key and value. The sentinel is
-/// distinctive enough that a substring match cannot collide with an ordinary
-/// label.
+/// The counter's name is not asserted, because no name exists to assert:
+/// `NFR.OBS.4` is recorded as having no design and no counters
+/// (`docs/requirements/RELEASE-4.0.0-cluster-a-readiness.md:44`), so a literal
+/// here would be this test inventing the contract it claims to check. The two
+/// halves the row does name are both asserted, and each is written so that the
+/// cheapest wrong implementation fails it.
+///
+/// Three rounds rather than one, because "each round" is the half a single
+/// successful round cannot observe: a counter emitted once per *call* carries
+/// `phase="bridge"` and satisfies a one-round row completely, while losing
+/// exactly the per-round resolution the requirement is about. Three answered
+/// rounds demand at least three bridge-phase records, which no once-per-call
+/// counter can produce.
+///
+/// The absence is the half that rots — a label added later to carry "what was
+/// answered" breaks nothing and fails nothing — so it is asserted against the
+/// captured records rather than by reading the emit sites, over every counter
+/// name and every label key and value. Each round answers with its own
+/// sentinel, so a bridge that leaks only the last answer, or only the first,
+/// is caught rather than sampled.
 #[tokio::test]
 async fn ac_mrtr_7ab_a_bridged_round_is_counted_without_the_answer_body() {
-    const SENTINEL: &str = "sentinel-answer-body-mrtr7";
+    const SENTINELS: [&str; 3] = [
+        "sentinel-answer-body-mrtr7-one",
+        "sentinel-answer-body-mrtr7-two",
+        "sentinel-answer-body-mrtr7-three",
+    ];
 
-    let client = FakeClient::new(vec![accepted(&json!({"branch": SENTINEL}))]);
-    let backend = FakeBackend::new(vec![completed()]);
+    let client = FakeClient::new(
+        SENTINELS
+            .iter()
+            .map(|sentinel| accepted(&json!({"branch": sentinel})))
+            .collect(),
+    );
+    let backend = FakeBackend::new(vec![
+        asking(&[("k2", ask("Which remote?"))]),
+        asking(&[("k3", ask("Which tag?"))]),
+        completed(),
+    ]);
     let records = Records::default();
 
     let outcome = bridge(
@@ -1313,25 +1380,35 @@ async fn ac_mrtr_7ab_a_bridged_round_is_counted_without_the_answer_body() {
     )
     .await;
 
-    assert!(outcome.is_ok(), "the round must complete: {outcome:?}");
-    let observed = records.all();
     assert!(
-        observed
-            .iter()
-            .any(|record| record.labels.get("phase").map(String::as_str) == Some("bridge")),
-        "a bridged round must be counted with phase=\"bridge\": {observed:?}"
+        outcome.is_ok(),
+        "the three rounds must complete: {outcome:?}"
+    );
+    let observed = records.all();
+    let bridged = observed
+        .iter()
+        .filter(|record| record.labels.get("phase").map(String::as_str) == Some("bridge"))
+        .count();
+    assert!(
+        bridged >= SENTINELS.len(),
+        "each of the {} bridged rounds must be counted with phase=\"bridge\", and {bridged} \
+         record(s) carry it: a counter emitted once per call passes the same row driven \
+         through a single round",
+        SENTINELS.len()
     );
     for record in &observed {
-        assert!(
-            !record.counter.contains(SENTINEL),
-            "an answer body must not reach a counter name: {:?}",
-            record.counter
-        );
-        for (key, value) in &record.labels {
+        for sentinel in SENTINELS {
             assert!(
-                !key.contains(SENTINEL) && !value.contains(SENTINEL),
-                "an answer body must not reach a label: {key}={value}"
+                !record.counter.contains(sentinel),
+                "an answer body must not reach a counter name: {:?}",
+                record.counter
             );
+            for (key, value) in &record.labels {
+                assert!(
+                    !key.contains(sentinel) && !value.contains(sentinel),
+                    "an answer body must not reach a label: {key}={value}"
+                );
+            }
         }
     }
 }

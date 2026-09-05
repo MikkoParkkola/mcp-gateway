@@ -304,6 +304,12 @@ impl InputBridge<'_> {
     /// means the request said nothing rather than that the client can do
     /// nothing.
     ///
+    /// `Some(&[])` is not `None`: an empty slice is a request declaring an
+    /// empty set, and it narrows to nothing, so no entry is asked. The two are
+    /// spelled out separately because the fail-open reading — treating an
+    /// explicit empty declaration as "no narrowing requested" — is the one that
+    /// keeps every other row passing.
+    ///
     /// # Errors
     ///
     /// Returns the reason the bridged call failed: a refused entry, a delivery
