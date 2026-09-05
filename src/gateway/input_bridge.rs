@@ -53,6 +53,13 @@ impl ServerRequestKind {
         }
     }
 
+    /// The kind a JSON-RPC method names, or `None` when the gateway relays no
+    /// such request.
+    #[must_use]
+    pub fn from_method(method: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.method() == method)
+    }
+
     /// The prefix every pending id of this kind carries.
     ///
     /// The trailing hyphen is part of the prefix: without it `sampling` would
@@ -316,12 +323,6 @@ impl InputBridge<'_> {
     ///
     /// Returns the reason the bridged call failed: a refused entry, a delivery
     /// that produced no answer, or a bound the call ran past.
-    // The stub awaits nothing yet; the async signature is the contract the
-    // acceptance rows drive. Delete this allowance by hand once a real await
-    // lands: `allow` stays silent when it becomes redundant, so nothing else
-    // will point it out. Spelled the way the rest of this crate spells it,
-    // because `unused_async_trait_impl` exists only on newer clippy.
-    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn run(
         &self,
         session_id: &str,
@@ -329,11 +330,187 @@ impl InputBridge<'_> {
         slice: Option<&[String]>,
         first: &crate::protocol::mrtr::InputRequired,
     ) -> Result<Value, BridgeError> {
-        let _ = (session_id, declared, slice, first);
-        let _ = (self.channel, self.backend, self.observer, self.bounds);
-        Err(BridgeError::Delivery {
-            key: String::new(),
-            error: DeliveryError::NoSession,
+        let started = std::time::Instant::now();
+        let mut interim = first.clone();
+        let mut spent = 0_u32;
+        for _ in 0..self.bounds.rounds {
+            if started.elapsed() >= self.bounds.aggregate {
+                return Err(BridgeError::Deadline);
+            }
+            let prompts = Self::plan(&interim, declared, slice)?;
+            spent = spent.saturating_add(u32::try_from(prompts.len()).unwrap_or(u32::MAX));
+            if spent > self.bounds.requests {
+                return Err(BridgeError::RequestBudgetExhausted);
+            }
+            self.observe(&interim);
+            let answers = self.ask(session_id, prompts, started).await?;
+            let retry = crate::protocol::mrtr::Bridge::retry_params(&interim, answers);
+            let result = self.backend.invoke(retry).await;
+            match crate::protocol::mrtr::InputRequired::from_result(&result) {
+                Some(next) => interim = next,
+                None => return Ok(result),
+            }
+        }
+        Err(BridgeError::RoundsExhausted)
+    }
+
+    /// Gate one interim result, whole, before a single frame leaves.
+    ///
+    /// Whole-batch and pre-send because a refusal is about the batch the
+    /// backend composed: asking the half a client can answer and refusing the
+    /// rest would put a question to a person on the strength of a request the
+    /// gateway had already decided it could not carry.
+    fn plan(
+        interim: &crate::protocol::mrtr::InputRequired,
+        declared: crate::protocol::meta::Declared,
+        slice: Option<&[String]>,
+    ) -> Result<Vec<Prompt>, BridgeError> {
+        if let Some(bad) = interim.undeclared(declared) {
+            return Err(BridgeError::Refused {
+                key: bad.key.to_string(),
+                reason: bad.reason,
+            });
+        }
+        interim
+            .requests
+            .iter()
+            .map(|(key, request)| Self::prompt(key, request, slice))
+            .collect()
+    }
+
+    /// Project one entry into the request it will be sent as.
+    ///
+    /// The slice narrows and may only narrow: the session's declaration is the
+    /// ceiling and is checked by the caller, so an absent slice asks for
+    /// everything declared and an empty one asks for nothing.
+    fn prompt(key: &str, request: &Value, slice: Option<&[String]>) -> Result<Prompt, BridgeError> {
+        let refused = |reason| BridgeError::Refused {
+            key: key.to_string(),
+            reason,
+        };
+        let method = request
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let (Some(kind), Some(capability)) = (
+            ServerRequestKind::from_method(method),
+            crate::protocol::meta::required_capability(method),
+        ) else {
+            return Err(refused(crate::protocol::mrtr::Refusal::UnrecognisedMethod));
+        };
+        if slice.is_some_and(|names| !names.iter().any(|name| name == capability)) {
+            return Err(refused(crate::protocol::mrtr::Refusal::Capability(
+                capability,
+            )));
+        }
+        Ok(Prompt {
+            key: key.to_string(),
+            kind,
+            params: request.get("params").cloned(),
         })
     }
+
+    /// Put one round's prompts to the client and collect what came back.
+    ///
+    /// A prompt that outlives its wait is dropped rather than failing the
+    /// call: the bound exists so one silent client cannot hold the exchange
+    /// open, and the backend is still owed the round it asked for. A client
+    /// that *answered* something unusable is the other case, and that one ends
+    /// the call, because an answer the gateway cannot read is not silence.
+    async fn ask(
+        &self,
+        session_id: &str,
+        prompts: Vec<Prompt>,
+        started: std::time::Instant,
+    ) -> Result<Vec<(String, Value)>, BridgeError> {
+        let mut answers = Vec::with_capacity(prompts.len());
+        for prompt in prompts {
+            let id = format!("{}{}", prompt.kind.prefix(), uuid::Uuid::new_v4());
+            let left = self.bounds.aggregate.saturating_sub(started.elapsed());
+            let sent =
+                self.channel
+                    .send_request(session_id, &id, prompt.kind.method(), prompt.params);
+            let Ok(reply) = tokio::time::timeout(self.bounds.per_prompt.min(left), sent).await
+            else {
+                continue;
+            };
+            let answer = reply
+                .and_then(|reply| Self::project(&reply))
+                .map_err(|error| BridgeError::Delivery {
+                    key: prompt.key.clone(),
+                    error,
+                })?;
+            answers.push((prompt.key, answer));
+        }
+        Ok(answers)
+    }
+
+    /// Read one client reply as the answer to file, or say why it is not one.
+    ///
+    /// A `result` carrying no `action` is filed whole: `roots/list` and
+    /// `sampling/createMessage` answer with their own shapes and never accept
+    /// or decline, so demanding an `action` of them would refuse every valid
+    /// reply of two of the three relayed kinds.
+    fn project(reply: &Value) -> Result<Value, DeliveryError> {
+        if let Some(error) = reply.get("error") {
+            return Err(DeliveryError::ClientRefused {
+                code: error
+                    .get("code")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_default(),
+                message: error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            });
+        }
+        let Some(result) = reply.get("result") else {
+            return Err(DeliveryError::NoReplyMember);
+        };
+        let Some(action) = result.get("action").and_then(Value::as_str) else {
+            return Ok(result.clone());
+        };
+        match action {
+            "accept" => result
+                .get("content")
+                .filter(|content| content.is_object())
+                .cloned()
+                .ok_or(DeliveryError::Malformed),
+            "decline" | "cancel" => Err(DeliveryError::Declined {
+                action: action.to_string(),
+            }),
+            _ => Err(DeliveryError::UnknownAction {
+                action: action.to_string(),
+            }),
+        }
+    }
+
+    /// Emit this round's observation.
+    ///
+    /// Counted per round rather than per prompt, and labelled with nothing a
+    /// person typed: the label set says that a bridged round happened and how
+    /// wide it was, and the answers themselves never reach a counter.
+    fn observe(&self, interim: &crate::protocol::mrtr::InputRequired) {
+        let mut labels = std::collections::BTreeMap::new();
+        labels.insert("phase".to_string(), "bridge".to_string());
+        labels.insert("requests".to_string(), interim.requests.len().to_string());
+        self.observer.record(BridgeRecord {
+            counter: "mrtr_bridge_rounds_total".to_string(),
+            labels,
+        });
+    }
+}
+
+/// One gated entry, ready to be put on the client's connection.
+///
+/// The params travel as the backend wrote them: the client is answering the
+/// backend's question, and a re-spelling of it is a different question.
+struct Prompt {
+    /// The backend's own key, which the answer must be filed under.
+    key: String,
+    /// Which relayed request this is.
+    kind: ServerRequestKind,
+    /// The params to send, absent for a request that carries none.
+    params: Option<Value>,
 }
