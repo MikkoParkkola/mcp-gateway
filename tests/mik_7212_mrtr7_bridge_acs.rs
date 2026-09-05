@@ -249,8 +249,8 @@ fn result(value: &Value) -> Reply {
 fn declared(capabilities: &Value) -> Declared {
     classify_request(
         Some(&json!({"_meta": {
-            "protocolVersion": "2026-07-28",
-            "clientCapabilities": capabilities,
+            mcp_gateway::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+            mcp_gateway::protocol::meta::KEY_CLIENT_CAPABILITIES: capabilities,
         }})),
         None,
     )
@@ -1339,4 +1339,25 @@ fn ac_mrtr_7b_the_asking_fixture_is_what_the_parser_reads() {
         Some("state-1"),
         "the fixture must carry the state a retry has to echo back"
     );
+}
+
+/// A control, not an acceptance row: it proves `declared_all` declares.
+///
+/// The `_meta` keys are reverse-DNS, and a fixture writing the bare names is
+/// read as a shape carrying no declaration at all — so every capability row
+/// would gate on `Declared::NONE` and pass whatever the bridge did with the
+/// permission it was never given. Asserting the fixture against the parser is
+/// what stops that from being reintroduced silently; the row tests cannot see
+/// it, because a client that declared nothing is a state they are allowed to
+/// encounter.
+#[test]
+fn ac_mrtr_7a_the_capability_fixture_declares_what_it_names() {
+    let all = declared_all();
+    for capability in ["sampling", "roots", "elicitation"] {
+        assert!(
+            all.has(capability),
+            "the fixture claiming every capability must declare {capability}, \
+             or every capability row gates on a client that declared nothing"
+        );
+    }
 }
