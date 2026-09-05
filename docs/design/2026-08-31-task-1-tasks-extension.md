@@ -304,8 +304,8 @@ makes it reachable.
 
 Two questions this section previously deferred are answered above. Both were deferred on the
 reading that no versioned text existed, so pinning one artifact closed both. Two rows remain, and
-the second is new: the two non-spec capability structs were recorded above as somebody's decision
-without being scheduled, which is an assumption with better manners. Scheduled here.
+the first of them is new: the two non-spec capability structs were recorded above as somebody's
+decision without being scheduled, which is an assumption with better manners. Scheduled here.
 
 **Deferred.**
 
