@@ -291,6 +291,14 @@ against three separate boots, checking that the values TRACK the file rather tha
 constant that happens to agree. Criterion list and disposals:
 `docs/design/2026-09-05-error-budget-test-plan.md`.
 
+One caveat on that evidence, raised by the driver and recorded rather than filed: every config
+fixture in those boots points at a relative `./capabilities`, and `serve` was run from the
+worktree root where that directory exists. The boots therefore prove the budget wiring, which is
+what the criterion asserts, but they are not independent of working directory and a later reader
+should not treat them as such. Nobody must act before the release; the observation exists so the
+next person to re-run these does not mistake a path that happened to resolve for one that always
+will.
+
 Of the two that remain, only `enable_idempotency` has a release criterion behind it, so only it is
 tracked as blocking. `with_tool_registry` is recorded here rather than filed: no acceptance
 criterion depends on it, nobody must act before the release, and a ticket would cost a human's
