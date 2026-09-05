@@ -237,12 +237,27 @@ impl Backend {
         // symmetric even if a concurrent idle-eviction later replaces this
         // slot's `PooledEntry` for `key` (MIK-6735 fix 1).
         match &result {
-            Ok(_) => {
+            Ok(response) => {
                 tracing::info!(
                     latency_ms = latency.as_millis(),
                     "Request completed successfully"
                 );
-                entry.failsafe.record_success(latency);
+                // A throttle can arrive as a successful JSON-RPC response
+                // carrying `isError: true`, not only as a transport error.
+                // Reaching `record_success` with one would break a real
+                // failure streak and could close a half-open circuit.
+                let throttled = response.result.as_ref().is_some_and(|result| {
+                    result
+                        .get("isError")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                        && crate::gateway::recovery::is_rate_limited(&result.to_string())
+                });
+                if throttled {
+                    entry.failsafe.record_rate_limited("rate limited", latency);
+                } else {
+                    entry.failsafe.record_success(latency);
+                }
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),

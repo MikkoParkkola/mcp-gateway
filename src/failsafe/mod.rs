@@ -62,6 +62,21 @@ impl Failsafe {
         self.health_tracker.record_failure();
     }
 
+    /// Record a throttled response: reachable, but no evidence of health.
+    ///
+    /// The backend answered, so the health tracker counts it and a throttled
+    /// backend cannot be made to look down. The circuit breaker sees nothing:
+    /// a `429` neither breaks a failure streak nor closes a half-open circuit,
+    /// because being told to slow down is not proof of recovery.
+    pub fn record_rate_limited(&self, reason: &str, latency: std::time::Duration) {
+        tracing::debug!(
+            reason,
+            latency_ms = latency.as_millis(),
+            "Rate-limited response excluded from failure accounting"
+        );
+        self.health_tracker.record_success(latency);
+    }
+
     /// Record a dispatch failure, excluding rate-limited responses from failure
     /// accounting (GH #475). A `429` proves the backend is reachable, so it
     /// records transport health as a success and no failure anywhere: a
@@ -72,12 +87,7 @@ impl Failsafe {
     /// its telemetry with what actually happened.
     pub fn record_dispatch_failure(&self, reason: &str, latency: std::time::Duration) -> bool {
         if crate::gateway::recovery::is_rate_limited(reason) {
-            tracing::debug!(
-                reason,
-                latency_ms = latency.as_millis(),
-                "Rate-limited response excluded from failure accounting"
-            );
-            self.health_tracker.record_success(latency);
+            self.record_rate_limited(reason, latency);
             return true;
         }
         self.record_failure(reason, latency);
@@ -88,5 +98,37 @@ impl Failsafe {
     #[must_use]
     pub fn health_metrics(&self) -> HealthMetrics {
         self.health_tracker.metrics()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{CircuitBreakerConfig, FailsafeConfig};
+    use std::time::Duration;
+
+    /// GH475.RL.3 — a throttle must not break a failure streak. Two failures
+    /// with a rate-limited response between them still trip the circuit.
+    #[test]
+    fn a_rate_limited_response_does_not_reset_the_failure_streak() {
+        let config = FailsafeConfig {
+            circuit_breaker: CircuitBreakerConfig {
+                enabled: true,
+                failure_threshold: 2,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let failsafe = Failsafe::new("throttled-backend", &config);
+        let latency = Duration::from_millis(1);
+
+        failsafe.record_failure("boom", latency);
+        failsafe.record_rate_limited("429 too many requests", latency);
+        failsafe.record_failure("boom", latency);
+
+        assert!(
+            !failsafe.can_proceed(),
+            "the circuit must be open: a throttle is not evidence the backend recovered"
+        );
     }
 }
