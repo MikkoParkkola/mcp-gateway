@@ -54,6 +54,25 @@ fn saw_method(received: &Received, method: &str) -> bool {
         .any(|request| request.get("method").and_then(Value::as_str) == Some(method))
 }
 
+/// A question body large enough that one frame cannot be written atomically.
+///
+/// Row 324 asserts that concurrent outbound frames are not interleaved, and on
+/// a pipe a single `write_all` below `PIPE_BUF` is atomic already — at the
+/// fixture's original ~100 bytes the assertion could not fire whatever the
+/// writer did, so an unlocked writer passed the row written to catch it. The
+/// size is the test: a frame past the buffer takes several writes, and two
+/// unserialized writers then produce a line that does not parse.
+const QUESTION_BYTES: usize = 96 * 1024;
+
+/// The backend's delay before answering `initialize`.
+///
+/// Row 323 needs the client-visible handshake to still be outstanding when the
+/// pipelined `tools/call` is processed. Without a delay the gateway answers
+/// `initialize` in microseconds while the bridged question needs a backend
+/// round-trip, so the ordering the row asserts holds by timing rather than by
+/// design and the row passes against the interleaving it exists to catch.
+const BACKEND_INITIALIZE_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
+
 /// An HTTP MCP backend that answers `initialize` and `tools/list`, and whose
 /// one tool returns the MRTR interim shape carrying an `elicitation/create`
 /// the gateway is meant to relay to its own client.
@@ -64,7 +83,12 @@ async fn spawn_fixture_backend() -> (String, Received) {
         "/",
         axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
             let sink = Arc::clone(&app_sink);
-            async move { axum::Json(fixture_answer(&request, &sink)) }
+            async move {
+                if request.get("method").and_then(Value::as_str) == Some("initialize") {
+                    tokio::time::sleep(BACKEND_INITIALIZE_DELAY).await;
+                }
+                axum::Json(fixture_answer(&request, &sink))
+            }
         }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -112,7 +136,8 @@ fn fixture_answer(request: &Value, sink: &Received) -> Value {
                             "method": "elicitation/create",
                             "params": {
                                 "mode": "form",
-                                "message": "Which branch?",
+                                "message": "Which branch? ".to_string()
+                                    + &"x".repeat(QUESTION_BYTES),
                                 "requestedSchema": {"type": "object", "properties": {}},
                             },
                         },
