@@ -100,12 +100,9 @@ impl Backend {
         // up. Any era already determined describes the peer that came before
         // it, which an upgrade or a downgrade may have replaced, so carrying
         // the verdict across the swap asserts something never observed about
-        // the peer now on the wire. Guarded on a determination existing so a
-        // cold start does not emit a discard record for a belief it never had.
-        if self.era.cached().await.is_some() {
-            self.era.invalidate_because("restart").await;
-        }
-        self.era.resolve_with(|| probe(transport, timeout)).await;
+        // the peer now on the wire. Discard and probe are one locked step: a
+        // detached re-probe of the old peer must not be able to land between them.
+        self.era.restart_with(|| probe(transport, timeout)).await;
     }
 
     /// Re-probe when an ordinary response contradicts the cached verdict.

@@ -196,16 +196,11 @@ impl EraCache {
     /// leaving the caller believing it had discarded a belief it had not. A
     /// control that fails silently is worse than one that blocks briefly.
     pub async fn invalidate(&self) {
-        self.invalidate_because("trigger").await;
-    }
-
-    /// Discard the determination, recording why.
-    pub async fn invalidate_because(&self, reason: &str) {
         *self.observation.lock().await = EraObservation::never_probed();
         tracing::info!(
             target: "mcp_gateway::observed",
             backend = %self.name,
-            reason = %reason,
+            reason = "trigger",
         );
     }
 
@@ -245,7 +240,50 @@ impl EraCache {
             return guard.era;
         }
         tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = false);
+        self.probe_and_store(&mut guard, trigger, probe).await
+    }
 
+    /// Discard any determination and probe the peer that replaced it, holding the
+    /// lock across both halves.
+    ///
+    /// The atomicity is the requirement, not a refinement of it. A detached re-probe
+    /// of the *previous* peer may already be queued on this same lock. Split into an
+    /// invalidate and then a resolve, that probe lands in the gap between the two: it
+    /// writes a verdict about a process that is no longer on the wire, and the
+    /// restart's own resolve then sees [`EraSource::Probed`] and keeps it. Held
+    /// throughout, the stale probe can only run before the reset — where the reset
+    /// discards it — or after the fresh verdict, where the early return above drops it.
+    pub async fn restart_with<F, Fut>(&self, probe: F) -> Era
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ProbeOutcome>,
+    {
+        let mut guard = self.observation.lock().await;
+        // Guarded on a determination existing so a cold start does not emit a discard
+        // record for a belief it never held.
+        if guard.source == EraSource::Probed {
+            *guard = EraObservation::never_probed();
+            tracing::info!(
+                target: "mcp_gateway::observed",
+                backend = %self.name,
+                reason = "restart",
+            );
+        }
+        self.probe_and_store(&mut guard, ProbeTrigger::Start, probe)
+            .await
+    }
+
+    /// Run one probe and record what it decided. The caller owns the lock.
+    async fn probe_and_store<F, Fut>(
+        &self,
+        guard: &mut EraObservation,
+        trigger: ProbeTrigger,
+        probe: F,
+    ) -> Era
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ProbeOutcome>,
+    {
         let started = std::time::Instant::now();
         let outcome = probe().await;
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -497,5 +535,55 @@ impl EraObservation {
             );
         }
         fields
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A probe answer that classifies as [`Era::Modern`].
+    fn modern_document() -> ProbeOutcome {
+        ProbeOutcome::Result(serde_json::json!({
+            "capabilities": {},
+            "supportedVersions": ["2026-07-28"],
+        }))
+    }
+
+    /// A restart swaps the peer, so a verdict about the peer it replaced must never be
+    /// what the restart reports — however fresh that verdict looks.
+    ///
+    /// This is the reachable half of the guarantee. The other half — that a detached probe
+    /// of the previous peer cannot land *between* a restart's discard and its own probe —
+    /// is not test-reachable: the two used to be separate lock acquisitions with no await
+    /// between them, so the window opens only under a multi-threaded scheduler and closing
+    /// it was a structural change (one acquisition, not two) rather than a behavioural one.
+    /// A race test was written for it and passed against the pre-fix code, which is why it
+    /// is not here. What this pins is the property that made the window harmful: a restart
+    /// that found a determination would return it instead of probing.
+    #[tokio::test]
+    async fn a_restart_probes_the_new_peer_rather_than_reporting_the_old_verdict() {
+        let cache = Arc::new(EraCache::for_backend("swapped-peer"));
+        cache.resolve_with(|| async { modern_document() }).await;
+        assert_eq!(cache.cached().await, Some(Era::Modern));
+
+        let probes = AtomicUsize::new(0);
+        let era = cache
+            .restart_with(|| async {
+                probes.fetch_add(1, Ordering::SeqCst);
+                ProbeOutcome::Error(METHOD_NOT_FOUND_CODE)
+            })
+            .await;
+
+        assert_eq!(probes.load(Ordering::SeqCst), 1, "the restart must probe");
+        assert_eq!(
+            era,
+            Era::Legacy,
+            "the restart must report what the peer now on the wire answered, not the \
+             determination made about the process it replaced"
+        );
+        assert_eq!(cache.cached().await, Some(Era::Legacy));
     }
 }
