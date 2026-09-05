@@ -17,7 +17,7 @@ Design:
 | GH475.RL.4 | a digit run inside a larger token is not a rate limit | `500` body quoting request id `4291a` → counts as failure | unit | boundary | `src/gateway/meta_mcp/invoke.rs` tests |
 | GH475.RL.5 | the `throttl` stem does not exempt | `"throttling disabled"` → counts as failure | unit | boundary | same |
 | GH475.RL.6 | the four accepted phrases do exempt | standalone `429`, `too many requests`, `rate limit`/`rate-limit`/`ratelimit`, `RESOURCE_EXHAUSTED` | unit | boundary | same |
-| GH475.RL.7 | an ordinary failure is unaffected | plain `500` → failure in both budgets and the breaker | unit | regression | `src/backend/tests.rs:912` |
+| GH475.RL.7 | an ordinary failure is unaffected | plain `500` → failure in both budgets and the breaker | unit | regression | `src/backend/tests.rs:912` (breaker and health) and `src/gateway/meta_mcp/invoke.rs` mod `error_budget_tests`, `ordinary_dispatch_failure_still_counts_against_both_budgets` (the budget recorder) — two call sites that decide independently |
 | GH475.RL.8 | a success is still a success | `BudgetOutcome::Success` → success sample | unit | regression | `src/gateway/meta_mcp/invoke.rs` mod `error_budget_tests`, `ordinary_dispatch_success_still_counts_as_a_success_sample` |
 | GH475.RL.9 | a backend returning only `429`s neither opens its circuit nor exhausts a budget | end-to-end invoke against a stub backend emitting `429` past both thresholds | integration | behaviour | `tests/` |
 | GH475.CFG.1 | the documented YAML parses | full `error_budget:` block → expected struct | unit | round-trip | `src/config/tests.rs` |
@@ -59,9 +59,10 @@ own clause, that a success is recorded as a success, was asserted nowhere, and
 retagging would have closed the appearance and not the hole. Closed 2026-09-06:
 the duplicate now carries the RL.7 tag it always asserted (a second recorder,
 worth its own case), and RL.8 has its own case asserting a `Success` reaches
-both windows as a success sample. Falsifier probe run — routing `Success` into
-the early return that excludes throttled calls turns the new assertion from
-`(1, 0)` into `(0, 1)`, and no other case in the module notices.
+both windows as a success sample. Falsifier probe run — replacing the
+`outcome == BudgetOutcome::Success` condition with `false` routes a success
+through the failure arm and turns the new assertion from `(1, 0)` into
+`(0, 1)`, and no other case in the module notices.
 
 Every criterion carries either a case or a recorded reason it has none, and the
 reasons are in **Rows without a case** below. The `GH475.*` identifiers are
@@ -108,12 +109,16 @@ name behaviour that does not exist yet:
   carried until 2026-09-05 were stale by eleven lines and, read today, said the
   wiring was still missing). Both halves are asserted from the boot path at
   `src/gateway/server/mod.rs:3061` and `:3615`, neither calling a setter.
-- **GH475.RL.3 fails today**: `src/backend/ops.rs:255` records every dispatch
-  `Err` unconditionally.
+- **GH475.RL.3 failed at the red run**: `src/backend/ops.rs` recorded every
+  dispatch `Err` unconditionally. The rate-limit exclusion landed with the
+  implementation and the row is green.
 
-Most remaining rows fail for ordinary reasons — the config key does not parse,
-the validation does not exist, the outcome enum does not exist. Each is checked
-by running it before the implementation, not by assertion.
+Most remaining rows failed for ordinary reasons — at the red run the config key
+did not parse, the validation did not exist, the outcome enum did not exist.
+Each was checked by running it before the implementation, not by assertion.
+Every statement in this section is **red-run history as of 2026-09-05**, before
+the implementation landed; it describes a tree that no longer exists and is
+kept as the evidence that each row could fail.
 
 Four rows are **regressions and are green before the implementation**, so a red
 run is not available and claiming one would be false. Each names the mutant that

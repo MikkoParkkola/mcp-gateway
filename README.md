@@ -497,17 +497,25 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 
 **Backend will not connect?** Test the command directly (`npx -y @anthropic/mcp-server-tavily`), then check gateway logs with `--log-level debug`.
 
-**Circuit breaker open?** Check `curl localhost:39400/health | jq '.backends'`. Adjust thresholds in `failsafe.circuit_breaker` (default: opens after 5 consecutive failures, retries after 30s).
+**Circuit breaker open?** Check `curl -H "Authorization: Bearer $ADMIN_KEY" localhost:39400/health | jq '.backends'` — per-backend detail is admin-only, an unauthenticated caller sees just `{count, all_healthy}`. Adjust thresholds in `failsafe.circuit_breaker` (default: opens after 5 consecutive failures, retries after 30s).
 
-**A backend or a single tool went quiet for about five minutes?** That is the
-error budget, not the circuit breaker — two separate mechanisms with separate
-keys. The budget kills a backend whose failure rate over a sliding window
-crosses `error_budget.threshold`, and disables one failing capability without
-touching the rest of its backend. Both thresholds and the per-capability
-`cooldown` (default 5 minutes) live under `error_budget:` — see
-`examples/gateway-full.yaml` for every key. Rate-limited responses (`429`,
-`RESOURCE_EXHAUSTED`) are excluded from both budgets: a throttled backend is a
-working backend.
+**One tool went quiet, then came back on its own about five minutes later?**
+That is the per-capability error budget, not the circuit breaker — separate
+mechanism, separate keys. A capability whose failure rate crosses
+`error_budget.capability.threshold` is disabled on its own, leaving the rest of
+its backend serving, and re-enables itself on the next call once
+`error_budget.capability.cooldown` (default 5 minutes) has elapsed.
+
+**A whole backend went offline and stayed offline?** The backend-level error
+budget auto-killed it: its failure rate crossed `error_budget.threshold` over
+the sliding window. Unlike a capability, a killed backend does **not** come
+back by itself — revive it with `gateway_revive_server`, and raise the
+threshold or the window if the kill was premature.
+
+Every key of both budgets is documented inline in `examples/gateway-full.yaml`
+under `error_budget:`. Rate-limited responses (`429`, `RESOURCE_EXHAUSTED`) are
+excluded from both budgets: a throttled backend is a working backend, so
+throttling alone can neither kill a backend nor disable a capability.
 
 **Tools not appearing?** Verify the backend is running (`gateway_list_servers`). Tool lists are cached for 5 minutes.
 
