@@ -78,6 +78,10 @@ pub struct Migration {
     pub description: &'static str,
     /// Apply the migration; receives the gateway data directory (`~/.mcp-gateway/`).
     pub apply: fn(&Path) -> std::io::Result<()>,
+    /// `true` when the migration only tells the operator something and leaves
+    /// every file alone. A notice earns no config backup, and it is addressed
+    /// to a person, so `--quiet` silences it.
+    pub notice: bool,
 }
 
 /// All registered migrations in ascending `applies_below` order.
@@ -99,11 +103,13 @@ static MIGRATIONS: &[Migration] = &[
         applies_below: "3.0.0",
         description: "v3.0.0: informational per-user OAuth isolation notice (config unchanged)",
         apply: migrate_3_0_0_multi_user_notice,
+        notice: true,
     },
     Migration {
         applies_below: "4.0.0",
         description: "v4.0.0: informational breaking-change notice (config unchanged)",
         apply: migrate_4_0_0_release_notice,
+        notice: true,
     },
 ];
 
@@ -210,8 +216,10 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
     };
 
     match detect_multi_user_posture(&yaml) {
-        MultiUserPosture::Undeclared => tracing::warn!("{NOTICE_MULTI_USER_DEFAULT}"),
-        MultiUserPosture::AuthDisabled => tracing::warn!("{NOTICE_AUTH_DISABLED}"),
+        // Printed for the same reason as the 4.0.0 notice: a log filter must
+        // not be able to swallow a one-time message addressed to a person.
+        MultiUserPosture::Undeclared => println!("{NOTICE_MULTI_USER_DEFAULT}"),
+        MultiUserPosture::AuthDisabled => println!("{NOTICE_AUTH_DISABLED}"),
         MultiUserPosture::AlreadyDeclared => tracing::info!("{NOTICE_ALREADY_CONFIGURED}"),
     }
     Ok(())
@@ -258,7 +266,10 @@ fn migrate_4_0_0_release_notice(_data_dir: &Path) -> std::io::Result<()> {
         .map(|(i, item)| format!("    {}. {item}", i + 1))
         .collect::<Vec<_>>()
         .join("\n");
-    tracing::warn!(
+    // Printed, not logged: `--log-level error` or a RUST_LOG filter would
+    // swallow a warn event while the version stamp advances, and the notice
+    // fires exactly once.
+    println!(
         "v4.0.0: four changes need your attention. No config was changed automatically.\n{body}"
     );
     Ok(())
@@ -400,7 +411,10 @@ impl UpgradeContext<'_> {
         let migrations = self.applicable_migrations();
         let count = migrations.len();
 
-        if !self.dry_run && count > 0 {
+        // A notice writes nothing, so backing the config up would leave an
+        // unexplained gateway.yaml.bak.<version> behind for an upgrade that
+        // touched only the version stamp.
+        if !self.dry_run && migrations.iter().any(|m| !m.notice) {
             backup_config(self.data_dir, &self.old_ver.to_string())?;
         }
 
@@ -409,7 +423,7 @@ impl UpgradeContext<'_> {
                 let prefix = if self.dry_run { "[dry-run] " } else { "" };
                 println!("  {prefix}Applying: {}", m.description);
             }
-            if !self.dry_run {
+            if !self.dry_run && !(m.notice && self.quiet) {
                 (m.apply)(self.data_dir)?;
             }
         }
@@ -1174,21 +1188,27 @@ mod tests {
     }
 
     #[test]
-    fn migration_registered_for_3_0_0_triggers_config_backup() {
+    fn notice_only_upgrade_leaves_no_config_backup() {
         // GIVEN: a pre-3.0.0 install with a gateway.yaml present
         let dir = TempDir::new().unwrap();
         let yaml = dir.path().join("gateway.yaml");
         std::fs::write(&yaml, "auth:\n  enabled: true\n  single_user: true\n").unwrap();
         write_stamp(&stamp_path(dir.path()), "2.10.0").unwrap();
 
-        // WHEN: check_upgrade runs, triggering the registered 3.0.0 migration
+        // WHEN: check_upgrade runs, and every applicable migration is a notice
         check_upgrade(dir.path()).unwrap();
 
-        // THEN: the existing backup path fired because >=1 migration applied
+        // THEN: nothing was copied, because nothing was changed. A backup file
+        // for an upgrade that only advanced the version stamp is an unexplained
+        // artefact the operator has to reason about.
         let bak = dir.path().join("gateway.yaml.bak.2.10.0");
         assert!(
-            bak.exists(),
-            "backup should be created once a real migration is registered and applies"
+            !bak.exists(),
+            "a notice-only upgrade must not write a config backup"
+        );
+        assert!(
+            MIGRATIONS.iter().all(|m| m.notice),
+            "this test is only meaningful while every registered migration is a notice"
         );
     }
 }
