@@ -36,9 +36,10 @@ independently implemented, lower priority than this one — and whether it lands
 in 4.0.0 is decided after that design exists and carries an effort estimate,
 not now. Deferring it here is a sequencing decision, not a decision to drop it.
 
-Also out: the row-308 SSE delivery half (its
-own deferral, trigger is this commit) — which is a deferral of that release
-row's own evidence, **not** permission for this change to skip delivery. A
+IN, not out: live delivery of the question over the client's own stream.
+Release row 308 defers its own evidence with this commit as the trigger, which
+defers *that row's evidence* and is **not** permission for this change to skip
+delivery. A
 legacy HTTP client that cannot actually receive the bridge's question has not
 been bridged, so delivery over the live stream is inside FOR and
 `MIK-7212.WIRE.8` is the row that finds out whether it works; the `NFR.OBS.4` counter name
@@ -192,7 +193,7 @@ test code is written.
 | stdio serial dispatch deadlocks a bridged call (GPT, HIGH, CERTAIN) | confirmed at source. Second blocker, above. **Filed as MIK-7387** with the three failing rows as its acceptance evidence; the requester decides include/exclude for the release there |
 | reply projection is not request-kind-aware; params forwarded unvalidated (GPT) | out of this scope — defects in `input_bridge.rs` itself, not in wiring it. Filed rather than fixed here |
 | store as an injected trait (Kimi) | declined. A trait with one implementation is an abstraction nothing asked for. `BridgeObserver` earns its trait because production genuinely passes a no-op; a capability store does not |
-| store has no eviction or ownership (both vendors, HIGH) — **re-raised on the amended design** (GPT, HIGH) | confirmed twice. The first answer, `SessionLifecycle`, has no production caller at all; declarations live in `ClientSession` instead, where removal and TTL reaping already drop them. Open question 3 |
+| store has no eviction or ownership (both vendors, HIGH) — **re-raised on the amended design** (GPT, HIGH) | confirmed twice. The first answer, `SessionLifecycle`, has no production caller at all; declarations live in the `NotificationMultiplexer` session map instead, the only session-keyed store whose removal runs in production. Superseded answer recorded at open question 3; the owner is fixed by amendment 3 |
 | bridge retries invoke the backend outside cost accounting (GPT, HIGH, LIKELY) | confirmed at source: `invoke.rs:1246,1369,1394` each fire once around the single dispatch at :1327. In scope — this change creates the second invocation. One dispatch helper, change surface above |
 | the merge widens MRTR.9 for modern callers while the table says it does not (synthetic, MEDIUM, CERTAIN) | confirmed at source: the gate at `invoke.rs:1518` is shape-blind. Merge scoped to `Legacy` only, option C above |
 | construction-site census says five and lists seven (synthetic, LOW) | confirmed. Count was wrong, list was right; re-enumerated by role |
@@ -212,7 +213,8 @@ fix; changing the gate would be the defect.
 The merge happens where `CallerContext` is built, not where it is read:
 `src/gateway/router/handlers.rs:705,1164` (HTTP, `session_id` in scope at :707)
 and `src/gateway/server/mod.rs:1827` (stdio, `session_id` in scope from :1722,
-constant `"stdio-session"` at :1579).
+constant `"stdio-session"` at :1579 — a key nothing ever writes under, so the
+stdio read returns nothing and the caller is refused).
 
 **Absent is fail-closed.** No captured capabilities for a session — evicted,
 pre-store, restarted — means the client declared nothing, and the question is
@@ -235,10 +237,13 @@ Wiring one call is the smallest part of this.
   constructor — `Declared::from_initialize` — documenting the exact
   capabilities-map contract it accepts. The visibility change then reads as a
   designed API surface instead of a convenience opening.
-- stdio still captures its client's declaration at `initialize` under the
-  constant `"stdio-session"`, and nothing reads it until the stdio work package
-  lands. That write is deliberately stored-but-unused; it is not dead code and
-  should not be removed as such.
+- stdio writes nothing. The store is written at the HTTP `initialize` call
+  site only, so a stdio caller has no entry and the conjunction in amendment 1
+  refuses it. An earlier revision had stdio capture under a `"stdio-session"`
+  constant, on the rationale that one write site should cover every bridgeable
+  transport; that rationale died when stdio left the bridgeable set, and a
+  stored-but-unread declaration is a claim about permission that nothing
+  checks.
 - a write in `MetaMcp::handle_initialize`, and a read at each `CallerContext`
   construction site. Seven, enumerated from source and split by role: two
   production writes carrying a real declaration (`handlers.rs:705,1164`), and
@@ -311,7 +316,15 @@ saying the backend stopped to ask when it has since acted — the key is never
 settled and the response is judged on a stale verdict. Confirmed at source.
 The dispatch helper named in the change surface therefore returns the *settled*
 result, and `interim` and `stopped_to_ask` are derived after it returns. One
-result value in scope means a stale verdict has nowhere to live.
+result value in scope means a stale verdict has nowhere to live. The two uses
+of "did it stop to ask" are distinct and neither name is reused:
+
+```
+let first = dispatch(...);                       // one attempt
+let asked = InputRequired::claims_input_required(&first);   // authorizes bridging only
+let result = if asked && bridgeable { bridge_and_retry(first) } else { first };
+let stopped_to_ask = InputRequired::claims_input_required(&result);  // settles + gates
+```
 
 **3. The declaration store is owned by the session manager, not by `ClientSession`.**
 Open question 3 answered "declarations live in `ClientSession`". `ClientSession`
@@ -344,6 +357,27 @@ retries, prompt parameters forwarded without typed validation, and reply
 projection ignoring request kind. All three are inside `input_bridge.rs`, none
 is created by the call site, and MIK-7388 is where bridge-internal defects go.
 MIK-7388 blocking MIK-7212 is what keeps them from shipping live.
+
+## Round 4 review, disposed
+
+Fourth pass, GPT on the amended design plus the test plan. Verdict
+SHIP-WITH-FIXES. Three HIGH findings were the same defect: the amendments were
+appended and the passages they overturned were left standing, so the document
+stated both readings. Each is now eliminated rather than annotated — the
+superseded sentence is gone, not footnoted.
+
+| finding | disposal |
+|---|---|
+| stdio still captures a declaration while the amendment says it never writes (HIGH, CERTAIN) | confirmed in the text. The capture is deleted: the store is written at the HTTP `initialize` site only. Its rationale — one write site for every bridgeable transport — died when stdio left that set |
+| the earlier resolution still assigns the store to `ClientSession` (HIGH, CERTAIN) | confirmed in the text, in the disposal table and in the open-question-3 answer. Both now name the `NotificationMultiplexer` session map and record `ClientSession` as the superseded answer |
+| scope excludes live SSE delivery that the HTTP bridge requires (HIGH, CERTAIN) | confirmed in the text. The paragraph opened "Also out" and then argued the opposite; it now opens "IN, not out". Delivery is inside FOR and `MIK-7212.WIRE.8` is its evidence |
+| no non-ignored case proves an initialized stdio caller stays refused (HIGH, LIKELY) | accepted. Added as `MIK-7212.WIRE.10`, deliberately not `#[ignore]`d: the refusal is stdio's behaviour until MIK-7387 lands |
+| WIRE.5 checks one generic accounting record (HIGH, POSSIBLE) | accepted. The row now asserts the backend-call count and each sink — invocation metrics, error budget, cost tracker, spend — carries three |
+| WIRE.9 does not test the cache gate (MEDIUM, CERTAIN) | accepted. The row now asserts the settled result is cached and a follow-up call is served without a further invocation |
+| pseudocode for interim vs settled verdict (improvement) | accepted. Four lines under amendment 2 |
+| make MIK-7388 a merge-before-wiring prerequisite, defects in one place (improvement) | already closed by the revision under review's successor: one list of four defects, one ticket, four schedule fields, `when` = merges before this wiring |
+| stage both a permitted and a forbidden request in WIRE.4 (improvement) | accepted, row rewritten |
+| map each of the 21 existing rows to its test name (improvement) | accepted, scheduled: done before implementation handoff, so an omission is mechanically visible rather than inferred from a count |
 
 ## Unknowns, scheduled
 
@@ -389,12 +423,14 @@ MIK-7388 blocking MIK-7212 is what keeps them from shipping live.
    flagged. Verified on the write side, which is where an absent caller is
    visible: no non-test `register` call, no production `remove_session` call.
 
-   **The declarations therefore live in `ClientSession`**
-   (`src/gateway/streaming.rs:47`) — the HTTP transport's own per-session
-   struct, which already carries `created_at` for TTL reaping and is dropped
-   whole on removal (`streaming.rs:219`). Eviction is then not a mechanism this
-   change adds; it is a field going out of scope with the session that owns it,
-   on replacement, on `DELETE`, and on reaping alike. Nothing hangs off the
+   **The declarations therefore live in the `NotificationMultiplexer` session
+   map** (`src/gateway/streaming.rs:75`) — the only session-keyed store with a
+   production removal path, on `DELETE` (`router/handlers.rs:354`) and at
+   stream end (`streaming.rs:578`). This answer first named `ClientSession`
+   itself; amendment 3 records why that owner cannot hold it — the struct is
+   private, is built only at `streaming.rs:188,202`, and never sees
+   `initialize`. Eviction is then not a mechanism this change adds; it is an
+   entry removed by the path that already removes the session. Nothing hangs off the
    dead hook, so wiring `SessionLifecycle` is **not** a prerequisite of this
    change. Its absence stays recorded here because it is the reason the obvious
    answer was the wrong one, and because the firewall's anomaly tracker
