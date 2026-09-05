@@ -4422,8 +4422,10 @@ mod error_budget_tests {
         );
     }
 
-    /// GH475.RL.8 — an ordinary failure still counts, so the exclusion cannot
-    /// be mistaken for the budget having stopped working altogether.
+    /// GH475.RL.7 — an ordinary failure still counts at the meta-MCP recorder,
+    /// so the exclusion cannot be mistaken for the budget having stopped
+    /// working altogether. `src/backend/tests.rs:912` asserts the same property
+    /// at the other recorder; both call sites decide independently.
     #[test]
     fn ordinary_dispatch_failure_still_counts_against_both_budgets() {
         let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
@@ -4432,6 +4434,26 @@ mod error_budget_tests {
         assert_eq!(
             m.kill_switch.capability_window_counts("srv", "tool"),
             (0, 1)
+        );
+    }
+
+    /// GH475.RL.8 — a success is still recorded as a success. The exclusion
+    /// returns before the recorders, so routing `Success` into that early
+    /// return would leave both windows empty and no other case would notice:
+    /// RL.1 wants them empty and RL.7 only pins the failure arm.
+    #[test]
+    fn ordinary_dispatch_success_still_counts_as_a_success_sample() {
+        let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        m.record_error_budget("srv", "tool", BudgetOutcome::Success);
+        assert_eq!(
+            m.kill_switch.window_counts("srv"),
+            (1, 0),
+            "a healthy call is a healthy sample, not a skipped one"
+        );
+        assert_eq!(
+            m.kill_switch.capability_window_counts("srv", "tool"),
+            (1, 0),
+            "the per-capability budget records the same success"
         );
     }
 

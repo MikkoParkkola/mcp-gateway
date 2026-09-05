@@ -18,7 +18,7 @@ Design:
 | GH475.RL.5 | the `throttl` stem does not exempt | `"throttling disabled"` → counts as failure | unit | boundary | same |
 | GH475.RL.6 | the four accepted phrases do exempt | standalone `429`, `too many requests`, `rate limit`/`rate-limit`/`ratelimit`, `RESOURCE_EXHAUSTED` | unit | boundary | same |
 | GH475.RL.7 | an ordinary failure is unaffected | plain `500` → failure in both budgets and the breaker | unit | regression | `src/backend/tests.rs:912` |
-| GH475.RL.8 | a success is still a success | `BudgetOutcome::Success` → success sample | unit | regression | `src/gateway/meta_mcp/invoke.rs` mod `error_budget_tests` — but see the note under this table: the case carrying the tag asserts RL.7's property, so RL.8 has no assertion of its own |
+| GH475.RL.8 | a success is still a success | `BudgetOutcome::Success` → success sample | unit | regression | `src/gateway/meta_mcp/invoke.rs` mod `error_budget_tests`, `ordinary_dispatch_success_still_counts_as_a_success_sample` |
 | GH475.RL.9 | a backend returning only `429`s neither opens its circuit nor exhausts a budget | end-to-end invoke against a stub backend emitting `429` past both thresholds | integration | behaviour | `tests/` |
 | GH475.CFG.1 | the documented YAML parses | full `error_budget:` block → expected struct | unit | round-trip | `src/config/tests.rs` |
 | GH475.CFG.2 | a partial section merges field-by-field | `error_budget: {threshold: 0.5}` → threshold 0.5, other four at today's defaults | unit | boundary | same |
@@ -52,12 +52,16 @@ The `home` column was re-read against the tree on 2026-09-05 and nine cells
 were wrong in three ways. Five named `src/kill_switch/tests.rs`, which carries
 no `GH475` tag at all. Two named `tests/` for boot-path cases that live in the
 crate. Two named `src/backend/ops.rs`, which is the production site — the cases
-are in `src/backend/tests.rs`. The cases are where the column now says. One row is not a citation error: the case
-tagged `GH475.RL.8` at `src/gateway/meta_mcp/invoke.rs:4425` asserts RL.7's
-property, and `src/backend/tests.rs:912` already asserts that same property
-under the correct tag — so RL.8's own clause, that a success is recorded as a
-success, is asserted nowhere. Retagging `:4425` would close the appearance and
-not the hole.
+are in `src/backend/tests.rs`. The cases are where the column now says. One row was not a citation error: the
+case tagged `GH475.RL.8` asserted RL.7's property, which
+`src/backend/tests.rs:912` already asserted under the correct tag — so RL.8's
+own clause, that a success is recorded as a success, was asserted nowhere, and
+retagging would have closed the appearance and not the hole. Closed 2026-09-06:
+the duplicate now carries the RL.7 tag it always asserted (a second recorder,
+worth its own case), and RL.8 has its own case asserting a `Success` reaches
+both windows as a success sample. Falsifier probe run — routing `Success` into
+the early return that excludes throttled calls turns the new assertion from
+`(1, 0)` into `(0, 1)`, and no other case in the module notices.
 
 Every criterion carries either a case or a recorded reason it has none, and the
 reasons are in **Rows without a case** below. The `GH475.*` identifiers are

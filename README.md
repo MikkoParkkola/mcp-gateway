@@ -497,7 +497,17 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 
 **Backend will not connect?** Test the command directly (`npx -y @anthropic/mcp-server-tavily`), then check gateway logs with `--log-level debug`.
 
-**Circuit breaker open?** Check `curl localhost:39400/health | jq '.backends'`. Adjust thresholds in `failsafe.circuit_breaker`.
+**Circuit breaker open?** Check `curl localhost:39400/health | jq '.backends'`. Adjust thresholds in `failsafe.circuit_breaker` (default: opens after 5 consecutive failures, retries after 30s).
+
+**A backend or a single tool went quiet for about five minutes?** That is the
+error budget, not the circuit breaker — two separate mechanisms with separate
+keys. The budget kills a backend whose failure rate over a sliding window
+crosses `error_budget.threshold`, and disables one failing capability without
+touching the rest of its backend. Both thresholds and the per-capability
+`cooldown` (default 5 minutes) live under `error_budget:` — see
+`examples/gateway-full.yaml` for every key. Rate-limited responses (`429`,
+`RESOURCE_EXHAUSTED`) are excluded from both budgets: a throttled backend is a
+working backend.
 
 **Tools not appearing?** Verify the backend is running (`gateway_list_servers`). Tool lists are cached for 5 minutes.
 
