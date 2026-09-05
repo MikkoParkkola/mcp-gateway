@@ -271,7 +271,8 @@ impl Backend {
         // rejects this call with a 2026-only code is modern whatever its
         // `server/discover` did. Correct the verdict off the request path.
         if let Ok(response) = &result {
-            self.reprobe_if_contradicted(response, &transport).await;
+            self.reprobe_if_contradicted(method, response, &transport)
+                .await;
         }
 
         result

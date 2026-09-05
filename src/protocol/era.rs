@@ -42,7 +42,7 @@ impl Era {
 }
 
 /// JSON-RPC `method not found` — the honest legacy answer to `server/discover`.
-const METHOD_NOT_FOUND_CODE: i32 = -32601;
+pub const METHOD_NOT_FOUND_CODE: i32 = -32601;
 
 /// JSON-RPC error code for `UnsupportedProtocolVersion` in 2026-07-28.
 ///

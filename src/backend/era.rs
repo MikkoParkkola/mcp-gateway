@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::Backend;
 use crate::protocol::JsonRpcResponse;
-use crate::protocol::era::{Era, EraObservation, ProbeOutcome, classify};
+use crate::protocol::era::{Era, EraObservation, METHOD_NOT_FOUND_CODE, ProbeOutcome, classify};
 use crate::transport::Transport;
 
 /// Method a modern peer answers with its discovery document.
@@ -54,6 +54,24 @@ fn contradicts_legacy(code: i32) -> bool {
     classify(&ProbeOutcome::Error(code)) == Era::Modern
 }
 
+/// Methods the 2026-07-28 revision defines and earlier revisions do not.
+///
+/// A peer that answers one of these `method not found` cannot be speaking that revision, whatever
+/// its probe said. Kept as a named set rather than folded into the check so that adding a method
+/// is an edit to a list, not to a condition.
+const MODERN_ONLY_METHODS: [&str; 1] = [DISCOVER_METHOD];
+
+/// Whether an ordinary request's error answer disproves a cached `Modern` verdict.
+///
+/// Narrow on purpose, and the narrowness is the design: only `method not found`, and only against
+/// a method that exists solely in the modern revision. A modern peer may reject any other method
+/// for reasons of its own, and a transport fault or a refused credential is a failure to surface
+/// rather than evidence about which dialect the peer speaks. Widening this to a family of codes
+/// would file real faults as a benign "peer is older than we thought".
+fn contradicts_modern(method: &str, code: i32) -> bool {
+    code == METHOD_NOT_FOUND_CODE && MODERN_ONLY_METHODS.contains(&method)
+}
+
 impl Backend {
     /// The era this backend's peer was last observed to speak, if it has been
     /// resolved. Never probes: a caller asking what is known must not change
@@ -91,20 +109,29 @@ impl Backend {
         self.era.resolve_with(|| probe(transport, timeout)).await;
     }
 
-    /// Re-probe when an ordinary response contradicts a cached `Legacy` verdict.
+    /// Re-probe when an ordinary response contradicts the cached verdict.
     ///
-    /// A peer that answers a normal call with a 2026-only error code is modern
-    /// however its probe went, so the stale verdict is dropped and one fresh
-    /// probe is run. Detached: the request that noticed must not pay for it.
+    /// The clause is symmetric, so both directions are read. A peer that answers
+    /// a normal call with a 2026-only error code is modern however its probe
+    /// went; a peer that answers a 2026-only method `method not found` is not
+    /// modern however its probe went. Either way the stale verdict is dropped
+    /// and one fresh probe is run, detached: the request that noticed must not
+    /// pay for it.
     pub(super) async fn reprobe_if_contradicted(
         &self,
+        method: &str,
         response: &JsonRpcResponse,
         transport: &Arc<dyn Transport>,
     ) {
         let Some(error) = response.error.as_ref() else {
             return;
         };
-        if !contradicts_legacy(error.code) || self.cached_era().await != Some(Era::Legacy) {
+        let contradicted = match self.cached_era().await {
+            Some(Era::Legacy) => contradicts_legacy(error.code),
+            Some(Era::Modern) => contradicts_modern(method, error.code),
+            None => false,
+        };
+        if !contradicted {
             return;
         }
 

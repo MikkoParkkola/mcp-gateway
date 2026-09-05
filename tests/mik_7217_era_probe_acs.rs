@@ -394,3 +394,111 @@ async fn discover_5_a_restart_discards_the_cached_era() {
         fixture.frames()
     );
 }
+
+/// A peer that answers the first probe as modern and every later `server/discover` with
+/// `method not found`.
+///
+/// The marker file is what makes the second answer differ from the first. It is the only way to
+/// reach "a cached Modern verdict whose assumption later fails" from a fixture that decides
+/// nothing about eras: the change has to come from the peer, not from a canned era value.
+fn modern_then_method_not_found_arm() -> String {
+    concat!(
+        r#"if [ -f "$LOG.probed" ]; then "#,
+        r#"printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not found"}}\n' "$id"; "#,
+        r#"else : > "$LOG.probed"; "#,
+        r#"printf '{"jsonrpc":"2.0","id":%s,"result":{"capabilities":{},"supportedVersions":["2026-07-28"]}}\n' "$id"; "#,
+        "fi",
+    )
+    .to_string()
+}
+
+/// DISCOVER.5b, the other direction — a cached Modern verdict is re-probed when it fails.
+///
+/// The Legacy arm is covered above. This is its mirror: the clause says "the cached assumption
+/// fails", which is symmetric, and until this test the Modern half was never re-probed at all.
+///
+/// Narrow by decision (operator, 2026-09-05): only `-32601 method not found`, and only against a
+/// method the 2026 revision defines. A modern peer may reject any other method for its own
+/// reasons, and a transport fault or a refused credential is a failure to surface — not evidence
+/// about which dialect the peer speaks.
+///
+/// Frame counting: the start probe is 1, the client's own `server/discover` passthrough is 2, and
+/// the re-probe this test exists to prove is 3.
+#[tokio::test]
+async fn discover_5b_a_failing_modern_assumption_is_re_probed() {
+    let fixture = Fixture::with_discover_arm(
+        "2026-07-28",
+        &modern_then_method_not_found_arm(),
+        EMPTY_TOOLS,
+    );
+    let backend = fixture.backend("contradicted-modern");
+
+    backend.ensure_started().await.expect("backend starts");
+    assert_eq!(
+        backend.cached_era().await,
+        Some(Era::Modern),
+        "the start probe answered with a 2026 discovery document, so the peer must be cached \
+         Modern before the contradiction; recorded frames were:\n{}",
+        fixture.frames()
+    );
+
+    let _ = backend.request("server/discover", None).await;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && fixture.discover_count() < 3 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert_eq!(
+        fixture.discover_count(),
+        3,
+        "a `method not found` answer to a 2026-only method must drop the cached Modern verdict \
+         and trigger exactly one re-probe within 5s (a count of 2 means no re-probe fired); \
+         recorded frames were:\n{}",
+        fixture.frames()
+    );
+    assert_eq!(
+        backend.cached_era().await,
+        Some(Era::Legacy),
+        "the re-probe was itself answered `method not found`, which is the honest legacy answer, \
+         so the corrected verdict must be Legacy; recorded frames were:\n{}",
+        fixture.frames()
+    );
+}
+
+/// DISCOVER.5b, discriminator — `-32601` on an ordinary method leaves a Modern verdict alone.
+///
+/// This is the half that keeps the rule narrow. A modern peer is entitled to answer
+/// `method not found` to a method it simply does not implement; treating that as proof the peer
+/// is not modern would discard a correct verdict on every unimplemented call.
+#[tokio::test]
+async fn discover_5b_method_not_found_on_an_ordinary_method_does_not_re_probe() {
+    let fixture = Fixture::new(
+        "2026-07-28",
+        MODERN_DISCOVER,
+        r#""error":{"code":-32601,"message":"Method not found"}"#,
+    );
+    let backend = fixture.backend("modern-unimplemented-method");
+
+    backend.ensure_started().await.expect("backend starts");
+    let _ = backend.request("tools/list", None).await;
+
+    // A re-probe is detached, so "will never fire" and "has not fired yet" look identical until
+    // the clock runs out. The wait is the assertion.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    assert_eq!(
+        fixture.discover_count(),
+        1,
+        "`method not found` on tools/list says nothing about the peer's era, so the start-path \
+         probe must remain the only one; recorded frames were:\n{}",
+        fixture.frames()
+    );
+    assert_eq!(
+        backend.cached_era().await,
+        Some(Era::Modern),
+        "the cached Modern verdict must survive an unimplemented ordinary method; recorded \
+         frames were:\n{}",
+        fixture.frames()
+    );
+}
