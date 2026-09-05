@@ -25,6 +25,9 @@ pub(crate) struct BudgetWindow {
     max_calls: usize,
     /// Maximum age of entries before they are evicted.
     max_age: Duration,
+    /// Number of failures currently in `entries`, kept incrementally so that
+    /// reading the window is O(1) rather than a scan of up to `max_calls`.
+    failures: usize,
 }
 
 impl BudgetWindow {
@@ -34,6 +37,7 @@ impl BudgetWindow {
             entries: VecDeque::with_capacity(max_calls.min(4096)),
             max_calls,
             max_age,
+            failures: 0,
         }
     }
 
@@ -41,9 +45,12 @@ impl BudgetWindow {
     pub fn record(&mut self, success: bool) {
         self.evict_old();
         self.entries.push_back((Instant::now(), success));
+        if !success {
+            self.failures += 1;
+        }
         // Enforce size cap
         if self.entries.len() > self.max_calls {
-            self.entries.pop_front();
+            self.pop_oldest();
         }
     }
 
@@ -54,23 +61,31 @@ impl BudgetWindow {
         if total == 0 {
             return 0.0;
         }
-        let failures = self.entries.iter().filter(|(_, ok)| !ok).count();
         #[allow(clippy::cast_precision_loss)]
-        let rate = failures as f64 / total as f64;
+        let rate = self.failures as f64 / total as f64;
         rate
     }
 
     /// Return `(successes, failures)` counts after eviction.
     pub fn counts(&mut self) -> (usize, usize) {
         self.evict_old();
-        let failures = self.entries.iter().filter(|(_, ok)| !ok).count();
-        let successes = self.entries.len() - failures;
-        (successes, failures)
+        let successes = self.entries.len() - self.failures;
+        (successes, self.failures)
     }
 
     /// Clear all entries (used on revive).
     pub fn reset(&mut self) {
         self.entries.clear();
+        self.failures = 0;
+    }
+
+    /// Drop the oldest entry, keeping the failure count in step.
+    fn pop_oldest(&mut self) {
+        if let Some((_, ok)) = self.entries.pop_front() {
+            if !ok {
+                self.failures -= 1;
+            }
+        }
     }
 
     /// Remove entries older than `max_age`.
@@ -78,7 +93,7 @@ impl BudgetWindow {
         let now = Instant::now();
         while let Some((ts, _)) = self.entries.front() {
             if now.duration_since(*ts) > self.max_age {
-                self.entries.pop_front();
+                self.pop_oldest();
             } else {
                 break;
             }
