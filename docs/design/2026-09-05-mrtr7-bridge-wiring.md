@@ -45,12 +45,40 @@ legacy HTTP client that cannot actually receive the bridge's question has not
 been bridged, so delivery over the live stream is inside FOR and
 `MIK-7212.WIRE.8` is the row that finds out whether it works; the `NFR.OBS.4` counter name
 (`RELEASE-4.0.0-cluster-a-readiness.md:44` — "No design, no counters"); any
-change to the MRTR.9 refusal or to the continuation mint for modern callers; the
-two defects the reviews raised inside `input_bridge.rs` itself: a pending entry
-stranded when the outer timeout cancels registration (`:430`), and reply
-projection that reads any result containing `action` as an elicitation reply
-(`:454`). They are that file's bugs rather than this change's wiring, and they
-are filed together as **MIK-7388**.
+change to the MRTR.9 refusal or to the continuation mint for modern callers; and
+the reply projection that reads any result containing `action` as an elicitation
+reply (`input_bridge.rs:454`) — that file's own bug rather than this change's
+wiring, filed as **MIK-7388**.
+
+### The other MIK-7388 defect is this change's, and BRIDGE.2 is satisfied here
+
+MIK-7388's second defect — "a pending entry stranded when the outer timeout
+cancels registration (`:430`)" — was filed against `input_bridge.rs` and is not
+there. That file holds no pending state, as the findings table below already
+records, so the OUT item points at a repair with nothing to repair. The
+obligation it describes lands on whoever *implements* `ClientChannel`, and the
+trait's own cancellation contract (`src/gateway/input_bridge.rs:268-287`) names
+the owner verbatim: "The requirement is recorded as MIK-7388; the first
+implementation obliged by it, and the test that proves it, arrive with
+MIK-7212." This change writes that implementation, so this change carries the
+obligation. Concretely: the production `ClientChannel` impl holds a
+`PendingRequestGuard`-shaped RAII across the awaited send (the shape at
+`src/transport/stdio.rs:517`), and `MIK-7212.WIRE.11` in the test plan pins it,
+mirroring `cancelled_request_does_not_strand_pending_entry`
+(`src/transport/stdio.rs:815`).
+
+So the re-bound `MIK-7388.BRIDGE.2` — "Given the production `ClientChannel`
+implementation that registers pending state keyed by request id" — is
+**satisfied by this change**, not handed a surface and left open.
+
+This is not a §P0 scope move. FOR is unchanged: one production caller for
+`InputBridge::run` on the HTTP transports. OUT is unchanged: a repair to
+`input_bridge.rs`'s own code at `:430` stays out, because there is nothing there
+to repair. Cancellation safety in code this change *writes* is not the repair of
+an existing defect; it is a correctness property of new code, mandated by the
+trait it implements. The only edit the reading forces is the one above — the OUT
+list previously described `:430` as a defect inside `input_bridge.rs` while the
+findings table recorded that it is not, and those two lines disagreed.
 
 Two further findings were carried here as defects and **died at the
 requirements**, which is why the count fell from four. A timed-out prompt
