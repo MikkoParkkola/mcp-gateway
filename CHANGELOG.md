@@ -9,7 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **The kill-switch error budgets are now operator-tunable from the config file** (GH #475). A new `error_budget:` section sets the backend failure-rate `threshold`, `window_size`, `window_duration` and `min_samples`, and an `error_budget.capability:` sub-section sets the same four plus `cooldown` for the per-capability budget. Every key is optional and an absent key keeps the value that has been shipping, so an existing config file behaves exactly as before. Values are validated at load: a threshold outside `(0.0, 1.0]` (`.nan` included), a window of zero or of more than 100000 calls, a zero `window_duration` or `cooldown`, and a `min_samples` of zero or larger than its own window are each refused by name rather than silently disabling the kill switch. An unknown key under either level is refused too, so a typo is not read as a default. The section is read when the meta-MCP server is built, so an edit to it is reported as restart-required on reload rather than appearing to take effect.
+- **The kill-switch error budgets are tunable from the config file** (GH #475).
+  An `error_budget:` section sets the backend failure-rate `threshold`,
+  `window_size`, `window_duration` and `min_samples`, and an
+  `error_budget.capability:` sub-section sets the same four plus a recovery
+  `cooldown` for the per-capability budget. Every key is optional and an absent
+  key keeps the value that has been shipping, so a config without the section
+  behaves exactly as before. Values are validated at load and refused with the
+  offending field named rather than clamped: a threshold outside `(0.0, 1.0]`
+  (`.nan` included), a window of zero or of more than 100000 calls, a zero
+  `window_duration` or `cooldown`, and a `min_samples` above its own
+  `window_size`, which describes a budget that can never be evaluated. An
+  unknown key at either level is refused too, so a typo is not read as a
+  default. The section is read when the meta-MCP server is built, so an edit to
+  it is reported as restart-required rather than appearing to take effect.
 
 ### Removed
 
@@ -158,16 +171,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were. Scanning is per logical line, as the parser reads them.
 
 ### Added
-
-- **Error budgets are configurable from YAML.** An `error_budget:` section sets
-  the failure-rate threshold, sliding-window size and duration and the minimum
-  sample count for backends, with the same knobs plus a recovery `cooldown`
-  under `error_budget.capability:`. Every key is optional and an absent key
-  keeps the value that has been shipping, so a config without the section
-  behaves exactly as before. Values are validated at startup and refused with
-  the offending field named rather than clamped — `min_samples` above
-  `window_size` describes a budget that can never be evaluated. The section is
-  read when the gateway starts, so an edit is reported as restart-required.
 
 - **First start after upgrading to 4.0.0 prints what changed underneath it.**
   The release re-keys OAuth credentials, refuses a malformed `env_files` line at
