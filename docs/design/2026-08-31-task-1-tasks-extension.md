@@ -295,6 +295,13 @@ makes it reachable.
   the implementer with an upstream question attached — there is no divergence to record and
   nobody to ask.
 
+- *Is this design pinned to the artifact that is actually normative, or to a stale copy of it?* —
+  re-fetched the pinned blob on 2026-09-06 with `gh api` against the `ext-tasks` repository's
+  contents endpoint for the versioned specification path — 911 lines / 34,148 bytes, blob
+  `5d6a202e`, unchanged — so §1's pin holds. It changed nothing in §1 and one method name in §2,
+  §3, §5 and §8 (§10.2): the notification is `notifications/tasks`, not the name those four
+  sections had been using.
+
 Two questions this section previously deferred are answered above. Both were deferred on the
 reading that no versioned text existed, so pinning one artifact closed both. Two rows remain, and
 the second is new: the two non-spec capability structs were recorded above as somebody's decision
@@ -477,8 +484,8 @@ Every row checked against `schema.ts` and `tasks.md` this session.
 |---|---|---|
 | 5 statuses `working\|input_required\|completed\|failed\|cancelled` | piece 1 | matches |
 | `taskId: string`, `createdAt`/`lastUpdatedAt` ISO 8601 required | piece 1 | matches |
-| `ttlMs: number \| null` REQUIRED and `@nullable` | piece 1 ("present-and-nullable, not absent") | matches, and the distinction is the one the schema draws |
-| `pollIntervalMs?: number`, integer ms, MAY change over the task's life | piece 1 | matches; the MAY-change clause is not stated, and the store must not treat it as write-once |
+| `ttlMs: number \| null` REQUIRED and `@nullable`, and it MAY change over the task's life (`schema.ts:76-82`) | piece 1 ("present-and-nullable, not absent") | matches on the shape, and the distinction is the one the schema draws; the MAY-change clause is not stated, and it is the same defect as the `pollIntervalMs` row below — a reaper that pins the TTL it read at creation reaps a task the server has since extended |
+| `pollIntervalMs?: number`, integer ms, MAY change over the task's life | piece 1 | matches; the MAY-change clause is not stated, and the store must not treat it as write-once. Same clause and same omission as the `ttlMs` row above — one rule for both mutable fields, not two |
 | `failed` carries `error` as a JSON-RPC error **object** | piece 1, AC `.6` | matches |
 | `completed` carries `result`, shape = the original request's result type; `isError: true` is still `completed` | AC `.6` | matches the terminal-state MUST at `tasks.md:890-891` |
 | `CreateTaskResult = Result & Task & {resultType: "task"}`, flat | §3 opening, AC `.1` | matches |
@@ -528,13 +535,18 @@ that does not say so is a handoff wearing a verdict.
 
 ### 10.5 Unknowns after this pass
 
-Unchanged in count: **five resolved** (§6, each with a recorded answer), **two deferred** with all
-four fields (the two non-spec capability structs; the `dod-check.md` §0 disposition, owned by the
-first TASK.1 code commit). This pass resolved one more by re-fetch — *is the design pinned to the
-artifact that is actually normative?* — command: `gh api` against the `ext-tasks` repository's
-contents endpoint for `specification/2026-07-28/tasks.md`; answer: yes, 911 lines / 34,148 B,
-matching pinned blob `5d6a202e`; what it changed: nothing in §1, and one method name in §2, §3, §5
-and §8 (see §10.2). It adds no new deferred unknown.
+**Six resolved, two deferred.** One more than §6 previously carried, resolved by re-fetch —
+*is the design pinned to the artifact that is actually normative?* — command: `gh api` against the
+`ext-tasks` repository's contents endpoint for the versioned specification path; answer: yes, 911
+lines / 34,148 B, matching pinned blob `5d6a202e`; what it changed: nothing in §1, and one method
+name in §2, §3, §5 and §8 (see §10.2). It is recorded as the sixth bullet in §6, where the other
+five live, rather than only here. It adds no new deferred unknown.
+
+The two deferred rows are unchanged and still carry all four fields: the two non-spec capability
+structs, and where the task store lives multi-replica. The §0 disposition of the superseded
+`dod-check.md` paragraph is owned by the first TASK.1 code commit and tracked in §0 — a
+documentation correction with a named owner, not an open question about the design, so it is
+deliberately not a third row here.
 
 ### 10.6 What this pass did NOT do
 

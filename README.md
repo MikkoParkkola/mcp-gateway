@@ -497,14 +497,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 
 **Backend will not connect?** Test the command directly (`npx -y @anthropic/mcp-server-tavily`), then check gateway logs with `--log-level debug`.
 
-**Circuit breaker open?** Ask your MCP client for `gateway_list_servers`: it
-reports `circuit_breaker` per backend and works on the shipped config. The HTTP
-equivalent, `curl -H "Authorization: Bearer $ADMIN_KEY" localhost:39400/health |
-jq '.backends'`, additionally needs `auth.enabled: true` and an admin
-credential — authentication is off by default, and while it is off every caller
-is anonymous, so the token is ignored and even a bearer-carrying request sees
-just `{count, all_healthy}`. Adjust thresholds in `failsafe.circuit_breaker`
-(default: opens after 5 consecutive failures, retries after 30s).
+**Circuit breaker open?** Check `curl -H "Authorization: Bearer $ADMIN_KEY" localhost:39400/health | jq '.backends'` — per-backend detail is admin-only, an unauthenticated caller sees just `{count, all_healthy}`. Adjust thresholds in `failsafe.circuit_breaker` (default: opens after 5 consecutive failures, retries after 30s).
 
 **One tool went quiet, then came back on its own about five minutes later?**
 That is the per-capability error budget, not the circuit breaker — separate
@@ -512,15 +505,12 @@ mechanism, separate keys. A capability whose failure rate crosses
 `error_budget.capability.threshold` is disabled on its own, leaving the rest of
 its backend serving, and re-enables itself on the next call once
 `error_budget.capability.cooldown` (default 5 minutes) has elapsed.
-`gateway_list_disabled_capabilities` names the ones currently suspended.
 
 **A whole backend went offline and stayed offline?** The backend-level error
 budget auto-killed it: its failure rate crossed `error_budget.threshold` over
 the sliding window. Unlike a capability, a killed backend does **not** come
 back by itself — revive it with `gateway_revive_server`, and raise the
-threshold or the window if the kill was premature. `gateway_list_servers`
-reports a killed backend as `"status": "disabled"`, which is how you tell an
-auto-kill apart from an open breaker.
+threshold or the window if the kill was premature.
 
 Every key of both budgets is documented inline in `examples/gateway-full.yaml`
 under `error_budget:`. Rate-limited responses (`429`, `RESOURCE_EXHAUSTED`) are
