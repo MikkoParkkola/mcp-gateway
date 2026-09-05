@@ -35,6 +35,30 @@ call site exists. Rows 1-7 would all pass against a well-tested function nobody
 calls; `WIRE.8` would not.
 | `MIK-7212.WIRE.10` | An initialized stdio caller is still refused | stdio session declares elicitation at `initialize`, backend asks; assert the MRTR.9 refusal is returned immediately, no client request is sent, and no retry occurs | integration | regression | this row is not `#[ignore]`d: the refusal is stdio's behaviour until MIK-7387 lands, and a transport-scope regression would turn it into a 30–120s stall |
 
+## The two questions a plan review answers
+
+**Does every acceptance criterion have a case, or a stated reason it has none?**
+Yes, with one qualifier. The ten `MIK-7212.WIRE.*` rows above each carry a case.
+The criteria this change does not add a case for are named in the section below,
+each with its reason, not skipped. The qualifier is the twenty-one existing
+MRTR.7 rows in `tests/mik_7212_mrtr7_bridge_acs.rs`: today they are accounted
+for by count, not by name, so a duplicate or an omission inside that set would
+not show. Mapping each row to its test name is scheduled before implementation
+handoff; until that lands this answer rests on an aggregate, and an aggregate
+cannot show a gap.
+
+**Can each named case actually fail?** Yes — the rightmost column of the table
+is that answer, per row, and it is the reason the column exists. Five rows fail
+against today's tree for a reason stated at source (`WIRE.5`, `WIRE.6`,
+`WIRE.9`, and the two halves of the gate in `WIRE.1`/`WIRE.3`), which is the
+strongest form of the answer: the case fails now and passing it is what the
+change buys. No row's fixture constructs the condition it then asserts, and no
+row is staged so that its assertion is true before the production code runs —
+the failure mode `test-plan-honesty` exists to catch. `WIRE.8` is the one row
+whose failure would be an environment failure as easily as a defect, because it
+drives real HTTP; it is kept because nothing else proves the path composes, and
+its diagnosis cost is the price of that proof.
+
 ## Criteria with no case, and why
 
 - **MRTR.7a/7b on legacy stdio** — no drivable surface in this change. The three
