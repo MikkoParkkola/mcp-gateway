@@ -604,9 +604,12 @@ impl Gateway {
             backend_threshold = backend_budget.threshold,
             backend_window_size = backend_budget.window_size,
             backend_min_samples = backend_budget.min_samples,
+            backend_window_duration_secs = backend_budget.window_duration.as_secs(),
             capability_threshold = capability_budget.threshold,
             capability_window_size = capability_budget.window_size,
             capability_min_samples = capability_budget.min_samples,
+            capability_window_duration_secs = capability_budget.window_duration.as_secs(),
+            capability_cooldown_secs = capability_budget.cooldown.as_secs(),
             "Error budgets configured"
         );
         meta_mcp.set_error_budget_config(backend_budget);
