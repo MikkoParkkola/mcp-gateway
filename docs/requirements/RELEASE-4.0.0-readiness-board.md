@@ -486,8 +486,12 @@ They are listed apart because each was absent, not deprioritised, and an absent 
 is the failure mode this whole section is about.
 
 **`NFR.PERF.1` is deferred, with the four fields a deferral owes.** It has sat as
-PARTIAL against an end-to-end 3.5.0 comparison that exists at no version of this
-repository, which is a residual-risk paragraph, and §P1 says that is not a state.
+PARTIAL against an end-to-end comparison that no harness in this repository can
+produce. The 3.5.0 side is not the missing half — `v3.5.0` is `32f135a6`, built
+and measured on the same box minutes before the 4.0.0 side — so a reader who
+binds "missing" to the baseline goes hunting for a tag that is already in
+`git tag`. What is absent is the wire-level harness. Either way it was a
+residual-risk paragraph, and §P1 says that is not a state.
 Owner: `perf-e2e`, an agent to be dispatched, with MIK-7213's performance work as its
 handoff trigger — "cluster E" names a row in this table, not anybody accountable, and
 that is how this row spent a release unowned. What resolves it: build the
