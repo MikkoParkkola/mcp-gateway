@@ -56,6 +56,22 @@ doc's own tables and against the rollup this file summarises. **Two clusters hav
 have no branch, no worktree and no commit — verified against `git worktree list` and `git branch`, which show
 `fix/mrtr2-continuation-handle` (cluster A) plus two unrelated gap branches.
 
+**Recorded, not filed — one fact has now bitten four times.** Nothing on a
+transport calls the input bridge. `rg 'impl .*ClientChannel for' src/` returns
+nothing at `466979db`, and `InputBridge` is named in exactly one file, its own
+(`src/gateway/input_bridge.rs`). Four separate pieces of work have each stopped
+on this same fact without it being written down: `MIK-7388.BRIDGE.2` asked for a
+test beside a production implementation that does not exist; three stdio rows
+(`tests/mik_7212_mrtr7_stdio_acs.rs:355,:420,:470`) are `#[ignore]`d because the
+dispatch they specify has no caller; cluster A's row below already carries
+`MRTR.7a/7b` as its one unwired group; and the reply-projection fix `60a28464`
+changes wire behaviour for two classes of reply that no client can currently
+send, which is why it needs no release-note entry and `NFR.DOC.2` stands. The
+fact is cheap to state and has cost four rediscoveries. **Whether an unreachable
+bridge ships in 4.0.0 at all is a release-owner question, not an agent's**, and
+until it is answered every criterion written against that bridge is a criterion
+about dead code.
+
 **Recorded, not filed.** Every gateway-authored `Error::JsonRpc` reaches the client with its code twice — `error_response_preserving_status` builds the message from `error.to_string()`, which already prefixes `JSON-RPC error -32602:`. Cosmetic, pre-existing, and a repair touches every error message in the gateway, so it is an observation rather than a ticket.
 
 **Recorded, not filed — two outbound-error observations.** `reqwest::Error`'s `Display` appends `" for url (...)"` verbatim (`reqwest-0.13.4/src/error.rs:279-280`), so any site logging a raw one emits the backend URL and whatever credential its query string carries. The site CodeQL flagged is repaired (`redact_url`, `src/capability/executor/mod.rs`); the wider class is not swept. The OAuth client logs errors at `src/oauth/client/mod.rs:338,608,621,1048,1060` — these are wrapped errors, not raw `reqwest::Error`, and **whether the chain preserves reqwest's URL-bearing `Display` was not traced**. Worth a sweep because the URL there is a token endpoint; not a finding until someone reads the error type.
