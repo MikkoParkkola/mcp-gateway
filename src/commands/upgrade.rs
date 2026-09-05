@@ -218,8 +218,8 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
     match detect_multi_user_posture(&yaml) {
         // Printed for the same reason as the 4.0.0 notice: a log filter must
         // not be able to swallow a one-time message addressed to a person.
-        MultiUserPosture::Undeclared => println!("{NOTICE_MULTI_USER_DEFAULT}"),
-        MultiUserPosture::AuthDisabled => println!("{NOTICE_AUTH_DISABLED}"),
+        MultiUserPosture::Undeclared => eprintln!("{NOTICE_MULTI_USER_DEFAULT}"),
+        MultiUserPosture::AuthDisabled => eprintln!("{NOTICE_AUTH_DISABLED}"),
         MultiUserPosture::AlreadyDeclared => tracing::info!("{NOTICE_ALREADY_CONFIGURED}"),
     }
     Ok(())
@@ -266,10 +266,11 @@ fn migrate_4_0_0_release_notice(_data_dir: &Path) -> std::io::Result<()> {
         .map(|(i, item)| format!("    {}. {item}", i + 1))
         .collect::<Vec<_>>()
         .join("\n");
-    // Printed, not logged: `--log-level error` or a RUST_LOG filter would
-    // swallow a warn event while the version stamp advances, and the notice
-    // fires exactly once.
-    println!(
+    // Printed to stderr, not logged: `--log-level error` or a RUST_LOG filter
+    // would swallow a warn event while the version stamp advances, and the
+    // notice fires exactly once. stderr so `--quiet` can suppress progress
+    // chatter on stdout without suppressing the warning itself.
+    eprintln!(
         "v4.0.0: four changes need your attention. No config was changed automatically.\n{body}"
     );
     Ok(())
@@ -423,7 +424,7 @@ impl UpgradeContext<'_> {
                 let prefix = if self.dry_run { "[dry-run] " } else { "" };
                 println!("  {prefix}Applying: {}", m.description);
             }
-            if !self.dry_run && (!m.notice || !self.quiet) {
+            if !self.dry_run {
                 (m.apply)(self.data_dir)?;
             }
         }
