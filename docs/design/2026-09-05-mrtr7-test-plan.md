@@ -96,10 +96,12 @@ its diagnosis cost is the price of that proof.
 - **MRTR.7a/7b on legacy stdio** — no drivable surface in this change. The three
   rows exist in `tests/mik_7212_mrtr7_stdio_acs.rs`, are `#[ignore]`d against
   MIK-7387, and become that package's acceptance evidence.
-- **The four `input_bridge.rs` defects** (`:433`, `:430`, `:409`, `:454`) —
-  confirmed, out of scope for a wiring change, and disposed in the design's
-  finding table. They are **MIK-7388**, which merges before this wiring, and
-  their acceptance cases belong to that ticket rather than to this plan.
+- **The two `input_bridge.rs` defects** (`:430`, `:454`) — confirmed, out of
+  scope for a wiring change, and disposed in the design's finding table. They are
+  **MIK-7388**, which merges before this wiring, and their acceptance cases
+  belong to that ticket rather than to this plan. The two findings once counted
+  alongside them (`:433`, `:409`) died at requirement rows 320 and 308; the
+  design says where.
 
 ## What this plan does not claim
 

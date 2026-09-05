@@ -46,14 +46,24 @@ been bridged, so delivery over the live stream is inside FOR and
 `MIK-7212.WIRE.8` is the row that finds out whether it works; the `NFR.OBS.4` counter name
 (`RELEASE-4.0.0-cluster-a-readiness.md:44` — "No design, no counters"); any
 change to the MRTR.9 refusal or to the continuation mint for modern callers; the
-four defects the reviews raised inside `input_bridge.rs` itself: a timed-out
-client answer discarded and the backend retried without it (`:433`), a pending
-entry stranded when the outer timeout cancels registration (`:430`), backend
-prompt parameters forwarded without typed validation (`:409`), and reply
+two defects the reviews raised inside `input_bridge.rs` itself: a pending entry
+stranded when the outer timeout cancels registration (`:430`), and reply
 projection that reads any result containing `action` as an elicitation reply
-(`:454`). Earlier revisions called two different pairs "the two defects"; there
-are four, they are that file's bugs rather than this change's wiring, and they
+(`:454`). They are that file's bugs rather than this change's wiring, and they
 are filed together as **MIK-7388**.
+
+Two further findings were carried here as defects and **died at the
+requirements**, which is why the count fell from four. A timed-out prompt
+retrying the backend without an answer (`:433`) is what requirement row 320
+specifies — "abandoned at `min(remaining, 30s)`, and the rounds still remaining
+are unaffected" — and `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call`
+pins `frames == 2, calls == 2` to prove the call does **not** end. Deserializing
+prompt params into a typed `ServerRequest` (`:409`) is what row 308 forbids:
+params must reach the client whole, "nothing dropped and nothing invented", and
+a round-trip through a typed struct drops what the struct does not name. The
+reviewer's underlying worry — a backend continuing without input a person never
+gave — is real and unaddressed; changing either row is the **requester's** call,
+not a repair, and it is raised as an open question rather than made here.
 
 That deferral is scheduled, not merely recorded. Owner: MIK-7388, priority 2,
 already related to MIK-7212 as `blocks`. What resolves it: the three acceptance
@@ -61,7 +71,7 @@ criteria on that ticket, each a test that fails against today's tree. When: it
 merges **before** this wiring does — that is what the `blocks` edge means here,
 because wiring is what first makes the defects reachable. If it resolves badly —
 the defects prove deeper than a bounded fix, or the ticket stalls — this change
-does not ship on its own; it waits, because a call site that activates four
+does not ship on its own; it waits, because a call site that activates two
 known HIGH defects is worse than the UNWIRED row it replaces.
 
 Consequence, stated rather than discovered later: rows :130 and :131 go green
@@ -194,6 +204,7 @@ test code is written.
 | stdio serial dispatch deadlocks a bridged call (GPT, HIGH, CERTAIN) | confirmed at source. Second blocker, above. **Filed as MIK-7387** with the three failing rows as its acceptance evidence; the requester decides include/exclude for the release there |
 | reply projection is not request-kind-aware; params forwarded unvalidated (GPT) | out of this scope — defects in `input_bridge.rs` itself, not in wiring it. Filed rather than fixed here |
 | store as an injected trait (Kimi) | declined. A trait with one implementation is an abstraction nothing asked for. `BridgeObserver` earns its trait because production genuinely passes a no-op; a capability store does not |
+| two of MIK-7388's four defects contradict frozen acceptance rows (implementer, HIGH) | confirmed at source. `:433` is what row 320 specifies and `:409` is what row 308 forbids; both findings die at the requirement, and the ticket narrows to `:430` + `:454`. Whether row 320 is the behaviour the requester wants is open question 4, not a repair |
 | store has no eviction or ownership (both vendors, HIGH) — **re-raised on the amended design** (GPT, HIGH) | confirmed twice. The first answer, `SessionLifecycle`, has no production caller at all; declarations live in the `NotificationMultiplexer` session map instead, the only session-keyed store whose removal runs in production. Superseded answer recorded at open question 3; the owner is fixed by amendment 3 |
 | bridge retries invoke the backend outside cost accounting (GPT, HIGH, LIKELY) | confirmed at source: `invoke.rs:1246,1369,1394` each fire once around the single dispatch at :1327. In scope — this change creates the second invocation. One dispatch helper, change surface above |
 | the merge widens MRTR.9 for modern callers while the table says it does not (synthetic, MEDIUM, CERTAIN) | confirmed at source: the gate at `invoke.rs:1518` is shape-blind. Merge scoped to `Legacy` only, option C above |
@@ -376,7 +387,7 @@ superseded sentence is gone, not footnoted.
 | WIRE.5 checks one generic accounting record (HIGH, POSSIBLE) | accepted. The row now asserts the backend-call count and each sink — invocation metrics, error budget, cost tracker, spend — carries three |
 | WIRE.9 does not test the cache gate (MEDIUM, CERTAIN) | accepted. The row now asserts the settled result is cached and a follow-up call is served without a further invocation |
 | pseudocode for interim vs settled verdict (improvement) | accepted. Four lines under amendment 2 |
-| make MIK-7388 a merge-before-wiring prerequisite, defects in one place (improvement) | already closed by the revision under review's successor: one list of four defects, one ticket, four schedule fields, `when` = merges before this wiring |
+| make MIK-7388 a merge-before-wiring prerequisite, defects in one place (improvement) | already closed by the revision under review's successor: one list, one ticket, four schedule fields, `when` = merges before this wiring |
 | stage both a permitted and a forbidden request in WIRE.4 (improvement) | accepted, row rewritten |
 | map each of the 21 existing rows to its test name (improvement) | accepted, scheduled: done before implementation handoff, so an omission is mechanically visible rather than inferred from a count |
 
@@ -437,6 +448,20 @@ superseded sentence is gone, not footnoted.
    answer was the wrong one, and because the firewall's anomaly tracker
    (`src/security/firewall/anomaly.rs:129`) is still waiting on that same
    callback — a leak this change neither causes nor fixes.
+
+4. Should a prompt no human answers still retry the backend without that
+   answer? — **deferred, and it is an ASK, not a check.** Requirement row 320
+   says yes in terms ("abandoned at `min(remaining, 30s)`, and the rounds still
+   remaining are unaffected"), and the frozen acceptance row pins it. GPT-5
+   raised the same behaviour as a HIGH defect on the ground that a backend may
+   then continue without input a person was required to give. Both readings are
+   coherent; only the requester can choose. Owner: the release owner, with this
+   design. What resolves it: the requester answering, in one line, whether an
+   abandoned prompt ends the round (today) or the call (the reviewer's reading).
+   When: before MIK-7388 is worked, since its `:433` item exists only under the
+   second reading. If it resolves toward the reviewer: row 320 and its
+   acceptance test change first, this wiring is unaffected, and `:433` returns
+   to the ticket as a requirements change rather than a bug fix.
 
 ## What is not claimed
 
