@@ -15,17 +15,28 @@ Verified 2026-09-03 against the worktree at `fix/mrtr2-continuation-handle`
 row. A cell reading **no** means a search found nothing, not that nobody intends
 to do it.
 
-**Not a cluster, and the decision is open (2026-09-05).** The upgrade path — what
-an operator meets when they move a 3.x install to 4.0.0 — has a requirement
-(`NFR.DOC.2`) and driven criteria (`GH475.MIG.*`, `GH475.NOTICE.1`,
-`docs/design/2026-09-05-error-budget-test-plan.md`), but no row here, and
-`RELEASE-4.0.0-blocking-rollup.md` contains no occurrence of *upgrade*, *notice*
-or *migrat*. So this board cannot answer how far along that path is. It is
-recorded here rather than made an eighth cluster because minting release scope is
-the release owner's call, not an agent's. The cost of leaving it: the printed
-upgrade notice was telling operators to run `auth login`, a subcommand this binary
-does not have, and no cluster on this board would have surfaced that — it was
-found by driving the binary for a criterion that lives in a design document.
+**Cluster H, by operator ruling (2026-09-05).** The upgrade path — what an
+operator meets when they move a 3.x install to 4.0.0 — was recorded here as *not
+a cluster and the decision open*, because minting release scope is the release
+owner's call and not an agent's. The release owner has now made it: it is a
+tracked, blocking cluster, and it has a row below.
+
+What the ruling does **not** do is make its criteria countable. The path's
+criteria live in `docs/design/2026-09-05-error-budget-test-plan.md` — thirty-five
+of them — and not one is a row in `RELEASE-4.0.0-criteria-status.md`. The `rows`
+column here sums to that ledger's blocking count, which
+`scripts/release/count-release-criteria.py --check` verifies, so cluster H's
+`rows` reads `0` because the ledger holds none of them, not because none are
+open. `GH475.MIG.3` is open and filed as
+[#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481); it is invisible
+to every count this release runs. Promoting the set into the ledger is what
+cluster H is blocked on, and it is the cluster's own first piece of work.
+
+The cost of having left it off until now, kept because it is the evidence for the
+ruling: the printed upgrade notice was telling operators to run `auth login`, a
+subcommand this binary does not have, and no cluster on this board would have
+surfaced that — it was found by driving the binary for a criterion that lives in
+a design document.
 
 | # | cluster | rows | design | test plan | plan reviewed | code | the one thing blocking |
 |---|---|---|---|---|---|---|---|
@@ -36,6 +47,7 @@ found by driving the binary for a criterion that lives in a design document.
 | E | performance measurement | 1 | n/a — this is a measurement, not a design | n/a | n/a | n/a | **run on Spark 2026-09-03**, `32f135a6` against `5c29494a`, recorded in `RELEASE-4.0.0-performance.md`. `NFR.PERF.2` is MET. `NFR.PERF.1` stays open as PARTIAL: no shared case regressed near either budget, but criterion measures in-process component work, so the P50 and P99 the clause names have no value. Closing it needs an end-to-end client-to-backend comparison against a 3.5.0 binary, which exists at no version of this repository |
 | F | compatibility facts | 3 | `NFR.COMPAT.4` only — `2026-09-02-conformance-matrix.md`; `NFR.OBS.5` test plan `2026-09-04-nfr-obs5-test-plan.md` | no | no | no | `NFR.COMPAT.1` is a default change that cannot land before **both** cluster A and cluster C merge — default-on turns every unwired gap in the revision surface into a first-run defect, exactly as it does for the continuation path. `NFR.OBS.5` joined this cluster on 2026-09-04 and is gated on the same flip: the operator retired its `default off` clause on 2026-09-03, so its test file is rewritten around default-on and RED on purpose until cluster A and cluster C land |
 | G | stdio dispatch | 2 | yes — `2026-09-02-cluster-g-stdio-dispatch-parity.md` | yes — `2026-09-02-cluster-g-test-plan.md` | **round 5, unresolved** | **row 1 STILL OPEN, narrowed 2026-09-05** — `d306c7e8` put the record site on the path and `b6836a02` made its evidence readable, but dual review found the record itself incomplete: a legacy stdio request after `initialize` records `absent`/`none` because no session state carries the negotiated revision, so the criterion's *per request* clause fails on the transport this cluster exists for. The reopening on 2026-09-03 was correct at the time and its cause is now named: `tracing` caches each callsite's interest process-wide, so a sibling test reaching the emit site with no subscriber cached the callsite as `never` and every later capture was skipped — the capture was blind, not the record site, which the diagnostic assertion (`1b13b255`) showed by reporting `0 record(s) captured` on both failures. 12 of 12 clean full-suite runs after the fix; transcript `audit-notes/2026-09-04-obs1-flake-transcript.md`. Diagnosed and eliminated, so §4's quarantine-or-serialise path does not arise **Row 2, `NFR.OBS.2`, closed 2026-09-05 by `f7781df8` and left the cluster.** `81c0a8ad` had already put the `tools/list` surface record on the stdio path (`src/gateway/server/mod.rs:1727-1735`) with two tests beside the dispatcher — those tests sit in the source file, not under `tests/`, which is why a search of `tests/` reported them missing — so the site half is genuinely closed. Review then found the content half open: the record writes `profile = "none"` as a stdio invariant, but `active_profile` (`src/gateway/meta_mcp/mod.rs:1053-1063`) resolves a profile from `session_profiles` by session id and falls back to the registry default, so a bound or defaulted profile filters the list while the record denies one exists. `code_mode` and `query_present` record declared inputs rather than filters that ran. `f7781df8` built the one record where the list is built (`shadow_tools_list_assembly`, `src/gateway/meta_mcp/mod.rs:1236-1266`), reporting the profile actually resolved, and deleted the stdio site with its duplication | the one remaining row, which queues behind the gate as planned, plus a second gap the MRTR work surfaced: `src/gateway/server/mod.rs:1748` hardcodes `retry: &NO_RETRY`, so a stdio client can never present a retry at all. Same defect class as cluster A's prefix exemption — a whole category of callers silently dropped — and it belongs to G's design, not to A's change. Cluster A's branch no longer carries a red test from G |
+| H | upgrade path (GH #475) | 0 — see above | yes — `2026-09-05-error-budget-config.md`, `2026-09-05-error-budget-test-plan.md` | yes — same stem, `-test-plan.md` | **asserted, not evidenced** — the plan's own header says "reviewed as a plan" and names no vendor verdict; no ledger row records one | yes — the error-budget config, the version guard and the upgrade notice all ship in this branch | **its criteria are in no ledger, so nothing counts them.** Nine were driven at `073790da` and all nine PASS (`docs/release/4.0.0-upgrade-path-qa-2026-09-05.md`); the other twenty-six have no recorded status at all, and `GH475.MIG.3` is open at #481 |
 | — | residue | 10 | **triaged `591194c2`** into DESIGN 5 / TEST 3 / CODE 2 (`RELEASE-4.0.0-residue-triage.md`); `CONTROL.3a`+`CONTROL.4` designed in `7159cdfd` | no | **yes** for the caller-identity design — both legs SHIP-WITH-FIXES, 9 findings repaired | no | `HEADER.9a/9b` is **designed and owned** — `2026-09-03-header-9-era-conditional-outbound.md`, owner `design-residue`, on `fix/mrtr2-continuation-handle` (unpushed, parent `20ff255f`). Round 3 was declared VOID under §PA when a commit moved the tree mid-read; the re-run at `11e9b613` is valid and both legs are SHIP-WITH-FIXES. It does not close: a CONFIRMED HIGH says the mechanism cannot activate — `resolve_with` holds the era mutex across the probe await (`src/protocol/era.rs:150-161`) while the probe's own request reaches `request_with_headers`, which is where the design puts its `cached()` read, so the probe blocks on its own guard, times out at 2s and resolves Legacy forever. The repair is an elimination and a fresh round, not a patch. Still true and still worth stating: the `mrtr-9a-*` agents own **MRTR.9a**, a different criterion. The reaper TTL that blocked `CONTROL.4` is ruled: 300s, sharing `PER_USER_IDLE_TTL` (`src/gateway/server/mod.rs:1988`) rather than a second retention number |
 
 The `rows` column sums to the ledger's blocking count, which
