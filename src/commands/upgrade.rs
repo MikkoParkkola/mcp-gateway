@@ -423,7 +423,7 @@ impl UpgradeContext<'_> {
                 let prefix = if self.dry_run { "[dry-run] " } else { "" };
                 println!("  {prefix}Applying: {}", m.description);
             }
-            if !self.dry_run && !(m.notice && self.quiet) {
+            if !self.dry_run && (!m.notice || !self.quiet) {
                 (m.apply)(self.data_dir)?;
             }
         }

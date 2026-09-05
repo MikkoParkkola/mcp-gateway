@@ -81,10 +81,8 @@ impl BudgetWindow {
 
     /// Drop the oldest entry, keeping the failure count in step.
     fn pop_oldest(&mut self) {
-        if let Some((_, ok)) = self.entries.pop_front() {
-            if !ok {
-                self.failures -= 1;
-            }
+        if let Some((_, false)) = self.entries.pop_front() {
+            self.failures -= 1;
         }
     }
 
