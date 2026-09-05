@@ -542,3 +542,41 @@ One improvement declined with its reason: splitting the normative plan from the
 review-disposal history (MEDIUM). The history is what stops a superseded
 decision being re-proposed, and this document has now had the same passage
 re-raised twice; moving it to a second file is how it stops being read.
+
+## Design event — the retry interface cannot carry a governance refusal
+
+Named here per the development process: a decision the design did not make,
+surfaced while the test plan was under review, changing an observable contract.
+
+`BackendInvoker::invoke` yields a bare `Value` (`src/gateway/input_bridge.rs:299-302`),
+and `InputBridge::run` returns that value to the caller unchanged once it is not
+another interim (`src/gateway/input_bridge.rs:366-369`). The production path it will
+wrap does not speak in values alone: the cost-governance check refuses a call with
+`Err(Error::json_rpc(-32003, …))` before dispatch (`src/gateway/meta_mcp/invoke.rs:1290-1297`),
+and every other pre-dispatch gate on that path refuses the same way.
+
+An adapter bridging the two can therefore only flatten a refusal into
+success-shaped data. The first attempt's refusal reaches the caller intact,
+because it happens before the bridge is entered; the *retry's* refusal does not.
+An operator's spend limit would be enforced on attempt one and silently discarded
+on attempt two, which is the failure the limit exists to prevent.
+
+**Decision**: `BackendInvoker::invoke` yields `Result<Value, Error>`, and
+`BridgeError` gains a variant carrying a backend error so `InputBridge::run`
+propagates it to `invoke_tool` rather than fabricating a result. The alternative —
+encoding the refusal as an error-shaped `Value` and re-parsing it — was rejected:
+it invents a second spelling for an error the path already types, and every
+consumer would have to agree on the spelling.
+
+**Who decided**: recorded here rather than settled in an implementation commit,
+because it changes a public trait signature and the observable outcome of a
+budget-blocked retry.
+
+**Found by**: the GPT leg of the test-plan review, held across three rounds against
+a decline that cited the trait's own signature as evidence the channel existed. The
+decline was wrong: the signature is what removes the channel. Verified at source
+before this was written.
+
+**Cost of the alternative history**: the plan would have shipped a WIRE.5 whose
+budget assertion could never go green, and the defect would have been found in
+implementation, against code written to the wrong contract.
