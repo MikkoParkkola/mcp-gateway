@@ -8,7 +8,7 @@ stateless path, identity, all 17 MIK-7272 criteria (RESULT/ERROR/ORDER, then SUB
 the MIK-7246 destructive-confirmation gate, and the MIK-7217 discovery/era group. Every requirement ID
 in `RELEASE-4.0.0-requirements.md` now has a row, functional and non-functional alike.
 
-Coverage: 146 criteria, 146 rows, 114 met or non-blocking, 32 blocking.
+Coverage: 146 criteria, 182 rows, 145 met or non-blocking, 37 blocking.
 
 That line is the only place in this file that states totals, and it is not maintained by hand.
 `scripts/release/count-release-criteria.py --check` recounts the blocking column of every table
@@ -360,6 +360,77 @@ evidence that the behaviour is *visible*, and none of these paths emits a log li
 | NFR.DOC.2 | upgrade note states what changes for an operator, for a client author, and what does not | I | MET | `docs/release/v4.0.0-release-notes-DRAFT.md:104` carries the what-does-not-change section, and `:160-207` addresses the operator (re-auth, replica count) and the client author (JSON shape change, the 2024-10-07 upgrade note) separately. The file is still named DRAFT; the criterion asks what the note states, not that it is final. Second surface, added 2026-09-05: the release notes are what a reader finds on GitHub, but the notice `mcp-gateway upgrade` prints is what an operator actually meets, and no criterion covered it until GH475.MIG.4 and GH475.NOTICE.1 did. That mattered — the printed notice was telling operators to run `auth login`, a subcommand this binary does not have (`f60cf65c`). Both are now driven against the built binary by a driver who did not write them | no |
 | NFR.DOC.3 | any deliberate divergence from the specification recorded with its reason | I | MET | `docs/spec-divergences.md` now enumerates the set, which is what `any` needed and two loose instances could not supply. It holds one entry — `src/gateway/destructive_confirmation.rs:151` (backend and capability tools deliberately out of scope) — and its closing section states how the set was derived. The `2026-07-28` omission at `SUPPORTED_VERSIONS` (`src/protocol/mod.rs`) was listed and has been removed: a handshake the specification scopes to `2025-11-25` and earlier does not diverge by omitting a later revision, and the file records why it is not one. The derivation is separate and is also recorded: several case-insensitive `rg` passes over `src/`, test files excluded, for divergence, deviation, extension and non-compliance phrasing, with the full pattern list written down. Every other spec-citing comment described compliance or an unstated gap; two `does not implement` hits were read in context and are unrelated. The set being small is a finding, not a shortfall — what was missing was the enumeration and its method | no |
 
+
+## GH475 (RL, CFG, VAL, OBS, MIG, NOTICE) — error budgets and the upgrade path, cluster H
+
+Promoted from `docs/design/2026-09-05-error-budget-test-plan.md` under the readiness board's
+2026-09-05 ruling that the set is tracked and blocking. Statuses below were read from `src/` and
+`tests/` directly; the plan's own claims about which rows are implemented were not carried over.
+
+Two things this section does not resolve, recorded rather than papered over:
+
+- These 36 rows have **no declaration in `RELEASE-4.0.0-requirements.md`**, which is why the
+  headline reads 146 criteria against 182 rows. The gap is the honest signal: a criterion set
+  published on a GitHub issue reached the ledger before it reached the requirements document.
+  Reconciling the two is cluster H's next piece of work, not this promotion's.
+- The identifier grammar in `scripts/release/count-release-criteria.py` was widened to admit
+  `GH<n>` as a third family beside `MIK-<n>` and `NFR`, because `GH475.*` is the published
+  identity the reporter reads on the issue and closure evidence has to cite the same strings.
+  Both anchors were kept, so a mistyped `GH475.RL.1abc` is still reported as malformed rather
+  than silently attributed to `GH475.RL.1`.
+
+| ID | criterion | status | evidence | blocking |
+|---|---|---|---|---|
+| GH475.RL.1 | a rate-limited response records nothing in the backend budget | MET | prod `src/gateway/meta_mcp/invoke.rs:3021` routes the text through `is_rate_limited` before recording; test `invoke.rs:4386` asserts both windows stay empty | no |
+| GH475.RL.2 | …nor in the capability budget | MET | same test asserts `capability_window_counts` at `invoke.rs:4400` | no |
+| GH475.RL.3 | …nor as a circuit-breaker failure | MET | prod `src/backend/ops.rs:254-258` records a rate limit as reachability, not failure; tests `src/backend/tests.rs:885` and `src/failsafe/mod.rs:110` | no |
+| GH475.RL.4 | a digit run inside a larger token is not a rate limit | MET | test `src/gateway/meta_mcp/invoke.rs:4419` drives the RL.4-RL.6 signal table against `src/gateway/recovery.rs:281` | no |
+| GH475.RL.5 | the `throttl` stem does not exempt | MET (`narrowed`) | same table, same test. The header overstates production: `src/gateway/recovery.rs:288` exempts `throttled`, and says at `:277` why. What the case pins is the negation `throttling disabled`, and that is what holds | no |
+| GH475.RL.6 | the four accepted phrases do exempt | MET | same table, same test; the phrases are the arms at `src/gateway/recovery.rs:284` onward | no |
+| GH475.RL.7 | an ordinary failure is unaffected | MET | test `src/backend/tests.rs:912`, plus `src/gateway/meta_mcp/invoke.rs:4409` at the recorder | no |
+| GH475.RL.8 | a success is still a success | MET (`unasserted`) | prod `src/gateway/meta_mcp/invoke.rs:1916` records `BudgetOutcome::Success` as a success sample. No test asserts that clause: the test carrying the `GH475.RL.8` tag (`invoke.rs:4406`) asserts RL.7's property instead, and `src/kill_switch/tests.rs:293` reaches the recorder directly rather than through an outcome | no |
+| GH475.RL.9 | a `429`-only backend neither opens its circuit nor exhausts a budget | UNTESTED | the mechanism exists at the dispatch call site (`src/backend/ops.rs:254`) but no case drives a backend past both thresholds; the stub MCP backend harness the criterion needs does not exist in `tests/`. [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) | yes |
+| GH475.RL.10 | a typed rate-limit outcome needs no text | ABSENT | `src/capability/executor/` contains no call to `is_rate_limited` and no rate-limit classification of any kind; `jsonrpc.rs:198` still holds the status, so the exclusion is possible there and simply is not built. [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) | yes |
+| GH475.RL.11 | both recorders route through one predicate | MET (`structural`) | one predicate, `is_rate_limited` (`src/gateway/recovery.rs:281`), and every caller reaches it: `src/backend/ops.rs:254`, `src/gateway/meta_mcp/invoke.rs:2976`, `:2988`, `:3021`, `src/failsafe/mod.rs:89`. Read off the call graph, not asserted: no test drives one signal table through both real call paths, so a second predicate added later would stay green | no |
+| GH475.RL.13 | a `429` records transport-health reachability | MET | prod `src/backend/ops.rs:258` calls `record_rate_limited`; test `src/backend/tests.rs:899` | no |
+| GH475.RL.14 | a backend reporting a `429` the MCP way is exempt | MET | prod `src/gateway/meta_mcp/invoke.rs:2976` gates on `is_error` before the predicate; test `invoke.rs:4447` | no |
+| GH475.CFG.1 | the documented YAML parses | MET | test `src/config/tests.rs:1813` | no |
+| GH475.CFG.2 | a partial section merges field-by-field | MET | test `src/config/tests.rs:1840` | no |
+| GH475.CFG.3 | a partial `capability:` merges the same way | MET | test `src/config/tests.rs:1853` | no |
+| GH475.CFG.4 | absent section = today's behaviour | MET | test `src/config/tests.rs:1873` | no |
+| GH475.CFG.5 | a configured backend threshold reaches the running budget | MET | the setter is no longer callerless: `src/gateway/server/mod.rs:615` applies it on the boot path; tests `server/mod.rs:3052` and `:3489`, the latter deliberately calling neither setter. It reads the running config rather than driving invoke to an auto-kill at the configured rate, so the value is proved to arrive and not yet proved to decide | no |
+| GH475.CFG.5b | a configured capability threshold reaches the running capability budget | MET | the second setter is wired separately at `src/gateway/server/mod.rs:616`; test `server/mod.rs:3489` covers both, with the same limit as CFG.5 | no |
+| GH475.CFG.6 | a reload reports the section as restart-required | MET | test `src/config_reload/tests.rs:2903` | no |
+| GH475.CFG.7 | the shipped example config parses | MET | test `src/config/tests.rs:1893` | no |
+| GH475.VAL.1 | out-of-range threshold rejected, field named | MET | test `src/config/tests.rs:1929` | no |
+| GH475.VAL.2 | `.nan` rejected | MET | test `src/config/tests.rs:1940` | no |
+| GH475.VAL.3 | sub-1 sizes rejected | MET | test `src/config/tests.rs:1949` | no |
+| GH475.VAL.4 | `min_samples > window_size` rejected | MET | test `src/config/tests.rs:1962` | no |
+| GH475.VAL.5 | zero duration rejected | MET | test `src/config/tests.rs:1977` | no |
+| GH475.VAL.6 | `window_size` above the upper bound is rejected | MET | test `src/config/tests.rs:1986` | no |
+| GH475.VAL.7 | every VAL row repeats under `capability:` | MET | test `src/config/tests.rs:1995` | no |
+| GH475.VAL.8 | the accepted side of each boundary is accepted | MET | test `src/config/tests.rs:2019` | no |
+| GH475.OBS.1 | each exclusion is observable | UNTESTED | the counter exists: `src/gateway/meta_mcp/invoke.rs:1902` increments `mcp_error_budget_suppressed_total` with `reason = rate_limited` before the exclusion returns. No case asserts it, so the success and ordinary-failure controls the criterion names are unproven, and the second exclusion site `src/backend/ops.rs:258` emits nothing. [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) | yes |
+| GH475.OBS.2 | the suppression debug event is emitted | UNTESTED | the event exists: `src/gateway/meta_mcp/invoke.rs:1908` emits a `debug!` carrying the server and the tool. No case captures it, and it names the tool rather than the excluded outcome the criterion asks for. [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) | yes |
+| GH475.MIG.1 | the 4.0.0 notice fires below 4.0.0 and writes nothing | MET | test `src/commands/upgrade.rs:1163` starts at stamp `3.9.0` and asserts the config is byte-identical | no |
+| GH475.MIG.2 | it is idempotent, and the first run advances the stamp | MET | same test runs the upgrade twice and pins the stamp at `4.0.0` | no |
+| GH475.MIG.3 | the comparison direction is pinned | UNTESTED | the notice is registered at `src/commands/upgrade.rs:111` and guarded by the stamp, but no case starts above `4.0.0`, so an inverted comparison stays green. [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) | yes |
+| GH475.MIG.4 | the notice says what the four changes are | MET | tests `src/commands/upgrade.rs:1148` (all four items named) and `:1218` (every command the notice tells an operator to run exists) | no |
+| GH475.NOTICE.1 | a quiet upgrade still delivers the breaking-change notices | MET | integration test `tests/gh475_quiet_upgrade_still_warns.rs:3` runs the built binary with `--quiet` over a 2.x data directory | no |
+
+Five of the six rows the test plan filed to [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481)
+are blocking here. The sixth, `GH475.RL.11`, is recorded MET (`structural`) rather than blocking
+because reading the call graph settles the criterion as stated — one predicate, every caller
+reaching it — while the case the plan wanted still does not exist. #481 stays open for it.
+
+Reading source rather than the plan moved three rows off what the plan says about them.
+`GH475.OBS.1` and `GH475.OBS.2` are recorded UNTESTED, not absent: the plan's "Rows without a
+case" table still gives "there is no suppression counter" and "no debug event is emitted" as the
+reason, and both were built at `src/gateway/meta_mcp/invoke.rs:1902`. `GH475.CFG.5`'s
+free-failure argument names two setters as callerless at `src/gateway/meta_mcp/mod.rs:961` and
+`:967`; the setters are at `:972` and `:977` and both are called from
+`src/gateway/server/mod.rs:615`. The plan is a design document and is not this ledger's to
+rewrite, so the divergence is recorded here where the status is.
 
 ## What this audit does not cover
 
