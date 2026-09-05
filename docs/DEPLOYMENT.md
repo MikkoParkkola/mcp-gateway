@@ -799,6 +799,25 @@ failsafe:
 cache:
   default_ttl: 60s             # Higher = fewer calls, staler data
   max_entries: 10000           # In-memory; scale with available RAM
+error_budget:
+  threshold: 0.8               # Failure rate that disables a backend
+  window_size: 100             # Calls in the sliding window
+  window_duration: 5m          # Age at which a call leaves the window
+  min_samples: 10              # Calls needed before the budget is judged
+  capability:                  # Same knobs, per capability
+    threshold: 0.8
+    window_size: 50
+    window_duration: 5m
+    min_samples: 5
+    cooldown: 5m               # How long a disabled capability stays off
 ```
+
+Every `error_budget` key is optional and any key left out keeps the value shown
+above. Values are validated at startup and a bad one is refused by name rather
+than clamped — `min_samples` above `window_size`, for instance, describes a
+budget that can never be evaluated. The section is read when the gateway
+starts, so an edit takes effect on restart, not on reload. Rate-limited
+responses are excluded from both budgets: a throttled backend is not a failing
+one.
 
 Each stdio backend uses 3 file descriptors. Set `LimitNOFILE=65536` in systemd for large deployments.

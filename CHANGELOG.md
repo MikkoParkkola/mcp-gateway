@@ -155,6 +155,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Error budgets are configurable from YAML.** An `error_budget:` section sets
+  the failure-rate threshold, sliding-window size and duration and the minimum
+  sample count for backends, with the same knobs plus a recovery `cooldown`
+  under `error_budget.capability:`. Every key is optional and an absent key
+  keeps the value that has been shipping, so a config without the section
+  behaves exactly as before. Values are validated at startup and refused with
+  the offending field named rather than clamped — `min_samples` above
+  `window_size` describes a budget that can never be evaluated. The section is
+  read when the gateway starts, so an edit is reported as restart-required.
+
 - **First start after upgrading to 4.0.0 prints what changed underneath it.**
   The release re-keys OAuth credentials, refuses a malformed `env_files` line at
   startup instead of ignoring it, stops advertising protocol revision

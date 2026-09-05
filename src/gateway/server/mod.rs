@@ -3030,6 +3030,35 @@ mod tests {
         }
     }
 
+    /// GH475.CFG.5 — a configured threshold reaches the running budget, and a
+    /// key the operator left out keeps the value that has been shipping.
+    #[tokio::test]
+    async fn build_meta_mcp_applies_the_error_budget_section() {
+        let mut config = Config::default();
+        config.error_budget.threshold = Some(0.42);
+        config.error_budget.capability.cooldown = Some(std::time::Duration::from_secs(90));
+
+        let gateway = Gateway::new(config).await.unwrap();
+        let built = gateway.build_meta_mcp().await.unwrap();
+        let (backend, capability) = built.meta_mcp.budget_configs();
+
+        assert!(
+            (backend.threshold - 0.42).abs() < f64::EPSILON,
+            "the configured backend threshold never reached the running budget: {}",
+            backend.threshold
+        );
+        assert_eq!(
+            capability.cooldown,
+            std::time::Duration::from_secs(90),
+            "the configured capability cooldown never reached the running budget"
+        );
+        assert_eq!(
+            backend.window_size,
+            crate::kill_switch::budget::ErrorBudgetConfig::default().window_size,
+            "a key the operator did not write must keep the shipped default"
+        );
+    }
+
     #[tokio::test]
     async fn build_meta_mcp_applies_context_integrity_team_shared_preset() {
         let mut config = Config::default();
