@@ -54,21 +54,44 @@ So the delta below is entirely at the **call site**, and one row is end-to-end.
 
 | AC | criterion | case | level | type | how it can fail |
 |---|---|---|---|---|---|
-| `MIK-7212.WIRE.1` | A modern request that declared at `initialize` and sent no `_meta` is still refused | drive `invoke` with a modern-shaped request, session declaration present, `_meta` absent; assert MRTR.9 refuses and nothing is asked | integration | negative | an unconditional merge makes it bridge; the assertion is on the refusal AND on zero client frames |
+| `MIK-7212.WIRE.1` | A modern request that declared at `initialize` but declares nothing about the asked capability in its own `_meta` is still refused | drive `invoke` with a well-formed modern request — `_meta` carrying `protocolVersion` and a `clientCapabilities` object that omits the capability the backend asks for (`src/protocol/meta.rs:542-549`) — session declaration present; assert MRTR.9 refuses and nothing is asked | integration | negative | an unconditional merge makes it bridge; the assertion is on the refusal AND on zero client frames. An **absent** `_meta` would not classify as `Modern` at all, so the fixture must declare — declaring nothing is `Declared::NONE` on a Modern shape, which is the condition this row is about |
 | `MIK-7212.WIRE.2` | A legacy request with a session declaration is bridged | same call site, legacy shape, session declaration present; assert the client is asked | integration | positive | a shape check inverted, or the session store never read, leaves the client unasked |
 | `MIK-7212.WIRE.3` | A legacy request with no session declaration is refused | legacy shape, empty session; assert refusal | integration | negative | fail-open on an absent declaration bridges instead of refusing |
-| `MIK-7212.WIRE.4` | A modern request reads only its own `_meta` | modern shape, `_meta` declares sampling, session declares elicitation; stage one sampling request (permitted) and one elicitation request (refused) and assert each outcome, rather than inspecting the merged value | integration | boundary | the merge leaking into the modern path admits elicitation |
-| `MIK-7212.WIRE.5` | Every backend attempt is accounted exactly once, including bridge retries | one call that bridges and retries twice; assert the backend was invoked three times and that each sink — invocation metrics, error budget, cost tracker, spend record — carries three, not one | integration | positive | the pre-factoring code counts only the first attempt — this row fails against today's tree, which is what makes it load-bearing |
+| `MIK-7212.WIRE.4` | A modern request reads only its own `_meta` | modern shape, `_meta` declares sampling, session declares elicitation. **Two invokes, not one mixed batch**: `undeclared()` refuses the whole interim on its first undeclared entry (`src/protocol/mrtr.rs:302-311`), so a batch mixing the two can only ever show the refusal. Invoke one: backend asks sampling — assert a **continuation is minted and zero client frames are sent**, because a modern caller that declared the capability on this request is served the continuation, not bridged. Invoke two: backend asks elicitation — assert the MRTR.9 refusal | integration | boundary | two independent mutants die here. The merge leaking into the modern path admits elicitation (invoke two). A wiring that bridges *every* capable caller, modern included, passes WIRE.1-3 and dies on invoke one, whose assertion is on the continuation and the silent client — never on "the client was asked" |
+| `MIK-7212.WIRE.5` | Every backend attempt is accounted exactly once, including bridge retries, and governance is re-checked before each | one call that bridges and retries twice; assert the backend was invoked three times and that each sink — invocation metrics, error budget, cost tracker, spend record — carries three, not one. **Second fixture, same row**: a budget sized to admit the first attempt and reject the second; assert the retry never reaches the backend and records no spend | integration | positive | the pre-factoring code counts only the first attempt — this row fails against today's tree, which is what makes it load-bearing. Accounting alone would pass a wiring that bills three attempts an operator's limit forbade; the budget fixture is the half that refuses to |
 | `MIK-7212.WIRE.6` | The retry bound is enforced against the accounted attempts, not a separate counter | drive past the bound; assert refusal and that accounting agrees with the attempt count | integration | boundary | two counters drifting apart passes a bound check while over-billing |
-| `MIK-7212.WIRE.7` | A declaration dies with its session | capture at `initialize`, then DELETE the session; assert a later request under a reused identifier is refused | integration | negative | a declaration outliving its session grants inherited permissions — assert on the **refusal**, not on a map being empty, or the row passes against a store nobody reads |
-| `MIK-7212.WIRE.8` | The whole path composes over real HTTP | one test: `initialize` declaring a capability, a backend that asks, delivery over live SSE, the answer POSTed back and correlated, the backend retried with it, then session cleanup | system | end-to-end | every fake in rows 1-7 is replaced by the production transport; this is the only row that can fail because an adapter was never constructed |
+| `MIK-7212.WIRE.7` | A declaration dies with its session | capture at `initialize`, **bridge once successfully under that declaration** so the capture is proven live, then DELETE the session; assert the same request under a reused identifier is now refused | integration | negative | a declaration outliving its session grants inherited permissions — assert on the **refusal**, not on a map being empty, or the row passes against a store nobody reads. Without the successful bridge first, a capture that never worked at all satisfies the refusal too: the row would go green on a no-op |
+| `MIK-7212.WIRE.8` | The whole path composes over real HTTP | one test: `initialize` declaring a capability, a **legacy-shaped** tool call (a modern one would be served a continuation and never exercise the bridge at all), a backend that asks, delivery over live SSE, the answer POSTed back and correlated, the backend retried with it, then session cleanup | system | end-to-end | every fake in rows 1-7 is replaced by the production transport; this is the only row that can fail because an adapter was never constructed |
 | `MIK-7212.WIRE.9` | A successful bridge retry is judged on its own result | a backend that asks once and then succeeds; assert the idempotency key is settled as completed, the response is returned, and the settled result is cached — an equivalent follow-up call carrying a *different* idempotency key and the same response-cache key is served without a further backend invocation, since the cache gate at `invoke.rs:1769` is the second consumer of the same verdict. The two assertions are separate on purpose: a follow-up reusing the settled key would be answered by the idempotency entry and would pass without the cache gate running at all | integration | regression | `invoke.rs:1475` computes `stopped_to_ask` from the *first* result, so a passing test here proves the verdict is re-derived after the retry — against today's tree the key stays unsettled and the row fails |
-| `MIK-7212.WIRE.10` | An initialized stdio caller is still refused | stdio session declares elicitation at `initialize`, backend asks; assert the MRTR.9 refusal is returned immediately, no client request is sent, and no retry occurs | integration | regression | this row is not `#[ignore]`d: the refusal is stdio's behaviour until MIK-7387 lands, and a transport-scope regression would turn it into a 30–120s stall |
-| `MIK-7212.WIRE.11` | The production `ClientChannel` strands no pending entry when the prompt's outer timeout cancels the send | spawn `send_request` against a client that never answers; wait until the pending map holds the id (precondition asserted, not slept for), abort the task so the future is dropped mid-await, then assert the map is empty for that id | integration | negative | an impl that inserts into the map and awaits without an RAII guard passes every other row here and fails only this one — neither the success nor the error path runs on cancellation, so the entry leaks for the life of the connection. Mirrors `cancelled_request_does_not_strand_pending_entry` (`src/transport/stdio.rs:815`) |
+| `MIK-7212.WIRE.10` | An initialized stdio caller is still refused | stdio session declares elicitation at `initialize`, backend asks; assert the MRTR.9 refusal returns **inside a 2-second `tokio::time::timeout` wrapping the call** — an order of magnitude under the bridge's 30-second prompt timeout, so a regression that reaches the prompt path fails the deadline rather than eventually returning the right answer — no client request is sent, and no retry occurs | integration | regression | this row is not `#[ignore]`d: the refusal is stdio's behaviour until MIK-7387 lands, and a transport-scope regression would turn it into a 30–120s stall |
+| `MIK-7212.WIRE.11` (also satisfies `MIK-7388.BRIDGE.2`) | The production `ClientChannel` strands no pending entry when the prompt's outer timeout cancels the send | spawn `send_request` against a **live** peer that accepts the frame and never answers — a `NoSession` or an inner timeout would empty the map on its own and pass this row vacuously; wait until the pending map holds the id (precondition asserted under a 5s deadline, not slept for), `abort()` the task, **await the `JoinHandle` until it reports cancelled**, then assert the map is empty for that id |  integration | negative | an impl that inserts into the map and awaits without an RAII guard passes every other row here and fails only this one — neither the success nor the error path runs on cancellation, so the entry leaks for the life of the connection. Mirrors `cancelled_request_does_not_strand_pending_entry` (`src/transport/stdio.rs:815`), including its live-peer staging and its join-after-abort — inspecting the map while the aborted task is still unwinding is how correct cancellation-safe code fails in CI |
 
 `WIRE.8` is the row the reviewers asked for and the only one that proves the new
 call site exists. Rows 1-7 would all pass against a well-tested function nobody
 calls; `WIRE.8` would not.
+
+## Riskiest assumption, and the order the rows are written in
+
+**Riskiest assumption (G10):** that the production `ClientChannel` implementation
+can be built over the existing HTTP pending-sampling surface
+(`src/gateway/proxy.rs:76,105,128,153`) *and* be cancellation-safe, without
+reshaping that surface. Impact is high — every other row assumes the type exists
+— and uncertainty is the highest of any assumption here, because no impl exists
+to inspect. Second: that the call site can distinguish shapes at the point where
+the bridge is reachable.
+
+**Cheapest-first execution order (G11):** the riskiest assumption is also the
+cheapest to falsify, so it goes first.
+
+1. `WIRE.11` — cancellation contract, direct against the new type, no HTTP fixture.
+   Fails or compiles; either answer is bought in minutes.
+2. `WIRE.1`-`WIRE.4` — call-site shape and declaration gate, fakes only.
+3. `WIRE.5`-`WIRE.7`, `WIRE.9` — accounting, bound, budget, lifecycle.
+4. `WIRE.10` — stdio refusal, bounded.
+5. `WIRE.8` — full HTTP composition, the most expensive fixture in the set, last.
+
+Running `WIRE.8` first would spend the largest fixture on the assumption that is
+already assumed by every row above it.
 
 ## The two questions a plan review answers
 
@@ -82,11 +105,31 @@ inside that set shows. That mapping is what turned up the three stdio rows
 living in another file.
 
 **Can each named case actually fail?** Yes — the rightmost column of the table
-is that answer, per row, and it is the reason the column exists. Five rows fail
-against today's tree for a reason stated at source (`WIRE.5`, `WIRE.6`,
-`WIRE.9`, and the two halves of the gate in `WIRE.1`/`WIRE.3`), which is the
-strongest form of the answer: the case fails now and passing it is what the
-change buys. `WIRE.11` is the sixth and is stated differently on purpose: the
+is that answer, per row, and it is the reason the column exists.
+
+An earlier draft of this paragraph claimed `WIRE.1` and `WIRE.3` fail against
+today's tree. **They do not, and both reviewers said so.** Today nothing bridges,
+so every row whose assertion is *a refusal* passes on the unwired tree — and
+passes for the wrong reason. Corrected, per row, on the present tree:
+
+| row | present tree | what a green tells you |
+|---|---|---|
+| `WIRE.1`, `WIRE.3`, `WIRE.10` | **pass** | nothing. They also pass on a correct shape-conditional merge, and on no merge at all. They fail only if this change merges the session declaration into the Modern path, or fail-opens Legacy — which is the regression they exist to catch, not a baseline they establish |
+| `WIRE.2` | **fails** | this is the red half of the gate: a legacy caller with a session declaration must be *asked*, and no call site asks anyone today |
+| `WIRE.4` | passes (both invokes) | not a baseline falsifier — a mutant killer. It dies against a wiring that bridges every capable caller, which nothing else here catches |
+| `WIRE.5`, `WIRE.6`, `WIRE.9` | **fail** | attempts counted once, the bound read off a second counter, the verdict computed from the first result (`invoke.rs:1475`) |
+| `WIRE.7`, `WIRE.8` | **fail** | no bridging call site exists, so neither the successful pre-DELETE bridge nor the composed HTTP round can happen |
+| `WIRE.11` | does not compile | the production `ClientChannel` type does not exist yet |
+
+Marked **I**, not V: the outcomes are derived from the absent call site
+(`src/gateway/meta_mcp/invoke.rs` reaches `InputBridge` from no production path), not from
+a recorded run — the tests do not exist yet, which is the point of writing the
+plan first. `cargo test --quiet -- mik_7212_wire` on the first red commit is the
+command that converts this column to V, and its output belongs in that commit
+message. A claimed red that nobody ran is exactly the evidence this table was
+wrong about once already.
+
+`WIRE.11` is stated differently again on purpose: the
 type it drives does not exist yet, so today it does not compile. Once it does,
 it fails against the obvious implementation — insert into the map, then await —
 and only an RAII guard turns it green, which is the property being pinned rather
