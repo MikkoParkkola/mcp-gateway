@@ -70,8 +70,28 @@ unambiguous phrase match — `429` as a standalone token, `too many requests`,
 run inside a larger token, and never on the `throttl` stem, which matches its own
 negation. Everything else counts as a failure exactly as it does today.
 
-Tightening that arm of the classifier is therefore IN scope for this change; it
-was out in the first draft. Recorded as a scope move rather than a silent edit:
+**Text is the fallback, not the mechanism.** The second design leg raised the
+status-code fix twice, and re-reading the transport boundary shows it is half
+right. `src/capability/executor/jsonrpc.rs:198` already holds a
+`reqwest::Response` and reads `response.status()`, so on the capability path a
+`429` can be typed at the point it is observed and never becomes text at all.
+The MCP dispatch path has no such point: the status is consumed inside the
+transport crate and never surfaces. But `src/backend/ops.rs:255` records
+`entry.failsafe.record_failure(&e.to_string(), latency)` — it is holding the
+typed `Error` and stringifies it before deciding anything. So the ordering is:
+
+1. type the rate-limited outcome where a status is visible (capability path),
+2. match the typed `Error` at both recorders rather than its `Display` text,
+3. fall back to the narrowed phrase match only where no type carries the fact.
+
+That leaves free text load-bearing on exactly one path, which is the one where
+no other signal exists. `src/error.rs:120-126` still refuses status-only
+classification in general — 404 and 400 are overloaded to mean session expiry —
+but `429` carries no such overload, which is why it is the one status worth
+typing.
+
+Tightening the text arm of the classifier is therefore IN scope for this change;
+it was out in the first draft. Recorded as a scope move rather than a silent edit:
 D1 cannot be correct without it, because D1 is what makes a misclassification
 expensive.
 
@@ -161,6 +181,13 @@ what D3 exists to prevent. Also refused: `window_size` or `min_samples` below
 1; a zero duration; and `min_samples > window_size`, which is the interesting
 one — it makes the budget silently never evaluate, so a clamp would hand the
 operator a breaker that looks configured and never fires.
+
+`window_size` also carries an upper bound of 100_000. Each window is a
+per-backend, per-tool ring of samples held for the process lifetime, so an
+unbounded value lets one YAML typo allocate against every routed tool at once.
+The number is a guard rail, not a tuning recommendation: it sits far above any
+window an operator would choose and far below anything that costs real memory.
+Refused with the field named, like every other bound.
 
 **D4 — defaults unchanged.** Every field keeps the value it has today, so an
 existing deployment that adds no YAML sees exactly one behaviour change: D1.
@@ -304,5 +331,43 @@ Both improvements accepted: an end-to-end `429` regression covering the failsafe
 and both budgets is in the test plan, and the ignored-rate-limit path returns
 before taking either configuration lock.
 
+### Leg 3 — confirmation pass on the amended design
+
+`SHIP-WITH-FIXES`, three findings, all at `prob: POSSIBLE`. Each verified at
+source; two changed the design, one was refused with its reason.
+
+- **D1 promotes ambiguous body text into a health gate** (HIGH). Raised for the
+  second time, and the second reading found what the first missed: a status is
+  visible on the capability path (`jsonrpc.rs:198`) and `ops.rs:255` discards a
+  typed error by calling `to_string()` on it. D1 now types the outcome where a
+  status exists and matches the typed `Error` at both recorders, leaving text as
+  the fallback on the one path that has no other signal. The finding was right
+  and the earlier refusal was too broad.
+- **D3 accepts unbounded window sizes** (HIGH, gate BEFORE-PRODUCTION).
+  Confirmed by reading `budget.rs`: the window is a retained per-tool ring.
+  `window_size` gains an upper bound of 100_000.
+- **Ignoring `429` across the whole failsafe leaves stale health failures**
+  (MEDIUM). Confirmed in part and reduced. A `429` proves the backend is
+  reachable, so it is recorded as a transport-health success while still
+  entering neither budget — this is the finding's own prescription. The
+  availability half of the concern does not hold: `can_proceed` returns `true`
+  unconditionally in `HalfOpen` (`circuit_breaker.rs:179`), so a breaker that
+  cannot accumulate the successes to close still passes every request, and a
+  single real failure re-opens it (`:45`). Stuck-half-open is an observability
+  cost, not an outage.
+
+Two checks run against the same amendment, both refuted at source and recorded
+so they are not re-raised:
+
+- **A third recorder in the capability executor.** `executor/mod.rs:124-156`
+  calls `health.record_success`/`record_failure` directly. It gates nothing:
+  `is_healthy()` (`:228`) has no production caller — every hit is a test. That
+  tracker is observability, so D1's two recorders remain two.
+- **Where the shared predicate lives.** Named here rather than left to
+  implementation: `src/error.rs`, beside `classify_from_detail`, which is the
+  only module both `backend/ops.rs` and `gateway/meta_mcp/invoke.rs` already
+  depend on. A test asserts both call sites route through it.
+
 This change ships no code yet, so no leg has reviewed an implementation. Both
-design legs have now returned; implementation starts against this text.
+design legs and one confirmation pass have returned; implementation starts
+against this text.
