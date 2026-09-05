@@ -889,7 +889,14 @@ impl Backend {
         // nothing to take back. A start that failed for THAT reason is not a
         // fault worth reporting as one.
         match self.start_entry(&PoolKey::Shared, &entry).await {
-            Ok(_) => Ok(RestartOutcome::Rebuilt),
+            Ok(transport) => {
+                // Same obligation as the cold start path: the era describes the
+                // process on the other end, and this one has just been
+                // replaced. Runs under the `start_lock` taken above, which is
+                // the order `Backend::resolve_era` documents.
+                self.resolve_era(&transport).await;
+                Ok(RestartOutcome::Rebuilt)
+            }
             Err(error) => {
                 if self.replaced_transport_cleanups.lock().stopping {
                     Ok(RestartOutcome::SkippedStopping)

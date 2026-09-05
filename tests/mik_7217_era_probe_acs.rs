@@ -359,3 +359,38 @@ async fn discover_4_a_probe_that_is_never_answered_caches_nothing() {
         fixture.frames()
     );
 }
+
+/// DISCOVER.5, restart half — a restarted backend is a new peer, so the belief is discarded.
+///
+/// The cached era describes the process on the other end of the transport. A restart swaps that
+/// process: the peer that answered the first probe is gone, and the one that replaced it may
+/// speak a different dialect after an upgrade or a downgrade. Carrying the old verdict across
+/// the swap is the gateway asserting something it has not observed about the peer it now has.
+///
+/// Exact equality, for the same reason the caching test uses it: `>= 1` would pass on a build
+/// that never re-probes at all.
+#[tokio::test]
+async fn discover_5_a_restart_discards_the_cached_era() {
+    let fixture = Fixture::new("2025-11-25", MODERN_DISCOVER, EMPTY_TOOLS);
+    let backend = fixture.backend("restarted-era");
+
+    backend.ensure_started().await.expect("backend starts");
+    backend
+        .request("tools/list", None)
+        .await
+        .expect("tools/list answered before the restart");
+
+    backend.force_restart().await.expect("backend restarts");
+    backend
+        .request("tools/list", None)
+        .await
+        .expect("tools/list answered after the restart");
+
+    assert_eq!(
+        fixture.discover_count(),
+        2,
+        "a restart swaps the peer, so the era must be probed again rather than carried over. \
+         recorded frames were:\n{}",
+        fixture.frames()
+    );
+}

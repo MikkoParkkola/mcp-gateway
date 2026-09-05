@@ -79,6 +79,15 @@ impl Backend {
     /// `ensure_entry_started`, which would invert the order.
     pub(super) async fn resolve_era(&self, transport: &Arc<dyn Transport>) {
         let timeout = self.probe_timeout();
+        // A start hands over a transport to a process that has only just come
+        // up. Any era already determined describes the peer that came before
+        // it, which an upgrade or a downgrade may have replaced, so carrying
+        // the verdict across the swap asserts something never observed about
+        // the peer now on the wire. Guarded on a determination existing so a
+        // cold start does not emit a discard record for a belief it never had.
+        if self.era.cached().await.is_some() {
+            self.era.invalidate_because("restart").await;
+        }
         self.era.resolve_with(|| probe(transport, timeout)).await;
     }
 
