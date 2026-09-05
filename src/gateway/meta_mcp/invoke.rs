@@ -2942,13 +2942,11 @@ fn classify_from_detail(detail: Option<&str>) -> ErrorCategory {
     let lower = text.to_ascii_lowercase();
 
     // Rate limiting — retryable after backoff, NOT a param error.
-    if lower.contains("429")
-        || lower.contains("too many requests")
-        || lower.contains("rate limit")
-        || lower.contains("rate-limit")
-        || lower.contains("ratelimit")
-        || lower.contains("throttl")
-    {
+    //
+    // Delegated to the shared predicate so this classifier and the backend
+    // circuit breaker cannot disagree about what a rate-limit response is
+    // (GH #475). The narrowing lives there, with its rationale.
+    if crate::gateway::recovery::is_rate_limited(text) {
         return ErrorCategory::RateLimited;
     }
 

@@ -370,7 +370,25 @@ so they are not re-raised:
   `classify_from_detail`, which lives in `gateway/meta_mcp/invoke.rs` and is
   unreachable from `backend/ops.rs`. `recovery` is the one module both call
   sites can already import, which is what makes a single definition possible —
-  `classify_from_detail` delegates to it rather than keeping its own copy. A test asserts both call sites route through it.
+  `classify_from_detail` delegates to it rather than keeping its own copy.
+
+### Design event during implementation — `throttled` is matched, `throttling` is not
+
+The design above refused the whole `throttl` stem, on the grounds that it
+matches its own negation ("throttling disabled"). Implementing it found that
+too broad: `invoke.rs` already carried a test asserting `request throttled by
+upstream` classifies as rate-limited, written from a shape this gateway has
+observed. Refusing the stem would have deleted an observed true positive to
+avoid a hypothetical false one.
+
+The predicate therefore matches `throttled` — the past participle, which
+reports what happened — and not `throttling`, the gerund that names the feature
+and appears in its negation. Named here because it changes what an acceptance
+criterion asserts, not because it was hard.
+
+Residual, stated: `throttled: false` would match and be excluded. Nobody has
+observed that string; "request throttled by upstream" is in a test because
+somebody did. Accepted knowingly rather than traded for the observed case. A test asserts both call sites route through it.
 
 This change ships no code yet, so no leg has reviewed an implementation. Both
 design legs and one confirmation pass have returned; implementation starts
