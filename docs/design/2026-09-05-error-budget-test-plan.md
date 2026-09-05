@@ -63,12 +63,12 @@ read as complete.
 
 | row | why there is no case | disposal |
 |---|---|---|
-| GH475.RL.9 | an end-to-end `429`-only backend needs a stub MCP backend harness that does not exist; RL.3, RL.7 and RL.13 cover the same predicate at the dispatch call site | ticket |
-| GH475.RL.10 | the capability executor does not classify rate limits at all — `src/capability/executor/` has no call to the shared predicate. The criterion presupposes an exclusion that was never built | ticket |
-| GH475.RL.11 | the property is structural rather than tested: `src/gateway/recovery.rs:281` is the single predicate and both call sites (`backend/ops.rs:254`, `meta_mcp/invoke.rs:2976`) reach it. No test drives one signal table through both | ticket |
-| GH475.OBS.1 | there is no suppression counter to assert against; no metric is emitted when an outcome is excluded | ticket |
-| GH475.OBS.2 | same cause — no debug event is emitted on exclusion | ticket |
-| GH475.MIG.3 | the notice guard compares against `4.0.0` and no case pins the direction, so an inverted comparison would not be caught | ticket |
+| GH475.RL.9 | an end-to-end `429`-only backend needs a stub MCP backend harness that does not exist; RL.3, RL.7 and RL.13 cover the same predicate at the dispatch call site | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
+| GH475.RL.10 | the capability executor does not classify rate limits at all — `src/capability/executor/` has no call to the shared predicate. The criterion presupposes an exclusion that was never built | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
+| GH475.RL.11 | the property is structural rather than tested: `src/gateway/recovery.rs:281` is the single predicate and both call sites (`backend/ops.rs:254`, `meta_mcp/invoke.rs:2976`) reach it. No test drives one signal table through both | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
+| GH475.OBS.1 | there is no suppression counter to assert against; no metric is emitted when an outcome is excluded | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
+| GH475.OBS.2 | same cause — no debug event is emitted on exclusion | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
+| GH475.MIG.3 | the notice guard compares against `4.0.0` and no case pins the direction, so an inverted comparison would not be caught | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
 
 
 ## Can each case actually fail?
@@ -105,6 +105,12 @@ expired, reinitialise" — and `backend/ops.rs` has only the `Error`, the status
 having been discarded upstream. Text is the signal that path has. The capability
 executor is different: `jsonrpc.rs:198` still holds the status, so a status-based
 exclusion is possible there. It is not built, and GH475.RL.10 above records that.
+
+A second review fix was not applied, and the reason is recorded so it is not
+re-raised: narrowing `src/gateway/recovery.rs:281` so `rate limit` no longer
+matches as a substring. GH475.RL.6 states that the phrase does exempt, so the
+narrowing moves an agreed criterion rather than repairing a defect. It needs the
+requester's decision and carries one: [#482](https://github.com/MikkoParkkola/mcp-gateway/issues/482).
 
 Two shapes explicitly refused in this plan:
 
