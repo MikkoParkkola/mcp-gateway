@@ -309,9 +309,10 @@ impl InputBridge<'_> {
     /// Returns the reason the bridged call failed: a refused entry, a delivery
     /// that produced no answer, or a bound the call ran past.
     // The stub awaits nothing yet; the async signature is the contract the
-    // acceptance rows drive, and the allowance lapses the moment a real await
-    // lands. Spelled the way the rest of this crate spells it, because
-    // `unused_async_trait_impl` exists only on newer clippy.
+    // acceptance rows drive. Delete this allowance by hand once a real await
+    // lands: `allow` stays silent when it becomes redundant, so nothing else
+    // will point it out. Spelled the way the rest of this crate spells it,
+    // because `unused_async_trait_impl` exists only on newer clippy.
     #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn run(
         &self,
