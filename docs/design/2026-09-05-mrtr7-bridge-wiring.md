@@ -1,8 +1,13 @@
 # MRTR.7 — wiring `InputBridge::run` into the production path
 
-Status: design, not implemented. Reviewed by: GPT-5.x and Kimi K2, both
-SHIP-WITH-FIXES, both naming the same blocker. Findings disposed below.
-Change: `fix/mrtr2-continuation-handle`, HEAD `33f64798`.
+Status: design, not implemented. Change: `fix/mrtr2-continuation-handle`.
+
+Reviewed twice, adversarially, by two vendors: `gpt-review` (Codex/GPT-5.x) and
+`synthetic-review` (the open-weights leg, `glm-5.3` alias — the wrapper formerly
+called `kimi-review`; earlier revisions of this file misattributed it to Kimi K2,
+which did not run). Round 2 ran against `08c0b9c9` and both returned
+SHIP-WITH-FIXES, each naming a doc-level fix inside this design. Findings
+disposed below.
 
 ## Problem
 
@@ -230,12 +235,20 @@ Wiring one call is the smallest part of this.
 
 ### Decision table
 
-| shape | declared | outcome |
+Because the merge is conditional on shape, the two shapes do not read the same
+value, and a row is only decidable once its source is named. The middle column
+names it.
+
+| shape | where `declared` is read | outcome |
 |---|---|---|
-| modern | yes | continuation minted, as today |
-| modern | no | refused by MRTR.9, as today |
-| legacy | yes (from `initialize`) | bridged |
-| legacy | no | refused by MRTR.9, as today |
+| modern | this request's `_meta` — declared there | continuation minted, as today |
+| modern | this request's `_meta` — absent there, and the session value is **not** merged in | refused by MRTR.9, as today |
+| legacy | the session's `initialize` declaration — declared there | bridged |
+| legacy | the session's `initialize` declaration — absent there | refused by MRTR.9, as today |
+
+Row 2 is the one an unconditional merge would flip: a modern client that
+declared at `initialize` and omitted `_meta` would start being asked, which is
+the per-request gate MRTR.9 exists to enforce. It stays refused.
 
 ## Unknowns, scheduled
 
