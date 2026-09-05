@@ -296,10 +296,23 @@ sessions from transport state. `MetaMcp::handle_initialize`
 (`src/gateway/meta_mcp/mod.rs:1151`) is the only place the declaration exists,
 and it already carries `session_id: Option<&str>`. So the writer and the owner
 are real but in different modules, and the earlier answer would not have
-compiled. Amended: the store is keyed by session id and owned by the streaming
-session manager, reached through two methods on it rather than by making the
-struct public. Removal and TTL reaping stay where they already are, which is
-what open question 3 was for.
+compiled. Amended: the store is keyed by session id and owned by
+`NotificationMultiplexer` (`src/gateway/streaming.rs:73`), which owns the
+session map and is the only session-keyed store in this path with production
+removal — `handlers.rs:354` on DELETE and `streaming.rs:578` on stream end. The
+declaration is captured at the `initialize` call site in
+`src/gateway/router/handlers.rs:926`, which holds both the params and
+`state.multiplexer`; `handle_initialize` itself does not need to change.
+`ClientSession` stays private.
+
+Two stores were rejected on the same test, applied to each in turn — does
+anything outside a test remove from it. `SessionProfileStore`
+(`src/routing_profile/mod.rs:430`) is already owned by `MetaMcp` and keyed by
+session id, so it looked like the obvious home; its `remove_session` has no
+non-test caller, so it would have leaked exactly as `SessionLifecycle` would.
+The stdio `initialize` path (`src/gateway/server/mod.rs:1788`) has no
+multiplexer to write to, which is amendment 1's conjunction holding by
+construction rather than by a transport check.
 
 Not amended, still out of scope: the aggregate deadline not bounding backend
 retries, prompt parameters forwarded without typed validation, and reply
