@@ -364,9 +364,13 @@ so they are not re-raised:
   `is_healthy()` (`:228`) has no production caller — every hit is a test. That
   tracker is observability, so D1's two recorders remain two.
 - **Where the shared predicate lives.** Named here rather than left to
-  implementation: `src/error.rs`, beside `classify_from_detail`, which is the
-  only module both `backend/ops.rs` and `gateway/meta_mcp/invoke.rs` already
-  depend on. A test asserts both call sites route through it.
+  implementation: `src/gateway/recovery.rs`, beside the `ErrorCategory` it
+  returns (`:42`, `pub`, under `pub mod recovery`). Not `src/error.rs`, which
+  holds the `Error` variants but not the category; and not beside
+  `classify_from_detail`, which lives in `gateway/meta_mcp/invoke.rs` and is
+  unreachable from `backend/ops.rs`. `recovery` is the one module both call
+  sites can already import, which is what makes a single definition possible —
+  `classify_from_detail` delegates to it rather than keeping its own copy. A test asserts both call sites route through it.
 
 This change ships no code yet, so no leg has reviewed an implementation. Both
 design legs and one confirmation pass have returned; implementation starts
