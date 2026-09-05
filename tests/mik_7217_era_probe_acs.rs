@@ -444,8 +444,11 @@ async fn discover_5b_a_failing_modern_assumption_is_re_probed() {
 
     let _ = backend.request("server/discover", None).await;
 
+    // The corrected verdict, not the frame, is what this waits on. A frame is recorded when the
+    // re-probe is *sent*; the cache is written when its answer comes back, so waiting on the
+    // count alone would leave the verdict assertion below racing the store that satisfies it.
     let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline && fixture.discover_count() < 3 {
+    while Instant::now() < deadline && backend.cached_era().await != Some(Era::Legacy) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
