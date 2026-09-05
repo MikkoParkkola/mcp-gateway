@@ -135,11 +135,16 @@ impl Backend {
             return;
         }
 
+        // Dropped before the spawn, not inside it. A burst of contradicting answers would
+        // otherwise each observe the stale verdict still cached and fan out into one detached
+        // probe apiece; with the verdict already gone, every later answer in the burst reads
+        // `None` and takes the arm that decides nothing.
+        self.era.invalidate().await;
+
         let era = Arc::clone(&self.era);
         let transport = Arc::clone(transport);
         let timeout = self.probe_timeout();
         tokio::spawn(async move {
-            era.invalidate().await;
             era.reprobe_with(|| probe(&transport, timeout)).await;
         });
     }
