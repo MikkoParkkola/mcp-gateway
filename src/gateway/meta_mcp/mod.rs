@@ -1167,6 +1167,11 @@ impl MetaMcp {
     ) -> JsonRpcResponse {
         let client_version = extract_client_version(params);
         let negotiated_version = negotiate_version(client_version);
+        // NFR.OBS.1. The session is served under this value from here on, and
+        // the observation record has to report it rather than the client's ask
+        // -- the two differ whenever the ask is unsupported. Bound at the one
+        // site that negotiates, so no second derivation can drift from it.
+        crate::protocol_revision_telemetry::bind_session_revision(session_id, negotiated_version);
         debug!(
             client = client_version,
             negotiated = negotiated_version,

@@ -33,6 +33,18 @@ OUT:
 rather than left as an empty cell: it is the rationale for (a)+(b), not a separable obligation.
 Anything it could assert is asserted by the cases for (a) and (b).
 
+## Clause (a)/(b) boundary, stated so a reviewer does not have to find it
+
+No case here verifies any requirement in two roles. Cases 3 and 4 verify that `--check` *reports*
+a row verified in one role only. That is deliberate and it is the whole of what this row can own:
+`NFR.COMPAT.4` states an obligation over the other 99 rows and delegates the evidence to the
+matrix (clause e). Verifying `NFR.SEC.2` in both roles is `NFR.SEC.2`'s work, on its own transport,
+in its own cluster. A test file here that drove a second role would be testing someone else's row
+and would go green while the obligation stayed unmeasured.
+
+What this plan therefore proves is narrower and checkable: that a half-verified row cannot pass
+unnoticed. The reviewer who wants the wider reading should refuse the §P0 scope, not the cases.
+
 ## Mechanism facts this plan rests on (verified at source)
 
 - The matrix does not exist. `docs/requirements/conformance-matrix.toml`, a renderer under
@@ -86,7 +98,7 @@ status is asserted separately by cases 10 and 11, because U-C made the two indep
 | 12 | d | the pre-tag mode exits non-zero while EMPTY is non-zero, and zero when EMPTY is zero | the blocking half lives at the tag, not the PR; without this case, case 11 would prove the check can never refuse anything | set EMPTY to zero → exit 0 |
 | 13 | d | the three published numbers (`cells-in-scope`, `EMPTY`, `EXEMPT`) in the rendered markdown are recomputed and compared; a hand-edited number is a FINDING | headline numbers are script-owned. The hand-maintained ones in this repo drifted three times (`scripts/release/count-release-criteria.py:5-7`) | edit one number in the fixture render → FINDING naming it |
 | 14 | d | rendered markdown that disagrees with the TOML is a FINDING | the rendered file is checked in because one review leg cannot render; a stale render is a document that lies to that leg | re-render → clean |
-| 15 | a, b, c | **live documents**: every criterion `count-release-criteria.py` counts has a matrix row, and the published numbers match the recomputed ones | a fixture cannot satisfy this case. It is the one case that fails if the real matrix drifts from the real requirements | none — it is the probe. Its failure mode is the drift it exists to catch |
+| 15 | a, b, c | **live documents**: the matrix has a row for each of the **100 rows** `count-release-criteria.py` reports — rows, not the 95 criteria, so a sub-row (`MRTR.9a`, `.10a`, `.10b`) cannot go unmatrixed — and the published numbers match the recomputed ones | a fixture cannot satisfy this case. It is the one case that fails if the real matrix drifts from the real requirements | none — it is the probe. Its failure mode is the drift it exists to catch |
 
 Case 15 is the reason the fixture cases are safe to trust. Cases 1-14 run on synthetic strings,
 which is exactly the shape of the two defects this repo shipped, where a fixture replaced the
@@ -120,7 +132,8 @@ being settled quietly by whoever writes the first row.
 **DE-1 — "every requirement above" is positional, and the document has 18 requirement rows
 below it.** `NFR.COMPAT.4` sits at `RELEASE-4.0.0-requirements.md:264`, the last row of §4.1.
 Everything in §4.2 Security, §4.3 Performance, §4.4 Observability and §4.5 Documentation comes
-after it — 18 rows, counted. Read literally, the dual-role obligation reaches no security
+after it — 18 rows, listed rather than counted so the ruling does not rest on a regex:
+`NFR.SEC.1-6`, `NFR.PERF.1-4`, `NFR.OBS.1-5`, `NFR.DOC.1-3`. Read literally, the dual-role obligation reaches no security
 requirement, and does not reach `NFR.OBS.5`, whose own test plan was written yesterday. The
 design assumes the whole document (population = the ledger's 100 rows). The criterion says
 "above". One of the two is wrong and the plan cannot pick: it decides whether ~18 rows exist in
@@ -197,6 +210,9 @@ its deliberately red suite belong to another agent and are untouched here.
 - `NFR.COMPAT.4` cannot honestly close on this change alone. The matrix existing is acceptance
   2's mechanism; the matrix being *full* is 34 blocking rows' worth of other people's work. This
   plan delivers the first and measures the second, which is the most a T row about evidence can
-  do. It does not, however, wait on cluster A or cluster C — nothing here reads
-  `SUPPORTED_VERSIONS` for anything but the revision axis's membership, and that axis is the
-  union of two constants whose values are not in dispute.
+  do. The renderer does not wait on cluster A or
+  cluster C — nothing here reads `SUPPORTED_VERSIONS` for anything but the revision axis's
+  membership. The *checked-in render* does: while those clusters are unlanded, every cell in the
+  `2026-07-28` column is EMPTY or EXEMPT, and cases 13 and 15 pin the checked-in numbers to that
+  state. So the honest version is two sentences, not one — the mechanism lands now, and the
+  rendered artefact needs a re-render commit when A and C flip the constants.

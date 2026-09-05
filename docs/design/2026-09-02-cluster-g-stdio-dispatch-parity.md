@@ -459,3 +459,68 @@ That is the policy's own constant compared with the policy's own constructor: it
 or not any caller consults it, which is how "written for this decision and then never consulted"
 survived to be discovered in the handler comment. Row 13 asserts the *behaviour at the
 boundary* instead, which is the only form of this test that can go red.
+
+## §P3 design event, 2026-09-05 — where the stdio negotiated revision lives
+
+Open question 1 settled *what* to record (retain the negotiated revision, source it to the
+handshake). Implementation then had to settle *where it lives* and *how it reaches the record*,
+and those are four decisions the design did not make. Named here, at the moment they were made.
+
+**1. The session store already exists; this change does not build a second one.**
+`observe_inbound_request` (`src/protocol_revision_telemetry.rs:974-995`) already binds a
+`SessionAttribution` on a stdio `initialize` and reads it back per request. The board row's
+"no session state carries the negotiated revision" is wrong as stated: state exists, and
+`classify_and_observe` — the site that emits `protocol_revision` — is simply handed `None` at
+`src/gateway/server/mod.rs:1768` and never consults it. Threading a `&mut Option<String>`
+through `run_stdio` and `dispatch_single_with_sink` would have given one fact two homes: the
+two-site pattern review round 2 already rejected on the MRTR row.
+
+**2. What the store holds is the client's ASK, and the record must carry the server's ANSWER.**
+`SessionAttribution.requested_revision` is the requested value, bounded to `MEASURED_REVISIONS`
+or collapsed to `other`. `negotiate_version` (`src/protocol/mod.rs:53-62`) returns the request
+only when it is in `SUPPORTED_VERSIONS`, and otherwise falls back to `PROTOCOL_VERSION` — so ask
+and answer diverge exactly when the ask is unsupported, which is the population this telemetry
+exists to measure. Binding the ask and labelling it the session's revision would be cluster G
+row 2's defect again: a record asserting one thing while the code resolved another
+(`profile="none"` against `active_profile`). The store therefore gains a second field,
+`negotiated_revision`, written at the ONE site where negotiation happens —
+`MetaMcpServer::handle_initialize` (`src/gateway/meta_mcp/mod.rs:1168-1169`), which already
+receives `session_id` — carrying the exact `&'static str` the handshake answered. Not recomputed
+at the transport: a second call to `negotiate_version` on a second extraction of the same params
+is how the two drift.
+
+**3. `revision_source = "handshake"` — the fourth value the test plan left open.**
+The plan's two candidates were a fourth value or reporting `none` and carrying the revision
+without a source. `none` is rejected: a record with a present revision and source `none` is
+indistinguishable from the pre-handshake case the plan pins as `absent`/`none`, so the vocabulary
+would stop separating the two states it exists to separate. `handshake` is not invented for this
+change — the Legacy arm of `classify_and_observe` already emits it (`src/protocol/meta.rs:499`).
+The stale comment at `src/gateway/server/mod.rs:3438` claiming "exactly three values" is corrected
+in this change; it was already untrue.
+
+**4. The value reaches the record as its own parameter, never as `header_version`.**
+`classify_and_observe` gains `session_revision: Option<&str>`, consulted only by the Legacy and
+Malformed fallbacks and only after `_meta` and the header. Reusing `header_version` would have
+been one fewer parameter and would have labelled a stdio Modern-but-malformed request `header`,
+on a transport that has no headers. HTTP passes `None` (it has a header for this); the stdio
+dispatcher passes the store's value, keyed on the `session_id` it already holds, so no dispatcher
+signature moves and every existing caller keeps compiling.
+
+Ordering is deliberate and unchanged: `classify_and_observe` runs before the request is handled,
+so the `initialize` request itself still sources from its own `params.protocolVersion` and the
+negotiated value applies from the next request onward — which is the "omitted only if no
+handshake has occurred yet" that question 1 asked for.
+
+### `NO_RETRY` on stdio — declared OUT, with something watching it
+
+`src/gateway/server/mod.rs:1853` hardcodes `retry: &NO_RETRY`, so a stdio client can never be
+presented a retry. Same defect class as cluster A's prefix exemption. It is **out of scope for
+this change**, and the reason is not convenience: closing it requires building `RetryFields` at
+the convergence point AND refusing malformed retry fields pre-dispatch on both transports — a
+behaviour change with its own four test rows, which would move this change's `FOR` after the
+§P0 freeze and need a receipt update to do it honestly.
+
+Prose alone would leave nothing watching it, which is what the board criticised in cluster C.
+The watcher is an `#[ignore]`d test asserting the DESIRED behaviour with the reason in the
+attribute, plus a line on the readiness board's cluster G row. The current defect is NOT pinned
+as correct by any passing test.

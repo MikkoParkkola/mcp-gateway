@@ -678,8 +678,14 @@ pub(super) async fn meta_mcp_handler(
     // the two readings cannot disagree.
     // NFR.OBS.1 is recorded by the classifier itself, so the HTTP and stdio
     // dispatchers cannot drift apart on what a request declared.
-    let shape =
-        crate::protocol::meta::classify_and_observe(&method, params.as_ref(), declared_version);
+    let shape = crate::protocol::meta::classify_and_observe(
+        &method,
+        params.as_ref(),
+        declared_version,
+        // HTTP echoes the revision in a header on every request, so there
+        // is nothing for a session lookup to add.
+        None,
+    );
     if let crate::protocol::meta::RequestShape::Malformed { ref missing } = shape {
         // Declared itself modern and then omitted a required field. The
         // specification is specific about both halves of the answer: -32602,

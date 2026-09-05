@@ -461,12 +461,19 @@ fn bounded_for_log(value: &str) -> &str {
 /// one. Stdio has no headers, so it passes `None` and a modern request there
 /// can only be sourced to `_meta`.
 ///
+/// `session_revision` is what this session's handshake ANSWERED, for a
+/// transport that keeps one. It is consulted last, so a caller that declared a
+/// revision is always attributed to its own declaration; it is a distinct
+/// parameter rather than a second use of `header_version` because a request on
+/// a headerless transport must never be recorded as header-sourced.
+///
 /// Emitted above any early return the caller makes, so every request that
 /// reaches a dispatcher is recorded and not only the well-formed ones.
 pub fn classify_and_observe(
     method: &str,
     params: Option<&Value>,
     header_version: Option<&str>,
+    session_revision: Option<&str>,
 ) -> RequestShape {
     let shape = classify_request(params, header_version);
     let (protocol_revision, revision_source) = match &shape {
@@ -486,17 +493,31 @@ pub fn classify_and_observe(
             Some(version) => (version, "_meta"),
             None => match header_version {
                 Some(version) => (version, "header"),
-                None => ("absent", "none"),
+                // Last, and only last: a transport that carries its own
+                // declaration has already answered above, so this reaches only
+                // a caller that declared nowhere -- on stdio, the session it
+                // negotiated at `initialize`.
+                None => match session_revision {
+                    Some(version) => (version, "handshake"),
+                    None => ("absent", "none"),
+                },
             },
         },
         // A legacy revision is settled once at `initialize` and echoed on every
         // later request in the header, so both readings below report the same
         // handshake rather than a second source.
-        RequestShape::Legacy => match header_version.or_else(|| {
-            params
-                .and_then(|p| p.get("protocolVersion"))
-                .and_then(Value::as_str)
-        }) {
+        RequestShape::Legacy => match header_version
+            .or_else(|| {
+                params
+                    .and_then(|p| p.get("protocolVersion"))
+                    .and_then(Value::as_str)
+            })
+            // A transport without headers echoes nothing, so on every request
+            // but `initialize` itself the session's negotiated revision is the
+            // only reading there is. It is the answer the handshake gave, not
+            // the ask, so `handshake` names it accurately here too.
+            .or(session_revision)
+        {
             Some(version) => (version, "handshake"),
             None => ("absent", "none"),
         },
