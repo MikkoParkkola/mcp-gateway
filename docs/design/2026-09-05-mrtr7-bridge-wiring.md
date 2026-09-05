@@ -13,13 +13,24 @@ marked UNWIRED. Tests-only reachability is a D7:WIRED failure, not done.
 
 ## Scope
 
-FOR: giving `InputBridge::run` one production caller, so a legacy client is
-asked the backend's question and the backend is retried with the answer.
+FOR: giving `InputBridge::run` one production caller **on the HTTP transports**,
+so a legacy client that declared a capability at `initialize` is asked the
+backend's question and the backend is retried with the answer.
 
-OUT: the row-308 SSE delivery half (its own deferral, trigger is this commit);
-the `NFR.OBS.4` counter name (`RELEASE-4.0.0-cluster-a-readiness.md:44` — "No
-design, no counters"); any change to the MRTR.9 refusal or to the continuation
-mint for modern callers.
+OUT: legacy **stdio** callers, which keep the MRTR.9 refusal they get today —
+ruled by the requester on 2026-09-05, on the finding below that stdio's serial
+read loop deadlocks any bridged call. The stdio concurrency work is its own
+change, not a step inside this one. Also out: the row-308 SSE delivery half (its
+own deferral, trigger is this commit); the `NFR.OBS.4` counter name
+(`RELEASE-4.0.0-cluster-a-readiness.md:44` — "No design, no counters"); any
+change to the MRTR.9 refusal or to the continuation mint for modern callers; the
+two defects the review raised inside `input_bridge.rs` itself (unvalidated
+params, request-kind-blind reply projection), which are that file's bugs and not
+this change's wiring.
+
+Consequence, stated rather than discovered later: rows :130 and :131 go green
+for the HTTP transports only. Whether that reads as met, or as met with a named
+limit, is the release owner's call and not this design's.
 
 ## Where it goes
 
@@ -103,7 +114,7 @@ the stdin nobody is reading. Every legacy stdio bridge deadlocks until
 
 This is not a defect in the bridge. It is the transport lacking the concurrency
 the bridge presupposes, and no placement of the call inside `invoke.rs` avoids
-it. Two honest responses, and the choice is not engineering's to make alone:
+it. Two honest responses, and the choice was not engineering's to make alone:
 
 - **Make stdio concurrent** — dispatch off the read loop, route replies by id
   before dispatch, one serialized writer, an `initialize` barrier. A transport
@@ -111,6 +122,10 @@ it. Two honest responses, and the choice is not engineering's to make alone:
 - **Bridge only where the concurrency already exists** — the HTTP transports
   have in-flight request correlation (`ProxyManager`'s pending-response path).
   Legacy stdio callers keep the MRTR.9 refusal they get today.
+
+Asked of the requester, 2026-09-05. Answer: bridge on HTTP only; stdio
+concurrency becomes its own change. It narrowed this design's FOR to the HTTP
+transports and moved stdio to OUT, above.
 
 ## Review findings, disposed
 
