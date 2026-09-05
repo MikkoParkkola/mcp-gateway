@@ -25,10 +25,13 @@
 //! The stagings that rows 323 and 324 depend on — a backend slow enough to put
 //! a question beside the `initialize` response, and a frame large enough that
 //! an unlocked writer can be caught interleaving — cannot be shown to work
-//! while `InputBridge::run` is a stub. No bridged request is written at all,
-//! so the ordering and the framing are both unobservable. Each staging removes
-//! a known reason its row could not fail; neither is yet evidence that the row
-//! now can. Re-check both against the first working bridge.
+//! while `InputBridge::run` has no production caller. The bridge itself is
+//! implemented and its rounds are driven green through trait fakes in the
+//! sibling file, but nothing on a transport calls it, so no bridged request is
+//! written to the pipe at all and the ordering and the framing are both
+//! unobservable. Each staging removes a known reason its row could not fail;
+//! neither is yet evidence that the row now can. Re-check both against the
+//! first wired bridge.
 //!
 //! Row 308 wants a legacy client **on an SSE session** to receive its
 //! `elicitation/create` on its own connection. No row covers that: this file

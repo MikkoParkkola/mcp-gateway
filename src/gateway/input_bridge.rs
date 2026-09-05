@@ -453,7 +453,7 @@ impl InputBridge<'_> {
                 continue;
             };
             let answer = reply
-                .and_then(|reply| Self::project(&reply))
+                .and_then(|reply| Self::project(prompt.kind, &reply))
                 .map_err(|error| BridgeError::Delivery {
                     key: prompt.key.clone(),
                     error,
@@ -465,11 +465,15 @@ impl InputBridge<'_> {
 
     /// Read one client reply as the answer to file, or say why it is not one.
     ///
-    /// A `result` carrying no `action` is filed whole: `roots/list` and
-    /// `sampling/createMessage` answer with their own shapes and never accept
-    /// or decline, so demanding an `action` of them would refuse every valid
-    /// reply of two of the three relayed kinds.
-    fn project(reply: &Value) -> Result<Value, DeliveryError> {
+    /// `action` is elicitation's word, so the accept/decline projection is read
+    /// for that kind and no other. `roots/list` and `sampling/createMessage`
+    /// answer with their own shapes and are filed whole however they are
+    /// spelled: reading an `action` member there returns `content` alone and
+    /// silently drops the rest of an answer the backend was given. An
+    /// elicitation reply that omits its `action` is unreadable rather than
+    /// filable, because filing it whole hands the backend the same answer one
+    /// nesting deeper than an accept does.
+    fn project(kind: ServerRequestKind, reply: &Value) -> Result<Value, DeliveryError> {
         if let Some(error) = reply.get("error") {
             return Err(DeliveryError::ClientRefused {
                 code: error
@@ -486,8 +490,11 @@ impl InputBridge<'_> {
         let Some(result) = reply.get("result") else {
             return Err(DeliveryError::NoReplyMember);
         };
-        let Some(action) = result.get("action").and_then(Value::as_str) else {
+        if kind != ServerRequestKind::Elicitation {
             return Ok(result.clone());
+        }
+        let Some(action) = result.get("action").and_then(Value::as_str) else {
+            return Err(DeliveryError::Malformed);
         };
         match action {
             "accept" => result

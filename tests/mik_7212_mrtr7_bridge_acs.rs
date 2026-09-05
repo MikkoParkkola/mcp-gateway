@@ -1352,6 +1352,91 @@ async fn ac_mrtr_7b_cancel_unnamed_action_and_no_member_fail_distinguishably() {
     }
 }
 
+/// MIK-7388 (`InputBridge::project`) — an `action` member in a reply to a kind
+/// that has no actions is data, not a verdict.
+///
+/// `action` is elicitation's word. A `sampling/createMessage` result answers
+/// with `role`/`content`/`model`/`stopReason`, and a client that also spells an
+/// `action` field — an extension, a shared reply builder, a proxy — had its
+/// answer read as an elicitation accept: the projection returned `content`
+/// alone and `role`, `model` and `stopReason` never reached the backend. The
+/// backend is owed the answer it was given, whole.
+#[tokio::test]
+async fn mik_7388_an_action_member_does_not_reshape_a_sampling_answer() {
+    let answer = json!({
+        "role": "assistant",
+        "content": {"type": "text", "text": "hello"},
+        "model": "some-model",
+        "stopReason": "endTurn",
+        "action": "accept",
+    });
+    let client = FakeClient::new(vec![result(&answer)]);
+    let backend = FakeBackend::new(vec![completed()]);
+    let records = Records::default();
+
+    let outcome = bridge(
+        &client,
+        &backend,
+        &records,
+        declared_all(),
+        None,
+        &interim(&[(
+            "k1",
+            entry(
+                "sampling/createMessage",
+                &json!({"messages": [], "maxTokens": 8}),
+            ),
+        )]),
+    )
+    .await;
+
+    assert!(outcome.is_ok(), "sampling round failed: {outcome:?}");
+    assert_eq!(
+        backend.calls()[0].pointer("/inputResponses/k1"),
+        Some(&answer),
+        "a sampling answer must reach the backend whole, action member and all"
+    );
+}
+
+/// MIK-7388 (`InputBridge::project`) — an elicitation reply with no `action`
+/// fails as malformed rather than being filed as it stands.
+///
+/// The other half of the same kind-blindness. `action` is required of an
+/// elicitation reply, so one that omits it is unreadable — and filing it whole
+/// hands the backend `{"content": …}` where an accept hands it `…`, the same
+/// answer at two nesting depths depending on what the client forgot. A shape
+/// the gateway cannot read is a delivery failure, and it is already spelled
+/// `Malformed`.
+#[tokio::test]
+async fn mik_7388_an_elicitation_reply_without_an_action_fails_as_malformed() {
+    let client = FakeClient::new(vec![result(&json!({"content": {"branch": "main"}}))]);
+    let backend = FakeBackend::never();
+    let records = Records::default();
+
+    let outcome = bridge(
+        &client,
+        &backend,
+        &records,
+        declared_all(),
+        None,
+        &interim(&[("k1", ask("Which branch?"))]),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        Err(BridgeError::Delivery {
+            key: "k1".to_string(),
+            error: DeliveryError::Malformed,
+        }),
+        "an elicitation reply with no action must fail as malformed"
+    );
+    assert!(
+        backend.calls().is_empty(),
+        "backend must not be retried for an unreadable elicitation reply"
+    );
+}
+
 /// Row 328 — *each* bridged round is counted with `phase="bridge"`, and no part
 /// of what a person answered appears in any record.
 ///
