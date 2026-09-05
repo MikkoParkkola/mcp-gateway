@@ -212,11 +212,9 @@ impl ProxyManager {
         let id = format!("sampling-{}", Uuid::new_v4());
 
         let rx = self.register_pending(id.clone(), session_id);
-        // Declared after `id` so it drops first, and held across the await
-        // below: an outer timeout or a task abort drops this future without
-        // running any arm of the match, and the guard is the cleanup that
-        // still runs. The explicit removals below stay — each sits on a path
-        // that reports something too, and a second removal is a no-op.
+        // Held across the await: on an outer timeout or a task abort no arm
+        // of the match below runs, and dropping this guard is the only
+        // cleanup left. See `PendingSampleGuard`.
         let _cleanup = PendingSampleGuard {
             proxy: self,
             id: &id,
@@ -281,11 +279,9 @@ impl ProxyManager {
         let id = format!("elicitation-{}", Uuid::new_v4());
 
         let rx = self.register_pending(id.clone(), session_id);
-        // Declared after `id` so it drops first, and held across the await
-        // below: an outer timeout or a task abort drops this future without
-        // running any arm of the match, and the guard is the cleanup that
-        // still runs. The explicit removals below stay — each sits on a path
-        // that reports something too, and a second removal is a no-op.
+        // Held across the await: on an outer timeout or a task abort no arm
+        // of the match below runs, and dropping this guard is the only
+        // cleanup left. See `PendingSampleGuard`.
         let _cleanup = PendingSampleGuard {
             proxy: self,
             id: &id,
@@ -977,13 +973,9 @@ mod tests {
     /// The live session is what makes the drop happen mid-await: delivery
     /// must succeed (an undeliverable prompt is already cleaned up on the
     /// `NoSession` path) and the session must never answer.
-    #[tokio::test]
-    async fn mik_7212_wire_11_cancelled_sampling_does_not_strand_pending_entry() {
-        // GIVEN: a live session that will receive the prompt and never answer
-        let mux = make_multiplexer();
-        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-cancel"));
-        let proxy = Arc::new(ProxyManager::new(Arc::clone(&mux)));
-        let params = SamplingCreateMessageParams {
+    /// A prompt nobody will ever answer, so the call parks on its receiver.
+    fn never_answered_sampling_params() -> SamplingCreateMessageParams {
+        SamplingCreateMessageParams {
             messages: vec![SamplingMessage {
                 role: "user".to_string(),
                 content: Content::Text {
@@ -996,7 +988,26 @@ mod tests {
             model_preferences: None,
             system_prompt: None,
             max_tokens: 16,
-        };
+        }
+    }
+
+    /// The elicitation counterpart of [`never_answered_sampling_params`].
+    fn never_answered_elicitation_params() -> ElicitationCreateParams {
+        ElicitationCreateParams {
+            mode: None,
+            message: "never answered".to_string(),
+            requested_schema: None,
+            url: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn mik_7212_wire_11_cancelled_sampling_does_not_strand_pending_entry() {
+        // GIVEN: a live session that will receive the prompt and never answer
+        let mux = make_multiplexer();
+        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-cancel"));
+        let proxy = Arc::new(ProxyManager::new(Arc::clone(&mux)));
+        let params = never_answered_sampling_params();
 
         // The timeout is far beyond the abort below, so the proxy's own
         // timeout arm cannot be what cleans up — the drop must be.
@@ -1033,6 +1044,116 @@ mod tests {
             proxy.pending_sampling.read().len(),
             0,
             "a cancelled in-flight sampling call must not strand its pending entry"
+        );
+    }
+
+    /// MIK-7212 WIRE-11 (elicitation): the sibling of the sampling case above.
+    ///
+    /// `forward_elicitation_with_response` registers in the SAME
+    /// `pending_sampling` map, so it strands an entry the same way. Covered by
+    /// the same guard, but a guard nobody exercises is a guard nobody has
+    /// checked — the elicitation call site is verified here on its own.
+    #[tokio::test]
+    async fn mik_7212_wire_11_cancelled_elicitation_does_not_strand_pending_entry() {
+        let mux = make_multiplexer();
+        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-cancel-elicit"));
+        let proxy = Arc::new(ProxyManager::new(Arc::clone(&mux)));
+        let params = never_answered_elicitation_params();
+
+        let proxy_for_task = Arc::clone(&proxy);
+        let origin = session.clone();
+        let wait = tokio::spawn(async move {
+            proxy_for_task
+                .forward_elicitation_with_response(&origin, &params, Duration::from_secs(30))
+                .await
+        });
+
+        let delivered = tokio::time::timeout(Duration::from_millis(500), rx_session.recv())
+            .await
+            .expect("originating session must receive the elicitation request")
+            .expect("channel open");
+        assert_eq!(delivered.data["method"], "elicitation/create");
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            1,
+            "precondition: the in-flight call holds exactly one pending entry"
+        );
+
+        wait.abort();
+        let _ = wait.await;
+
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "a cancelled in-flight elicitation call must not strand its pending entry"
+        );
+    }
+
+    /// MIK-7212 WIRE-11 (outer timeout, sampling): a different way to be cancelled.
+    ///
+    /// The abort tests above cover the task-reaper shape; this is the shape a
+    /// real caller hits, wrapping the call in a timeout of its own. Both end at
+    /// the same `Drop`, so this is a second CALLER rather than a second
+    /// mechanism. The proxy's own timeout is 30s away, so it cannot be what
+    /// cleans up here either.
+    #[tokio::test]
+    async fn mik_7212_wire_11_outer_timeout_on_sampling_does_not_strand_pending_entry() {
+        let mux = make_multiplexer();
+        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-outer-sampling"));
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+        let params = never_answered_sampling_params();
+
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(50),
+            proxy.forward_sampling_with_response(&session, &params, Duration::from_secs(30)),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "the outer timeout must fire first; the proxy's own is 30s away"
+        );
+
+        // Draining afterwards proves the request really was registered and sent
+        // before the outer timeout dropped the future.
+        let delivered = rx_session
+            .try_recv()
+            .expect("the sampling request must have reached the session");
+        assert_eq!(delivered.data["method"], "sampling/createMessage");
+
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "an externally timed-out sampling call must not strand its pending entry"
+        );
+    }
+
+    /// MIK-7212 WIRE-11 (outer timeout, elicitation): the fourth corner.
+    #[tokio::test]
+    async fn mik_7212_wire_11_outer_timeout_on_elicitation_does_not_strand_pending_entry() {
+        let mux = make_multiplexer();
+        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-outer-elicit"));
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+        let params = never_answered_elicitation_params();
+
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(50),
+            proxy.forward_elicitation_with_response(&session, &params, Duration::from_secs(30)),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "the outer timeout must fire first; the proxy's own is 30s away"
+        );
+
+        let delivered = rx_session
+            .try_recv()
+            .expect("the elicitation request must have reached the session");
+        assert_eq!(delivered.data["method"], "elicitation/create");
+
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "an externally timed-out elicitation call must not strand its pending entry"
         );
     }
 }
