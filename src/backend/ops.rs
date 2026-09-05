@@ -254,6 +254,7 @@ impl Backend {
                         && crate::gateway::recovery::is_rate_limited(&result.to_string())
                 });
                 if throttled {
+                    tracing::warn!(latency_ms = latency.as_millis(), "Request rate limited");
                     entry.failsafe.record_rate_limited("rate limited", latency);
                 } else {
                     entry.failsafe.record_success(latency);
@@ -399,7 +400,7 @@ impl Backend {
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
-                    "status" => if throttled { "rate_limited" } else { "ok" }
+                    "status" => "ok"
                 )
                 .increment(1);
             }
