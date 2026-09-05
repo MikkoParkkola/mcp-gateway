@@ -342,8 +342,18 @@ called at `:1301`; 18 + 25 passing at `b5d4ce7f`). Its remaining rows are EVIDEN
 a path that exists — recorded runs and the five NFR rows that verify it — not mechanism, which
 is why they can be produced alongside other work rather than gating it. CONFIRM.2 follows it.
 What is left with no design, no test plan and no code is the revision surface (MIK-7272, seven
-rows, five separate half-wirings). Era detection's `NFR.OBS.3` landed on 2026-09-04, leaving
-`DISCOVER.5`'s discard record as cluster B's only open row. The revision surface is the schedule now.
+rows, five separate half-wirings). Era detection's `NFR.OBS.3` landed on 2026-09-04, and the
+discard record landed on 2026-09-05 (`f9563d5e`), closing `DISCOVER.5a`. `DISCOVER.5b` is
+cluster B's only open row and it is one direction of a symmetric clause: `reprobe_if_contradicted`
+(`src/backend/era.rs:99`) returns early unless the cached verdict is `Legacy`, so a cached
+`Modern` verdict that starts failing modern requests is never dropped. The decision that has to
+be made before code is which error proves the contradiction. Reading it through `classify` the
+way the legacy direction does would fire on every code that is not one of the three modern ones,
+so an ordinary `-32602 invalid params` would discard a correct verdict; the narrow reading is
+`-32601 method not found` alone, which is a peer saying it does not implement the method at all.
+Either reading inherits the legacy direction's flip-flop: a re-probe that returns the same verdict
+leaves the next failing request to trigger another. That is the existing shape, not a new defect,
+but it should be decided rather than copied. The revision surface is the schedule now.
 
 **Wave 5 — the two measurements.** `NFR.PERF.1` needs a P50 and a P99 that the component
 session on `spark` could not produce: no wire, no backend, no queue, therefore no latency
