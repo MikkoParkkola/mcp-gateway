@@ -245,9 +245,8 @@ impl StdioSession {
     async fn read_until_id(&mut self, id: i64) -> (Vec<String>, Option<Value>) {
         let mut seen = Vec::new();
         loop {
-            let line = match timeout(READ_TIMEOUT, self.stdout.next_line()).await {
-                Ok(Ok(Some(line))) => line,
-                _ => return (seen, None),
+            let Ok(Ok(Some(line))) = timeout(READ_TIMEOUT, self.stdout.next_line()).await else {
+                return (seen, None);
             };
             let matched = serde_json::from_str::<Value>(&line)
                 .ok()

@@ -55,7 +55,7 @@ fn ac_mrtr_7a_wire_methods_and_id_prefixes_match_the_admitted_set() {
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::Duration;
 
