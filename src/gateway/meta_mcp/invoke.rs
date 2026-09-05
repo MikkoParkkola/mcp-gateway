@@ -4424,9 +4424,8 @@ mod error_budget_tests {
 
     /// GH475.RL.7 — an ordinary failure still counts at the meta-MCP recorder,
     /// so the exclusion cannot be mistaken for the budget having stopped
-    /// working altogether. `ordinary_dispatch_failure_still_counts` in
-    /// `src/backend/tests.rs` asserts the same property at the breaker and the
-    /// transport-health counters; the two call sites decide independently.
+    /// working altogether. `src/backend/tests.rs:912` asserts the same property
+    /// at the other recorder; both call sites decide independently.
     #[test]
     fn ordinary_dispatch_failure_still_counts_against_both_budgets() {
         let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
@@ -4438,13 +4437,10 @@ mod error_budget_tests {
         );
     }
 
-    /// GH475.RL.8 — a success is still recorded as a success, at both budgets.
-    /// Nothing else pins that arm: RL.1 wants empty windows and RL.7 pins only
-    /// the failure one, so a `Success` that reached the recorders as a failure,
-    /// or never reached them at all, would go unnoticed. The falsifier probe
-    /// run against this case was the first of those — the `Success` arm of the
-    /// outcome predicate forced false — and it failed here, `(0, 1)` against
-    /// the expected `(1, 0)`.
+    /// GH475.RL.8 — a success is still recorded as a success. The exclusion
+    /// returns before the recorders, so routing `Success` into that early
+    /// return would leave both windows empty and no other case would notice:
+    /// RL.1 wants them empty and RL.7 only pins the failure arm.
     #[test]
     fn ordinary_dispatch_success_still_counts_as_a_success_sample() {
         let m = MetaMcp::new(Arc::new(BackendRegistry::new()));

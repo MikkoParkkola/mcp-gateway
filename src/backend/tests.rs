@@ -909,9 +909,7 @@ async fn rate_limited_dispatch_records_transport_health() {
     assert_eq!(metrics.consecutive_failures, 0);
 }
 
-/// GH475.RL.7 — an ordinary failure is still a failure at the circuit breaker
-/// and in transport health. The error-budget windows carry the same tag and are
-/// asserted separately, in `error_budget_tests` in `src/gateway/meta_mcp/invoke.rs`.
+/// GH475.RL.7 — an ordinary failure is still a failure at both recorders.
 #[tokio::test]
 async fn ordinary_dispatch_failure_still_counts() {
     let backend = dispatch_failing_request("HTTP 500: internal error, request id 4291a").await;
