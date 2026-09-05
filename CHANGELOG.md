@@ -82,6 +82,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A throttled backend no longer looks like a failing one.** A rate-limited
+  response counted against the backend error budget, the per-capability budget
+  and the circuit breaker exactly as a `500` did, so a caller fast enough to be
+  throttled could open a circuit on a backend that was answering correctly.
+  `429`, `too many requests`, `rate limit`, `RESOURCE_EXHAUSTED` and `throttled`
+  now record the backend as reachable and contribute no budget sample at all —
+  neither success nor failure, because a throttle says nothing about health.
+  Every exclusion increments `mcp_error_budget_suppressed_total`, so the
+  suppression is visible rather than inferred.
+
 - **A failed config load no longer leaks its env files into the process.**
   Reading a config file used to apply every `env_files` entry it named to the
   process environment before validating the file, so a refused reload changed
@@ -144,6 +154,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were. Scanning is per logical line, as the parser reads them.
 
 ### Added
+
+- **First start after upgrading to 4.0.0 prints what changed underneath it.**
+  The release re-keys OAuth credentials, refuses a malformed `env_files` line at
+  startup instead of ignoring it, stops advertising protocol revision
+  2024-10-07 and stops counting rate limiting against error budgets. Each is
+  announced once, on the first start from a 3.x install; the notice reads no
+  configuration and writes none.
 
 - **MCP protocol revision 2026-07-28, behind `server.modern_protocol`.** The
   revision removes the `initialize` handshake, protocol sessions and the
