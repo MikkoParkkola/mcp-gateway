@@ -60,3 +60,6 @@ mutants.out.old/
 
 # Python bytecode from the release-criteria counter.
 __pycache__/
+
+# Scratch directories written by functional QA drives.
+scratchpad_*/
