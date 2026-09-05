@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The kill-switch error budgets are now operator-tunable from the config file** (GH #475). A new `error_budget:` section sets the backend failure-rate `threshold`, `window_size`, `window_duration` and `min_samples`, and an `error_budget.capability:` sub-section sets the same four plus `cooldown` for the per-capability budget. Every key is optional and an absent key keeps the value that has been shipping, so an existing config file behaves exactly as before. Values are validated at load: a threshold outside `(0.0, 1.0]` (`.nan` included), a window of zero or of more than 100000 calls, a zero `window_duration` or `cooldown`, and a `min_samples` of zero or larger than its own window are each refused by name rather than silently disabling the kill switch. An unknown key under either level is refused too, so a typo is not read as a default. The section is read when the meta-MCP server is built, so an edit to it is reported as restart-required on reload rather than appearing to take effect.
+
 ### Removed
 
 - Removed the ungrounded savings estimates from gateway statistics: the

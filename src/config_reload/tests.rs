@@ -2926,4 +2926,15 @@ fn gh475_cfg_6_error_budget_change_needs_restart() {
         pending.contains(&"error_budget"),
         "a capability-only edit must be reported: {pending:?}"
     );
+
+    // The diff must also see the edit at all. An empty patch returns before the
+    // new snapshot is published, so `pending_restart_fields` would then compare
+    // the running config against the *stale* snapshot, find nothing, and the
+    // operator would be told "no changes" for an edit that needs a restart.
+    for changed in [&wanted, &nested] {
+        assert!(
+            !super::compute_diff(&running, changed).is_empty(),
+            "an error_budget-only edit must produce a non-empty patch"
+        );
+    }
 }
