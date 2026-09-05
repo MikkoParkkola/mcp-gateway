@@ -241,7 +241,8 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 /// none, because the operator has already read it.
 const NOTICE_4_0_0_ITEMS: &[&str] = &[
     "OAuth credentials are now stored per issuer. Stored tokens from 3.x are not \
-migrated: re-authenticate each OAuth backend once (`mcp-gateway auth login <backend>`).",
+migrated: each OAuth backend re-authenticates once, on its next use. Expect one \
+authorization prompt per backend; no config change is needed.",
     "A malformed line in an `env_files` file now FAILS STARTUP instead of being \
 skipped silently. A typo that used to cost one missing variable now costs a \
 refused start, and says which line.",
@@ -1212,5 +1213,38 @@ mod tests {
             MIGRATIONS.iter().all(|m| m.notice),
             "this test is only meaningful while every registered migration is a notice"
         );
+    }
+
+    /// GH475.MIG.4 — every command a notice tells an operator to run must exist.
+    ///
+    /// The 4.0.0 notice shipped `mcp-gateway auth login <backend>` for a binary
+    /// that has no `auth` subcommand, so the one item requiring operator action
+    /// gave an instruction that exits 2. Asserting the notice *names its four
+    /// items* did not catch it, because the text was present and wrong.
+    ///
+    /// Checked against clap's own subcommand list rather than a hand-kept
+    /// spelling, so a renamed or removed subcommand fails here instead of in an
+    /// operator's terminal.
+    #[test]
+    fn every_command_a_notice_prints_is_a_real_subcommand() {
+        use clap::CommandFactory;
+
+        let cli = mcp_gateway::cli::Cli::command();
+        let known: Vec<&str> = cli.get_subcommands().map(clap::Command::get_name).collect();
+
+        for item in NOTICE_4_0_0_ITEMS {
+            for (offset, _) in item.match_indices("mcp-gateway ") {
+                let rest = &item[offset + "mcp-gateway ".len()..];
+                let sub = rest
+                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                    .next()
+                    .unwrap_or("");
+                assert!(
+                    !sub.is_empty() && known.contains(&sub),
+                    "the notice tells the operator to run `mcp-gateway {sub}`, \
+which is not one of the binary's subcommands: {known:?}"
+                );
+            }
+        }
     }
 }

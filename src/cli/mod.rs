@@ -436,7 +436,10 @@ pub enum Command {
     /// Apply pending post-upgrade migrations and update the version stamp
     ///
     /// Reads `~/.mcp-gateway/version.stamp`, compares it to the current binary
-    /// version, backs up `gateway.yaml`, and runs any registered migrations.
+    /// version, and runs any registered migrations. `gateway.yaml` is backed up
+    /// to `gateway.yaml.bak.<old-version>` only when a migration will modify it;
+    /// an upgrade that only prints notices leaves no backup, because it changed
+    /// nothing to roll back to.
     ///
     /// This is called automatically at `serve` startup; run it manually after
     /// a Homebrew `brew upgrade` or other out-of-band binary swap.

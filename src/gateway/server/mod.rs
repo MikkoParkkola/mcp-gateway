@@ -593,8 +593,24 @@ impl Gateway {
         // Apply the operator's `error_budget:` section to the running budgets
         // (GH #475). Absent keys keep the values that have been shipping, so a
         // config without the section leaves both budgets exactly as before.
-        meta_mcp.set_error_budget_config(self.config.error_budget.backend_config());
-        meta_mcp.set_capability_budget_config(self.config.error_budget.capability_config());
+        let backend_budget = self.config.error_budget.backend_config();
+        let capability_budget = self.config.error_budget.capability_config();
+        // Logged because the budgets are otherwise unobservable: nothing emits a
+        // metric or an event carrying the effective threshold, so a gateway
+        // running a configured value and one running the default are
+        // indistinguishable from outside, and a regression that silently ignored
+        // the section would produce no signal at all.
+        info!(
+            backend_threshold = backend_budget.threshold,
+            backend_window_size = backend_budget.window_size,
+            backend_min_samples = backend_budget.min_samples,
+            capability_threshold = capability_budget.threshold,
+            capability_window_size = capability_budget.window_size,
+            capability_min_samples = capability_budget.min_samples,
+            "Error budgets configured"
+        );
+        meta_mcp.set_error_budget_config(backend_budget);
+        meta_mcp.set_capability_budget_config(capability_budget);
 
         // ── Transparency log (issue #133, D3) ─────────────────────────────────
         // The opened `Arc` is kept as `transparency_log` (not just handed to
