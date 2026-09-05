@@ -36,7 +36,9 @@ here, and they are the three stdio rows carried, `#[ignore]`d, by
 | — (fixture) | `ac_mrtr_7b_the_shipped_bounds_are_the_documented_ones` |
 | — (fixture) | `ac_mrtr_7b_the_asking_fixture_is_what_the_parser_reads` |
 | — (fixture) | `ac_mrtr_7a_the_capability_fixture_declares_what_it_names` |
-| 312, 323, 324 | in `mik_7212_mrtr7_stdio_acs.rs`, `#[ignore]`d — MIK-7387 |
+| 312 | `ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads` — in `mik_7212_mrtr7_stdio_acs.rs`, `#[ignore]`d, MIK-7387 |
+| 323 | `ac_mrtr_7a_bridged_request_follows_the_initialize_response` — same file, `#[ignore]`d, MIK-7387 |
+| 324 | `ac_mrtr_7a_concurrent_bridged_requests_write_whole_frames` — same file, `#[ignore]`d, MIK-7387 |
 
 `tests/mik_7212_mrtr7_bridge_acs.rs` drives `InputBridge::run` through trait
 fakes and receives the capability value as a **parameter**. That is the right
@@ -60,24 +62,23 @@ So the delta below is entirely at the **call site**, and one row is end-to-end.
 | `MIK-7212.WIRE.6` | The retry bound is enforced against the accounted attempts, not a separate counter | drive past the bound; assert refusal and that accounting agrees with the attempt count | integration | boundary | two counters drifting apart passes a bound check while over-billing |
 | `MIK-7212.WIRE.7` | A declaration dies with its session | capture at `initialize`, then DELETE the session; assert a later request under a reused identifier is refused | integration | negative | a declaration outliving its session grants inherited permissions — assert on the **refusal**, not on a map being empty, or the row passes against a store nobody reads |
 | `MIK-7212.WIRE.8` | The whole path composes over real HTTP | one test: `initialize` declaring a capability, a backend that asks, delivery over live SSE, the answer POSTed back and correlated, the backend retried with it, then session cleanup | system | end-to-end | every fake in rows 1-7 is replaced by the production transport; this is the only row that can fail because an adapter was never constructed |
-| `MIK-7212.WIRE.9` | A successful bridge retry is judged on its own result | a backend that asks once and then succeeds; assert the idempotency key is settled as completed, the response is returned, and the settled result is cached — an equivalent follow-up call is served without a further backend invocation, since the cache gate at `invoke.rs:1769` is the second consumer of the same verdict | integration | regression | `invoke.rs:1475` computes `stopped_to_ask` from the *first* result, so a passing test here proves the verdict is re-derived after the retry — against today's tree the key stays unsettled and the row fails |
+| `MIK-7212.WIRE.9` | A successful bridge retry is judged on its own result | a backend that asks once and then succeeds; assert the idempotency key is settled as completed, the response is returned, and the settled result is cached — an equivalent follow-up call carrying a *different* idempotency key and the same response-cache key is served without a further backend invocation, since the cache gate at `invoke.rs:1769` is the second consumer of the same verdict. The two assertions are separate on purpose: a follow-up reusing the settled key would be answered by the idempotency entry and would pass without the cache gate running at all | integration | regression | `invoke.rs:1475` computes `stopped_to_ask` from the *first* result, so a passing test here proves the verdict is re-derived after the retry — against today's tree the key stays unsettled and the row fails |
+| `MIK-7212.WIRE.10` | An initialized stdio caller is still refused | stdio session declares elicitation at `initialize`, backend asks; assert the MRTR.9 refusal is returned immediately, no client request is sent, and no retry occurs | integration | regression | this row is not `#[ignore]`d: the refusal is stdio's behaviour until MIK-7387 lands, and a transport-scope regression would turn it into a 30–120s stall |
 
 `WIRE.8` is the row the reviewers asked for and the only one that proves the new
 call site exists. Rows 1-7 would all pass against a well-tested function nobody
 calls; `WIRE.8` would not.
-| `MIK-7212.WIRE.10` | An initialized stdio caller is still refused | stdio session declares elicitation at `initialize`, backend asks; assert the MRTR.9 refusal is returned immediately, no client request is sent, and no retry occurs | integration | regression | this row is not `#[ignore]`d: the refusal is stdio's behaviour until MIK-7387 lands, and a transport-scope regression would turn it into a 30–120s stall |
 
 ## The two questions a plan review answers
 
 **Does every acceptance criterion have a case, or a stated reason it has none?**
 Yes, with one qualifier. The ten `MIK-7212.WIRE.*` rows above each carry a case.
 The criteria this change does not add a case for are named in the section below,
-each with its reason, not skipped. The qualifier is the twenty-one existing
-MRTR.7 rows in `tests/mik_7212_mrtr7_bridge_acs.rs`: today they are accounted
-for by count, not by name, so a duplicate or an omission inside that set would
-not show. Mapping each row to its test name is scheduled before implementation
-handoff; until that lands this answer rests on an aggregate, and an aggregate
-cannot show a gap.
+each with its reason, not skipped. The qualifier is gone: the twenty-one existing
+MRTR.7 rows in `tests/mik_7212_mrtr7_bridge_acs.rs` are now mapped by name in
+the table above, not accounted for by count, so a duplicate or an omission
+inside that set shows. That mapping is what turned up the three stdio rows
+living in another file.
 
 **Can each named case actually fail?** Yes — the rightmost column of the table
 is that answer, per row, and it is the reason the column exists. Five rows fail

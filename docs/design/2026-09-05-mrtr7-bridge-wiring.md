@@ -256,8 +256,8 @@ Wiring one call is the smallest part of this.
   transport; that rationale died when stdio left the bridgeable set, and a
   stored-but-unread declaration is a claim about permission that nothing
   checks.
-- a write in `MetaMcp::handle_initialize`, and a read at each `CallerContext`
-  construction site. Seven, enumerated from source and split by role: two
+- a write at the HTTP `initialize` call site (`router/handlers.rs:926`), and a
+  read at each `CallerContext` construction site. Seven, enumerated from source and split by role: two
   production writes carrying a real declaration (`handlers.rs:705,1164`), and
   five passing `Declared::NONE` today (`invoke.rs:3816,3846,3881` — tests —
   and `server/mod.rs:1827,2619` — stdio). An earlier revision of this document
@@ -346,10 +346,24 @@ sessions from transport state. `MetaMcp::handle_initialize`
 (`src/gateway/meta_mcp/mod.rs:1151`) is the only place the declaration exists,
 and it already carries `session_id: Option<&str>`. So the writer and the owner
 are real but in different modules, and the earlier answer would not have
-compiled. Amended: the store is keyed by session id and owned by
-`NotificationMultiplexer` (`src/gateway/streaming.rs:73`), which owns the
-session map and is the only session-keyed store in this path with production
-removal — `handlers.rs:354` on DELETE and `streaming.rs:578` on stream end. The
+compiled. Amended: the declaration is a **field on `ClientSession`**, reached through
+getter and setter methods on `NotificationMultiplexer`
+(`src/gateway/streaming.rs:73`). The session map's value type is already
+`Arc<ClientSession>` (`:75`), so a field cannot drift from the session the way
+a second keyed map can, and it cannot outlive it: the declaration is dropped
+with the session, by construction rather than by a removal call anyone has to
+remember. `get_or_create_session` returns the existing session, so a stream
+reconnect keeps the declaration instead of silently losing the client's
+capabilities.
+
+The sole production removal is `handlers.rs:354` on DELETE. An earlier revision
+of this paragraph also cited `streaming.rs:578` as a stream-end removal. It is
+a line inside a test — the same defect that disqualified `SessionLifecycle`
+four paragraphs down, made while writing the sentence that disqualified it.
+Named residual: nothing reaps a session that is never DELETEd, so its
+declaration lives until the process exits. That is the multiplexer's existing
+session lifetime, not a new leak this change introduces, and it bounds what
+amendment 1's conjunction can promise. The
 declaration is captured at the `initialize` call site in
 `src/gateway/router/handlers.rs:926`, which holds both the params and
 `state.multiplexer`; `handle_initialize` itself does not need to change.
@@ -401,9 +415,11 @@ superseded sentence is gone, not footnoted.
    `src/gateway/router/handlers.rs:926` (HTTP router). It already receives both
    values a per-session store needs: the `initialize` `params`, which carry the
    client's `capabilities` object, and a `session_id` that both call sites pass
-   as `Some(..)`, never `None`. Changed the design: option A's store goes
-   inside that handler, one write site covering every bridgeable transport, not
-   one per transport as the option feared.
+   as `Some(..)`, never `None`. That answer is superseded by amendment 3: the store
+   is written at the HTTP call site (`router/handlers.rs:926`) only. One write
+   site covering every bridgeable transport was the right shape while stdio was
+   bridgeable; it left that set, and a declaration nothing reads is a claim
+   about permission nobody checks.
 2. Is the `NFR.OBS.4` counter name decided anywhere? — deferred. Owner: the
    readiness doc's owner. Resolves when a counter design exists. Nothing here
    depends on it: `BridgeObserver` is a trait, and production can pass a no-op
@@ -476,3 +492,25 @@ itself remains refused until 13:41 UTC by a circumvention latch recorded
 against the earlier disk block, which expires on a four-hour timer. Re-running
 both acceptance suites after that expiry is what raises this to V; nothing in
 this design should be implemented on the strength of the reported run alone.
+
+## Closure re-check, disposed
+
+The finder re-checked its own round-4 findings against the repaired text and
+re-raised three. All three were verified at source before being touched; none
+was taken on the reviewer's word.
+
+| finding | disposal |
+|---|---|
+| the write site is still named twice, HTTP-only in one place and `MetaMcp::handle_initialize` in another (HIGH, CERTAIN) | confirmed. The round-4 repair fixed the stdio paragraph and left two passages carrying the old instruction — the change-surface bullet and the answer recorded against the first scheduled question. Both now name `router/handlers.rs:926`, and the recorded answer says which amendment superseded it rather than being quietly rewritten |
+| the store's owner is not concrete, and the cited stream-end removal does not exist (HIGH, LIKELY) | confirmed, and the citation was worse than the finding said. `streaming.rs:578` is a line inside a test; the only production removal is `handlers.rs:354` on DELETE (V: `rg -n 'remove_session' src/` returns those two and nothing else). Eliminated rather than patched: the declaration becomes a field on `ClientSession`, which the map already holds as its value type, so it cannot drift from or outlive the session and no second keyed map needs removal wiring. The absence of a reaper is now a named residual instead of an invented removal path |
+| `WIRE.9`'s follow-up call is answered by the settled idempotency entry, so the cache gate never runs (MEDIUM, CERTAIN) | confirmed by reading the row: it reused the key it had just asserted settled, which is exactly the shape `test-plan-honesty` calls a case that cannot fail. The follow-up now carries a different idempotency key and the same response-cache key, and settlement is asserted separately |
+
+Two improvements taken, both in the test plan: `WIRE.10` sat outside the
+acceptance table as a detached row and is now inside it, and rows 312, 323 and
+324 are mapped to their three stdio test names, with the stale sentence saying
+the mapping was still scheduled removed — it had landed one commit earlier.
+
+One improvement declined with its reason: splitting the normative plan from the
+review-disposal history (MEDIUM). The history is what stops a superseded
+decision being re-proposed, and this document has now had the same passage
+re-raised twice; moving it to a second file is how it stops being read.
