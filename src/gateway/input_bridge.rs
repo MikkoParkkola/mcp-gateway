@@ -267,6 +267,24 @@ pub struct BridgeRecord {
 #[async_trait::async_trait]
 pub trait ClientChannel: Send + Sync {
     /// Put one request on the client's own connection and wait for its reply.
+    ///
+    /// # Cancellation contract
+    ///
+    /// The returned future is dropped part-way whenever a prompt outlives its
+    /// bound: `InputBridge::ask` wraps every call in an outer
+    /// `tokio::time::timeout` and abandons the future on expiry. An
+    /// implementation that registers pending state keyed by `id` — a reply
+    /// sender, a slot in a map — before awaiting must therefore release it on
+    /// drop as well, because neither the success nor the error path runs. Left
+    /// behind, the entry leaks for the life of the connection and a late reply
+    /// finds no receiver.
+    ///
+    /// `PendingRequestGuard` in `src/transport/mod.rs` is the cancellation-safe
+    /// shape to mirror: `src/transport/stdio.rs:517` holds one across the
+    /// awaited send, and `cancelled_request_does_not_strand_pending_entry`
+    /// (`src/transport/stdio.rs:815`) pins the behaviour. The requirement is
+    /// recorded as MIK-7388; the first implementation obliged by it, and the
+    /// test that proves it, arrive with MIK-7212.
     async fn send_request(
         &self,
         session_id: &str,
