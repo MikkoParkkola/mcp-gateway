@@ -93,11 +93,26 @@ field and the rule, TASK.1 ships the first entry.
   This matters because "blocked on a person" and "code unblocked" are opposite instructions to
   whoever picks SUB.4 up. One sentence needs deleting; until it is, a reader hitting the prose
   first will stop.
-- **`TASK.1` still carries a live cross-document conflict.** `RELEASE-4.0.0-dod-check.md:557-584`
-  records "4.0.0 does not advertise the tasks extension"; `RELEASE-4.0.0-plan.md:110-112` carries
-  the overturn. Two status documents disagree. Scheduled — owner: whoever lands the first TASK.1
-  code commit; resolved by replacing the `dod-check.md` disposition with a pointer to the design
-  note, in the same commit series, before merge.
+- **`TASK.1` carries no cross-document conflict. The citation that claimed one had drifted** (V,
+  corrected 2026-09-05). This paragraph previously read that `RELEASE-4.0.0-dod-check.md:557-584`
+  and `RELEASE-4.0.0-plan.md:110-112` disagreed. Both anchors were stale and the disagreement is
+  not there. What the three artifacts actually say, newest last:
+  - `RELEASE-4.0.0-dod-check.md:829-858` — "4.0.0 does not advertise the tasks extension, and the
+    code already behaves that way." Recorded as a decision rather than an omission, owner of the
+    conformant implementation **MIK-7311**, reversible: "One line overturns it."
+  - `RELEASE-4.0.0-plan.md:164` — lists TASK.1 as a remaining whole feature and notes that "a
+    decision to build it changes SUB.4's scope". That records the decision as **unmade**. It is
+    not an overturn, and nothing at `:110-112` concerns the tasks extension at all.
+  - `src/protocol/extensions.rs:51-63` — "Wire this up as part of MIK-7311, not before." This is
+    the **newest** of the three: the `MIK-7311` string was added at `0b169c30` (2026-09-03 22:55),
+    two hours after the plan.md commit `9f97bbba` (20:33).
+
+  So the disposition stands and TASK.1 is out of 4.0.0. Consequence for whoever picks the row up:
+  `ac_task_1_tasks_get_reports_that_it_is_not_implemented`
+  (`tests/mik_7272_subscriptions_acs.rs:580`) and
+  `ac_task_1_tasks_get_is_not_reachable_on_the_legacy_path:596` **must not be inverted** — they
+  correctly describe 4.0.0 as shipped. Inverting them was the instruction the drifted citation
+  produced, and it would have been wrong. They invert under MIK-7311, not here.
 
 ## Ledger corrections found while verifying (V, by symbol)
 
