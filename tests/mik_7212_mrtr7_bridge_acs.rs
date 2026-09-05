@@ -21,6 +21,24 @@ use mcp_gateway::gateway::input_bridge::{ServerRequestKind, is_bridge_reply_id};
 /// fails as a caller timeout, far from the enum that caused it.
 #[test]
 fn ac_mrtr_7a_wire_methods_and_id_prefixes_match_the_admitted_set() {
+    // The set itself first. The loop below runs over `ALL`, so an `ALL` that
+    // repeats one variant and omits another passes every assertion in it while
+    // the omitted kind is minted with a prefix nothing admits.
+    for kind in [
+        ServerRequestKind::Sampling,
+        ServerRequestKind::Elicitation,
+        ServerRequestKind::Roots,
+    ] {
+        assert_eq!(
+            ServerRequestKind::ALL
+                .iter()
+                .filter(|&&k| k == kind)
+                .count(),
+            1,
+            "{kind:?} must appear in ALL exactly once"
+        );
+    }
+
     // Every kind, matched explicitly. A wildcard arm would let a fourth variant
     // arrive with no method and no prefix asserted at all.
     for kind in ServerRequestKind::ALL {
@@ -797,12 +815,20 @@ async fn ac_mrtr_7b_an_error_reply_fails_the_call_as_a_client_refusal() {
 /// that accepted and said nothing, and a `content` that is not an object is a
 /// client that said something unusable. Either forwarded to the backend files
 /// an answer nobody gave under a key the backend will read.
+///
+/// The non-object half runs every scalar JSON admits, not only a string and an
+/// array. A check written as "is it a map, or is it a string" reads `null`,
+/// `true` and `0` as neither and falls through to the accept path, and `null`
+/// is what a client emits for a field it chose not to fill.
 #[tokio::test]
 async fn ac_mrtr_7b_an_unusable_accept_fails_as_malformed() {
     for body in [
         json!({"action": "accept"}),
         json!({"action": "accept", "content": "not an object"}),
         json!({"action": "accept", "content": ["nor", "this"]}),
+        json!({"action": "accept", "content": null}),
+        json!({"action": "accept", "content": true}),
+        json!({"action": "accept", "content": 0}),
     ] {
         let client = FakeClient::new(vec![result(&body)]);
         let backend = FakeBackend::never();
