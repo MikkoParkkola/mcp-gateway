@@ -841,3 +841,80 @@ fn prepare_tool_metadata_excludes_and_annotates_in_one_pass() {
         Some(true)
     );
 }
+
+/// Transport whose every request fails with a caller-supplied error, so a test
+/// can drive the real dispatch path and watch what it records.
+struct ErroringTransport {
+    error_text: String,
+}
+
+#[async_trait]
+impl Transport for ErroringTransport {
+    async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        Err(Error::Transport(self.error_text.clone()))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Err(Error::Transport(self.error_text.clone()))
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+async fn dispatch_failing_request(error_text: &str) -> Arc<Backend> {
+    let backend = Arc::new(Backend::new(
+        "test",
+        BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(Arc::new(ErroringTransport {
+        error_text: error_text.to_string(),
+    }) as Arc<dyn Transport>);
+    let result = backend.request("tools/list", None).await;
+    assert!(result.is_err(), "the mock transport always fails");
+    backend
+}
+
+/// GH475.RL.3 — a rate-limited dispatch is not a circuit-breaker failure.
+#[tokio::test]
+async fn rate_limited_dispatch_is_not_a_breaker_failure() {
+    let backend = dispatch_failing_request("API returned 429 Too Many Requests").await;
+
+    let stats = backend.circuit_breaker_stats();
+    assert_eq!(
+        stats.current_failures, 0,
+        "a throttled backend is not a failing backend"
+    );
+    assert_eq!(stats.state, crate::failsafe::CircuitState::Closed);
+    assert_eq!(backend.health_metrics().failure_count, 0);
+}
+
+/// GH475.RL.13 — a `429` still proves the backend is reachable.
+#[tokio::test]
+async fn rate_limited_dispatch_records_transport_health() {
+    let backend = dispatch_failing_request("rate limit exceeded, slow down").await;
+
+    let metrics = backend.health_metrics();
+    assert_eq!(
+        metrics.success_count, 1,
+        "a 429 is a reachable backend, so health records a success"
+    );
+    assert_eq!(metrics.consecutive_failures, 0);
+}
+
+/// GH475.RL.7 — an ordinary failure is still a failure at both recorders.
+#[tokio::test]
+async fn ordinary_dispatch_failure_still_counts() {
+    let backend = dispatch_failing_request("HTTP 500: internal error, request id 4291a").await;
+
+    assert_eq!(backend.circuit_breaker_stats().current_failures, 1);
+    assert_eq!(backend.health_metrics().failure_count, 1);
+    assert_eq!(backend.health_metrics().success_count, 0);
+}

@@ -251,12 +251,21 @@ impl Backend {
                 .increment(1);
             }
             Err(e) => {
-                tracing::error!(error = %e, latency_ms = latency.as_millis(), "Request failed");
-                entry.failsafe.record_failure(&e.to_string(), latency);
+                let text = e.to_string();
+                let rate_limited = entry.failsafe.record_dispatch_failure(&text, latency);
+                if rate_limited {
+                    tracing::warn!(
+                        error = %e,
+                        latency_ms = latency.as_millis(),
+                        "Request rate limited"
+                    );
+                } else {
+                    tracing::error!(error = %e, latency_ms = latency.as_millis(), "Request failed");
+                }
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
-                    "status" => "error"
+                    "status" => if rate_limited { "rate_limited" } else { "error" }
                 )
                 .increment(1);
             }
@@ -380,12 +389,21 @@ impl Backend {
                 .increment(1);
             }
             Err(e) => {
-                tracing::error!(error = %e, latency_ms = latency.as_millis(), "Notification failed");
-                entry.failsafe.record_failure(&e.to_string(), latency);
+                let text = e.to_string();
+                let rate_limited = entry.failsafe.record_dispatch_failure(&text, latency);
+                if rate_limited {
+                    tracing::warn!(
+                        error = %e,
+                        latency_ms = latency.as_millis(),
+                        "Notification rate limited"
+                    );
+                } else {
+                    tracing::error!(error = %e, latency_ms = latency.as_millis(), "Notification failed");
+                }
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
-                    "status" => "error"
+                    "status" => if rate_limited { "rate_limited" } else { "error" }
                 )
                 .increment(1);
             }
