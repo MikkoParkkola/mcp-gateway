@@ -269,25 +269,36 @@ requirement rather than in the code.
 
 MIK-7272.SUB.4 was traced by looking for a `pub` setter that nothing calls. Searching for that
 construct rather than for the symptom found four more, all in `src/gateway/meta_mcp/`, each marked
-`#[allow(dead_code)]` and each appearing exactly once in the whole repository — its own definition:
+`#[allow(dead_code)]` and each appearing, at the time of the search, exactly once in the whole
+repository — its own definition. Struck rows have since acquired a caller:
 
 | setter | file:line | effect |
 |---|---|---|
-| `enable_idempotency` | `meta_mcp/mod.rs:657` | idempotency cache stays `None`; this is MIK-7272.SUB.4 |
-| `with_tool_registry` | `meta_mcp/mod.rs:843` | tool registry never attached |
-| `set_error_budget_config` | `meta_mcp/mod.rs:885` | error-budget config never applied |
-| `set_capability_budget_config` | `meta_mcp/mod.rs:891` | capability error-budget config never applied |
+| `enable_idempotency` | `meta_mcp/mod.rs:656` | idempotency cache stays `None`; this is MIK-7272.SUB.4 |
+| `with_tool_registry` | `meta_mcp/mod.rs:919` | tool registry never attached |
+| ~~`set_error_budget_config`~~ | `meta_mcp/mod.rs:972` | **wired 2026-09-05**, `server/mod.rs:615` |
+| ~~`set_capability_budget_config`~~ | `meta_mcp/mod.rs:977` | **wired 2026-09-05**, `server/mod.rs:616` |
 
-`set_playbook_engine` (`meta_mcp/invoke.rs:2259`) carries the same attribute but IS wired
-(`server/mod.rs:935`); its attribute is stale, not a defect.
+`set_playbook_engine` (`meta_mcp/invoke.rs:2882`) carries the same attribute but IS wired
+(`server/mod.rs:965`); its attribute is stale, not a defect.
 
-Only the first has a release criterion behind it, so only it is tracked as blocking. The other
-three are recorded here rather than filed: no acceptance criterion depends on them, nobody must act
-before the release, and three tickets would cost a human's attention permanently to record what one
-paragraph records here. They are a DoD 2 WIRED violation for the repository and should be picked up
-by whoever next touches `meta_mcp` -- either wire them or delete them. `#[allow(dead_code)]` on a
-`pub` setter is what let all five survive the clippy gate: the attribute silences the exact warning
-that would have reported them.
+The two budget setters left this table on 2026-09-05 with GH #475. Startup now reads the
+`error_budget:` config section and applies both, and the `#[allow(dead_code)]` that hid them is
+gone rather than merely inaccurate. The wiring is proved from outside the code: criterion
+GH475.CFG.5 boots the gateway from a YAML file, calls neither setter, and asserts the configured
+threshold reaches the running budget — and a driver who did not write the change confirmed it
+against three separate boots, checking that the values TRACK the file rather than matching a
+constant that happens to agree. Criterion list and disposals:
+`docs/design/2026-09-05-error-budget-test-plan.md`.
+
+Of the two that remain, only `enable_idempotency` has a release criterion behind it, so only it is
+tracked as blocking. `with_tool_registry` is recorded here rather than filed: no acceptance
+criterion depends on it, nobody must act before the release, and a ticket would cost a human's
+attention permanently to record what one paragraph records here. It is a DoD 2 WIRED violation for
+the repository and should be picked up by whoever next touches `meta_mcp` -- either wire it or
+delete it. `#[allow(dead_code)]` on a `pub` setter is what let all five survive the clippy gate:
+the attribute silences the exact warning that would have reported them, which is why removing it
+was part of wiring the two above and not a separate tidy-up.
 
 ## NFR (section 4 of the requirements) — 22 criteria, opened 2026-09-01
 
