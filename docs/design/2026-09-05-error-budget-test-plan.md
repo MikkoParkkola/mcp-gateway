@@ -13,7 +13,7 @@ Design:
 |---|---|---|---|---|---|
 | GH475.RL.1 | a rate-limited response records nothing in the backend budget | drive the recorder with `IgnoredRateLimit`; assert sample count unchanged | unit | behaviour | `src/kill_switch/tests.rs` |
 | GH475.RL.2 | …nor in the capability budget | same, capability recorder | unit | behaviour | `src/kill_switch/tests.rs` |
-| GH475.RL.3 | …nor as a circuit-breaker failure | rate-limited dispatch `Err`; assert `circuit_breaker_stats()` failure count unchanged and state `Closed` | unit | behaviour | `src/backend/ops.rs` tests |
+| GH475.RL.3 | …nor as a circuit-breaker failure | dispatch returns a rate-limited `Err` **whose displayed detail matches none of the accepted phrases**, so only the typed status can exempt it; assert `circuit_breaker_stats()` failure count unchanged and state `Closed` | unit | behaviour | `src/backend/ops.rs` tests |
 | GH475.RL.4 | a digit run inside a larger token is not a rate limit | `500` body quoting request id `4291a` → counts as failure | unit | boundary | `src/gateway/meta_mcp/invoke.rs` tests |
 | GH475.RL.5 | the `throttl` stem does not exempt | `"throttling disabled"` → counts as failure | unit | boundary | same |
 | GH475.RL.6 | the four accepted phrases do exempt | standalone `429`, `too many requests`, `rate limit`/`rate-limit`/`ratelimit`, `RESOURCE_EXHAUSTED` | unit | boundary | same |
@@ -24,24 +24,31 @@ Design:
 | GH475.CFG.2 | a partial section merges field-by-field | `error_budget: {threshold: 0.5}` → threshold 0.5, other four at today's defaults | unit | boundary | same |
 | GH475.CFG.3 | a partial `capability:` merges the same way | `capability: {min_samples: 2}` → other four unchanged | unit | boundary | same |
 | GH475.CFG.4 | absent section = today's behaviour (D4) | empty config → both `Default` impls, value for value | unit | regression | same |
-| GH475.CFG.5 | **a configured backend threshold reaches the running budget** | config → setter → invoke; assert the breaker trips at the configured rate, not 0.8 | integration | wiring | `tests/` |
-| GH475.CFG.5b | **a configured capability threshold reaches the running capability budget** | same path through the capability setter; a green CFG.5 says nothing about it, because the two setters are separate and separately callerless | integration | wiring | `tests/` |
+| GH475.CFG.5 | **a configured backend threshold reaches the running budget** | boot the gateway from a YAML file carrying a non-default threshold; **the test may not call either setter** — it drives invoke and asserts the backend auto-kill fires at the configured rate, not 0.8 | integration | wiring | `tests/` |
+| GH475.CFG.5b | **a configured capability threshold reaches the running capability budget** | same YAML-boot path, asserting capability disable at the configured rate; a green CFG.5 says nothing about it, because the two setters are separate and separately callerless | integration | wiring | `tests/` |
 | GH475.CFG.6 | a reload reports the section as restart-required | edit `error_budget`, reload → `pending_restart_fields` contains `error_budget` | unit | behaviour | `src/config_reload/` tests |
 | GH475.VAL.1 | out-of-range threshold rejected, field named | `1.5`, `0.0`, `-1.0` → error naming `threshold` | unit | negative | `src/config/tests.rs` |
 | GH475.VAL.2 | `.nan` rejected | YAML `.nan` → rejected, not accepted-and-inert | unit | negative | same |
 | GH475.VAL.3 | sub-1 sizes rejected | `window_size: 0`, `min_samples: 0` | unit | negative | same |
 | GH475.VAL.4 | `min_samples > window_size` rejected | `window_size: 10, min_samples: 11` | unit | negative | same |
 | GH475.VAL.5 | zero duration rejected | `window_duration: 0s` | unit | negative | same |
-| GH475.OBS.1 | each exclusion is observable | N rate-limited responses → suppression counter reads N | unit | behaviour | `src/kill_switch/tests.rs` |
+| GH475.OBS.1 | each exclusion is observable | N throttled responses through the gateway **plus a success control and an ordinary-failure control**; assert the suppression counter rose by exactly N and neither control moved it | integration | behaviour | `tests/` |
 | GH475.RL.10 | a typed rate-limit outcome needs no text | a capability `429` observed at `jsonrpc.rs` is excluded with the error text scrubbed to an unrelated string | integration | behaviour | `src/capability/executor/` tests |
-| GH475.RL.11 | both recorders route through one predicate | the shared predicate is the only definition; a test asserts `ops.rs` and `invoke.rs` agree on the same input set, so the two cannot drift | unit | wiring | `src/error.rs` tests |
-| GH475.RL.12 | a `429` records transport-health reachability | a throttled backend records a health success and no budget sample | unit | behaviour | `src/failsafe/` tests |
+| GH475.RL.11 | both recorders route through one predicate | one signal table (the RL.4–RL.6 inputs) driven through **both real call paths** — backend dispatch and `MetaMCP` invoke — asserting an identical exempt/count verdict per input | unit | wiring | both call-site test modules |
+| GH475.RL.13 | a `429` records transport-health reachability | drive a typed `429` through **backend dispatch**, not a hand-built `Failsafe`; assert the production failsafe gains one health success, no circuit-breaker failure, and no budget sample | integration | behaviour | `src/backend/ops.rs` tests |
 | GH475.VAL.6 | `window_size` above the upper bound is rejected | `window_size: 100001` → refused with the field named | unit | negative | same |
+| GH475.VAL.7 | every VAL row repeats under `capability:` | the same rejected values nested one level down are refused, naming the nested field | unit | negative | same |
+| GH475.VAL.8 | the accepted side of each boundary is accepted | `threshold: 1.0`, `window_size: 1`, `min_samples: 1`, `min_samples == window_size`, `window_duration: 1s`, `window_size: 100000` all parse | unit | boundary | same |
+| GH475.OBS.2 | the suppression debug event is emitted | one throttled response → one debug event naming the backend and the excluded outcome | unit | behaviour | `src/kill_switch/tests.rs` |
+| GH475.CFG.7 | the shipped example config parses | the `error_budget:` block shipped in the example file, uncommented, loads and validates | unit | round-trip | `src/config/tests.rs` |
+| GH475.MIG.4 | the notice says what the four changes are | the emitted text names all four items, the re-authentication and the startup-refusal consequences | unit | behaviour | `src/commands/upgrade.rs` tests |
 | GH475.MIG.1 | the 4.0.0 notice fires below 4.0.0 and writes nothing | stamp `3.9.0` → notice emitted, config file byte-identical | unit | behaviour | `src/commands/upgrade.rs` tests |
-| GH475.MIG.2 | it is idempotent | second run at stamp `4.0.0` → silent | unit | behaviour | same |
+| GH475.MIG.2 | it is idempotent, and the first run advances the stamp | start at stamp `3.9.0`, run the upgrade **twice**; assert exactly one notice total and stamp `4.0.0` after the first run | unit | behaviour | same |
 | GH475.MIG.3 | the comparison direction is pinned | stamp `4.1.0` → silent; an inverted comparison makes this row fire | unit | negative | same |
 
-No criterion is without a case. No case is without a criterion.
+No criterion is without a case. No case is without a criterion. The `GH475.*`
+identifiers are published in the tracking comment on GH #475, so closure evidence
+cites the same strings the reporter can read (DoR B4).
 
 ## Can each case actually fail?
 
@@ -55,9 +62,20 @@ name behaviour that does not exist yet:
 - **GH475.RL.3 fails today**: `src/backend/ops.rs:255` records every dispatch
   `Err` unconditionally.
 
-The remaining rows fail for ordinary reasons — the config key does not parse,
+Most remaining rows fail for ordinary reasons — the config key does not parse,
 the validation does not exist, the outcome enum does not exist. Each is checked
 by running it before the implementation, not by assertion.
+
+Four rows are **regressions and are green before the implementation**, so a red
+run is not available and claiming one would be false. Each names the mutant that
+must turn it red instead, run once against a deliberately broken build:
+
+| row | falsifier |
+|---|---|
+| GH475.RL.7 | make the predicate return `true` unconditionally — a plain `500` must then fail this row |
+| GH475.RL.8 | route `Success` into the failure arm |
+| GH475.MIG.2 | remove the stamp write — the second run must then emit a second notice |
+| GH475.MIG.3 | invert the version comparison — stamp `4.1.0` must then emit |
 
 Two shapes explicitly refused in this plan:
 
