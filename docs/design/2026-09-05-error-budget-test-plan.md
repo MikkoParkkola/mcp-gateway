@@ -13,7 +13,7 @@ Design:
 |---|---|---|---|---|---|
 | GH475.RL.1 | a rate-limited response records nothing in the backend budget | drive the recorder with `IgnoredRateLimit`; assert sample count unchanged | unit | behaviour | `src/kill_switch/tests.rs` |
 | GH475.RL.2 | …nor in the capability budget | same, capability recorder | unit | behaviour | `src/kill_switch/tests.rs` |
-| GH475.RL.3 | …nor as a circuit-breaker failure | dispatch returns a rate-limited `Err` **whose displayed detail matches none of the accepted phrases**, so only the typed status can exempt it; assert `circuit_breaker_stats()` failure count unchanged and state `Closed` | unit | behaviour | `src/backend/ops.rs` tests |
+| GH475.RL.3 | …nor as a circuit-breaker failure | dispatch returns a rate-limited `Err`; assert `circuit_breaker_stats()` failure count unchanged and state `Closed` | unit | behaviour | `src/backend/ops.rs` tests |
 | GH475.RL.4 | a digit run inside a larger token is not a rate limit | `500` body quoting request id `4291a` → counts as failure | unit | boundary | `src/gateway/meta_mcp/invoke.rs` tests |
 | GH475.RL.5 | the `throttl` stem does not exempt | `"throttling disabled"` → counts as failure | unit | boundary | same |
 | GH475.RL.6 | the four accepted phrases do exempt | standalone `429`, `too many requests`, `rate limit`/`rate-limit`/`ratelimit`, `RESOURCE_EXHAUSTED` | unit | boundary | same |
@@ -35,7 +35,7 @@ Design:
 | GH475.OBS.1 | each exclusion is observable | N throttled responses through the gateway **plus a success control and an ordinary-failure control**; assert the suppression counter rose by exactly N and neither control moved it | integration | behaviour | `tests/` |
 | GH475.RL.10 | a typed rate-limit outcome needs no text | a capability `429` observed at `jsonrpc.rs` is excluded with the error text scrubbed to an unrelated string | integration | behaviour | `src/capability/executor/` tests |
 | GH475.RL.11 | both recorders route through one predicate | one signal table (the RL.4–RL.6 inputs) driven through **both real call paths** — backend dispatch and `MetaMCP` invoke — asserting an identical exempt/count verdict per input | unit | wiring | both call-site test modules |
-| GH475.RL.13 | a `429` records transport-health reachability | drive a typed `429` through **backend dispatch**, not a hand-built `Failsafe`; assert the production failsafe gains one health success, no circuit-breaker failure, and no budget sample | integration | behaviour | `src/backend/ops.rs` tests |
+| GH475.RL.13 | a `429` records transport-health reachability | drive a `429` through **backend dispatch**, not a hand-built `Failsafe`; assert the production failsafe gains one health success, no circuit-breaker failure, and no budget sample | integration | behaviour | `src/backend/ops.rs` tests |
 | GH475.VAL.6 | `window_size` above the upper bound is rejected | `window_size: 100001` → refused with the field named | unit | negative | same |
 | GH475.VAL.7 | every VAL row repeats under `capability:` | the same rejected values nested one level down are refused, naming the nested field | unit | negative | same |
 | GH475.VAL.8 | the accepted side of each boundary is accepted | `threshold: 1.0`, `window_size: 1`, `min_samples: 1`, `min_samples == window_size`, `window_duration: 1s`, `window_size: 100000` all parse | unit | boundary | same |
@@ -76,6 +76,15 @@ must turn it red instead, run once against a deliberately broken build:
 | GH475.RL.8 | route `Success` into the failure arm |
 | GH475.MIG.2 | remove the stamp write — the second run must then emit a second notice |
 | GH475.MIG.3 | invert the version comparison — stamp `4.1.0` must then emit |
+
+One review fix was refused, and the refusal is recorded so it is not re-raised:
+a case requiring the backend rows to carry a rate-limit **status** rather than
+rate-limit text. `src/error.rs:120-126` refuses status-only classification with
+its own reason — this protocol overloads `404` and `400` to mean "session
+expired, reinitialise" — and `backend/ops.rs` has only the `Error`, the status
+having been discarded upstream. Text is the signal that path has. The capability
+executor is different and is covered separately: `jsonrpc.rs:198` still holds the
+status, which is what GH475.RL.12 exercises.
 
 Two shapes explicitly refused in this plan:
 
