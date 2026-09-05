@@ -795,3 +795,45 @@ fn expose_all_reproduces_the_unfiltered_preamble() {
         expected
     );
 }
+
+// ---------------------------------------------------------------------------
+// Extensions capability (`io.modelcontextprotocol/extensions`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn extensions_reach_the_wire_when_the_gateway_implements_one() {
+    // `build_server_capabilities` takes the extension source as a parameter for
+    // exactly this assertion: perturb the input, observe the serialized value.
+    // Without it, a capabilities struct left at its `Default` is indistinguishable
+    // from one that is correctly populated, because both are empty today.
+    let mut implemented = std::collections::HashMap::new();
+    implemented.insert(
+        "io.modelcontextprotocol/tasks".to_string(),
+        serde_json::json!({}),
+    );
+
+    let wire = serde_json::to_value(build_server_capabilities(implemented)).unwrap();
+
+    assert_eq!(
+        wire.get("extensions")
+            .and_then(|e| e.get("io.modelcontextprotocol/tasks")),
+        Some(&serde_json::json!({})),
+        "an implemented extension must appear in the serialized capabilities; \
+         it is how a client learns the mechanism is honoured"
+    );
+}
+
+#[test]
+fn empty_extensions_are_omitted_so_discovery_stays_additive() {
+    // MIK-7217 AC discover-3 requires the initialize result to be unchanged for a
+    // client asking for an already-supported revision. An always-present
+    // `"extensions": {}` breaks that: a key that appears for every client is a
+    // handshake change, not an additive one. Serializing it unconditionally is
+    // what turned that AC red, so this pins the omission rather than the default.
+    let wire = serde_json::to_value(build_server_capabilities(implemented_extensions())).unwrap();
+
+    assert!(
+        wire.get("extensions").is_none(),
+        "capabilities must not carry an extensions key while none is implemented, got: {wire}"
+    );
+}
