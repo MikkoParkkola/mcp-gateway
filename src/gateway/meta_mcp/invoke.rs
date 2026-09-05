@@ -1366,7 +1366,7 @@ impl MetaMcp {
             }
         }
 
-        self.record_error_budget(server, tool, dispatch_result.is_ok());
+        self.record_error_budget(server, tool, BudgetOutcome::of(&dispatch_result));
 
         // Record cost for successful calls (token count estimated at 0 for non-LLM tools).
         if dispatch_result.is_ok()
@@ -1877,11 +1877,28 @@ impl MetaMcp {
         Ok(GuardedValue::sealed_by_guard(final_result))
     }
 
-    /// Record success/failure against both backend and per-capability error budgets.
-    fn record_error_budget(&self, server: &str, tool: &str, success: bool) {
+    /// Record an outcome against both backend and per-capability error budgets.
+    fn record_error_budget(&self, server: &str, tool: &str, outcome: BudgetOutcome) {
+        // A throttled backend is a working backend (GH #475). Recording it as
+        // either sample distorts the failure rate the budgets exist to measure,
+        // so the call returns before the config locks — a throttling burst
+        // would otherwise contend on them to record nothing.
+        if outcome == BudgetOutcome::IgnoredRateLimit {
+            telemetry_metrics::counter!(
+                "mcp_error_budget_suppressed_total",
+                "server" => server.to_owned(),
+                "reason" => "rate_limited"
+            )
+            .increment(1);
+            debug!(
+                server,
+                tool, "Rate-limited response excluded from error budget accounting"
+            );
+            return;
+        }
         let cfg = self.error_budget_config.read();
         let cap_cfg = self.capability_budget_config.read();
-        if success {
+        if outcome == BudgetOutcome::Success {
             self.kill_switch
                 .record_success(server, cfg.window_size, cfg.window_duration);
             self.kill_switch
@@ -2920,6 +2937,38 @@ fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
         Error::Protocol(msg) => (classify_from_detail(Some(msg)), msg.clone()),
         Error::JsonRpc { message, .. } => (ErrorCategory::BackendError, message.clone()),
         _ => (ErrorCategory::BackendError, error.to_string()),
+    }
+}
+
+/// How a dispatch counts against the error budgets.
+///
+/// A `bool` cannot express the third case: an outcome that is neither a success
+/// nor a failure and must leave the window untouched (GH #475).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BudgetOutcome {
+    Success,
+    Failure,
+    /// The backend answered, and answered "not so fast".
+    IgnoredRateLimit,
+}
+
+impl BudgetOutcome {
+    /// Classify a dispatch result.
+    ///
+    /// Rate limiting is recognised through the same predicate the backend
+    /// circuit breaker uses, so the two cannot disagree about what a throttled
+    /// response is.
+    pub(super) fn of<T>(result: &Result<T>) -> Self {
+        match result {
+            Ok(_) => Self::Success,
+            Err(error) => {
+                if crate::gateway::recovery::is_rate_limited(&error.to_string()) {
+                    Self::IgnoredRateLimit
+                } else {
+                    Self::Failure
+                }
+            }
+        }
     }
 }
 
@@ -4295,6 +4344,78 @@ mod identity_propagation_enforcement_tests {
             msg.contains("token-exchange request failed"),
             "must fail as a network/exchange error (proving the endpoint WAS \
              wired into the descriptor), not a Misconfigured short-circuit: {msg}"
+        );
+    }
+}
+
+/// Error-budget accounting for GH #475: a throttled backend must not be
+/// recorded as either a success or a failure in the budget windows.
+#[cfg(test)]
+mod error_budget_tests {
+    use std::sync::Arc;
+
+    use super::{BudgetOutcome, MetaMcp};
+    use crate::Error;
+    use crate::backend::BackendRegistry;
+
+    /// GH475.RL.1 / GH475.RL.2 — a rate-limited dispatch records no sample in
+    /// either budget. Both windows must stay empty, not merely stay under
+    /// threshold: a suppressed call recorded as a success would mask a genuine
+    /// failure rate just as effectively as one recorded as a failure.
+    #[test]
+    fn rate_limited_dispatch_records_no_budget_sample() {
+        let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        m.record_error_budget("srv", "tool", BudgetOutcome::IgnoredRateLimit);
+        assert_eq!(
+            m.kill_switch.window_counts("srv"),
+            (0, 0),
+            "a throttled backend is neither a failing backend nor a healthy sample"
+        );
+        assert_eq!(
+            m.kill_switch.capability_window_counts("srv", "tool"),
+            (0, 0),
+            "the per-capability budget must be untouched too"
+        );
+    }
+
+    /// GH475.RL.8 — an ordinary failure still counts, so the exclusion cannot
+    /// be mistaken for the budget having stopped working altogether.
+    #[test]
+    fn ordinary_dispatch_failure_still_counts_against_both_budgets() {
+        let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        m.record_error_budget("srv", "tool", BudgetOutcome::Failure);
+        assert_eq!(m.kill_switch.window_counts("srv"), (0, 1));
+        assert_eq!(
+            m.kill_switch.capability_window_counts("srv", "tool"),
+            (0, 1)
+        );
+    }
+
+    /// GH475.RL.4-RL.6 — the outcome mapping is driven by the shared predicate,
+    /// so a request id that merely contains `429` inside a `500` is a failure.
+    #[test]
+    fn budget_outcome_classifies_only_unambiguous_rate_limits() {
+        assert_eq!(
+            BudgetOutcome::of(&Ok::<_, Error>(())),
+            BudgetOutcome::Success
+        );
+        for text in [
+            "API returned 429 Too Many Requests",
+            "backend replied: rate limit exceeded",
+            "RESOURCE_EXHAUSTED: quota",
+        ] {
+            assert_eq!(
+                BudgetOutcome::of(&Err::<(), _>(Error::Protocol(text.to_string()))),
+                BudgetOutcome::IgnoredRateLimit,
+                "{text} must be excluded"
+            );
+        }
+        assert_eq!(
+            BudgetOutcome::of(&Err::<(), _>(Error::Protocol(
+                "500 internal server error (request 4291a)".to_string()
+            ))),
+            BudgetOutcome::Failure,
+            "a 429 inside a request id is not a rate limit"
         );
     }
 }
