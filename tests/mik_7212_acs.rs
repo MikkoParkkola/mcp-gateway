@@ -655,6 +655,21 @@ mod reverse {
         );
     }
 
+    /// Row 308, projection half only.
+    ///
+    /// The row names an SSE session: a legacy client receives the request "on
+    /// its own connection". This test calls the projection in process, so it
+    /// proves the shape and not the delivery. A bridge whose projection is
+    /// perfect and whose SSE path never writes passes here.
+    ///
+    /// The delivery half is DEFERRED, not assumed:
+    /// - owner: MIK-7212, this branch
+    /// - resolved by: an SSE row asserting an `elicitation/create` frame
+    ///   reaching a client stream, written against the wired bridge
+    /// - when: the commit that wires `InputBridge::run` into the router — the
+    ///   row cannot fail honestly before then, because nothing dispatches
+    /// - if it resolves badly: the SSE path needs its own dispatch and row 308
+    ///   is not met by the projection alone, however green this file is
     #[test]
     fn ac_mrtr_7_a_legacy_client_is_asked_the_way_it_expects() {
         // The translation: each input request becomes a server-initiated call
