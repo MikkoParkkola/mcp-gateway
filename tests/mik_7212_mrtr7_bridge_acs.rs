@@ -1450,20 +1450,25 @@ async fn ac_mrtr_7ab_a_bridged_round_is_counted_without_the_answer_body() {
 /// reason that has nothing to do with the bound it names. This asserts the
 /// fixture rather than the bridge, so unlike its neighbours it may legitimately
 /// pass while the bridge is still a stub.
+///
+/// Asserted against [`interim`] rather than against written-out literals: the
+/// two fixtures agreeing is the property, and a literal restates one of them
+/// where a later edit could move the other. Field by field because
+/// `InputRequired` carries no `PartialEq`, and deriving one on a shipped type
+/// to shorten a test is a production change this row does not need.
 #[test]
 fn ac_mrtr_7b_the_asking_fixture_is_what_the_parser_reads() {
+    let expected = interim(&[("k1", ask("Which branch?"))]);
     let parsed = InputRequired::from_result(&asking(&[("k1", ask("Which branch?"))]))
         .expect("the retry fixture must parse as an unfinished round");
 
     assert_eq!(
-        parsed.requests,
-        vec![("k1".to_string(), ask("Which branch?"))],
-        "the fixture must carry the backend's own key and its entry verbatim"
+        parsed.requests, expected.requests,
+        "the wire fixture must parse to the entries the struct fixture states"
     );
     assert_eq!(
-        parsed.request_state.as_deref(),
-        Some("state-1"),
-        "the fixture must carry the state a retry has to echo back"
+        parsed.request_state, expected.request_state,
+        "the wire fixture must carry the state a retry has to echo back"
     );
 }
 
