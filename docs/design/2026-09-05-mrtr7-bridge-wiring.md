@@ -152,24 +152,28 @@ design shows what it costs. It narrowed this design's FOR to the HTTP
 transports; stdio moves out of THIS change, above, and stays on the release's
 open list until its own design is reviewed.
 
+The tests this change needs are planned separately, in
+`docs/design/2026-09-05-mrtr7-test-plan.md`, and reviewed as a plan before any
+test code is written.
+
 ## Review findings, disposed
 
 | finding | disposal |
 |---|---|
 | gate refuses before the bridge is reached (both vendors, HIGH) | confirmed as a **documentation** gap, not a mechanism one — see below |
-| read side never verified: does the bridge site hold the session id (Kimi, HIGH) | **died at source.** The lookup belongs at `CallerContext` construction, where `session_id` is already in scope on both transports. Nothing new reaches `invoke.rs`, and the suggested fix — threading a store into the invoke path — is unnecessary |
-| absent session capabilities leave the default unspecified (Kimi, HIGH) | confirmed. Pinned fail-closed below |
+| read side never verified: does the bridge site hold the session id (synthetic, HIGH) | **died at source.** The lookup belongs at `CallerContext` construction, where `session_id` is already in scope on both transports. Nothing new reaches `invoke.rs`, and the suggested fix — threading a store into the invoke path — is unnecessary |
+| absent session capabilities leave the default unspecified (synthetic, HIGH) | confirmed. Pinned fail-closed below |
 | store has no eviction or ownership (both vendors, HIGH) | confirmed. Bound to session lifecycle below |
 | no production `ClientChannel` / `BackendInvoker` / `BridgeObserver` (GPT, HIGH, CERTAIN) | confirmed. This design understated its own change surface; see below |
-| stdio serial dispatch deadlocks a bridged call (GPT, HIGH, CERTAIN) | confirmed at source. Second blocker, above |
+| stdio serial dispatch deadlocks a bridged call (GPT, HIGH, CERTAIN) | confirmed at source. Second blocker, above. **Filed as MIK-7387** with the three failing rows as its acceptance evidence; the requester decides include/exclude for the release there |
 | reply projection is not request-kind-aware; params forwarded unvalidated (GPT) | out of this scope — defects in `input_bridge.rs` itself, not in wiring it. Filed rather than fixed here |
 | store as an injected trait (Kimi) | declined. A trait with one implementation is an abstraction nothing asked for. `BridgeObserver` earns its trait because production genuinely passes a no-op; a capability store does not |
 | store has no eviction or ownership (both vendors, HIGH) — **re-raised on the amended design** (GPT, HIGH) | confirmed twice. The first answer, `SessionLifecycle`, has no production caller at all; declarations live in `ClientSession` instead, where removal and TTL reaping already drop them. Open question 3 |
 | bridge retries invoke the backend outside cost accounting (GPT, HIGH, LIKELY) | confirmed at source: `invoke.rs:1246,1369,1394` each fire once around the single dispatch at :1327. In scope — this change creates the second invocation. One dispatch helper, change surface above |
-| the merge widens MRTR.9 for modern callers while the table says it does not (Kimi, MEDIUM, CERTAIN) | confirmed at source: the gate at `invoke.rs:1518` is shape-blind. Merge scoped to `Legacy` only, option C above |
-| construction-site census says five and lists seven (Kimi, LOW) | confirmed. Count was wrong, list was right; re-enumerated by role |
-| timed-out client prompt discarded, backend retried without the answer (GPT, HIGH, LIKELY) | out of this scope — a defect inside `input_bridge.rs`, filed with the other two, not fixed by a wiring change |
-| pending-response map grows if the outer timeout cancels after registration (GPT, HIGH) | out of this scope, same file, filed |
+| the merge widens MRTR.9 for modern callers while the table says it does not (synthetic, MEDIUM, CERTAIN) | confirmed at source: the gate at `invoke.rs:1518` is shape-blind. Merge scoped to `Legacy` only, option C above |
+| construction-site census says five and lists seven (synthetic, LOW) | confirmed. Count was wrong, list was right; re-enumerated by role |
+| timed-out client prompt discarded, backend retried without the answer (GPT, HIGH, LIKELY) | out of this scope — a defect inside `input_bridge.rs`, not fixed by a wiring change. **Filed as MIK-7388** with the pending-map growth, blocking MIK-7212 |
+| pending-response map grows if the outer timeout cancels after registration (GPT, HIGH) | out of this scope, same file. **Filed as MIK-7388**, which blocks MIK-7212: neither defect is reachable until this wiring gives the bridge a caller |
 | production-path HTTP test beyond trait fakes (GPT, MEDIUM) | accepted. The acceptance rows are fake-driven; one end-to-end HTTP test is the honest evidence and belongs in the test plan |
 | compact legacy-or-modern discriminator instead of full `RequestShape` (GPT, both passes) | accepted. Recorded as the field's intended shape; `RequestShape` was shorthand, not a requirement |
 
