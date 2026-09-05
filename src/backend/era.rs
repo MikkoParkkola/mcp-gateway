@@ -12,6 +12,7 @@ use std::time::Duration;
 use super::Backend;
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::era::{Era, EraObservation, METHOD_NOT_FOUND_CODE, ProbeOutcome, classify};
+use crate::protocol::meta::ADDED_IN_2026_07_28;
 use crate::transport::Transport;
 
 /// Method a modern peer answers with its discovery document.
@@ -54,13 +55,6 @@ fn contradicts_legacy(code: i32) -> bool {
     classify(&ProbeOutcome::Error(code)) == Era::Modern
 }
 
-/// Methods the 2026-07-28 revision defines and earlier revisions do not.
-///
-/// A peer that answers one of these `method not found` cannot be speaking that revision, whatever
-/// its probe said. Kept as a named set rather than folded into the check so that adding a method
-/// is an edit to a list, not to a condition.
-const MODERN_ONLY_METHODS: [&str; 1] = [DISCOVER_METHOD];
-
 /// Whether an ordinary request's error answer disproves a cached `Modern` verdict.
 ///
 /// Narrow on purpose, and the narrowness is the design: only `method not found`, and only against
@@ -68,8 +62,13 @@ const MODERN_ONLY_METHODS: [&str; 1] = [DISCOVER_METHOD];
 /// for reasons of its own, and a transport fault or a refused credential is a failure to surface
 /// rather than evidence about which dialect the peer speaks. Widening this to a family of codes
 /// would file real faults as a benign "peer is older than we thought".
+///
+/// The modern-only set is read from [`ADDED_IN_2026_07_28`] rather than re-listed here, so a
+/// method added to the revision is covered by this check without a second edit — a second list
+/// would go stale silently, and the failure would be a re-probe that never fires.
 fn contradicts_modern(method: &str, code: i32) -> bool {
-    code == METHOD_NOT_FOUND_CODE && MODERN_ONLY_METHODS.contains(&method)
+    code == METHOD_NOT_FOUND_CODE
+        && (method == DISCOVER_METHOD || ADDED_IN_2026_07_28.contains(&method))
 }
 
 impl Backend {
