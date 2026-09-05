@@ -79,8 +79,9 @@ pub struct Migration {
     /// Apply the migration; receives the gateway data directory (`~/.mcp-gateway/`).
     pub apply: fn(&Path) -> std::io::Result<()>,
     /// `true` when the migration only tells the operator something and leaves
-    /// every file alone. A notice earns no config backup, and it is addressed
-    /// to a person, so `--quiet` silences it.
+    /// every file alone. A notice earns no config backup. It is addressed to a
+    /// person and goes to stderr, so `--quiet` does NOT silence it: the startup
+    /// path always runs quiet, and suppressing notices there delivered none.
     pub notice: bool,
 }
 
