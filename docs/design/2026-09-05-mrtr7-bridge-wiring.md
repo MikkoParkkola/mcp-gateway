@@ -17,8 +17,9 @@ latter. Findings disposed below.
 
 ## Problem
 
-`src/gateway/input_bridge.rs` implements `InputBridge::run` and 21 acceptance
-rows drive it green through trait fakes. It has **no production call site**, so
+`src/gateway/input_bridge.rs` implements `InputBridge::run` and 18 acceptance
+rows drive it green through trait fakes (mapped to their tests by name in the
+companion test plan). It has **no production call site**, so
 `docs/requirements/RELEASE-4.0.0-criteria-status.md:130,:131` are honestly
 marked UNWIRED. Tests-only reachability is a D7:WIRED failure, not done.
 
@@ -188,7 +189,7 @@ test code is written.
 | gate refuses before the bridge is reached (both vendors, HIGH) | confirmed as a **documentation** gap, not a mechanism one — see below |
 | read side never verified: does the bridge site hold the session id (synthetic, HIGH) | **died at source.** The lookup belongs at `CallerContext` construction, where `session_id` is already in scope on both transports. Nothing new reaches `invoke.rs`, and the suggested fix — threading a store into the invoke path — is unnecessary |
 | absent session capabilities leave the default unspecified (synthetic, HIGH) | confirmed. Pinned fail-closed below |
-| store has no eviction or ownership (both vendors, HIGH) | confirmed. Bound to session lifecycle below |
+| store has no eviction or ownership (both vendors, HIGH) | confirmed. The answer given here first, `SessionLifecycle`, was superseded on the next round — see the re-raised row below for the owner that ships |
 | no production `ClientChannel` / `BackendInvoker` / `BridgeObserver` (GPT, HIGH, CERTAIN) | confirmed. This design understated its own change surface; see below |
 | stdio serial dispatch deadlocks a bridged call (GPT, HIGH, CERTAIN) | confirmed at source. Second blocker, above. **Filed as MIK-7387** with the three failing rows as its acceptance evidence; the requester decides include/exclude for the release there |
 | reply projection is not request-kind-aware; params forwarded unvalidated (GPT) | out of this scope — defects in `input_bridge.rs` itself, not in wiring it. Filed rather than fixed here |

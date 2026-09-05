@@ -4,7 +4,39 @@ Companion to `docs/design/2026-09-05-mrtr7-bridge-wiring.md`. Written before any
 test code, to be reviewed **as a plan**: every acceptance criterion gets a case
 or a stated reason it has none, and every named case must be able to fail.
 
-## What the existing 21 rows already cover, and what they cannot
+## What the existing rows already cover, and what they cannot
+
+`tests/mik_7212_mrtr7_bridge_acs.rs` holds 21 tests: 18 acceptance rows of the
+MRTR.7 block in `docs/requirements/RELEASE-4.0.0-test-plan.md`, and 3 that check
+a fixture is what the parser reads. Named rather than counted, because a count
+cannot show an omission and this mapping does — rows 312, 323 and 324 are absent
+here, and they are the three stdio rows carried, `#[ignore]`d, by
+`tests/mik_7212_mrtr7_stdio_acs.rs` against MIK-7387.
+
+| row | test |
+|---|---|
+| 308 | `ac_mrtr_7a_elicitation_params_reach_the_client_whole` |
+| 309 | `ac_mrtr_7a_a_method_outside_the_closed_set_is_refused_unsent` |
+| 310 | `ac_mrtr_7a_wire_methods_and_id_prefixes_match_the_admitted_set` |
+| 311 | `ac_mrtr_7a_an_undeclared_variant_is_not_asked_under_an_empty_slice` |
+| 313 | `ac_mrtr_7b_an_accepted_answer_is_filed_under_the_backend_key` |
+| 314 | `ac_mrtr_7b_a_decline_fails_the_call_as_a_refusal_by_a_person` |
+| 315 | `ac_mrtr_7b_an_error_reply_fails_the_call_as_a_client_refusal` |
+| 316 | `ac_mrtr_7b_an_unusable_accept_fails_as_malformed` |
+| 317 | `ac_mrtr_7b_content_violating_the_requested_schema_is_forwarded_unchanged` |
+| 318 | `ac_mrtr_7b_the_retry_bound_cuts_off_after_three_retries` |
+| 319 | `ac_mrtr_7b_the_request_budget_is_checked_before_a_batch_is_sent` |
+| 320 | `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call` |
+| 321 | `ac_mrtr_7b_answered_rounds_are_ended_by_the_aggregate_deadline` |
+| 322 | `ac_mrtr_7b_a_batch_of_three_answers_arrives_in_one_retry` |
+| 325 | `ac_mrtr_7a_a_session_declared_capability_is_asked_with_no_slice` |
+| 326 | `ac_mrtr_7a_sampling_and_roots_each_complete_an_accepted_round` |
+| 327 | `ac_mrtr_7b_cancel_unnamed_action_and_no_member_fail_distinguishably` |
+| 328 | `ac_mrtr_7ab_a_bridged_round_is_counted_without_the_answer_body` |
+| — (fixture) | `ac_mrtr_7b_the_shipped_bounds_are_the_documented_ones` |
+| — (fixture) | `ac_mrtr_7b_the_asking_fixture_is_what_the_parser_reads` |
+| — (fixture) | `ac_mrtr_7a_the_capability_fixture_declares_what_it_names` |
+| 312, 323, 324 | in `mik_7212_mrtr7_stdio_acs.rs`, `#[ignore]`d — MIK-7387 |
 
 `tests/mik_7212_mrtr7_bridge_acs.rs` drives `InputBridge::run` through trait
 fakes and receives the capability value as a **parameter**. That is the right
@@ -12,7 +44,7 @@ shape — no fixture reimplements a capability store, so none of those rows can
 pass by testing its own scaffolding. It is also the limit: every one of them
 begins after the decision the wiring change actually makes. Nothing in that file
 observes which value the caller passed, where it came from, or whether the caller
-exists at all. The 21 rows stay green whether or not this change ships.
+exists at all. All 18 stay green whether or not this change ships.
 
 So the delta below is entirely at the **call site**, and one row is end-to-end.
 
@@ -64,9 +96,10 @@ its diagnosis cost is the price of that proof.
 - **MRTR.7a/7b on legacy stdio** — no drivable surface in this change. The three
   rows exist in `tests/mik_7212_mrtr7_stdio_acs.rs`, are `#[ignore]`d against
   MIK-7387, and become that package's acceptance evidence.
-- **The two `input_bridge.rs` defects** (discarded timeout at `:433`, pending-map
-  growth at `:430`) — confirmed, out of scope for a wiring change, and disposed
-  in the design's finding table. They get cases when they get a change.
+- **The four `input_bridge.rs` defects** (`:433`, `:430`, `:409`, `:454`) —
+  confirmed, out of scope for a wiring change, and disposed in the design's
+  finding table. They are **MIK-7388**, which merges before this wiring, and
+  their acceptance cases belong to that ticket rather than to this plan.
 
 ## What this plan does not claim
 
