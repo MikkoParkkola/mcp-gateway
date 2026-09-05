@@ -261,7 +261,7 @@ impl Backend {
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
-                    "status" => "ok"
+                    "status" => if throttled { "rate_limited" } else { "ok" }
                 )
                 .increment(1);
             }
@@ -399,7 +399,7 @@ impl Backend {
                 telemetry_metrics::counter!(
                     "mcp_backend_requests_total",
                     "backend" => self.name.clone(),
-                    "status" => "ok"
+                    "status" => if throttled { "rate_limited" } else { "ok" }
                 )
                 .increment(1);
             }
