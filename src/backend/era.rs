@@ -12,7 +12,6 @@ use std::time::Duration;
 use super::Backend;
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::era::{Era, EraObservation, METHOD_NOT_FOUND_CODE, ProbeOutcome, classify};
-use crate::protocol::meta::ADDED_IN_2026_07_28;
 use crate::transport::Transport;
 
 /// Method a modern peer answers with its discovery document.
@@ -63,12 +62,15 @@ fn contradicts_legacy(code: i32) -> bool {
 /// rather than evidence about which dialect the peer speaks. Widening this to a family of codes
 /// would file real faults as a benign "peer is older than we thought".
 ///
-/// The modern-only set is read from [`ADDED_IN_2026_07_28`] rather than re-listed here, so a
-/// method added to the revision is covered by this check without a second edit — a second list
-/// would go stale silently, and the failure would be a re-probe that never fires.
+/// The set is exactly [`DISCOVER_METHOD`], named rather than listed. The revision's other
+/// additions — the `tasks/*` and `subscriptions/listen` extension methods — are optional and
+/// capability-gated, so a peer that fully speaks 2026-07-28 may answer them `method not found`
+/// for the ordinary reason that it does not implement that extension. Reading those answers as
+/// evidence would downgrade a modern peer for declining an option the revision lets it decline.
+/// Discovery is the one method the revision requires of every peer, which is what makes its
+/// absence say something about the peer's era rather than about its feature set.
 fn contradicts_modern(method: &str, code: i32) -> bool {
-    code == METHOD_NOT_FOUND_CODE
-        && (method == DISCOVER_METHOD || ADDED_IN_2026_07_28.contains(&method))
+    code == METHOD_NOT_FOUND_CODE && method == DISCOVER_METHOD
 }
 
 impl Backend {
@@ -147,5 +149,32 @@ impl Backend {
     /// Probe deadline: never longer than the backend's own request timeout.
     fn probe_timeout(&self) -> Duration {
         self.config.timeout.min(PROBE_TIMEOUT)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION;
+    use crate::protocol::meta::ADDED_IN_2026_07_28;
+
+    /// An optional extension the peer declined is not evidence about its era.
+    ///
+    /// The revision adds these methods and lets a peer omit them, so their `method not found`
+    /// answer is a statement about implemented features. Only discovery, which every peer of
+    /// this revision must answer, disproves a modern verdict.
+    #[test]
+    fn declining_an_optional_extension_does_not_disprove_a_modern_peer() {
+        for method in ADDED_IN_2026_07_28 {
+            assert!(
+                !contradicts_modern(method, METHOD_NOT_FOUND_CODE),
+                "{method} is optional in this revision, so refusing it says nothing about era"
+            );
+        }
+        assert!(contradicts_modern(DISCOVER_METHOD, METHOD_NOT_FOUND_CODE));
+        assert!(!contradicts_modern(
+            DISCOVER_METHOD,
+            UNSUPPORTED_PROTOCOL_VERSION
+        ));
     }
 }
