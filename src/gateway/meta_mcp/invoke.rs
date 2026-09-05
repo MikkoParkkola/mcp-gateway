@@ -2976,6 +2976,11 @@ impl BudgetOutcome {
                 if is_error && crate::gateway::recovery::is_rate_limited(&response.to_string()) {
                     Self::IgnoredRateLimit
                 } else {
+                    // A non-rate-limit `isError: true` is a tool refusing a
+                    // request, not a backend in poor health: a bad argument or
+                    // a missing file would otherwise open a circuit on a
+                    // backend that answered correctly every time. It is
+                    // sampled as a success on purpose.
                     Self::Success
                 }
             }
