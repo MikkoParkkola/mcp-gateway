@@ -82,6 +82,29 @@ struct PendingSample {
     tx: oneshot::Sender<Value>,
 }
 
+/// Removes a pending entry when the request future ends, however it ends.
+///
+/// [`ProxyManager::resolve_pending`] clears the entry on the answered path and
+/// the timeout arm clears its own, but neither runs when an OUTER timeout or a
+/// task abort drops the in-flight future first. The entry would then outlive
+/// the caller waiting on it for the proxy's lifetime. Dropping the guard is the
+/// one cleanup that happens on every exit, so it covers cancellation; where a
+/// path has already removed the entry the removal is a harmless no-op.
+///
+/// The transport layer solves the same problem the same way — see
+/// `PendingRequestGuard` in `src/transport/mod.rs`. That guard is typed to the
+/// transports' `DashMap` of response senders, so it cannot be reused here.
+struct PendingSampleGuard<'a> {
+    proxy: &'a ProxyManager,
+    id: &'a str,
+}
+
+impl Drop for PendingSampleGuard<'_> {
+    fn drop(&mut self) {
+        self.proxy.cancel_pending(self.id);
+    }
+}
+
 impl ProxyManager {
     /// Create a new proxy manager.
     #[must_use]
@@ -189,6 +212,15 @@ impl ProxyManager {
         let id = format!("sampling-{}", Uuid::new_v4());
 
         let rx = self.register_pending(id.clone(), session_id);
+        // Declared after `id` so it drops first, and held across the await
+        // below: an outer timeout or a task abort drops this future without
+        // running any arm of the match, and the guard is the cleanup that
+        // still runs. The explicit removals below stay — each sits on a path
+        // that reports something too, and a second removal is a no-op.
+        let _cleanup = PendingSampleGuard {
+            proxy: self,
+            id: &id,
+        };
 
         let data = json!({
             "jsonrpc": "2.0",
@@ -249,6 +281,15 @@ impl ProxyManager {
         let id = format!("elicitation-{}", Uuid::new_v4());
 
         let rx = self.register_pending(id.clone(), session_id);
+        // Declared after `id` so it drops first, and held across the await
+        // below: an outer timeout or a task abort drops this future without
+        // running any arm of the match, and the guard is the cleanup that
+        // still runs. The explicit removals below stay — each sits on a path
+        // that reports something too, and a second removal is a no-op.
+        let _cleanup = PendingSampleGuard {
+            proxy: self,
+            id: &id,
+        };
 
         let data = json!({
             "jsonrpc": "2.0",
