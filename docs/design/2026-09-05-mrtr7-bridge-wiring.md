@@ -17,10 +17,15 @@ FOR: giving `InputBridge::run` one production caller **on the HTTP transports**,
 so a legacy client that declared a capability at `initialize` is asked the
 backend's question and the backend is retried with the answer.
 
-OUT: legacy **stdio** callers, which keep the MRTR.9 refusal they get today —
-ruled by the requester on 2026-09-05, on the finding below that stdio's serial
-read loop deadlocks any bridged call. The stdio concurrency work is its own
-change, not a step inside this one. Also out: the row-308 SSE delivery half (its
+OUT OF THIS CHANGE, NOT OUT OF THE RELEASE: legacy **stdio** callers keep the
+MRTR.9 refusal they get today. Ruled by the requester on 2026-09-05, on the
+finding below that stdio's serial read loop deadlocks any bridged call. Stdio
+concurrency is a **separate work package** — independently designed,
+independently implemented, lower priority than this one — and whether it lands
+in 4.0.0 is decided after that design exists and carries an effort estimate,
+not now. Deferring it here is a sequencing decision, not a decision to drop it.
+
+Also out: the row-308 SSE delivery half (its
 own deferral, trigger is this commit); the `NFR.OBS.4` counter name
 (`RELEASE-4.0.0-cluster-a-readiness.md:44` — "No design, no counters"); any
 change to the MRTR.9 refusal or to the continuation mint for modern callers; the
@@ -95,6 +100,18 @@ the exact inversion of the MRTR.9 gate one branch above. Rejected.
 only for `Legacy`.** A modern caller that declared capabilities must get a
 continuation, not a bridge, and `Declared` alone cannot tell the two apart.
 
+**The merge is conditional on shape, and that is load-bearing.** The MRTR.9
+gate is shape-blind — `invoke.rs:1518` reads `caller.input_capabilities` with
+no modern/legacy branch — so an unconditional merge would silently widen the
+gate for modern callers too: one that declared `elicitation` at `initialize`
+and sent no per-request `_meta` is refused today and would be minted a
+continuation after the change. That is a fail-open move on a security gate
+nobody asked for, and it is the same inversion option B was rejected for.
+So `input_capabilities` is the session value **only for `Legacy`**, which has
+no per-request channel at all — that absence is the whole reason the merge
+exists. `Modern` keeps per-request semantics exactly as today. Every row of
+the decision table below then holds as written.
+
 Recommendation: **C**. Deriving the discriminator from `Declared` conflates
 "declared nothing" with "cannot understand `input_required`", and those two
 need opposite handling.
@@ -123,9 +140,12 @@ it. Two honest responses, and the choice was not engineering's to make alone:
   have in-flight request correlation (`ProxyManager`'s pending-response path).
   Legacy stdio callers keep the MRTR.9 refusal they get today.
 
-Asked of the requester, 2026-09-05. Answer: bridge on HTTP only; stdio
-concurrency becomes its own change. It narrowed this design's FOR to the HTTP
-transports and moved stdio to OUT, above.
+Asked of the requester, 2026-09-05. Answer: bridge on HTTP only. Stdio
+concurrency becomes its own work package — designed and estimated separately,
+kept at lower priority, and admitted to or excluded from the release once that
+design shows what it costs. It narrowed this design's FOR to the HTTP
+transports; stdio moves out of THIS change, above, and stays on the release's
+open list until its own design is reviewed.
 
 ## Review findings, disposed
 
@@ -170,11 +190,20 @@ Wiring one call is the smallest part of this.
 - `Declared::parse` (`src/protocol/meta.rs:367`) already takes a plain
   capabilities map of exactly the `initialize` shape, and already reads the 2026
   elicitation modes from it — an empty `elicitation` object declares form mode.
-  It is **private**. Making it reachable widens visibility, which is a design
-  decision rather than a convenience edit.
-- a write in `MetaMcp::handle_initialize`, a read at each of the five
-  `CallerContext` construction sites (`handlers.rs:705,1164`,
-  `invoke.rs:3816,3846,3881`, `server/mod.rs:1827,2619`).
+  It is **private**. Rather than widening the parser itself, expose a named
+  constructor — `Declared::from_initialize` — documenting the exact
+  capabilities-map contract it accepts. The visibility change then reads as a
+  designed API surface instead of a convenience opening.
+- stdio still captures its client's declaration at `initialize` under the
+  constant `"stdio-session"`, and nothing reads it until the stdio work package
+  lands. That write is deliberately stored-but-unused; it is not dead code and
+  should not be removed as such.
+- a write in `MetaMcp::handle_initialize`, and a read at each `CallerContext`
+  construction site. Seven, enumerated from source and split by role: two
+  production writes carrying a real declaration (`handlers.rs:705,1164`), and
+  five passing `Declared::NONE` today (`invoke.rs:3816,3846,3881` — tests —
+  and `server/mod.rs:1827,2619` — stdio). An earlier revision of this document
+  said "five" while listing seven; the count was wrong, the list was right.
 - `shape` threaded to each of those sites, and production implementations of
   the bridge's three traits, which today exist only as test fakes.
 - `CallerContext::input_capabilities` currently documents itself as "what this
@@ -208,12 +237,31 @@ Wiring one call is the smallest part of this.
    depends on it: `BridgeObserver` is a trait, and production can pass a no-op
    until the name is chosen, which is honest rather than inventing a literal.
 
-3. Which existing session state should carry the declarations, on each
-   transport? — read the session lifecycle the HTTP router already maintains
-   (`rg -n "session" src/gateway/router/session*.rs src/gateway/router/mod.rs`)
-   and name the owner before writing one. Blocking: nothing may be implemented
-   against a store whose lifetime owner is unnamed, because that is how the
-   eviction finding comes back.
+3. Which existing session state should carry the declarations? — RESOLVED, and
+   the answer is not the one both reviewers assumed. `SessionStateStore`
+   (`src/gateway/state.rs:22`) is the right shape to copy: keyed by session id,
+   `Arc<RwLock<HashMap<..>>>`, cheaply cloneable. `SessionLifecycle`
+   (`src/gateway/session_lifecycle.rs:22`) is the right owner in principle —
+   named callbacks fired on disconnect and on a reclamation deadline, the
+   deadline existing precisely because MCP 2026-07-28 removed protocol
+   sessions.
+
+   But **nothing registers with it in production.** `register` is called only
+   from its own unit tests; `SessionStateStore::remove_session` has no
+   production caller either. Three modules' doc comments instruct the reader to
+   register via the hook — `src/security/firewall/anomaly.rs:187`,
+   `src/security/firewall/mod.rs:680` — and `anomaly.rs:129` states in its own
+   words that nothing reclaims a session.
+
+   So "bind eviction to the existing session lifecycle", which both reviewers
+   independently recommended and which this design accepted, would have written
+   a comment claiming eviction while shipping the leak they flagged. The hook
+   must be *wired* before anything can hang off it, and the leak is already
+   shared: the firewall's anomaly tracker is waiting on the same callback.
+   Wiring it is a prerequisite of this change and benefits more than this
+   change. Verified by search on the write side, which is where an absent
+   caller is visible: no non-test `register` call, no production
+   `remove_session` call.
 
 ## What is not claimed
 
