@@ -919,4 +919,79 @@ mod tests {
             "an undeliverable prompt must not leave a pending entry behind"
         );
     }
+
+    /// MIK-7212.WIRE.11 — dropping an in-flight sampling call must not strand
+    /// its `pending_sampling` entry.
+    ///
+    /// This is the HTTP mirror of the stdio contract already pinned by
+    /// `cancelled_request_does_not_strand_pending_entry` in
+    /// `src/transport/stdio.rs`: an outer `tokio::time::timeout` or a task
+    /// abort drops the request future BEFORE the proxy's own timeout arm
+    /// runs, so neither `resolve_pending` nor the timeout branch removes the
+    /// entry. Only RAII cleanup on drop can. Without it every cancelled
+    /// sampling call leaks a `PendingSample` for the proxy's lifetime, which
+    /// is the leak MIK-7388.BRIDGE.2 requires the bridged client channel not
+    /// to have.
+    ///
+    /// The live session is what makes the drop happen mid-await: delivery
+    /// must succeed (an undeliverable prompt is already cleaned up on the
+    /// `NoSession` path) and the session must never answer.
+    #[tokio::test]
+    async fn mik_7212_wire_11_cancelled_sampling_does_not_strand_pending_entry() {
+        // GIVEN: a live session that will receive the prompt and never answer
+        let mux = make_multiplexer();
+        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-cancel"));
+        let proxy = Arc::new(ProxyManager::new(Arc::clone(&mux)));
+        let params = SamplingCreateMessageParams {
+            messages: vec![SamplingMessage {
+                role: "user".to_string(),
+                content: Content::Text {
+                    text: "never answered".to_string(),
+                    annotations: None,
+                },
+            }],
+            tools: None,
+            tool_choice: None,
+            model_preferences: None,
+            system_prompt: None,
+            max_tokens: 16,
+        };
+
+        // The timeout is far beyond the abort below, so the proxy's own
+        // timeout arm cannot be what cleans up — the drop must be.
+        let proxy_for_task = Arc::clone(&proxy);
+        let origin = session.clone();
+        let wait = tokio::spawn(async move {
+            proxy_for_task
+                .forward_sampling_with_response(&origin, &params, Duration::from_secs(30))
+                .await
+        });
+
+        // Receiving the prompt proves the entry is registered and the send
+        // succeeded: the call is now parked on the response receiver.
+        let delivered = tokio::time::timeout(Duration::from_millis(500), rx_session.recv())
+            .await
+            .expect("originating session must receive the sampling request")
+            .expect("channel open");
+        assert_eq!(delivered.data["method"], "sampling/createMessage");
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            1,
+            "precondition: the in-flight call holds exactly one pending entry"
+        );
+
+        // WHEN: the call is cancelled mid-await. Joining the aborted handle
+        // is what makes this deterministic — `abort()` only requests
+        // cancellation, and the future is not dropped until the task is
+        // reaped, so asserting before the join races the runtime.
+        wait.abort();
+        let _ = wait.await;
+
+        // THEN: nothing is left allocated for a caller that no longer exists
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "a cancelled in-flight sampling call must not strand its pending entry"
+        );
+    }
 }
