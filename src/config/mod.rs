@@ -33,13 +33,13 @@ pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvF
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
-    CacheConfig, CapabilityConfig, CircuitBreakerConfig, CodeModeConfig, ContextIntegrityConfig,
-    ContextIntegrityPresetConfig, FailsafeConfig, HealthCheckConfig, IdentityGrantsConfig,
-    KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
-    PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig,
-    RemoteServerSigningConfig, ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig,
-    RuntimeConfig, RuntimeProfileConfig, SecurityConfig, StreamingConfig, ToolContractConfig,
-    WebhookConfig,
+    CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
+    CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, ErrorBudgetSection,
+    FailsafeConfig, HealthCheckConfig, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
+    KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
+    PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
+    RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
+    StreamingConfig, ToolContractConfig, WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -63,6 +63,8 @@ pub struct Config {
     pub streaming: StreamingConfig,
     /// Failsafe configuration.
     pub failsafe: FailsafeConfig,
+    /// Error-budget / kill-switch thresholds (GH #475).
+    pub error_budget: ErrorBudgetSection,
     /// Backend configurations.
     pub backends: HashMap<String, BackendConfig>,
     /// Capability configuration (direct REST API integration).
@@ -731,6 +733,7 @@ impl Config {
         self.validate_identity_propagation()?;
         self.validate_agent_key_material(overlay)?;
         self.key_server.validate()?;
+        self.error_budget.validate()?;
         Ok(())
     }
 

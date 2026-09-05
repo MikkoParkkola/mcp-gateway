@@ -100,6 +100,22 @@ failsafe:
     interval: 30s                 # Health check interval
     timeout: 5s                   # Health check timeout
 
+# --- Error Budget / Kill Switch ---
+
+# Error budget / kill switch (GH #475). Every key is optional; an absent key
+# keeps the shipped default. Thresholds are failure RATES in (0.0, 1.0].
+error_budget:
+  threshold: 0.8          # backend auto-kill at an 80% failure rate
+  window_size: 100        # calls in the backend sliding window
+  window_duration: 5m     # maximum age of a call in that window
+  min_samples: 10         # calls required before the budget is evaluated
+  capability:
+    threshold: 0.8        # per-capability auto-disable rate
+    window_size: 50
+    window_duration: 5m
+    min_samples: 5
+    cooldown: 5m          # offline period before a capability auto-recovers
+
 # --- Response Cache ---
 
 cache:

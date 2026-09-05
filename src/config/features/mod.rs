@@ -9,6 +9,7 @@ mod auth;
 mod cache;
 mod capability;
 mod code_mode;
+mod error_budget;
 mod failsafe;
 mod key_server;
 mod playbooks;
@@ -21,6 +22,7 @@ pub use auth::{AgentAuthConfig, AgentDefinitionConfig, ApiKeyConfig, AuthConfig}
 pub use cache::CacheConfig;
 pub use capability::CapabilityConfig;
 pub use code_mode::CodeModeConfig;
+pub use error_budget::{CapabilityErrorBudgetSection, ErrorBudgetSection};
 pub use failsafe::{
     CircuitBreakerConfig, FailsafeConfig, HealthCheckConfig, RateLimitConfig, RetryConfig,
 };
