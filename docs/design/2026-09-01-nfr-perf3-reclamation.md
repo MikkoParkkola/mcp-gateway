@@ -344,6 +344,13 @@ ceiling assertion that fails when the model-facing meta-tool count exceeds 16.
 release owner ruled on 2026-09-05 that 4.0.0 ships on headroom); `NFR.PERF.2`; `MRTR.7`; deleting
 the seventeenth meta-tool, which is gated on the operator's breaking-change question.
 
+> **WITHDRAWN, same day — do not build either of these.** Both mechanisms below were superseded by
+> the correction at the end of this document, and one of them is rejected at source: `ec11dcec`
+> deleted `InFlight::reap` deliberately, and MRTR.8b's Design A replaces the interval task with a
+> single `guard(now)` entry point every reader passes through. The two paragraphs are kept because
+> the correction argues against them by name; an implementer who stops reading here would rebuild
+> exactly the pair that was removed.
+
 Two mechanisms, both absent:
 
 1. **`InFlight::reap(&self, now) -> usize`** — `reclaim_abandoned` under the lock, returning how
@@ -399,9 +406,10 @@ goes through `guard(now)`; merged first it would not compile, so the dependency 
 constraint and not merely a logical one.
 
 The reclamation test is unchanged in shape by this correction and gets simpler: with `guard(now)`
-in place, abandon 8 192 exchanges (2x `IN_FLIGHT_CAPACITY`), advance the driven clock past the
-deadline, and `len(now)` is 0 with a fresh `hold` succeeding — no tick to wait for, no wall clock,
-and it cannot go green before Design A lands.
+in place, abandon exactly `IN_FLIGHT_CAPACITY` exchanges and never attempt one more, advance the
+driven clock past the deadline, and `len(now)` is 0 — no tick to wait for, no wall clock, and it
+cannot go green before Design A lands. Filling *past* the ceiling would drain the table through
+`hold`'s existing refusal branch and hand the row a pass that Design A had no part in.
 
 The at-capacity amplifier resolved above survives into Design A unchanged: reclamation now runs on
 *every* read rather than only on refusal, so the O(capacity) walk under the lock is more frequent,
