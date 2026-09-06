@@ -11,12 +11,28 @@ state is stale the moment a leg returns, and it was, twice.
 | 2 | glm-5.3 | SHIP-WITH-FIXES | `e56ef494…` | 08:15:06Z |
 | 2 | grok | SHIP-WITH-FIXES | `7462c16f…` | 08:25:19Z |
 
-Keyed on `material_sha256`, deliberately: the ledger's `head` field pins the branch tip at run
+Keyed on `material_sha256` rather than on the ledger's `head`: `head` pins the branch tip at run
 time and this branch is shared, so every row above carries a `head` belonging to some other
-session's commit. Round 1's two legs share a digest, which is what identical material looks like.
-**Round 2's do not, and I have not reconciled why** — recorded as an open item rather than
-explained away, because "both legs saw the same bytes" is precisely the claim a digest exists to
-support and mine does not support it.
+session's commit.
+
+The digest is a weaker key than its name suggests, and both rounds show a different face of it.
+Both wrappers compute `sha256(scope-arguments + NUL + staged-file)` — `digest()` at
+`~/.claude/bin/synthetic-review:557`, `digest_material()` at `~/.claude/bin/grok-review:653`,
+byte-identical in behaviour. Two consequences, each verified against the ledger rows rather than
+reasoned:
+
+- **Round 1's matching digest attests nothing about the material.** Both rows record
+  `material_bytes` = 205, which is the scope string alone: the payload went in on STDIN, and
+  stdin is outside what the digest covers. Identical digests there mean identical ARGV.
+- **Round 2's differing digests do not mean differing material.** The rows are 15824 and 15822
+  bytes against scope strings that differ by one character — `§P1 gate` versus `P1 gate`, and
+  `§` is two bytes in UTF-8. The material was the same file; the scope was retyped. Reconciled,
+  not open.
+
+So the round-2 legs did review the same bytes, and the round-1 pair is unattested by anything
+except my own invocation. Recorded because the fix is mechanical and belongs to the wrappers,
+not here: a digest whose name says `material` and whose input can omit the material is a claim
+the review process makes and cannot support.
 
 kimi is not in the table because it produced no row at all: `synthetic-review`'s trusted preamble
 tells the model it may inspect the repository read-only, kimi has no filesystem, and it answered
@@ -257,7 +273,14 @@ These are the invariants the implementation must hold, written here so the concu
 has checkable properties rather than prose:
 
 1. `minting_kid` is always a member of `keys`.
-2. Every retained key is within `CONTINUATION_LIFETIME_SECS` of its retirement.
+2. No envelope is ever OPENED under a key past its retention window. This is a property of the
+   refusal, not of the ring's shape, and it holds without pruning: `issued_at` is at most the
+   retirement instant `R`, so `expires_at` is at most `R + CONTINUATION_LIFETIME_SECS`, and the
+   expiry check at `continuation.rs:508` refuses every such envelope on its own. Stating the
+   invariant over the ring instead — *every retained key is within the lifetime of its
+   retirement* — is what invariant 5 makes false: a replica that stops minting never prunes, and
+   the stale key then sits in the ring with nothing wrong happening. Pruning is memory hygiene
+   with no invariant riding on it.
 3. Kids are unique within the live ring.
 4. `minted` is 0 immediately after a rotation, on every path that rotates — and there is one.
 5. Only `mint` writes the ring. `open` takes the read lock and returns a refusal reason decided
