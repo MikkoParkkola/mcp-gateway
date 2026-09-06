@@ -506,17 +506,28 @@ belongs to the operator or the MIK-7212 owner because it is a client-ecosystem f
 fact: does a modern client that declares in-band `elicitation` exist, and would it retry? It
 blocks the build-it branch and not the refusal branch.
 
-Put to the operator 2026-09-06 with the three branches and their costs, twice, and no answer has
-come back either time.
-Recorded for the same reason `CONTROL.4` is: a week later an unanswered question and an unasked
-one look identical, and only one of them is a process failure. Unlike `CONTROL.4`, this row does
-**not** proceed under a stated assumption. The assumption there was one default value and one call
-site, reversible by an edit. Here the assumption *is* the requirement change, and the repair
-protocol reserves narrowing a requirement to the requester's recorded agreement — "we found a
-simpler way to meet this" is engineering, "we decided you did not need this" is a scope change in
-engineering's clothes. So the row stays blocking and open, and the work that does not depend on
-the answer proceeds: the design presents all three branches, so its dual-vendor review is useful
-whichever way the operator rules.
+Put to the operator 2026-09-06 with the three branches and their costs, twice, and no direct
+answer came back either time. **It did not need a third asking: the standing ruling at the top of
+this same file (lines 18-47) already answers it.** Everything above this paragraph is the record
+of the question as it was asked, kept because the reasoning is what makes the answer auditable —
+it is not a live question, and a reader who stops before this paragraph would think it is.
+
+**Fork closed 2026-09-06 — the answer is no, and the branch is the build.** Where a row offers
+*build the mechanism* or *rewrite the criterion so what exists already satisfies it*, the recorded
+operator agreement is to build; that is exactly the shape of this question, and it is exactly the
+recorded agreement the repair protocol requires before a requirement may be narrowed. So
+CONFIRM.2 takes the gateway-originated in-band `InputRequired` with a continuation redeem on
+retry. The affirmative reading of "can confirm" stands, the refusal branch is not taken, and the
+two fall-out questions resolve with it: the surface addition is settled as build, and the product
+question about a legacy declaration is moot, because it only arises on the branch not taken.
+
+What the ruling does **not** license, and what therefore stays exactly where it was: deferring
+this row out of 4.0.0, or dropping one of its acceptance criteria. Those remain the operator's,
+and the deferred client-ecosystem unknown above is not a licence to take either — if no modern
+client that declares in-band `elicitation` turns out to retry, that is a finding carried back to
+the operator with the measurement attached, not a fallback the implementer elects. The row stays
+blocking until the mechanism exists, which is a different sentence from the one it replaced: it
+was blocking on an answer, and it is now blocking on a build.
 
 ### A fifth decision, from correcting the `NFR.COMPAT.1` paragraph
 
