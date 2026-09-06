@@ -102,6 +102,29 @@ pub fn decode_header_value(value: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
+/// Encode a value so it survives an HTTP header field and decodes back.
+///
+/// The exact inverse of [`decode_header_value`], and deliberately written
+/// beside it: two functions in different files drift, and a wrapper that no
+/// longer round-trips is a silent rename of every tool it names.
+///
+/// A value passes through untouched only when it is already a legal, unambiguous
+/// header field value — visible ASCII, no leading or trailing space, and not
+/// itself sentinel-shaped. Everything else is Base64-wrapped. The last clause is
+/// the one an `is_ascii()` check gets wrong: a tool literally named
+/// `=?base64?x?=` is plain ASCII and would decode as a wrapper, so it must be
+/// wrapped to come back as itself.
+#[must_use]
+pub fn encode_header_value(value: &str) -> String {
+    let transparent = !value.is_empty()
+        && !value.starts_with(SENTINEL_PREFIX)
+        && value.bytes().all(|b| (0x21..=0x7e).contains(&b));
+    if transparent {
+        return value.to_string();
+    }
+    format!("{SENTINEL_PREFIX}{}{SENTINEL_SUFFIX}", BASE64.encode(value))
+}
+
 /// Why a request was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeaderMismatch {

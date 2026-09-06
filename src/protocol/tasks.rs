@@ -22,6 +22,12 @@ use serde_json::Value;
 /// name carries the provenance the literal cannot.
 pub const INTERNAL_ERROR: i32 = -32603;
 
+/// The code a task cancelled by its client carries.
+///
+/// From the specification's reserved range, so it is a named constant
+/// regardless of use count: the name carries the provenance the literal cannot.
+pub const REQUEST_CANCELLED: i32 = -32800;
+
 /// Where a task has got to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {

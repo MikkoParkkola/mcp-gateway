@@ -83,6 +83,27 @@ pub(super) fn build_error_response(
     )
 }
 
+/// Build a JSON-RPC error carrying a `data` payload the client must act on.
+///
+/// Separate from [`build_error_response`] rather than an `Option` parameter on
+/// it: every existing caller would have to name a payload it does not have, and
+/// a `None` threaded through forty call sites is how the payload ends up
+/// omitted at the one site that needed it.
+pub(super) fn build_error_response_with_data(
+    id: Option<RequestId>,
+    code: i32,
+    message: impl Into<String>,
+    data: serde_json::Value,
+    session_id: &str,
+    status: StatusCode,
+) -> axum::response::Response {
+    build_response(
+        JsonRpcResponse::error_with_data(id, code, message.into(), data),
+        session_id,
+        status,
+    )
+}
+
 /// Build a JSON-RPC HTTP response body without attaching a session header.
 pub(super) fn build_http_response(
     rpc: &JsonRpcResponse,
