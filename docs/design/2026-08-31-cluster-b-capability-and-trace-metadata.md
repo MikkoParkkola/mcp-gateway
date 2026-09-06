@@ -2,6 +2,21 @@
 
 Status: §P1 design, reviewed. No code. Test plan (§P2): `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`.
 
+**Tree drift since the pin, re-checked 2026-09-06.** The pin below is doing its job and this
+paragraph is the proof: `src` moved after `5c7e64f4` and two of this document's statements about
+the code are now true only at that commit. `baa318b2` (2026-08-31 21:23) added a `baggage` field
+to `TraceContext` with a verbatim parse and a verbatim re-emit; `d4874a25` (21:33) called
+`TraceContext::from_meta` from `invoke.rs:1845-1847`, reading `args.get("_meta")`. Neither is an
+ancestor of `5c7e64f4`. So 2.3's "`baggage` appears nowhere in `src`" and "nothing calls
+`TraceContext` from the request path" are **superseded as statements about HEAD** and stand as
+statements about the pin. Nothing else in this design changes: the gap is the carrier and the
+reach, and both are untouched by those commits — `extract_tools_call_params` still discards
+everything but `(tool_name, arguments)`, and the one read is still a level below where the
+protocol puts `_meta`. What DID change is 3.4's cost: the "new `baggage` field" it warns about
+is no longer hypothetical, so the unbounded verbatim copy it predicted has already landed and
+the bounded read is a repair rather than a precaution. The companion test plan's §12 records the
+commands; its §5 now carries its own pin, which is what this document had and it did not.
+
 Evidence base: every `file:line` below is read from commit `5c7e64f4` (`git show 5c7e64f4:<path>`),
 not from the working tree — four other sessions hold uncommitted edits in this checkout, so a
 line read live may be someone's unmerged change. Spec citations are the MCP core schema for
