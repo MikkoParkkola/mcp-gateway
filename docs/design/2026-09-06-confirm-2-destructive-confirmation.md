@@ -170,7 +170,10 @@ to serve one confirmation would reintroduce both defects for the narrowest possi
 ## Audit record — the repudiation cell
 
 Named because a destructive action whose confirmation leaves no record fails the R of the STRIDE
-short-form, and the security pre-analysis (C6) did not cover it.
+short form, and the security pre-analysis below reaches it only to say it is open. (That gate is
+lettered C6 in the DoR. The `C6` in this document's constraint table is the MRTR-machinery
+measurement and is unrelated — the two letter spaces do not correspond, and this paragraph
+previously read as though they did.)
 
 Today: nothing is recorded beyond a log line naming the tool. `destructive_confirmation.rs`
 contains no occurrence of `principal` or `audit` (V, this session); the refusal path emits
@@ -188,6 +191,47 @@ What each option owes:
 
 This is a gap the design NAMES, not one it closes. Closing it is a change to the gate's logging,
 not to the option chosen, and it applies whichever branch the requester rules for.
+
+## Security pre-analysis — STRIDE short form
+
+The DoR security gate wants this before implementation, not after, and a review leg was right
+that the document answered Q2 without it. It is written here for **both** live options, because
+the requester has not ruled and a pre-analysis that assumes the answer is not one.
+
+Trust boundary: the caller of a destructive meta-tool is authenticated as a transport peer and is
+not thereby authorised to destroy anything — that is what the gate is for. Data locality local,
+partition CP: a confirmation that cannot be resolved must refuse, never proceed. Input surfaces
+today are the tool name and its arguments on the invoke path; Option I adds two, the
+`inputResponses` map and the `requestState` handle a caller returns at the gate.
+
+| | the threat, at this gate | mitigation, and whose bill it is |
+|---|---|---|
+| S | a caller other than the one asked answers the confirmation | R: no channel exists, nothing to spoof. I: the payload already carries `principal_fingerprint`; redemption MUST compare it against the redeeming caller and refuse on mismatch. Inherited primitive, but the comparison is a line Option I owes and does not yet have |
+| T | the arguments confirmed are not the arguments executed | the continuation must bind the arguments digest and re-check it at redemption. Confirming a kill of server A must not redeem against server B. Same discipline as C12's key derivation, at a different site |
+| R | nobody can later show who authorised the kill | OPEN — see the audit-record section above. Named, not closed, in every option |
+| I | the handle or the refusal leaks more than it must | the refusal string names the tool, the declared protocol version and the channel that works (Option R deliverable); a continuation handle must stay opaque and must not carry arguments in cleartext into a log line |
+| D | the gate becomes a denial-of-service surface | the gate IS a DoS control, which is exactly what Q3 asks about. Option I adds unredeemed continuations; `InFlight` already bounds that store, so the bound is inherited rather than newly owed |
+| E | a confirmation widens what the caller may do | the admin gate runs first and stays first (C4). A continuation must be redeemable for the one tool it was minted for, and confirmation must never enlarge the governed set |
+
+Crypto: none new. No key agreement, no signature primitive, so the PQC gate is N/A by the
+symmetric-only fast path — the existing `principal_fingerprint` and digest machinery is reused
+unchanged.
+
+### If the requester rules for the affirmative branch, the emit is unversioned and that blocks
+
+A gateway-authored `InputRequired` is a message the gateway sends that no gateway sends today
+(C9/C10). That is a cross-boundary shape, and the protocol-first gate refuses an unversioned one
+before implementation, not at review. This design does **not** write that schema, deliberately —
+writing it would pick the branch the requester has not picked. Scheduled, with the four fields:
+
+| field | |
+|---|---|
+| owner | the requester, as part of ruling Q2 — it is the same decision |
+| what would resolve it | a versioned schema for the gateway-originated `InputRequired` and for the `inputResponses` shape accepted back at the gate, reviewed as a protocol change |
+| when | before any Option I implementation begins; a YES to Q2 is what triggers it |
+| if it resolves badly | if the shape cannot be versioned inside the 4.0.0 window, Option I is not available in 4.0.0 and Option R is the only live answer — which is the decision Q1 already puts in front of the requester |
+
+Nothing that depends on this is implemented, which is the condition a scheduled deferral has to meet.
 
 ## Explicitly out of scope
 
