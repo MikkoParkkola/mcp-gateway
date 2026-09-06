@@ -368,7 +368,10 @@ has checkable properties rather than prose:
    retirement* — is what invariant 5 makes false: a replica that stops minting never prunes, and
    the stale key then sits in the ring with nothing wrong happening. Pruning is memory hygiene
    with no invariant riding on it.
-3. Kids are unique within the live ring.
+3. Kids are unique within the live ring — a CONSEQUENCE of the successor rule, not a check to
+   write: `minting_kid.wrapping_add(1)` advances by one, and
+   `256 * CONTINUATION_ROTATION_SECS > CONTINUATION_LIFETIME_SECS` keeps the returning value
+   outside the live window. A test asserting uniqueness is really asserting that bound.
 4. `minted` is 0 immediately after a rotation, on every path that rotates — and there is one.
    It is an `AtomicU64` on the key, not a field of the locked ring, so this is a property of
    the new key's construction rather than of the write guard.
