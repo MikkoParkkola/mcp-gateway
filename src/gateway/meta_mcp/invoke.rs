@@ -1843,7 +1843,7 @@ impl MetaMcp {
             let otel_trace_id = args
                 .get("_meta")
                 .and_then(crate::protocol::trace::TraceContext::from_meta)
-                .map(|tc| tc.trace_id().to_string());
+                .and_then(|tc| tc.trace_id().map(str::to_string));
             let sid = otel_trace_id.as_deref().or(session_id).unwrap_or("unknown");
             if let Err(e) =
                 tl.log_invocation(sid, caller, server, tool, &request_hash, &response_hash)
