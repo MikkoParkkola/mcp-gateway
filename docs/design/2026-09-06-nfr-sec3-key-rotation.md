@@ -2,7 +2,7 @@
 
 Status: DESIGN, not reviewed yet. No code exists. Author: `sec-nfr`, 2026-09-06.
 
-## MRTR.5 is the hardest constraint, and it decides the design
+## MRTR.5 is the constraint that decides this design — and its text is narrower than the first draft claimed
 
 Per-process key material is not an accident of the current build. It is the stated
 enforcement mechanism for MRTR.5, at `src/protocol/continuation.rs:776-788`, verified at
@@ -22,13 +22,36 @@ The double-spend set is empty BY CONSTRUCTION. No mechanism can double-spend, be
 second replica can open the envelope at all. That is a structural impossibility, and it is
 the strongest form this property can take.
 
-**A shared key destroys it and a shared ledger does not restore it.** A shared ledger
-replaces impossibility with DETECTION: the spend becomes authentic on every replica, and
-correctness moves from a local mutex to an external store that must be both correct and
-reachable. Per the repair protocol's own test — after the fix, can the finding still be
-STATED? — "two components can disagree about whether an envelope is spent" remains
-statable under a shared ledger and is undescribable today. A shared ledger is therefore a
-PATCH, and elimination is the default on an architecture finding.
+### What MRTR.5 actually says, and the claim this design first got wrong
+
+Quoted rather than paraphrased, because the first draft of this section argued from the
+enforcement comment instead of the criterion and overstated the result. The criterion is two
+rows in `docs/requirements/RELEASE-4.0.0-criteria-status.md:132-133`:
+
+> `MIK-7212.MRTR.5a` — a continuation MUST be single-use
+> `MIK-7212.MRTR.5b` — a continuation MUST expire
+
+Neither mentions replicas. **A linearizable shared ledger with atomic check-and-spend
+PREVENTS a double spend while it is reachable — it does not merely detect one.** The earlier
+"a shared ledger only detects" framing was wrong and is withdrawn. What survives is narrower
+and is the real difference: today the property holds by construction with no reachable
+dependency; under (b) it holds conditionally on an external store being both linearizable and
+up, which forces the partition dichotomy — fail closed and lose liveness, or fail open and
+lose 5a.
+
+The binding objection to (b) is therefore not this prose at all. It is a test-plan row that
+already exists and is already marked blocking
+(`docs/requirements/RELEASE-4.0.0-test-plan.md:301`):
+
+> A token minted by one `AppState` is refused by a second one built through the production
+> constructor from the same configuration, the refusal is `NotAuthentic`, and it is decided
+> before any ledger lookup […] Any implementation that derives key material from
+> configuration or reads it from the environment gives both processes the same key, and
+> fails here while passing every single-process row.
+
+Option (b) is config-supplied key material. That row fails by construction under (b). Meeting
+(b) therefore requires REWRITING an accepted, blocking acceptance criterion — which the repair
+protocol reserves to the requester, recorded, before it happens.
 
 ## What the criterion actually says
 
@@ -56,15 +79,17 @@ rebuilds it. So: no rotate operation, no retention deadline, no retire-after-lif
 
 ## Recommended: per-replica in-place rotation (option C)
 
-On config reload, the replica generates a NEW random key with a new `kid`, makes it the
+On a rotation trigger, the replica generates a NEW random key with a new `kid`, makes it the
 minting key, and RETAINS prior key pairs until max envelope lifetime has elapsed, then
-drops them. Key material stays per-process and written nowhere.
+drops them. Key material stays per-process and written nowhere. Which triggers, and why the
+first draft picked the wrong one, is settled two sections down.
 
 Against the three clauses:
 
-- ROTATABLE — met. Trigger is config reload, a real production caller, so no D7 WIRED
-  violation. A `rotate` added today with no caller WOULD be one. There are TWO reload
-  callers and they do not cost the same; verified at source below.
+- ROTATABLE — met. Two triggers, both real production callers, so no D7 WIRED violation: the
+  `gateway_reload_config` meta-tool is the operator-invocable verb, and an interval task
+  guarantees the cadence when nobody invokes it. A `rotate` added today with no caller WOULD
+  be a violation. Which triggers survive review, and which was dropped, is below.
 - RETAINED — met. Old kids stay verifiable for the max lifetime; `open` already selects
   by kid and already refuses once dropped.
 - VERSIONED — unchanged.
@@ -98,14 +123,31 @@ parameter rather than a restructure because `meta_mcp` is built at `server/mod.r
 the watcher starts at `:1276` in the same function, so the `Arc` is already in scope at the
 call site.
 
-Third fact, and it changes what "trigger" means: **there is no continuation or key section
+Third fact, and it is why the reload trigger is wrong: **there is no continuation or key section
 in `Config` at all**, because the key is process-random and written nowhere. So no config
 FIELD can change to signal a rotation, and `pending_restart_fields` (`src/config_reload/mod.rs:550`)
-has nothing to say about it either. The trigger is therefore *a reload happened*, not *a
-continuation setting changed*. Named as a decision, not assumed: every reload rotates, so an
-operator editing one backend URL also rotates continuation keys. Under 300s retention that is
-invisible to in-flight callers — which is the point of RETAINED — but it is a behaviour
-nobody asked for and the team lead may want it narrowed to an explicit rotate verb instead.
+has nothing to say about it either.
+
+### Revised after review: the watcher leg is dropped and a timer is added
+
+A reviewer's finding, accepted rather than argued: reload is a POOR trigger and choosing it
+manufactured the whole two-caller problem above. A replica that never reloads never rotates,
+so ROTATABLE would be met as a capability and never in practice; and because no continuation
+setting exists, a reload-driven rotation fires on an unrelated backend-URL edit — a behaviour
+nobody asked for.
+
+The revision is strictly smaller than what it replaces:
+
+| trigger | keep? | why |
+|---|---|---|
+| `gateway_reload_config` meta-tool (`src/gateway/meta_mcp/invoke.rs:2836`) | KEEP | free — runs on `&self` of `MetaMcp`, which already owns `continuation`. It is the operator-invocable lever, which is what makes ROTATABLE a verb rather than a property. |
+| file watcher (`ConfigWatcher::start`) | **DROP** | this was the only piece needing new plumbing, and it was coupling rotation to file edits that say nothing about keys. Removing it deletes the new parameter, the `ReloadContext` question and the two-caller table. |
+| interval task inside `ContinuationState` | **ADD** | guaranteed cadence with no plumbing at all: rotation no longer depends on an operator ever reloading. It also gives eager retention pruning a home, so the ring holds only keys inside the 300s window instead of only pruning at the next rotation. |
+
+The interval is a compile-time constant beside `CONTINUATION_LIFETIME_SECS`
+(`src/protocol/continuation.rs:128`), not new config — same reasoning that kept the retention
+window out of config. `CONTINUATION_LIFETIME_SECS` stays the SINGLE source of the retention
+deadline; the rotation code must not carry a second copy of the number.
 
 ### The real mechanical work
 
@@ -125,8 +167,26 @@ Second point, easy to miss: `Keyring` also carries a minted counter and a mint b
 forward makes rotation pointless as a budget reset; resetting it silently gives an attacker
 who can trigger reloads an unbounded mint budget. Named here as a decision, not assumed.
 
-Third: `kid` is a `u8`. 256 kids before wrap. With retention bounded by max envelope
-lifetime the live set is tiny, but wrap must refuse or reuse deliberately, not by overflow.
+Third: `kid` is a `u8`. 256 kids before wrap. Decided rather than left open, because the
+timer trigger makes the rate knowable: at one rotation per interval the live ring holds
+`ceil(300 / interval) + 1` kids, so a kid is REUSED only once its previous holder has been
+dropped — safe by definition, since a dropped key's envelopes can no longer open. A rotation
+that cannot find a free kid does NOT fail its caller: it logs and keeps the current minting
+key. Rotation is a hygiene operation, and failing an operator's reload because key hygiene
+could not run is a worse outcome than skipping one rotation.
+
+Rotation emits one log line — old kid, new kid, trigger, retained-key count. Without it the
+residual `NotAuthentic` failures around a rotation window have no correlating event, and a key
+ceremony with no trail is not auditable.
+
+These are the invariants the implementation must hold, written here so the concurrency work
+has checkable properties rather than prose:
+
+1. `minting_kid` is always a member of `keys`.
+2. Every retained key is within `CONTINUATION_LIFETIME_SECS` of its retirement.
+3. Kids are unique within the live ring.
+4. The mint budget's treatment across a rotation is whatever the decision above settles, and
+   it is the same on every path.
 
 ## Rejected alternatives
 
@@ -137,12 +197,15 @@ agreement runs the other way, `:25-27` — "implement the full 4.0.0 scope, with
 fixed with the full scope". Cited, not re-argued.
 
 **(b) Config-supplied shared keys + reload-time rotation + shared consumed-ledger +
-in-flight continuity.** Feasible, and strictly worse on the property named above as the
-hardest constraint. It trades a structural impossibility for a detection mechanism whose
-correctness depends on an external store's atomicity and reachability, and it must then
-answer what a partition does — fail closed and lose liveness, or fail open and lose MRTR.5.
-It is also the larger build by a wide margin. Rejected because (c) meets all three clauses
-of the criterion as written WITHOUT paying that, not because it is too big.
+in-flight continuity.** Feasible, and it does meet MRTR.5's text — a linearizable shared
+ledger prevents a second spend, it does not merely notice one. Two things stand against it,
+and only the first is decisive. It fails an accepted blocking test-plan row as written
+(`RELEASE-4.0.0-test-plan.md:301`, quoted above), so adopting it requires the requester to
+rewrite that criterion, recorded, before the work starts. And it moves single-use from a
+property that holds by construction to one conditional on an external store being
+linearizable and reachable, which forces the partition answer — fail closed and lose
+liveness, or fail open and lose 5a. It is also the larger build by a wide margin, which is
+the least interesting objection and is not why it is declined here.
 
 This is a §P3 design event and is named as one: (b) is the scoped instruction, and this
 design declines three of its four pieces. That decision belongs to the team lead to confirm
@@ -163,7 +226,7 @@ them gets built first.
 |---|---|---|
 | 1 | Does the criterion's author read "rotatable" as requiring operator-supplied material? If yes, (c) does not meet it and (b) returns. | ASKABLE, not checkable — asked of the team lead in the message accompanying this design. Blocks all four pieces. |
 | 2 | What is "the max lifetime" as a number, and is it bounded anywhere today? RETAINED is unimplementable without it. | RESOLVED, checkable. `rg CONTINUATION_LIFETIME_SECS src/` — `const CONTINUATION_LIFETIME_SECS: u64 = 300` at `src/protocol/continuation.rs:128`, not a parameter and deliberately not one. The retention window is therefore 300 seconds, a compile-time constant. It changed the design: the retention deadline needs no new config and no new plumbing. |
-| 3 | Can the config-reload path actually REACH the live keyring? The whole ROTATABLE claim, and the D7 WIRED argument with it, rests on this. | RESOLVED, checkable. `rg -n "MetaMcp\|continuation\|ContinuationState" src/config_reload/` — zero hits; `ReloadContext` (`:1371-1388`) holds config path, live config, registry, failsafe, TTL and env, and no gateway handle. The meta-tool caller reaches it for free, the file watcher does not. It changed the design: the "free trigger" claim was half true, the watcher needs one new parameter, and the trigger is *a reload happened* rather than *a setting changed* because no continuation setting exists. Written up above rather than left as a table cell. |
+| 3 | Can the config-reload path actually REACH the live keyring? The whole ROTATABLE claim, and the D7 WIRED argument with it, rests on this. | RESOLVED, checkable. `rg -n "MetaMcp\|continuation\|ContinuationState" src/config_reload/` — zero hits; `ReloadContext` (`:1371-1388`) holds config path, live config, registry, failsafe, TTL and env, and no gateway handle. The meta-tool caller reaches it for free, the file watcher does not. It changed the design twice: first the "free trigger" claim turned out half true, and then review showed the reload trigger was the wrong choice altogether. The watcher leg is dropped, the meta-tool leg is kept as the operator's rotate verb, and an interval task supplies the cadence. Written up above rather than left as a table cell. |
 
 Question 1 is load-bearing: a yes reverses the recommendation.
 
