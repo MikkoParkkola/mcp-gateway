@@ -474,7 +474,7 @@ this section.
 |---|---|---|
 | MIK-7272 (RESULT.1-2, ERROR.1-2, ORDER.1-3) | 9 of 22 | yes — see MIK-7272 section above |
 | MIK-7272 (EXT, OAUTH, OTEL, SUB, TASK) | 13 of 22 | yes, 2026-08-31 — see MIK-7272 section above (13 rows once SUB.1 was split into three clause rows and SUB.2 into two; 8 MET, 3 UNWIRED, 2 ABSENT; 5 of the 13 blocking, after SUB.1's GET clause and SUB.3 were closed on 2026-08-31 by the `GET /mcp` era gate) |
-| MIK-7217.DISCOVER | 11 | yes, 2026-08-31 — see MIK-7217 section above (11 clause rows, 4 blocking) |
+| MIK-7217.DISCOVER | 11 | yes, 2026-08-31 — see MIK-7217 section above (11 clause rows, all MET, none blocking as of 2026-09-06; the four that were blocking on 2026-08-31 closed as the discovery document landed on both dispatch paths). Ledger rows MET is not proof the Linear ticket is complete: `MIK-7217`'s own acceptance set is numbered `MCP728.DISCOVER.1-8` and its AC.2 requires `server/discover` on five other repositories, which no row here reaches |
 | MIK-7246.CONFIRM | 4 | yes, 2026-08-31 — see MIK-7246 section above (4 clause rows after CONFIRM.1 was split; 2 MET — CONFIRM.1b and CONFIRM.3; CONFIRM.1a PARTIAL — the stdio gap is closed in the tree and the row is held open only for a green suite and a review; CONFIRM.2 ABSENT, so 2 blocking) |
 | MIK-7214.HEADER.7-9 | 3 | yes, 2026-08-31 — see MIK-7213/7214 section above (HEADER.7 and .8 MET without caveat as of 2026-08-31; HEADER.9 ABSENT/blocking) |
 | MIK-7214.HEADER.5 | 1 | corrected twice on 2026-08-31: recorded ABSENT, revised to UNWIRED when `param_headers.rs` landed, back to ABSENT once its unwired outbound helpers were deleted rather than kept as dead API |
