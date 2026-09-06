@@ -4447,6 +4447,7 @@ const MODERN_SESSIONLESS: Option<&str> = Some("");
 /// A mock streamable-http MCP backend that answers `tools/list` and
 /// `tools/call`, so a promotion can be driven through the production
 /// `gateway_invoke` path instead of by calling `promote_tool_for_session`.
+#[cfg(feature = "spec-preview")]
 async fn start_invokable_mock() -> String {
     use axum::Json;
     use axum::Router;
@@ -4493,6 +4494,7 @@ async fn start_invokable_mock() -> String {
 }
 
 /// The tool names in a `tools/list` response, in the order returned.
+#[cfg(feature = "spec-preview")]
 fn tools_list_names(resp: &JsonRpcResponse) -> Vec<String> {
     resp.result.as_ref().unwrap()["tools"]
         .as_array()
@@ -4736,7 +4738,7 @@ async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
 ///
 /// Every observation is pinned to the same default-state literal rather than
 /// compared with the one before it: comparing two observations would pass both
-/// when the set_state silently did nothing and when a regression moved both
+/// when the `set_state` silently did nothing and when a regression moved both
 /// lists in step.
 ///
 /// Q4 — whether `gateway_set_state` is refused outright on a sessionless
@@ -4748,7 +4750,12 @@ async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
 async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
     let meta = meta_with_state_staged_capabilities().await;
 
-    let list_before = discovery_names(&meta.list_tools(&json!({}), MODERN_SESSIONLESS).await.unwrap());
+    let list_before = discovery_names(
+        &meta
+            .list_tools(&json!({}), MODERN_SESSIONLESS)
+            .await
+            .unwrap(),
+    );
     let search_before = discovery_names(
         &meta
             .search_tools(&json!({"query": "staged"}), MODERN_SESSIONLESS)
@@ -4775,7 +4782,12 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
         )
         .await;
 
-    let list_after = discovery_names(&meta.list_tools(&json!({}), MODERN_SESSIONLESS).await.unwrap());
+    let list_after = discovery_names(
+        &meta
+            .list_tools(&json!({}), MODERN_SESSIONLESS)
+            .await
+            .unwrap(),
+    );
     let search_after = discovery_names(
         &meta
             .search_tools(&json!({"query": "staged"}), MODERN_SESSIONLESS)
@@ -4800,6 +4812,74 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
         assert_eq!(
             observed, STAGED_DEFAULT_TOOLS,
             "{label}: a gateway_set_state on this connection changed what it is shown"
+        );
+    }
+}
+
+/// B-08 — ORDER.2a on the FSM leg: a `gateway_set_state` issued by one modern
+/// connection must not change what a *different* modern connection is shown.
+///
+/// A and B carry the same session tuple here, and that is not a shortcut in
+/// the fixture — it is the defect. A modern HTTP connection presents
+/// `Some("")` (`server/mod.rs` supplies the empty string), so at every seam
+/// below the transport, two independent connections are one key. After (c)
+/// `session_key` maps that key to `None` and neither connection can hold a
+/// state at all, which is why the same tuple stops being a shared entry.
+///
+/// What distinguishes this case from B-09 is therefore not the fixture but the
+/// claim: B issues no `gateway_set_state` of its own and is still shown the
+/// state A selected. B-09 asserts the same connection is unaffected by its own
+/// call; this asserts a bystander is unaffected by someone else's.
+///
+/// The Q4 outcome pin — whether A's call is refused outright — is deferred on
+/// the same terms as B-09's: this case asserts the half that holds under
+/// either answer.
+#[tokio::test]
+async fn b08_one_connections_set_state_does_not_change_another_connections_set() {
+    let meta = meta_with_state_staged_capabilities().await;
+
+    // Connection A. Driven through the real meta-tool: the defect is the
+    // argument passed at `mod.rs:1689`, and a fixture touching
+    // `SessionStateStore::set_state` directly bypasses the line under test.
+    let _ = meta
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_set_state",
+            json!({"state": TARGET_STATE}),
+            MODERN_SESSIONLESS,
+            allow_all_ctx(),
+        )
+        .await;
+
+    // Connection B, which has issued no state change of its own.
+    let list = discovery_names(
+        &meta
+            .list_tools(&json!({}), MODERN_SESSIONLESS)
+            .await
+            .unwrap(),
+    );
+    let search = discovery_names(
+        &meta
+            .search_tools(&json!({"query": "staged"}), MODERN_SESSIONLESS)
+            .await
+            .unwrap(),
+    );
+    let single = discovery_names(
+        &meta
+            .list_tools(&json!({"server": "staged"}), MODERN_SESSIONLESS)
+            .await
+            .unwrap(),
+    );
+
+    for (label, observed) in [
+        ("gateway_list_tools", &list),
+        ("gateway_search_tools", &search),
+        ("gateway_list_tools server=staged", &single),
+    ] {
+        assert_eq!(
+            observed, STAGED_DEFAULT_TOOLS,
+            "{label}: another connection's gateway_set_state changed what this \
+             connection is shown"
         );
     }
 }
