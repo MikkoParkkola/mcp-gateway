@@ -1,16 +1,23 @@
 # ORDER.2 — list results must not vary per connection, nor as a side effect
 
-MIK-7272.ORDER.2a, MIK-7272.ORDER.2b. Design only. No code, no tests.
+MIK-7272.ORDER.2a, MIK-7272.ORDER.2b. This note adds no code and no tests. It is not, however, a design written ahead of all of its subject: two of the three legs below had already landed when it was written (`eb9e537a`, `76b8536c` and the five profile cases are ancestors of the revision under review). For those two legs this note is a POST-HOC RECORD and should be read as one; only the third leg, the FSM workflow-state store, is designed here before it is built. A reviewer judging the closed legs is judging a decision already constrained by its implementation, and saying so is cheaper than implying otherwise.
 
 ## What this note is, and is not
 
 This is a **delta** on `docs/design/2026-08-31-cluster-b-connection-invariance.md`
 (Part I of that note *is* ORDER.2) and its sibling test plan. It does not restate
 the option analysis, the blast radius, or the cases already written there. It
-records two things that note could not: that the profile leg has since been
-**closed in code**, and that the one remaining leg is the `spec-preview`
-promotion store, which cluster-b classified in its §I.2 and explicitly left to
-"whichever ORDER.2 option is chosen".
+records what that note could not: which legs have since **closed in code** and which
+have not. Three legs, measured against `fd93bf87` and not against a working tree.
+The routing profile is closed and carried by five cases. The `spec-preview`
+promotion store — which cluster-b classified in its §I.2 and explicitly left to
+"whichever ORDER.2 option is chosen" — is closed in code at `eb9e537a` but has no
+sessionless case behind it. The **FSM workflow-state store is the one leg still open
+in committed code**: `76b8536c` converged four discovery entry points onto one
+accessor, which is the precondition for a filter and is not the filter. An earlier
+revision of this paragraph named `spec-preview` as the sole remainder; that was
+written before `eb9e537a` landed and is corrected here rather than left to mislead
+an implementer into repairing the leg that is already done.
 
 ## §P0 SCOPE
 

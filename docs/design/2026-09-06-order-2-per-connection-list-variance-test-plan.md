@@ -151,18 +151,28 @@ recorded as untested:
   by B-07, so until B-07 exists, `B-10` (2b, same-connection) is the *only*
   promotion case with code behind it.
 
-## Open question this plan waits on
+## The question this plan waited on, and its answer
 
 **Q4** — whether `gateway_set_state` should be refused on a modern connection in
-the default build, as `gateway_set_profile` already is. With the operator, queued
-by the team lead, not self-decidable: it changes a tool that succeeds today for a
-client doing nothing wrong.
+the default build, as `gateway_set_profile` already is. Not self-decidable: it
+changes a tool that succeeds today for a client doing nothing wrong.
 
-Q4 governs **B-08's and B-09's assertions, not their existence.** Both are
-written to assert the refusal *and* the unchanged lists if Q4 ratifies, or the
-leak alone if it declines — B-08's row says so, and that conditional phrasing is
-what stops it going green without ever constructing the state it observes. B-10
-and the repaired B-07 do not depend on Q4 and are unblocked.
+**Asked of the operator — ratified 2026-09-06, option (c): it is refused.** What
+that changed: B-08 and B-09 are no longer conditional. They assert the refusal,
+and the conditional phrasing that used to stand in for the ratification comes out.
+
+Both cases MUST assert the returned error, not merely that the lists did not move.
+A `gateway_set_state` that silently does nothing satisfies an unchanged-list
+assertion exactly as well as the ratified refusal does, so a case that discards the
+call's response cannot tell the repair from its absence — the §P2 failure mode of a
+case that passes while the thing it names is broken.
+
+The message is asserted too, and it is NOT today's. HEAD returns
+`gateway_set_state requires a session (send Mcp-Session-Id header)`
+(`mod.rs:1696`), and the modern HTTP router deliberately ignores that header — so
+the remediation it offers a modern caller cannot be followed. The refusal this plan
+asserts names the condition rather than an impossible fix. B-10 and the repaired
+B-07 never depended on Q4 and stay unblocked.
 
 ## Review record
 
