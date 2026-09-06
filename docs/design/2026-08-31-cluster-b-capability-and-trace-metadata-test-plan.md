@@ -73,21 +73,26 @@ E1, E2 and E3 assert against code that already shipped (`ServerCapabilities.exte
 
 The restore must be of content, not of working-tree state. `git stash` around a committed change removes only later edits; `git checkout -- <path>` discards an uncommitted repair. Use `git show <pre-fix-ref>:<path>`, under a `trap` that copies a `mktemp` backup back on `EXIT INT TERM`.
 
-**`<pre-fix-ref>` is pinned, not left to the runner.** A recipe naming no ref is decorative — it
-cannot be run as written, which is the empty cell this section exists to forbid. The two refs, both
-found with `git log -S` against the file under test rather than assumed:
+**The probe MUTATES; it does not restore a pre-field tree.** A ref-pinned restore was tried and
+is wrong here: `6daf020f^` is the last tree without `ServerCapabilities.extensions`, and the same
+commit gave `build_server_capabilities` its map parameter — so a test file written against today's
+signature does not COMPILE against that tree. A compile failure is the wrong failure. §P2 is
+explicit: *a missing-import error is not a caught defect; read the assertion, not the exit code.*
+A restore that cannot reach the assertion produces no falsification evidence at all.
 
-| what the probe restores | ref | why that one |
+Each case therefore names a **one-line mutation** that leaves the code compiling and makes exactly
+that case's assertion false:
+
+| case | mutation | the assertion it must break |
 | --- | --- | --- |
-| `src/protocol/types.rs` without `ServerCapabilities.extensions` | `6daf020f^` (parent of `feat(capabilities): declare the extensions map in server capabilities`) | `6daf020f` is the commit that added the field; its parent is the last tree in which the field does not exist. Verified: `git show 6daf020f^:src/protocol/types.rs` contains no `pub extensions`. |
-| `src/gateway/meta_mcp_helpers.rs` with the builder unwired | `6daf020f^` | the same commit rewrote `build_server_capabilities` to take the map as an argument, so one ref restores both halves of the retrofit. |
+| E1 | change the field attribute on `ServerCapabilities.extensions` to `#[serde(skip)]` | the key is absent for a non-empty map — E1's presence assertion fails |
+| E2 | drop `skip_serializing_if = "HashMap::is_empty"`, keeping `default` | an empty map emits `"extensions": {}` — E2's absence assertion fails, and this is the pre-`f8fcbcb1` behaviour reproduced without leaving the current tree |
+| E3 | in `build_server_capabilities`, replace `extensions` with `HashMap::new()` and bind the parameter as `_extensions` | the builder ignores its argument — E3's literal `example.test/probe` assertion fails |
 
-Do **not** reach for `f8fcbcb1` (`fix(protocol): omit empty extensions from server capabilities`)
-as the pre-fix ref. It added `skip_serializing_if = "HashMap::is_empty"` a day after the field
-landed; restoring its parent gives a tree where the field exists and always serialises, which is
-the state E2 was inverted to reject (§3, E2) — a probe against it would show E2 failing for the
-right reason on the wrong question. `f8fcbcb1` is the ref for a probe of the **omission** rule
-itself, and nothing in E1-E3 asserts that rule directly.
+Restore discipline is unchanged and is the part that gets skipped: `cp` the file to a unique
+`mktemp` backup BEFORE mutating, `trap 'cp "$keep" <path>' EXIT INT TERM`, and verify the restore
+by RE-RUNNING the case, never by `git status` — mutation and repair are both modifications and
+`status` reports them identically.
 
 E3 is the probe that carries the section. E1 and E2 both survive a builder that ignores its argument — E1 because a hardcoded non-empty map still emits the key, E2 because absence is also what an unwired field emits (§4.1). Only E3 pins identity: mutate `build_server_capabilities` to ignore the map it is handed, and E3 must fail on the literal `example.test/probe` assertion. A probe run on E1 or E2 alone is evidence of nothing.
 
