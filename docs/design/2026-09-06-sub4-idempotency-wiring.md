@@ -81,14 +81,33 @@ the failure the function's own doc comment warns about for the response cache:
 "a write that lands under a key no read computes is a cache that never hits while
 looking exactly like one that does" (`support.rs:48-51`).
 
-So the derivation moves INTO the function rather than being duplicated beside it:
-`idempotency_key_for` takes `cache_binding: Option<&str>` and formats the suffix
-itself. After that change there is no second derivation to diverge — the defect
+A second, worse defect sits in the same expression, and the second reviewer
+found it: `identity_suffix` keys on `cache_binding` ALONE, and that is
+`.unwrap_or_default()` — the empty string — whenever identity propagation is
+off, which is the shipped default. Two authenticated callers who pick the same
+client key therefore share one idempotency entry, and the second caller is told
+its call is a duplicate of a call it never made. The code says so itself, three
+lines below: "Keying on the binding alone let two authenticated callers share
+one entry whenever propagation was off, which is the shipped default"
+(`invoke.rs:1135-1137`). That comment explains why `caller_principal` was fixed
+to fall back to the verified subject — and records that `identity_suffix` was
+deliberately left on the old footing. Nothing was wrong with that while the
+cache was off. Turning it on by default is what makes it reachable, so this
+change owns the defect.
+
+So the derivation moves INTO the function rather than being duplicated beside it,
+and it moves onto the principal rather than the binding: `idempotency_key_for`
+takes `caller_principal: Option<&str>` — the value already computed at
+`invoke.rs:1140-1142` for the response cache — and formats the suffix itself. After that change there is no second derivation to diverge — the defect
 stops being describable rather than being tested for. `projection_key_suffix`
 stays a parameter: it has three consumers (`:1150`, `:1218`, `:1791`) and one
 producer (`crate::projection::projection_key_suffix`), so it is already
 single-owner and folding it in would couple the idempotency key to the response
 cache's argument list.
+
+Keying both on one `caller_principal` is the elimination, not a coincidence: the
+two caches then agree about WHO a call belongs to, and there is no second answer
+to that question for them to disagree about later.
 
 ## Decision: default ON is not a behaviour change (§P3, named)
 
@@ -103,6 +122,13 @@ expectation that it is honoured.
 This is named as a design decision anyway, because "default on" for a guard that
 can return 409 is the kind of choice that must be visible rather than inferred
 from a config default.
+
+The heading overstates it, and the first review said so. For a client that DOES
+send keys, default-ON is a behaviour change: it can now receive 409 on a live
+duplicate or a fingerprint mismatch, and 503 at `MAX_ENTRIES`. Calling that "not
+a behaviour change" because such a client asked for the guard is an argument
+about whether the change is WELCOME, not about whether it is one. The keyless
+no-op claim above is the part that survives unqualified.
 
 ## Risks (G8)
 
@@ -127,6 +153,17 @@ from a config default.
 - *Is a cleanup task required, or does the cache self-evict?* — read `idempotency.rs:355,605` — `evict_expired` exists but is only driven by `spawn_cleanup_task`, which `enable_idempotency` already spawns — **no separate wiring needed**.
 
 ## Deferred (owner, trigger, fallback)
+
+- **Operator approval for the default-ON breaking change (DoR C5).** Owner: the
+  operator. Resolves when they accept or refuse default-ON for clients already
+  sending idempotency keys. Trigger: before the implementation merges — the
+  design and the tests do not depend on the answer, only the config default
+  does. If it resolves badly (refused), the fallback is option (b), default-OFF,
+  which does NOT satisfy `SUB.4` as a MUST and would ship with the criterion
+  narrowed and that narrowing recorded. Stated as a real fork rather than
+  assumed in this change's favour, because a `409` reaching a client that has
+  never seen one is exactly the class of change an operator is entitled to
+  refuse.
 
 - **Distributed idempotency across processes.** Owner: `MIK-7272`. Resolves when
   a multi-process deployment is supported. Trigger: the first HA deployment
@@ -159,9 +196,11 @@ change would ship as option (a) plus a recorded, narrowed criterion.
 
 ## Review round 1 (§P4)
 
-- **Codex/GPT** — leg 1 produced no verdict: the first run exited with an empty
-  output file and no live process, and was relaunched. Recorded here rather than
-  scraped from body text (§PA: a verdict is a ledger row and an exit status).
+- **Codex/GPT** — `SHIP-WITH-FIXES`. Run:
+  `~/.claude/data/reviews/runs/gpt-20260906T210031Z-60264.md`. The run appeared
+  dead — an empty output file with no live process — and was relaunched before
+  it reported; the first run had in fact completed. An empty run file is a race
+  until the process exits, and this one was read too early.
 - **Kimi** — `SHIP-WITH-FIXES`. Run:
   `~/.claude/data/reviews/runs/synthetic-20260906T210035Z-60804.md`.
 
@@ -172,4 +211,7 @@ Findings and disposal:
 | The single-owner claim is false: key derivation lives at the call site | CONFIRMED — `invoke.rs:1128-1132` formats `identity_suffix` by hand; `support.rs:35-44` takes it pre-formatted | ELIMINATED, not patched — derivation hoisted into `idempotency_key_for`. The finding is no longer statable. |
 | Exit criteria lack a cross-route key-equivalence test and a per-route 409 test | CONFIRMED by reading the criteria as written | Both added as criteria 3 and 4. |
 | The grep-based MET criterion passes by construction | CONFIRMED — `rg` for a line the change itself adds cannot fail | Removed, and its removal stated rather than silent. |
+| Default-ON activates cross-principal replay: the key binds to `cache_binding`, empty under the shipped default | CONFIRMED — `invoke.rs:1128-1132` plus the repo's own comment at `:1135-1137` | ELIMINATED — the key moves onto `caller_principal`, the value the response cache already uses. |
+| Default-ON is a breaking change needing recorded approval and a migration (DoR C5) | CONFIRMED — `enforce` returns 409/503 that a key-sending client cannot see today | Deferred to the operator with owner, trigger and a stated fallback; the heading claiming "not a behaviour change" is corrected rather than defended. |
+| Keyless side effects stay unprotected | CONFIRMED, and it is the design's stated scope, not a defect | No change. A keyless call carries no key to deduplicate on; protecting it would mean inventing one, which `src/idempotency.rs` removed deliberately. |
 | The cited `rg` outputs are unreproducible from the reviewer's position | Accurate about the review position, not a defect in the design | Noted: the reviewer has no filesystem access, so every citation here is evidence only to a reader who can run it. The commands are recorded with their outputs above for exactly that reason. |
