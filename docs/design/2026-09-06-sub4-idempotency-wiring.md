@@ -67,9 +67,28 @@ such cost, per the decision below.
 `IdempotencyConfig` under `config/features/` defaulting `enabled: true`; call
 `enable_idempotency` from `server/mod.rs` in the existing `enable_*` chain; at
 the direct route, parse `RetryFields` with the same parser the meta route uses
-(`protocol/mrtr.rs:117`) and call the same `idempotency::enforce`. The policy
-keeps a single owner — the shared function — even with two call sites, the
-pattern `MIK-7212.MRTR.10b` established for `cacheable::is_final`.
+(`protocol/mrtr.rs:117`) and call the same `idempotency::enforce`, the pattern
+`MIK-7212.MRTR.10b` established for `cacheable::is_final`.
+
+Sharing the guard function is *not* by itself enough to give the policy a single
+owner, and the first version of this design claimed it was. `idempotency_key_for`
+takes an already-formatted `identity_suffix`, and that formatting is hand-written
+at the call site (`invoke.rs:1128-1132`, `format!("|idp:{b}")`), where it has
+exactly one consumer (`rg -n 'identity_suffix' src/gateway/meta_mcp/invoke.rs`
+-> `:1128`, `:1138` comment, `:1151`). A second call site reproducing that
+expression is a second derivation, and two derivations of one key is precisely
+the failure the function's own doc comment warns about for the response cache:
+"a write that lands under a key no read computes is a cache that never hits while
+looking exactly like one that does" (`support.rs:48-51`).
+
+So the derivation moves INTO the function rather than being duplicated beside it:
+`idempotency_key_for` takes `cache_binding: Option<&str>` and formats the suffix
+itself. After that change there is no second derivation to diverge — the defect
+stops being describable rather than being tested for. `projection_key_suffix`
+stays a parameter: it has three consumers (`:1150`, `:1218`, `:1791`) and one
+producer (`crate::projection::projection_key_suffix`), so it is already
+single-owner and folding it in would couple the idempotency key to the response
+cache's argument list.
 
 ## Decision: default ON is not a behaviour change (§P3, named)
 
@@ -94,8 +113,10 @@ from a config default.
    that never saw it.
 2. **The direct route's parse is new surface.** The meta route's key handling is
    proven; the direct route's is not, and a wrong fingerprint there is worse
-   than no guard — it serves one call's result to another. Mitigated by using
-   the shared parser and the shared `enforce` rather than a second derivation.
+   than no guard — it serves one call's result to another. Mitigated by the
+   shared parser, the shared `enforce`, and by hoisting the identity-suffix
+   formatting into `idempotency_key_for` so the direct route cannot express a
+   different key at all.
 3. **In-process only.** Two gateway processes behind a load balancer do not
    share the cache. Out of scope, not a regression: nothing is shared today.
 
@@ -115,11 +136,40 @@ from a config default.
 
 ## Exit criteria (G18)
 
-MET when: `rg 'enable_idempotency' src/` shows a production caller outside
-`meta_mcp/mod.rs`; a test drives a keyed call twice through each route and sees
-one dispatch; a keyless call is unaffected on both routes; and the criteria
-count moves from 28 blocking to 27.
+MET when all four behavioural tests pass:
+
+1. A keyed call driven twice through the meta route dispatches once.
+2. A keyed call driven twice through the direct route dispatches once.
+3. The same logical call with the same client key, driven once through each
+   route, hits ONE cache entry — the cross-route key-equivalence test. This is
+   the falsifier for the divergent-derivation defect above; without it the
+   single-owner claim is structural inference, and the hoist could be reverted
+   with every other test still green.
+4. A keyless call is unaffected on both routes, and a key bound to a different
+   fingerprint returns 409 on each route.
+
+NOT a criterion: `rg 'enable_idempotency' src/` finding a production caller. It
+passes the moment the line is typed and can never fail while the change exists,
+so it measures nothing. The criteria count moving from 28 blocking to 27 is an
+administrative consequence of these tests passing, not evidence that they did.
 
 KILL if: the direct-route parse turns out to require changing ADR-008 rung 2's
 routing decision. That is a separate design with a separate review, and this
 change would ship as option (a) plus a recorded, narrowed criterion.
+
+## Review round 1 (§P4)
+
+- **Codex/GPT** — leg 1 produced no verdict: the first run exited with an empty
+  output file and no live process, and was relaunched. Recorded here rather than
+  scraped from body text (§PA: a verdict is a ledger row and an exit status).
+- **Kimi** — `SHIP-WITH-FIXES`. Run:
+  `~/.claude/data/reviews/runs/synthetic-20260906T210035Z-60804.md`.
+
+Findings and disposal:
+
+| finding | verified at source | response |
+|---|---|---|
+| The single-owner claim is false: key derivation lives at the call site | CONFIRMED — `invoke.rs:1128-1132` formats `identity_suffix` by hand; `support.rs:35-44` takes it pre-formatted | ELIMINATED, not patched — derivation hoisted into `idempotency_key_for`. The finding is no longer statable. |
+| Exit criteria lack a cross-route key-equivalence test and a per-route 409 test | CONFIRMED by reading the criteria as written | Both added as criteria 3 and 4. |
+| The grep-based MET criterion passes by construction | CONFIRMED — `rg` for a line the change itself adds cannot fail | Removed, and its removal stated rather than silent. |
+| The cited `rg` outputs are unreproducible from the reviewer's position | Accurate about the review position, not a defect in the design | Noted: the reviewer has no filesystem access, so every citation here is evidence only to a reader who can run it. The commands are recorded with their outputs above for exactly that reason. |
