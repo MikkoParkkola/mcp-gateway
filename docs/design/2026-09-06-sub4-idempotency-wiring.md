@@ -109,6 +109,19 @@ Keying both on one `caller_principal` is the elimination, not a coincidence: the
 two caches then agree about WHO a call belongs to, and there is no second answer
 to that question for them to disagree about later.
 
+`caller_principal` is itself `Option`, and the repair does not invent a principal
+where none exists: with no binding AND no verified identity it is `None`, and
+callers are then indistinguishable to the key. That case is not introduced here
+and is not narrowed to idempotency — `response_cache_key_for` takes the same
+`principal: Option<&str>` and passes it to `ResponseCache::response_key`
+(`support.rs:65-77`), so a gateway that cannot tell its callers apart already
+shares every cached response between them. What the repair removes is the
+strictly larger case the code named: a gateway that CAN tell its callers apart,
+by verified identity, and keyed on the binding anyway because propagation was
+off. Closing the remaining case means requiring an authenticated principal
+before the guard engages, which is a policy decision about who may call an
+unauthenticated gateway, not a property of this key.
+
 ## Decision: default ON is not a behaviour change (§P3, named)
 
 Turning this on changes nothing for a client that sends no idempotency key.
