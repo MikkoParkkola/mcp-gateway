@@ -100,3 +100,21 @@ individually at the row's head: `invoke.rs:906`, `:954`, `:1214`, `:1787` and `m
 `authz_tests` declaration moved to `:1793` inside that window, correct at both review heads and
 stale by the time the row landed. Re-pointed in `89292be1`, immediately before this record. That is the whole
 contamination check; the head-pair equality is not it.
+
+**What of the canonical DoR actually travelled — a stated limit of both legs.** §P4 requires
+every plan review to also check the canonical criteria, and both vendors are filesystem-isolated,
+so a criterion that does not travel in the payload is a criterion nobody checked. What travelled
+was one paraphrased sentence, identical in both payloads: judge it against the canonical DoR —
+every open question scheduled (resolved = the question, the check run, what came back, what it
+changed; or deferred = owner, what would resolve it, when, what if it resolves badly), an
+explicit out-of-scope statement, dependencies mapped. That is the applicable subset for a plan,
+and it is the subset both legs answered. What did **not** travel is
+`rules-source/_reference/workflows/quality-gates-dor.md` itself — neither its text nor its path,
+and neither vendor could have fetched it. So the honest claim is: the three plan-applicable
+criteria were checked; the 84-gate file was not read by either reviewer. Recorded as a limit,
+not repaired — re-firing both legs to transmit a file whose applicable content is those three
+lines buys a round and no information.
+
+**What the reviewers actually read.** Both payloads are the plan as of `6dd1c4fa`. This verdicts
+section was appended afterwards and is not part of the reviewed material — recomputing either
+digest from the current file will not reproduce it, and that is expected, not drift.
