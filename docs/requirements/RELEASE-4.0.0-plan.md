@@ -399,9 +399,14 @@ touched by other sessions. Coordinate before editing them.
 
 ## Open for the operator
 
-Six decisions are the requester's, not the team lead's, and are recorded here rather than in the
-design that raised each one so they survive a session boundary. None blocks the work that does not
-turn on it. Each names what changes either way, so an answer costs a sentence.
+Eight decisions are the requester's, not the team lead's, and are recorded here rather than in the
+design that raised each one so they survive a session boundary. Each names what changes either way,
+so an answer costs a sentence.
+
+Six of them leave work that does not turn on them free to proceed. Items 7 and 8 do not: both block
+`NFR.PERF.4` outright, because a design built while question 7 is open would be built against an
+acceptance criterion its own frozen scope may foreclose. That is why they carry no fallback that
+starts code.
 
 Scheduled per §P1 rather than described: every one of them is *deferred*, the owner is the
 operator in all cases, and the resolving action is the question being asked — none is settled by
@@ -413,6 +418,8 @@ running anything, which is why none has a command against it.
 | 5. whether v4.0.0 lands as one merge or a sequence of them | **answered 2026-09-03: a sequence of per-cluster PRs.** Cluster A first, then each later cluster on its own PR; cluster F's default flip lands after both A and C | resolved | — |
 | 4. what the direct `POST /mcp/{name}` route needs | operator says whether it gets its own instrumentation, and whether CACHE.1-4 are HTTP-only | before response-cache keying (MIK-7213) starts code in Wave 3 | scope CACHE.1-4 to the traced route only and leave the direct route uninstrumented, which is today's behaviour and reversible |
 | 6. whether `GH475.RL.10`'s property leg breaks `capability::Error` in 4.0.0 | operator picks: ship with the residual risk recorded, add the typed variant now, or drop the criterion from 4.0.0 | asked 2026-09-06 and unanswered; must be settled before cluster H can be called closed | ship 4.0.0 with the behaviour met and the property recorded as residual risk, and re-file the typed signal against 4.1.0 — the reversible option, and the only one that does not change a public error type inside the release that already carries the upgrade path |
+| 7. which served surfaces the `NFR.PERF.4` band governs | operator says whether the 14..=16 band is a claim about the unfiltered traditional surface only, or about every served list including Code Mode, `exposed_meta_tools` filtering and session-promoted tools | asked 2026-09-06 and unanswered; blocks implementation, because the frozen scope excludes the filtering machinery | if it governs every served list the criterion is unsatisfiable inside the frozen scope — Code Mode serves 2 tools (`src/gateway/meta_mcp/mod.rs:1265`) and no rearrangement of the surface reaches 14 — so §P0 reopens rather than the design being patched |
+| 8. where webhook status becomes observable once `gateway_webhook_status` stops being enumerated | operator picks: fold it into `gateway_get_stats`, give it a CLI subcommand, or remove it with no replacement | asked 2026-09-06 and unanswered; blocks implementation | "no replacement" makes this a breaking capability removal under DoR C5 needing recorded approval — removal is established as non-breaking *as a name* (no published client calls it) but not *as a capability*, and running those two claims together is the error revision 3 corrected |
 
 The two resolved items below stay in the section because their *scheduling* consequences are
 still live; they are not open questions.
