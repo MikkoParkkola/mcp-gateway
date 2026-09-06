@@ -877,15 +877,17 @@ run `grok-20260906T063048Z-57193`; kimi, run `synthetic-20260906T063051Z-57626`.
 exited 0. §PA makes the verdict that row and that exit status — this sentence is a pointer to them,
 never the verdict itself.
 
-What is still owed is narrower than it was, and naming it is the point. **Four** commits were
-applied *after* those SHIPs and are therefore unreviewed, and they do not share one provenance:
+What is still owed is narrower than it was, and naming it is the point. **Four** repairs were
+applied *after* those SHIPs and are therefore unreviewed, and they do not share one provenance.
+The last row is written without a hash on purpose: a paragraph that names the commit editing it can
+never be correct, because the naming is itself an edit.
 
 | commit | what | who asked |
 |---|---|---|
 | `ad49fc1b` | conditional delete moved onto piece 2's store primitive | kimi's HIGH finding, **relocated on the team-lead's instruction** — the finding is a vendor's, the placement is not |
 | `a66a65ff` | the AC file's stale scope carve-out | grok, LOW, applied verbatim |
 | `2932de0b` | `.17` rewritten in `.14`'s polling terms; the plan's own review-boundary paragraph | grok SMALL for `.17`; the paragraph is a §P4a re-read of my own |
-| `3f2615d6` | this paragraph | a §P4a re-read of my own |
+| *(no hash)* | this paragraph, including whichever commit last corrected it | a §P4a re-read of my own |
 
 Two are a reviewer's confirmation finding applied verbatim, which is why no fourth round was spent
 on them. The other two are documents corrected because this change made them untrue, which §P4a
