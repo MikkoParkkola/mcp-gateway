@@ -116,6 +116,44 @@ Five pieces, in dependency order.
    confirmation pass, HIGH). Capacity is released when the record is deleted or expires, never
    when the task reaches a terminal state. Do not implement from this paragraph alone.*
 
+   *Amended 2026-09-06, closing §10.3's two open rows (`ttlMs` and `pollIntervalMs` **MAY** change
+   over a task's lifetime — `schema.ts:76-90`, `tasks.md:308`, `tasks.md:340`). One rule covers both
+   fields, and it is an **ownership** rule rather than a rule against caching: **the store record is
+   the only place either value exists, and the record's single writer is the only thing that writes
+   it.** Configuration supplies the value in force at creation; from that moment the record is the
+   source of truth, and every later reader — the reaper, `tasks/get`, the serialiser — reads it from
+   the record at the moment it acts. Nothing derives a deadline once and keeps it, so "the reaper
+   and the record disagree about the TTL" is not a sentence that can be said about this design.
+   That is what makes it an elimination rather than a no-caching rule someone has to remember.
+   `src/config_reload/` makes it live rather than theoretical: a reload can change the default TTL
+   while tasks are running, and it changes only tasks created after it.
+
+   *Who "the server" is.* The gateway — §3's opening sentence: it originates tasks, it does not
+   proxy a backend's. So "a server changes the value mid-task" means the gateway changing a value
+   it published. The backend-proxy reading has no code path in 4.0.0: nothing hands a backend a
+   task record to mutate, so there is no second writer for the ownership rule to arbitrate.
+
+   *What 4.0.0 does.* It exercises the permission by never using it: neither value changes after
+   creation. That is conformant — **MAY** is a permission, not an obligation — and it creates no
+   client re-read obligation. It also closes an admission hole §11.2 would otherwise leave open:
+   the caps count every unreaped record and capacity is released only on deletion or expiry, so an
+   extendable `ttlMs` is one principal holding a capacity slot for as long as it likes. A later
+   release can make either field mutable as a write through the record's single writer, and the
+   reaper needs no change to follow it — which is the point of stating the rule this way.
+
+   *Two consequences, stated so they are not re-asked.* The gateway does **not** rate-limit clients
+   polling faster than the published `pollIntervalMs` — `tasks.md:308` makes that a server **MAY**,
+   and the gateway publishes the value without policing the client's rate. And at expiry a record
+   is **deleted** rather than marked `failed` and retained: `tasks.md:340` permits either, deletion
+   is what releases the capacity the caps count, and it keeps AC `.11`'s byte-identical not-found
+   intact — an expired-but-retained record would have needed a second refusal shape, for a task
+   that exists and is gone.
+
+   *On the line numbers.* Citations into `tasks.md` and `schema.ts` are stable because §1 pins the
+   blob (`5d6a202eacbaab3444f9d0727ce6587598e7e077`, re-fetched and re-hashed 2026-09-06, 34,148
+   bytes). They are not a relapse from §8's symbol-anchor rule, which governs anchors into this
+   repository's own moving source.*
+
 3. **Capability gating is wiring, not construction.** `KEY_CLIENT_CAPABILITIES`
    (`meta.rs:44`), `classify_request` (`meta.rs:117`) and `ExtensionSet::from_capabilities`
    already read the per-request `_meta` envelope. The spec's MUST — never return a
@@ -581,17 +619,21 @@ Every row checked against `schema.ts` and `tasks.md` this session.
 now stamped on piece 4 and AC `.3`. The rows below still read "design is silent" because they
 record what this conformance pass found; leaving them unmarked would re-teach a closed defect.
 
-**The two MAY-change rows — `ttlMs` and `pollIntervalMs` — are STILL OPEN.** No finding in §11 or
-§12 touched them, so nothing supersedes them: neither vendor raised the clause, and an admission
-cap on `ttlMs` is a different rule from "this field may change over the task's life and the store
-must not treat it as write-once". They are what this note still owes, listed in §11.6.
+**The two MAY-change rows — `ttlMs` and `pollIntervalMs` — were the last open finding here, and
+they are CLOSED as of 2026-09-06 by the amendment to piece 2 in §3.** No review round raised them;
+they came from this conformance pass, and an admission cap on `ttlMs` was never the same rule as
+"this field may change over the task's life and the store must not treat it as write-once". Both
+rows are answered by one ownership rule — the record is where either value lives and its single
+writer is the only thing that writes it — so the reaper cannot hold a deadline the record has
+since changed. The rows below are left as written: they record what the pass found, and a repaired
+row teaches nothing to the next pass.
 
 | spec fact | §3 | verdict |
 |---|---|---|
 | 5 statuses `working\|input_required\|completed\|failed\|cancelled` | piece 1 | matches |
 | `taskId: string`, `createdAt`/`lastUpdatedAt` ISO 8601 required | piece 1 | matches |
-| `ttlMs: number \| null` REQUIRED and `@nullable`, and it MAY change over the task's life (`schema.ts:76-82`) | piece 1 ("present-and-nullable, not absent") | matches on the shape, and the distinction is the one the schema draws; the MAY-change clause is not stated, and it is the same defect as the `pollIntervalMs` row below — a reaper that pins the TTL it read at creation reaps a task the server has since extended |
-| `pollIntervalMs?: number`, integer ms, MAY change over the task's life | piece 1 | matches; the MAY-change clause is not stated, and the store must not treat it as write-once. Same clause and same omission as the `ttlMs` row above — one rule for both mutable fields, not two |
+| `ttlMs: number \| null` REQUIRED and `@nullable`, and it MAY change over the task's life (`schema.ts:76-82`) | piece 1 ("present-and-nullable, not absent") | matches on the shape, and the distinction is the one the schema draws; the MAY-change clause is not stated, and it is the same defect as the `pollIntervalMs` row below — a reaper that pins the TTL it read at creation reaps a task the server has since extended. **Resolved 2026-09-06** by the piece-2 amendment in §3 |
+| `pollIntervalMs?: number`, integer ms, MAY change over the task's life | piece 1 | matches; the MAY-change clause is not stated, and the store must not treat it as write-once. Same clause and same omission as the `ttlMs` row above — one rule for both mutable fields, not two. **Resolved 2026-09-06** by the piece-2 amendment in §3 — and it is one rule, as this row asked |
 | `failed` carries `error` as a JSON-RPC error **object** | piece 1, AC `.6` | matches |
 | `completed` carries `result`, shape = the original request's result type; `isError: true` is still `completed` | AC `.6` | matches the terminal-state MUST at `tasks.md:890-891` |
 | `CreateTaskResult = Result & Task & {resultType: "task"}`, flat | §3 opening, AC `.1` | matches |
@@ -788,15 +830,25 @@ its owner, not the housekeeping LOOP-CLEAN forbids.
 
 ### 11.6 What is NOT yet done
 
-The confirmation pass required by §12 — *are the gaps closed* — has now RUN; §12 below records it.
-What is still owed after it: the final criterion numbering, which is the team lead's call and not
-this note's to make (the lead has ruled that the two new authorisation criteria are `.12` and `.13`
-rather than an extension of `.11`, but the out-of-order `.11`/`.10` rows above are untouched); the
-question of whether `.12` and `.13` become rows in
-`docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is open with the lead and stated in
-§12; and the `ttlMs` / `pollIntervalMs` MAY-change clauses, which §10.3 found
-unstated and no review round since has raised — an open conformance gap, not a superseded one. The functional leg (D6:E2E) is **N/A: this change has no running surface** —
-it is a design note; nothing was built, so there is nothing to drive.
+The confirmation pass required by §12 — *are the gaps closed* — has RUN; §12 below records it.
+This list is rewritten 2026-09-06 to carry only what is still owed, because three of the items it
+carried are settled and a list of closed items is a list nobody reads.
+
+**Closed, recorded so they are not re-opened.** The criterion numbering is the lead's, and the lead
+ruled: the two new authorisation criteria are `.12` and `.13`, not an extension of `.11`. The
+out-of-order `.11`/`.10` rows above are deliberate and stay. Whether `.12` and `.13` become rows in
+`docs/requirements/RELEASE-4.0.0-criteria-status.md` is settled too, and settled by that file: it
+carries exactly one TASK.1 row (`docs/requirements/RELEASE-4.0.0-criteria-status.md:233`), so
+`.12` and `.13` are criteria underneath it, never ledger rows beside it. And the
+`ttlMs` / `pollIntervalMs` MAY-change clauses that §10.3 found unstated are answered by the
+amendment to piece 2 in §3 — one ownership rule for both fields.
+
+**Still owed: the dual-vendor review of this note as it now stands.** The §12 confirmation pass
+re-checked findings raised before the §3 amendment existed; the amendment itself is unreviewed
+material, and no verdict trailer is stamped anywhere in this file for that reason.
+
+The functional leg (D6:E2E) is **N/A: this change has no running surface** — it is a design note;
+nothing was built, so there is nothing to drive.
 
 ## 12. Confirmation pass — 2026-09-06
 
