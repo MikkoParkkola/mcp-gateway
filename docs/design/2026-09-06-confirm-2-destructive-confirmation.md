@@ -199,7 +199,12 @@ What each option owes:
 | legacy path | unchanged, and unchanged is not the same as adequate. Called out so a later reader does not read this table as saying the legacy era already does it |
 
 This is a gap the design NAMES, not one it closes. Closing it is a change to the gate's logging,
-not to the option chosen, and it applies whichever branch the requester rules for.
+not to the option chosen, and it applies whichever branch the requester rules for. Naming a gap is
+not scheduling one, so it is carried as **U2** in the deferred unknowns below, with the four fields
+a deferral owes. It blocks DEPLOYMENT of either branch, never the ruling on Q1: a branch can be
+chosen without it and cannot ship without it. Read the cost lines above with that attached — Option
+R's "cheapest of the three" is cheapest *given* U2 is answered, and a refusal nobody can later
+evidence is not the control it looks like.
 
 ## Security pre-analysis — STRIDE short form
 
@@ -364,6 +369,20 @@ walks, and every minted continuation expires unredeemed.
 
 U1 **blocks Option I**. Nothing depending on it may be implemented while it is open. Option R
 does not depend on it and may proceed the moment Q1 is answered.
+
+**U2 — What must a destructive confirmation, or a refusal, persist?** The audit-record section
+above shows nothing is persisted today beyond a log line naming the tool. Every option owes a
+record; no option's cost line prices one; and that is how the cheapest branch came to read as free.
+
+| field | value |
+|---|---|
+| owner | the requester (MIK-7212 owner) — what an operator must be able to reconstruct after a kill is a policy call, not a repo fact, and the record's contents follow from it |
+| what would resolve it | a ruling on the minimum record — at least principal, tool, arguments digest and outcome; on the affirmative branch also the answer given and the redemption that authorised the kill. The emission then joins the chosen option's deliverable and its cost line, and stops being free |
+| when | before either branch DEPLOYS. Not before Q1: the branch is choosable without this and shippable only with it |
+| what if it resolves badly | a ruling that 4.0.0 needs no record is an accepted residual, recorded here as one with its reason, rather than left as an unremarked silence. It is not a finding that dies by being ignored |
+
+U2 blocks **deployment of either branch** and blocks nothing before that, so it does not sit on the
+path from Q1 to a decision.
 
 ## Questions for the requester
 
