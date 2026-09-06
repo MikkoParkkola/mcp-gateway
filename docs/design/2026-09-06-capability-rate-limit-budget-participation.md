@@ -186,7 +186,7 @@ Rejected, three reasons, any one sufficient:
 
 Revised from an earlier draft of this option, which proposed a new
 `crate::Error` variant (see the superseded cost discussion this replaced, now
-folded into the two DESIGN EVENTs below). Reuse beats addition here: at each of
+folded into the DESIGN EVENTs below). Reuse beats addition here: at each of
 the three format sites (`jsonrpc.rs:204`, `params.rs:50`, `graphql.rs:260`),
 call `response.error_for_status_ref()` *before* the body is consumed. Verified
 at source (reqwest 0.13.4, `src/async_impl/response.rs:409`): on `Err`, the
@@ -213,8 +213,9 @@ public symbol (no D28) and breaks no exhaustive downstream `match` (no D2) —
 `Http` already exists at the crate root (`src/lib.rs:94`, `src/error.rs`) and
 downstream code that matches it today keeps matching it. That removes the
 breaking-change cost the earlier draft carried. What it does **not** remove is
-the obligation to name what changes, per §P3: two DESIGN EVENTs, both required
-by team-lead review, are recorded here rather than left implicit.
+the obligation to name what changes, per §P3: three DESIGN EVENTs, the two
+required by team-lead review plus one this document's own re-check surfaced,
+are recorded here rather than left implicit.
 
 **DESIGN EVENT 1 — diagnostic disposition changes.** Today the three format
 sites embed the (truncated) response body directly in the formatted error's
@@ -252,10 +253,40 @@ Capability's own retry logic, `send_with_retry`
 trigger a retry it would not already have triggered under the current text-
 matching behaviour. See the new Resolved rows in section 6.
 
+**DESIGN EVENT 3 — the RecoveryHint category for a capability error can
+degrade, and O1 must prevent it, not just name it.** `classify_dispatch_error`
+(`src/gateway/meta_mcp/invoke.rs:2940-2958`) has an explicit arm,
+`Error::Protocol(msg) => (classify_from_detail(Some(msg)), msg.clone())` —
+the mechanism that turns a `429`-shaped message into
+`ErrorCategory::RateLimited` and a retryable `RecoveryHint` (asserted by
+`rate_limit_429_classified_as_rate_limited`, `invoke.rs:3078`). `Error::Http`
+has no arm there either, and falls through the same trailing
+`_ => (ErrorCategory::BackendError, error.to_string())` that DESIGN EVENT 2
+found in `to_rpc_code` — the identical gap, in a second match. Confirmed
+wired, not theoretical: `classify_dispatch_error` is called from the `Err(e)`
+branch of the same `dispatch_result` O1 feeds to `BudgetOutcome::of`
+(`invoke.rs:1384` records the budget, `invoke.rs:1461` classifies the error,
+both off one match on one result). Unfixed, a throttled capability call that
+O1 correctly keeps out of the failure budget would still tell the calling
+agent `BackendError` with no retry guidance instead of `RateLimited,
+retry: true` — losing the exact recovery signal RL.* exists to get right.
+Unlike DESIGN EVENT 2's JSON-RPC integer, a rarely-inspected protocol detail,
+this is agent-facing behaviour on the path this design is about, so naming it
+as accepted degradation is the wrong disposition. O1's implementation adds an
+`Error::Http` arm to `classify_dispatch_error` alongside the existing
+`Protocol` one — matching on `reqwest::Error::status()` directly (already
+used by `BudgetOutcome::of`, so the two cannot disagree on what a `429` is,
+same rationale as `is_rate_limited`'s single-predicate design) rather than
+round-tripping through `classify_from_detail`'s text scan — so that "a
+capability 429's recovery hint degrades under O1" cannot be stated of the
+landed code. This is one match arm, mechanically identical in shape to the
+one already present, folded into O1's implementation steps (section 7, item
+3) rather than a separate option.
+
 4.0.0 is a major release in preparation, but that is no longer the load-bearing
 fact here — O1 as revised needs no breaking-change window, because it adds no
 public symbol and breaks no match. What still needs the requester's sign-off is
-narrower: the two DESIGN EVENTs above, not an enum-widening ask. See the revised
+narrower: the three DESIGN EVENTs above, not an enum-widening ask. See the revised
 section 6.
 
 ### O1b — the same classification, carried crate-internally (rejected)
@@ -264,7 +295,7 @@ Revised alongside O1: the question this section answers is no longer "can we
 avoid O1's public-enum cost", because reusing `Error::Http` means O1 no longer
 has one. What remains is narrower and still worth asking — could the
 classification avoid `crate::Error` entirely and stay on a purely
-crate-internal carrier, so that neither DESIGN EVENT named in O1 need apply?
+crate-internal carrier, so that none of the DESIGN EVENTs named in O1 need apply?
 Both ends of *this* wire — the meta-MCP invoke path's classification hookup,
 the only wire O1 touches — are in-crate: the status is known at
 `executor/jsonrpc.rs:204` and consumed at `invoke.rs:1384`. That is narrower
@@ -388,6 +419,7 @@ text predicate because a transport error there genuinely has no typed status.
 | Does `error_for_status_ref()` lose the response body needed for diagnostics? | read reqwest 0.13.4 source `src/async_impl/response.rs:409`, `src/error.rs:180` | the returned error is built from status/URL/reason only, borrowing nothing from the body; the borrow ends immediately so `response.text().await` remains legal after | confirms O1's mechanism is sound: call `error_for_status_ref()` first, log the body via `tracing::warn!`, then convert — no diagnostic information is silently lost, it moves to a log line (DESIGN EVENT 1, section 4) |
 | What JSON-RPC code does a capability `429` surface as, once it is carried as `Error::Http`? | read `to_rpc_code` `src/error.rs:193-209`; `rg` confirms nothing in the capability path constructs `Error::Http` today | `Protocol(_)` has its own arm (`-32600`); `Http` has none and falls through `_ => -32603` | DESIGN EVENT 2 (section 4): a capability `429` now surfaces as `-32603` rather than `-32600` — named explicitly rather than left for a client integrator to discover |
 | Does reusing `Error::Http` on the capability path create a retry-storm risk? | read `is_retryable` `src/chains/retry.rs:179` and `src/failsafe/retry.rs:96`; traced their sole callers `src/backend/ops.rs:218` (MCP-backend) and `src/chains/executor.rs:175`; read `send_with_retry` `src/capability/executor/mod.rs:111-160` | `is_retryable` treats `Error::Http` as retryable, but capability's own retry logic never calls `is_retryable` — it is self-contained | no risk: an `Error::Http` returned from the capability path cannot trigger a retry it would not already trigger under today's behaviour; closed rather than left as an unstated risk |
+| Does any other match on `crate::Error` discriminate `Protocol` from `Http` on the dispatch path O1 touches? | `rg 'Error::Protocol\|Error::Http' src/`, read `classify_dispatch_error` `invoke.rs:2940-2958` and its call site `invoke.rs:1461`, traced back to the shared `dispatch_result` also read at `invoke.rs:1384` | yes: `classify_dispatch_error` gives `Protocol` a `classify_from_detail` arm and lets `Http` fall through `_ => BackendError` — the same shape of gap `to_rpc_code` has | DESIGN EVENT 3 (section 4): unlike the JSON-RPC code, this one is not accepted as-is — O1's implementation must add the missing `Http` arm so the RecoveryHint category does not degrade |
 
 ### Deferred
 
@@ -398,8 +430,9 @@ via `error_for_status_ref()` instead of adding one, so there is no enum
 widening left to ask the operator to approve. This closes what was tracked as
 finding #4 (moot given finding #2's O1 revision) explicitly, rather than
 letting it lapse silently when O1 changed underneath it. What O1 still owes —
-naming its two DESIGN EVENTs — is not a deferred question; both are named in
-section 4 and recorded as Resolved above, and neither blocks implementation.
+naming its three DESIGN EVENTs — is not a deferred question; all three are named in
+section 4 and recorded as Resolved above, and none blocks implementation
+(DESIGN EVENT 3 is a required implementation step, not an open question).
 
 ## 7. What lands next, in order
 
@@ -478,8 +511,13 @@ section 4 and recorded as Resolved above, and neither blocks implementation.
 2. The ledger correction at `RELEASE-4.0.0-criteria-status.md:393` — the ABSENT
    line's stated reason is false and the row splits into behaviour and property.
 3. O1 — no longer gated on section 6 (that gate is closed, moot; see the
-   Deferred-table closure note). Implementation proceeds directly; its two
-   named DESIGN EVENTs (section 4) travel with it into §P4 review.
+   Deferred-table closure note). Implementation proceeds directly; its three
+   named DESIGN EVENTs (section 4) travel with it into §P4 review. DESIGN
+   EVENT 3 is not optional polish: the `classify_dispatch_error` `Error::Http`
+   arm lands in the same commit as the three format-site rewrites, not as a
+   follow-up, since a capability `429` reaching `to_rpc_code`'s new code path
+   without it also reaching `classify_dispatch_error`'s is a state the design
+   never intends to exist even transiently.
 
 ## 8. Reviews
 
