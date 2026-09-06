@@ -602,3 +602,36 @@ trip it, then be refused. `record_client_failure` (`src/gateway/auth.rs:292`) an
 config field, so the test is short. Writing it closes the row without narrowing a
 security criterion's population — which is the more expensive mistake of the two, and
 the one that needs an operator's recorded agreement.
+
+### Which of the blocking rows an operator ruling actually gates
+
+The sections above record the decisions one at a time, as each was surfaced. What none of
+them answers is the question an operator arriving cold asks first: *of the rows still
+blocking, how many are waiting on me?* This table is only that. It adds no new decision
+and no new criterion — the open decisions are stated in `RELEASE-4.0.0-plan.md` under
+"Open for the operator" and are not restated here, only cited by their number there.
+
+| blocking row | verdict | gated by | what an answer unblocks |
+|---|---|---|---|
+| `MIK-7213.CACHE.4a` | PARTIAL | plan decision 4 | whether `CACHE.1-4` are HTTP-only fixes the keying surface the design must cover |
+| `MIK-7213.CACHE.4b` | ABSENT | plan decision 4 | same surface question; the policy-epoch design cannot freeze scope without it |
+| `MIK-6865.SCHEMA.1c` | PARTIAL | plan decision 2 | the refuse / publish-and-flag / degrade posture decides what the composition-bound check does on a violation |
+| `GH475.RL.10` | MET (behaviour) / ABSENT (property) | plan decision 6 | the property leg is a breaking change to `capability::Error`; ship-with-risk, add-the-variant and drop-the-criterion are all live |
+| `NFR.PERF.4` | ABSENT | plan decisions 7 **and** 8 | both, not either: 7 sets which served surfaces the 14..=16 band governs, 8 says where webhook status goes once it stops being enumerated |
+
+**Five rows, four decisions, twenty-three rows waiting on nobody.** The remaining
+twenty-three are engineering the team can start today: they need a design, a reviewed test
+plan and code, in that order, and no ruling stands between them and a first commit.
+
+The one design already carrying a stop verdict is `NFR.PERF.4`'s
+(`docs/design/2026-09-06-nfr-perf-4-meta-tool-surface-band.md`, revision 3, DO-NOT-SHIP),
+and it stops on exactly decisions 7 and 8 — which is why that row appears here rather than
+among the twenty-three. Every other design under `docs/design/` for a blocking row reads
+`proposed`, `draft` or `reviewed, not implemented`: pre-implementation states, not blocks.
+The single `superseded` document (`2026-09-06-gh475-rl10-capability-rate-limit-classification.md`)
+names its own replacement.
+
+Checked by reading the `Status:` line of every design document, not by recalling which
+were open. That check exists because `NFR.PERF.4` was listed as the one unblocked
+implementation item in an earlier draft of the plan while its own design had been
+DO-NOT-SHIP on two rulings for a day.
