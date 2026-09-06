@@ -69,9 +69,7 @@ not silently fixed, because two of them changed what a case must do.
 
 ### 3.1 E1/E2/E3 are retrofits, and a retrofit owes a falsifier probe
 
-E1, E2 and E3 assert against code that already shipped (`ServerCapabilities.extensions` landed before this plan was written). A test written after the code cannot borrow the free failure a test-first case gets, so each one owes the probe `development-process.md` §P2 prescribes: restore the **pre-field content** of the file under test, run the case, and read the **assertion** that fails — not the exit code, because a missing-import error is not a caught defect. Then restore the repair and re-run to confirm it goes green.
-
-The restore must be of content, not of working-tree state. `git stash` around a committed change removes only later edits; `git checkout -- <path>` discards an uncommitted repair. Use `git show <pre-fix-ref>:<path>`, under a `trap` that copies a `mktemp` backup back on `EXIT INT TERM`.
+E1, E2 and E3 assert against code that already shipped (`ServerCapabilities.extensions` landed before this plan was written). A test written after the code cannot borrow the free failure a test-first case gets, so each one owes the probe `development-process.md` §P2 prescribes: put the defect back, run the case, and read the **assertion** that fails — not the exit code, because a missing-import error is not a caught defect. Then undo the change and re-run to confirm it goes green.
 
 **The probe MUTATES; it does not restore a pre-field tree.** A ref-pinned restore was tried and
 is wrong here: `6daf020f^` is the last tree without `ServerCapabilities.extensions`, and the same
