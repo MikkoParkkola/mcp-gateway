@@ -4571,3 +4571,162 @@ const B10_EXPECTED_TOOLS: &[&str] = &[
     "gateway_set_state",
     "gateway_reload_capabilities",
 ];
+
+// ============================================================================
+// MIK-7272.ORDER.2 — FSM workflow state (B-08, B-09)
+// ============================================================================
+
+/// A capability backend whose visible tool set genuinely depends on the FSM
+/// state.
+///
+/// Every capability fixture in the tree declares `visible_in_states: vec![]`
+/// — always visible, in every state — so against those fixtures the discovery
+/// set is invariant under the FSM state and B-08/B-09 would run green whether
+/// or not the leak they exist to catch is present. One capability here is
+/// pinned to `default`, which is what makes a leaked state observable.
+async fn meta_with_state_staged_capabilities() -> MetaMcp {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("always.yaml"),
+        r"
+name: staged_always
+description: visible in every state
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.invalid
+      path: /always
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("default_only.yaml"),
+        r"
+name: staged_default_only
+description: visible only in the default state
+visible_in_states:
+  - default
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.invalid
+      path: /default-only
+",
+    )
+    .unwrap();
+
+    let cap_backend = Arc::new(CapabilityBackend::new(
+        "staged",
+        Arc::new(crate::capability::CapabilityExecutor::new()),
+    ));
+    cap_backend
+        .load_from_directory(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_capabilities(cap_backend);
+    meta
+}
+
+/// Tool names in a discovery result, sorted.
+///
+/// Sorted because membership, not ordering, is what ORDER.2 constrains, and an
+/// unsorted pin would flake on directory-read order rather than on the defect.
+fn discovery_names(v: &Value) -> Vec<String> {
+    let arr = v
+        .get("tools")
+        .or_else(|| v.get("matches"))
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("no tools/matches array in discovery result: {v}"));
+    let mut names: Vec<String> = arr
+        .iter()
+        .map(|t| {
+            t.get("name")
+                .or_else(|| t.get("tool"))
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("discovery entry names no tool: {t}"))
+                .to_string()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// The staged set as seen in the default FSM state, pinned.
+const STAGED_DEFAULT_TOOLS: &[&str] = &["staged_always", "staged_default_only"];
+
+/// The staged set as seen in any other state — the OTHER set.
+const STAGED_OTHER_STATE_TOOLS: &[&str] = &["staged_always"];
+
+/// The state B-08 and B-09 transition to. Not `default`, and not in
+/// `staged_default_only`'s `visible_in_states`.
+const TARGET_STATE: &str = "triage";
+
+/// Proof that the staging holds: the staged capability set really does move
+/// with the FSM state, on the same discovery entry points the leak cases use.
+///
+/// Driven from a **session-bearing** connection, never a modern sessionless
+/// one. Under option (c) a modern HTTP connection cannot hold a non-default
+/// state at all — that is what (c) is for — so a staging proof phrased as a
+/// call from the connection under test would be unsatisfiable after the fix
+/// and the case would be red forever. A session-bearing connection's
+/// `gateway_set_state` is refused under neither answer to Q4.
+#[tokio::test]
+async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
+    let meta = meta_with_state_staged_capabilities().await;
+    let sess = Some("session-bearing");
+
+    assert_eq!(
+        discovery_names(&meta.list_tools(&json!({}), sess).await.unwrap()),
+        STAGED_DEFAULT_TOOLS,
+        "the staged set in the default state is not what the cases pin"
+    );
+
+    let set = meta
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_set_state",
+            json!({"state": TARGET_STATE}),
+            sess,
+            allow_all_ctx(),
+        )
+        .await;
+    assert!(
+        set.error.is_none(),
+        "a session-bearing connection must be able to hold a state, or the \
+         staging cannot be proved at all: {:?}",
+        set.error
+    );
+
+    assert_eq!(
+        discovery_names(&meta.list_tools(&json!({}), sess).await.unwrap()),
+        STAGED_OTHER_STATE_TOOLS,
+        "gateway_list_tools does not honour the FSM state, so the staging is \
+         not what B-08/B-09 assume"
+    );
+    assert_eq!(
+        discovery_names(
+            &meta
+                .search_tools(&json!({"query": "staged"}), sess)
+                .await
+                .unwrap()
+        ),
+        STAGED_OTHER_STATE_TOOLS,
+        "gateway_search_tools does not honour the FSM state"
+    );
+    assert_eq!(
+        discovery_names(
+            &meta
+                .list_tools(&json!({"server": "staged"}), sess)
+                .await
+                .unwrap()
+        ),
+        STAGED_OTHER_STATE_TOOLS,
+        "list_tools_single_server does not honour the FSM state"
+    );
+}
