@@ -1196,6 +1196,27 @@ mod tests {
         );
     }
 
+    /// GH475.MIG.3 — the comparison direction is pinned. `applicable_migrations`
+    /// selects a migration when `old_ver < applies_below`; every other case in
+    /// this file starts at or below 4.0.0, so an inverted comparison
+    /// (`old_ver > applies_below`) would stay green under all of them. This
+    /// starts strictly above 4.0.0 and asserts the 4.0.0 notice does not
+    /// re-fire.
+    #[test]
+    fn upgrade_from_above_4_0_0_does_not_refire_the_notice() {
+        let ctx = UpgradeContext {
+            data_dir: Path::new("/nonexistent"),
+            old_ver: SemVer::parse("4.0.1").unwrap(),
+            new_ver: SemVer::parse("4.0.1").unwrap(),
+            dry_run: true,
+            quiet: true,
+        };
+        assert!(
+            ctx.applicable_migrations().is_empty(),
+            "no migration should apply when already installed above 4.0.0"
+        );
+    }
+
     #[test]
     fn notice_only_upgrade_leaves_no_config_backup() {
         // GIVEN: a pre-3.0.0 install with a gateway.yaml present
