@@ -135,3 +135,10 @@ Neither row's falsifier probe has been run, and neither can be: both are specifi
 evidence rather than a green test, so **this plan is not discharged until they run** — owner: this
 slice, trigger: the first commit after MRTR.8b lands. If a probe fails to go red, the row it
 belongs to is not a case and the clause it claims to cover is uncovered.
+
+No vendor has reviewed the plan as it now stands. grok's round-2 verdict predates `98f25160`, the
+repair made in response to grok's own improvement, and repair-protocol step 6 would return that
+commit to grok. Closed without a re-check because the repair is the finder's prescription applied
+verbatim — row 1 points at `ac_mrtr_8_the_table_is_bounded` instead of specifying a second
+fill-to-capacity case, which is the improvement's text — leaving no interpretation to the author.
+Recorded rather than assumed, so that closing by silence does not become the habit.

@@ -190,8 +190,9 @@ sends, which is why a green suite did not surface this.
 
 What this entails, and what it deliberately does not:
 
-- **Entailed.** The trace fields must be read at **params level, before
-  `extract_tools_call_params` discards them**, and must reach the **invoke funnel on both
+- **Entailed.** The trace fields must be read at **params level, before the params are reduced
+  to `(name, arguments)`** — today that reduction is `extract_tools_call_params`, but the
+  constraint is the reduction, not the function, and must reach the **invoke funnel on both
   transports** — the funnel is where 3.4a's write consumes them, and a read the funnel never
   sees closes nothing.
 - **Not entailed, and therefore not mandated here: _which_ seam carries them.**
@@ -541,8 +542,9 @@ Tasks and TASK.1 has not landed (3.1a). An empty `extensions` object is the hone
 and it is not the same wire value as omitting the field.
 
 OTEL.1 closes when the three W3C fields are read from the inbound **params-level** `_meta` —
-before `extract_tools_call_params` discards it, reaching the invoke funnel on both transports,
-never from the tool argument object (2.7) — bounded, validated by
+before the request params are reduced to `(name, arguments)`, whichever code performs that
+reduction, reaching the invoke funnel on both transports, never from the tool argument object
+(2.7) — bounded, validated by
 a predicate that matches the W3C grammar (3.4b), and written unchanged into the outbound `_meta`
 at `dispatch_to_backend` unconditionally (3.4a) — never minted, never interpreted, subject to the
 CONTROL.3 carve-out in 3.4. Deleting `src/tracing_context/` is NOT part of it: 4.3 already says a
