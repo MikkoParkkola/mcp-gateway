@@ -100,7 +100,14 @@ Five pieces, in dependency order.
    other four cases in that file are not this problem.
 
 2. **A task store.** Insert-if-absent, TTL-reaped, holding the record plus a secondary index
-   (see §4). It is the *same defect class* as the consumed-continuation ledger recorded open in
+   (see §4). **Two primitives, not one: insert-if-absent, and delete-if-`ttlMs`-still-says-so** —
+   the reap is a single store-level compare-and-delete against the record's current `ttlMs`, never
+   a read followed by an unconditional delete. Stated here, on the primitive, rather than only in
+   §11.2's ownership rule (kimi, HIGH, 2026-09-06; team-lead, same day): the requirement has to
+   exist before the store does, or whoever builds it rediscovers it. A read-then-delete reaper
+   reaps a task extended between its two steps — and it reaches further than this piece, because
+   the release's open CONTROL.4 decision assumes the reaper rides the gateway's existing
+   maintenance tick, which is exactly the interval in which that extension can land. It is the *same defect class* as the consumed-continuation ledger recorded open in
    `dod-check.md` finding #1: process-local today, needs a shared atomic insert-if-absent store
    before production, and `tasks/get` reaching the replica that owns the task is the same
    replica-affinity problem cluster A is solving in `src/protocol/continuation.rs`. It inherits
