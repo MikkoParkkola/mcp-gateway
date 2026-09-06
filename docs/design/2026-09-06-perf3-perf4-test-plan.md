@@ -4,7 +4,8 @@ Status: draft for dual-vendor review as a PLAN. No test code written.
 Design: `docs/design/2026-09-01-nfr-perf3-reclamation.md`, including its 2026-09-06 receipt update
 and the same-day correction that hands the lifetime mechanism to MRTR.8b.
 Depends on: `docs/design/2026-09-06-mrtr-8b-10a-lifetime-and-idempotency-wiring.md` Design A
-(`InFlight::guard(now)`). Row 2 cannot pass before it lands, which is the point of it.
+(`InFlight::guard(now)`). Row 2 cannot compile, let alone pass, before it lands — see its
+can-fail cell, which is the point of it.
 
 `NFR.PERF.4` is not covered here and never was this slice's: the ceiling, its assertion and its
 open breaking-change question all live in `docs/design/2026-09-02-perf4-meta-tool-ceiling.md`,
@@ -20,7 +21,7 @@ constant itself, about `NFR.PERF.1`, or about the meta-tool surface.
 | # | criterion clause | the case that proves it | level | type | can it fail today, and on what |
 |---|---|---|---|---|---|
 | 1 | memory MUST NOT grow unboundedly with abandoned continuations — the bound holds | fill to `IN_FLIGHT_CAPACITY` (4 096) with live, unexpired holds, then `hold` once more; the refusal is `None` and occupancy stays at 4 096 | unit, `src/protocol/continuation.rs` tests | boundary | **No — and it is stated as already met.** `hold`'s capacity branch is built (`:696-717`). The row exists so the clause has a case, not because it is expected to go red; its value is regression, and the falsifier probe below is what earns it |
-| 2 | …and a soak with abandonment MUST show reclamation | abandon exactly `IN_FLIGHT_CAPACITY` (4 096) exchanges against a **driven clock** and never attempt a 4 097th, so the capacity branch is never entered; advance `now` past the deadline; `len(now)` is 0 | unit, same module | lifetime / state | **Yes.** Today reclamation runs *only* inside the capacity branch, and this fixture never enters it, so every expired hold is retained. Fails on the occupancy assertion until `guard(now)` lands |
+| 2 | …and a soak with abandonment MUST show reclamation | abandon exactly `IN_FLIGHT_CAPACITY` (4 096) exchanges against a **driven clock** and never attempt a 4 097th, so the capacity branch is never entered; advance `now` past the deadline; `len(now)` is 0 | unit, same module | lifetime / state | **Yes — but not today, and not on the assertion.** `InFlight::len` is `len(&self)` today (`continuation.rs:756`): no clock. `len(now)` therefore does not *compile* until Design A lands, and a compile error is not evidence about reclamation. The assertion-level red is earned by a falsifier probe run *after* `guard(now)` lands: delete the reclaim call from `guard`, and the row goes red on the occupancy assertion — 4 096 entries retained past their deadline, because reclamation otherwise runs only inside the capacity branch and this fixture never enters it. Restore, re-run, and the pass is what proves the restore |
 
 ## Why no wall-clock soak
 
@@ -28,8 +29,9 @@ The requirement names no duration, no abandonment rate and no reclamation thresh
 an unknown and resolved in the design's receipt update. A wall-clock soak would therefore be
 inventing its own bound, would not run in the suite, and would be a weaker observation than the
 driven clock: it can only show that reclamation happened *somewhere* in the interval, where row 2
-shows it happened *at the deadline*. The clock is a parameter on the entry points (`now: u64`,
-already the module's shape at `:696` and in Design A), so no sleeping and no timing tolerance.
+shows it happened *at the deadline*. The clock is already a parameter on `hold` (`now: u64`, `:696`) and Design A extends it to
+the readers — `len` acquires it there, which is why row 2 is written against Design A's signature and not
+today's. Either way: no sleeping and no timing tolerance.
 
 ## Assertion strength — the second question a plan review must answer
 
