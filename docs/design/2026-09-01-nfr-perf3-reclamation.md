@@ -196,6 +196,17 @@ either deadlocks or forces a lock-release-reacquire that opens a window where tw
 space. The retain goes inline, in the lock `hold` is already holding — exactly as `consume` does at
 `:532`.
 
+> **SUPERSEDED as a test specification — 2026-09-06.** This section and the one after it are the
+> reasoning that produced `docs/design/2026-09-06-perf3-reclamation-test-plan.md`; the cases to
+> write are that plan's two rows, not these. One statement below is now the *opposite* of what the
+> plan asserts: "admission is the signal; occupancy is not" holds for an epoch soak, where
+> occupancy at the ceiling is the correct steady state — but the plan fills the table exactly once
+> and never enters the capacity branch, so occupancy returning to 0 on the tick is the only thing
+> that distinguishes reclamation-on-a-clock from the reclamation `hold` already does. Of the three
+> cases below, two belong to the earliest-deadline guard and one to the lifetime tick; the
+> correction at the end of this document transfers all three to MRTR.8b with `InFlight`'s entry
+> points.
+
 ## The soak, and what it is allowed to observe
 
 `NFR.PERF.3` asks for a soak, so the design has to say what it runs and what would make it fail —
