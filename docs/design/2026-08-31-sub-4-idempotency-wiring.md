@@ -236,6 +236,13 @@ not before.
   `idempotency_key_for`'s own doc comment claims the opposite of this ("They stay part of the key so
   one caller's stored result is never served to another under the same client key") and is
   therefore a stale comment to fix in the same commit as the mechanism.
+
+  Axis 4 discharges this at the derivation site rather than in the format string: the spoof needs
+  an attacker whose own `identity_suffix` is empty, and that is exactly the caller Axis 4 refuses.
+  The raw append remains a real defect in `idempotency_key_for` and stays tracked on MIK-7408 as
+  defence in depth — a second control on a function that will outlive this design's refusal — but
+  activation no longer waits on it. What activation waits on is Axis 4 being implemented as
+  decided; relax that refusal and this bullet is live again.
   Consequence for the SUB.4 design, not a separate ticket: whatever fixes P8 must ALSO make the
   suffix unspellable — hash it as `response_key` does, length-prefix it, or move the client-supplied
   key to the tail. Landing P8's fallback chain while the append stays raw reintroduces the exact
