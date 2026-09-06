@@ -227,3 +227,52 @@ deprecation path. The `reason` set, by contrast, is expected to grow — §"the 
 refusal set" makes a new refusal site a compile error precisely so that new values appear, and a
 consumer that enumerates `reason` values exhaustively is relying on something this design says will
 change. Aggregate over `reason`, alert on `phase`.
+
+---
+
+## Design-receipt update — 2026-09-07
+
+*What this does not decide* named one open thing — the A2A metrics-surface export. A second was
+never reached rather than decided wrongly: **how a test observes these four counters.** A counter
+design that cannot say how its numbers are asserted leaves the acceptance test to invent the
+answer, and the obvious inventions are order-dependent.
+
+### How a test reads them — measured, not proposed
+
+`metrics` is a **default** feature (`Cargo.toml`: `default = [… "metrics"]`), so an ordinary
+`cargo test` compiles the recorder. The in-tree precedent is
+`src/gateway/meta_mcp/invoke.rs:4748-4795`: a `#[cfg(feature = "metrics")] #[test]` calls
+`crate::metrics::install()`, then `crate::metrics::render()`, then finds its counter line in the
+Prometheus text. Nothing new is needed to see the numbers.
+
+### The precedent's isolation trick is unavailable here
+
+The recorder is process-global (`OnceLock`, `src/metrics.rs:16`). `invoke.rs:4743-4747` keeps
+parallel tests from leaking into each other by giving **each test function a unique `server` label
+value**. The continuation counters have no such discriminator by construction:
+`mcp_continuation_mint_total` and `mcp_continuation_redeem_total` carry no labels at all, and
+`reason` / `phase` / `detected` are the closed enums this document deliberately fixed. Adding a
+test-only label value would contaminate a production surface to make a test convenient.
+
+So an assertion on an **absolute** counter value is order-dependent under parallel `cargo test`,
+and would pass or fail on which other test ran first.
+
+### Decision: assert monotonically on a delta
+
+`serial_test` is not a dependency of this crate and this does not add one. The acceptance test
+reads `render()` before the action, acts, reads after, and asserts `after >= before + N`.
+
+A counter only ever goes up, so a concurrent increment from another test can push the value higher
+and **cannot** make this assertion red; an increment that never fired makes it red on every
+schedule. That asymmetry is the whole reason the delta is stated as `>=` and not `==`.
+
+**Named limit:** it cannot detect over-counting — a double increment passes. A counter whose
+exactness matters more than its occurrence needs a surface that is not process-global, and this
+document does not add one; the first requirement that needs exactness is the trigger to revisit.
+
+This does **not** reopen the mechanism. `telemetry_metrics::counter!` remains the whole mechanism.
+An instance-owned aggregate on `ContinuationState` exposing `snapshot()` was considered on
+2026-09-07 and rejected: it makes a second owner for the same four numbers, and two owners of one
+count is a thing to keep agreeing rather than a thing to read. (Checked while considering it: there
+is no existing `fn snapshot` anywhere under `src/protocol/` to reuse — the only ones are in
+`src/protocol_revision_telemetry.rs` at `:430` and `:793`. Nothing was being inherited.)
