@@ -26,6 +26,8 @@ use url::Url;
 use super::Transport;
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
+use crate::protocol::era::Era;
+use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
     RequestId, is_version_mismatch_error, negotiate_best_version,
@@ -199,6 +201,14 @@ pub struct HttpTransport {
     message_url: RwLock<Option<String>>,
     /// Custom headers
     headers: HashMap<String, String>,
+    /// The owning `Backend`'s era cache, attached at start (MIK-7214.HEADER.9).
+    ///
+    /// Shared rather than copied: the verdict is re-probed on the backend when
+    /// an ordinary answer contradicts it, and a copy taken at start would keep
+    /// shaping requests for a peer that has since been replaced. `OnceLock`
+    /// because a transport is rebuilt per start, so the cache it serves never
+    /// changes for the life of this object.
+    era: std::sync::OnceLock<Arc<crate::protocol::era::EraCache>>,
     /// Per-caller-identity MCP session ids (MIK-6784).
     ///
     /// A single `HttpTransport` is Arc-shared across every gateway user for a
@@ -295,6 +305,96 @@ fn parse_sse_response(text: &str) -> Result<JsonRpcResponse> {
     Err(Error::Transport("No data in SSE response".to_string()))
 }
 
+/// Re-assert on a modern peer's request what the revision requires of it.
+///
+/// Runs at the LAST writer on each outbound path rather than inside
+/// `build_mcp_headers`, and that placement is the point. The builder merges the
+/// backend's static headers itself, and the request path merges per-request
+/// `extra_headers` *after* the builder returns — so a value written inside the
+/// builder is one an operator's configured header silently overrides. These are
+/// protocol facts about the dialect being spoken, not defaults an operator gets
+/// to disagree with.
+///
+/// Removing `MCP-Session-Id` is `MIK-7215.STATELESS.3a`: the revision prohibits
+/// emitting it, and the prohibition is on emission rather than on minting, so
+/// the session a legacy handshake left behind must be dropped here rather than
+/// never taken.
+fn finalise_modern_headers(headers: &mut header::HeaderMap) {
+    headers.insert(
+        "MCP-Protocol-Version",
+        header::HeaderValue::from_static(MODERN_VERSIONS[0]),
+    );
+    headers.remove("MCP-Session-Id");
+}
+
+/// Wrap outbound `params` in the `_meta` envelope a modern peer requires.
+///
+/// Merges rather than replaces: `_meta` is a shared namespace and a caller's
+/// own keys (a trace context, say) are not this transport's to discard. The two
+/// protocol keys are overwritten because their value is a fact about the
+/// dialect, not a caller preference.
+///
+/// `clientInfo` is deliberately absent. It is optional and self-asserted, so
+/// sending one would be an identity claim made by the transport on the
+/// gateway's behalf — the ticket's identity criteria decide that, not this.
+///
+/// Both failures are LOCAL: nothing is sent. A `params` that is not an object,
+/// or an `_meta` that is not an object, cannot carry the required keys, and the
+/// alternatives are worse than failing — overwriting destroys caller data, and
+/// sending unchanged means a real modern peer answers `-32602` after the fact.
+fn with_modern_meta(method: &str, params: Option<Value>) -> Result<Option<Value>> {
+    let mut params = match params {
+        None => serde_json::Map::new(),
+        Some(Value::Object(map)) => map,
+        Some(other) => {
+            return Err(Error::Protocol(format!(
+                "cannot send `{method}` to a 2026 peer: `params` must be an object to carry the \
+                 required `_meta`, got {kind}",
+                kind = value_kind(&other),
+            )));
+        }
+    };
+
+    let meta = match params.remove("_meta") {
+        None => serde_json::Map::new(),
+        Some(Value::Object(map)) => map,
+        Some(other) => {
+            return Err(Error::Protocol(format!(
+                "cannot send `{method}` to a 2026 peer: `params._meta` must be an object, got \
+                 {kind}",
+                kind = value_kind(&other),
+            )));
+        }
+    };
+
+    let mut meta = meta;
+    meta.insert(
+        KEY_PROTOCOL_VERSION.to_string(),
+        Value::String(MODERN_VERSIONS[0].to_string()),
+    );
+    // Matches what the legacy handshake already declares for this client
+    // (`"capabilities": {}`), so the two paths cannot disagree about the
+    // gateway's own capabilities.
+    meta.insert(
+        KEY_CLIENT_CAPABILITIES.to_string(),
+        Value::Object(serde_json::Map::new()),
+    );
+    params.insert("_meta".to_string(), Value::Object(meta));
+    Ok(Some(Value::Object(params)))
+}
+
+/// Name a JSON value's kind for an error a human has to act on.
+fn value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
+}
+
 impl HttpTransport {
     /// Create a new HTTP transport
     ///
@@ -363,6 +463,7 @@ impl HttpTransport {
             base_url: url.to_string(),
             message_url: RwLock::new(None),
             headers,
+            era: std::sync::OnceLock::new(),
             sessions: RwLock::new(HashMap::new()),
             single_tenant_hint: AtomicBool::new(false),
             request_id: AtomicU64::new(1),
@@ -397,6 +498,33 @@ impl HttpTransport {
     /// `debug_assert!` provably safe to enable: it must stay OFF (the
     /// default) for a `Shared`-slot instance, which is Arc-shared across
     /// every caller and relies on `sessions` staying multi-entry.
+    /// Attach the owning `Backend`'s era cache, so outbound messages can be
+    /// shaped for the dialect the peer actually speaks (MIK-7214.HEADER.9).
+    ///
+    /// A setter rather than a constructor parameter: `new` and `new_with_oauth`
+    /// are both public, and widening two published signatures for a value only
+    /// the lifecycle can supply would put an argument in front of every
+    /// external caller that has nothing to pass for it.
+    ///
+    /// Idempotent by construction. A second call is the lifecycle attaching a
+    /// cache to a transport that already has one, which cannot happen for a
+    /// freshly built transport and must not silently swap the cache if it ever
+    /// did.
+    pub(crate) fn attach_era(&self, era: Arc<crate::protocol::era::EraCache>) {
+        let _ = self.era.set(era);
+    }
+
+    /// The peer's era, as far as it is known right now.
+    ///
+    /// Never probes and never blocks on one in flight: an unresolved era reads
+    /// `None`, and `None` means legacy. Waiting here would deadlock — the probe
+    /// is itself a request through this transport.
+    /// Non-blocking on purpose: see `EraCache::cached_now`. This runs on the
+    /// path the probe itself takes.
+    fn outbound_era(&self) -> Option<crate::protocol::era::Era> {
+        self.era.get().and_then(|era| era.cached_now())
+    }
+
     pub(crate) fn mark_single_tenant(&self) {
         self.single_tenant_hint.store(true, Ordering::Relaxed);
     }
@@ -872,7 +1000,11 @@ impl HttpTransport {
 
     /// Send a raw request to the message endpoint
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
-        self.send_request_with_headers(request, &[], None).await
+        // `None`, not `self.outbound_era()`: this is the handshake, and a
+        // modern-shaped `initialize` is a message the peer we are still
+        // introducing ourselves to may be unable to parse.
+        self.send_request_with_headers(request, &[], None, None)
+            .await
     }
 
     /// Send a raw request, merging `extra_headers` into the outbound header set
@@ -890,6 +1022,7 @@ impl HttpTransport {
         request: &JsonRpcRequest,
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
+        era: Option<Era>,
     ) -> Result<JsonRpcResponse> {
         let message_url = self.get_message_url();
 
@@ -910,6 +1043,11 @@ impl HttpTransport {
             ) {
                 headers.insert(name, value);
             }
+        }
+        // AFTER every merge this path runs. Placed inside `build_mcp_headers`
+        // it would be overridden by the loop just above.
+        if era == Some(Era::Modern) {
+            finalise_modern_headers(&mut headers);
         }
 
         let response = self
@@ -1023,6 +1161,17 @@ impl Transport for HttpTransport {
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
+        // Read the era once, here, and carry it into the send. Reading it
+        // inside the header builder instead would leave the body half of the
+        // envelope decided somewhere else, and the two must agree about which
+        // dialect this one message is written in.
+        let era = self.outbound_era();
+        let params = if era == Some(Era::Modern) {
+            with_modern_meta(method, params)?
+        } else {
+            params
+        };
+
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: self.next_id(),
@@ -1031,7 +1180,7 @@ impl Transport for HttpTransport {
         };
 
         let result = self
-            .send_request_with_headers(&request, extra_headers, identity_key)
+            .send_request_with_headers(&request, extra_headers, identity_key, era)
             .await;
 
         // MIK-5982 / MIK-6040: when the backend's session expires (daemon restart,
@@ -1068,7 +1217,7 @@ impl Transport for HttpTransport {
             self.sessions.write().remove(bucket);
             self.initialize().await?;
             return self
-                .send_request_with_headers(&request, extra_headers, identity_key)
+                .send_request_with_headers(&request, extra_headers, identity_key, era)
                 .await;
         }
 
@@ -1100,15 +1249,28 @@ impl Transport for HttpTransport {
     ) -> Result<()> {
         let message_url = self.get_message_url();
 
+        let era = self.outbound_era();
+        let params = if era == Some(Era::Modern) {
+            with_modern_meta(method, params)?
+        } else {
+            params
+        };
+
         let notification = JsonRpcNotification {
             jsonrpc: "2.0".to_string(),
             method: method.to_string(),
             params,
         };
 
-        let headers = self
+        let mut headers = self
             .build_mcp_headers(HeaderMode::Notify, identity_key)
             .await?;
+        // This path has no per-request merge, so the builder's return is the
+        // last writer here. Finalising only in `send_request_with_headers`
+        // would leave every notification unshaped.
+        if era == Some(Era::Modern) {
+            finalise_modern_headers(&mut headers);
+        }
 
         let response = self
             .client

@@ -165,6 +165,21 @@ impl EraCache {
         }
     }
 
+    /// The era for a caller that must not wait — `None` when it is
+    /// undetermined *or* momentarily unreadable.
+    ///
+    /// The outbound request path reads the era on every request, and the
+    /// probe's own `server/discover` is one of those requests. `resolve_*`
+    /// holds this lock across the probe on purpose, so an awaiting read on
+    /// that path deadlocks the probe against itself until its own timeout.
+    /// Collapsing "held" into `None` loses nothing: a held lock means a probe
+    /// is in flight, and an in-flight probe means no era is determined yet —
+    /// which is what `None` already says.
+    pub fn cached_now(&self) -> Option<Era> {
+        let observation = *self.observation.try_lock().ok()?;
+        (observation.source == EraSource::Probed).then_some(observation.era)
+    }
+
     /// The era, if one has been determined and not since invalidated.
     pub async fn cached(&self) -> Option<Era> {
         let observation = *self.observation.lock().await;

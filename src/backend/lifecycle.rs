@@ -372,6 +372,11 @@ impl Backend {
                 if matches!(key, PoolKey::PerUser { .. }) {
                     transport.mark_single_tenant();
                 }
+                // Before `initialize()`, deliberately: the handshake must stay
+                // legacy-shaped, and it reaches the wire via `send_request`,
+                // which shapes nothing. Attaching after would leave every
+                // request between start and the first shaped call unshaped.
+                transport.attach_era(Arc::clone(&self.era));
                 transport.initialize().await?;
                 transport
             }
