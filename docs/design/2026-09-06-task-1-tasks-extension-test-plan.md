@@ -125,6 +125,7 @@ row, it is a wish.
 | `.15` | capacity is released when the record is **deleted or expires**, never when the task reaches a terminal state: with the per-principal cap at N, N `completed`-but-unreaped tasks refuse the N+1th admission, and the slot frees once the record is gone | integration | negative | **No — vacuous until the caps and expiry semantics both exist**, and vacuous in the dangerous direction: the default an implementer reaches for is an active-only counter, which reads zero and admits forever, so a case asserting only that admission succeeds after expiry passes on the broken code. The assertion that carries the row is the **refusal at N with terminal-state records**; advance the clock past the TTL and assert admission second. The row does not require a distinct reaper process (kimi and grok both, 2026-09-06): a lazy expiry check at admission time satisfies the design's "deleted or expires" exactly as a sweeper does, and naming the sweeper in the trigger would have made a conformant implementation look like a miss. **Trigger:** §11.2's caps and whatever releases an expired record; owner TASK.1. |
 | `.16` | a client polling `tasks/get` more frequently than the recorded `pollIntervalMs` is served normally — no throttle, no error | integration | negative | **No — vacuous until `tasks/get` exists**, and the weakest of the three: it asserts the absence of a behaviour nobody has written. Per A3 the case asserts the **observed responses** — N successes carrying the same shape — never "no rate-limit error occurred". Kept because `tasks.md:308` says servers **MAY** rate-limit below the recorded interval: declining that permission is a design decision, and this row is where a later implementer learns that adding a limiter changes our design rather than improving our conformance. |
 
+| `.17` | an in-flight task follows the `ttlMs` recorded **at creation**, not a default a later configuration reload changed: create a task under a default TTL of T1, reload a configuration whose default is T2 **< T1**, and both `tasks/get` and expiry still use T1 — the task is retrievable after T2 has elapsed and disappears at T1 | integration | negative | **No — vacuous until piece 2's task default-TTL key and a store exist.** Added 2026-09-06 (grok, HIGH): it is the ownership rule's **only** failure observable inside 4.0.0's own behaviour, and it had no row. `.14`–`.16` each run under one static configuration, so a reaper that reads live config rather than the record passes all three — the rule would have shipped with nothing able to contradict it. The direction is pinned deliberately: a reload **downward** makes live handles vanish while the backend call is still running, which is the failure the ownership rule exists to prevent; a reload upward merely extends a task and is barely observable, so a case run in that direction would be vacuous in the safe direction. **Trigger:** piece 2's task default-TTL configuration key; owner TASK.1 piece 2. |
 **Tally.** Of 33 clause rows — 32 cases plus `.12c`, which is a verdict rule and not a test — 11
 can fail against HEAD for a behavioural or compile reason: `.2a`,
 `.2b`, `.2c`, `.4a`, `.4b`, `.5`, `.6a`, `.7`, `.8e`, `.8f`, `.10b` — with `.13a`/`.13b` partial.
@@ -133,13 +134,17 @@ against whatever the dispatcher turns out to do. That asymmetry is the plan's he
 TASK.1 is mostly new surface, and the tests that constrain it on day one are the ones asserting
 against code that already exists.
 
-**Three design-decision rows, counted apart from the clause rows.** `.14`, `.15` and `.16` do not
-descend from a criterion clause: they pin the point this design picked inside a range the pinned
-spec leaves open (`tasks.md:308`, `tasks.md:340` — every server-side clause on expiry, retention
+**Four design-decision rows, counted apart from the clause rows.** `.14`, `.15`, `.16` and `.17`
+do not descend from a criterion clause. Three of them — `.14`, `.15`, `.16` — pin the point this
+design picked inside a range the pinned spec leaves open (`tasks.md:308`, `tasks.md:340` — every server-side clause on expiry, retention
 and poll-interval handling is a **MAY**, checked against the pinned blob before these rows were
-written). So they are the plan's to test and not the ledger's to judge, they are appended rather
-than slotted next to related rows, and none of them can fail against HEAD — the red tally stays
-at 11.
+written). `.17` is there for a different reason and the sentence above does not cover it: it pins
+no spec range at all, it pins this design's own internal invariant — the record, not live
+configuration, owns the value — which the specification neither requires nor forbids. That still
+makes it ours to test rather than the ledger's to judge, by the same rule and not by the same
+argument. All four are the plan's to test and not the ledger's to judge, all four are appended
+rather than slotted next to related rows, and none of them can fail against HEAD — the red tally
+stays at 11.
 
 ## 5. `.12` cannot close on a vacuous pass — read this section first
 
