@@ -164,7 +164,18 @@ not before.
   accept cross-caller replay. Left unstated it defaults to the second by accident.
   The two options are NOT symmetric, and R6 is why: after P8's fallback chain lands, the callers
   whose `identity_suffix` is still empty are exactly this population, so "protect it with an unbound
-  key" is the option that keeps R6's spoofable-suffix population alive. Decide R5 with R6 in hand.
+  key" is the option that keeps R6's spoofable-suffix population alive.
+
+  **DECIDED: refuse the call, not the protection.** Neither option the bullet names is acceptable:
+  protecting with an unbound key is cross-caller replay by construction, and declining to protect
+  while executing the call anyway means a client that asked for protection silently does not get
+  it, which is the criterion's MUST failing quietly. So a request that carries a client key and
+  resolves to no principal is REFUSED — the call does not execute. That is the same fail-closed
+  posture this design already took at the capacity bound, and it is decidable at the derivation
+  site, where both the key and the identity are in hand. A caller with no resolvable identity that
+  sends no key is unaffected: protection applies when a key is present and never otherwise, so
+  nothing that works today starts failing. Recorded here so the operator can overrule it in one
+  line rather than discover it in code.
 - **R6 — the idempotency suffix is appended raw after a client-supplied prefix, so a caller can
   spell another caller's binding.** Dormant, for the same reason everything else here is: with
   `idempotency_cache` always `None`, `idempotency_key_for` returns `None` before it formats
@@ -297,6 +308,8 @@ otherwise.
 | Does ADR-008 bear on the direct route's bypass? | CHECKED end to end. It does not; rung 2 is client-native OAuth passthrough. What it does bind is INV-3. CHANGED: the bypass loses its justification and axis 2 gains a placement constraint. | RESOLVED |
 | What capacity bound, and what happens at the bound? | CHECKED `src/config/features/cache.rs:12` and `src/cache.rs:185-204`: bound 10_000, policy evict-oldest. CHANGED: take the number, reject the policy, fail closed. | RESOLVED |
 | Does a configured backend timeout exceed `IN_FLIGHT_TIMEOUT`? | CHECKED. Per-backend `timeout` defaults to 30s (`src/config/mod.rs:1383`), enforced at `src/transport/http/mod.rs:305`; the server's `request_timeout` is also 30s (`src/config/mod.rs:1178`). CHANGED: P7 is out of reach at defaults and reachable only by configuration, so its fix shrinks to a config-load validation. | RESOLVED |
+
+| When neither `cache_binding` nor a stable actor id resolves, is a client-keyed call protected with an unbound key, left unprotected, or refused? | DECIDED on the requirement, with R6 in hand: refused. Protecting unbound is cross-caller replay; executing unprotected fails the MUST silently. Recorded so it can be overruled, not so it can be confirmed. | RESOLVED — overrulable |
 
 Nothing is deferred, and nothing is open. Every row above is RESOLVED; the first was answered on
 2026-08-31 and the code it gated is unblocked. A paragraph here used to record the state before that
