@@ -246,9 +246,13 @@ MET when all four behavioural tests pass:
    sites, not one that is consistently wrong at both. That is the defect the
    hoist exists to prevent, and a consistently-wrong derivation is caught by
    criteria 1, 2 and 4b instead — each asserts a behaviour the key must produce,
-   not a shape it must have. The route discriminator itself comes from the same
-   parser the meta route already uses (`src/protocol/mrtr.rs:117`) rather than a
-   literal written at each site, so route naming stays single-owner too.
+   not a shape it must have. The route discriminator is a typed argument to
+   `idempotency_key_for` (`support.rs:35-44`) — an enum whose variants are the
+   only route names in existence — and the string it renders to lives inside
+   that function, so route naming has the same single owner as the rest of the
+   key. It does NOT come from the retry-field parser at `src/protocol/mrtr.rs:117`:
+   that parser reads per-request `_meta` fields and knows nothing about which
+   route is executing. An earlier draft of this paragraph cited it and was wrong.
 
    Parameterized over the principal rung, not run once at one rung. The
    principal is the part of the key most likely to be derived differently at
