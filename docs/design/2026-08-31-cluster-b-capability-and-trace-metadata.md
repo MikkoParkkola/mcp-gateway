@@ -9,10 +9,14 @@ to `TraceContext` with a verbatim parse and a verbatim re-emit; `d4874a25` (21:3
 `TraceContext::from_meta` from `invoke.rs:1845-1847`, reading `args.get("_meta")`. Neither is an
 ancestor of `5c7e64f4`. So 2.3's "`baggage` appears nowhere in `src`" and "nothing calls
 `TraceContext` from the request path" are **superseded as statements about HEAD** and stand as
-statements about the pin. Nothing else in this design changes: the gap is the carrier and the
-reach, and both are untouched by those commits — `extract_tools_call_params` still discards
-everything but `(tool_name, arguments)`, and the one read is still a level below where the
-protocol puts `_meta`. What DID change is 3.4's cost: the "new `baggage` field" it warns about
+statements about the pin. Nothing else in this design changes, and that was checked rather than assumed: the gap is
+the carrier and the reach, and both are untouched by those commits — `extract_tools_call_params` still discards everything but `(tool_name, arguments)`, and the
+one read is still a level below where the protocol puts `_meta`. `d4874a25` **consumes** the
+trace id internally, as the transparency log's correlation key; it writes nothing into the
+outbound `_meta`, which still carries the prompt cache key and the MRTR retry fields and no
+trace field. So 2.3's "no trace metadata crosses the hop today" survives the drift, while
+2.3's "nothing calls `TraceContext` from the request path" does not — the two claims sat in
+one paragraph and only one of them moved. What DID change is 3.4's cost: the "new `baggage` field" it warns about
 is no longer hypothetical, so the unbounded verbatim copy it predicted has already landed and
 the bounded read is a repair rather than a precaution. The companion test plan's §12 records the
 commands; its §5 now carries its own pin, which is what this document had and it did not.

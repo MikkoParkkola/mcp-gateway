@@ -161,7 +161,7 @@ checks in §12 — checks a reviewer demanded and this plan had until then only 
 | OTEL.1.e | **T8a (charset)** one row per field, each breaking exactly one character class against the W3C grammar (A9), with the permitted neighbour asserted alongside (A1). Literal valid and invalid values pinned per field at writing time. | unit | boundary | Yes — no charset check exists today. **Not blocked**: charset is independent of the length numbers. |
 | OTEL.1.e | **T8b (length bounds)** per bounded field: at the limit ⇒ propagated; one byte over ⇒ dropped, request still succeeds. Both sides pinned (A1). | unit | boundary | Yes — no bound exists today (F4). **Blocked on a number: see §6.1.** |
 | OTEL.1.e | **T9 (constant perturbation)** a stated **mutation procedure**, not a unit case: patch the named bound constant in source, re-run T8b unchanged, require the verdict on the same input to flip. A runtime-injected bound would not prove the same thing — the point is that no hardcoded length sits beside the constant (A7). | procedure | A7 mutation | Same block as T8b. |
-| OTEL.1.g | **T10 (non-interpretation)** two requests identical except for their trace values; assert the **cache key is byte-identical** across both, and that the resolved backend and tool name are identical. The cache key is the one interpretation channel that is mechanically checkable in-process. | integration | negative, security | No — nothing reads trace values today, so this passes on HEAD. Recorded as a **regression guard**, not as evidence the clause was newly met. |
+| OTEL.1.g | **T10 (non-interpretation)** two requests identical except for their trace values; assert the **cache key is byte-identical** across both, and that the resolved backend and tool name are identical. The cache key is the one interpretation channel that is mechanically checkable in-process. | integration | negative, security | No — but not for the reason first written here. HEAD **does** read a trace value: `invoke.rs:1845-1847` parses `_meta.traceparent` and uses the trace id as the transparency-log correlation key (`d4874a25`, check 6). That read is outside the clause's interpretation channels — it sets no cache key, resolves no backend, decides no route, auth, policy or budget — and T10 asserts on exactly those, so the case still passes on HEAD. Recorded as a **regression guard**, not as evidence the clause was newly met. |
 | OTEL.1.g | routing, authorisation, policy and budget non-interpretation | — | — | **No case.** See §6.3. |
 | OTEL.1.h | end-to-end across a real backend hop | — | — | **No case.** See §6.4. |
 
@@ -551,7 +551,9 @@ src/protocol/trace.rs:109:        let onward = TraceContext::from_meta(&inbound)
 src/protocol/trace.rs:122:        let onward = TraceContext::from_meta(&json!({ "traceparent": TRACEPARENT }))
 src/protocol/trace.rs:135:            TraceContext::from_meta(&json!({ "baggage": "userId=alice" })),
 
-### check 4 — TraceContext has no baggage field; nothing references it outside its module
+### check 4 — REFUTED: `TraceContext` HAS a `baggage` field, and `invoke.rs` references it
+(the heading this check was written under asserted the opposite; its own output is below,
+and it is what falsified the premise §5 was built on)
 $ sed -n 12,25p src/protocol/trace.rs
 //! Propagated, never re-minted. A gateway that started a fresh trace would make
 //! its own hop the root and hide the caller that caused it.
