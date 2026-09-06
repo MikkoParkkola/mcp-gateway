@@ -274,6 +274,24 @@ MET when all four behavioural tests pass:
    routes gets one dispatch per route, which is the behaviour it has today.
 4. A keyless call is unaffected on both routes, and a key bound to a different
    fingerprint returns 409 on each route.
+5. Two different `(client key, projection, principal, route)` tuples never
+   produce the same key, including when one caller's client key ends in the
+   exact text of another caller's suffix. Today `idempotency_key_for`
+   (`support.rs:43`) returns `format!("{key}{projection_key_suffix}{identity_suffix}")`
+   — bare concatenation of a caller-controlled string with two suffixes whose
+   own delimiters (`|idp:`, `invoke.rs:1131`) are also spellable inside a client
+   key. An anonymous caller sending the key `X|idp:alice` addresses the entry
+   that caller `alice` created with the key `X`. The composition therefore
+   becomes a hash of a length-prefixed tuple via `sha256_hex_chunks`
+   (`src/hashing.rs`, already used this way by `derive_key`,
+   `src/idempotency.rs:442`), not a concatenation. This is a defect in the
+   SHIPPED helper, not one this change introduces — but this change is what
+   makes it reachable, because the guard is inert today, and composition is
+   inside scope per the receipt above.
+6. With idempotency disabled by configuration, a keyed duplicate dispatches
+   twice on BOTH routes. The change makes the guard default-on; an operator who
+   cannot turn it off has no way back to the pre-4.0.0 behaviour, and nothing
+   currently proves the off switch reaches the direct route at all.
 
 NOT a criterion: `rg 'enable_idempotency' src/` finding a production caller. It
 passes the moment the line is typed and can never fail while the change exists,
