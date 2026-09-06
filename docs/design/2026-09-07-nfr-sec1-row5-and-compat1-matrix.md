@@ -24,7 +24,7 @@ describes; the inventory now carries the correction as its fourth miscitation.
 The residue is narrower and still worth the change. That test **stages** the
 open circuit by calling `record_client_failure` directly. Nothing in it
 touches the site where production records a failure
-(`src/gateway/router/handlers.rs:1330`), so deleting that call leaves the test
+(`record_client_failure` in `handle_jsonrpc_request`, `handlers.rs:1511`), so deleting that call leaves the test
 green and the breaker inert for every real caller. The work here is to trip
 the breaker the way a caller trips it — repeated erroring `POST /mcp` — and
 keep every assertion the existing test already makes.
@@ -108,13 +108,15 @@ too.**
    asserts through `POST /mcp`, which is a production path. What it does not
    cover is the recording site, so a build that stops recording failures still
    passes. Rejected as the *whole* of S5's evidence, kept as its assertions.
-3. **Trip it through `POST /mcp` with repeated erroring calls.** Chosen, as a
-   strengthening of the existing test rather than a second one. Uses the same
-   recording site production uses (`handlers.rs:1330`), so a change that stops
-   recording failures breaks the test. Availability is conditional on a
-   JSON-RPC error response reaching that site under the fixture's client name;
-   if it does not, the existing test stands unchanged and the recording-path
-   gap is recorded as an observation.
+3. **Trip it through `POST /mcp` with repeated calls to a method that does not
+   exist.** Chosen, as a strengthening of the existing test rather than a
+   second one. Uses the same recording site production uses
+   (`handlers.rs:1511`), so a change that stops recording failures breaks the
+   test. The trip is named rather than left conditional: the recorder sits
+   below the dispatch match, so `-32601` from the `_` arm reaches it while an
+   error refused *before* dispatch — auth, parse, the rate limiter — does not.
+   Each staging call asserts its own `-32601`, so a build where the trip
+   silently stops erroring fails at the staging step instead of at the claim.
 4. **One combined COMPAT test parameterised over five revisions.** Rejected:
    the 2026 revision and the 2025 ones enter by different paths, so one
    parameterised body would need a branch on the parameter — which is two
@@ -159,7 +161,7 @@ yes: the router's own tests already set that field, they just set it to `None`.
 
 | unknown | check | result | what it changed |
 |---|---|---|---|
-| Is the client circuit breaker trippable from outside the `/mcp` route? | read every caller of `record_client_failure` (`rg` over `src/`) | Yes. `src/gateway/router/handlers.rs:1330` records a failure for the authenticated client on **any** JSON-RPC error response, excluding confirmation refusals. `backend_handlers.rs:559,:814,:868` record on the backend path. | Killed the N/A. Row 5 is buildable, and option 3 became available. |
+| Is the client circuit breaker trippable from outside the `/mcp` route? | read every caller of `record_client_failure` (`rg` over `src/`) | Yes, and narrower than first recorded. The call sits **below the method-dispatch match** in `handle_jsonrpc_request` (`src/gateway/router/handlers.rs:1511`; cited as `:1330` before a peer's edits shifted it), so it sees every response that match produces — including the `_` arm's `-32601` — and no error returned before dispatch. `backend_handlers.rs` records on the backend path. | Killed the N/A, and named the trip: repeated authenticated calls to a method that does not exist. |
 | Which path serves 2026-07-28? | read `MODERN_VERSIONS` and its consumers | The stateless POST path via the version header, gated on `server.modern_protocol`; never `initialize`. | Split C1 from C2-C5. Without this the C1 test would have driven `initialize` and failed for a non-defect. |
 | Does `modern_protocol` default on? | `src/config/mod.rs:1236` | true, since `83c98902` (2026-09-04) | C1 needs no config mutation for its positive arm; its falsifier flips the flag off. |
 | Does the breaker's refusal have a signature distinct from the gates around it? | read `errors.rs:20,:29` | 503/`-32003` vs the rate limiter's 429/`-32000` | Made the S5 falsifier decidable. |

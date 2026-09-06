@@ -13,9 +13,9 @@ are worded. An empty evidence cell is the finding, not an omission.
 
 | id | criterion | case | level | type | production entry | passes only if |
 |---|---|---|---|---|---|---|
-| S5.a | SEC.1 row 5 | an authenticated client whose circuit is open is refused | system | negative | `POST /mcp` after N erroring calls | HTTP 503 **and** code `-32003` |
+| S5.a | SEC.1 row 5 | an authenticated client whose circuit is open is refused | system | negative | `POST /mcp` after N authenticated calls to a method that does not exist, each asserting `-32601` | HTTP 503 **and** code `-32003` |
 | S5.b | SEC.1 row 5 | falsifier — the same frame from a client whose circuit is closed | system | positive | `POST /mcp`, fresh client name | 200, no error member |
-| C1.a | COMPAT.1 | 2026-07-28 is served | system | positive | `POST /mcp` + `MCP-Protocol-Version: 2026-07-28` | served statelessly; response carries 2026-07-28 |
+| C1.a | COMPAT.1 | 2026-07-28 is served | system | positive | `POST /mcp` + `MCP-Protocol-Version: 2026-07-28` | HTTP 200 with a `result` member and **no** `Mcp-Session-Id` response header — the stateless path's observables, since no response field echoes the revision |
 | C1.b | COMPAT.1 | falsifier — same frame with `modern_protocol` off | system | negative | as C1.a, flag flipped | `-32022` unsupported protocol version |
 | C2 | COMPAT.1 | 2025-11-25 served | system | positive | `server/discover` | `supportedVersions` **contains** 2025-11-25 |
 | C3 | COMPAT.1 | 2025-06-18 served | system | positive | `initialize` | negotiated version **equals** 2025-06-18 |
