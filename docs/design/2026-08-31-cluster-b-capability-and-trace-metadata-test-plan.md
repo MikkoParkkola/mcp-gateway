@@ -583,6 +583,20 @@ status only, never scraped from the body text (§PA).
 | `gpt-review` (codex-default) | 08:28:17Z — `process_status: error`, `exit_code: 1`, verdict field empty, no run file written | **ERROR** — usage limit. Not a refusal, not a SHIP, and not evidence of closure. |
 | `claude-review` (claude-opus-5) | 08:32:37Z — `process_status: ok`, `exit_code: 0` | **SHIP-WITH-FIXES** |
 
+**The re-check went to the wrong pair, and that is a finding about this pass, not about the
+repairs.** Repair-protocol step 6 returns a closure re-check to the vendor that *raised* the
+finding; the delegated path opens only on finder unavailability, after a 12h clock, under the
+narrower mandate of confirming or refusing the finding's own text. The six findings' finders were
+`grok-default` and `synthetic:hf:moonshotai/Kimi-K3`, and both were reachable minutes before this
+pass launched — grok wrote an `ok` verdict-bearing row at 08:25:19Z, three minutes before the
+08:28 launch, and the kimi wrapper served a row at 08:15:06Z. Neither was asked. Routing to
+`gpt-review` and `claude-review` instead was a **mis-route, not a delegation**: no clock started
+and no narrower mandate travelled in the material. The consequence is exactly what the rule
+predicts of a stranger vendor — the surviving leg re-opened three things it never raised. Those
+three are therefore **new material disposed under §P0**, not confirmation-pass output, which is
+why each was eliminated on its own merits and verified at source rather than accepted as closure.
+What still has no finder re-check is the closure of findings 16-21.
+
 The surviving leg confirmed all six round-2 findings closed **by changed specification rather
 than by words**, and raised three new ones against the repair itself. Every one is a claim the
 repair made about its own closure — the same shape as the defect §12 exposed, one level up.
@@ -591,7 +605,7 @@ repair made about its own closure — the same shape as the defect §12 exposed,
 |---|---|
 | §5's repaired preamble lists T14 among the rows asserting on the outbound params object, while §5.2 puts T14 at the funnel and §5's own table contains no T14 row. | **Eliminated.** "and T14" struck. T0 and T10 remain the section's two named exceptions, and the sentence can no longer be read against a row that is not there. |
 | T5's red-on-HEAD cell still cited the premise check 4 refuted — "`baggage` appears nowhere in `src`". | **Eliminated.** The cell carries the surviving cause, verified at source: outbound `_meta` is written only when a cache key is present (`invoke.rs:2545`), and the inbound read is at the arguments level (`invoke.rs:1844`). The grade stands; its stated reason no longer contradicts §12. |
-| §5's pin was asserted, not evidenced, and check 6 reasoned against unpinned `HEAD` inside the section whose purpose is to ban unpinned references. | **Eliminated.** Check 6 now runs against `b8cfc7e4`; check 7 evidences the pin itself — ancestor of HEAD, zero `src/` drift, and the five cited files unmodified in the shared checkout. |
+| §5's pin was asserted, not evidenced, and check 6 reasoned against unpinned `HEAD` inside the section whose purpose is to ban unpinned references. | **Eliminated.** Check 6 now runs against `b8cfc7e4`; check 7 evidences the pin itself against a *named* tree, `f2cf01b9` — ancestor, zero `src/` drift, and the five cited files unmodified in the shared checkout. Naming the tree is the point: this branch is shared and HEAD moved three times while this pass ran, so a check written against `HEAD` reads false to the next reader even when it was true when run. |
 
 Three improvements are recorded as observations rather than actioned (§P0, third disposal): name a
 checkable shape for §5.1's constraint 4 the way constraint 3 names a signature; add a
@@ -676,16 +690,18 @@ $ sed -n 53,88p src/protocol/trace.rs
         let mut meta = json!({ "traceparent": self.traceparent });
         ... for (key, value) in [("tracestate", ...), ("baggage", ...)]
 
-### check 6 — when the baggage field landed, and that it is behind HEAD
+### check 6 — when the baggage field landed, and that it is behind the pin `b8cfc7e4`
 $ git log -1 --format='%h %ad %s' --date=short baa318b2
 baa318b2 2026-08-31 feat(trace): carry baggage across the gateway hop
 $ git merge-base --is-ancestor baa318b2 b8cfc7e4 && echo "IS ANCESTOR of b8cfc7e4"
 IS ANCESTOR of b8cfc7e4
 
 ### check 7 — the pin itself, which every other check was asserted against
-$ git merge-base --is-ancestor b8cfc7e4 HEAD && echo "IS ANCESTOR of HEAD"
-IS ANCESTOR of HEAD
-$ git diff --stat b8cfc7e4..HEAD -- src/ | wc -l
+$ git rev-parse --short HEAD
+f2cf01b9
+$ git merge-base --is-ancestor b8cfc7e4 f2cf01b9 && echo "IS ANCESTOR of f2cf01b9"
+IS ANCESTOR of f2cf01b9
+$ git diff --stat b8cfc7e4..f2cf01b9 -- src/ | wc -l
        0
 $ git status --porcelain -- src/protocol/trace.rs src/gateway/router/helpers.rs \
     src/gateway/router/handlers.rs src/gateway/server/mod.rs src/gateway/meta_mcp/invoke.rs | wc -l
