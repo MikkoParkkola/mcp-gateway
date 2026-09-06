@@ -92,10 +92,29 @@ The race is not "the epoch is missing from the key". It is that :1214 and :1787 
 *post*-bump epoch — a body assembled under the superseded authorization, wearing the new
 authorization's name, and therefore retrievable by every subsequent reader.
 
-Fix, per C1+C2: read the epoch **once**, immediately after the authorization decision at :954,
-into a local; thread that same local into both `KeyContext` builds. One read means the two
-builds cannot disagree; there is no window for them to disagree in. This is an ordering, not a
-lock — the repair protocol's "an order in which the race cannot arise".
+Fix, per C1+C2: read the epoch **once**, into a local, and thread that same local into both
+`KeyContext` builds. One read means the two builds cannot disagree; there is no window for them
+to disagree in. This is an ordering, not a lock — the repair protocol's "an order in which the
+race cannot arise".
+
+**Where the single read goes is load-bearing, and the first draft of this design put it on the
+wrong side.** It read the epoch immediately *after* the authorization decision. A bump landing
+between `authorize` at :906 and that read then yields the *post*-bump epoch for a body whose
+authorization inputs were read *pre*-bump — the entry is written under the new epoch wearing the
+old authorization, which is the 4.g failure this design exists to remove, merely narrowed to a
+smaller window. Narrowing a race is patching it; the test is whether the finding can still be
+stated afterwards, and there it still could.
+
+The read therefore happens **before** the authorization decision at :906 — earlier than every
+input the authorization consumes (`authorizer.authorize` at :906 and `enforce_identity_grants`
+at :954). A bump landing after the read now strands the entry under the *old* epoch: no
+post-bump reader can name it, and the request that raced simply writes a cache line nobody will
+ever look up. The failure mode is a wasted insert, never a stale serve. Stale-closed beats
+stale-open, and only this ordering gives it.
+
+The compiler cannot enforce that the write sites use the captured local rather than re-reading,
+so the ordering is named as an invariant in a rustdoc comment on the `policy_epoch` accessor and
+is the mutation the 4.g falsifier below fires on.
 
 **Falsifier (this is the row that proves the implementation, not merely the key):** read the
 epoch fresh at the write site instead of threading the captured value. The entry then lands
@@ -115,7 +134,7 @@ response equals the pre-change body → red.
 | 4.f.1 grant-store mutation | **In scope.** Bump in `set_identity_grants` (C8: `&self`, no signature change). Honest limit recorded below. Test-shape constraint, recorded here so the plan inherits it: the mutation the test swaps in **must keep the same principal authorized**. A mutation that revokes the caller makes the second request fail authorization before it reaches the cache — the test then goes green for the wrong reason, and the 4.f.1 falsifier (remove the bump → response repeats the pre-change body) cannot tell the two apart. The assertion is a **fresh body**, never an error. |
 | 4.f.2 `LiveConfig` reload | **DEFERRED** — C5. |
 | 4.f.3 `CapabilityWatcher` reload | **DEFERRED** — C5. |
-| 4.g revocation race | **In scope, and the load-bearing row.** Capture-once at :954, threaded to :1214 and :1787. |
+| 4.g revocation race | **In scope, and the load-bearing row.** Capture-once *before* the authorization decision at :906, threaded to :1214 and :1787. |
 
 ## Accepted tradeoffs, named so they are not re-derived
 
@@ -125,6 +144,12 @@ response equals the pre-change body → red.
 - **`policy_epoch` stays `u64` with `Default` = 0.** Not a newtype, not an `Option`. C6: the
   moment a non-zero epoch appears every production key changes — fine on a cold cache — but
   changing the *type* breaks peers' `..KeyContext::default()` call sites for no gain.
+  The type carries no monotonicity guarantee, and nothing today can reset the counter because
+  it is created once inside `MetaMcp::new()`. A future re-initialisation path could, and a reset
+  epoch reuses keys minted under superseded grants — the exact collision the epoch removes. The
+  guard is one `debug_assert` at the bump site that the new value exceeds the old, added with
+  the bump rather than after the regression, so a reset becomes a test failure instead of a
+  silent cross-epoch hit.
 - **The bump is latent in production today.** C4: `set_identity_grants` runs once at startup,
   before any entry exists, so the 4.f.1 bump changes no production behaviour *yet*. It is not
   dead code — it is the correct behaviour at the only mutation point that exists, and it is what
