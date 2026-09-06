@@ -43,8 +43,8 @@ Two further gaps compound it, both found in review and verified at source.
 route reads `caller.retry.idempotency_key` (the MRTR retry envelope, `src/protocol/mrtr.rs`)
 and passes it to `idempotency_key_for` (`src/gateway/meta_mcp/support.rs:35-44`,
 `invoke.rs:1148`). What does not exist is any way for a client to *learn* that it may send one:
-the field is in no tool schema. A client cannot discover it, so today the *only* reachable protection
-is the automatic derivation — which is itself defect P2 below. This is the finding that
+the field is in no tool schema. A client cannot discover it, and since the automatic derivation
+was removed (P2 below) there is now no reachable protection at all. This is the finding that
 reshapes the design: "enforce only on an explicit client key" is not an available option until
 a carrier exists on both routes.
 
@@ -158,8 +158,9 @@ It is not inherited, but it is the same kind of risk: it fires when the cache is
 not before.
 
 - **R4 — loose key reuse starts returning 409.** A caller that today reuses one key string across
-  different `(server, tool, arguments)` gets a silent replay; once P5's binding check lands it gets
-  `Mismatch`. That is the intended behaviour and it is still a client-visible change, so it belongs
+  different `(server, tool, arguments)` gets no protection at all, because the cache is unwired;
+  on activation it gets `Mismatch`, since P5's binding has already landed in the derivation. That
+  is the intended behaviour and it is still a client-visible change, so it belongs
   in this change's release note rather than being discovered in production.
 - **R5 — an unverifiable identity leaves the key unbound.** When neither `cache_binding` nor a
   stable actor id resolves, the *key* carries no principal at all — the fingerprint never carries
@@ -284,8 +285,8 @@ placement is settled above: the binding goes in the derivation.
 
 **Axis 3 — the key carrier.** Protection needs a key a client can actually send, on both routes,
 advertised and validated. Nothing in the tree advertises one. This axis is upstream of the other
-two: deleting the automatic derivation with no carrier leaves the criterion unsatisfiable, and
-keeping it leaves the silent-dedup defect P2.
+two: with the automatic derivation already deleted and no advertised carrier, the criterion is
+unsatisfiable as things stand — which is why this axis is decided rather than deferred.
 
 DECIDED 2026-08-31. Asked of the operator, four options put with their costs, answered:
 the key travels in `_meta` on the meta route and an `Idempotency-Key` header on the direct route.
@@ -304,8 +305,8 @@ so it takes the key from an `Idempotency-Key` HTTP header, which is the industry
 Rejected: an `idempotency_key` tool argument, because it puts a gateway-internal concern into
 every backend tool's advertised surface. Rejected: a header on both routes, because a stdio
 client has no headers and would be left unprotected. Rejected: keeping automatic derivation as a
-fallback, because it is defect P2 — deriving a key for a client that never asked for one silently
-collapses deliberate repeats for 24 hours. Protection applies when a key is present and never
+fallback, because that would REINSTATE defect P2, already removed from the tree — deriving a key
+for a client that never asked for one silently collapses deliberate repeats for 24 hours. Protection applies when a key is present and never
 otherwise.
 
 **Axis 4 — an unresolvable principal under a client key. DECIDED: refuse the call.** Created by the
@@ -345,9 +346,9 @@ an invariant is what stops the defect returning row by row.
 | SUB.4, meta route | abort after the backend executed, reissue with a new request id and the same retry key, assert a mutation counter on a `destructiveHint` tool reads 1 | unwired: the counter reaches 2 |
 | SUB.4, concurrency (P1) | two same-key requests in flight together; exactly one executes, the other gets `409` or the stored result | non-atomic `enforce` lets both proceed |
 | SUB.4, direct route | the same post-execution reissue through `POST /mcp/{name}` | that route never resolves a key |
-| no false dedup (P2) | the *identical* keyless call issued twice, both backends must run | red once the cache is wired with auto-derivation intact — which is the point of the row |
-| `_full` protection (P4) | the meta-route case again with `_full` requested | `want_full` forces the key to `None` |
-| key/request binding (P5) | one key reused for a different `(server, tool, arguments)`; the second call must be refused, not replayed | the key is used verbatim, so the first result is replayed |
+| no false dedup (P2) | the *identical* keyless call issued twice, both backends must run | GREEN TODAY — regression coverage. `idempotency_key_for` returns `None` without a client key, so the row guards against reinstating the derivation, and it is the falsifier for the Axis 3 rejection above |
+| `_full` protection (P4) | the meta-route case again with `_full` requested | GREEN TODAY — regression coverage. The suppression was removed and `invoke.rs:1144-1147` records why; the row is what makes putting it back go red |
+| key/request binding (P5) | one key reused for a different `(server, tool, arguments)`; the second call must be refused, not replayed | GREEN ONCE WIRED — the binding is derived today but unreachable while the cache is `None`, so this row goes red only against a build that wires the cache without it |
 | reservation release (P6) | a call that trips the contract gate after dispatch; a later same-key call must not be locked out | the entry stays `InFlight` until timeout |
 | bound (P3) | fill to 10_000, assert a new protected side effect is refused rather than admitted | unbounded map admits it |
 | MRTR.10b regression | a non-final `InputRequired` result through the newly wired path must leave the call retryable, not stored as completed | SUB.4 is the change that first populates the cache, so this guard has never run in production; its only coverage calls `mark_completed` directly |
