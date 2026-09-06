@@ -661,7 +661,7 @@ Verdicts are the ledger rows, not text scraped from the output (§PA).
 
 | leg | vendor | verdict | ledger row |
 |---|---|---|---|
-| 1 | Kimi K3 | **SHIP-WITH-FIXES** | `kimi-review-ledger.jsonl`, `2026-09-06T06:53:20Z`, `process_status: ok`, output `synthetic-20260906T065320Z-87663.md` |
+| 1 | Kimi K3 | **SHIP-WITH-FIXES** | `kimi-review-ledger.jsonl`, `ts 2026-09-06T06:55:48Z`, `process_status: ok`, output `synthetic-20260906T065320Z-87663.md` |
 | 2 | Grok | **SHIP-WITH-FIXES** | `grok-review-ledger.jsonl`, `2026-09-06T07:01:17Z`, `process_status: ok`, output `grok-20260906T065254Z-82892.md` |
 
 Both legs SHIP-WITH-FIXES. Neither raised a SCOPE-CHALLENGE; the §P0 FOR/OUT
