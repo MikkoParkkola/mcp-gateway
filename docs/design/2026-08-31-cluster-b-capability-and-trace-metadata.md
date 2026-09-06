@@ -490,6 +490,24 @@ remains is the size limit each bounded read enforces.
 | when | with the test plan, so the boundary rows assert a real number rather than a placeholder |
 | what if it resolves badly | a bound set too low drops valid context from a conforming client; too high, it relays more attacker-influenced bytes than needed. Both are one constant, and the drop-not-repair rule means neither can fail a request |
 
+**Note the field this table does not carry: `traceparent`.** W3C fixes its length by grammar —
+version `00` is exactly 55 characters — so there is no bound to choose, and a row asking for "the
+traceparent size limit" would be asking for a number that does not exist. The bounded reads are
+`tracestate` (member count and total length) and `baggage` (total length); those are different
+specifications with different numbers, which is why they are named separately here rather than
+collected under one limit.
+
+**Someone may be resolving this right now, and that is a collision, not a resolution.** Observed
+2026-09-07 on this shared checkout: `src/protocol/trace.rs` carries **uncommitted** constants
+named `MAX_TRACESTATE_LEN`, `MAX_TRACESTATE_MEMBERS` and `MAX_BAGGAGE_LEN`, each with a doc
+comment quoting the spec sentence it comes from, plus filters applying them. They belong to
+another session's working tree — the committed file at `HEAD` contains none of them — so this
+design **cannot cite them as its answer**. Unlanded work in a shared tree is not evidence: a
+checkout erases it and the citation with it. What this changes about the deferral is the
+implementer's first act here — re-check whether those constants have LANDED, and if they have,
+adopt them and their provenance rather than mint a second set. Two sessions pinning the same
+bound to different numbers is the failure this note exists to prevent.
+
 ### 4.3 Deferred — disposal of `src/tracing_context/`
 
 | field | value |
