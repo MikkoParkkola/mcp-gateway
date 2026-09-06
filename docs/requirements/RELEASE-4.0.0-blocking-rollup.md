@@ -40,6 +40,12 @@ ruling makes them rarer rather than easier. It settles which way the *build-or-r
 nothing wider. A row whose build branch turns out to be genuinely infeasible is a finding to
 report, not a licence to take the other branch.
 
+This section landed inside `e5f76c2c`, a commit whose message is about a cache test-plan control and
+whose author trailer is not the author of these paragraphs. A concurrently running session staged
+the whole worktree rather than its own paths, and this file was open. Recorded rather than rewritten:
+history is shared with several live sessions, so a rebase costs far more than a wrong subject line.
+The commit to search for is this one, not that one.
+
 ## The clusters
 
 How far each cluster has actually got — design, test plan, review, code, owner —
