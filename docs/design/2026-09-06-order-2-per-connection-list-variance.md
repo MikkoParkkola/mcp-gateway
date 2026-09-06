@@ -60,10 +60,15 @@ in the shape of cluster-b's **option (b)** (profiles do not exist in modern mode
 not the option (a) that note recommended. The mechanism is elimination, not a
 check: with no non-empty key there is no per-connection profile state to vary.
 
-## 2. What remains: the spec-preview promotion store
+## 2. The spec-preview promotion store — closed in code, and now tested
 
-`spec-preview` dynamic promotion (SEP-1862) is the one list-shaping input that
-does **not** pass through `session_key`.
+`spec-preview` dynamic promotion (SEP-1862) was the one list-shaping input that
+did **not** pass through `session_key`. It does now: `promote_tool_for_session`
+takes `Option<&str>` and returns early when `session_key` rejects the caller
+(`src/gateway/meta_mcp/spec_preview.rs:238-241`, landed in `eb9e537a`), and a
+sessionless caller is held to promoting nothing by a case added in `0527aacc`.
+The facts below record the defect as it stood, because the option analysis in
+§4 was written against it.
 
 | # | fact | source |
 |---|---|---|
@@ -387,13 +392,13 @@ copy nobody reads is the one that goes stale.
 
 ## 8. What this note does not close
 
-ORDER.2a and ORDER.2b are **not** satisfied by this note. It is design only: no
-code changed, no test was added, and the promotion leg in §2 is open in the
-source as of 682a709a. The ledger rows stay blocking. What has changed is what
+ORDER.2a and ORDER.2b are **not** satisfied by this note. The promotion leg of §2 has since closed —
+guarded in `eb9e537a`, covered by a sessionless case in `0527aacc` — and the FSM
+state store of §2b is the one leg still open in the source at `0527aacc`. The ledger rows stay blocking. What has changed is what
 the evidence cell can now say: the profile leg is closed in code and measured
-here, the remaining defect is **two stores and four call sites** — the
-feature-gated promotion store of §2 and the default-build FSM state store of §2b
-— and the option to close both is chosen, priced, and ratified by the operator
+here, the remaining defect is **one store** — the
+default-build FSM state store of §2b; the feature-gated promotion store of §2 is
+closed — and the option to close both is chosen, priced, and ratified by the operator
 on 2026-09-06 (§6 Q4). §2b belongs to ORDER.2
 itself, per Q3's answer of 2026-09-06; it would have been the same defect under
 either reading.
