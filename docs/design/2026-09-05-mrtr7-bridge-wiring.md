@@ -1120,3 +1120,95 @@ tests, 2026-09-06). The round-7 verdict is therefore `MISSING`, never a verdict
 scraped from any output file. The round-6 recorded verdict reviewed the
 **unamended** design and does not carry to this amendment; both legs re-run
 against the material above, submitted on stdin.
+
+## Round 8 — two rulings recorded, and the roots defect is worse than round 7 said
+
+Round 7 named five decisions. Two were the requester's and have been ruled.
+Recorded in the askable form the design process requires: the question, who was
+asked, the answer, and what it changed.
+
+### D-A RESOLVED — `roots/list` stays in scope; fund the id-bearing forward
+
+- **question:** descope `roots/list` from MRTR.7, or fund a forward that can be
+  replied to?
+- **asked of:** the team lead, standing on the operator's ask for this fleet —
+  "get to the release ready state with all gaps fixed with the full scope"
+- **the answer:** roots is NOT descoped. A surface that cannot deliver by
+  construction is a GAP, and the ask says gaps are fixed, not narrowed.
+  Descoping a declared capability because its delivery path was built wrong is
+  precisely the move that sentence forbids.
+- **what it changed:** the wiring now has to repair the forward before it can
+  use it. Round 7 treated descoping as a live option and sized the work without
+  it; that sizing is void.
+
+Recorded, not confirmed: the lead is reporting this to the operator with the
+reasoning exposed, in case "full scope" was meant more narrowly. Build against
+roots being in; do not wait.
+
+### D-C RESOLVED — a dedicated channel, and the 22 call sites get paid
+
+- **question:** ride the destructive-confirmation `&ProxyManager`, or add a
+  dedicated client-request channel?
+- **asked of:** the team lead, who owns it — the requester has no stake in
+  which struct carries an internal request pipe
+- **the answer:** dedicated channel. The confirmation channel's NARROWNESS is
+  its security property. Widening it means every later reader must ask "is this
+  a confirmation or something else", and the first reader who gets that wrong
+  writes a bug in the destructive path.
+- **what it changed:** the module-root struct plus 22 literal call sites enter
+  the change. Mechanical work, which is the cheap kind — paid once, against a
+  channel whose purpose stays stateable in one sentence, which is paid at every
+  later change.
+
+### The roots defect has a second half, and it is the load-bearing one
+
+Round 7 said the forward sends no request `id`, so nothing can be matched. True,
+and incomplete. Reading the roots forward beside the sampling forward shows two
+differences, not one:
+
+| | sampling forward | roots forward |
+|---|---|---|
+| JSON-RPC `id` | minted as `sampling-<uuid>`, in the frame | absent |
+| SSE envelope | `message` — "MCP-standard: raw JSON-RPC for compliant clients" | `proxy_request` |
+
+The missing `id` makes the frame a **notification** rather than a request, and
+its own doc comment says so. A conforming MCP client is not obliged to answer a
+notification, and would not. The non-standard envelope compounds it: even with
+an `id` bolted on, a compliant client reading only the standard `message` event
+never sees the frame as a request at all.
+
+So the repair is not "add an id". It is: mint `roots-<uuid>`, register it,
+hold a `PendingSampleGuard` across the await, put the id in the frame, AND move
+the envelope to `message`. Anything less leaves a surface that still cannot be
+answered — the exact defect, one layer down, wearing a fix.
+
+Two consequences that are not optional:
+
+- **This is a wire-observable change.** A client that sees a notification today
+  sees a request tomorrow. Protocol-first applies: the frame is the contract.
+- **The two existing roots tests assert the current shape** and will fail. That
+  is correct and expected — they encode the notification behaviour that is being
+  repaired. They are updated as part of this change, not worked around.
+
+### One naming defect this exposes, recorded rather than silently fixed
+
+The pending map is named for sampling. Roots replies will land in the same map,
+because it is a generic id-keyed registry that sampling merely happened to be
+the first user of. The mechanism is right; the name will be a lie the moment
+roots lands. Recorded here as an observation, not a ticket — the rename is
+smaller than the ticket describing it would be, and it rides with this change.
+
+### Still open after this round
+
+- **D-B** `Declared` has no name-list projection — author's call, unchanged.
+- **D-E** `cost_warnings` on first vs last round — open since round 5.
+
+### Review provenance for round 8
+
+Both legs were launched against the round-7 material and **killed mid-flight**
+when these rulings arrived: that material froze while D-A and D-C were open, so
+every finding would have been argued against a premise that no longer holds. Any
+ledger row left by the kill carries a nonzero exit and is read as `ERROR`, never
+as a verdict. Round 7 and round 8 are both `MISSING` by design, and the dual
+review runs against the wiring — where the decisions are settled and the code
+exists to argue about.
