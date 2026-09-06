@@ -553,11 +553,15 @@ names the notification `notifications/tasks`. The design was the outlier, not th
 
 Every row checked against `schema.ts` and `tasks.md` this session.
 
-**Four verdicts in this table are SUPERSEDED by §11.2 and §12 — read those, not these rows.** The
-`ttlMs` and `pollIntervalMs` MAY-change clauses, the `tasks/update` key-matching MUST with its
-empty-ack shape, and the cooperative-cancel licence are all now stamped on piece 4 and AC `.3`.
-The rows below still read "design is silent" / "is not stated" because they record what this
-conformance pass found; leaving them unmarked would re-teach a closed defect to the next reader.
+**Two verdicts in this table are SUPERSEDED by §11.2 and §12 — read those, not these rows.** The
+`tasks/update` key-matching MUST with its empty-ack shape, and the cooperative-cancel licence, are
+now stamped on piece 4 and AC `.3`. The rows below still read "design is silent" because they
+record what this conformance pass found; leaving them unmarked would re-teach a closed defect.
+
+**The two MAY-change rows — `ttlMs` and `pollIntervalMs` — are STILL OPEN.** No finding in §11 or
+§12 touched them, so nothing supersedes them: neither vendor raised the clause, and an admission
+cap on `ttlMs` is a different rule from "this field may change over the task's life and the store
+must not treat it as write-once". They are what this note still owes, listed in §11.6.
 
 | spec fact | §3 | verdict |
 |---|---|---|
@@ -757,7 +761,8 @@ exact failure §0 of this note was written about, and it reproduced within six d
 
 The confirmation pass required by §12 — *are the gaps closed* — has now RUN; §12 below records it.
 What is still owed after it: the final criterion numbering, which is the team lead's call and not
-this note's to make. The functional leg (D6:E2E) is **N/A: this change has no running surface** —
+this note's to make, and the `ttlMs` / `pollIntervalMs` MAY-change clauses, which §10.3 found
+unstated and no review round since has raised — an open conformance gap, not a superseded one. The functional leg (D6:E2E) is **N/A: this change has no running surface** —
 it is a design note; nothing was built, so there is nothing to drive.
 
 ## 12. Confirmation pass — 2026-09-06
@@ -776,7 +781,10 @@ materiality on its own line and re-opens what it never raised.
 | `tasks/update` under-specified (MEDIUM) | grok | **NOT CLOSED** | the three MUSTs were stamped on AC `.3` only. An implementer writes the handler from piece 4 and reaches the criterion only when writing tests. Repaired: piece 4 carries them |
 | citations land on passages that do not carry the claim | grok | **PARTIAL** | §0, §7, §9 and §10.4 verified at source and correct. §4 and §9 still cited `plan.md:48-50,110-112` for "both ship"; the claim is at `:605-606`. Repaired — §11.4 had retargeted this same pointer everywhere except here |
 
-**Both legs: SHIP-WITH-FIXES.** All six fixes are in the commit that carries this section.
+**Both legs: SHIP-WITH-FIXES.** The two CLOSED findings were fixed before this pass ran, in
+`55467540` and `a4748f63`. The four this pass sent back are repaired in `8ab52da8`, which precedes
+the commit carrying this section — the verdicts and their repairs are separate commits on purpose,
+so the record of what came back open survives independently of the fix.
 
 Two IMPROVEMENTs were **disposed, not fixed** (§P0 disposal, named so the default of filing a
 ticket does not reassert itself):
