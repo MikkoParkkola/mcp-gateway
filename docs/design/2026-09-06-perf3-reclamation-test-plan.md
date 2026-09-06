@@ -79,10 +79,10 @@ Every row states above what makes it fail. The risks specific to this plan:
 
 Recorded here rather than in the design section because neither meets a §P3 trigger: no acceptance
 criterion moves, no contract changes, nothing enters or leaves what §P0 declared FOR or OUT. They
-are §P4a documentation updates, shipped in the same commit series as the test they describe, and
+are §P4a documentation updates, recorded now because the case has been written against them, and
 are not going back through §P4 on their own account.
 
-- **Row 2's case lives in its own target, `tests/nfr_perf3_reclamation.rs`, not "the same module".**
+- **Row 2's case belongs in its own target, `tests/nfr_perf3_reclamation.rs`, not "the same module".**
   Cargo builds one binary per file in `tests/`, and this row is deliberately red-because-unbuilt.
   Put beside the MIK-7212 criteria it would take that whole binary down — including
   `ac_mrtr_8_the_table_is_bounded`, which is *row 1's entire evidence*. Breaking a committed green
@@ -157,6 +157,26 @@ Neither row's falsifier probe has been run, and neither can be: both are specifi
 evidence rather than a green test, so **this plan is not discharged until they run** — owner: this
 slice, trigger: the first commit after MRTR.8b lands. If a probe fails to go red, the row it
 belongs to is not a case and the clause it claims to cover is uncovered.
+
+Row 2's case is **written and deliberately out of tree** until `guard(now)` lands. MRTR.8b has no
+code committed at all — design and plan documents only — so the dependency is unstarted rather than
+merely unmerged, and this plan's own landing order puts this slice after it. A file that fails the
+build and lint gates on a branch eleven worktrees share would buy a compile error this plan already
+says is not evidence about reclamation, at the price of everyone else's gate. The case therefore
+waits in this session's scratchpad as `nfr_perf3_reclamation.rs`, reproducible from row 2 and the
+two corrections above if the session ends first.
+
+It briefly was in tree: another session's broad commit swept the staged file into `ea61525c` and
+the corrections above into `e174b8bd`, and the file was removed again in the commit carrying this
+paragraph. Recorded because a reader tracing the file's history will otherwise read that add as a
+decision this plan made.
+
+Three things fall at one trigger — the first commit after MRTR.8b lands. Both falsifier probes, and
+moving the case back into `tests/` with a check that its compile failure is `len`'s arity **and
+nothing else**. That last check is unrun today: the disk guard (MIK-4777) halts the toolchain below
+5 GB free and the recovery freeze forbids clearing it. A red caused by a stray typo or a wrong
+import looks identical to the red this row wants, which is why it is named as owed rather than
+assumed.
 
 No vendor has reviewed the plan as it now stands. grok's round-2 verdict predates `98f25160`, the
 repair made in response to grok's own improvement, and repair-protocol step 6 would return that
