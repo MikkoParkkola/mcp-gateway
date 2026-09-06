@@ -193,18 +193,25 @@ async fn ordinary_request(peer: Peer) -> Wire {
     // Positive control for the session-header pins. The peer issues
     // `Mcp-Session-Id` only on `initialize`, so a flow that never handshook
     // would satisfy "the modern shape carries no session header" for the
-    // boring reason and never traverse the code that strips it.
+    // boring reason and never traverse the code that strips it. Ordered, not
+    // merely present: the capture is in arrival order, and a handshake landing
+    // after the request under test leaves that request just as sessionless.
+    let request = seen
+        .iter()
+        .position(|wire| wire.method == "tools/list")
+        .expect("the ordinary request must reach the peer");
+    let handshake = seen.iter().position(|wire| wire.method == "initialize");
     assert!(
-        seen.iter().any(|wire| wire.method == "initialize"),
-        "the fixture flow must handshake, else the session-header assertions \
-         are vacuous; the peer saw {:?}",
+        handshake.is_some_and(|at| at < request),
+        "the fixture must handshake before the request under test, else the \
+         session-header assertions are vacuous; the peer saw {:?}",
         seen.iter()
             .map(|wire| wire.method.as_str())
             .collect::<Vec<_>>()
     );
     seen.into_iter()
-        .find(|wire| wire.method == "tools/list")
-        .expect("the ordinary request must reach the peer")
+        .nth(request)
+        .expect("an index just taken from the same capture")
 }
 
 /// Read one header as a string, or say which one was missing.
