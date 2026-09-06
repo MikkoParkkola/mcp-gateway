@@ -60,7 +60,7 @@ only one and produced the wrong conclusion. The draft at `.../specification/draf
 | the era gate in `src/gateway/router/handlers.rs` | `if !is_modern && ADDED_IN_2026_07_28.contains(&method)` -> `-32601` | a 2025-era client can reach `tasks/cancel` today, because the list does not name it |
 | `src/gateway/router/handlers.rs:842` | `"subscriptions/listen"` returns an SSE stream, ack first | the stream a task's notifications must ride, and must not carry progress/message |
 | `mcp_name_required` / `mcp_name_body_field` (`src/protocol/headers.rs`) | `mcp_name_required` / `mcp_name_body_field`, "exactly these three" | the extension adds a fourth..sixth: `tasks/get\|update\|cancel` mirror `taskId`, not `name` |
-| `src/protocol/era.rs:39-40` | `MISSING_REQUIRED_CLIENT_CAPABILITY: i32 = -32021` — "(was `-32003`)" | the draft still says `-32003`; the pinned 2026-07-28 text says `-32021`, and so does this tree |
+| `MISSING_REQUIRED_CLIENT_CAPABILITY` (`src/protocol/era.rs`) | `MISSING_REQUIRED_CLIENT_CAPABILITY: i32 = -32021` — "(was `-32003`)" | the draft still says `-32003`; the pinned 2026-07-28 text says `-32021`, and so does this tree |
 | `src/gateway/meta_mcp/support.rs:35-44` | `idempotency_key_for` — client key or nothing; a keyless call gets no key at all (corrected 2026-09-06: the auto-deriving `resolve_idempotency_key` this row previously named is not in the tree) | SUB.4 keys a task-augmented call only when the client supplied a key, and that is the one case the two mechanisms can collide over |
 | `src/protocol/cacheable.rs:99-101` | `is_final(result) == (resultType == "complete")` | `resultType: "task"` is non-final, so neither the response cache nor `mark_completed` can swallow a `CreateTaskResult` |
 
@@ -354,13 +354,13 @@ written for, through a door AC `.11` does not cover.*
   `cacheable.rs:99-101` and the two call sites — `is_final` is `resultType == "complete"`, and
   `"task"` is not — no change needed to either guard, which is why §4's rule is a skip on entry
   rather than a new gate. This one changed nothing in those two files; saying so is the point.
-- *Does `-32003` exist in this tree?* — `rg -n '32003' src/` — `era.rs:39-40` defines
+- *Does `-32003` exist in this tree?* — `rg -n '32003' src/` — `era.rs` defines
   `MISSING_REQUIRED_CLIENT_CAPABILITY = -32021` with the comment "(was `-32003`)" — the draft's
   number is the *pre-renumbering* one.
 
 - *So which number does a non-declaring client get — the draft's `-32003` or this tree's
   `-32021`?* — read the pinned blob's error table: "Missing required client capabilities:
-  `-32021` (Missing Required Client Capability)". The versioned text agrees with `era.rs:39-40`;
+  `-32021` (Missing Required Client Capability)". The versioned text agrees with `era.rs`'s `MISSING_REQUIRED_CLIENT_CAPABILITY`;
   the draft is stale on this point. That closed what an earlier revision of this note deferred to
   the implementer with an upstream question attached — there is no divergence to record and
   nobody to ask.
@@ -601,7 +601,7 @@ must not treat it as write-once". They are what this note still owes, listed in 
 | no `tasks/list`, deliberately, for cross-caller correlation (`tasks.md:904`) | §3 "two non-spec structs", §3 piece 6 | matches, and is load-bearing in both places |
 | negotiation: client per-request `_meta["io.modelcontextprotocol/clientCapabilities"].extensions`; server `result.capabilities.extensions`; empty object = support | pieces 3 and 5 | matches |
 | creation is **server-directed** per request | §3 opening | matches |
-| `-32021` + `data.requiredCapabilities.extensions` | piece 3, AC `.4` | matches; §6 already proved `-32021` against `era.rs:39-40` |
+| `-32021` + `data.requiredCapabilities.extensions` | piece 3, AC `.4` | matches; §6 already proved `-32021` against `era.rs`'s `MISSING_REQUIRED_CLIENT_CAPABILITY` |
 | task IDs MAY be bearer tokens -> entropy requirement | piece 1 (v4 UUID) | matches |
 | auth MUST be checked on **each** task-related request | piece 6, AC `.11` | matches; the criterion is `MIK-7272.TASK.1.11` (cross-principal retrieval answered as not-found), not `.9`, which is the notification-filter row. It is dispositioned for *retrieval*, and NOT for subscription admission — see §11 |
 | `notifications/tasks` is optional; clients subscribe via `subscriptions/listen` | §5, AC `.9` | matches after §10.2's rename |
