@@ -1032,3 +1032,91 @@ ledger row exists with `process_status: ok` and verdict SHIP-WITH-FIXES, but its
 wrapper passed the path and the reviewer read the document off disk itself. The
 findings are real and cite real line numbers. The chain from verdict to material
 is not, and the next round submits the material on stdin.
+
+## Round 7 — the decisions this design has not made, named as decisions
+
+Round 6 closed three findings and left the document reading as if wiring were a
+transcription job. It is not. Five decisions stand between this design and code,
+and none of them is an implementation detail. Naming them is the §P3 obligation
+discharged at the moment the gap is visible, not after a helper has been written
+against a bridge that cannot deliver. Each carries who decides and what breaks
+if it resolves badly, per the four-field form for a deferred unknown.
+
+### D-A `roots/list` has no response path — SCOPE, requester decides
+
+`forward_roots_list` sends no request `id`. `resolve_pending` keys on the id of
+the reply, so a `roots-` prefixed response can never be matched, and nothing
+downstream of a roots forward can ever complete. One third of the bridge's
+declared surface is undeliverable as the code stands.
+
+- **owner:** requester (this is what the bridge is FOR, not how it works)
+- **resolves by:** a decision — descope `roots/list` from MRTR.7, or fund an
+  id-bearing variant of the forward
+- **when:** before any `ClientChannel` production adapter is written
+- **if it resolves badly:** a wired bridge that advertises three client
+  capabilities and silently hangs on one. Worse than not wiring it, because the
+  hang is indistinguishable from a slow client.
+
+### D-B `Declared` has no name-list projection — CONTRACT, author decides
+
+`run` compares against capability name strings via its `slice` parameter.
+`Declared` carries no `Vec<String>` projection and no `from_initialize`
+constructor (line 330-336 is where one would go). The `run` doc comment cites a
+session store that does not exist in this tree.
+
+- **owner:** the implementing author, recorded here rather than decided silently
+- **resolves by:** either add `Declared::from_initialize` and keep the `run`
+  contract, or change `run` to take `&Declared` and drop the string slice
+- **if it resolves badly:** a name list assembled at the call site, which is the
+  two-owners-of-one-fact shape the repair protocol says to eliminate, not patch
+
+### D-C the production `ClientChannel` source — COUPLING, requester decides
+
+Two available sources, and the cost difference is not the point:
+
+| option | cost | what it means |
+|---|---|---|
+| ride the `caller.confirmation` `&ProxyManager` | zero edits to the meta-MCP module root | the destructive-confirmation channel becomes a general client-request pipe |
+| a dedicated channel | the module-root struct plus 22 literal call sites | the confirmation channel keeps its single purpose |
+
+Either way the adapter is `register_pending` + `PendingSampleGuard` +
+`send_to_session`, with `SamplingError -> DeliveryError` conversion. The
+mechanism is settled; the **purpose of the channel** is not, and widening a
+narrow safety channel is a design decision wearing a convenience edit costume.
+
+- **owner:** requester
+- **if it resolves badly:** a confirmation path whose blast radius now includes
+  every bridge request, discovered the first time one of them wedges it
+
+### D-D `accounted_dispatch` — SETTLED, recorded for the record
+
+Committed at `aa601f58` in the meta-MCP invoke module. Behaviour-identical
+extraction: the governance **gate is excluded**, six emissions plus a single
+`dispatch_to_backend` are inside, and the helper is shared by the opening round
+and every bridge retry. `BackendInvoker::invoke` returns `Result<Value, Error>`.
+This is the one piece of the wiring that exists.
+
+### D-E `cost_warnings` on first vs last round — OPEN (was D8)
+
+Unresolved from round 5 and still unresolved. Named here so it stops being
+carried as a footnote: a retry sequence emits warnings per round, and nothing
+decides whether the caller sees the first round's or the last's.
+
+### Policy — a bridge exchange is gated ONCE (design event)
+
+The governance gate stays **outside** `accounted_dispatch` deliberately. A
+mid-exchange re-gate would let a budget move between a bridge request and its
+reply and refuse a half-completed exchange, leaving a `PendingSampleGuard` with
+no path to resolution. Accounting still accrues per round — `record_spend`
+writes both the `global_daily` and `tool_daily` accumulators on every dispatch —
+so the exposure is bounded to overspend within a single call, not to an
+unmetered retry loop. That bound is what makes gating once affordable.
+
+### Review provenance for this round
+
+The `gpt-review` ledger holds **no row** for this material. The most recent row
+is a different repo, run and ticket (`mcp-v4-delivery`, MIK-7212 component
+tests, 2026-09-06). The round-7 verdict is therefore `MISSING`, never a verdict
+scraped from any output file. The round-6 recorded verdict reviewed the
+**unamended** design and does not carry to this amendment; both legs re-run
+against the material above, submitted on stdin.
