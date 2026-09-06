@@ -351,8 +351,8 @@ The assertion is a mutation counter on the tool, never the response body: two id
 are also what executing twice produces.
 
 **Two constraints and one case, transferred 2026-09-06 from the MRTR.8b/10a design when Change B was
-withdrawn.** The table below carries a second row that is NOT transferred — R6's falsifier is this
-design's own, added when R6 was written into it. That change's plan had written them for a wiring that no longer exists; they are
+withdrawn.** The table below also carries rows that are NOT transferred — R6's
+falsifier and R5's, both this design's own, added when those risks were written into it. That change's plan had written them for a wiring that no longer exists; they are
 constraints on *this* plan because this is the change that activates the cache.
 
 - **The activation test constructs through the production builder, not a hand-assembled server.**
@@ -368,4 +368,5 @@ constraints on *this* plan because this is the change that activates the cache.
 | criterion | case | how it fails today |
 |---|---|---|
 | cross-principal binding (P8/P9) | two *different* authenticated callers issue the same tool, same arguments and the same key string, with identity propagation OFF; the second must execute rather than receive the first's stored response | `identity_suffix` is empty at that default, so both callers derive the same *key* (`support.rs:43`); `admit` looks the entry up by key (`idempotency.rs:256`) and `matches` (`:130-131`) then compares fingerprints, which are identical because the two calls genuinely are the same `(server, tool, arguments)` — so it returns `AdmitOutcome::Completed` and replays |
+| unresolvable principal under a client key (R5 / Axis 4) | on a non-`required` propagation backend, a caller with neither a `cache_binding` nor a stable actor id sends a client key for a `destructiveHint` tool; the call must be REFUSED — neither executed unprotected nor admitted under an unbound key | no key is derived at all (`idempotency_cache` is `None`), so the call executes unprotected and the criterion's MUST fails silently. That silent branch is the whole reason Axis 4 decides rather than defers: without this row the decision is a paragraph, and a paragraph cannot go red |
 | suffix unspellability (R6's repair constraint) | in one deployment, a bound caller sends client key `X` and an unbound caller on the same non-`required` backend sends `X|idp:<the bound caller's binding>`; the two must derive DIFFERENT keys, so the unbound caller is admitted rather than served the bound caller's stored result | the suffix is appended raw and unlength-prefixed against what precedes it (`format!("{key}{projection_key_suffix}{identity_suffix}")`), so the two spellings collide exactly. This row is what stops P8's fallback chain landing while the append stays raw: a chain that resolves more principals but still concatenates plaintext turns this case red rather than green, and only a test says so out loud |
