@@ -132,7 +132,7 @@ name in the governed set. NFR.PERF.4.6 pins the property either way.
 |---|---|---|---|
 | 1 | Do published clients call `gateway_webhook_status` by name? | checkable | **resolved**, see 6.1 |
 | 2 | Is `readme_benchmark: 16` measured or a target? | checkable | **resolved**, see 6.2 |
-| 4 | Does the 14..=16 band govern only the unfiltered traditional surface, or every served list including Code Mode and `exposed_meta_tools`? | askable — operator | **open**, blocks the acceptance criterion's wording, not the implementation |
+| 4 | Does the 14..=16 band govern only the unfiltered traditional surface, or every served list including Code Mode, surfaced and session-promoted tools? | askable — operator | **open**, blocks implementation — see 6.3 and 9.1 |
 | 5 | When the tool goes, where does webhook status become observable? | askable — operator | **open**, blocks implementation |
 
 ### 6.1 Answer to question 1
@@ -219,7 +219,12 @@ a count can satisfy the band while the surface costs more context.
 
 ## 9. Revision 3 review: the criterion is unsatisfiable as worded
 
-Dual review of revision 3 returned DO-NOT-SHIP. Three HIGH findings converge on
+Dual review of revision 3 returned DO-NOT-SHIP (Codex/GPT) and SHIP-WITH-FIXES
+(Kimi). Both vendors independently raised the same HIGH finding — the removal is
+breaking under DoR C5 regardless of in-tree callers — which is why finding 3
+below is accepted on consensus rather than argued. Kimi additionally caught the
+§6 table still saying Q4 does not block implementation after §6.3 had been
+rewritten to say it does; that row is now corrected. Three HIGH findings converge on
 one claim, and the sharpest of them is now **resolved by check rather than left
 open**: the acceptance criterion cannot be made true by any change inside this
 scope, or indeed inside the meta-tool builder at all.
