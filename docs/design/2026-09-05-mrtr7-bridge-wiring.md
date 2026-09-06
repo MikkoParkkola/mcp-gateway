@@ -563,7 +563,7 @@ was taken on the reviewer's word.
 | finding | disposal |
 |---|---|
 | the write site is still named twice, HTTP-only in one place and `MetaMcp::handle_initialize` in another (HIGH, CERTAIN) | confirmed. The round-4 repair fixed the stdio paragraph and left two passages carrying the old instruction — the change-surface bullet and the answer recorded against the first scheduled question. Both now name `router/handlers.rs:926`, and the recorded answer says which amendment superseded it rather than being quietly rewritten |
-| the store's owner is not concrete, and the cited stream-end removal does not exist (HIGH, LIKELY) | confirmed, and the citation was worse than the finding said. `streaming.rs:578` is a line inside a test; the only production removal is `handlers.rs:354` on DELETE (V: `rg -n 'remove_session' src/` returns those two and nothing else). Eliminated rather than patched: the declaration becomes a field on `ClientSession`, which the map already holds as its value type, so it cannot drift from or outlive the session and no second keyed map needs removal wiring. The absence of a reaper is now a named residual instead of an invented removal path |
+| the store's owner is not concrete, and the cited stream-end removal does not exist (HIGH, LIKELY) | confirmed, and the citation was worse than the finding said. `streaming.rs:578` is a line inside a test; the only production removal is `handlers.rs:354` on DELETE (I: `rg -n 'remove_session' src/` returns those two and nothing else — one grep is one source, however carefully it was run). Eliminated rather than patched: the declaration becomes a field on `ClientSession`, which the map already holds as its value type, so it cannot drift from or outlive the session and no second keyed map needs removal wiring. The absence of a reaper is now a named residual instead of an invented removal path |
 | `WIRE.9`'s follow-up call is answered by the settled idempotency entry, so the cache gate never runs (MEDIUM, CERTAIN) | confirmed by reading the row: it reused the key it had just asserted settled, which is exactly the shape `test-plan-honesty` calls a case that cannot fail. The follow-up now carries a different idempotency key and the same response-cache key, and settlement is asserted separately |
 
 Two improvements taken, both in the test plan: `WIRE.10` sat outside the
@@ -806,9 +806,12 @@ Both rulings this change stands on are recorded and neither answers the other.
   legacy-client bridge is REACHABLE FROM PRODUCTION. The ruling names no
   transport.
 
-Stdio is the dominant MCP client transport. An HTTP-only bridge makes the bridge
-reachable from production on one transport and leaves legacy stdio callers
-refused. Whether that satisfies the release gate is not checkable by running
+An HTTP-only bridge makes the bridge reachable from production on one transport
+and leaves legacy stdio callers refused. An earlier revision opened this
+paragraph by asserting that stdio is the dominant MCP client transport. That
+was an A-grade claim — no source — in the sentence that frames a question for
+the requester, which is the worst place to put one. How much stdio matters is
+the requester's weighing, and this design should not pre-argue it. Whether that satisfies the release gate is not checkable by running
 anything, and it must not be assumed: nothing on the record shows the 09-06
 ruling had the 09-05 descope in view.
 
@@ -833,7 +836,9 @@ while the question is open. Implementation of 7a is not.
 
 Every claim in sections 1-4 was read at source on 2026-09-06 against
 `fix/mrtr2-continuation-handle` — no claim here is carried from a previous
-round's summary. Line numbers are as of that revision and will drift; the
+round's summary. Each is marked **I**, not V: one careful read of the tree is
+one source, and nothing in this round was corroborated by a second independent
+one. Line numbers are as of that revision and will drift; the
 symbols are the durable anchors. Section 5 quotes two records rather than
 measuring anything, and says so.
 
