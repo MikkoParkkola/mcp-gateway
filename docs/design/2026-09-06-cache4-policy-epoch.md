@@ -4,8 +4,8 @@ Design receipt. NO CODE. Companion to `docs/design/2026-08-31-cluster-f-response
 (new file rather than an edit: that document is the receipt of a landed change and its
 eight-row verdict table is cited by others; this is a separate change with its own scope).
 
-Release criteria owned here: `docs/requirements/RELEASE-4.0.0-criteria-status.md:86` (CACHE.4a,
-PARTIAL) and `:87` (CACHE.4b, ABSENT, blocking). Test-plan rows in scope: 4.d, 4.e, 4.f.1,
+Release criteria owned here: `docs/requirements/RELEASE-4.0.0-criteria-status.md:93` (CACHE.4a,
+PARTIAL) and `:94` (CACHE.4b, ABSENT, blocking). Test-plan rows in scope: 4.d, 4.e, 4.f.1,
 4.f.2, 4.f.3, 4.g of `docs/design/2026-08-31-cluster-f-response-cache-keying-test-plan.md`.
 
 ## §P0 SCOPE
@@ -235,7 +235,7 @@ the seam guard test asserts only that the seam discriminates.
 **These two deferrals block nothing in this change and gate what they name**: no 4.e closure
 claim, no 4.f.2/4.f.3 closure claim.
 
-**They also bound what CACHE.4b may claim.** The criterion at `:87` reads "a policy epoch that
+**They also bound what CACHE.4b may claim.** The criterion at `:94` reads "a policy epoch that
 invalidates it on a grant **or profile** change". The epoch closes the *grant* half (4.f.1). The
 *profile* half splits two ways: a different profile **identity** is already handled by 4.d keying
 (different name, different key), but a profile whose **contents** change under the same name keys

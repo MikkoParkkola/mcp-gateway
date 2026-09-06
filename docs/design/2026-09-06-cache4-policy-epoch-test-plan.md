@@ -1,8 +1,8 @@
 # CACHE.4 policy epoch — test plan (§P2, before any test code)
 
 Design receipt: `docs/design/2026-09-06-cache4-policy-epoch.md`.
-Criteria: `docs/requirements/RELEASE-4.0.0-criteria-status.md:86` (CACHE.4a, PARTIAL) and
-`:87` (CACHE.4b, ABSENT, release-blocking).
+Criteria: `docs/requirements/RELEASE-4.0.0-criteria-status.md:93` (CACHE.4a, PARTIAL) and
+`:94` (CACHE.4b, ABSENT, release-blocking).
 Plan rows in scope: 4.d, 4.e, 4.f.1, 4.f.2, 4.f.3, 4.g of
 `docs/design/2026-08-31-cluster-f-response-cache-keying-test-plan.md`.
 
