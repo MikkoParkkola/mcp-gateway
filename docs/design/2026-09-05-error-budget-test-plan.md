@@ -90,7 +90,7 @@ against a fixture rather than the gateway.
 | GH475.RL.10 | the capability executor does not classify rate limits at all — `src/capability/executor/` has no call to the shared predicate. The criterion presupposes an exclusion that was never built | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
 | GH475.RL.11 | the property is structural rather than tested: `src/gateway/recovery.rs:281` is the single predicate and both call sites (`backend/ops.rs:254`, `meta_mcp/invoke.rs:2976`) reach it. No test drives one signal table through both | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
 | GH475.OBS.1 | the counter exists and nothing asserts it. `src/gateway/meta_mcp/invoke.rs:1902` increments `mcp_error_budget_suppressed_total` with `reason => "rate_limited"` on every exclusion; what is missing is a case driving N throttled responses plus the two controls through the gateway. UNTESTED, not absent — the distinction is the difference between asserting a mechanism and building one | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
-| GH475.OBS.2 | same correction — the debug event is emitted at `invoke.rs:1908`, naming the server, the tool and the exclusion. No case captures it | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
+| GH475.OBS.2 | landed 2026-09-06 (`a8b1158f`): `rate_limited_exclusion_emits_a_debug_event` (`invoke.rs:4546`) now captures the event under a scoped subscriber and asserts `server` and `tool`. Superseded text, kept for the record — this row previously read "same correction — the debug event is emitted at `invoke.rs:1908`, naming the server, the tool and the exclusion. No case captures it": the last clause was false the moment the case landed. What the case does NOT assert — an explicit field naming which `BudgetOutcome` variant excluded the sample, as distinct from `server`/`tool` naming which call — is named as a §P3 design event below, not restated as a missing case here | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
 | GH475.MIG.3 | the notice guard compares against `4.0.0` and no case pins the direction, so an inverted comparison would not be caught | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
 
 
@@ -158,3 +158,83 @@ Two shapes explicitly refused in this plan:
 
 Retry/backoff behaviour, per-backend overrides, and the other two dead setters —
 per the design's own out-of-scope list.
+
+## §P3 design event — GH475.OBS.2's exclusion-reason field (2026-09-06)
+
+Per `development-process.md` §P3: "A decision the design did not make is a
+DESIGN EVENT... Obligation = NAME it." This section discharges the naming
+obligation only. It grants no authority and settles nothing: §P0 owns moving
+this to FOR or OUT, repair-protocol step 0 owns whether the response is a
+patch or an elimination, §P2 owns whatever case follows, §P4 owns the review.
+
+Row 42 of this plan (unedited, quoted verbatim) specified a field-level
+assertion:
+
+> | GH475.OBS.2 | the suppression debug event is emitted | one throttled
+> response → one debug event naming the backend and the excluded outcome |
+> unit | behaviour | `src/gateway/meta_mcp/invoke.rs` mod
+> `error_budget_tests`, beside the emit site at `invoke.rs:1908` |
+
+Row 93, before the correction above, read the already-emitted event as
+already satisfying that (quoted verbatim, now superseded):
+
+> | GH475.OBS.2 | same correction — the debug event is emitted at
+> `invoke.rs:1908`, naming the server, the tool and the exclusion. No case
+> captures it | [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) |
+
+The landed test (`a8b1158f`, `rate_limited_exclusion_emits_a_debug_event`,
+`invoke.rs:4546`) asserts only `server` and `tool`; it discriminates the
+exclusion by matching the hardcoded message string
+`"Rate-limited response excluded from error budget accounting"`
+(confirmed: that string appears at exactly two lines in the file,
+`invoke.rs:1910` the emit site and `invoke.rs:4574` the test's match), not by
+an explicit field naming which `BudgetOutcome` variant fired. Two readings of
+that gap are both live and neither was decided:
+
+1. Row 93's "naming... the exclusion" was already loose — the event has
+   never carried a field naming which variant excluded the sample, only the
+   message string. Read this way, nobody decided that the string is a
+   sufficient discriminant; that reliance has been silently load-bearing
+   since `record_error_budget` happens to have only one exclusion arm today.
+2. Row 42's "naming... the excluded outcome" specified a field-level
+   assertion. Read this way, the implementation narrowed what the plan asked
+   for, without recording the narrowing.
+
+Both readings converge on the same design event, which is why resolving
+which one was "meant" is not required to name it: **nobody decided whether a
+hardcoded message string is an acceptable substitute for a structured field
+naming the exclusion reason.**
+
+The gap was not silent at the point of landing — the test's own doc comment
+(`invoke.rs:4536-4543`) already names it: "PROD GAP, recorded rather than
+fixed... a second exclusion reason added later would emit textually
+identical fields except for the hardcoded message string, and nothing in the
+event itself would let a consumer tell the two apart." That comment is
+accurate and is the reason this section can be written from source rather
+than from inference. What it was never given was a §P3 record — it sat in a
+code comment and, one level up, in a parenthetical on the ledger row
+(`docs/requirements/RELEASE-4.0.0-criteria-status.md:414`), neither of which
+is the place §P3 requires a decision to be named.
+
+The concrete asymmetry a repair would act on, found by reading the emit site
+rather than assuming one: the counter recorded in the SAME `if` arm
+(`invoke.rs:1902-1906`) already carries a structured `"reason" =>
+"rate_limited"` label. The `debug!` call three lines below it
+(`invoke.rs:1908-1911`) carries no equivalent field. Nobody decided the log
+event should carry less structure than the metric emitted beside it in the
+same branch.
+
+Per repair-protocol step 0 (requirements/test-plan-adjacent finding):
+**elimination is the default, patching is the exception.** Test: after a fix,
+can the finding still be stated? Adding a `reason` field to the `debug!` call
+(mirroring the counter already three lines above it) removes the finding
+under BOTH readings above, without needing to adjudicate which reading row 42
+"meant" — it makes the exclusion nameable by field rather than by message
+string, whichever way "the excluded outcome" is read. That is the shape a
+repair would take; this section does not apply it. Naming this decision
+satisfies none of §P0/§P2/§P4 on its own — it exposes the decision so a
+repair round can act on it, per §P3's own text. Disposal: tracked at
+[#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481), the same
+issue rows 92-93 already carry — no new ticket, per the DoR B4/§P0 filing
+gate (a ticket is the most expensive disposal and this finding already has
+one it belongs under).
