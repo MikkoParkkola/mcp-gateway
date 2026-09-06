@@ -299,11 +299,12 @@ Every unknown is resolved with a recorded answer or deferred with four fields.
 
 Nothing in this note's recommendation depends on either deferred item.
 
-## 6. Questions put to the requester — three settled, one open
+## 6. Questions put to the requester — all four settled
 
 Recorded here because a question that was asked and answered is evidence; a
-question that quietly stopped being asked is not. Q4 is open and blocks the
-`session_state` half of the implementation, not the note.
+question that quietly stopped being asked is not. Q4 was the last one open; it
+is answered as of 2026-09-06 and no longer blocks the `session_state` half of
+the implementation.
 
 **Q1 is struck.** It asked whether the `gateway_set_profile` refusal was
 intended. The operator answered that on 2026-08-31 in cluster-b Part IV §4.1 —
@@ -330,7 +331,8 @@ and not an escalation to the operator, and it is why nothing in §7 moves. What 
 fixes is where the work lands: the `session_state` half of (c) belongs to ORDER.2
 itself rather than to a sibling criterion, so implementation is one ticket.
 
-**Q4 — OPEN, and it blocks implementation of (c)'s `session_state` half.** After
+**Q4 — RESOLVED 2026-09-06, and it no longer blocks implementation of (c)'s
+`session_state` half.** After
 (c), `gateway_set_state` **refuses** on a modern HTTP connection, in the
 **default build**, on a tool that succeeds today. §4 prices this; §4 cannot
 ratify it. This is the same shape as cluster-b §4.1, where the operator ratified
@@ -347,6 +349,19 @@ already-agreed removal while this one is a live tool changing behaviour under
 Recommended: ratify. The tool's current success is not a working feature, it is
 the defect wearing a return value — the state it sets is read by every other
 modern connection on the same gateway.
+
+**Answer, in this note's askable form.** *Question* — ratify the refusal, taking
+option (c) as recommended, including the default-build `gateway_set_state`
+refusal on sessionless callers. *Asked of* — the operator, on 2026-09-06, via
+the team lead, on the pricing in §4 and the two-row table above. *The answer* —
+"ratify the refusal": option (c) approved as recommended, on the reasoning that
+the tool's current success is the defect wearing a return value. The alternative,
+keeping it succeeding and closing 2a only, was put and declined. *What it
+changed* — the `session_state` half of (c) is unblocked and may be implemented;
+§4 no longer prices an unratified break; and the last question this note held
+open is closed, so nothing in §5 or §6 is now waiting on the requester. What it
+does **not** change: the ledger rows, which stay blocking until code and tests
+exist, and the stdio coverage limit in §8, which is cluster-g's.
 
 ## 7. Test plan — moved to its own document
 
@@ -371,7 +386,8 @@ source as of 682a709a. The ledger rows stay blocking. What has changed is what
 the evidence cell can now say: the profile leg is closed in code and measured
 here, the remaining defect is **two stores and four call sites** — the
 feature-gated promotion store of §2 and the default-build FSM state store of §2b
-— and the option to close both is chosen and priced. §2b belongs to ORDER.2
+— and the option to close both is chosen, priced, and ratified by the operator
+on 2026-09-06 (§6 Q4). §2b belongs to ORDER.2
 itself, per Q3's answer of 2026-09-06; it would have been the same defect under
 either reading.
 
