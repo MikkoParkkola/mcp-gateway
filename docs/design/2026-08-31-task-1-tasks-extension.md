@@ -920,6 +920,22 @@ materiality on its own line and re-opens what it never raised.
 the commit carrying this section — the verdicts and their repairs are separate commits on purpose,
 so the record of what came back open survives independently of the fix.
 
+**Closure re-check — 2026-09-06.** Repair-protocol step 6 applied to the four NOT CLOSED/PARTIAL
+rows above, against `8ab52da8` only — the diff that carries each row's `Repaired: ...` text. gpt was
+usage-limited past the 12h SLA on its own two findings, so those two closures were delegated to
+kimi under the narrower confirm-or-refuse mandate (repair protocol step 6, finder-unavailable
+clause) rather than reassigned silently; grok re-checked its own two directly, no delegation needed.
+
+| finding | re-checked by | verdict |
+|---|---|---|
+| `ttlMs` has no admission bound (HIGH) | kimi, delegate for gpt (SLA expired) | **CLOSED** — caps count every unreaped record, released on deletion or expiry, not just active tasks |
+| dedupe key is not principal-bound (CRITICAL) | kimi, delegate for gpt (SLA expired) | **CLOSED** — key is `(principal, client idempotency key)`; same key with a different body is rejected, not collapsed into the first call |
+| `tasks/update` under-specified (MEDIUM) | grok (self) | **CLOSED** — the three MUSTs sit on piece 4 itself, where the handler is written from |
+| citations land on passages that do not carry the claim | grok (self) | **CLOSED** — §4 and §9 now cite `plan.md:605-606`, with a note on why `:48-50`/`:110-112` don't carry it |
+
+All four confirmed closed on the commit's own text. This pass's verdict revises from
+SHIP-WITH-FIXES to **SHIP**.
+
 Two IMPROVEMENTs were **disposed, not fixed** (§P0 disposal, named so the default of filing a
 ticket does not reassert itself):
 
