@@ -68,13 +68,14 @@ OTEL.1's increment, not a separate task. Nobody reading OTEL.1 alone can see eit
 answer landed in a different document after both sentences were written.
 
 A second citation defect surfaced in the same check and is recorded here because this document
-cites the decision: **SUB.4's design contradicts itself on the carrier.** Its decision line and its
-open-question row both say `_meta` on both routes, rejecting *"a header on both routes"* and *"an
-HTTP header alone"*; its body prose still says the direct route *"takes the key from an
-`Idempotency-Key` HTTP header"* (`docs/design/2026-08-31-sub-4-idempotency-wiring.md:161-169`
-against `:154-155` and `:178`). The decided row binds — it is the operator-answered one — and
-correcting the prose belongs to SUB.4's increment. An implementer who reads only the prose builds
-the rejected option.
+cites the decision: **SUB.4's design contradicted itself on the carrier.** Its decision line and its
+open-question row both said `_meta` on both routes, rejecting *"a header on both routes"* and *"an
+HTTP header alone"*, while its body prose still said the direct route *"takes the key from an
+`Idempotency-Key` HTTP header"*. The decided row bound — it was the operator-answered one — and
+correcting the prose belonged to SUB.4's increment, which did so on 2026-09-07: the prose now names
+the hybrid as a rejected option and states `_meta` on both routes. Line references are omitted
+because the ones taken at the time have since moved. Recorded because an implementer who read only
+the prose would have built the rejected option.
 
 **3. The constraint TASK.1 hands to SUB.2 is already satisfied there, in other words.** TASK.1 §5:
 a task-scoped `subscriptions/listen` stream carries `notifications/tasks/status` only, and must not
