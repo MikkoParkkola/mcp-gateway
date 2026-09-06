@@ -193,9 +193,25 @@ down. So (c) folds `search.rs:581-584` and `search.rs:647-650` into
 `current_search_state` first, and then filters inside it. Three sites become one,
 and the finding stops being restatable rather than being patched three times.
 
-Each store is then routed through `session_key` at one read and one write, so a
-sessionless caller neither writes to nor reads from either. A modern connection then sees the unpromoted list
-and the default workflow state, always, and an invoke has no effect on either.
+**The filter goes inside the owning function, not at its call sites.** A counted
+list of call sites is a discipline the next caller can skip — which is precisely
+how `list_tools` came to read the FSM store directly while `current_search_state`
+sat one file away. So: inside `promoted_tools_for_session` (`mod.rs:1021-1030`)
+and inside `promote_tool_for_session` (`spec_preview.rs:228`), and inside
+`current_search_state` (`search.rs:161-165`) once the three copies are folded
+into it. Each store then has one accessor and one mutator, both filtering, and a
+future list-shaping caller inherits the guard instead of having to remember it.
+
+One deliberate exception, because it is the kind that gets "corrected" later: the
+FSM **write** is filtered at the `gateway_set_state` handler (`mod.rs:1689`), not
+inside `SessionStateStore`. A sessionless caller must receive a protocol error,
+and a store setter has no way to return one — pushing the filter down into the
+store would turn the refusal into a silent no-op, which is a worse defect than
+the one being fixed. The profile stores already sit this way, for the same
+reason.
+
+A modern connection then sees the unpromoted list and the default workflow state,
+always, and an invoke has no effect on either.
 
 **The cost, stated rather than implied.** On the `session_state` half this is not
 free: `gateway_set_state` currently *succeeds* on a modern connection, and after
