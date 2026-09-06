@@ -248,7 +248,7 @@ and says nothing about the *identity*. The fix already exists twelve lines away.
 name stands: it changes a material security property. Its §P0 disposal was *fix it in this change*
 while this change was the one making the path reachable. It no longer is. The disposal is now
 *write it into the design* — SUB.4's, which owns activation and independently decided the binding
-belongs inside the derivation (`:125-128`). A fix here would repair a path nothing reaches, and the
+belongs inside the derivation ("Constraints, measured"). A fix here would repair a path nothing reaches, and the
 guarantee that matters — **no activation before the key binds the principal** — is enforced where
 activation happens, not where it doesn't. Default-OFF was never the safety here either: the first
 operator to flip a switch gets the defect, which is one more reason the switch is gone.
@@ -307,7 +307,8 @@ dying with this section:
 > **The noun matters here.** The keys COLLIDE; the fingerprints MATCH. Written as "both fingerprints
 > collide" — how this first travelled, corrected by `sub-ext` in `28d22d5b` — an implementer is sent
 > to add a principal to `idem_fingerprint` instead of to `identity_suffix`. That fix would also
-> work, and a wrong noun pointing at a working repair is dangerous rather than merely imprecise.
+> stop the replay — differently, and at a cost set out two paragraphs below — and a wrong noun
+> pointing at a working repair is dangerous rather than merely imprecise.
 > The response cache does *not* have this defect: `caller_principal` (`:1140-1142`)
 > already falls back to `VerifiedIdentity::stable_actor_id`. `identity_suffix` adopting the same
 > fallback chain, twelve lines away, is the first move of the fix — **not the whole of it.**
@@ -321,9 +322,28 @@ dying with this section:
 > the fallback chain over the raw append converts an empty-suffix collision into a spoofable one —
 > the population that gains a binding is exactly the population that could forge it. The repair
 > therefore hashes the suffix, length-prefixes it, or moves the client key to the tail; which of
-> the three is SUB.4's call, but doing none of them is not one of the options. SUB.4 `:125-128` independently decided the
-> binding belongs *inside* the derivation rather than at the call site — the same conclusion, and
-> the place to implement it.
+> the three is SUB.4's call, but doing none of them is not one of the options. SUB.4's own
+> "Constraints, measured" independently decided the binding belongs *inside* the derivation rather
+> than at the call site — the same conclusion, and the place to implement it.
+>
+> **The fingerprint route is not an unconstrained fourth option.** It escapes all three constraints
+> honestly: nothing client-supplied reaches `idem_fingerprint` unhashed, because `derive_key` is a
+> SHA-256 digest of `(tool, canonical arguments)` (`src/idempotency.rs:440-443`) and a principal
+> appended after a fixed-width digest has no client-controlled prefix to hide in. What it does
+> instead is **refuse**: the two callers still derive one key, `matches` then disagrees, and `admit`
+> returns `AdmitOutcome::Mismatch` (`src/idempotency.rs:270`) — the second honest caller is denied
+> rather than given its own entry. Binding the KEY separates the two callers; binding only the
+> fingerprint collides them and then declines. That is why the repair goes to `identity_suffix`
+> even though the fingerprint is the cheaper edit.
+>
+> **Disposal, and what happens if nobody answers.** R6 is *written into the design* — §P0's second
+> disposal — and rides SUB.4's rev-5 review rather than a round of its own. Whether it ALSO warrants
+> a ticket is `team-lead`'s call, put to them on 2026-09-06 (msg `f701c181`) with the argument for
+> one stated: a spoofable key in a shipped default may need a human timeline independent of a review
+> that can slip, and this slice is no longer this session's. **If no ruling lands before SUB.4's
+> rev-5 review opens, it is filed** — a finding recorded only inside two documents of a slice this
+> session does not own does not survive that review being re-scoped, and disposal by silence is the
+> one outcome §P0 does not offer.
 >
 > **The fix carries a comment obligation.** `invoke.rs:1133-1139` explains that `caller_principal`
 > is "kept separate from `identity_suffix` above: that one keys retry de-duplication, a different
