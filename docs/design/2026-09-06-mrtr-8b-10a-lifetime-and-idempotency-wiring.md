@@ -199,7 +199,7 @@ The criterion: *the idempotency key MUST include `inputResponses`/`requestState`
 
 The derivation is correct and tested. `RetryFields::key_discriminator`
 (`src/protocol/mrtr.rs:182`) separates the two fields rather than concatenating them; it folds
-into the fingerprint at `src/gateway/meta_mcp/invoke.rs:1147-1164` as
+into the fingerprint at `src/gateway/meta_mcp/invoke.rs:1164-1168` as
 `derive_key("{server}:{tool}", arguments)` + discriminator, and into the response-cache key at
 `src/gateway/meta_mcp/support.rs:56`.
 
@@ -300,7 +300,7 @@ dying with this section:
 > contributes nothing to tell them apart. `admit` then looks the entry up by that key
 > (`idempotency.rs:256`) and `matches` (`:130-131`) compares fingerprints, which agree because the
 > two calls genuinely *are* the same `(server, tool, arguments)` — `idem_fingerprint`
-> (`invoke.rs:1163-1167`) is `derive_key` plus the retry discriminator and carries no principal by
+> (`invoke.rs:1164-1168`) is `derive_key` plus the retry discriminator and carries no principal by
 > design, at any setting. So `AdmitOutcome::Completed` (`idempotency.rs:278`) replays the first
 > caller's stored response to the second (`:582`).
 >
@@ -327,13 +327,23 @@ dying with this section:
 > than at the call site — the same conclusion, and the place to implement it.
 >
 > **The fingerprint route is not an unconstrained fourth option.** It escapes all three constraints
-> honestly: nothing client-supplied reaches `idem_fingerprint` unhashed, because `derive_key` is a
-> SHA-256 digest of `(tool, canonical arguments)` (`src/idempotency.rs:440-443`) and a principal
-> appended after a fixed-width digest has no client-controlled prefix to hide in. What it does
-> instead is **refuse**: the two callers still derive one key, `matches` then disagrees, and `admit`
-> returns `AdmitOutcome::Mismatch` (`src/idempotency.rs:270`) — the second honest caller is denied
-> rather than given its own entry. Binding the KEY separates the two callers; binding only the
-> fingerprint collides them and then declines. That is why the repair goes to `identity_suffix`
+> honestly: nothing client-supplied reaches `idem_fingerprint` unhashed. `derive_key` is a SHA-256
+> digest of `(tool, canonical arguments)` (`src/idempotency.rs:440-443`), and the only other
+> ingredient — the retry discriminator concatenated after it — is itself either empty or
+> `|mrtr:` plus a fixed 64-hex digest of the responses and request state
+> (`src/protocol/mrtr.rs:182-195`). Both halves are fixed-width and hashed, so a principal appended
+> to that pair has no variable-length client-controlled prefix to hide in. That second half is the
+> load-bearing one: it sits exactly where R6's spoofable client key sits, and had it been free-form
+> the fingerprint route would carry all three constraints too.
+>
+> What the route does instead is **refuse**: the two callers still derive one key, `matches` then
+> disagrees, and `admit` returns `AdmitOutcome::Mismatch` (`src/idempotency.rs:270`), which
+> `enforce` turns into a 409 (`src/idempotency.rs:583`) — the second honest caller is denied
+> rather than given its own entry. `matches` short-circuits true on an empty stored fingerprint
+> (`:130-131`), but not here: `idem_fingerprint` is `Some` exactly when `idem_key` is, and
+> `enforce` is reached only when both are (`invoke.rs:1174-1177`), so the empty case is unreachable
+> on this path and does not soften the refusal. Binding the KEY separates the two callers; binding
+> only the fingerprint collides them and then declines. That is why the repair goes to `identity_suffix`
 > even though the fingerprint is the cheaper edit.
 >
 > **Disposal, and what happens if nobody answers.** R6 is *written into the design* — §P0's second
@@ -343,7 +353,10 @@ dying with this section:
 > that can slip, and this slice is no longer this session's. **If no ruling lands before SUB.4's
 > rev-5 review opens, it is filed** — a finding recorded only inside two documents of a slice this
 > session does not own does not survive that review being re-scoped, and disposal by silence is the
-> one outcome §P0 does not offer.
+> one outcome §P0 does not offer. **`sub-ext` holds the trigger**, told on 2026-09-06: they own
+> rev-5 and are therefore the only party who reliably sees it open, and this session may have ended
+> by then. A bound whose condition nobody is watching decays into exactly the silence it was
+> written against.
 >
 > **The fix carries a comment obligation.** `invoke.rs:1133-1139` explains that `caller_principal`
 > is "kept separate from `identity_suffix` above: that one keys retry de-duplication, a different
