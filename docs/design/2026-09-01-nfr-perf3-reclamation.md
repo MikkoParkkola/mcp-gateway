@@ -449,3 +449,52 @@ because the file is theirs.
 Both legs returned. The grok leg's headline finding — that `NFR.PERF.4` was already specified in
 `docs/design/2026-09-02-perf4-meta-tool-ceiling.md` — is what removed the ceiling from this slice's
 scope above; its citation and withdrawal findings are applied in the sections they name.
+
+---
+
+## Design-receipt update — 2026-09-07
+
+Anchors re-measured; the soak has become a retrofit and needs the probe; one bound it does not
+carry, named so a green run is not over-read.
+
+### Anchors, re-measured on `fix/mrtr2-continuation-handle`
+
+All in `src/protocol/continuation.rs` unless stated. These supersede every anchor above, including
+the 2026-09-06 receipt's.
+
+| symbol | anchor |
+|---|---|
+| `IN_FLIGHT_CAPACITY = 4_096` | `:811`, asserted again at `:1041` |
+| `CONSUMED_LEDGER_CAPACITY = 65_536` | `:803` |
+| `CONTINUATION_LIFETIME_SECS = 300` | `:128` |
+| `hold(&self, backend_id, expires_at, now) -> Option<String>` | `:696`; at-capacity branch `:698`; **`reclaim_abandoned(&mut held, now);` `:707`**; the second refusal `:708-710` |
+| `begin_exchange` | `:854`, calling `hold` at `:862-865` |
+| production call site | `src/gateway/meta_mcp/invoke.rs:385` — **385, not 384** |
+
+### The soak is a RETROFIT now, so the falsifier probe is mandatory
+
+The section above says the soak "fails on today's code … cycle 4 097, in the first epoch". The
+2026-09-06 receipt falsified that for the **count** clause: `reclaim_abandoned` is built and `hold`
+calls it at `:707`, so a count-clause soak written today goes green on its first run. A test that
+was never observed red is not a §P2 failing test — it is a test added to existing code, which is
+the retrofitting case, and the exception's probe is not optional there.
+
+The line to remove, named so the probe is not a hunt: `reclaim_abandoned(&mut held, now);` at
+`continuation.rs:707`. With it gone, successful holds cap at `IN_FLIGHT_CAPACITY` and every later
+attempt returns `None` — red on the admission assertion, which is the *right* failure, not a
+compile error. The arithmetic works for **any N greater than capacity**; N is not a tuned number
+and no soak length should be defended as one.
+
+Mechanics are the ones §P2 already specifies and are repeated here only as the three that get
+skipped: copy to a **unique** temp path before overwriting, under a `trap`; read the assertion that
+fired, not the exit code; verify the restore **by re-running the test**, never by `git status` —
+defect and repair are both modifications and `status` reports them identically.
+
+### What the soak does not bound
+
+**Over-reclamation.** A `hold` that wrongly freed *live* entries would also admit every attempt, so
+it passes this soak exactly as a correct one does. Admission is the signal, and admission cannot
+distinguish a slot correctly reclaimed from one taken from a live exchange. In scope as noted, not
+a gap: liveness is owned by the lifetime cases in *Three cases the uniform-deadline epochs cannot
+reach* and by MRTR.8b's `guard(now)` tests. Recorded so nobody reads a green soak as proof that
+only abandoned entries were freed.
