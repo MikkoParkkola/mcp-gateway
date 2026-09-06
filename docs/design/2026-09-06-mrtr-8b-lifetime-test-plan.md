@@ -66,18 +66,22 @@ exclusion was false. Note also that capacity is a constructor argument
 | .01 | `hold` an exchange with deadline T; `len(T+1)` reports 0 | C1 | U | F | `len` counts the dead today (`continuation.rs:756`) |
 | .02 | same fixture; `route(key, T+1)` does not answer `Here` | C1 | U | F | `route` answers from presence alone (`:735-742`) |
 | .03 | same fixture; `complete(key, T+1)` returns `false` | C1 | U | F | `complete` returns `true` for an expired entry today, telling the caller it completed something the table should not have held |
-| .04 | live entry, deadline T; `len(T-1)` reports 1, `route(key, T-1)` answers `Here` | C1 | U | N | negative control: the reclaim must not eat live records. Fails if `guard` reclaims eagerly on a clearly-live entry — an inverted `retain` predicate, or a comparison on the wrong side |
-| .04a | entry with deadline T; `len(T)` reports 1 and `route(key, T)` answers `Here` | C1 | U | B | the boundary, and the ONLY `now` at which `<` and `<=` differ — .01 (`T+1`) and .04 (`T-1`) pass under either. Fails if `guard` reclaims at `deadline == now`, which would drop a record `Keyring::open` still accepts (`continuation.rs:508`) |
-| .05 | hold, let the deadline pass, make NO intervening call, then one call through `guard`: the entry is gone on that first call | C2 | U | F | this is the abandonment case — nothing completes the exchange and no reaper exists |
+| .04 | live entry, deadline T; `len(T-1)` reports 1, `route(key, T-1)` answers `Here`, and `complete(key, T-1)` returns `true` — identity, since a count of 1 could be the wrong record | C1 | U | N | negative control: the reclaim must not eat live records. Fails if `guard` reclaims eagerly on a clearly-live entry — an inverted `retain` predicate, or a comparison on the wrong side |
+| .04a | entry with deadline T; `len(T)` reports 1, `route(key, T)` answers `Here`, and `complete(key, T)` returns `true` | C1 | U | B | the boundary, and the ONLY `now` at which `<` and `<=` differ — .01 (`T+1`) and .04 (`T-1`) pass under either. Fails if `guard` reclaims at `deadline == now`, which would drop a record `Keyring::open` still accepts (`continuation.rs:508`) |
+| .05 | hold, let the deadline pass, make NO intervening call, then one call through `guard`: the entry is gone on that first call. **Table-driven over all four public readers** — `hold`, `route`, `complete`, `len` — each in its own fresh fixture, so C2 is not as strong as whichever single method an implementer picked | C2 | U | F | this is the abandonment case — nothing completes the exchange and no reaper exists |
 | .06 | R2a's bargain, stated as a test: after the deadline passes with no intervening call the record is *still resident* in the map; residency ends at the first `guard`. Asserted by inspecting the map directly *before* any `guard`
 call, not through a public reader — which is why it does not contradict .05, whose assertion is made
 *after* one | C2 | U | B | pins the honest bound. Fails if someone later adds a background reaper and quietly changes what the criterion means |
-| .07 | freshness precondition: capture `now` once, hold with deadline `now+1`, advance nothing, call `route(key, now)` twice — the entry survives both, because the supplied `now` never moved | C1 | U | B | asserts the contract's limit. Fails if `guard` reads the wall clock internally, which is the rejected alternative |
-| .08 | transferred from NFR.PERF.3 (`2026-09-01-nfr-perf3-reclamation.md:375-388`): `hold` at `IN_FLIGHT_CAPACITY` with expired entries present **admits** rather than refusing | C2 | U | B | today reclaim lives inside the capacity branch; after the change `hold` keeps only its refusal, so the reclaim must have happened in `guard` before the check reads `len` |
-| .09 | `hold` at capacity with all entries live still refuses | C1 | U | N | the pair to .08. Without it, .08 passes trivially if the capacity refusal is deleted rather than re-ordered |
+| .07 | freshness precondition: hold with deadline T, advance nothing, call `route(key, T-1)` twice — the entry survives both, because the supplied `now` never moved | C1 | U | B | asserts the contract's limit, and the synthetic epoch is what makes it assertable: with a real-clock fixture (`now` from `SystemTime::now()`, deadline `now+1`) a `guard` that read the clock internally would answer identically and the row could not fail for its stated reason. Anchored at T = 1_000, a wall-clock `guard` sees a `now` ~1.7 billion seconds past the deadline, reclaims, and `route` answers `Gone` |
+| .08 | transferred from NFR.PERF.3 (`2026-09-01-nfr-perf3-reclamation.md:375-388`): `hold` at capacity with expired entries present **admits** rather than refusing. Run at `InFlight::new("gw-1", 4)`, as `tests/mik_7212_acs.rs:496`/`:510` already do — the falsifier is identical at 4 and at 4_096, and inserting 4_096 entries would not make the walk observable. The design's cost number gets its own one-line same-module assertion, `IN_FLIGHT_CAPACITY == 4_096` (`continuation.rs:811`, private to the crate), which pins the documented bound without pretending a test can see a walk length | C2 | U | B | today reclaim lives inside the capacity branch; after the change `hold` keeps only its refusal, so the reclaim must have happened in `guard` before the check reads `len` |
+| .09 | `hold` at capacity (4) with all entries live still refuses | C2 | U | N | the pair to .08. Without it, .08 passes trivially if the capacity refusal is deleted rather than re-ordered |
 
-Every criterion clause has a row; no cell is empty. C1 is carried by .01-.04, .04a, .07, .09-.11;
-C2 by .05, .06, .08, .11.
+Every criterion clause has a row; no cell is empty. C1 is carried by .01, .02, .03, .04, .04a and
+.07; C2 by .05, .06, .08 and .09. Rows .10 and .11 were deleted in review — .11 because the
+envelope refuses before the table is consulted (below), .10 because it asserted occupancy, which
+.09 already asserts, while the walk length it claimed to pin is not observable through any public
+reader. Neither clause lost its last row: eliminating a row that cannot fail is not a coverage
+cut.
 
 ## Q2 — can each case actually fail?
 
