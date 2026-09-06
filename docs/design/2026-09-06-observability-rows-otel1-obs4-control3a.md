@@ -257,3 +257,65 @@ three half-wired rows.
 
 No code. Test cases live in the test plan (§P2), one row per requirement
 clause, written after this design is reviewed.
+
+## Round 1 review — kimi (SHIP-WITH-FIXES), findings and disposition
+
+Ledger row: `~/.claude/data/kimi-review-ledger.jsonl`, 2026-09-06T07:02:46Z,
+`material_bytes=49019`, `process_status=ok`, verdict SHIP-WITH-FIXES.
+Every claim below was verified at source before it was accepted or closed.
+
+CONFIRMED — design corrected:
+- F5, "mcp_provider is not the sole egress". CORRECT, and worse than stated:
+  `invoke.rs:2564` and `:2567` send `tools/call` for the gateway_invoke path,
+  building params at `:2547-2552` where `inject_cache_key` ALREADY writes a
+  params-level `_meta`. The design's "only place" claim was wrong. R1's
+  injection point moves there; `mcp_provider.rs:83-88` is a separate
+  provider-trait path and is now named as an open question (Q-4).
+- F3, R2 double-counts expiry. CORRECT. Each outcome gets exactly one owner:
+  `expired` is REMOVED from the redeem reason set and counted only as
+  `event=expiry`. The test plan asserts the two totals do not overlap.
+- F4, verbatim pass-through versus re-parenting the span is a third decision
+  made silently. CORRECT as a process point. Named here: the gateway forwards
+  the inbound `traceparent` VERBATIM and does not re-parent. Consequence: the
+  backend sees the client's span as its parent and the gateway hop is not a
+  span of its own. Accepted because `protocol/trace.rs:11-13` refuses re-minting
+  by design, and minting a child span is a tracing feature, not a propagation
+  requirement. OTEL.1 asks for propagation.
+
+CLOSED AT SOURCE — no repair, no round spent:
+- F2, "a spawn may sit between the `with_trace_id` scope and the provider
+  call", HIGH/POSSIBLE. `rg 'tokio::spawn|spawn_blocking' src/gateway/meta_mcp/
+  invoke.rs` returns NOTHING for the whole file. The task-local holds across
+  the entire dispatch. The finding was the right question; the answer is no.
+- F6, "`_meta` may not be in scope at `invoke_tool` entry". `invoke_tool` takes
+  `args: &Value` (`invoke.rs:763`) and passes the SAME reference to
+  `invoke_tool_traced` (`:862-868`), which reads `args.get("_meta")` at `:1846`.
+  Same value, same scope. Closed.
+- F1, "the reviewer pair violates DoD §12". Correct against the shared SSOT,
+  which names gpt+grok. This session's pair was set by the team lead
+  (`gpt-review` is quota-blocked until 2026-09-12) and the operator's ruling
+  binds over the default matrix. Recorded, not repaired.
+
+ACCEPTED IMPROVEMENTS (folded into the plan, not the design's shape):
+- One computed-once task-local carrying `{TraceContext, correlation key,
+  key_source}` serves R1 and R3 together — one parse, one fallback decision.
+  Adopted; it deletes the placeholder literal and the second derivation.
+- Negative test for R1: no inbound context implies NO `_meta` key outbound,
+  locking the no-re-mint invariant.
+- R3 test asserts the logged key EQUALS the id returned to the client via
+  `augment_with_trace` — correlatability, not mere non-emptiness.
+- R2 reuses the existing reason-string vocabulary rather than minting new
+  spellings per site.
+
+DECLINED, with reason:
+- "File the stale citations as a tracked issue." §P0's disposal table puts
+  filing last and this repo files sixteen tickets for every one completed. The
+  row owner has been told directly. Observation stands; no ticket.
+
+NEW OPEN QUESTION FROM THIS ROUND:
+- Q-4: does any production path reach a backend through
+  `provider/mcp_provider.rs:83-88` rather than through `invoke.rs:2547-2570`?
+  Check: enumerate the callers of the provider trait's tool-call method before
+  R1 is implemented. If yes, R1 injects in both places; if no, the provider
+  path is named as out of scope with that as its reason. Blocks R1's
+  implementation, nothing else.
