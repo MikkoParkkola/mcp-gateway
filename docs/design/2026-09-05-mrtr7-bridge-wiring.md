@@ -721,7 +721,7 @@ to MRTR.9. That narrows what the bridge is FOR by removing a declared capability
 from the answerable set, which is a requester decision, not an engineering one
 (repair protocol, step 0). Not taken.
 
-### 4. MRTR.7b's accounting blocker, measured: five emission points around one dispatch
+### 4. MRTR.7b's accounting blocker, measured: eight emission points around one dispatch
 
 The 7b criterion names two blockers. The first is already recorded as a design
 event at line 546 (`BackendInvoker::invoke` returns a bare `Value`, so a
