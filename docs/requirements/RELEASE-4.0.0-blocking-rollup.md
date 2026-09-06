@@ -46,6 +46,37 @@ the whole worktree rather than its own paths, and this file was open. Recorded r
 history is shared with several live sessions, so a rebase costs far more than a wrong subject line.
 The commit to search for is this one, not that one.
 
+## Standing ruling — stage paths, never the worktree
+
+Two slice owners escalated the same thing rather than repairing it, correctly: it is a ruling,
+not a repair. Eight commits across four sessions have swept other sessions' uncommitted edits
+into an unrelated commit — `e5f76c2c`, `1967d93e`, `13975971`, `ed94ef45`, `c08c055a`,
+`5f714c7e`, `32f051e3` (89 of its 96 lines belonged to someone else). Every one of them used
+`git commit -a` or `git add -A` on a branch that eleven sessions share.
+
+**The rule: `git commit -o <path> [<path>...]`, always. Never `git commit -a`, never
+`git add -A`, never `git add .`.** A shared worktree has no such thing as "my changes" that git
+can infer; the only session that knows which paths are yours is you, and the only way to say so
+is to name them.
+
+No content has been lost to this — the sweeps commit real work, and it stays reachable. What is
+lost is *provenance*: the message describes one slice's finding while the diff carries four, so
+the repair protocol's commit-per-finding is unavailable to every session on this branch, and a
+later reader looking for when a change landed searches the wrong subject line. That is the whole
+cost, and it is enough.
+
+Not repaired by rewriting history. A rebase on a branch with eleven live worktrees costs more
+than the wrong subject lines it fixes.
+
+**When you discover you swept**: leave the commit alone and record the provenance — an empty
+commit naming the real authors and what each contributed (`85fd8985` is the precedent), or a
+line in the affected design doc. A correction that is findable beats a history that is tidy.
+
+**Not enforced mechanically, deliberately.** The obvious guard is a `pre-commit` hook, and this
+repository's hooks live in a `.git` directory shared by every worktree *including the operator's
+own checkout* — a guard that misfires there blocks their commits, not just ours. Installing one
+is the operator's call and has been put to them.
+
 ## The clusters
 
 How far each cluster has actually got — design, test plan, review, code, owner —
