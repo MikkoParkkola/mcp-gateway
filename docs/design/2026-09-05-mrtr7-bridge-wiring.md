@@ -1171,6 +1171,14 @@ differences, not one:
 | JSON-RPC `id` | minted as `sampling-<uuid>`, in the frame | absent |
 | SSE envelope | `message` — "MCP-standard: raw JSON-RPC for compliant clients" | `proxy_request` |
 
+Read that table precisely, because the obvious reading is wrong: the column is
+the RESPONSE-BEARING sampling forward, not sampling in general. The
+fire-and-forget `forward_sampling` emits `proxy_request` exactly as roots does.
+So the envelope split is response-bearing versus fire-and-forget, and roots is
+not uniquely malformed — it is a forward that must MOVE into the
+response-bearing half, and the envelope has to move with it. The repair is
+unchanged; the reason it is needed is one step narrower than first written.
+
 The missing `id` makes the frame a **notification** rather than a request, and
 its own doc comment says so. A conforming MCP client is not obliged to answer a
 notification, and would not. The non-standard envelope compounds it: even with
