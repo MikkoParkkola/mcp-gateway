@@ -63,3 +63,9 @@ __pycache__/
 
 # Scratch directories written by functional QA drives.
 scratchpad_*/
+
+# Reviewer payloads and run output written at the repo root by the review
+# wrappers. Untracked scratch in a worktree several sessions share, where a
+# `git add -A` sweeps whatever happens to be lying about into someone else's
+# commit.
+.review-*
