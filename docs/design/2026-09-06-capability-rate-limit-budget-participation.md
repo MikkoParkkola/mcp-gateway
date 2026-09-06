@@ -36,7 +36,7 @@ So a capability `429` is **already excluded** from the server error budget, from
 the per-capability budget (`kill_switch.record_capability_failure`, `:1929`), and
 from the kill switch. It is excluded because `reqwest::StatusCode`'s `Display` is
 `429 Too Many Requests` and sits at the FRONT of the message, ahead of the
-500-character body truncation, and `is_rate_limited` (`src/gateway/recovery.rs:283-301`)
+500-character body truncation, and `is_rate_limited` (`src/gateway/recovery.rs:286-307`)
 matches both the `429` token and `too many requests`.
 
 Two further facts that bound the problem:
@@ -251,7 +251,7 @@ path records at `src/backend/ops.rs:254` via `Failsafe::record_dispatch_failure`
 (`src/failsafe/mod.rs:88`), which owns a circuit breaker and a per-slot health
 tracker. The capability path records at `invoke.rs:1384` via `BudgetOutcome`,
 which owns budgets and the kill switch. They share exactly one thing: the
-predicate `is_rate_limited` (`recovery.rs:283`) — the single signal table RL.11
+predicate `is_rate_limited` (`recovery.rs:286`) — the single signal table RL.11
 is about. O1 does not change that predicate, does not add a second one, and does
 not move either recorder; it changes only what the capability path *feeds* into
 the decision, from a formatted string to a type. An MCP backend keeps using the
@@ -259,10 +259,13 @@ text predicate because a transport error there genuinely has no typed status.
 
 ### Fate of the criterion
 
-- **RL.10 — behaviour:** MET once pinned. The exclusion works today; the test
-  named in the row (drive a capability `429` through invoke, assert
-  `IgnoredRateLimit` and no budget sample) can be written against the tree as it
-  stands and closes G2. This is the part that must land regardless of O1.
+- **RL.10 — behaviour:** MET, one leg pinned. The exclusion works today. The
+  test this section originally named — drive a capability `429` through invoke,
+  assert `IgnoredRateLimit` and no budget sample — is **not** the test that
+  landed: `BudgetOutcome::of`'s recorder is private to `invoke.rs`, so the pin
+  enters at the shared predicate instead (§7.1). What is asserted is therefore
+  the predicate leg; the `BudgetOutcome` leg of the trace stays read off the
+  source. This is the part that must land regardless of O1.
 - **RL.10 — property ("needs no text"):** ABSENT until O1 lands. It is a breaking
   public API change (D2, D28), gated on an ask (section 6) — and O1b establishes
   there is no crate-internal way around that gate.
@@ -336,9 +339,12 @@ does not depend on it.
 
    What that pin does and does not close, stated plainly so no reader has to
    infer it:
-   - it closes G2 **for the REST capability path only**. `jsonrpc.rs:205` and
-     `graphql.rs:261` format their own status text, are driven by no test, and
-     stay exactly as exposed as this document found them.
+   - it closes G2 **for the predicate leg of the REST capability path only** —
+     that a real `params.rs:51` error string is classified as rate-limited.
+     It does not assert the `BudgetOutcome` leg, which stays read off the
+     source. `jsonrpc.rs:205` and `graphql.rs:261` format their own status
+     text, are driven by no test, and stay exactly as exposed as this document
+     found them.
    - it closes nothing of G1 at any of the three sites. Detection is not
      prevention; only O1 is.
    - it does not pin that `execute()` calls `handle_response` — the test enters
