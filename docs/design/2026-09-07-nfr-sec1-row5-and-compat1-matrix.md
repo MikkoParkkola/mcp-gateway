@@ -11,20 +11,27 @@ production path the claim is about.
 
 ## Problem
 
-### NFR.SEC.1 — one control has no refusal test
+### NFR.SEC.1 — row 5's refusal test does not prove the production path records
 
-`docs/requirements/nfr-sec1-control-inventory.md` closes the set at 14 gates
-plus a blocked 15th. Thirteen carry a refusal test. Row 5 — the per-client
-circuit breaker, `client_preflight` at `src/gateway/auth.rs:963` — does not.
+**This section's original claim was wrong and is corrected in place.** It said
+row 5 had no refusal test. It has one —
+`control_5_a_modern_caller_whose_circuit_is_open_is_refused`
+(`tests/nfr_sec1_controls.rs:495`), landed before this document was written —
+which drives `POST /mcp` and asserts 503 with `-32003`. The claim came from
+the inventory's *refusal test* column rather than the test file that column
+describes; the inventory now carries the correction as its fourth miscitation.
 
-The committed inventory argues row 5 is N/A: "refuses on a *trip count*, not
-an absent input... a circuit breaker has no absent input to remove." **That
-argument is rejected here.** It reads the criterion off its own sub-clause
-rather than its subject. The row says *no 3.5.0 control becomes inoperative
-for a modern caller; each has a refusal test*. What a breaker refuses is a
-caller whose circuit is open. That is an input, it is removable, and removing
-it is drivable — see the resolved unknown below. Narrowing a criterion is not
-available this release, so N/A is not this document's to take.
+The residue is narrower and still worth the change. That test **stages** the
+open circuit by calling `record_client_failure` directly. Nothing in it
+touches the site where production records a failure
+(`src/gateway/router/handlers.rs:1330`), so deleting that call leaves the test
+green and the breaker inert for every real caller. The work here is to trip
+the breaker the way a caller trips it — repeated erroring `POST /mcp` — and
+keep every assertion the existing test already makes.
+
+The inventory's old N/A argument ("a circuit breaker has no absent input to
+remove") is moot rather than rejected: the row is tested, so nothing turns on
+whether the criterion could have excused it.
 
 ### NFR.COMPAT.1 — one row, two assertions, two different mechanisms
 
@@ -49,16 +56,36 @@ testing the other wrong path.
 |---|---|---|---|---|
 | S5 | circuit breaker refuses an open-circuit caller | `POST /mcp`, authenticated client, N consecutive JSON-RPC errors | HTTP 503 + code `-32003` (`circuit_open_response`, `src/gateway/middleware/errors.rs:29`) | same frame, untripped client name → served |
 | C1 | 2026-07-28 served | `POST /mcp` + `MCP-Protocol-Version: 2026-07-28`, `modern_protocol` on | served statelessly, revision echoed | `modern_protocol` off → `-32022` |
-| C2 | 2025-11-25 served | `initialize` | echoed back, not downgraded | a revision absent from `SUPPORTED_VERSIONS` → downgraded to `PROTOCOL_VERSION` |
-| C3 | 2025-06-18 served | `initialize` | echoed back | as C2 |
-| C4 | 2025-03-26 not dropped | `initialize` | negotiates without error | as C2 |
-| C5 | 2024-11-05 not dropped | `initialize` | negotiates without error | as C2 |
+| C2 | 2025-11-25 served | `server/discover` | `supportedVersions` lists it | drop it from `SUPPORTED_VERSIONS` → discovery stops listing it |
+| C3 | 2025-06-18 served | `initialize` | negotiated version equals 2025-06-18 | a revision absent from `SUPPORTED_VERSIONS` → downgraded to `PROTOCOL_VERSION` |
+| C4 | 2025-03-26 not dropped | `initialize` | negotiated version equals 2025-03-26 | as C3 |
+| C5 | 2024-11-05 not dropped | `initialize` | negotiated version equals 2024-11-05 | as C3 |
 
 C1's second clause — the wired legacy-client bridge, `MIK-7212.MRTR.7a`/`7b`
 in `src/protocol/continuation.rs` — is **not in this change**. That file is
 peer-held. C1 as written asserts the revision is served; it does not assert
 the bridge exists, and the criterion stays blocking until the bridge lands
 regardless of what this change proves.
+
+## 2025-11-25 is the fallback, so the handshake cannot observe it
+
+`PROTOCOL_VERSION` is `2025-11-25` (`src/protocol/mod.rs:27`) and
+`negotiate_version` returns it for every revision it does not recognise
+(`:54`). The consequence is narrow and decisive: for C2 alone, the answer to
+`initialize` is the same whether 2025-11-25 is served or has been deleted from
+`SUPPORTED_VERSIONS`. "Echoed back, not downgraded" is a distinction the wire
+does not carry there — the echo and the downgrade are the same string.
+
+C2 therefore claims its revision on the surface that is built from the
+constant: `server/discover`'s `supportedVersions`
+(`src/gateway/meta_mcp/mod.rs:1155`). C3-C5 keep the handshake, where equality
+with 2025-06-18 / 2025-03-26 / 2024-11-05 is genuinely discriminating against a
+2025-11-25 fallback.
+
+This was found by checking `PROTOCOL_VERSION`'s value against the review
+finding rather than accepting the finding's aim. Both vendors flagged C4/C5 as
+unfalsifiable; at source C4/C5 are sound once they assert equality, and the
+degenerate case is the one neither named.
 
 ## Gate order is part of the S5 claim
 
@@ -75,12 +102,19 @@ too.**
 1. **Mark row 5 N/A with reason.** Rejected: the standing operator ruling says
    build the mechanism, and narrowing a criterion is not available. It is also
    unnecessary — the trip is drivable.
-2. **Trip the breaker by calling `record_client_failure` directly.** Rejected:
-   a unit test of a helper. MET is defined as a test driving the behaviour
-   through a production path.
-3. **Trip it through `POST /mcp` with repeated erroring calls.** Chosen. Uses
-   the same recording site production uses (`handlers.rs:1330`), so a change
-   that stops recording failures breaks the test.
+2. **Trip the breaker by calling `record_client_failure` directly.** This is
+   what the existing test does, and the rejection is narrower than it first
+   read: the test is *not* a helper unit test — it stages with the helper and
+   asserts through `POST /mcp`, which is a production path. What it does not
+   cover is the recording site, so a build that stops recording failures still
+   passes. Rejected as the *whole* of S5's evidence, kept as its assertions.
+3. **Trip it through `POST /mcp` with repeated erroring calls.** Chosen, as a
+   strengthening of the existing test rather than a second one. Uses the same
+   recording site production uses (`handlers.rs:1330`), so a change that stops
+   recording failures breaks the test. Availability is conditional on a
+   JSON-RPC error response reaching that site under the fixture's client name;
+   if it does not, the existing test stands unchanged and the recording-path
+   gap is recorded as an observation.
 4. **One combined COMPAT test parameterised over five revisions.** Rejected:
    the 2026 revision and the 2025 ones enter by different paths, so one
    parameterised body would need a branch on the parameter — which is two

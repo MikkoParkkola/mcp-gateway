@@ -84,7 +84,7 @@ hit them and should not have to guess whether they were missed.
 | 2 | Agent JWT validity | `agent_auth_middleware` — `src/gateway/router/mod.rs:255`, body at `src/gateway/oauth/mod.rs:113` | a bearer JWT that validates against the agent registry | **`tests/nfr_sec1_controls.rs`** — NEW (two arms: an unverifiable token and an absent one) |
 | 3 | Authentication | `auth_middleware` — `src/gateway/auth.rs:894`, `:945` | a bearer token or API key | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 4 | Per-client rate limit | `client_preflight` — `src/gateway/auth.rs:956` | remaining budget in the client's window | **`tests/nfr_sec1_controls.rs`** — NEW |
-| 5 | Client circuit breaker | `client_preflight` — `src/gateway/auth.rs:963` | a closed circuit for that client | NONE — see *Not closed* below |
+| 5 | Client circuit breaker | `client_preflight` — `src/gateway/auth.rs:963` | a closed circuit for that client | **`tests/nfr_sec1_controls.rs:495`** — asserts 503 + `-32003` through `POST /mcp`. See *The fourth miscitation* |
 | 6 | Agent identity allowlist | `validate_agent_identity` — `src/security/agent_identity.rs:141`, called at `handlers.rs:504` | an `X-Agent-ID` that is present and known | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 7 | Request body ceiling (10 MiB) | `handlers.rs:513` | a body within the ceiling | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 8 | JSON well-formedness | `handlers.rs:526` | parseable JSON | **`tests/nfr_sec1_controls.rs`** — NEW |
@@ -100,6 +100,27 @@ Firewall / anomaly detection (`handlers.rs:1068`, `-32002` / `-32600`) is a
 `src/security/firewall/**`, which another session owns and is editing now.
 Not tested here, not edited here, recorded so the set is not silently short.
 
+## The fourth miscitation — row 5 was never open
+
+This document said row 5 had no refusal test. It has one, and had one before
+this sentence was written: `control_5_a_modern_caller_whose_circuit_is_open_is_refused`
+(`tests/nfr_sec1_controls.rs:495`) drives `POST /mcp` against a client whose
+circuit is open and asserts 503 with `-32003` — the row's own gate, its own
+signature. The claim was made by reading this table's own *refusal test*
+column instead of the test file the column is a claim about. Same defect as
+rows 2, 8 and 11 above, in the same document, a fourth time; recorded rather
+than quietly repaired, because the count of times this happened is the
+evidence for the derivation rule at the top.
+
+What survives the correction is smaller and real. The test **stages** the trip
+by calling `record_client_failure` directly, so nothing in it proves the
+production path ever records a failure: delete the recording call at
+`src/gateway/router/handlers.rs:1330` and the test stays green while the
+breaker is inert for every real caller. That is an observation about test
+strength, not a missing control and not a gap in this criterion, which asks
+for a refusal test and has one. Tripping the breaker through repeated erroring
+`POST /mcp` calls instead would close it; recorded here, not filed.
+
 ## Not closed, and why
 
 Row 2 was listed here and is now closed. The reason recorded for leaving it
@@ -111,9 +132,11 @@ for this row in an earlier draft, never reached the gate at all: it exercises
 `authorize_tool_target`'s agent-scope branch, which is row 13's symbol, and
 never crosses `mod.rs:255`.
 
-| # | control | why no test |
-|---|---|---|
-| 5 | client circuit breaker | Refuses on a *trip count*, not an absent input. **This is a scope argument, not a cost one**: the criterion says "refusal when its input is absent", and a circuit breaker has no absent input to remove. Under the derivation rule that reads as N/A-with-reason rather than a gap — but reclassifying a row is the operator's call, not this document's, so it is flagged here and left counted as a gap. |
+Nothing else is open. The row-5 entry that stood here — arguing a circuit
+breaker has no absent input to remove, and asking whether the row should be
+reclassified N/A — is **withdrawn**. The question it raised is moot: the row
+has a refusal test that drives the production path, so whether the criterion
+*could* have excused it no longer decides anything.
 
 ## Controls that are NOT in the set (new in 4.0.0)
 
@@ -134,14 +157,13 @@ one, is the substance of the defect — not merely that the list was short.
 ## Verdict
 
 Set closed and derivable: 14 controls plus one blocked (firewall).
-**Thirteen** carry a refusal test (rows 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12,
-13, 14); **one** is open (row 5, and only because reclassifying it is the
-operator's call — see the table above); one — the firewall — is blocked on a
-file this session must not touch.
+**All fourteen** carry a refusal test (rows 1-14); one — the firewall — is
+blocked on `src/security/firewall/**`, a file this session must not touch.
 
-`NFR.SEC.1` remains unmet until row 5 is either tested or reclassified. That
-is not a code gap in the control: it is a scope question, named rather than
-estimated away.
+`NFR.SEC.1` is therefore met at 14 of 15, and the remaining one is blocked on
+ownership rather than on work. No scope question is outstanding: the row-5
+reclassification this document once asked the operator to rule on is withdrawn
+above, because the row is tested.
 
 An earlier draft of this table said twelve. It reached that number by citing,
 for rows 2 and 8, a test that asserts a *nearby* claim rather than the row's
@@ -158,9 +180,12 @@ omits the field runs with sanitization ON — the control was live on the
 default path the whole time the row was excused for being off. Its second
 clause was sound and is what the test answers: the refusal is pinned to a
 null byte, which `sanitize_string` refuses by contract rather than by
-heuristic. Three miscitations in the document written to close this
-criterion is the argument for the derivation rule at the top, not against
-it: the rule is what made each one findable.
+heuristic. Four miscitations in the document written to close this criterion is the
+argument for the derivation rule at the top, not against it: the rule is what
+made each one findable. The fourth (row 5) is above; it differs from the other
+three in direction — it understated the evidence rather than overstating it,
+and a document that undercounts its own coverage fails the criterion just as
+surely as one that inflates it.
 
 ## Gate order is part of the claim
 

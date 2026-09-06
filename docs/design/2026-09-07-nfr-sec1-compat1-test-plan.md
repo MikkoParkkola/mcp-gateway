@@ -17,11 +17,11 @@ are worded. An empty evidence cell is the finding, not an omission.
 | S5.b | SEC.1 row 5 | falsifier — the same frame from a client whose circuit is closed | system | positive | `POST /mcp`, fresh client name | 200, no error member |
 | C1.a | COMPAT.1 | 2026-07-28 is served | system | positive | `POST /mcp` + `MCP-Protocol-Version: 2026-07-28` | served statelessly; response carries 2026-07-28 |
 | C1.b | COMPAT.1 | falsifier — same frame with `modern_protocol` off | system | negative | as C1.a, flag flipped | `-32022` unsupported protocol version |
-| C2 | COMPAT.1 | 2025-11-25 served | system | positive | `initialize` | negotiated version **equals** 2025-11-25 |
-| C3 | COMPAT.1 | 2025-06-18 served | system | positive | `initialize` | negotiated version equals 2025-06-18 |
-| C4 | COMPAT.1 | 2025-03-26 not dropped | system | positive | `initialize` | negotiates without error, version equals 2025-03-26 |
-| C5 | COMPAT.1 | 2024-11-05 not dropped | system | positive | `initialize` | negotiates without error, version equals 2024-11-05 |
-| C6 | COMPAT.1 | falsifier for C2-C5 — a revision absent from `SUPPORTED_VERSIONS` | system | negative | `initialize` with `1999-01-01` | downgraded to `PROTOCOL_VERSION`, **not** echoed |
+| C2 | COMPAT.1 | 2025-11-25 served | system | positive | `server/discover` | `supportedVersions` **contains** 2025-11-25 |
+| C3 | COMPAT.1 | 2025-06-18 served | system | positive | `initialize` | negotiated version **equals** 2025-06-18 |
+| C4 | COMPAT.1 | 2025-03-26 not dropped | system | positive | `initialize` | negotiated version **equals** 2025-03-26 |
+| C5 | COMPAT.1 | 2024-11-05 not dropped | system | positive | `initialize` | negotiated version **equals** 2024-11-05 |
+| C6 | COMPAT.1 | falsifier for C3-C5 — a revision absent from `SUPPORTED_VERSIONS` | system | negative | `initialize` with `1999-01-01` | downgraded to `PROTOCOL_VERSION` (2025-11-25), **not** echoed |
 
 ## Can each case actually fail?
 
@@ -40,12 +40,27 @@ The question a plan review must answer, per case:
 - **C1.b** is what distinguishes "served because the flag is on" from "served
   because nothing checks". Without it C1.a passes on a build that ignores the
   header entirely.
-- **C2-C5** fail if a revision is removed from `SUPPORTED_VERSIONS`. Each
+- **C3-C5** fail if the revision is removed from `SUPPORTED_VERSIONS`. Each
   asserts **equality** with the requested revision, not merely absence of an
-  error: `negotiate_version` answers `PROTOCOL_VERSION` for anything it does
-  not know, so an error-free response is compatible with the revision having
-  been dropped. That is the whole trap in the second clause of the criterion.
-- **C6** proves C2-C5's assertion is discriminating rather than tautological.
+  error: `negotiate_version` (`src/protocol/mod.rs:54`) answers
+  `PROTOCOL_VERSION` for anything it does not know, so an error-free response
+  is compatible with the revision having been dropped. Equality discriminates
+  here because `PROTOCOL_VERSION` is `2025-11-25` — different from all three.
+- **C2 cannot be observed through `initialize` at all**, and this is why the
+  case moved. `PROTOCOL_VERSION` **is** 2025-11-25. Delete 2025-11-25 from
+  `SUPPORTED_VERSIONS` and `negotiate_version` still answers 2025-11-25, from
+  the fallback. Every assertion available on the handshake — echo, equality,
+  absence of error — is then satisfied by the downgrade path's own output.
+  A second assertion beside it would not help: the whole observable is
+  degenerate. So C2 observes a **different surface**, `server/discover`'s
+  `supportedVersions` (`src/gateway/meta_mcp/mod.rs:1155`), which is built
+  from the constant itself and stops listing the revision the moment it goes.
+  The state "passes while 2025-11-25 has been dropped" is not constructible
+  there, rather than merely detectable.
+- **C6** proves C3-C5's assertion is discriminating rather than tautological.
+  It does not cover C2, whose falsifier is structural: `1999-01-01` and a
+  dropped 2025-11-25 produce the identical handshake answer, which is the
+  finding.
 
 ## Retrofit — the falsifier probe
 
