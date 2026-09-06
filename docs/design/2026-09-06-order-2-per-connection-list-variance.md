@@ -299,10 +299,11 @@ Every unknown is resolved with a recorded answer or deferred with four fields.
 
 Nothing in this note's recommendation depends on either deferred item.
 
-## 6. Questions put to the requester — all three settled
+## 6. Questions put to the requester — three settled, one open
 
-None remain open. Recorded here because a question that was asked and answered is
-evidence; a question that quietly stopped being asked is not.
+Recorded here because a question that was asked and answered is evidence; a
+question that quietly stopped being asked is not. Q4 is open and blocks the
+`session_state` half of the implementation, not the note.
 
 **Q1 is struck.** It asked whether the `gateway_set_profile` refusal was
 intended. The operator answered that on 2026-08-31 in cluster-b Part IV §4.1 —
@@ -328,6 +329,24 @@ its cases identical** — that is precisely why this was the lead's call to sett
 and not an escalation to the operator, and it is why nothing in §7 moves. What it
 fixes is where the work lands: the `session_state` half of (c) belongs to ORDER.2
 itself rather than to a sibling criterion, so implementation is one ticket.
+
+**Q4 — OPEN, and it blocks implementation of (c)'s `session_state` half.** After
+(c), `gateway_set_state` **refuses** on a modern HTTP connection, in the
+**default build**, on a tool that succeeds today. §4 prices this; §4 cannot
+ratify it. This is the same shape as cluster-b §4.1, where the operator ratified
+the `gateway_set_profile` refusal before it shipped, and the reason to ask again
+rather than infer from that answer is that the profile refusal shipped behind an
+already-agreed removal while this one is a live tool changing behaviour under
+`default`.
+
+| answer | what it buys | what it costs |
+|---|---|---|
+| **ratify the refusal** (recommended) | 2a and 2b both closed on modern HTTP by removing state rather than adding checks; `gateway_set_state` behaves exactly as `gateway_set_profile` already does, so the surface stays coherent | a modern client calling `gateway_set_state` starts getting a protocol error where it got a success; if any client depends on it, that client breaks at upgrade |
+| keep it succeeding, close 2a only | no client-visible break | the tool's effect still leaks to every other sessionless connection, which is the defect — a per-connection tool that is not per-connection |
+
+Recommended: ratify. The tool's current success is not a working feature, it is
+the defect wearing a return value — the state it sets is read by every other
+modern connection on the same gateway.
 
 ## 7. Test plan — one row per clause
 
