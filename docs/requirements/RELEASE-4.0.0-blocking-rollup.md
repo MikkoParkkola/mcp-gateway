@@ -77,6 +77,12 @@ repository's hooks live in a `.git` directory shared by every worktree *includin
 own checkout* — a guard that misfires there blocks their commits, not just ours. Installing one
 is the operator's call and has been put to them.
 
+Put on 2026-09-06 with three branches — block above a staged-file threshold with an override,
+warn only, or leave the rule in prose — and no answer has come back. Recorded rather than assumed,
+for the reason `CONFIRM.2` is recorded: a week later an unanswered question and an unasked one look
+identical. The default while it is open is the prose rule above, which is the reversible branch —
+installing a guard in hooks the operator's own checkout reads is not a thing to do on silence.
+
 ## The clusters
 
 How far each cluster has actually got — design, test plan, review, code, owner —
