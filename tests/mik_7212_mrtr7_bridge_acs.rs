@@ -1170,6 +1170,15 @@ async fn ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call() {
         2,
         "the abandoned round retries the backend, and the answered one retries it again"
     );
+    assert!(
+        backend.calls()[0].pointer("/inputResponses/k1").is_none(),
+        "an abandoned prompt must reach the backend as a MISSING key, never as a filed \
+         placeholder: a bridge that files null, an empty object or a synthesized decline \
+         under `k1` satisfies every assertion above — the round ends, the next one runs — \
+         while telling the backend the question it asked was answered. Absence is what \
+         makes the abandonment observable, and an accepted empty answer (`k1: {{}}`) is a \
+         different retry from this one"
+    );
 }
 
 /// Row 321 — rounds each answered inside the per-prompt bound are still ended

@@ -148,12 +148,24 @@ its diagnosis cost is the price of that proof.
 - **MRTR.7a/7b on legacy stdio** — no drivable surface in this change. The three
   rows exist in `tests/mik_7212_mrtr7_stdio_acs.rs`, are `#[ignore]`d against
   MIK-7387, and become that package's acceptance evidence.
-- **The `input_bridge.rs` reply-projection defect** (`:454`) — confirmed, out of
-  scope for a wiring change, and disposed in the design's finding table. It is
-  **MIK-7388**, which merges before this wiring, and its acceptance case belongs
-  to that ticket rather than to this plan. The two findings once counted
-  alongside it (`:433`, `:409`) died at requirement rows 320 and 308; the design
-  says where.
+- **The `input_bridge.rs` reply-projection defect** (`:454`) — confirmed, and
+  already fixed in the tree by `60a28464`, which is why the merge-before-wiring
+  wait on **MIK-7388** is deleted in the design. Its acceptance case belongs to
+  that ticket rather than to this plan. The two findings once counted alongside
+  it (`:433`, `:409`) died at requirement rows 320 and 308; the design says
+  where.
+- **`MIK-7388.BRIDGE.4`** — the one condition of that ticket this change owns:
+  an abandoned prompt must reach the backend as a **non-answer**, distinguishable
+  from an accepted empty answer and from a decline. It is not a criterion without
+  a case; row 320 above is its case, and the assertion that pins it is
+  `tests/mik_7212_mrtr7_bridge_acs.rs:1173-1182` — the retry after the abandoned
+  round carries **no `/inputResponses/k1` key at all**. Absence is the whole
+  property: `ask()` skips the prompt on timeout (`src/gateway/input_bridge.rs:453`)
+  and `retry_params` files only collected keys (`src/protocol/mrtr.rs:482-488`),
+  so an accepted `{}` is a different retry and a decline is not a retry at all
+  (`project()` returns `DeliveryError::Declined`, which fails the call). Every
+  other assertion on row 320 is satisfied by a bridge that files a placeholder,
+  which is why the row needed one more.
 - **MIK-7388's stranded-pending-entry defect** (`:430`) — *not* absent from this
   plan. It was filed against `input_bridge.rs`, which holds no pending state; the
   obligation belongs to the `ClientChannel` implementor this change creates, per
