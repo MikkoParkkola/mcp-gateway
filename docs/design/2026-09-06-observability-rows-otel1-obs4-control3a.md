@@ -1,4 +1,4 @@
-# OTEL.1 / NFR.OBS.4 / CONTROL.3a — one source correction, not a fourth design
+# OTEL.1 / CONTROL.3a — one source correction, not a fourth design
 
 Status: proposed. Author: agent. Reviewers: grok + kimi (dual, §P4).
 Supersedes this file's own round-1 content, which restated three decisions that
@@ -16,8 +16,10 @@ a second copy that drifts (H3), and the copy is what an implementer reads.
 
 ## §P0 Scope
 
-FOR: recording one fact about source that all three of those designs assume and
-none of them states — the read side of `_meta` on the meta-MCP route.
+FOR: recording one fact about source that the OTEL.1 and CONTROL.3a designs
+assume and neither states — the read side of `_meta` on the meta-MCP route.
+NFR.OBS.4 does not depend on it: `2026-09-01-continuation-telemetry.md` never
+mentions `_meta`. Its row stays in the table above as a pointer, nothing more.
 
 OUT: re-deciding anything in the table above; the counter schema; the carrier;
 the TTL; the reclaimer's owner; any code.
@@ -50,16 +52,13 @@ WITHDRAWN, each answered at source rather than by the operator:
   the populations, and the reclaimer is owned by
   `2026-09-01-nfr-perf3-reclamation.md`.
 
-## Findings against the status ledger (observations, per §P0 — not filed)
+## Findings against the status ledger — withdrawn, both died at source
 
-- `CONTROL.3a`/`3b` (`docs/requirements/RELEASE-4.0.0-criteria-status.md:174`)
-  cite `invoke.rs:1339-1345`; the live site is `invoke.rs:1845-1852`.
-- `OTEL.1` (`:232`) cites `invoke.rs:2019` for the outbound path; outbound
-  params are built at `invoke.rs:2547-2552`, which is also where cluster-b
-  §3.4a's sibling-of-`inject_cache_key` write lands.
-- Disposal: recorded as observations for the row owner. Not filed — §P0's
-  filing test (a HUMAN must decide something) does not hold, and filing is the
-  most expensive disposal.
+Round 2 re-checked the two citations this file had called stale. Both are current:
+`RELEASE-4.0.0-criteria-status.md:174` cites `invoke.rs:1845-1849`, and `:232` cites
+`invoke.rs:2548` together with `src/provider/mcp_provider.rs:83-86` for the outbound
+gap. The observations are withdrawn. A finding that dies at source closes without a
+repair and without a disposal (§P4) — the ledger has no drift for a row owner to fix.
 
 ## Next
 
