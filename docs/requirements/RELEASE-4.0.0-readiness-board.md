@@ -355,6 +355,21 @@ operator's, and it is on the release critical path because nothing pushes until 
 settled. Recorded here rather than filed: the decision is one a human makes, and a ticket
 would only restate this paragraph.
 
+**Settled 2026-09-06 — see "One release branch, one PR" below.** The shape question this
+section left open is answered: one branch, one PR, each slice's verdicts recorded against its
+own commit range, and the push gated on those verdicts rather than on a further decision. What
+is *not* superseded is the paragraph above it: the stamp still certifies the merging diff, so
+that diff is still the whole release and still large. That is now an accepted cost of the shape
+chosen, not an open question — and `RATIFY_DIFF_BASE` still must not be pointed at the branch
+tip, for the reason given.
+
+The state that follows from it, unaddressed at the time of writing: 290 commits sit on this
+branch unpushed, the remote head dating from 02:58 on 2026-09-06 (V, `git rev-list --count
+fix/mrtr2-continuation-handle --not origin/fix/mrtr2-continuation-handle`). Every slice that
+landed since then exists on one disk. That is the delivery chain's step 1 unsatisfied for the
+whole day's work, and it clears when the outstanding slice verdicts do — not before, and not by
+a session pushing on its own account.
+
 ## The release's real blocker is the evidence rule, not any one cluster
 
 Four rows in three clusters were recorded MET or covered on evidence that could
