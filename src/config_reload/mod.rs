@@ -1646,10 +1646,16 @@ impl ReloadContext {
             // the process that refused it — that is the defect MIK-7256 names,
             // and it is closed: the candidate's env files build an `EnvOverlay`
             // that is published only on success (`self.env.set(overlay)`, below
-            // and unreachable from this path), and `#![deny(unsafe_code)]` on a
-            // 2024-edition crate makes `set_var` unavailable, so no code path
-            // can put a refused file's value where a later `env:` resolution
-            // would read it.
+            // and unreachable from this path), the overlay parses in memory
+            // (`dotenvy::from_read_iter`, `src/config/env_overlay.rs:362`)
+            // rather than through `dotenvy::dotenv`, and `rg set_var src/` is
+            // empty.
+            //
+            // Say that, not "impossible". `#![deny(unsafe_code)]` is not
+            // `forbid`, an `#[allow]` overrides it, and neither binds a
+            // dependency. What holds this closed is the ABSENT call site plus
+            // the parse path — a switch to `dotenvy::from_path` would reopen
+            // it, and that is the line to watch.
             //
             // The summary is still not written, for a different reason: this
             // check asks `network_bind_refusal` and nothing else, while a

@@ -1216,10 +1216,18 @@ async fn a_reload_publishing_the_gateway_over_open_tools_is_refused() {
         "refusal did not say what a restart does with this file: {err}"
     );
     // AND: it makes NO claim about what remains in force, anywhere in the
-    // message — prefix included. `Config::load` has already applied the
-    // candidate's env_files to the process and `capability::executor` reads
-    // `std::env::var` per call, so any such claim is one the code cannot keep
-    // (MIK-7256).
+    // message — prefix included. A refusal cannot speak for the whole running
+    // process: a restart-only edit published by an EARLIER reload is still
+    // outstanding (`with_pending_restart`), so "unchanged" is a claim about
+    // state this code path does not own, whatever this reload did.
+    //
+    // The reason recorded here until 2026-09-06 was the MIK-7256 leak —
+    // `Config::load` applying the candidate's env files to the process, read
+    // back per call through `std::env::var`. That mechanism is GONE: env files
+    // build an `EnvOverlay` published only by a reload that got that far
+    // (`src/config_reload/mod.rs:1683-1685`), and `env::var` no longer appears
+    // anywhere under `src/capability/`. The assertion outlived its rationale;
+    // the rationale above is the one that holds today.
     //
     // Every phrasing that has appeared here, not only the last one. An earlier
     // version of this case listed the two the body had just been corrected of,
