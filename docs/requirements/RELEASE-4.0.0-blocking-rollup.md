@@ -635,3 +635,26 @@ Checked by reading the `Status:` line of every design document, not by recalling
 were open. That check exists because `NFR.PERF.4` was listed as the one unblocked
 implementation item in an earlier draft of the plan while its own design had been
 DO-NOT-SHIP on two rulings for a day.
+
+### A sixth decision, surfaced by the MRTR.7a/7b bridge wiring
+
+The elicitation bridge cannot land until this is settled, because landing it makes the
+behaviour reachable on the first call that times out:
+**when an elicitation prompt no human answers times out, does the abandonment end the round
+or end the call?**
+
+The design defers it as an ASK and `MIK-7388` carries it as `BRIDGE.4`. It is not an analysis
+result: both answers are implementable and the requirement file already asserts one of them.
+
+| answer | what it costs |
+|---|---|
+| **ends the round** — what row 320 says today | the backend is retried without that answer and the remaining rounds continue. Already specified, pinned by a frozen acceptance row, encoded in 23 passing tests. Cost: a backend proceeds without input a person was required to supply — the exact shape GPT-5 filed as a HIGH defect. |
+| ends the call | no answer, no retry. A required human input cannot be silently skipped. Cost: row 320 and its acceptance test change before the wiring does, and one unanswered prompt ends a call that had rounds left. |
+
+Recommendation on the record: **ends the round**, because the abandonment is already
+observable — the backend receives a MISSING key, never a filed empty answer, so a caller can
+distinguish *nobody answered* from *answered with nothing*. That distinction is what makes the
+reviewer's objection survivable rather than merely disputed.
+
+Unanswered as of 2026-09-06. `MIK-7212.MRTR.7a` and `7b` stay UNWIRED until it is ruled on;
+the wiring itself is unaffected either way, so the ruling gates the ship gate, not the code.
