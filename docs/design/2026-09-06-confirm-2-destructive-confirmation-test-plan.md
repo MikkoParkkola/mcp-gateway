@@ -23,7 +23,7 @@ states the call site it observes; a case that exercises `enforce` satisfies none
 
 | AC | the case that proves it | level | type | branch |
 |---|---|---|---|---|
-| `MIK-7246.CONFIRM.2` | modern caller, no session, destructive call → `input_required` result carrying the question → retry with `inputResponses` + `requestState` → continuation redeemed, kill proceeds. End to end over the transport, not against the gate function | system | functional | Option I |
+| `MIK-7246.CONFIRM.2` (also `MIK-7212.MRTR.1a` / `.1b`) | modern caller, no session, destructive call → `input_required` result carrying the question → retry with `inputResponses` + `requestState` → continuation redeemed, kill proceeds. End to end over the transport, not against the gate function. **This is also MRTR.1a/1b's case**: both fields are dropped today by `extract_tools_call_params` (`helpers.rs:178`), so nothing reaches the gate to redeem unless they survive the extractor — they need no row of their own, and a unit test on the extractor would prove less | system | functional | Option I |
 | `MIK-7246.CONFIRM.1a` | modern caller that declared **no** input capabilities is still refused, `-32001`, message still containing `none could be obtained` (see the string collision below) | integration | negative | either |
 | `MIK-7246.CONFIRM.1b` | legacy path still warns and proceeds; Option I changed the modern branch and must not have moved this one | integration | regression | either |
 | `MIK-7212.MRTR.9` / `.9a` | **at the gate**: with `caller.input_capabilities` absent the gate refuses rather than asking; with the mode declared it asks, in the declared mode. Two cases, one per direction — the refusing half alone cannot distinguish "checks the declaration" from "never asks anyone" | unit + integration | negative | Option I (item 5) |
@@ -31,6 +31,7 @@ states the call site it observes; a case that exercises `enforce` satisfies none
 | `MIK-7212.MRTR.10a` / `.10b` | **at the gate**: duplicate delivery of a call whose confirmation was redeemed and whose kill succeeded returns the **recorded result**. This is the floor's `retry_after_redeemed_confirmation_returns_recorded_result` | integration | idempotency | Option I (item 7) |
 | item 4 — gate precedence | a valid retry is redeemed **before** gate re-entry: assert the gate was **not entered** (refusal absent, gate counter unmoved), not merely that the retry succeeded | integration | ordering | Option I (item 4) |
 | item 3 — typed origin | a gateway-authored continuation is **not** routed as a backend by `retry_origin_backend` (`invoke.rs:497-513`) | unit | correctness | Option I (item 3) |
+| `MIK-7212.MRTR.3a` / `.3b`, `.4a` / `.4b` | **at the gate**: a continuation minted for one caller confirming one kill, presented (i) by a different principal and (ii) against a different server, is refused at redemption. The design's own S and T rows say this binding is inherited from `redeemable_by` (`continuation.rs:202-224`, live at `invoke.rs:556-570`) and that what Option I owes is **that the gate sits on that path rather than beside it** — an obligation the design names in prose and no row carried. Two negative cases; the valid retry in the CONFIRM.2 row cannot tell "verifies the binding" from "verifies nothing" | integration | negative | Option I (items 1-2) |
 | `MIK-7246.CONFIRM.3` (dependency, not derivation) | every tool in the governed set is also admin-gated — `is_destructive_meta_tool` ⊆ `is_admin_meta_tool` (`src/gateway/destructive_confirmation.rs:218`, `src/gateway/router/authorization.rs:80`; the gate that consumes it, `src/gateway/meta_mcp/mod.rs:1585`). Option I does not change how the set derives; it **leans** on the snapshot, and this pins it. **In-crate `#[cfg(test)]`, not `tests/`** — `is_admin_meta_tool` is `pub(crate)` | unit | invariant | Option I (mitigation E) |
 | U2 record | a record is emitted for a **refused** kill — **CONDITIONAL, and U2 is open.** U2's bad-resolution field accepts "4.0.0 needs no record" as a recorded residual, so this row exists only if the ruling owes a record. Listed rather than dropped so its absence is visible | integration | audit | either, conditional |
 
@@ -80,17 +81,33 @@ nobody thought of: an empty cell is visible, an **absent row is not** — the sa
 and diffed against the table:
 
 ```
-rg -o 'MRTR\.[0-9]+[ab]?|CONFIRM\.[0-9]+[ab]?' <the design> | sort -u
+rg -o 'MIK-7212\.MRTR\.[0-9]+[a-z]?|MIK-7246\.CONFIRM\.[0-9]+[a-z]?' \
+   docs/requirements/RELEASE-4.0.0-requirements.md | sort -u
 ```
 
-That diff found two IDs the table did not carry, `MRTR.7a/7b` and `CONFIRM.3`, both dispositioned
-above — one as a stated reason, one as a row that had to be *reframed* rather than added. Neither
-was visible from the table alone, which is the point.
+**The register is the requirements file, and getting that wrong cost a row.** The first run of
+this check enumerated the *design* instead. A design yields only the IDs it happens to discuss, so
+it can no more show an unmentioned criterion than the table can — the same defect one level up
+again. That run found `MRTR.7a/7b` and `CONFIRM.3`, both dispositioned above. Re-run against the
+register — 26 IDs — it found what the design mentions nowhere as a criterion: the **redemption
+bindings**, `MRTR.3a/3b` and `4a/4b`, which the design's own STRIDE S and T rows say Option I owes
+at the gate, and which no row carried. That row exists now. A method whose second run finds more
+than its first is the argument for publishing the method rather than the count.
 
-Standing: ten rows. **Seven carry a criterion ID** (CONFIRM.2, 1a, 1b, 3; MRTR.9/9a, 8a/8b,
-10a/10b). **Three are not criteria** and say so — items 4 and 3 are design items whose failure is
-invisible in the CONFIRM.2 case, and the U2 row carries its condition. Items 1-2 carry their
-stated reason. MRTR.7a/7b carry theirs. No cell is empty and unexplained.
+The remaining ten register IDs are all `MRTR`, and get a clause each rather than ten rows:
+`1a`/`1b` (the retry must carry `inputResponses` / `requestState`) are proved by the CONFIRM.2
+row and are named on it; `5a` (single-use) is the 10a/10b row seen from the other side — a
+redeemed continuation that mints a second kill fails that case; `5b` (expiry) is what makes item
+6's count fall, under the same injectable clock; `2a`/`2b` are vacuous under Option I, which
+authors the question rather than relaying a backend's, so there is no backend `requestState` to
+forward or to wrap; `5c`/`5d`, `6` and `7` are multi-replica and bridge criteria the design lists
+under what it does not touch.
+
+Standing: eleven rows. **Eight carry a criterion ID** (CONFIRM.2, 1a, 1b, 3; MRTR.9/9a, 8a/8b,
+10a/10b, 3a/3b+4a/4b). **Three are not criteria** and say so — items 4 and 3 are design items
+whose failure is invisible in the CONFIRM.2 case, and the U2 row carries its condition. Items 1-2
+carry their stated reason. MRTR.7a/7b carry theirs. Ten more carry a clause above. No cell is
+empty and unexplained.
 
 **Q2 — can each named case actually FAIL?** Two rows could not, as first drafted, and are written
 above in the form that can:
@@ -105,6 +122,13 @@ Item 7's falsifier is free: the design states the wrong behaviour outright (gate
 second delivery is refused), so the case asserts the **recorded result comes back**, not merely
 that no error occurred. No case above stages its own assertion true; no fixture replaces the
 production code it observes.
+
+One row is green before a line of Option I exists, and that is not a Q2 failure. `CONFIRM.3` pins
+an **invariant** — governed = {`gateway_kill_server`} ⊆ the four admin meta-tools, verified true
+today at source. Q2 asks whether a case *can* fail, not whether it fails now: this one's falsifier
+is the first destructive tool added outside the admin set, which is precisely what C4's snapshot
+warning predicts and why the row earns its line. Reading Q2 as "every case must be red today"
+would delete exactly the rows that catch a future change.
 
 ## What this plan does NOT prove — U1
 
