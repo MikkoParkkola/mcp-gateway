@@ -55,13 +55,19 @@ Revision 1 attributed that bypass to "ADR-008 rung 2"; that was a misreading. AD
 client-native OAuth passthrough and says nothing about HTTP routing. No ADR sanctions the
 bypass.
 
-**Out of scope, found while rebasing the above (disposal: observation, not a ticket).** Seven
-other documents still cite `resolve_idempotency_key` by name — `RELEASE-4.0.0-gap-plan.md`,
-`RELEASE-4.0.0-execution-plan.md`, `audit-notes/criteria-mrtr.md`, and four sibling designs. The
-function does not exist in `src/`. Nothing needs deciding, so this is not a ticket; it is a
-mechanical staleness sweep somebody should run, and it is recorded here rather than fixed because
-editing four other designs to repair this one is the second hop §P0a exists to stop. Stale
-citations of a deleted symbol are model input, so the cost of leaving them is not zero.
+**Out of scope, found while rebasing the above (two disposals, §P0).** Seven other documents
+still cite `resolve_idempotency_key` by name. The function does not exist in `src/`.
+
+`RELEASE-4.0.0-gap-plan.md` and `RELEASE-4.0.0-execution-plan.md` get the **ticket** disposal, on
+the existing MIK-7408 rather than a new one: they are planning documents that feed what gets built
+next, so a human has to decide whether the work they describe against a deleted function still
+exists. That is a decision, which is what separates the fourth disposal from the third.
+
+`audit-notes/criteria-mrtr.md` and the four sibling designs get the **observation** disposal.
+They are records of what was true when written; nothing is decided from them, so the repair is a
+mechanical staleness sweep and recording it here is enough. It is recorded rather than fixed
+because editing four other designs to repair this one is the second hop §P0a exists to stop.
+Stale citations of a deleted symbol are model input, so the cost of leaving them is not zero.
 
 ## The cache cannot simply be turned on — seven prerequisites
 
