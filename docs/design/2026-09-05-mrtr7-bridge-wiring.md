@@ -333,11 +333,11 @@ Wiring one call is the smallest part of this.
   the deadlock the descope exists to prevent stays unreachable.
 - `shape` threaded to each of those sites, and production implementations of
   the bridge's three traits, which today exist only as test fakes.
-- **one dispatch path, not two.** The accounting emissions around the single
-  `dispatch_to_backend` are enumerated once, in the section 4 table — this
-  bullet deliberately does not restate them, because the earlier three-item
-  copy here had already drifted from the eight the table lists, with stale line
-  numbers. A bridged retry invokes the backend a *second* time, after all of
+- **one dispatch path, not two.** The budget gate and the accounting emissions
+  around the single `dispatch_to_backend` are enumerated once, in the section 4
+  table — this bullet deliberately does not restate them, because the earlier
+  three-item copy here had already drifted from what the table lists, with stale
+  line numbers. A bridged retry invokes the backend a *second* time, after all of
   them, so without this a paid backend is called twice and billed once and a
   configured budget is exceeded with no record. Factor the backend attempt and
   its accounting into one helper that the initial invocation and every bridge
@@ -750,15 +750,16 @@ to MRTR.9. That narrows what the bridge is FOR by removing a declared capability
 from the answerable set, which is a requester decision, not an engineering one
 (repair protocol, step 0). Not taken.
 
-### 4. MRTR.7b's accounting blocker: eight emission points around one dispatch, read at source (I)
+### 4. MRTR.7b's accounting blocker: one gate and eight emissions around one dispatch, read at source (I)
 
 The 7b criterion names two blockers. The first is already recorded as a design
 event at line 546 (`BackendInvoker::invoke` returns a bare `Value`, so a
 budget-refused retry has no way to propagate a refusal). The second was named but
 never measured. Measured now, in `src/gateway/meta_mcp/invoke.rs`:
 
-| emission | line | condition |
+| step | line | condition |
 |---|---|---|
+| `enforcer.check(tool, api_key_name)` | 1289 | BEFORE dispatch, `cost-governance`. REFUSES with `-32003` when the budget is exceeded; otherwise returns the warnings the epilogue injects |
 | `stats.record_invocation(server, tool)` | 1263 | unconditional, BEFORE dispatch |
 | `ranker.record_use(server, tool)` | 1266 | unconditional, before dispatch |
 | `dispatch_to_backend(...).await` | 1344 | the single paid call |
@@ -769,20 +770,37 @@ never measured. Measured now, in `src/gateway/meta_mcp/invoke.rs`:
 | `self.cost_tracker.record(sid, api_key_name, server, tool, 0, …)` | after 1386 | on success |
 | `enforcer.record_spend(tool, api_key_name, cost)` | 1409 | on success, `cost-governance` |
 
-Eight accounting and telemetry emissions, none of them factored into a function,
-arranged as a straight-line prologue and epilogue around ONE awaited
-`dispatch_to_backend`. There is no "invoke the backend once, accounted" callable
-in this file — the accounting IS the surrounding statements.
+Eight accounting and telemetry emissions and ONE GATE, none of them factored
+into a function, arranged as a straight-line prologue and epilogue around ONE
+awaited `dispatch_to_backend`. There is no "invoke the backend once, accounted"
+callable in this file — the accounting IS the surrounding statements.
+
+The gate is listed first because an earlier revision of this section did not
+list it at all. That revision counted EMISSION POINTS, and `enforcer.check` is
+not an emission: it is the one statement on this path that can REFUSE. Grok
+raised the omission in round 6 and it is confirmed at source — `invoke.rs:1289`
+returns `Err(-32003)` before `dispatch_to_backend` is ever awaited, and the
+bridge module contains no reference to an enforcer at all (`rg enforcer
+src/gateway/input_bridge.rs` is empty). A retry loop wired over a path extracted
+from a count of emissions would therefore make every bridged round after the
+first UNMETERED: the operator's per-tool spend limit is checked once, on the
+call that entered the bridge, and never again on the `rounds + 1` backend
+invocations `InputBridge::run` can drive.
+
+So the invariant below is stated over the whole boundary, not over a list: what
+the extraction factors is EVERY STATEMENT BETWEEN THE GATE AND THE EPILOGUE,
+including the gate. A count is the wrong shape for this requirement, and
+counting is what lost the gate.
 
 That is what makes the 7b blocker structural rather than a missing call. A
 bridged retry has exactly two shapes available today and both are wrong:
 
 - call `dispatch_to_backend` again from inside the bridge's `BackendInvoker`: a
-  second paid backend call that is invisible to all eight emissions. Billed
-  once, invoked twice, and a per-tool daily budget can be exceeded with no
-  record that it happened.
-- add a second set of the eight around the retry: two owners of the same
-  counter, which the repair protocol's own table calls the patch (a check
+  second paid backend call that is invisible to the gate and to all eight
+  emissions. Billed once, invoked twice, unmetered on the second pass, and a
+  per-tool daily budget can be exceeded with no record that it happened.
+- add a second copy of the accounted block around the retry: two owners of the
+  same counter, which the repair protocol's own table calls the patch (a check
   detecting the disagreement) rather than the elimination (one owner).
 
 What the design REQUIRES is the invariant, not the mechanism: every backend
@@ -794,8 +812,8 @@ their dispositions:
 
 | shape | disposition |
 |---|---|
-| the bridge calls `dispatch_to_backend` directly | REJECTED. A second paid call invisible to all eight emissions: invoked twice, billed once, a per-tool budget exceedable with no record that it happened. |
-| a second set of the eight emissions around the retry | REJECTED. Two owners of one counter — the repair protocol's own table calls that the patch, not the elimination. |
+| the bridge calls `dispatch_to_backend` directly | REJECTED. A second paid call invisible to the gate and to all eight emissions: invoked twice, billed once, unmetered on the second pass, a per-tool budget exceedable with no record that it happened. |
+| a second copy of the accounted block around the retry | REJECTED. Two owners of one counter and two owners of one spend limit — the repair protocol's own table calls that the patch, not the elimination. |
 | extract the accounted block; the bridge's `BackendInvoker` runs over the extraction | VIABLE. Costs a cross-cutting change to a path every invocation in the gateway uses. |
 | the bridge RETURNS its answers and the invoke path re-enters its own prologue-dispatch-epilogue in a loop | VIABLE ON ACCOUNTING — every pass is accounted by code that already exists — but it fails on criteria; see below. |
 
@@ -811,9 +829,28 @@ inherits the reasoning rather than the conclusion. If the requester would
 rather relax 7a's wording than pay for the cross-cutting extraction, that is a
 criteria decision and belongs beside the section 5 question, not inside an
 implementation commit. On the criteria as they stand, the extraction is the
-shape that survives: the eight emissions factored around the single await, and
-the bridge's `BackendInvoker` implemented over that extraction rather than over
-`dispatch_to_backend`.
+shape that survives: the gate and the eight emissions factored around the single
+await, and the bridge's `BackendInvoker` implemented over that extraction rather
+than over `dispatch_to_backend`.
+
+What the accounted path receives from the bridge, stated because the two
+adjacent shapes are both wrong. `Bridge::retry_params` (`mrtr.rs:477-489`)
+returns a BARE OVERLAY — `{requestState, inputResponses}` and nothing else, with
+each field omitted when it has no content. It is not a params object: it carries
+no `name` and no `arguments`, so an implementation that hands it to a backend as
+the call's params sends a call with no tool in it. The gateway already owns the
+correct merge and it is not a new helper: `OutboundRetry::apply`
+(`invoke.rs:455-465`) inserts both fields BESIDE `name` and `arguments` in the
+existing object, which is what the specification makes them and what lets a tool
+keep an argument of its own called `requestState`.
+
+The accounted path must also NOT run `redeem_retry` (`invoke.rs:529`) on that
+overlay. That function redeems a continuation handle this gateway minted for a
+CLIENT to present later, and it refuses a handle replayed against another tool
+by checking the digest sealed in the envelope. A bridged retry has no such
+handle: the client never went away, the bridge is holding the call open, and the
+`requestState` in the overlay is the BACKEND's own, echoed verbatim. Running the
+redemption over it would refuse every honest bridged retry.
 
 Consequence for sequencing, stated because it is easy to get wrong: this
 extraction is a prerequisite of 7b, not a part of it. It changes the accounting
@@ -898,13 +935,15 @@ turned out to be worse than stated.
 | "nothing reaps a session that is never DELETEd" is false — `spawn_reaper_on` runs in production (MEDIUM, CERTAIN) | grok | confirmed and larger than stated. The reaper walks the same map (`streaming.rs:75`) that holds `ClientSession`, and it removes by `retain`, which is why the write-side grep could not see it. The four-field deferred table is DELETED and the unknown recorded as resolved |
 | open question 3 still cites `streaming.rs:578` as a stream-end removal (MEDIUM, CERTAIN) | grok | confirmed. The main passage had been corrected and the recorded answer had not. It now names the reaper |
 | the `ClientChannel` shrink wraps typed forwarders that re-serialize params and mint a second id (HIGH, CERTAIN) | grok | OPEN, unverified. Named here rather than disposed: it is a change-the-approach finding against round 5's own repair, and it has not been read at source. It carries into round 7 as the first thing checked |
-| the accounted helper omits `enforcer.check`, and the retry overlay's shape is unstated (HIGH, LIKELY) | grok | OPEN, unverified, same handling. If it holds, §4's invariant is under-specified rather than wrong |
+| the accounted helper omits `enforcer.check`, and the retry overlay's shape is unstated (HIGH, LIKELY) | grok | CONFIRMED at source and repaired. `invoke.rs:1289` refuses with `-32003` before the dispatch is awaited and `src/gateway/input_bridge.rs` names no enforcer at all, so a path extracted from a COUNT OF EMISSIONS would leave every bridged round after the first unmetered. §4 now states the invariant over the whole boundary — gate included — and states what the accounted path does with `retry_params`: merge it as siblings via the existing `OutboundRetry::apply`, and never run `redeem_retry` on a backend's own echoed state |
 | the wait on MIK-7388 has nothing left to wait for (MEDIUM, CERTAIN) | grok | OPEN, unverified. It bears on sequencing, not on correctness, so it does not block the two HIGHs above |
 | WIRE.8 should assert elicitation params arrive whole on the production wire; record the invoke-loop as a rejected alternative | grok | the second is already in §4's shape table with its rejection reason. The first is a test-plan change and goes to the test plan, not here |
 
-Three findings left open is the honest state, not an oversight: a finding is a
+Two findings left open is the honest state, not an oversight: a finding is a
 lead until it is read at source, and closing one on the reviewer's word is the
-failure this document has already recorded twice.
+failure this document has already recorded twice. The third — the accounted
+helper — was read at source after the table was first written and moved from
+OPEN to repaired above, which is what the open state is FOR.
 
 **Grok's verdict is recorded with a caveat about its own provenance.** The
 ledger row exists with `process_status: ok` and verdict SHIP-WITH-FIXES, but its
