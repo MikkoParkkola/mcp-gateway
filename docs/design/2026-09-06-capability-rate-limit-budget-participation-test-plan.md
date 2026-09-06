@@ -1,6 +1,6 @@
 # GH475.RL.10 — test plan (PREVENTION half)
 
-Status: **draft, not yet reviewed as a plan** (§P2 requires its own dual-vendor pass).
+Status: **draft, not yet reviewed as a plan** (revised 2026-09-06 to follow the design's 429-only narrowing) (§P2 requires its own dual-vendor pass).
 Design: `docs/design/2026-09-06-capability-rate-limit-budget-participation.md`, option **O1**.
 Companion to the DETECTION half, already landed (`src/capability/executor_tests.rs:1002`, `:1194`, `:1239`).
 
@@ -19,8 +19,11 @@ can read MET.
 | C3 | Same, at the GraphQL format site | drive `graphql.rs` execute path with a 429; same assertion | unit | positive | yes, same reason |
 | C4 | Classification reads the **type**, not the text | build the `Error::Http` for a 429 whose body and reason phrase contain **no** rate-limit token at all (body `{"detail":"x"}`, and assert `is_rate_limited(&err.to_string())` is `false` for that same string); assert `BudgetOutcome::of(&Err(err))` is still `IgnoredRateLimit` | unit | **discriminating** — this is the one case that distinguishes O1 from the status quo | yes: under today's code the outcome is `Failure`. This is the case whose failure IS the criterion |
 | C5 | A non-429 HTTP failure is still counted as a failure | 500 through the same path; assert `BudgetOutcome::of` is `Failure` | unit | negative | yes — a match arm that returned `IgnoredRateLimit` for any `Http` would pass C4 and fail here. C4 without C5 is passable by a stub |
+| C5b | A non-429 status is **not** re-carriered at all: it stays `Error::Protocol` with today's text | drive 500, 504 and 403 through each format site; assert the returned error matches `Error::Protocol(_)` and its string still contains the status and the body fragment | unit | **discriminating** — this is the row that pins the review's one substantive revision | yes: an implementation that gates on `error_for_status_ref()`'s `Err` rather than on `status == 429` returns `Error::Http` here and fails immediately. That implementation is the obvious one to write, which is why this row exists |
+| C5c | The agent-facing classification of a non-429 failure is byte-for-byte unchanged | assert `classify_dispatch_error` yields `Timeout` for the 504 error and `BackendError` for the 500, exactly as it does before O1 | unit | regression | yes — under the wide gate a 504 becomes `BackendError`, which is the degradation both review legs raised. This row goes red on it |
 | C6 | The exclusion **effect** survives: a 429 does not trip the capability breaker | the three DETECTION tests, re-run unchanged against the new error type | unit | regression | yes — they assert on the effect via the shared predicate; if O1 changes the string the predicate sees, they break, which is the point of leaving them untouched |
-| C7 | The truncated response body is not lost, only relocated (DESIGN EVENT 1) | capture `tracing` output for a 429 and assert the body fragment appears in the `warn!` record; assert the returned `Display` carries status and URL and **not** the body | unit | positive + negative pair | yes — an implementation that simply drops the body passes every other row here |
+| C7 | The truncated response body is not lost, only relocated (DESIGN EVENT 1) | capture `tracing` output for a 429 and assert the body fragment appears in the `warn!` record; assert the returned `Display` does **not** carry the body | unit | positive + negative pair | yes — an implementation that simply drops the body passes every other row here |
+| C7b | The backend URL never reaches the agent-facing error (DESIGN EVENT 1, the review's other blocking finding) | drive a 429 whose request URL carries a distinctive query parameter (`?api_key=CANARY`); assert `err.to_string()` contains neither the host, the path, nor `CANARY`; assert `err.url()` is `None` | unit | **negative, security** | yes: omitting `.without_url()` — the single easiest thing to forget, since `Error::Http(err)` compiles fine without it — puts the whole URL in `Display` and this row goes red on the canary |
 | C8 | A capability 429 maps to JSON-RPC code **-32000** (DESIGN EVENT 2) | `to_rpc_code(Error::Http(429-err))` | unit | positive | yes — today `Http` falls through to `_ => -32603`, so the case fails before the guarded arm exists |
 | C9 | A non-429 `Http` error keeps `-32603` | `to_rpc_code(Error::Http(500-err))` | unit | negative | yes — guards the DESIGN EVENT 2 arm against being widened to all `Http` |
 | C10 | `classify_dispatch_error` gains an `Error::Http` arm in the **same** commit (DESIGN EVENT 3) | assert the dispatch classification of a 429 `Error::Http`; the case lands with the format-site rewrite, never as a follow-up | unit | positive | yes |
@@ -35,7 +38,7 @@ per §P2 that is the whole point of reviewing a plan rather than the tests.
 ## The two questions a plan review must answer
 
 1. **Does every criterion clause have a case, or a stated reason it has none?**
-   Eleven clauses, eleven cases, zero stated exemptions. Answer above.
+   Fourteen clauses, fourteen cases, zero stated exemptions. Answer above.
 2. **Can each named case actually fail?** Answered per row, last column. The
    shape to distrust is C4: it is the only row whose failure *is* the criterion,
    and a fixture that hands `BudgetOutcome::of` an error it built itself would
