@@ -67,6 +67,7 @@ fn code_mode_meta_mcp() -> MetaMcp {
 /// surfaces, tagged with `"<mode>/<tool name>"` for failure messages.
 fn all_meta_tool_schemas() -> Vec<(String, serde_json::Value)> {
     let mut schemas = Vec::new();
+    let mut names = Vec::new();
     for (mode, meta_mcp) in [
         ("traditional", operational_meta_mcp()),
         ("code_mode", code_mode_meta_mcp()),
@@ -77,9 +78,47 @@ fn all_meta_tool_schemas() -> Vec<(String, serde_json::Value)> {
             "{mode} tools/list returned zero tools — fixture is not exercising real schemas"
         );
         for tool in tools {
+            names.push(format!("{mode}/{}", tool.name));
             schemas.push((format!("{mode}/{}", tool.name), tool.input_schema));
+            // Both schema fields are published to a client, so both are in the
+            // population. Only some tools declare an `outputSchema`.
+            if let Some(output) = tool.output_schema {
+                schemas.push((format!("{mode}/{} [outputSchema]", tool.name), output));
+            }
         }
     }
+
+    // Population floor. Without it an `all_meta_tool_schemas()` that silently
+    // returned a near-empty set would make every check above it pass while
+    // walking nothing — the failure mode the per-mode non-empty assert alone
+    // does not catch (one tool per mode satisfies it).
+    let traditional = names
+        .iter()
+        .filter(|n| n.starts_with("traditional/"))
+        .count();
+    assert!(
+        traditional >= 14,
+        "traditional mode published {traditional} tools; the documented floor for the \
+         Meta-MCP surface is 14 — the fixture is not enabling the real surface: {names:?}"
+    );
+    for expected in [
+        "traditional/gateway_search_tools",
+        "traditional/gateway_invoke",
+        "traditional/gateway_list_servers",
+        "traditional/gateway_get_stats",
+        "code_mode/gateway_search",
+        "code_mode/gateway_execute",
+    ] {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "`{expected}` is missing from the enumerated surface: {names:?}"
+        );
+    }
+    assert!(
+        schemas.iter().any(|(n, _)| n.ends_with("[outputSchema]")),
+        "no tool published an outputSchema — the outputSchema arm of this walk covers nothing"
+    );
+
     schemas
 }
 
@@ -130,6 +169,13 @@ fn dangling_refs(schema: &serde_json::Value) -> Vec<String> {
         // fetch this gateway must never make (the `jsonschema` dependency is
         // built `default-features = false` precisely to disable remote
         // resolution), so it cannot resolve here and is reported.
+        // ponytail: JSON-pointer fragments only. A plain-name fragment
+        // (`#name`, resolved against `$anchor`) and an `$id`-relative base are
+        // both legal 2020-12 and would be reported here as dangling. No
+        // published schema uses either today — the surface has no `$ref` at
+        // all — so the walker stays a pointer walker; teach it `$anchor` and
+        // `$id` bases the day one appears, rather than editing the schema to
+        // suit the check.
         let Some(rest) = pointer.strip_prefix('#') else {
             return false;
         };
@@ -235,4 +281,45 @@ fn falsifier_a_ref_to_a_missing_definition_is_reported_by_the_same_walker() {
         vec!["https://json-schema.org/draft/2020-12/schema".to_string()],
         "an external $ref cannot resolve in-document and must be reported"
     );
+}
+
+/// The published surface is not only the 19 `gateway_*` definitions: every
+/// capability YAML the loader reads becomes a tool whose `inputSchema` and
+/// `outputSchema` reach the same client. Enumerating them through the real
+/// load path (`CapabilityLoader::load_directory` → `to_mcp_tool`) is what
+/// makes the population the criterion's population rather than a subset.
+#[tokio::test]
+async fn capability_schemas_are_valid_2020_12_and_resolve_their_own_refs() {
+    let dir = repo_file("capabilities");
+    let definitions = mcp_gateway::capability::CapabilityLoader::load_directory(
+        dir.to_str().expect("capabilities path is UTF-8"),
+    )
+    .await
+    .expect("the repo's capability directory must load");
+
+    assert!(
+        definitions.len() >= 100,
+        "loaded only {} capability definitions; the catalogue is 110+, so the load path is \
+         not being exercised",
+        definitions.len()
+    );
+
+    for definition in &definitions {
+        let tool = definition.to_mcp_tool();
+        let mut published = vec![(tool.name.clone(), tool.input_schema)];
+        if let Some(output) = tool.output_schema {
+            published.push((format!("{} [outputSchema]", tool.name), output));
+        }
+        for (name, schema) in published {
+            if let Err(err) = jsonschema::meta::validate(&schema) {
+                panic!("capability tool `{name}` publishes an invalid 2020-12 schema: {err}");
+            }
+            let dangling = dangling_refs(&schema);
+            assert!(
+                dangling.is_empty(),
+                "capability tool `{name}` publishes {} unresolvable $ref(s): {dangling:?}",
+                dangling.len()
+            );
+        }
+    }
 }
