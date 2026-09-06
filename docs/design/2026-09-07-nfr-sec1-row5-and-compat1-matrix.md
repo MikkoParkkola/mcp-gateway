@@ -120,13 +120,21 @@ too.**
    parameterised body would need a branch on the parameter — which is two
    tests wearing one name, and the branch is where the wrong-path bug hides.
 
+## The documentation the same finding falsifies
+
+`docs/ARCHITECTURE.md:65` described the protocol module as negotiating
+"2024-11-05 through 2025-11-25". Two defects in one clause: it reads as a
+continuous range where the constant holds four discrete revisions, and it omits
+2026-07-28 entirely — the revision the header path does serve. This document's
+own table is the correction, so the line is repaired here rather than recorded
+against someone else; the team lead assigned it in this change (`§P4a`: a
+document the change makes untrue is updated inside the change).
+
 ## Out of scope
 
 - The firewall gate (inventory's blocked 15th) — needs `src/security/firewall/**`,
   owned by another session.
 - The legacy-client bridge (`src/protocol/continuation.rs`) — peer-held.
-- `docs/ARCHITECTURE.md:65`, which advertises a revision `SUPPORTED_VERSIONS`
-  does not serve. Real defect, different owner, recorded not repaired.
 - Any edit to `docs/requirements/RELEASE-4.0.0-criteria-status.md`. Evidence is
   reported; the team lead regrades.
 
