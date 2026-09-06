@@ -226,7 +226,9 @@ fail to do the thing it was called to do. `cached()` on the outbound path is an
 failure. The two calls need opposite shapes for the same reason.
 
 `EraCache` therefore gains one accessor this increment: a synchronous, non-blocking read
-alongside `cached()`. That is a public-surface addition (D28) on a type §P0 declares out of
+alongside `cached()`. It is `pub(crate)`: the only caller is the transport's own
+`outbound_era`, so nothing outside the crate can reach it and the exported surface is
+unchanged — no D28 addition to count. What it does reach into is a type §P0 declares out of
 scope for *behavioural* change; adding a read that cannot block is not a change to what `Era`
 or `EraCache` mean, and this design does not touch `resolve_with`, `invalidate` or the
 classification rules. Flagged rather than assumed, because it is the one line of this design
