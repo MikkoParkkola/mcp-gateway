@@ -420,6 +420,18 @@ mod http {
             .await
             .expect("router must answer");
         let status = response.status();
+        // An admitted `subscriptions/listen` is an OPEN STREAM by design, so
+        // draining its body never returns. Content-type is what separates the
+        // two answers: a refusal is `application/json` and must be read and
+        // compared; a stream is `text/event-stream` and has no body to collect.
+        let streaming = response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"));
+        if streaming {
+            return (status, Value::Null);
+        }
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("body must read");
@@ -640,9 +652,21 @@ mod dispatch {
             Some(&json!("complete")),
             "the acknowledgement is an empty `complete` result: {body}"
         );
+        // `_meta` is excluded because it is the gateway's envelope, not the
+        // ack's payload: `handlers.rs` stamps `serverInfo` into every result it
+        // serves, so a count including it could never be 1 and the case could
+        // never go green. What the criterion is about is that the ack carries
+        // NO payload of its own.
+        let payload_keys: Vec<&str> = body["result"]
+            .as_object()
+            .expect("the ack is an object")
+            .keys()
+            .map(String::as_str)
+            .filter(|key| *key != "_meta")
+            .collect();
         assert_eq!(
-            body["result"].as_object().map(serde_json::Map::len),
-            Some(1),
+            payload_keys,
+            ["resultType"],
             "empty means empty: the ack carries `resultType` and nothing else: {body}"
         );
     }
