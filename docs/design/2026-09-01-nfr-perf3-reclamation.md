@@ -3,7 +3,7 @@
 
 # NFR.PERF.3 — reclamation, and the one table that cannot currently reclaim
 
-`NFR.PERF.3` (`docs/requirements/RELEASE-4.0.0-requirements.md:232`), verbatim: *"Memory MUST NOT
+`NFR.PERF.3` (`docs/requirements/RELEASE-4.0.0-requirements.md:283`), verbatim: *"Memory MUST NOT
 grow unboundedly with abandoned continuations; a soak with abandonment MUST show reclamation."*
 
 Two clauses, and they are not the same clause. **Bounded** and **reclaiming** are different
@@ -362,7 +362,7 @@ mechanism lands without the other.
 | unknown | state |
 |---|---|
 | Does the at-capacity refusal still amplify? | **Resolved: yes.** `hold` retains over the whole table on *every* refused attempt (`:698-709`) with no earliest-deadline guard, so a caller that keeps pushing at capacity pays O(4 096) under the lock per attempt and needs no privilege to do it. The guard this document proposed was not built with the retain. Fixing it is in scope here: track the earliest deadline and skip the sweep when nothing can have expired |
-| What soak bound does the requirement name? | **Resolved: none.** `RELEASE-4.0.0-performance.md:77-88` says "MUST NOT grow unboundedly" and "a soak MUST show reclamation" — no duration, no abandonment rate, no reclamation threshold. Changed the design: the criterion is made checkable by a **deterministic driven-clock test**, not a wall-clock soak — abandon 8 192 exchanges (2x `IN_FLIGHT_CAPACITY`, `:811`), advance the clock past the deadline plus one tick, assert occupied count returns to 0, then assert a fresh `hold` succeeds. A wall-clock soak is neither runnable in the suite nor a controlled observation |
+| What soak bound does the requirement name? | **Resolved: none.** `docs/requirements/RELEASE-4.0.0-requirements.md:283` says "MUST NOT grow unboundedly" and "a soak MUST show reclamation" — no duration, no abandonment rate, no reclamation threshold. Changed the design: the criterion is made checkable by a **deterministic driven-clock test**, not a wall-clock soak — abandon 8 192 exchanges (2x `IN_FLIGHT_CAPACITY`, `:811`), advance the clock past the deadline plus one tick, assert occupied count returns to 0, then assert a fresh `hold` succeeds. A wall-clock soak is neither runnable in the suite nor a controlled observation |
 | Would an RSS-based soak assertion fail today? | **Resolved: no — and that is why it is the wrong assertion.** Memory is bounded at 4 096 entries either way, so a memory soak passes against the unfixed code. The assertion has to be on *occupancy coming down on the tick*, which cannot go green before the interval task has a production caller |
 
 ### Correction, same day — the two mechanisms above are already owned, and one of them is rejected
