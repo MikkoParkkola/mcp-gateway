@@ -14,6 +14,7 @@ pub mod mrtr;
 mod negotiate;
 pub mod param_headers;
 pub mod subscriptions;
+pub mod task_store;
 pub mod tasks;
 pub mod trace;
 mod types;

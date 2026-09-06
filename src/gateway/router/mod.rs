@@ -70,6 +70,8 @@ pub struct AppState {
     /// deleted sessions, so there is nothing to key on. Kept beside it rather
     /// than inside it so the two lifetimes stay distinguishable.
     pub subscriptions: Arc<crate::gateway::subscription_registry::SubscriptionRegistry>,
+    /// In-flight tasks, scoped to the principal that created them.
+    pub tasks: Arc<crate::protocol::task_store::TaskStore>,
     /// Key server for OIDC-issued temporary tokens (optional)
     pub key_server: Option<Arc<KeyServer>>,
     /// Tool access policy

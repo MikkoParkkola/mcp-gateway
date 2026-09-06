@@ -358,6 +358,7 @@ mod http {
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
+            tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
             subscriptions: Arc::new(
                 mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
             ),

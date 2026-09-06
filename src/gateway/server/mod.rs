@@ -1229,6 +1229,7 @@ impl Gateway {
             firewall: firewall_arc,
             agent_identity_config: self.config.security.agent_identity.clone(),
             control_plane_store,
+            tasks: Arc::new(crate::protocol::task_store::TaskStore::new()),
             subscriptions: Arc::new(
                 crate::gateway::subscription_registry::SubscriptionRegistry::new(
                     crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
