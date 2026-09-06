@@ -3,7 +3,8 @@
 
 # GH475.RL.10 — why a capability backend's 429 is counted as a healthy call
 
-Status: **design, revision 1**, awaiting dual review. No code written.
+Status: **design, revision 2**, awaiting dual review. Question 1 resolved by
+check (see 4.1); question 2 remains open with a stated fallback. No code written.
 
 ## 0. The ledger's stated reason is wrong, and the correction changes the fix
 
@@ -93,15 +94,32 @@ carries an error status and an `is_error: false` envelope.
 
 | # | question | form | state |
 |---|---|---|---|
-| 1 | Does any existing consumer depend on a 4xx capability response arriving with `isError: false`? | checkable | **open** — the check is a search of the response-transform and output-schema paths, both of which branch on `isError` (`invoke.rs:157`) |
+| 1 | Does any existing consumer depend on a 4xx capability response arriving with `isError: false`? | checkable | **resolved**, see 4.1 |
 | 2 | Does the criterion want every error status marked, or only 429? | askable — operator | **open** |
 
-Question 1's fallback if it resolves badly: marking is narrowed to 429 alone,
-which satisfies the criterion and touches strictly less behaviour.
 Question 2's fallback: the narrow reading is implemented, since it is a subset
-of the wide one and cannot be wrong under it.
-Owner of both: this change's author for question 1, the operator for question 2.
-Trigger: before implementation. Nothing depending on either is written.
+of the wide one and cannot be wrong under it. Owner: the operator. Trigger:
+before implementation. Nothing depending on it is written.
+
+### 4.1 Answer to question 1 — resolved by check, not deferred
+
+**No consumer depends on a 4xx capability response arriving with
+`isError: false`.** Two sites read the field on the response path, and neither
+is harmed by the change:
+
+| site | what it does | effect of setting `is_error: true` on an error status |
+|---|---|---|
+| `src/gateway/meta_mcp/invoke.rs:308` | reads `isError` into the projection A/B telemetry event, defaulting to `false` when absent | the emitted log becomes **more** accurate; nothing branches on it |
+| `src/gateway/meta_mcp/invoke.rs:2145` | refuses a response whose `isError` is present and **not a boolean**, then copies it verbatim into the envelope | `true` is a boolean, so the guard passes and the value is preserved |
+
+The guard at `:2145` rejects malformedness, not truth: it never inspects
+whether the flag is set, only whether it is a boolean. Setting it is inside the
+contract the transform enforces.
+
+Question 1's fallback — narrowing the marking to 429 alone — is therefore **not
+required on this question's account**. Question 2 remains open and its own
+fallback stands.
+
 
 ## 5. Test obligations (plan, not tests)
 
