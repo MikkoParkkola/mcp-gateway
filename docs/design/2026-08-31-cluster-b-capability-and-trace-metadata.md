@@ -160,7 +160,11 @@ decides on, never reaches `invoke_tool`.
 `src/gateway/meta_mcp/invoke.rs:1845-1847`, and it reads `args.get("_meta")` — a field of
 `gateway_invoke`'s *argument object*, one level below the carrier. No meta-tool input schema
 declares `_meta` (`src/gateway/meta_mcp_tool_defs.rs`) and nothing copies `params._meta` into
-`arguments`, so for a spec-conformant client that read is always `None`. The existing test
+`arguments`, so a client that puts trace context where the protocol puts it is never read.
+The read is not provably dead, and the claim is deliberately not made: `gateway_invoke`'s
+`arguments` is an open object — `{"type": "object"}` with no `additionalProperties: false`
+(`meta_mcp_tool_defs.rs:148`) — so a client that nests `_meta` *there* is read. That is the
+shape the code serves and the shape no spec sends. The existing test
 (`src/gateway/meta_mcp/trace_correlation_tests.rs:104-130`) passes because its fixture nests
 `_meta` inside the argument object: it exercises the shape the code reads, not the shape a client
 sends, which is why a green suite did not surface this.
