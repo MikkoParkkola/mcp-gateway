@@ -13,12 +13,17 @@
 //! criterion that closes on a test which could not have failed is a release
 //! gate removed and written down as passed.
 //!
-//! SCOPE CARVE-OUT (§11.6): the specification's `ttlMs` / `pollIntervalMs`
-//! *MAY change over the task's life* clauses are an OPEN conformance gap — §3
-//! does not state them and another agent is resolving it. No case here asserts
-//! what the gateway does with a mid-task change to either field. The settled
-//! half (`ttlMs: number | null` present-and-nullable, `pollIntervalMs?: number`)
-//! is in scope; mutability is not.
+//! SCOPE CARVE-OUT: the specification's `ttlMs` / `pollIntervalMs` *MAY change
+//! over the task's life* clauses are no longer an open gap — the 2026-09-06
+//! amendment to §11.2 closed §10.3's two rows, and the design now owns both
+//! halves: 4.0.0 never mutates either field, and every reader takes the value
+//! from the store record at the moment it acts rather than caching a deadline.
+//! This file still asserts neither half, and that is deliberate, not an
+//! omission: both are behaviours of a store and a reaper that do not exist
+//! yet, so their cases live in the test plan as rows `.14`–`.17`
+//! (`docs/design/2026-09-06-task-1-tasks-extension-test-plan.md`), not here.
+//! The settled half (`ttlMs: number | null` present-and-nullable,
+//! `pollIntervalMs?: number`) is in scope and is asserted below.
 
 use mcp_gateway::protocol::cacheable::is_final;
 use mcp_gateway::protocol::headers::mcp_name_body_field;
