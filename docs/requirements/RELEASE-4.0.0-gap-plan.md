@@ -260,17 +260,16 @@ today, and what the criterion is actually asking for. It is the largest item and
 to move the release date — sizing it honestly is the first deliverable, not a commitment to build it
 in this release.
 
-**17 — NFR.SEC.6 owner decision (S, owner call).** MIK-7262 is open: the
-`registers_external_callback` override is silently skipped for read-only, non-mutating and no-schema
-methods (`capability/definition/mod.rs:1113-1152`). Shipping with a known bypass of an
-external-callback declaration is an owner's decision in the same shape as increment 8, not something
-an increment can close on its own authority.
+**17 — NFR.SEC.6 owner decision (S, owner call). WITHDRAWN 2026-09-06: there is no decision to make.**
+This increment rested on MIK-7262 being open. It is not. **CORRECTED 2026-09-06 -- MIK-7262 is CLOSED.** The line numbers this row was written against drifted: the declared-value return is at `src/capability/definition/mod.rs:1127-1129`, not `:1150` (`:1150` is now a `.get("properties")` call), and it sits ABOVE the inference short-circuits, not below them. Only the `read_only` return at `~:1113` precedes it, deliberately. Mutation-probed: deleting `:1127-1129` and running `cargo test --lib caller_addressed_state_tests` gives `6 passed; 4 failed` on four named declaration assertions (`:1326`, `:1344`, `:1360`, `:1369`); restoring and re-running gives `10 passed; 0 failed`. Enforcement is wired, not schema-only: `src/gateway/meta_mcp/invoke.rs:927-938` refuses a non-admin caller. See `RELEASE-4.0.0-criteria-status.md` NFR.SEC.6. NFR.SEC.6 is MET and no longer
+blocking; nothing here needs an owner's authority.
 
 **All eight cited locations re-read on 2026-08-31.** Six hold as the rows describe: the -32002
 return, `gateway_declares` with its single definition and no caller, `session_lifecycle` declared at
 `gateway/mod.rs:19` and referenced nowhere else, a cache key built only from server, tool, arguments,
 projection and identity, `forward_elicitation_with_response` taking a `session_id`, and the
-`registers_external_callback` check at `capability/definition/mod.rs:1150`. Two moved:
+`registers_external_callback` check, which has since moved to `capability/definition/mod.rs:1127-1129`
+and is asserted (see item 17). Two moved:
 
 - **12 is smaller than S.** The live `trace_id` is in scope at the log call (`invoke.rs:1298`) — the
   `warn!` three lines below already uses it. The correlation key is the session id with a literal

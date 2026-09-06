@@ -1640,21 +1640,21 @@ impl ReloadContext {
             };
             // Two bounded facts, and no summary of "what is still in force".
             //
-            // That summary is what kept being wrong. `Config::load` applies the
-            // candidate's `env_files` to the PROCESS environment before it
-            // returns, so by the time this check runs, that has happened — and
-            // it is not inert: `capability::executor` resolves an `env:` or
-            // `{env.VAR}` credential with `std::env::var` inside
-            // `dispatch_protocol`, per call. A later capability call can
-            // therefore use a value the refused file supplied.
+            // The clause that kept being wrong went out with its cause. Env
+            // files once reached the PROCESS environment inside `Config::load`
+            // before it returned, so a refused candidate had already mutated
+            // the process that refused it — that is the defect MIK-7256 names,
+            // and it is closed: the candidate's env files build an `EnvOverlay`
+            // that is published only on success (`self.env.set(overlay)`, below
+            // and unreachable from this path), and `#![deny(unsafe_code)]` on a
+            // 2024-edition crate makes `set_var` unavailable, so no code path
+            // can put a refused file's value where a later `env:` resolution
+            // would read it.
             //
-            // Three review rounds each narrowed that clause and each left it
-            // false, which is the shape of a claim that should be deleted
-            // rather than patched. The two facts below are checkable and the
-            // operator can act on them; the reassurance they wanted is the one
-            // the code cannot give. Pre-existing on every reload failure and
-            // filed as MIK-7256; overclaiming in a security message is how the
-            // next report starts.
+            // The summary is still not written, for a different reason: this
+            // check asks `network_bind_refusal` and nothing else, while a
+            // restart reads the whole file. Claiming more than the two facts
+            // below is how a security message starts the next report.
             return Err(format!(
                 "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped, \
                  and no configuration was published. {restart}",
