@@ -13,6 +13,7 @@ use std::process::ExitCode;
 
 use mcp_gateway::{
     config::TransportConfig,
+    config_persistence::load_existing_or_default,
     gateway::ui::backend_ops::{
         self, BackendUpdate, add_backend, get_backend, list_backends, parse_env_vars,
         remove_backend, resolve_transport, update_backend, write_config,
@@ -68,7 +69,13 @@ pub async fn run_add_command(
     // credential is not generated here on purpose; minting one as a side effect
     // of adding a backend is a surprise. Saying so is not.
     let creating_config = !config.exists();
-    let mut gateway_config = backend_ops::load_config_or_default(config);
+    let mut gateway_config = match load_existing_or_default(config) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Error: Failed to load {}: {e}", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     // ── Insert backend ─────────────────────────────────────────────────────
     if let Err(msg) = add_backend(
@@ -437,5 +444,63 @@ mod tests {
         let (_dir, path) = temp_config();
         let result = run_update_backend("ghost", BackendUpdate::default(), &path);
         assert!(result.is_err());
+    }
+
+    // GH462.CONFIG.5: these guarded writers must never persist an empty fallback.
+    fn assert_guarded_writers_preserve_invalid_config(original: &str) {
+        let (_dir, path) = temp_config();
+        std::fs::write(&path, original).unwrap();
+        let error = Config::load_literal(Some(&path)).unwrap_err();
+        if original.contains("bad/name") {
+            assert!(matches!(error, mcp_gateway::Error::ConfigValidation(_)));
+        } else {
+            assert!(matches!(error, mcp_gateway::Error::Config(_)));
+        }
+        #[cfg(unix)]
+        let identity = {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = std::fs::metadata(&path).unwrap();
+            (metadata.dev(), metadata.ino())
+        };
+
+        assert_eq!(run_remove_command("original", &path), ExitCode::FAILURE);
+        assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = std::fs::metadata(&path).unwrap();
+            assert_eq!((metadata.dev(), metadata.ino()), identity);
+        }
+
+        let result = run_update_backend(
+            "original",
+            BackendUpdate {
+                description: Some("gh462 edit must not persist".into()),
+                ..BackendUpdate::default()
+            },
+            &path,
+        );
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = std::fs::metadata(&path).unwrap();
+            assert_eq!((metadata.dev(), metadata.ino()), identity);
+        }
+    }
+
+    #[test]
+    fn gh462_remove_and_update_preserve_malformed_config() {
+        assert_guarded_writers_preserve_invalid_config(
+            "backends:\n  original:\n    command: \"unterminated\n",
+        );
+    }
+
+    #[test]
+    fn gh462_remove_and_update_preserve_semantic_invalid_config() {
+        assert_guarded_writers_preserve_invalid_config(
+            "backends:\n  bad/name:\n    command: echo original\n",
+        );
     }
 }

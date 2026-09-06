@@ -604,8 +604,8 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
     // the list is exhaustive, and a shape that makes adding one a single line
     // is the shape that stays exhaustive.
     macro_rules! sections {
-        ($($name:literal => $field:ident),* $(,)?) => {
-            vec![$((
+        ($($(#[$attr:meta])* $name:literal => $field:ident),* $(,)?) => {
+            vec![$($(#[$attr])* (
                 $name,
                 canonical_json(&running.$field) != canonical_json(&wanted.$field),
             )),*]
@@ -630,6 +630,7 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
         "error_budget" => error_budget,
         "cache" => cache,
         "runtime" => runtime,
+        #[cfg(feature = "cost-governance")]
         "cost_governance" => cost_governance,
     ]
 }
@@ -1520,7 +1521,7 @@ impl ReloadContext {
     /// # Errors
     ///
     /// [`ConfigWriteError::Busy`] when the lock did not come free in time, and
-    /// [`ConfigWriteError::Failed`] on write, rename, or reload failure. A
+    /// [`ConfigWriteError::Failed`] on load, write, rename, or reload failure. A
     /// refusal from `mutate` is not an error; it comes back as
     /// [`ConfigMutation::Rejected`].
     pub async fn mutate_and_reload_outcome<T, E, F>(
@@ -1550,7 +1551,10 @@ impl ReloadContext {
         F: FnOnce(&mut Config) -> std::result::Result<T, E>,
     {
         let _reload_guard = self.lock_reload_within(wait).await?;
-        let mut config = crate::config_persistence::load_config_or_default(path);
+        let mut config =
+            crate::config_persistence::load_existing_or_default(path).map_err(|e| {
+                ConfigWriteError::Failed(format!("Failed to load {}: {e}", path.display()))
+            })?;
         let value = match mutate(&mut config) {
             Ok(value) => value,
             Err(rejection) => return Ok(ConfigMutation::Rejected(rejection)),
@@ -1856,7 +1860,7 @@ pub enum ConfigMutation<T, E> {
 /// # Errors
 ///
 /// [`ConfigWriteError::Busy`] when a reload held the lock too long, and
-/// [`ConfigWriteError::Failed`] on validation, write, rename, or reload failure.
+/// [`ConfigWriteError::Failed`] on load, validation, write, rename, or reload failure.
 /// A refusal from `mutate` is not an error; it comes back as
 /// [`ConfigMutation::Rejected`] with the file untouched.
 pub async fn mutate_config_and_reload<T, E, F>(
@@ -1873,7 +1877,8 @@ where
 
     // No live gateway to reload, so no reload lock exists to hold. This path is
     // the CLI acting on a config file nothing else is serving.
-    let mut config = crate::config_persistence::load_config_or_default(path);
+    let mut config = crate::config_persistence::load_existing_or_default(path)
+        .map_err(|e| ConfigWriteError::Failed(format!("Failed to load {}: {e}", path.display())))?;
     match mutate(&mut config) {
         Ok(value) => {
             crate::config_persistence::write_config(path, &config)?;
