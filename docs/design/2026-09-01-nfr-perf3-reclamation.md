@@ -203,9 +203,12 @@ space. The retain goes inline, in the lock `hold` is already holding — exactly
 > occupancy at the ceiling is the correct steady state — but the plan fills the table exactly once
 > and never enters the capacity branch, so occupancy returning to 0 on the tick is the only thing
 > that distinguishes reclamation-on-a-clock from the reclamation `hold` already does. Of the three
-> cases below, two belong to the earliest-deadline guard and one to the lifetime tick; the
-> correction at the end of this document transfers all three to MRTR.8b with `InFlight`'s entry
-> points.
+> cases below, one belongs to the lifetime tick and is superseded by the plan's row 2, written
+> against MRTR.8b's `guard(now)`. The other two test the earliest-deadline guard: the correction at
+> the end of this document transfers that guard to MRTR.8b, but MRTR.8b's Design A **declined to
+> build it** and accepts the walk as cost — which is why the residual-risk table below carries it
+> with a named owner. Do not write those two as cases; they would assert a mechanism nobody is
+> building.
 
 ## The soak, and what it is allowed to observe
 
