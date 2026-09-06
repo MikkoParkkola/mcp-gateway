@@ -121,6 +121,9 @@ row, it is a wish.
 | `.12c` | **the bar, recorded in-row:** `.12` MAY NOT be marked MET while `.12a` is unsatisfied | — | gate | Not a test. A verdict rule, recorded where the verdict is read. See §5. |
 | `.13a` | a client declaring on request 1 that opens a listen stream carrying `taskIds` **without declaring on that request** is refused `-32021`, with the same `data.requiredCapabilities` payload `.4b` asserts | integration | negative | **Partially, for a real reason.** The per-request capability read exists (`.4` asserts it on the `tools/call` path and is red for behaviour, not absence), so this waits on the subscription path, not on the dispatcher. |
 | `.13b` | the gate is per **request**, not per **method family** | integration | negative | **Partially.** Written separately because a gate keyed on `tasks/*` passes `.4` and fails this: `subscriptions/listen` is not in that family and reaches the extension anyway. |
+| `.14` | an expired task's record is **deleted**, not marked `failed` and retained: after expiry, `tasks/get` for that id is byte-identical to `tasks/get` for an id that never existed, and no `failed` status is ever observable for an expired task | integration | negative | **No — vacuous until a store and a reaper exist**; both retrievals are not-found for the wrong reason. Written now because the pinned text permits the other branch — `tasks.md:340`, servers **MAY** mark a task `failed` after the TTL elapses and delete it later — so an implementer taking it would be conformant and would silently split `.11a`'s byte-identical assertion into two distinguishable answers. Needs `.11b`'s positive control in the same test: retrieve a live task successfully, or expiry is indistinguishable from nothing having been created. **Trigger:** the reaper; owner TASK.1 piece 2. |
+| `.15` | capacity is released when the record is **deleted or expires**, never when the task reaches a terminal state: with the per-principal cap at N, N `completed`-but-unreaped tasks refuse the N+1th admission, and the slot frees only after the reaper runs | integration | negative | **No — vacuous until the caps and the reaper both exist**, and vacuous in the dangerous direction: the default an implementer reaches for is an active-only counter, which reads zero and admits forever, so a case asserting only that admission succeeds after reaping passes on the broken code. The assertion that carries the row is the **refusal at N with terminal-state records**; advance the clock past the TTL and assert admission second. **Trigger:** §11.2's caps; owner TASK.1. |
+| `.16` | a client polling `tasks/get` more frequently than the recorded `pollIntervalMs` is served normally — no throttle, no error, no added delay | integration | negative | **No — vacuous until `tasks/get` exists**, and the weakest of the three: it asserts the absence of a behaviour nobody has written. Per A3 the case asserts the **observed responses** — N successes carrying the same shape — never "no rate-limit error occurred". Kept because `tasks.md:308` says servers **MAY** rate-limit below the recorded interval: declining that permission is a design decision, and this row is where a later implementer learns that adding a limiter changes our design rather than improving our conformance. |
 
 **Tally.** Of 33 clause rows — 32 cases plus `.12c`, which is a verdict rule and not a test — 11
 can fail against HEAD for a behavioural or compile reason: `.2a`,
@@ -129,6 +132,14 @@ The rest wait on the dispatcher or on SUB.2 and must be written **against the sp
 against whatever the dispatcher turns out to do. That asymmetry is the plan's headline finding:
 TASK.1 is mostly new surface, and the tests that constrain it on day one are the ones asserting
 against code that already exists.
+
+**Three design-decision rows, counted apart from the clause rows.** `.14`, `.15` and `.16` do not
+descend from a criterion clause: they pin the point this design picked inside a range the pinned
+spec leaves open (`tasks.md:308`, `tasks.md:340` — every server-side clause on expiry, retention
+and poll-interval handling is a **MAY**, checked against the pinned blob before these rows were
+written). So they are the plan's to test and not the ledger's to judge, they are appended rather
+than slotted next to related rows, and none of them can fail against HEAD — the red tally stays
+at 11.
 
 ## 5. `.12` cannot close on a vacuous pass — read this section first
 
