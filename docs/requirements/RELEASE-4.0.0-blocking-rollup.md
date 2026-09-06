@@ -348,6 +348,18 @@ number, not an implementation detail. Wiring `register` alone would leave handle
 are registered and never fire — indistinguishable from today except that the criterion
 would read as met. That is the worst available outcome and it was correctly not built.
 
+Put to the operator 2026-09-06 with four candidate defaults and their costs; no answer has come
+back. Recorded because an unanswered question and an unasked one look identical in a document a
+week later, and only one of them is a process failure. Until they rule, the row proceeds under a
+stated assumption rather than staying ownerless: **the reaper runs on the gateway's existing
+maintenance tick and the TTL is a config field defaulting to five minutes**, chosen to match the
+SSE reconnect window a client or proxy will attempt, so an ordinary network stall recovers
+instead of losing the call. The assumption is cheap to reverse — it is one default value and one
+call site — and it is named here so that reversing it is an edit rather than a rediscovery. What
+the assumption gives up is recorded with it: thirty seconds would hold less abandoned state under
+churn, and an hour would never lose a long human-in-the-loop elicitation. Neither is wrong; both
+were the operator's to pick.
+
 `MIK-7246.CONFIRM.2` names a confirmation mechanism; what exists is `elicitation/create`
 over SSE, a different mechanism reaching the same outcome. Both readings are consistent
 with everything in the tree, so no amount of reading code settles it. It is also
