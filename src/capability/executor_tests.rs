@@ -966,13 +966,21 @@ async fn redact_url_strips_a_credential_bearing_backend_url() {
 }
 
 /// GH475.RL.10 — the linkage between a capability backend's *real* HTTP 429
-/// and the failure accounting that must exclude it.
+/// and the shared predicate that must exclude it from failure accounting.
 ///
 /// PINNED OBSERVABLE: the circuit state after one dispatch failure. A real
 /// throttled response leaves the circuit closed; a real server error opens it.
 /// The two responses differ **only in the status line** — same body, same
 /// route shape — so the thing being pinned is that the status reaches the
 /// accounting at all, not that some word in the payload happened to.
+///
+/// WHICH ACCOUNTING, precisely: capability dispatch never reaches `Failsafe`.
+/// Its `Err` goes to `BudgetOutcome::of` (`gateway/meta_mcp/invoke.rs:1384`),
+/// whose recorder is private to that module. `Failsafe::record_dispatch_failure`
+/// is the only *public* consumer of the same `is_rate_limited` predicate
+/// (`gateway/recovery.rs:286`), so it is what this test drives. What is pinned
+/// is the classification of a real capability error string by that predicate —
+/// not the capability path's own budget accounting.
 ///
 /// The error text is produced by the production formatter in
 /// `executor/params.rs` (`handle_response`), not composed here: a test that
@@ -990,7 +998,7 @@ async fn redact_url_strips_a_credential_bearing_backend_url() {
 /// `gateway::meta_mcp::invoke`, where `error_budget_tests` pins it against the
 /// same `is_rate_limited` predicate this path uses.
 #[tokio::test]
-async fn a_real_capability_429_is_excluded_from_failure_accounting() {
+async fn a_real_capability_429_is_excluded_by_the_shared_rate_limit_predicate() {
     use crate::config::{CircuitBreakerConfig, FailsafeConfig};
     use crate::failsafe::Failsafe;
     use std::time::Duration;

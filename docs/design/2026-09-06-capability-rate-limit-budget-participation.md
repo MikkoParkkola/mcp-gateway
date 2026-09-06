@@ -60,12 +60,16 @@ nothing*. It is: **the exclusion is delivered, unpinned, and carried by a string
 **G1 — the classification is text-dependent.** Nothing in the executor knows it
 observed a `429`. The status is destroyed into prose at `jsonrpc.rs:204` and
 reconstructed by substring match 2,800 lines away. Three independent formatting
-sites must all keep the status ahead of the body for the exclusion to hold. Any
-of the ordinary edits that would break it looks harmless in review: wrapping the
-error ("upstream request failed: …"), moving the status after the body, replacing
-`{status}` with `{status.as_u16()}` plus a phrase that drops "Too Many Requests"
-(still matches the `429` token — survives), or adding a fourth protocol executor
-that formats its own message. The predicate is also fooled in the other direction
+sites must all keep the status *in* the message for the exclusion to hold.
+Order is not the hazard: `is_rate_limited` lowercases the whole string, matches
+its phrases anywhere in it, and accepts `429` as a standalone token
+(`recovery.rs:286`), so moving the status after the body survives, and so does
+wrapping the error ("upstream request failed: …") or replacing `{status}` with
+`{status.as_u16()}`, which keeps the bare token even when it drops "Too Many
+Requests". What breaks it, and looks harmless in review: dropping the status
+altogether, gluing the digits into a longer token (`HTTP429` lowercases to
+`http429`, which is not the token `429`), or adding a fourth protocol executor
+that formats its own message without a status. The predicate is also fooled in the other direction
 by a body that merely contains the word "throttled".
 
 **G2 — nothing pins it.** No test drives a capability `429` through
@@ -313,14 +317,19 @@ does not depend on it.
    harness — so the two-budget effect was the only half of that observable that
    could have been asserted anyway.
 
-   What landed instead: `a_real_capability_429_is_excluded_from_failure_accounting`
+   What landed instead: `a_real_capability_429_is_excluded_by_the_shared_rate_limit_predicate`
    (`src/capability/executor_tests.rs:993`). It drives a real loopback `429` and
    a real `500` whose bodies are **identical** — the status line is the only
    difference — through the production formatter `handle_response`
    (`capability/executor/params.rs:38`, format site `:51`) and hands each
    resulting `Error::Protocol` message to `Failsafe::record_dispatch_failure`
    (`failsafe/mod.rs:88`), which runs the same `is_rate_limited` predicate
-   (`gateway/recovery.rs:283`) that `BudgetOutcome::of` runs. The observable is
+   (`gateway/recovery.rs:286`) that `BudgetOutcome::of` runs. `Failsafe` is
+   **not on the capability path** — only `backend/ops.rs:271` and `:409` reach
+   it, and capability errors go to `BudgetOutcome::of` instead — it is the only
+   *public* consumer of that predicate, which is why the pin enters there. What
+   the pin therefore establishes is the classification of a real capability
+   error string, not the capability path's own budget bookkeeping. The observable is
    the **effect** — the throttled response leaves the circuit breaker closed,
    the control opens it — never `BudgetOutcome`'s return value. The control is
    what proves the path ran and discriminated.
