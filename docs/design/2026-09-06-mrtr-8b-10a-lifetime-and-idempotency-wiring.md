@@ -111,7 +111,7 @@ exactly this reason — same shape, deliberately.
 **The guarantee is relative to the supplied `now`, and that is the whole contract.** After this
 change the table holds no record whose deadline is at or before the `now` most recently passed in.
 It does *not* hold that the table is free of records expired against the wall clock at the instant
-a caller reads the result: `invoke.rs` captures `now` once at `:545` and reuses it at `:584` and
+a caller reads the result: `invoke.rs` captures `now` once at `:546` and reuses it at `:584` and
 `:613`, so an exchange expiring inside that window survives the reclaim and still routes. That is
 correct — a dispatch decided against a single consistent instant is the property the call path
 wants, and re-reading the clock per call would make one request observe two different presents.
@@ -126,7 +126,7 @@ been holding. With it, that call returns `false`. The return value is an observa
 the reclaim is what makes it honest; the uniform routing is the consequence, not the reason.
 
 Call sites to update: `invoke.rs:584` (`route`), `invoke.rs:613` (`complete`), both of which
-already have `now` in scope from `:545`. Tests in `continuation.rs` and
+already have `now` in scope from `:546`. Tests in `continuation.rs` and
 `tests/mik_7212_mrtr_component_acs.rs`.
 
 `len` deserves its own line, because this change turns a passive counter into a mutating,
