@@ -98,5 +98,5 @@ landed, two of them touching `invoke.rs` and `mod.rs` — files this plan cites 
 individually at the row's head: `invoke.rs:906`, `:954`, `:1214`, `:1787` and `mod.rs:493`,
 `:890` all still name what the plan says they name. `mod.rs:1786` did not survive — the
 `authz_tests` declaration moved to `:1793` inside that window, correct at both review heads and
-stale by the time the row landed. Re-pointed in the commit after this one. That is the whole
+stale by the time the row landed. Re-pointed in `89292be1`, immediately before this record. That is the whole
 contamination check; the head-pair equality is not it.
