@@ -176,7 +176,14 @@ declares `_meta` (`src/gateway/meta_mcp_tool_defs.rs`) and nothing copies `param
 The read is not provably dead, and the claim is deliberately not made: `gateway_invoke`'s
 `arguments` is an open object — `{"type": "object"}` with no `additionalProperties: false`
 (`meta_mcp_tool_defs.rs:143-151`, the `arguments` schema object) — so a client that nests `_meta` *there* is read. That is the
-shape the code serves and the shape no spec sends. The existing test
+shape the code serves, and the normative half is cited rather than asserted: in the `2026-07-28`
+schema `CallToolRequestParams` defines `_meta` (`$ref: RequestMetaObject`) as a member of
+`params` and lists it in `required` alongside `name`, while `arguments` is
+`{"type": "object", "additionalProperties": {}}` carrying no `_meta` member of its own — the
+tool's own `inputSchema` is what shapes it. A spec-conforming client therefore MUST send
+`params._meta` and has no defined place for `_meta` inside `arguments`. (Re-fetched 2026-09-06
+from the URL in §1; `_meta` being *required* at this revision is stronger than the earlier
+draft's optional member, and strengthens the read-site correction rather than weakening it.) The existing test
 (`src/gateway/meta_mcp/trace_correlation_tests.rs:104-130`) passes because its fixture nests
 `_meta` inside the argument object: it exercises the shape the code reads, not the shape a client
 sends, which is why a green suite did not surface this.
