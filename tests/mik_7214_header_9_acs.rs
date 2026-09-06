@@ -161,6 +161,16 @@ async fn spawn_peer(peer: Peer) -> (String, Recorder) {
 /// (`src/backend/lifecycle.rs`), so nothing here can hand the transport an era
 /// the lifecycle would not have given it.
 fn backend_at(url: &str) -> Backend {
+    backend_with(url, &[])
+}
+
+/// The same backend, plus the operator-configured static headers a pinning
+/// case needs.
+///
+/// Split from `backend_at` rather than duplicated: the pinning rows differ
+/// from every other row by one field, and a second copy of the constructor is
+/// a second place for the transport shape to drift.
+fn backend_with(url: &str, statics: &[(&str, &str)]) -> Backend {
     Backend::new(
         "header9-fixture",
         BackendConfig {
@@ -170,6 +180,10 @@ fn backend_at(url: &str) -> Backend {
                 streamable_http: true,
                 protocol_version: None,
             },
+            headers: statics
+                .iter()
+                .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+                .collect(),
             ..BackendConfig::default()
         },
         &FailsafeConfig::default(),
@@ -183,35 +197,111 @@ fn backend_at(url: &str) -> Backend {
 /// handshake are not the request under test, and `initialize` is required to
 /// stay legacy-shaped whatever the era.
 async fn ordinary_request(peer: Peer) -> Wire {
-    let (url, recorder) = spawn_peer(peer).await;
-    let backend = backend_at(&url);
-    backend
-        .request("tools/list", None)
+    Run::of(peer, Path::Request, "tools/list", None, &[], &[])
         .await
-        .expect("the fixture peer answers every method");
-    let seen = recorder.lock().expect("recorder poisoned").clone();
-    // Positive control for the session-header pins. The peer issues
-    // `Mcp-Session-Id` only on `initialize`, so a flow that never handshook
-    // would satisfy "the modern shape carries no session header" for the
-    // boring reason and never traverse the code that strips it. Ordered, not
-    // merely present: the capture is in arrival order, and a handshake landing
-    // after the request under test leaves that request just as sessionless.
-    let request = seen
-        .iter()
-        .position(|wire| wire.method == "tools/list")
-        .expect("the ordinary request must reach the peer");
-    let handshake = seen.iter().position(|wire| wire.method == "initialize");
-    assert!(
-        handshake.is_some_and(|at| at < request),
-        "the fixture must handshake before the request under test, else the \
-         session-header assertions are vacuous; the peer saw {:?}",
-        seen.iter()
+        .under_test("tools/list")
+        .clone()
+}
+
+/// Which outbound path a case drives.
+///
+/// Named rather than a bare `bool`: the two paths assemble their bodies and
+/// merge their headers at different sites (`mod.rs:968` / `:1045`,
+/// `:846-854` / `:1051-1053`), which is the whole reason every shape is
+/// driven twice.
+#[derive(Clone, Copy)]
+enum Path {
+    Request,
+    Notify,
+}
+
+/// One driven call and everything the fixture peer saw while it ran.
+struct Run {
+    seen: Vec<Wire>,
+    outcome: Result<(), String>,
+}
+
+impl Run {
+    /// Drive one call against a fresh peer and capture the wire.
+    async fn of(
+        peer: Peer,
+        path: Path,
+        method: &str,
+        params: Option<Value>,
+        statics: &[(&str, &str)],
+        extra: &[(&str, &str)],
+    ) -> Self {
+        let (url, recorder) = spawn_peer(peer).await;
+        let backend = backend_with(&url, statics);
+        let extra: Vec<(String, String)> = extra
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+            .collect();
+        let outcome = match path {
+            Path::Request => backend
+                .request_with_headers(method, params, &extra, None)
+                .await
+                .map(|_| ()),
+            Path::Notify => backend.notify_with_headers(method, params, None).await,
+        };
+        Self {
+            seen: recorder.lock().expect("recorder poisoned").clone(),
+            outcome: outcome.map_err(|err| err.to_string()),
+        }
+    }
+
+    /// The captured call under test, with the handshake-ordering control.
+    ///
+    /// Positive control for every session-header pin. The peer issues
+    /// `Mcp-Session-Id` only on `initialize`, so a flow that never handshook
+    /// would satisfy "the modern shape carries no session header" for the
+    /// boring reason and never traverse the code that strips it. Ordered, not
+    /// merely present: a handshake landing after the call under test leaves
+    /// that call just as sessionless.
+    fn under_test(&self, method: &str) -> &Wire {
+        let at = self
+            .seen
+            .iter()
+            .position(|wire| wire.method == method)
+            .unwrap_or_else(|| panic!("{method} never reached the peer; saw {}", self.methods()));
+        let handshake = self
+            .seen
+            .iter()
+            .position(|wire| wire.method == "initialize");
+        assert!(
+            handshake.is_some_and(|hs| hs < at),
+            "the fixture must handshake before the call under test, else the \
+             session-header assertions are vacuous; the peer saw {}",
+            self.methods()
+        );
+        &self.seen[at]
+    }
+
+    /// Assert the call failed locally and the peer never saw it.
+    ///
+    /// Both halves, deliberately: an implementation that sends first and
+    /// errors after satisfies an `Err`-only assertion while having already put
+    /// a malformed body on the wire.
+    fn failed_before_sending(&self, method: &str) {
+        assert!(
+            self.outcome.is_err(),
+            "a body this design rejects must fail the call locally, not be sent"
+        );
+        assert!(
+            !self.seen.iter().any(|wire| wire.method == method),
+            "the rejected call must never reach the peer; it saw {}",
+            self.methods()
+        );
+    }
+
+    /// What the peer saw, for a failure message that names the flow.
+    fn methods(&self) -> String {
+        self.seen
+            .iter()
             .map(|wire| wire.method.as_str())
             .collect::<Vec<_>>()
-    );
-    seen.into_iter()
-        .nth(request)
-        .expect("an index just taken from the same capture")
+            .join(", ")
+    }
 }
 
 /// Read one header as a string, or say which one was missing.
@@ -462,4 +552,306 @@ async fn a_reinitialize_keeps_the_initialized_notification_legacy_shaped() {
         "s1",
         "the legacy handshake keeps the session the peer issued"
     );
+}
+
+/// The three methods that must mirror a body field onto `Mcp-Name`, the field
+/// each one mirrors, and a sentinel value the builder could not invent.
+///
+/// Distinct sentinels per method, deliberately: a presence assertion passes
+/// against a header carrying any string, including one read from the wrong
+/// field. An implementation that reads `params.name` for `resources/read`
+/// sends the wrong sentinel and fails on the comparison rather than on
+/// absence. The field per method is the production selector's own
+/// (`mcp_name_body_field`, `src/protocol/headers.rs:63`), transcribed here so
+/// the case disagrees with a selector that changes.
+const NAMED_METHODS: &[(&str, &str, &str)] = &[
+    ("tools/call", "name", "sentinel-tool-alpha"),
+    ("prompts/get", "name", "sentinel-prompt-beta"),
+    ("resources/read", "uri", "file:///sentinel-resource-gamma"),
+];
+
+/// Every path a shaped case is driven over.
+const BOTH_PATHS: &[(Path, &str)] = &[(Path::Request, "request"), (Path::Notify, "notify")];
+
+/// MIK-7214.HEADER.9a — a modern call names its own method.
+#[tokio::test]
+async fn a_modern_call_carries_its_method_on_both_paths() {
+    for (path, label) in BOTH_PATHS {
+        let run = Run::of(Peer::Modern, *path, "tools/list", None, &[], &[]).await;
+        assert_eq!(
+            header(run.under_test("tools/list"), "Mcp-Method"),
+            "tools/list",
+            "the {label} path must name the method it is carrying"
+        );
+    }
+}
+
+/// MIK-7214.HEADER.9a — `Mcp-Name` mirrors the body field the method selects.
+#[tokio::test]
+async fn a_modern_named_call_mirrors_the_body_field_its_method_selects() {
+    for (method, field, sentinel) in NAMED_METHODS {
+        for (path, label) in BOTH_PATHS {
+            let params = Some(json!({ *field: sentinel }));
+            let run = Run::of(Peer::Modern, *path, method, params, &[], &[]).await;
+            let wire = run.under_test(method);
+            assert_eq!(
+                header(wire, "Mcp-Name"),
+                *sentinel,
+                "on the {label} path {method} must mirror `params.{field}`, not \
+                 whichever field happens to be present"
+            );
+        }
+    }
+}
+
+/// MIK-7214.HEADER.9a — a method with no name source carries no `Mcp-Name`.
+///
+/// The negative half of the table. Without it, an implementation that emits
+/// `Mcp-Name` unconditionally — reading any string it can find — passes every
+/// row above.
+#[tokio::test]
+async fn a_modern_call_to_an_unnamed_method_carries_no_name_header() {
+    for (path, label) in BOTH_PATHS {
+        let params = Some(json!({ "name": "a decoy the method does not address" }));
+        let run = Run::of(Peer::Modern, *path, "tools/list", params, &[], &[]).await;
+        assert!(
+            run.under_test("tools/list")
+                .headers
+                .get("Mcp-Name")
+                .is_none(),
+            "`tools/list` addresses no tool, prompt or resource, so the {label} \
+             path must send no name — not the decoy beside it"
+        );
+    }
+}
+
+/// MIK-7214.HEADER.9a — a named method whose name source is missing or not a
+/// string fails locally, before anything is sent.
+#[tokio::test]
+async fn a_modern_named_call_with_no_usable_name_source_fails_before_sending() {
+    let bad: &[Value] = &[json!({}), json!({ "name": 7 }), json!({ "name": null })];
+    for (method, _, _) in NAMED_METHODS {
+        for params in bad {
+            for (path, _) in BOTH_PATHS {
+                let run =
+                    Run::of(Peer::Modern, *path, method, Some(params.clone()), &[], &[]).await;
+                run.failed_before_sending(method);
+            }
+        }
+    }
+}
+
+/// Read `params._meta` off a captured call, or say what the body held instead.
+fn meta_of(wire: &Wire) -> &Value {
+    wire.body
+        .get("params")
+        .and_then(|params| params.get("_meta"))
+        .unwrap_or_else(|| panic!("no `params._meta` in {}", wire.body))
+}
+
+/// MIK-7214.HEADER.9a — a modern call with no params still declares.
+///
+/// A builder that skips declaration when there is nothing to merge into sends
+/// no `params` at all, and this fails on the object's absence.
+#[tokio::test]
+async fn a_modern_call_without_params_still_declares_the_envelope() {
+    for (path, label) in BOTH_PATHS {
+        let run = Run::of(Peer::Modern, *path, "tools/list", None, &[], &[]).await;
+        let meta = meta_of(run.under_test("tools/list"));
+        let keys: Vec<&str> = meta
+            .as_object()
+            .unwrap_or_else(|| panic!("`_meta` must be an object on the {label} path"))
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            vec![KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION],
+            "the {label} path must declare exactly the two required keys, and \
+             `clientInfo` is not one of them"
+        );
+    }
+}
+
+/// MIK-7214.HEADER.9a — the caller's own params survive the merge.
+#[tokio::test]
+async fn a_modern_call_keeps_the_callers_params_beside_the_envelope() {
+    for (path, label) in BOTH_PATHS {
+        let params = Some(json!({ "cursor": "caller-cursor-delta", "limit": 17 }));
+        let run = Run::of(Peer::Modern, *path, "tools/list", params, &[], &[]).await;
+        let body = &run.under_test("tools/list").body;
+        let sent = body
+            .get("params")
+            .unwrap_or_else(|| panic!("no params in {body}"));
+        assert_eq!(
+            sent.get("cursor").and_then(Value::as_str),
+            Some("caller-cursor-delta"),
+            "the {label} path must merge into the caller's params, not replace them"
+        );
+        assert_eq!(sent.get("limit").and_then(Value::as_i64), Some(17));
+    }
+}
+
+/// MIK-7214.HEADER.9a — a caller's own `_meta` keys survive; this design's own
+/// two are overwritten.
+///
+/// The fixture pre-sets both a foreign key and one of the two design keys to a
+/// wrong value: a wholesale replace loses the first, a merge that skips keys
+/// already present keeps the second.
+#[tokio::test]
+async fn a_modern_call_merges_into_an_existing_meta_without_losing_foreign_keys() {
+    for (path, label) in BOTH_PATHS {
+        let params = Some(json!({
+            "_meta": {
+                "io.example/trace": "foreign-trace-epsilon",
+                KEY_CLIENT_INFO: { "name": "a caller's own, neither inserted nor stripped" },
+                KEY_PROTOCOL_VERSION: "1999-01-01",
+            }
+        }));
+        let run = Run::of(Peer::Modern, *path, "tools/list", params, &[], &[]).await;
+        let meta = meta_of(run.under_test("tools/list"));
+        assert_eq!(
+            meta.get("io.example/trace").and_then(Value::as_str),
+            Some("foreign-trace-epsilon"),
+            "the {label} path must not drop a caller's foreign `_meta` key"
+        );
+        assert!(
+            meta.get(KEY_CLIENT_INFO).is_some(),
+            "a caller's own clientInfo is neither inserted nor stripped by this design"
+        );
+        assert_eq!(
+            meta.get(KEY_PROTOCOL_VERSION).and_then(Value::as_str),
+            Some(MODERN_VERSIONS[0]),
+            "this design owns the protocol-version key and must overwrite a \
+             caller's stale value on the {label} path"
+        );
+    }
+}
+
+/// MIK-7214.HEADER.9a — a non-object `params` fails locally, before any send.
+#[tokio::test]
+async fn a_modern_call_with_non_object_params_fails_before_sending() {
+    let bad: &[Value] = &[json!(null), json!("a string"), json!(7), json!([1, 2])];
+    for params in bad {
+        for (path, _) in BOTH_PATHS {
+            let run = Run::of(
+                Peer::Modern,
+                *path,
+                "tools/list",
+                Some(params.clone()),
+                &[],
+                &[],
+            )
+            .await;
+            run.failed_before_sending("tools/list");
+        }
+    }
+}
+
+/// MIK-7214.HEADER.9a — a `_meta` that is not an object fails locally.
+///
+/// An implementation that overwrites destroys caller data and passes a happy
+/// path; one that forwards unchanged emits no `clientCapabilities` and is
+/// rejected `-32602` by a real modern peer, which no local assertion catches.
+#[tokio::test]
+async fn a_modern_call_with_a_non_object_meta_fails_before_sending() {
+    let bad: &[Value] = &[json!(null), json!("a string"), json!(7), json!([1, 2])];
+    for meta in bad {
+        for (path, _) in BOTH_PATHS {
+            let params = Some(json!({ "_meta": meta.clone() }));
+            let run = Run::of(Peer::Modern, *path, "tools/list", params, &[], &[]).await;
+            run.failed_before_sending("tools/list");
+        }
+    }
+}
+
+/// The three headers this design owns, and a custom value for each that the
+/// builder could never produce.
+///
+/// Values chosen so a pin that leaks reads as an operator's, not as a plausible
+/// gateway output: `1999-01-01` is not a revision, and neither name is a method.
+const PINNED: &[(&str, &str)] = &[
+    ("MCP-Protocol-Version", "1999-01-01"),
+    ("Mcp-Method", "operator/override"),
+    ("Mcp-Name", "operator-supplied-name"),
+];
+
+/// MIK-7214.HEADER.9b — this design's values survive operator configuration,
+/// at both merge sites and on both paths.
+///
+/// On `Request` finalisation must run after the per-request `extra_headers`
+/// merge (`mod.rs:846-854`), so an implementation inside `build_mcp_headers`
+/// passes the static half and fails the per-request half. On `Notify` there is
+/// no per-request merge at all (`mod.rs:1051-1053`), so an implementation that
+/// finalises only in `send_request_with_headers` sends the operator's values
+/// and fails every notify assertion.
+#[tokio::test]
+async fn this_designs_headers_outrank_operator_configuration_at_both_merge_sites() {
+    let expected: &[(&str, &str)] = &[
+        ("MCP-Protocol-Version", MODERN_VERSIONS[0]),
+        ("Mcp-Method", "tools/call"),
+        ("Mcp-Name", "sentinel-tool-alpha"),
+    ];
+    for (path, label) in BOTH_PATHS {
+        // Static configuration on both paths; the per-request merge exists on
+        // `Request` only, so the notify row drives statics alone.
+        let extra: &[(&str, &str)] = match path {
+            Path::Request => PINNED,
+            Path::Notify => &[],
+        };
+        let params = Some(json!({ "name": "sentinel-tool-alpha" }));
+        let run = Run::of(Peer::Modern, *path, "tools/call", params, PINNED, extra).await;
+        let wire = run.under_test("tools/call");
+        for (name, value) in expected {
+            assert_eq!(
+                header(wire, name),
+                *value,
+                "on the {label} path {name} must come from this design, not from \
+                 the operator's configuration"
+            );
+        }
+    }
+}
+
+/// MIK-7215.STATELESS.3a — a modern call sends no session header, neither the
+/// minted one nor an operator's.
+///
+/// The prohibition is on emission, not on minting: a fixture with an empty
+/// session map passes an absence assertion without the removal existing, which
+/// is why the peer mints one on `initialize` and `under_test` proves the
+/// handshake ran first. The custom static value is the second half — an
+/// implementation that only skips the mint still forwards the operator's.
+#[tokio::test]
+async fn a_modern_call_sends_neither_the_minted_nor_the_configured_session() {
+    let configured: &[(&str, &str)] = &[("MCP-Session-Id", "operator-session-zeta")];
+    for (path, label) in BOTH_PATHS {
+        let run = Run::of(Peer::Modern, *path, "tools/list", None, configured, &[]).await;
+        assert!(
+            run.under_test("tools/list")
+                .headers
+                .get("Mcp-Session-Id")
+                .is_none(),
+            "the {label} path must carry no session header on a modern peer; saw {:?} across {}",
+            run.under_test("tools/list").headers,
+            run.methods()
+        );
+    }
+}
+
+/// MIK-7215.STATELESS.3a — the legacy rows still carry the minted session.
+///
+/// The counterweight. Without it, an implementation that strips the session
+/// header unconditionally passes the case above and silently breaks every
+/// legacy backend.
+#[tokio::test]
+async fn a_legacy_call_still_carries_the_minted_session() {
+    for (path, label) in BOTH_PATHS {
+        let run = Run::of(Peer::Legacy, *path, "tools/list", None, &[], &[]).await;
+        assert_eq!(
+            header(run.under_test("tools/list"), "Mcp-Session-Id"),
+            "s1",
+            "a legacy peer's {label} path is byte-for-byte what it was, session \
+             header included"
+        );
+    }
 }
