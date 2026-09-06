@@ -3,8 +3,9 @@
 
 # NFR.PERF.4 — holding the Meta-MCP surface inside 14..=16
 
-Status: **revision 2**, awaiting dual review. Revision 1's selected option is
-WITHDRAWN — see §0. No code written.
+Status: **revision 3**, reviewed. Verdict DO-NOT-SHIP; see §9. Revision 1's
+selected option is WITHDRAWN — see §0. The acceptance criterion is unsatisfiable
+as worded and the change is blocked on two operator rulings. No code written.
 
 ## 0. What revision 1 got wrong
 
@@ -215,3 +216,82 @@ error was trusting a builder-level count that the served path contradicts —
 `tests/public_claims_validation.rs:103` duplicates that arithmetic and is the
 line that let a 13 through. NFR.PERF.4.5 answers the review's improvement note:
 a count can satisfy the band while the surface costs more context.
+
+## 9. Revision 3 review: the criterion is unsatisfiable as worded
+
+Dual review of revision 3 returned DO-NOT-SHIP. Three HIGH findings converge on
+one claim, and the sharpest of them is now **resolved by check rather than left
+open**: the acceptance criterion cannot be made true by any change inside this
+scope, or indeed inside the meta-tool builder at all.
+
+### 9.1 The served count is not bounded by the builder
+
+`handle_tools_list_for_session` (`src/gateway/meta_mcp/mod.rs:1313-1345`)
+appends two further populations to the descriptor list *after* the builder has
+run:
+
+```rust
+// Append surfaced tools (skip in Code Mode - it uses a fixed 2-tool schema).
+for surfaced in &self.surfaced_tools { ... tool_descriptors.push(...) }
+// Append session-promoted tools (spec-preview only).
+let promoted = self.promoted_tools_for_session(session_id);
+```
+
+Served count is therefore `builder + |surfaced_tools| + |session_promoted|`.
+`surfaced_tools` is operator configuration; promoted tools are capped per
+session at the constant declared at `:80`. Both are unbounded with respect to
+the builder arithmetic every revision of this design has reasoned about.
+
+Consequence, stated plainly: **a gateway with one surfaced tool configured
+serves 17 and violates NFR.PERF.4 today**, before any change here, and removing
+`gateway_webhook_status` does not alter that by one tool. Option (e) fixes the
+builder ceiling and leaves the criterion false.
+
+This is Q4's "if it resolves badly" branch, arrived at by reading the code
+rather than by waiting for the ruling. The ruling is still required — but it is
+now a decision about **what the criterion should say**, not about which surfaces
+it happens to cover.
+
+### 9.2 Findings, and what each one is worth
+
+| # | finding | verified | disposition |
+|---|---|---|---|
+| 1 | deleting the `with_webhook_status` row forces a README prose edit the frozen scope puts OUT | **confirmed** — `README.md:264` reads "14 tools minimum, 16 in the README benchmark scenario, 17 when webhook status is surfaced" | scope must move; §P0 receipt update, not a silent widening |
+| 2 | Q4 omits surfaced, promoted and query-filtered populations | **confirmed, and stronger than reported** — §9.1 | criterion is unsatisfiable as worded |
+| 3 | removing a callable name is breaking regardless of in-repo callers | accepted on reasoning — §6.1 established the name is unreferenced in-tree, which is not the same claim | DoR C5 approval required in **every** Q5 outcome, not only "no replacement" |
+| 4 | the retired name survives in suggestion and collision rosters | **not confirmed** — the five files naming it are the definition, dispatch, server registration, surfaced-tool and module paths; no suggestion or collision roster was found | downgraded to a lead; re-check during implementation, not a blocker |
+| 5 | assumptions carry impact and uncertainty but no combined rank (G10/G11) | confirmed by inspection of §7 | fixed below |
+
+Finding 4 is recorded as refuted-at-source rather than repaired. A finding that
+dies on inspection closes; it does not earn a round.
+
+### 9.3 Assumption rank (G10), and the cheapest falsifier first (G11)
+
+| rank | assumption | impact | uncertainty | cheapest falsifier | state |
+|---|---|---|---|---|---|
+| 1 | the served surface is bounded by the meta-tool builder | **critical** — the whole design reasons on it | was low, wrongly | read `handle_tools_list_for_session` end to end | **falsified**, §9.1 |
+| 2 | webhook status has another observable path, or none is required | high | high | operator ruling, Q5 | open |
+| 3 | tool count is an adequate proxy for context cost | medium | medium | NFR.PERF.4.5 | deferred to implementation |
+
+Rank 1 was the cheapest check available and the most load-bearing assumption in
+the document, and three revisions were written without running it. That is the
+G11 failure this table now records rather than hides.
+
+### 9.4 State
+
+**NFR.PERF.4 is blocked on the operator, and the block is now larger than the
+change.** Two rulings are required, and the first has changed shape:
+
+1. What does the criterion count? It cannot mean "every served list" — that is
+   operator-configurable and unbounded. The candidates are: the built-in
+   meta-tool enumeration only; or the enumeration plus a bound on surfaced
+   tools; or the criterion is rewritten. This is a criterion edit, so §P0's
+   scope freeze reopens by way of a receipt update, not by inference here.
+2. Where does webhook status become observable once the tool goes — folded into
+   `gateway_get_stats`, a CLI subcommand, or removed with no replacement? Under
+   finding 3 all three are breaking and need recorded C5 approval.
+
+No revision 4 is written against the current wording. Iterating a design whose
+acceptance criterion is known false is the loop the repair protocol's step zero
+exists to stop: this finding did not undermine how the mechanism works, it
+undermined what the mechanism was for.
