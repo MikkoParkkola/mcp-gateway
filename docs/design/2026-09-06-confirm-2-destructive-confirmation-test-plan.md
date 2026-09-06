@@ -27,8 +27,8 @@ states the call site it observes; a case that exercises `enforce` satisfies none
 | `MIK-7246.CONFIRM.1a` | modern caller that declared **no** input capabilities is still refused, `-32001`, message still containing `none could be obtained` (see the string collision below) | integration | negative | either |
 | `MIK-7246.CONFIRM.1b` | legacy path still warns and proceeds; Option I changed the modern branch and must not have moved this one | integration | regression | either |
 | `MIK-7212.MRTR.9` / `.9a` | **at the gate**: with `caller.input_capabilities` absent the gate refuses rather than asking; with the mode declared it asks, in the declared mode. Two cases, one per direction — the refusing half alone cannot distinguish "checks the declaration" from "never asks anyone" | unit + integration | negative | Option I (item 5) |
-| `MIK-7212.MRTR.8a` / `.8b` | **at the gate**: a client that mints a confirmation continuation and never retries. Bound observed as a **count of live continuations** under an injectable clock, not a sleep | unit | resource | Option I (item 6) |
-| `MIK-7212.MRTR.10a` / `.10b` | **at the gate**: duplicate delivery of a call whose confirmation was redeemed and whose kill succeeded returns the **recorded result**. This is the floor's `retry_after_redeemed_confirmation_returns_recorded_result` | integration | idempotency | Option I (item 7) |
+| `MIK-7212.MRTR.8a` / `.8b` (also `MIK-7212.MRTR.5b`) | **at the gate**: a client that mints a confirmation continuation and never retries. Bound observed as a **count of live continuations** under an injectable clock, not a sleep. `5b` (expiry) is what makes that count fall, on the same clock — the bound and the expiry are one case read in two directions, not two cases | unit | resource | Option I (item 6) |
+| `MIK-7212.MRTR.10a` / `.10b` (also `MIK-7212.MRTR.5a`) | **at the gate**: duplicate delivery of a call whose confirmation was redeemed and whose kill succeeded returns the **recorded result**. This is the floor's `retry_after_redeemed_confirmation_returns_recorded_result`. **Two cases that must not be collapsed**, and the design's own reading of `enforce` is why: on the **same** idempotency key `enforce` returns `CachedResult` (`src/idempotency.rs:568,582`) *before redemption is attempted*, so that case proves idempotency and says nothing about single-use. `5a` therefore needs the second case — the **same continuation under a fresh idempotency key**, which reaches redemption and must be refused by `ConsumedLedger::consume` (`continuation.rs:595-611`) | integration | idempotency + negative | Option I (item 7) |
 | item 4 — gate precedence | a valid retry is redeemed **before** gate re-entry: assert the gate was **not entered** (refusal absent, gate counter unmoved), not merely that the retry succeeded | integration | ordering | Option I (item 4) |
 | item 3 — typed origin | a gateway-authored continuation is **not** routed as a backend by `retry_origin_backend` (`invoke.rs:497-513`) | unit | correctness | Option I (item 3) |
 | `MIK-7212.MRTR.3a` / `.3b`, `.4a` / `.4b` | **at the gate**: a continuation minted for one caller confirming one kill, presented (i) by a different principal and (ii) against a different server, is refused at redemption. The design's own S and T rows say this binding is inherited from `redeemable_by` (`continuation.rs:202-224`, live at `invoke.rs:556-570`) and that what Option I owes is **that the gate sits on that path rather than beside it** — an obligation the design names in prose and no row carried. Two negative cases; the valid retry in the CONFIRM.2 row cannot tell "verifies the binding" from "verifies nothing" | integration | negative | Option I (items 1-2) |
@@ -36,8 +36,11 @@ states the call site it observes; a case that exercises `enforce` satisfies none
 | U2 record | a record is emitted for a **refused** kill — **CONDITIONAL, and U2 is open.** U2's bad-resolution field accepts "4.0.0 needs no record" as a recorded residual, so this row exists only if the ruling owes a record. Listed rather than dropped so its absence is visible | integration | audit | either, conditional |
 
 Items 1 and 2 (emit-side constructor/serializer; mint-and-redeem reachable from the gate) get **no
-row of their own, and that is the answer, not an omission**: they are mechanism serving CONFIRM.2,
-and the CONFIRM.2 system case fails if either is wrong. Seven design items are not seven criteria.
+row for their happy path, and that is the answer, not an omission**: there they are mechanism
+serving CONFIRM.2, and the CONFIRM.2 system case fails if either is wrong. Their **binding**
+obligation is a separate matter and does carry a row — the MRTR.3a/3b + 4a/4b row above — because
+a redemption that verifies nothing walks the happy path green. Seven design items are not seven
+criteria.
 
 **`MIK-7212.MRTR.7a` / `.7b` get no row, and the reason is the design's own scope line.** They
 are the *other* direction — a modern **backend** returning `InputRequiredResult` to a legacy
@@ -89,25 +92,33 @@ rg -o 'MIK-7212\.MRTR\.[0-9]+[a-z]?|MIK-7246\.CONFIRM\.[0-9]+[a-z]?' \
 this check enumerated the *design* instead. A design yields only the IDs it happens to discuss, so
 it can no more show an unmentioned criterion than the table can — the same defect one level up
 again. That run found `MRTR.7a/7b` and `CONFIRM.3`, both dispositioned above. Re-run against the
-register — 26 IDs — it found what the design mentions nowhere as a criterion: the **redemption
+register — 26 IDs, 25 of them criteria — it found what the design mentions nowhere as a criterion: the **redemption
 bindings**, `MRTR.3a/3b` and `4a/4b`, which the design's own STRIDE S and T rows say Option I owes
 at the gate, and which no row carried. That row exists now. A method whose second run finds more
 than its first is the argument for publishing the method rather than the count.
 
-The remaining ten register IDs are all `MRTR`, and get a clause each rather than ten rows:
-`1a`/`1b` (the retry must carry `inputResponses` / `requestState`) are proved by the CONFIRM.2
-row and are named on it; `5a` (single-use) is the 10a/10b row seen from the other side — a
-redeemed continuation that mints a second kill fails that case; `5b` (expiry) is what makes item
-6's count fall, under the same injectable clock; `2a`/`2b` are vacuous under Option I, which
-authors the question rather than relaying a backend's, so there is no backend `requestState` to
-forward or to wrap; `5c`/`5d`, `6` and `7` are multi-replica and bridge criteria the design lists
-under what it does not touch.
+**The register carries 25 criterion rows** (lines 167-187, 196-199). The twenty-sixth ID the
+command returns, bare `MIK-7212.MRTR.7`, is **not one**: it occurs at line 340 only, inside
+`ASM.3`'s prose, as shorthand for the 7a/7b pair — which are the actual rows, at 180-181, and are
+dispositioned in their own paragraph above. Dispositioning the bare ID as a criterion would be
+dispositioning a dangling forward reference as though its text had been read. It is also the last
+residue of the defect this check was rewritten to catch, which is why it is named here rather
+than quietly counted.
+
+**Eighteen of the 25 are carried on rows and named in their AC cells.** The remaining seven get a
+clause each rather than seven rows: `2a`/`2b` are vacuous under Option I, which authors the
+question rather than relaying a backend's, so there is no backend `requestState` to forward or to
+wrap; `5c`/`5d` and `6` are multi-replica criteria the design lists under what it does not touch;
+`7a`/`7b` have the paragraph above.
 
 Standing: eleven rows. **Eight carry a criterion ID** (CONFIRM.2, 1a, 1b, 3; MRTR.9/9a, 8a/8b,
-10a/10b, 3a/3b+4a/4b). **Three are not criteria** and say so — items 4 and 3 are design items
-whose failure is invisible in the CONFIRM.2 case, and the U2 row carries its condition. Items 1-2
-carry their stated reason. MRTR.7a/7b carry theirs. Ten more carry a clause above. No cell is
-empty and unexplained.
+10a/10b, 3a/3b+4a/4b) — eighteen IDs between them, because three of those rows carry a second
+criterion in their AC cell: 1a/1b on the CONFIRM.2 row, 5a on 10a/10b, 5b on 8a/8b. **Three are
+not criteria** and say so — items 4 and 3 are design items whose failure is invisible in the
+CONFIRM.2 case, and the U2 row carries its condition. Items 1-2 carry their stated reason for the
+happy path and the 3a/3b+4a/4b row for the binding. Five more criteria carry a clause above,
+MRTR.7a/7b carry their paragraph, and bare MRTR.7 is not a criterion. No cell is empty and
+unexplained.
 
 **Q2 — can each named case actually FAIL?** Two rows could not, as first drafted, and are written
 above in the form that can:
@@ -120,7 +131,8 @@ above in the form that can:
 
 Item 7's falsifier is free: the design states the wrong behaviour outright (gate-first → the
 second delivery is refused), so the case asserts the **recorded result comes back**, not merely
-that no error occurred. No case above stages its own assertion true; no fixture replaces the
+that no error occurred. Its 5a sibling can fail for the reason the design supplies: a gate that
+redeems without burning passes the same-key case and fails the fresh-key one. No case above stages its own assertion true; no fixture replaces the
 production code it observes.
 
 One row is green before a line of Option I exists, and that is not a Q2 failure. `CONFIRM.3` pins
