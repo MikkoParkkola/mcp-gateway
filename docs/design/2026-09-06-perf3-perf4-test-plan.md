@@ -20,7 +20,7 @@ constant itself, about `NFR.PERF.1`, or about the meta-tool surface.
 
 | # | criterion clause | the case that proves it | level | type | can it fail today, and on what |
 |---|---|---|---|---|---|
-| 1 | memory MUST NOT grow unboundedly with abandoned continuations — the bound holds | fill to `IN_FLIGHT_CAPACITY` (4 096) with live, unexpired holds, then `hold` once more; the refusal is `None` and occupancy stays at 4 096 | unit, `src/protocol/continuation.rs` tests | boundary | **No — and it is stated as already met.** `hold`'s capacity branch is built (`:696-717`). The row exists so the clause has a case, not because it is expected to go red; its value is regression, and the falsifier probe below is what earns it |
+| 1 | memory MUST NOT grow unboundedly with abandoned continuations — the bound holds | **no new case: `ac_mrtr_8_the_table_is_bounded`, `tests/mik_7212_acs.rs:491`, already is it** — fill to the injected capacity with live, unexpired holds, then `hold` once more and get `None` | unit, existing | boundary | **No — already met, and already covered.** `hold`'s capacity branch is built (`:696-717`) and a committed case asserts the refusal. This row's whole content is the citation plus the falsifier probe below, which is what turns an existing green test into evidence for *this* clause |
 | 2 | …and a soak with abandonment MUST show reclamation | abandon exactly `IN_FLIGHT_CAPACITY` (4 096) exchanges against a **driven clock** and never attempt a 4 097th, so the capacity branch is never entered; advance `now` past the deadline; `len(now)` is 0 | unit, same module | lifetime / state | **Yes — but not today, and not on the assertion.** `InFlight::len` is `len(&self)` today (`continuation.rs:756`): no clock. `len(now)` therefore does not *compile* until Design A lands, and a compile error is not evidence about reclamation. The assertion-level red is earned by a falsifier probe run *after* `guard(now)` lands: delete the reclaim call from `guard`, and the row goes red on the occupancy assertion — 4 096 entries retained past their deadline, because reclamation otherwise runs only inside the capacity branch and this fixture never enters it. Restore, re-run, and the pass is what proves the restore |
 
 ## Why no wall-clock soak
@@ -37,16 +37,18 @@ today's. Either way: no sleeping and no timing tolerance.
 
 Every row states above what makes it fail. The risks specific to this plan:
 
-- **Row 1 asserts a property that is already true.** That is an honest weakness, not a hidden one:
-  written after the mechanism, it inherits none of the free failure, so it needs the retrofitting
-  falsifier probe from the process. The probe is a **mutation, not a revert.** An earlier draft
+- **Row 1 writes no test at all, because one exists.** Specifying a second fill-to-capacity case
+  would have been a second copy of a bound that already has one (`tests/mik_7212_acs.rs:491`), and
+  two cases asserting one property drift. What row 1 owes the clause is therefore the citation and
+  the falsifier probe — the existing case is green, written after the mechanism, so it inherits none
+  of the free failure and is not yet evidence for anything. The probe is a **mutation, not a revert.** An earlier draft
   named "restore the pre-`ec11dcec` body of the capacity branch", and that probe cannot go red:
   `ec11dcec` added the reclaim call and deleted `reap`, but the `held.len() >= self.capacity ->
   None` refusal predates it, and this row's fixture holds nothing expired, so the reclaim is a
   no-op against it and the restored body refuses identically. A probe that passes both ways is a
-  ceremony. Delete the refusal itself instead — the two lines that return `None` — and the case
-  goes red on the occupancy assertion (4 097 held, `Some` returned), which is the assertion the
-  row exists for. Restore, re-run, and the pass is what proves the restore, never `git status`.
+  ceremony. Delete the refusal itself instead — the two lines that return `None` — and
+  `ac_mrtr_8_the_table_is_bounded` goes red on its own assertion (`Some` returned at capacity),
+  which is the assertion the clause needs. Restore, re-run, and the pass is what proves the restore, never `git status`.
 - **Row 2 must not reclaim through the path that already works.** Two ways it could: calling
   `complete` on the abandoned exchanges, or reaching capacity before asserting. The second is the
   subtle one — `hold` reclaims on a refused attempt, so a fill that overshoots the ceiling drains
