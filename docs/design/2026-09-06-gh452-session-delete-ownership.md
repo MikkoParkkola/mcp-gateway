@@ -37,9 +37,16 @@ Formatting, actionlint and diff checks pass. The original failed Clippy run is
 preserved. Prior runtime reviews, critical coverage, mutation and independent
 acceptance evidence remain valid for the unchanged runtime patch.
 
-CI on the eventual PR revision, integration and release closure remain pending.
-The integration base's two ORDER.2 failures are a separate prerequisite; they
-must be resolved before this increment can pass the complete CI suite.
+This increment is committed and pushed at
+`55560ef5e7c7d1491b35b42255e41d4c00aa9127` as draft
+[PR #484](https://github.com/MikkoParkkola/mcp-gateway/pull/484).
+Its [CI run](https://github.com/MikkoParkkola/mcp-gateway/actions/runs/34064175041)
+passes 17 jobs, including Clippy and dependency audit. The Tests job fails the
+same two ORDER.2 assertions reproduced on the unchanged integration base:
+4052 library tests pass, two fail and four are ignored. Resolve that prerequisite
+before claiming passing CI. Delivery-delta review requires the two evidence
+corrections and finder confirmation; integration and release closure also remain
+pending. Runtime approvals are retained for the unchanged runtime files.
 
 **FOR:** closing the 4.0 release gap where a caller who knows another caller's
 legacy session ID can terminate that session through `DELETE /mcp`.
@@ -446,7 +453,10 @@ stream artifacts, and `cleanup-verification.json`. The concise final result is
 `gh452-independent-driver-r2/result.md`. Remote originals remain at
 `/home/mikko/codex/mcp-gateway-v4-gh452-functional/driver/20260906T145616Z-independent-r2`.
 
-Full Clippy, dependency/security scanning, integrated CI and deployment acceptance
-remain release gates owned by the delivery coordinator. This local implementation
-is uncommitted and has not been published or deployed; passing this increment's
-focused gates does not establish release completion.
+The isolated increment is committed and pushed as draft PR #484 at the revision
+recorded above. All-feature/all-target Clippy with warnings denied passes, and
+that revision's CI dependency audit and secret checks pass. The remaining gates
+are delivery-evidence finder confirmation, passing CI after the ORDER.2
+prerequisite, integration, full release acceptance and issue closure. This PR
+has not been merged, deployed or published as a release; focused acceptance
+does not establish release completion.

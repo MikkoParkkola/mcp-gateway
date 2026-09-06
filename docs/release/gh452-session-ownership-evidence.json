@@ -92,8 +92,17 @@
     "scope_limit": "One observed concurrency schedule; atomicity is supported separately by the reviewed single write guard."
   },
   "remaining_gates": [
-    "Mechanical delivery delta review",
+    "Delivery-evidence corrections and GPT finder confirmation",
     "CI on final PR revision; existing ORDER.2 failures are a separate prerequisite",
     "Integration, full release acceptance and issue closure"
-  ]
+  ],
+  "test_fixture_revision": {
+    "reviewed_sha256": "1ba5a3287fe6e96da61361b487925e8f22acfed0d89e1d621e4fd23d8c3c8e0c",
+    "current_sha256": "1027fb68293a934787ae28b36297484f20c17b20c40aebbde439d4e42e78f1ab",
+    "byte_identical_to_original_review": false,
+    "delta": "Direct initialization of unchanged Config.auth fixture; assertions and configured values unchanged. Covered by delivery-delta review, not byte identity.",
+    "review_run_id": "mcp-v4-gh452-delivery-delta-20260907-r1",
+    "gpt": "SHIP-WITH-FIXES: two evidence/documentation corrections; finder confirmation pending",
+    "grok": "SHIP"
+  }
 }
