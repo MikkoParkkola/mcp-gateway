@@ -32,6 +32,8 @@ use tower::ServiceExt;
 
 use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targets_for_call};
 
+mod order2_fsm;
+
 fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Arc<AppState> {
     test_router_app_state_with(streaming_config, crate::config::Config::default())
 }

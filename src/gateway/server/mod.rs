@@ -53,6 +53,9 @@ use warmstart::{WarmStartMode, build_warm_start_list, spawn_warm_start_task};
 use support::build_persisted_costs;
 use support::{log_startup_banner, serve_tls, shutdown_signal};
 
+/// State owner for the single client on a long-lived stdio connection.
+const STDIO_SESSION_ID: &str = "stdio-session";
+
 fn expand_home_path(path: &str) -> PathBuf {
     if path == "~" {
         return dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -1601,7 +1604,7 @@ impl Gateway {
         let mut stdout = stdout;
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
-        let session_id = "stdio-session";
+        let session_id = STDIO_SESSION_ID;
 
         while let Ok(Some(line)) = reader.next_line().await {
             let line = line.trim().to_string();
@@ -2191,6 +2194,8 @@ mod tests {
         protocol::{JsonRpcResponse, RequestId},
         security::ToolPolicy,
     };
+
+    mod order2_fsm;
 
     fn test_meta_mcp() -> Arc<MetaMcp> {
         Arc::new(MetaMcp::new(Arc::new(BackendRegistry::new())))

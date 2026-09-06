@@ -14,6 +14,9 @@ use crate::protocol::RequestId;
 use super::*;
 use crate::gateway::trace;
 
+#[path = "order2_fsm_tests.rs"]
+mod order2_fsm;
+
 /// The permissive authorizer the helpers below hand out.
 static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
 
@@ -4656,7 +4659,9 @@ fn discovery_names(v: &Value) -> Vec<String> {
             // `gateway_search` names a tool `server:tool_name`; the other three
             // readers name it bare. Compare on the bare name so one pinned
             // literal covers all four entry points.
-            raw.rsplit_once(':').map_or(raw, |(_, name)| name).to_string()
+            raw.rsplit_once(':')
+                .map_or(raw, |(_, name)| name)
+                .to_string()
         })
         .collect();
     names.sort();
@@ -4745,11 +4750,8 @@ async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
 /// when the `set_state` silently did nothing and when a regression moved both
 /// lists in step.
 ///
-/// Q4 — whether `gateway_set_state` is refused outright on a sessionless
-/// modern connection — is with the operator, and the answer decides what the
-/// call's own outcome must be asserted to be. This case asserts only the half
-/// that holds under either answer: the lists. The outcome pin lands when Q4 is
-/// answered.
+/// MIK-7272.ORDER2.FSM.2: Q4 ratified an explicit refusal on modern
+/// sessionless connections; both its response and all four lists are pinned.
 #[tokio::test]
 async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
     let meta = meta_with_state_staged_capabilities().await;
@@ -4782,7 +4784,7 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
     // Driven through the real meta-tool, not `SessionStateStore::set_state`:
     // the defect is the argument passed at `mod.rs:1689`, and a fixture
     // touching the store directly bypasses the line under test.
-    let _ = meta
+    let response = meta
         .handle_tools_call(
             RequestId::Number(1),
             "gateway_set_state",
@@ -4791,6 +4793,7 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
             allow_all_ctx(),
         )
         .await;
+    order2_fsm::assert_refusal(&meta, &response);
 
     let list_after = discovery_names(
         &meta
@@ -4849,9 +4852,8 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
 /// state A selected. B-09 asserts the same connection is unaffected by its own
 /// call; this asserts a bystander is unaffected by someone else's.
 ///
-/// The Q4 outcome pin — whether A's call is refused outright — is deferred on
-/// the same terms as B-09's: this case asserts the half that holds under
-/// either answer.
+/// MIK-7272.ORDER2.FSM.1: Q4 ratified explicit refusal; the bystander
+/// remains in the default state after that refused mutation.
 #[tokio::test]
 async fn b08_one_connections_set_state_does_not_change_another_connections_set() {
     let meta = meta_with_state_staged_capabilities().await;
@@ -4859,7 +4861,7 @@ async fn b08_one_connections_set_state_does_not_change_another_connections_set()
     // Connection A. Driven through the real meta-tool: the defect is the
     // argument passed at `mod.rs:1689`, and a fixture touching
     // `SessionStateStore::set_state` directly bypasses the line under test.
-    let _ = meta
+    let response = meta
         .handle_tools_call(
             RequestId::Number(1),
             "gateway_set_state",
@@ -4868,6 +4870,7 @@ async fn b08_one_connections_set_state_does_not_change_another_connections_set()
             allow_all_ctx(),
         )
         .await;
+    order2_fsm::assert_refusal(&meta, &response);
 
     // Connection B, which has issued no state change of its own.
     let list = discovery_names(

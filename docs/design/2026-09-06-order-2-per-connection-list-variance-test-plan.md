@@ -45,7 +45,7 @@ each reach both surfaces — which is why some cells are empty on purpose.
 |---|---|---|---|
 | routing profile | yes — `surfaced.rs:107` (reached only from `mod.rs:1310`), `spec_preview.rs:47`. **Not** `mod.rs:1263`: that `active_profile` read feeds `observe_tools_list` telemetry (`:1259-1262`) and shapes no list | yes — `search.rs:376,629,728` | B-01 (2a), B-02 (2b) on `tools/list`; **B-06 (2a)** on the filtered `tools/list` path, which is a profile case (`spec_preview.rs:47`), not a promotion one |
 | spec-preview promotion | yes — `mod.rs:1330`, `spec_preview.rs:112` | **no reader**: `promoted_tools_for_session` is not called from `search.rs` or `surfaced.rs` at all | B-07 (2a), B-10 (2b) |
-| FSM workflow state | **no reader**: nothing on the `tools/list` path reads it | yes, and only here — four entry points: `code_mode_search` (`search.rs:378`), `search_tools` (`:730`), and `list_tools` / `list_tools_single_server`, which today read the store directly (`:647-650`, `:581-584`) | B-08 (2a), B-09 (2b) |
+| FSM workflow state | **no reader**: nothing on the `tools/list` path reads it | yes, and only here — four entry points: `code_mode_search` (`search.rs:378`), `search_tools` (`:730`), and `list_tools` / `list_tools_single_server`, which now delegate to that accessor (`76b8536c`) | B-08 (2a), B-09 (2b) |
 
 Two empty cells need no case, because there is no behaviour in them to assert:
 promotion has no discovery-surface reader, and the FSM state has no `tools/list`
@@ -73,9 +73,9 @@ rather than accidental.
 | 2a | spec-preview promotion | **B-07, repaired in the sibling plan on 2026-09-06**: as previously written (`:187-204`) the case could not fail against the defect §2 describes. Its premise promotes tool `T` for a **legacy-era** session A and observes it in A's legacy list; the two modern lists it then pins are read under the key `""`, which that promotion never touched, so the case stays green whether or not modern connections share promotions. The repair, now applied there: drive the promotion through **a modern connection's own successful `gateway_invoke`** (`invoke.rs:1826-1828` writes under `Some("")`), move the reverse-A5 observable to a **legacy control connection** whose own list must contain `T` (so a silently no-oping promotion fails the control instead of greening the case), and pin both modern lists to a literal that excludes `T` | integration | After the repair: `T` appears in the other modern connection's list — which is what happens today, because both read `""`. It also fails if the legacy control does not see `T`, which is what catches a promotion that no-ops. Before the repair it could fail on nothing, which was the finding. The fixture must not stub `promote_tool_for_session`, or the case asserts against its own fixture rather than production. |
 | 2a | spec-preview preview list | **B-06**: B-01 re-run under `--features spec-preview` with a pinned match-all `params.query` | integration | The two modern connections' filtered lists differ from each other or from one pinned **filtered** literal. Not "differs from the default build's list" — an earlier draft said that, and it cannot hold: `handle_tools_list_filtered` deliberately omits the meta-tools from a filtered response (`spec_preview.rs:28-29`), so the two builds are *expected* to differ and a case asserting otherwise stays red after a correct fix. Covers `spec_preview.rs:46`. Runs only in a job that enables the feature; a suite that never enables it reports green while proving nothing, so the feature-enabled job is part of the case, not an optional extra. |
 | 2b — must not vary as a side effect of other requests on the connection | routing profile | **B-02**: `tools/list`, then `gateway_set_profile`, then `tools/list`; both lists compared to the same pinned literal | integration | Either list differs from the literal. Note the case must assert on the *lists*, not on the `gateway_set_profile` response: that call now returns `NO_SESSION_FOR_PROFILE` (§1 fact 4), and a case that asserts only the refusal would pass even if the lists diverged. |
-| 2b | spec-preview promotion | **new — B-10**: repaired B-07 covers the cross-connection half; the same-connection half is its own case, the sequence `tools/list` → successful `gateway_invoke` → `tools/list` on one modern connection, with **both** lists asserted against the same pinned literal and the invoke asserted to have succeeded. **The promoted tool `T` must be one that is NOT already in the first list, and the pinned literal must exclude it** — promotion is de-duplicated against already-surfaced tools (`mod.rs:1332-1335`), so invoking an already-listed tool leaves both lists identical and the case green while promotion still writes under `""`. Same constraint repaired B-07 carries — and it binds on both merges, since the filtered path de-dups the same way (`spec_preview.rs:113-114`). **Each `tools/list` in the sequence is issued twice, once unfiltered and once with `params.query` set**, so 2b covers the filtered merge (`spec_preview.rs:112`) as well as the unfiltered one (`mod.rs:1330`). Repaired B-07 already forces the query on the 2a side, so the filtered path has 2a coverage; without this, 2b reaches it only if (c) puts the guard inside `promoted_tools_for_session` rather than at the unfiltered call site — and the test plan must not be contingent on an implementation choice it also has to check. (The committed case already pins a literal excluding `echo` and asserts `before` against it; this row is where the constraint was missing.) Feature-gated: it runs only in the `--features spec-preview` job, on the same terms as B-06 | integration | Either list differs from the literal, or the invoke did not succeed. Asserting the two observed lists against each other would pass both when the invoke silently failed (nothing was promoted, so nothing changed) and when a regression moved both lists in step; the pinned literal and the invoke assertion are what remove those two green-while-broken paths. This is the direct statement of 2b and fails against §2 today. |
-| 2a | FSM workflow state (§2b) | **new — B-08**: connection A calls `gateway_set_state` to a non-default state; connection B, opened independently, calls **`gateway_list_tools` and `gateway_search_tools`** — both, and not `tools/list`, which reads this store on no path (§7 matrix) — and each result is compared against the pinned default-state literal | integration | B's set differs from the literal — which is what happens today, because A wrote under the key `""` and B reads the same entry. Fails in the **default build**, no feature flag needed. It cannot pass by construction: the fixture must drive the real `gateway_set_state` meta-tool, since the defect is the argument at `mod.rs:1689`, and a fixture calling `SessionStateStore::set_state` directly bypasses the line under test. **What it asserts after (c) depends on Q4, and the case must be written for that** — B-09's row states this and this row did not, which is the asymmetry that would have shipped the weaker case. If Q4 ratifies the refusal, A's `gateway_set_state` is refused on a modern HTTP connection, so A never writes; B then reads the default literal and the case goes green **without ever constructing the leaked state it exists to observe** — green for the wrong reason, and unfalsifiable. One fixture fact the row owes an implementer, because it looks like a shortcut and is not: **A and B carry the same session tuple**. A modern HTTP connection presents `Some("")` (`server/mod.rs:1604` supplies it), so below the transport two independently opened connections are one key — which is the defect this case exists to state, not a corner the fixture cut. After (c) `session_key` maps that key to `None` and neither connection can hold a state, so the shared entry stops existing rather than stops being shared. What separates this case from B-09 is therefore the claim, not the fixture: B issues no `gateway_set_state` of its own. So the case asserts *both*, exactly as B-02 does for `gateway_set_profile`: A's call is refused, **and** B's two sets equal the pinned default literal. Written that way it still fails if the refusal is dropped, if B's set moves, or if `gateway_set_state` becomes a silent no-op instead of an error. If Q4 declines the refusal, the leak assertion is the whole case **plus one stimulus pin**: A's `gateway_set_state` must be asserted to have SUCCEEDED, exactly as B-10 asserts of its `gateway_invoke`. Without it a failed or no-op write makes "B's set equals the default literal" true of a world where nothing was ever written — green over an empty stimulus. The ratify branch does not need this line, because its refusal assertion already pins the outcome of A's call; the decline branch had no such pin and that asymmetry is the gap. Note what the pairing costs nothing to say: after (c) the leak is not merely undetected, it is unconstructible from a modern HTTP connection — `session_key` gives that connection no entry to share. Each case drives a **third** discovery call, `gateway_list_tools` with `server=` set to the staged capability backend, to reach `list_tools_single_server` (`search.rs:581-584`) — the one FSM reader the other two calls do not touch. **Staging is part of the case, and it is an assertion, not a note**: the discovery filter is `visible_in_states` (`capability/backend.rs:342-343`, `search.rs:196-199,285-288`), and **every fixture in the tree today declares `visible_in_states: vec![]`** — always visible, in every state (V 2026-09-06: 18 sites, all empty). Against such a fixture the tool set is invariant under the FSM state, so a leaked state moves nothing and this case is green whether or not the leak exists. The fixture must therefore register one capability visible in `"default"` and **not** in the state A sets (or the reverse), and the pinned literal must be pinned to that staging. Without a proof that the staging held, the staging is unverified prose and the case decays back to the invariant-fixture version — but **that proof must not be phrased as a discovery call from a modern HTTP connection made while the target state is in force**. On the Q4-ratify branch no modern connection can hold a non-default state after (c) — that is what (c) is for — so a staging assertion of that shape is unsatisfiable on that branch and the case is red forever: `test-plan-honesty`'s second survivor, a case that can never go green, not the one this repair was guarding against. The proof therefore runs on a **session-bearing connection**, one that legitimately owns a session id so its `gateway_set_state` is refused under neither answer to Q4, driving the same discovery entry point: set the state, observe the OTHER set. That proves both halves the staging needs — the capability is genuinely state-dependent, and the discovery path honours the dependence — and it is Q4-independent. The leak assertion then asserts only what its own branch permits. |
-| 2b | FSM workflow state (§2b) | **new — B-09**: on one modern connection, `gateway_list_tools` → `gateway_set_state` → `gateway_list_tools`, and the same sequence again through `gateway_search_tools`, each list compared against the same pinned literal | integration | Either list differs from the literal. Note this case's expected behaviour changes under (c): today the second list differs; after (c) the `gateway_set_state` call is *refused*, and the case must assert the refusal **and** the unchanged lists, exactly as B-02 does for `gateway_set_profile` — asserting only the refusal would pass while the lists diverged. Each case drives a **third** discovery call, `gateway_list_tools` with `server=` set to the staged capability backend, to reach `list_tools_single_server` (`search.rs:581-584`) — the one FSM reader the other two calls do not touch. **Staging is part of the case, and it is an assertion, not a note**: the discovery filter is `visible_in_states` (`capability/backend.rs:342-343`, `search.rs:196-199,285-288`), and **every fixture in the tree today declares `visible_in_states: vec![]`** — always visible, in every state (V 2026-09-06: 18 sites, all empty). Against such a fixture the tool set is invariant under the FSM state, so a leaked state moves nothing and this case is green whether or not the leak exists. The fixture must therefore register one capability visible in `"default"` and **not** in the state A sets (or the reverse), and the pinned literal must be pinned to that staging. Without a proof that the staging held, the staging is unverified prose and the case decays back to the invariant-fixture version — but **that proof must not be phrased as a discovery call from a modern HTTP connection made while the target state is in force**. On the Q4-ratify branch no modern connection can hold a non-default state after (c) — that is what (c) is for — so a staging assertion of that shape is unsatisfiable on that branch and the case is red forever: `test-plan-honesty`'s second survivor, a case that can never go green, not the one this repair was guarding against. The proof therefore runs on a **session-bearing connection**, one that legitimately owns a session id so its `gateway_set_state` is refused under neither answer to Q4, driving the same discovery entry point: set the state, observe the OTHER set. That proves both halves the staging needs — the capability is genuinely state-dependent, and the discovery path honours the dependence — and it is Q4-independent. The leak assertion then asserts only what its own branch permits. |
+| 2b | spec-preview promotion | **B-10 (existing promotion regression)**: repaired B-07 covers the cross-connection half; the same-connection half is its own case, the sequence `tools/list` → successful `gateway_invoke` → `tools/list` on one modern connection, with **both** lists asserted against the same pinned literal and the invoke asserted to have succeeded. **The promoted tool `T` must be one that is NOT already in the first list, and the pinned literal must exclude it** — promotion is de-duplicated against already-surfaced tools (`mod.rs:1332-1335`), so invoking an already-listed tool leaves both lists identical and the case green while promotion still writes under `""`. Same constraint repaired B-07 carries — and it binds on both merges, since the filtered path de-dups the same way (`spec_preview.rs:113-114`). **Each `tools/list` in the sequence is issued twice, once unfiltered and once with `params.query` set**, so 2b covers the filtered merge (`spec_preview.rs:112`) as well as the unfiltered one (`mod.rs:1330`). Repaired B-07 already forces the query on the 2a side, so the filtered path has 2a coverage; without this, 2b reaches it only if (c) puts the guard inside `promoted_tools_for_session` rather than at the unfiltered call site — and the test plan must not be contingent on an implementation choice it also has to check. (The committed case already pins a literal excluding `echo` and asserts `before` against it; this row is where the constraint was missing.) Feature-gated: it runs only in the `--features spec-preview` job, on the same terms as B-06 | integration | Either list differs from the literal, or the invoke did not succeed. Asserting the two observed lists against each other would pass both when the invoke silently failed (nothing was promoted, so nothing changed) and when a regression moved both lists in step; the pinned literal and the invoke assertion are what remove those two green-while-broken paths. This is the direct statement of 2b and is an expected green regression against the already guarded promotion store. |
+| 2a | FSM workflow state (§2b) | **B-08 / MIK-7272.ORDER2.FSM.1**: A drives the real `gateway_set_state` with `Some("")`; assert JSON-RPC protocol refusal (-32600), exact modern-aware message, no result, and no empty-key store write. B then drives all four discovery readers (list, list with server, search_tools, code_mode_search), each pinned to `STAGED_DEFAULT_TOOLS`. Both callers use the router's actual empty session key (`handlers.rs`); no caller has a session. | integration / isolation and error contract | Fails if the write guard is absent, if the method silently succeeds, or if any bystander list changes. The shared state-dependent fixture and its non-empty session staging control prove the observed membership can change. No declined-Q4 branch remains. |
+| 2b | FSM workflow state (§2b) | **B-09 / MIK-7272.ORDER2.FSM.2**: on one sessionless caller, pin all four discovery lists before, drive the real state call, assert the same exact refusal and no store write, then pin all four lists after. | integration / sequence and error contract | Fails for a successful or silent-no-op response even when the lists happen to remain unchanged, or for any changed list. Q4 was ratified; success is not an allowed alternative. |
 
 ## Preconditions on the implementation — plan-blocking, not advisory
 
@@ -83,24 +83,12 @@ A test plan normally constrains only tests. Two of these cases are honest **only
 if the implementation takes a particular shape**, so the shape is stated here as
 a rule that blocks the plan rather than as a note the implementer may weigh.
 
-**1. The fold is load-bearing.** B-08 and B-09 each drive **two** discovery entry
-points — `gateway_list_tools` and `gateway_search_tools` — so a skipped fold would
-already fail their `gateway_list_tools` assertion. The reader those two calls still
-do not reach is **`list_tools_single_server`** (`search.rs:581-584`, inside the
-function opening at `:560`), which reads the store directly on its own copy. Each
-case therefore drives a **third** call, `gateway_list_tools` with `server=` set to
-the capability backend carrying the staged state-dependent capability. With that
-call present the fold is a correctness improvement rather than a load-bearing
-precondition; without it the fold is what keeps the unfolded copy from going
-unobserved, and (c) folds `list_tools` and `list_tools_single_server` back into
-`current_search_state` before guarding it.
-The FSM store is not single-owner today: those two read it directly
-(`search.rs:581-584`, `:647-650`). If the fold is skipped and `session_key` is
-applied to the accessor alone, **B-08 and B-09 go green while `gateway_list_tools`
-still reads the shared entry** — a case passing over a live defect, which is
-exactly what §P2's second question exists to prevent. An implementation that
-skips the fold owes two more cases, one per unfolded reader, before this plan is
-satisfied.
+**1. The fold is already complete; FSM.4 falsifies the read guard.** Base
+`0d4df3c0` has one discovery-state read in `current_search_state` and all four
+entry points delegate to it. No fold is required. B08/B09 pin the refused writer;
+a write-only repair can pass them. FSM.4 therefore seeds old empty-key state and
+drives all four real discovery readers, exposing an omitted read guard without
+requiring the repaired writer to create forbidden state.
 
 **2. The empty profile/discovery cell is conditional on the accessor guard.** The
 justification above holds because the filter sits inside `active_profile`. If the
@@ -121,7 +109,9 @@ identically, and the case stays green through it.
 **Drive the real meta-tool path.** A fixture calling `promote_tool_for_session`
 or `SessionStateStore::set_state` directly bypasses the exact line under test.
 The defects are in the arguments passed at those call sites; a fixture that
-supplies its own argument asserts against itself.
+supplies its own argument asserts against itself. The explicitly named FSM.4
+exception seeds an old store entry only as the read-side precondition; its
+observations still drive the real discovery entry points.
 
 ## A property stated in prose is not a test
 
@@ -151,20 +141,39 @@ recorded as untested:
   by B-07, so until B-07 exists, `B-10` (2b, same-connection) is the *only*
   promotion case with code behind it.
 
-## Open question this plan waits on
+The preceding inventory preserves the original test-plan investigation. At the
+prerequisite base `0d4df3c0`, the FSM consolidation `76b8536c` is already present;
+it must not be repeated. Current remaining FSM cases and their gate status are
+in the checkpoint at the end of this plan. No other cluster is graded here.
 
-**Q4** — whether `gateway_set_state` should be refused on a modern connection in
-the default build, as `gateway_set_profile` already is. With the operator, queued
-by the team lead, not self-decidable: it changes a tool that succeeds today for a
-client doing nothing wrong.
+## Resolved decision governing B-08 and B-09
 
-Q4 governs **B-08's and B-09's assertions, not their existence.** Both are
-written to assert the refusal *and* the unchanged lists if Q4 ratifies, or the
-leak alone if it declines — B-08's row says so, and that conditional phrasing is
-what stops it going green without ever constructing the state it observes. B-10
-and the repaired B-07 do not depend on Q4 and are unblocked.
+**Q4 is resolved.** The operator selected **"Ratify the refusal (recommended)"**
+at `2026-09-06T11:19:59.466Z`. The actual question/answer provenance is recorded
+in [the design's Q4 decision](2026-09-06-order-2-per-connection-list-variance.md#6-questions-put-to-the-requester--decisions-recorded).
+The design and this plan previously retained their OPEN wording after the answer.
 
-## Review record
+Q4 governs **B-08's and B-09's assertions, not their existence.** Execute the
+ratified branch described in those rows: assert the refusal *and* unchanged lists,
+with the session-bearing positive control proving the fixture's state-dependent
+visibility. There is no alternative decline branch in the executable contract. B-10 and the repaired B-07 remain independent of Q4.
+Decision recovery does not grade test execution, implementation review or release
+acceptance; those remain pending until their evidence is recorded.
+
+Both cases MUST assert the returned error, not merely that the lists did not move.
+A `gateway_set_state` that silently does nothing satisfies an unchanged-list
+assertion exactly as well as the ratified refusal does, so a case that discards the
+call's response cannot tell the repair from its absence — the §P2 failure mode of a
+case that passes while the thing it names is broken.
+
+The message is asserted too, and it is NOT today's. HEAD returns
+`gateway_set_state requires a session (send Mcp-Session-Id header)`
+(`mod.rs:1696`), and the modern HTTP router deliberately ignores that header — so
+the remediation it offers a modern caller cannot be followed. The refusal this plan
+asserts names the condition rather than an impossible fix. B-10 and the repaired
+B-07 never depended on Q4 and stay unblocked.
+
+## Historical review record
 
 Two independent **non-author** legs are required. This work is Claude-authored,
 so `gpt`, `grok` and `kimi` are all eligible and any two make a valid pair; the
@@ -173,7 +182,7 @@ reviewer that is forbidden here is `claude-review`, not `grok`.
 | leg | vendor | verdict | run |
 |---|---|---|---|
 | 1 | Grok | SHIP-WITH-FIXES | `grok-20260906T071032Z-19225` |
-| 2 | Kimi | pending | material submitted inline on stdin — kimi has no filesystem |
+| 2 | Kimi | SHIP-WITH-FIXES (recovered ledger) | `synthetic-20260906T080350Z-26796`; differing material, not closure |
 | — | Codex/GPT | MISSING | usage limit machine-wide until 2026-09-12 06:33 |
 
 The GPT row is recorded as **availability, not substitution**: an exhausted
@@ -193,3 +202,72 @@ found unmapped during that repair and given a drive of its own.
 **Declared for the second leg:** this plan was edited after leg 1 read it. The
 edits are the repairs above plus this section and the cluster-B untested row.
 Leg 2 reads the plan as it now stands, not as leg 1 saw it.
+
+
+## FSM prerequisite test gate recovery — 2026-09-07
+
+This section carries the remaining FSM requirements of the existing change.
+Historical review records above are provenance, not a current passing gate.
+B08/B09 currently discard the response: repairing their assertions is mandatory
+before runtime integration. Both retain all four pinned discovery observations.
+The exact serialized JSON-RPC `error.message` is independently pinned below.
+It includes the existing `Error::Protocol` Display prefix from `error.rs`; the
+inner `NO_SESSION_FOR_STATE` detail omits that prefix:
+
+> Protocol error: The workflow state is per-session, and this connection has no session. MCP 2026-07-28 removed protocol-level sessions; capability visibility is decided by the authorization presented on each request.
+
+| Criterion | Case and level/type | Falsifier | Result |
+|---|---|---|---|
+| MIK-7272.ORDER2.FSM.1 | B08: refusal and unaffected bystander; integration/isolation | Missing write guard or silent successful no-op | Pending repaired-test RED |
+| MIK-7272.ORDER2.FSM.2 | B09: refusal and same caller lists unchanged; integration/sequence | Success response, impossible remediation text, changed membership | Pending repaired-test RED |
+| MIK-7272.ORDER2.FSM.3 | Missing `None` key and empty `Some("")` both refuse with -32600, no result, exact message and no write; integration/boundary | Empty-only guard, missing-key old message, store mutation before refusal | Pending RED |
+| MIK-7272.ORDER2.FSM.4 | Seed an old non-default empty-key entry directly as a fixture; assert it exists, then each of four real discovery calls for None/empty sees the default literal; integration/contaminated-state regression | Delete the read guard while leaving the write guard intact | Pending RED |
+| MIK-7272.ORDER2.FSM.5 | Existing staging control plus non-empty legacy and `stdio-session` callers successfully change their own state and see the non-default literal while another named caller remains default; integration/compatibility | Overbroad refusal/default read; no-op mutator; shared non-empty keys | Pending control |
+
+Seeded old empty-key state is a deliberate test precondition for the read-side
+obligation; it is not reachable through the repaired modern writer and is not
+claimed as public functional driving. Real HTTP driving independently exercises
+FSM.1/.2, the empty-key branch of FSM.3, and the session-bearing control in FSM.5.
+The `None` branch of FSM.3 is N/A to public HTTP driving because the modern router
+passes `Some("")`; it is required component evidence, not a public PASS. The seed-only internal
+part of FSM.4 is N/A to public drive because production exposes no operation to
+create that forbidden state after the fix; its reviewed component evidence is
+required instead. Full default/all-feature invocation and existing profile,
+promotion and state tests provide regression coverage. No network backend needs
+to answer a request for the staged capability listings.
+
+Order: finder confirmation of plan repairs, repaired assertion RED, separate
+review of the tests as tests, minimum runtime guard patch, green/fault/coverage
+and focused self-QA, final dual code review with isolated functional drive.
+The initial CI RED is preserved as baseline evidence and is not falsely reused
+as execution of the new refusal assertions. Source line numbers in old sections
+are historical; this checkpoint binds symbols and exact isolated revisions.
+
+
+### Test finder repair: production caller checks
+
+The five criteria and runtime scope are unchanged. GPT test finder r1 requests
+caller-boundary regressions in addition to the reviewed component cases; the
+coordinator approved this bounded repair. Add one real modern `Router::oneshot`
+state-refusal case (with and without an offered session header), using the
+existing modern-era fixture and exact error/no-result assertions (FSM.3), and
+one `Gateway::dispatch_single` stdio transition sequence proving the previous,
+current and owner values in two successful responses (FSM.5). The stdio helper reaches the production `dispatch_single_with_sink` path.
+GPT finder r2 additionally requires the production `run_stdio` loop and test to
+share one private `STDIO_SESSION_ID` constant, while the test retains its
+independent literal owner assertion. This behavior-preserving extraction makes
+an empty owner falsify the compatibility case; no OS-pipe claim is made.
+These complement the existing modern session-mapping router regression and
+retain all component cases, including None and the contaminated empty-key seed.
+Expected final focused set: eight cases. Both new caller cases must compile;
+modern refusal must assert RED on the base, and the stdio sequence is a positive
+control. Independent public HTTP driving is still a final gate; these automated
+caller checks do not substitute for it. No stdio/A2A transport policy changes.
+
+Current implementation result: `order2-prerequisite-green.log` records eight
+passing cases, actual exit 0; `order2-prerequisite-tests-red-r4.log` records the
+pre-guard five assertion failures and three controls. GPT test finder r3 SHIP
+(actual 0, material c69da711ac4fa284c21357a68e8a0f8c77569e3b4a8294c325631cbf280d8ee0)
+closes the required caller seam; Grok r1 SHIP is retained. All five FSM criteria
+pass at their declared component/caller levels. Independent public driving,
+quantitative and final code-review gates are still pending.
