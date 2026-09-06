@@ -756,10 +756,35 @@ bridged retry has exactly two shapes available today and both are wrong:
   counter, which the repair protocol's own table calls the patch (a check
   detecting the disagreement) rather than the elimination (one owner).
 
-The design's requirement stands and is now evidenced: ONE ACCOUNTED DISPATCH
-PATH, shared by the initial invocation and every bridged retry — the eight
-emissions extracted around the single await, and the bridge's `BackendInvoker`
-implemented over that extraction rather than over `dispatch_to_backend`.
+What the design REQUIRES is the invariant, not the mechanism: every backend
+invocation the gateway makes — initial or bridged — passes through exactly one
+accounted path, exactly once. An earlier revision named a single mechanism as
+REQUIRED without recording what else was available, which is the Definition of
+Ready bar failed on the one item this round calls structural. Four shapes, with
+their dispositions:
+
+| shape | disposition |
+|---|---|
+| the bridge calls `dispatch_to_backend` directly | REJECTED. A second paid call invisible to all eight emissions: invoked twice, billed once, a per-tool budget exceedable with no record that it happened. |
+| a second set of the eight emissions around the retry | REJECTED. Two owners of one counter — the repair protocol's own table calls that the patch, not the elimination. |
+| extract the accounted block; the bridge's `BackendInvoker` runs over the extraction | VIABLE. Costs a cross-cutting change to a path every invocation in the gateway uses. |
+| the bridge RETURNS its answers and the invoke path re-enters its own prologue-dispatch-epilogue in a loop | VIABLE ON ACCOUNTING — every pass is accounted by code that already exists — but it fails on criteria; see below. |
+
+The loop shape's cost is not accounting, it is MRTR.7a. `InputBridge::run` owns
+the round count, the aggregate deadline and the request budget. Moving the loop
+into the invoke path either bypasses `run` — and 7a's criterion is precisely
+that `run` is reached from production, so bypassing it fails the criterion this
+change exists to satisfy — or it duplicates the bounds, which is two owners of
+one budget: the same defect class as two owners of one counter, one layer up.
+
+That is a REASON, not a preference, and it is recorded so implementation
+inherits the reasoning rather than the conclusion. If the requester would
+rather relax 7a's wording than pay for the cross-cutting extraction, that is a
+criteria decision and belongs beside the section 5 question, not inside an
+implementation commit. On the criteria as they stand, the extraction is the
+shape that survives: the eight emissions factored around the single await, and
+the bridge's `BackendInvoker` implemented over that extraction rather than over
+`dispatch_to_backend`.
 
 Consequence for sequencing, stated because it is easy to get wrong: this
 extraction is a prerequisite of 7b, not a part of it. It changes the accounting
