@@ -141,6 +141,15 @@ recorded as untested:
   note §5, §8). No case in this plan exercises stdio, and none should — cluster-g
   owns it per §P0. Recorded, not covered.
 - **A2A.** Not measured at all. Cluster-g's deferred row.
+- **The rest of cluster B.** `B-01`, `B-02`, `B-06` and `B-07` are *specified and
+  not implemented*: `tests/tool_list_tests.rs` is 43 lines and contains none of
+  them. So `B-08`, `B-09` and `B-10` are the first cases in this lineage to exist
+  at all, and the B-07 repair this plan prescribes has no code under it to
+  repair. Read this plan as **foundational, not incremental** — a reviewer who
+  assumes the sibling cases are in place will judge the new rows against coverage
+  that is not there. What that costs concretely: the 2a promotion leg is carried
+  by B-07, so until B-07 exists, `B-10` (2b, same-connection) is the *only*
+  promotion case with code behind it.
 
 ## Open question this plan waits on
 
@@ -157,11 +166,30 @@ and the repaired B-07 do not depend on Q4 and are unblocked.
 
 ## Review record
 
+Two independent **non-author** legs are required. This work is Claude-authored,
+so `gpt`, `grok` and `kimi` are all eligible and any two make a valid pair; the
+reviewer that is forbidden here is `claude-review`, not `grok`.
+
 | leg | vendor | verdict | run |
 |---|---|---|---|
-| 1 (code/plan) | Codex/GPT | — | blocked: usage limit machine-wide, resets 2026-09-12 06:33 |
-| 2 (code/plan) | Grok | — | pending |
+| 1 | Grok | SHIP-WITH-FIXES | `grok-20260906T071032Z-19225` |
+| 2 | Kimi | pending | material submitted inline on stdin — kimi has no filesystem |
+| — | Codex/GPT | MISSING | usage limit machine-wide until 2026-09-12 06:33 |
 
-Leg 1 is unavailable for every change on this machine until the reset; the
-substitution question is with the operator, and the named residual if leg 2 alone
-stands is that fact-verification rests on a single vendor.
+The GPT row is recorded as **availability, not substitution**: an exhausted
+balance is not grounds to swap a vendor, and `MISSING` is the honest state rather
+than a stamp another vendor granted. Its practical consequence is narrow — `ratify`
+will not accept a stamp without it, so nothing here merges on the current pair —
+and the review itself is not short a leg.
+
+**Grok's three HIGH findings are repaired**, each in its own commit: the staged
+capability set is now state-dependent (`visible_in_states`), so a leaked state is
+what moves the observed set; B-10 pins a literal excluding the promoted tool `T`
+and asserts the invoke succeeded; and B-08/B-09 assert A's `gateway_set_state`
+outcome rather than only B's list. Grok's `list_tools_single_server` improvement
+is taken (`server=` drive added), and the fourth reader `gateway_search` was
+found unmapped during that repair and given a drive of its own.
+
+**Declared for the second leg:** this plan was edited after leg 1 read it. The
+edits are the repairs above plus this section and the cluster-B untested row.
+Leg 2 reads the plan as it now stands, not as leg 1 saw it.
