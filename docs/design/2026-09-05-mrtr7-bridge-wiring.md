@@ -409,10 +409,22 @@ The sole production removal is `handlers.rs:354` on DELETE. An earlier revision
 of this paragraph also cited `streaming.rs:578` as a stream-end removal. It is
 a line inside a test — the same defect that disqualified `SessionLifecycle`
 four paragraphs down, made while writing the sentence that disqualified it.
-Named residual: nothing reaps a session that is never DELETEd, so its
-declaration lives until the process exits. That is the multiplexer's existing
-session lifetime, not a new leak this change introduces, and it bounds what
-amendment 1's conjunction can promise. The
+Nothing reaps a session that is never DELETEd, so its declaration lives until
+the process exits. That was parked as a "named residual", which the process
+does not accept as a state. It is now a DEFERRED unknown, and the
+generation-binding above narrows it to memory growth alone — after that repair
+an unreaped session grants no permission, so this is a bound on the map's size
+and not on who may be asked a question.
+
+| field | value |
+|---|---|
+| owner | the session-store work package, not this change; the team lead places it |
+| what would resolve it | a measurement: session-map size against a client population that connects and never issues `DELETE` |
+| when | before 4.0.0 ships — the growth is unbounded in time, and this is the first release that keeps per-session declarations at all |
+| if it resolves badly | an idle-timeout reaper on the session map; a memory bound, not a permission bound |
+
+Nothing in MRTR.7a or 7b depends on the answer, which is what makes deferring
+it legitimate rather than convenient. The
 declaration is captured at the `initialize` call site in
 `src/gateway/router/handlers.rs:926`, which holds both the params and
 `state.multiplexer`; `handle_initialize` itself does not need to change.
