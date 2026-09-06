@@ -436,8 +436,14 @@ right: a parser that accepts garbage propagates garbage, and one that rejects va
 silently deletes real traces. It is therefore mine, not separable.
 
 Disposal: fixed inside this change, not deferred. Lowercase-only; reject `ff`; reject an all-zero
-`parent-id`; accept four-or-more fields, reading the first four and ignoring the rest. Four
-predicate changes in one function, one test row each.
+`parent-id`; and split the field-count rule **by version**, because W3C makes it version-dependent:
+version `00` is a fixed grammar of exactly four fields and exactly 55 characters, so a `00` header
+carrying a fifth field is invalid and is rejected, while a higher version may extend the format and
+is read as the first four fields with the remainder ignored. Accepting extra fields for `00` — the
+earlier wording, which said "four-or-more" with no version distinction — forwards a malformed
+header as if it were valid caller context. Five predicate changes in one function, one test row
+each, and the version split is the row a test plan must carry twice: a `00` with five fields
+rejected, a `01` with five fields accepted on its first four.
 
 | option | verdict |
 |---|---|
@@ -490,12 +496,23 @@ remains is the size limit each bounded read enforces.
 | when | with the test plan, so the boundary rows assert a real number rather than a placeholder |
 | what if it resolves badly | a bound set too low drops valid context from a conforming client; too high, it relays more attacker-influenced bytes than needed. Both are one constant, and the drop-not-repair rule means neither can fail a request |
 
-**Note the field this table does not carry: `traceparent`.** W3C fixes its length by grammar —
-version `00` is exactly 55 characters — so there is no bound to choose, and a row asking for "the
-traceparent size limit" would be asking for a number that does not exist. The bounded reads are
-`tracestate` (member count and total length) and `baggage` (total length); those are different
-specifications with different numbers, which is why they are named separately here rather than
-collected under one limit.
+**`traceparent` needs a bound too, and only for versions above `00`.** Version `00` is exactly 55
+characters by grammar, so there is nothing to choose there — the length check IS the format check.
+But 3.4's rule forwards a higher-version header by reading its first four fields and relaying the
+value verbatim, and no future version's total length is fixed by anything we can read today. That
+is an unbounded, attacker-influenced string relayed to every backend. It takes the same deferral
+fields as the other two:
+
+| field | value |
+|---|---|
+| owner | this ticket's implementer, with the other bounded-read constants |
+| what would resolve it | pin `MAX_TRACEPARENT_LEN` as one constant applying only to versions above `00`; `00` keeps its exact-55 grammar check and is unaffected |
+| when | with the test plan, which owes an at-limit and an over-limit row for a non-`00` version |
+| what if it resolves badly | too low drops valid future context from a conforming client; too high relays more attacker bytes than needed. Drop-not-repair means neither can fail a request |
+
+The bounded reads are therefore three, not two: `traceparent` above version `00`, `tracestate`
+(member count and total length) and `baggage` (total length). They are separate specifications with
+separate numbers, which is why they are named individually rather than collected under one limit.
 
 **Someone may be resolving this right now, and that is a collision, not a resolution.** Observed
 2026-09-07 on this shared checkout: `src/protocol/trace.rs` carries **uncommitted** constants
