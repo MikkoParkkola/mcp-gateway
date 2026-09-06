@@ -475,15 +475,27 @@ Disposition of every finding, in the plan's own commits (`0cdd280b`, `a0e88234`,
 - Operator config reference — **no delta.** The `idempotency:` section went with Change B.
 - Release notes — **no delta.** R4's behaviour change belongs to whichever change activates the
   cache, and that is SUB.4.
-- `docs/requirements/RELEASE-4.0.0-blocking-rollup.md:26` — cluster C names SUB.4 without the
+- `docs/requirements/RELEASE-4.0.0-blocking-rollup.md:88` — cluster C names SUB.4 without the
   activation prerequisite this change hands it. **Updated by this change**: a cluster-C note
-  records the caller-binding prerequisite, with this document as provenance. That note, not the
+  records the caller-binding prerequisite (`:96`), with this document as provenance. That note, not the
   team-lead message, is the durable artifact — a message id resolves to a transcript, and the next
   SUB.4 implementer greps the repository.
 - `docs/requirements/RELEASE-4.0.0-execution-plan.md:206` — step 8 orders SUB.4's activation.
   **No delta.** The prerequisite constrains what step 8 must contain, not where it sits.
 - `docs/design/2026-08-30-shared-continuation-state.md:116` is cited by `route`'s doc comment and
   stays true: nothing here touches the no-affinity bargain.
+**Re-check after the test plan's revision 1 — no documentation was made untrue.** Stated rather
+than assumed, because silence cannot be disagreed with. The plan's repairs deleted two rows,
+re-anchored every fixture to a synthetic epoch, and widened four assertions; none of that moved a
+criterion status, a citation or a line number, so `criteria-status:143`, `blocking-rollup:88` and
+`execution-plan:206` are unaffected. `criteria-status:140` is the one row whose text the review
+brushed against — its note asserts a dispatch defect and says the entry "still routes as live" —
+and it needs no edit now: the row above already commits both its status and its note to change with
+Change A, which is when the code exists to make either statement true or false. Correcting this
+document's own *summary* of a plan that was itself dual-reviewed, using that review's findings, is
+bookkeeping and does not re-enter §P4: it changes what this document reports, not what the change
+claims.
+
 - This document's own filename still names MRTR.10a and idempotency wiring. **Kept deliberately**:
   `2026-09-01-nfr-perf3-reclamation.md:375` cites it by path, and renaming a file to tidy a title
   breaks a live citation to save nothing. The title line carries the withdrawal instead.
@@ -494,14 +506,21 @@ Follows as a separate document, one row per clause, before any test code is writ
 withdrawn the plan covers Change A only, and three constraints are settled here rather than left to
 it:
 
-- **Change A's rows assert on `len` and `route` under a driven clock**, per U1 — not on a
-  dispatched retry, which U1 showed cannot happen.
+- **Change A's rows assert on the public readers under a driven clock** — `hold`, `route`,
+  `complete` and `len`, per U1 — not on a dispatched retry, which U1 showed cannot happen. The
+  plan's review widened this: the live and boundary rows assert `complete` alongside `len`, because
+  a count of 1 could be the wrong record, and the residency row is table-driven over all four so
+  the criterion is not as strong as whichever single reader an implementer happened to pick.
 - **A case for R2a's bargain**: after a deadline passes with no intervening call, the entry is
   still resident; the first call through `guard` is what makes it gone. The test states the bound
   the design actually delivers, so a future reader cannot mistake it for an absolute one.
 - **A case for what PERF.3's reclamation obligation actually became here**: `hold` at capacity,
-  with expired entries present, admits rather than refuses — and the walk it does is bounded by
-  `IN_FLIGHT_CAPACITY`, not by anything a client sizes.
+  with expired entries present, admits rather than refuses. The walk it does is bounded by
+  `IN_FLIGHT_CAPACITY` and not by anything a client sizes — that is the DoS argument and it is
+  unchanged. What the plan's review removed is the promise that a *row observes* the bound: no
+  public reader exposes a walk length, so the admission rows run at `InFlight::new("gw-1", 4)`
+  (the falsifier is identical at 4 and at 4_096) and the documented number is pinned by a literal
+  same-module assertion, `IN_FLIGHT_CAPACITY == 4_096`.
 
 Two of the three constraints the previous revision recorded for Change B (production-builder
 construction, a cross-principal binding case) are **not deleted, they are transferred**: the first
