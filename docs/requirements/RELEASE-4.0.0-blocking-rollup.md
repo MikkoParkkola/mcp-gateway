@@ -434,7 +434,8 @@ belongs to the operator or the MIK-7212 owner because it is a client-ecosystem f
 fact: does a modern client that declares in-band `elicitation` exist, and would it retry? It
 blocks the build-it branch and not the refusal branch.
 
-Put to the operator 2026-09-06 with the three branches and their costs; no answer has come back.
+Put to the operator 2026-09-06 with the three branches and their costs, twice, and no answer has
+come back either time.
 Recorded for the same reason `CONTROL.4` is: a week later an unanswered question and an unasked
 one look identical, and only one of them is a process failure. Unlike `CONTROL.4`, this row does
 **not** proceed under a stated assumption. The assumption there was one default value and one call
