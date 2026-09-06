@@ -4,7 +4,7 @@ Status: proposed, revision 5. No code written. Revisions 1 and 2 were reviewed b
 Grok; both returned `SHIP-WITH-FIXES` on revision 2. Revision 3 was the repair. Revision 4 settles
 the last question a check could settle, and records what happens to the two that need a person.
 
-Revision 5 is NOT reviewed. It is P8, P9, the "Risks inherited with activation" section and the
+Revision 5 is NOT reviewed. It is P8, P9, the "Risks that fire on activation" section and the
 test-plan transfer, which arrived 2026-09-06 from the MRTR.8b/10a design when that change withdrew
 its Change B, plus the reference corrections of the same date. No reviewer has seen any of it: the
 `SHIP-WITH-FIXES` above is a verdict on revision 2 and says nothing about this material. It rides
