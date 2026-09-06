@@ -112,9 +112,17 @@ post-bump reader can name it, and the request that raced simply writes a cache l
 ever look up. The failure mode is a wasted insert, never a stale serve. Stale-closed beats
 stale-open, and only this ordering gives it.
 
-The compiler cannot enforce that the write sites use the captured local rather than re-reading,
-so the ordering is named as an invariant in a rustdoc comment on the `policy_epoch` accessor and
-is the mutation the 4.g falsifier below fires on.
+Two distinct properties live here and they have different evidence, so they are not merged:
+
+| property | evidence |
+|---|---|
+| the two key builds use the *same* value (no re-read at the write site) | the 4.g falsifier below — re-reading at `:1787` turns the assertion red |
+| the single read happens *before* `:906` | **nothing mechanical.** No hook-free driver reaches that window, and adding one would replace the production path with the fixture |
+
+The second is recorded as UNTESTED, not as covered. A rustdoc invariant on the `policy_epoch`
+accessor states it for the next reader, and a comment stating a property is not a test — it is
+indistinguishable from coverage to a reviewer and to a coverage map alike, which is precisely
+why it is written down here as an untested property rather than left to look like one.
 
 **Falsifier (this is the row that proves the implementation, not merely the key):** read the
 epoch fresh at the write site instead of threading the captured value. The entry then lands
