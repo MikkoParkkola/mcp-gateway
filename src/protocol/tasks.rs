@@ -16,6 +16,12 @@
 
 use serde_json::Value;
 
+/// The JSON-RPC code a task failure carries when nothing more specific applies.
+///
+/// From a spec table, so it is a named constant regardless of use count: the
+/// name carries the provenance the literal cannot.
+pub const INTERNAL_ERROR: i32 = -32603;
+
 /// Where a task has got to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
@@ -77,7 +83,7 @@ impl Task {
         self.result.as_ref()
     }
 
-    /// Why it failed, if it did.
+    /// Why it failed, if it did: a serialized JSON-RPC error object.
     ///
     /// Failure and "not finished" are different answers, and a caller that
     /// cannot tell them apart polls a dead task forever.
@@ -100,12 +106,25 @@ impl Task {
         self.result = Some(result);
     }
 
-    /// Record a failure. Settled tasks stay settled, as above.
-    pub fn fail(&mut self, error: impl Into<String>) {
+    /// Record a failure with the JSON-RPC internal-error code.
+    ///
+    /// Settled tasks stay settled, as above.
+    pub fn fail(&mut self, message: impl Into<String>) {
+        self.fail_with_code(INTERNAL_ERROR, message);
+    }
+
+    /// Record a failure under a specific JSON-RPC error code.
+    ///
+    /// The stored value is a serialized JSON-RPC error **object**, not the bare
+    /// message: the specification hands a failed task the same `code` +
+    /// `message` pair a failed call would have carried, and a client that
+    /// branches on the code cannot recover one from prose.
+    pub fn fail_with_code(&mut self, code: i32, message: impl Into<String>) {
         if self.status != TaskStatus::Working {
             return;
         }
         self.status = TaskStatus::Failed;
-        self.error = Some(error.into());
+        self.error =
+            Some(serde_json::json!({ "code": code, "message": message.into() }).to_string());
     }
 }

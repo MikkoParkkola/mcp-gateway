@@ -234,14 +234,22 @@ pub const REMOVED_IN_2026_07_28: &[&str] = &[
 /// 2026 method to a 2025 client tells it the gateway speaks a revision that
 /// client cannot hold up its end of.
 ///
-/// `tasks/get` and `tasks/update` are listed because the revision adds them, not
-/// because this gateway serves them: neither is implemented. `tasks/get`
+/// `tasks/get`, `tasks/update` and `tasks/cancel` are listed because the
+/// revision adds them. `tasks/cancel` was absent from this list while the other
+/// two were present, which served it to a 2025 peer that cannot have negotiated
+/// it — the gate refuses what it does not know about, so an omission here is a
+/// method leaking past the era boundary rather than a missing feature. `tasks/get`
 /// previously answered every handle with a `not_found` **success**, which is
 /// not in the protocol's task model and told a client its handle had been
 /// looked up and missed. Both now reach the ordinary method-not-found answer,
 /// which is true. The specification page for the tasks extension returns 404 at
 /// the path its own index links, so there is no shape to implement against yet.
-pub const ADDED_IN_2026_07_28: &[&str] = &["subscriptions/listen", "tasks/get", "tasks/update"];
+pub const ADDED_IN_2026_07_28: &[&str] = &[
+    "subscriptions/listen",
+    "tasks/get",
+    "tasks/update",
+    "tasks/cancel",
+];
 
 /// The client capability a method needs, if it needs one.
 ///

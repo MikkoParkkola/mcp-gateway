@@ -55,11 +55,16 @@ pub fn mcp_name_required(method: &str) -> bool {
 /// gateway reads the `uri` beside it — which is exactly the split between
 /// routing truth and execution truth this whole check exists to close. The
 /// field is therefore chosen by the method and never searched for.
+///
+/// The task methods address a task rather than a tool, so the name they mirror
+/// is `params.taskId`. Returning `None` for them is not neutral: it lets a
+/// request be routed on a header the body never agreed to.
 #[must_use]
 pub fn mcp_name_body_field(method: &str) -> Option<&'static str> {
     match method {
         "tools/call" | "prompts/get" => Some("name"),
         "resources/read" => Some("uri"),
+        "tasks/get" | "tasks/update" | "tasks/cancel" => Some("taskId"),
         _ => None,
     }
 }
