@@ -1339,9 +1339,8 @@ impl MetaMcp {
                 }
             };
 
-        let dispatch_start = Instant::now();
         let dispatch_result = self
-            .dispatch_to_backend(
+            .accounted_dispatch(
                 server,
                 tool,
                 arguments.clone(),
@@ -1352,62 +1351,10 @@ impl MetaMcp {
                 caller_identity,
                 &caller_credential.headers,
                 caller_credential.cache_binding.as_deref(),
+                api_key_name,
+                trace_id,
             )
             .await;
-        let dispatch_latency = dispatch_start.elapsed();
-        telemetry_metrics::counter!(
-            "mcp_tool_invocations_total",
-            "server" => server.to_owned(),
-            "status" => if dispatch_result.is_ok() { "ok" } else { "error" }
-        )
-        .increment(1);
-        telemetry_metrics::histogram!(
-            "mcp_tool_invocation_duration_seconds",
-            "server" => server.to_owned()
-        )
-        .record(dispatch_latency.as_secs_f64());
-
-        // Record prompt-cached tokens from the backend response (if any)
-        if let Ok(ref response) = dispatch_result {
-            let cached_tokens = extract_cached_tokens(response);
-            if cached_tokens > 0
-                && let Some(ref stats) = self.stats
-            {
-                stats.record_cached_tokens(server, session_id, cached_tokens);
-                debug!(
-                    server,
-                    tool, cached_tokens, trace_id, "Prompt cache hit recorded"
-                );
-            }
-        }
-
-        self.record_error_budget(server, tool, BudgetOutcome::of(&dispatch_result));
-
-        // Record cost for successful calls (token count estimated at 0 for non-LLM tools).
-        if dispatch_result.is_ok()
-            && let Some(sid) = session_id
-        {
-            self.cost_tracker.record(
-                sid,
-                api_key_name,
-                server,
-                tool,
-                0, // token_count: 0 for backend tool calls (no model inference)
-                crate::cost_accounting::DEFAULT_PRICE_PER_MILLION,
-            );
-        }
-
-        // === POST-INVOKE: BudgetEnforcer cost recording ===
-        //
-        // Record actual spend for per-tool and global daily accumulators.
-        // Only on success — the call actually incurred the cost.
-        #[cfg(feature = "cost-governance")]
-        if dispatch_result.is_ok()
-            && let Some(ref enforcer) = self.budget_enforcer
-        {
-            let cost = enforcer.registry.cost_for(tool);
-            enforcer.record_spend(tool, api_key_name, cost);
-        }
 
         let mut result = match dispatch_result {
             Ok(value) => {
@@ -2405,6 +2352,108 @@ impl MetaMcp {
             }
             Err(e) => refuse(format!("credential minting failed: {e}")),
         }
+    }
+
+    /// Dispatch one round to the backend and meter it.
+    ///
+    /// Holds every emission that must fire once per backend call: the
+    /// invocation counter, the latency histogram, the prompt-cache token
+    /// record, the error budget, the cost tracker and the daily spend
+    /// accumulator. A bridged retry round is a real call — it takes latency
+    /// and spends budget exactly as the round that opened the exchange did —
+    /// so metering left behind at a single call site would make every round
+    /// after the first invisible.
+    ///
+    /// The pre-invoke budget gate is deliberately NOT here. It runs once, and
+    /// above the point where a retry handle is redeemed; moving it below that
+    /// redemption would burn a continuation on a call the budget refuses.
+    #[allow(clippy::too_many_arguments)]
+    async fn accounted_dispatch(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+        outbound_retry: &OutboundRetry,
+        prompt_cache_key: Option<&str>,
+        want_full: bool,
+        session_id: Option<&str>,
+        caller_identity: Option<&GrantSubject>,
+        propagated_headers: &[(String, String)],
+        cache_binding: Option<&str>,
+        api_key_name: Option<&str>,
+        trace_id: &str,
+    ) -> Result<Value> {
+        let dispatch_start = Instant::now();
+        let dispatch_result = self
+            .dispatch_to_backend(
+                server,
+                tool,
+                arguments,
+                outbound_retry,
+                prompt_cache_key,
+                want_full,
+                session_id,
+                caller_identity,
+                propagated_headers,
+                cache_binding,
+            )
+            .await;
+        let dispatch_latency = dispatch_start.elapsed();
+        telemetry_metrics::counter!(
+            "mcp_tool_invocations_total",
+            "server" => server.to_owned(),
+            "status" => if dispatch_result.is_ok() { "ok" } else { "error" }
+        )
+        .increment(1);
+        telemetry_metrics::histogram!(
+            "mcp_tool_invocation_duration_seconds",
+            "server" => server.to_owned()
+        )
+        .record(dispatch_latency.as_secs_f64());
+
+        // Record prompt-cached tokens from the backend response (if any)
+        if let Ok(ref response) = dispatch_result {
+            let cached_tokens = extract_cached_tokens(response);
+            if cached_tokens > 0
+                && let Some(ref stats) = self.stats
+            {
+                stats.record_cached_tokens(server, session_id, cached_tokens);
+                debug!(
+                    server,
+                    tool, cached_tokens, trace_id, "Prompt cache hit recorded"
+                );
+            }
+        }
+
+        self.record_error_budget(server, tool, BudgetOutcome::of(&dispatch_result));
+
+        // Record cost for successful calls (token count estimated at 0 for non-LLM tools).
+        if dispatch_result.is_ok()
+            && let Some(sid) = session_id
+        {
+            self.cost_tracker.record(
+                sid,
+                api_key_name,
+                server,
+                tool,
+                0, // token_count: 0 for backend tool calls (no model inference)
+                crate::cost_accounting::DEFAULT_PRICE_PER_MILLION,
+            );
+        }
+
+        // === POST-INVOKE: BudgetEnforcer cost recording ===
+        //
+        // Record actual spend for per-tool and global daily accumulators.
+        // Only on success — the call actually incurred the cost.
+        #[cfg(feature = "cost-governance")]
+        if dispatch_result.is_ok()
+            && let Some(ref enforcer) = self.budget_enforcer
+        {
+            let cost = enforcer.registry.cost_for(tool);
+            enforcer.record_spend(tool, api_key_name, cost);
+        }
+
+        dispatch_result
     }
 
     /// Dispatch a `tools/call` to the capability backend or an MCP backend.
