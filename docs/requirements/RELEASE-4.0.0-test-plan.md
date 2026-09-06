@@ -408,6 +408,11 @@ row set before its code is written, not before the release ends.
 | 9 — Authorization server | OAUTH.1–3 | Independent of the rest; can run in parallel |
 | 10 — Exploitation | EXT.1, OTEL.1, TASK.1, SURFACE.1, SCHEMA.1 | SURFACE.1 and PERF.2 are measurements, not tests |
 
+TASK.1 has its own per-criterion §P2 table: `docs/design/2026-09-06-task-1-tasks-extension-test-plan.md`.
+It decomposes the compound criteria into 33 clause rows and records, per row, whether the case can
+fail against HEAD. It **links** this plan rather than superseding it — the increment row above stays
+the release-level statement, and the per-criterion table is where a test author starts.
+
 ## Cross-cutting suites
 
 Two suites that no per-increment row set can express, because their subject is the interaction:
