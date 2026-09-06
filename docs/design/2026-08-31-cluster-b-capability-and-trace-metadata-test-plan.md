@@ -280,11 +280,19 @@ still passes.** T0 and T1 together bound the defect to "the fields are parsed an
 correctly once something on the request path reads them"; wiring that read is checked by the same
 backend-capture harness §6.4 waits on, which observes the whole route rather than a seam inside it.
 
-- owner: shared with §6.4 — the same harness answers both
-- resolving action: one route-level case per transport, or the capture harness
-- trigger: whichever lands first
-- if it resolves badly: OTEL.1.a closes on extractor evidence with the route gap named in the
-  closing comment, exactly as §6.4 requires for .h
+**SUPERSEDED 2026-09-06 by the design's §2.7 and §7.** That correction found the inbound
+`params._meta` is discarded before the invoke funnel on both transports and the one production
+read site reads a level below the carrier, so "a route never calls the extractor" is not a
+hypothetical this plan may close around — it is the state of the tree. Extractor evidence is
+therefore no longer sufficient for OTEL.1.a, and the bullet that permitted it is struck rather
+than annotated: a superseded clause left standing is read by whoever opens this file first.
+
+- owner: unchanged — shared with §6.4, the same harness answers both
+- resolving action: route-level ingestion per transport is now REQUIRED, not an alternative to
+  the capture harness; the harness may supply the evidence, the gap may not be waived
+- trigger: before OTEL.1.a is closed, not "whichever lands first"
+- if it resolves badly (no route-level evidence is obtainable in this release): OTEL.1.a does
+  not close — it is recorded as open with the design's §7 close condition unmet
 
 ## 7. The A1-A9 sweep, and what it changed
 
