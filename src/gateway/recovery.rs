@@ -276,7 +276,9 @@ pub fn attach_recovery(mut value: Value, hint: RecoveryHint) -> Value {
 /// `500`), and `throttling`, which appears in its own negation ("throttling
 /// disabled"). `throttled` — the past participle, which reports what happened
 /// rather than naming the feature — is matched, because "request throttled by
-/// upstream" is a shape this gateway has actually seen.
+/// upstream" is a shape this gateway has actually seen, unless negated
+/// ("not throttled", "unthrottled"): those report an ordinary failure, and a
+/// wrong exclusion there is the worse of the two mistakes above.
 #[must_use]
 pub fn is_rate_limited(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
@@ -286,7 +288,7 @@ pub fn is_rate_limited(text: &str) -> bool {
         || lower.contains("rate-limit")
         || lower.contains("ratelimit")
         || lower.contains("resource_exhausted")
-        || lower.contains("throttled")
+        || (lower.contains("throttled") && !throttled_is_negated(&lower))
     {
         return true;
     }
@@ -296,6 +298,14 @@ pub fn is_rate_limited(text: &str) -> bool {
     lower
         .split(|c: char| !c.is_ascii_alphanumeric())
         .any(|tok| tok == "429")
+}
+
+/// Whether `throttled` appears negated in an already-lowercased text.
+///
+/// Scoped to the two negated forms of this one word -- "not throttled" and
+/// "unthrottled" -- not a general negation parser (GH475.RL.5).
+fn throttled_is_negated(lower: &str) -> bool {
+    lower.contains("not throttled") || lower.contains("unthrottled")
 }
 
 // ============================================================================
@@ -488,6 +498,25 @@ mod tests {
             // plain failures that must still reach the breaker
             "HTTP 503 Service Unavailable",
             "connection reset by peer",
+        ] {
+            assert!(!is_rate_limited(s), "expected NOT rate-limited for {s:?}");
+        }
+    }
+
+    // GH475.RL.5: `throttled` (the past participle) is matched deliberately
+    // (see the doc comment above), but that substring match also fires on the
+    // word's own negation -- "not throttled" and "unthrottled" both contain
+    // "throttled" and both report the OPPOSITE of a rate limit. A false
+    // exclusion here hides a sick backend from the circuit breaker, which is
+    // the worse of the two mistakes the doc comment names. This closes the
+    // negation class for `throttled` specifically (past-participle and its
+    // prefixed form), not general natural-language negation.
+    #[test]
+    fn rate_limit_predicate_rejects_negated_throttled() {
+        for s in [
+            "not throttled, connection reset",
+            "backend is not throttled but timing out",
+            "unthrottled failure",
         ] {
             assert!(!is_rate_limited(s), "expected NOT rate-limited for {s:?}");
         }
