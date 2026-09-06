@@ -91,32 +91,42 @@ fn all_meta_tool_schemas() -> Vec<(String, serde_json::Value)> {
         }
     }
 
-    // Population floor. Without it an `all_meta_tool_schemas()` that silently
-    // returned a near-empty set would make every check above it pass while
-    // walking nothing — the failure mode the per-mode non-empty assert alone
-    // does not catch (one tool per mode satisfies it).
-    let traditional = names
-        .iter()
-        .filter(|n| n.starts_with("traditional/"))
-        .count();
-    assert!(
-        traditional >= 14,
-        "traditional mode published {traditional} tools; the documented floor for the \
-         Meta-MCP surface is 14 — the fixture is not enabling the real surface: {names:?}"
+    // Population EQUALITY, not a floor. The plan row's population is the 19
+    // `gateway_*` definitions in `src/gateway/meta_mcp_tool_defs.rs`; a floor
+    // of 14 permits five of them to go unwalked, so a dangling `$ref` in one
+    // of the five would ship with every assertion below still green. Equality
+    // also makes the list self-maintaining: adding or retiring a definition
+    // fails here until this list is updated deliberately.
+    let mut published: Vec<&str> = names.iter().map(String::as_str).collect();
+    published.sort_unstable();
+    assert_eq!(
+        published,
+        [
+            "code_mode/gateway_execute",
+            "code_mode/gateway_search",
+            "traditional/gateway_cost_report",
+            "traditional/gateway_get_profile",
+            "traditional/gateway_get_stats",
+            "traditional/gateway_invoke",
+            "traditional/gateway_kill_server",
+            "traditional/gateway_list_disabled_capabilities",
+            "traditional/gateway_list_profiles",
+            "traditional/gateway_list_servers",
+            "traditional/gateway_list_tools",
+            "traditional/gateway_reload_capabilities",
+            "traditional/gateway_reload_config",
+            "traditional/gateway_revive_server",
+            "traditional/gateway_run_playbook",
+            "traditional/gateway_search_tools",
+            "traditional/gateway_set_profile",
+            "traditional/gateway_set_state",
+            "traditional/gateway_webhook_status",
+        ],
+        "the enumerated surface is not the 19 `gateway_*` definitions: either \
+         the fixture stopped enabling the real surface, or a definition was \
+         added or retired without updating this list"
     );
-    for expected in [
-        "traditional/gateway_search_tools",
-        "traditional/gateway_invoke",
-        "traditional/gateway_list_servers",
-        "traditional/gateway_get_stats",
-        "code_mode/gateway_search",
-        "code_mode/gateway_execute",
-    ] {
-        assert!(
-            names.iter().any(|n| n == expected),
-            "`{expected}` is missing from the enumerated surface: {names:?}"
-        );
-    }
+
     assert!(
         schemas.iter().any(|(n, _)| n.ends_with("[outputSchema]")),
         "no tool published an outputSchema — the outputSchema arm of this walk covers nothing"
