@@ -27,8 +27,8 @@ constant itself, about `NFR.PERF.1`, or about the meta-tool surface.
 The requirement names no duration, no abandonment rate and no reclamation threshold — recorded as
 an unknown and resolved in the design's receipt update. A wall-clock soak would therefore be
 inventing its own bound, would not run in the suite, and would be a weaker observation than the
-driven clock: it can only show that reclamation happened *somewhere* in the interval, where rows 2
-and 3 show it happened *at the deadline*. The clock is a parameter on the entry points (`now: u64`,
+driven clock: it can only show that reclamation happened *somewhere* in the interval, where row 2
+shows it happened *at the deadline*. The clock is a parameter on the entry points (`now: u64`,
 already the module's shape at `:696` and in Design A), so no sleeping and no timing tolerance.
 
 ## Assertion strength — the second question a plan review must answer
@@ -40,11 +40,19 @@ Every row states above what makes it fail. The risks specific to this plan:
   retrofitting falsifier probe from the process — restore the pre-`ec11dcec` body of the
   capacity branch and show the case fails on the occupancy assertion, then restore and show it
   passes. Without the probe it is not evidence.
-- **Rows 2 and 3 must not stage away the condition they observe.** The fixture may not call
+- **Row 2 must not stage away the condition it observes.** The fixture may not call
   `complete` on the abandoned exchanges, and may not reach capacity before asserting; either would
   reclaim through a path that already works and make the assertion true without the mechanism
   under test. 8 192 is chosen so the *fill* crosses capacity while the *observation* happens after
   the drain, and the assertion is on holds that were never completed.
+- **The admission-recovery row was deleted, not repaired.** An earlier draft carried a third row —
+  after row 2's drain, a fresh `hold` at the advanced clock returns `Some` — presented as failing
+  evidence of the wedge. It is not: `hold`'s capacity branch already calls `reclaim_abandoned(now)`
+  and re-checks (`continuation.rs:696-717`), so against 4 096 expired holds that case returns
+  `Some` **today**, through the path that already works. It would have been a green row wearing a
+  red label. Its stated justification — that a reclaimer could empty the map while leaving capacity
+  accounting stale — describes a state this module cannot reach, because `held.len()` *is* the
+  accounting. One map, one number, no second bookkeeping to drift.
 
 ## What is deliberately not covered
 
