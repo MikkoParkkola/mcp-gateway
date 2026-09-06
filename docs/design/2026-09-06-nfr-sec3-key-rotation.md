@@ -90,10 +90,10 @@ first draft picked the wrong one, is settled two sections down.
 
 Against the three clauses:
 
-- ROTATABLE — met. Two triggers, both real production callers, so no D7 WIRED violation: the
-  `gateway_reload_config` meta-tool is the operator-invocable verb, and an interval task
-  guarantees the cadence when nobody invokes it. A `rotate` added today with no caller WOULD
-  be a violation. Which triggers survive review, and which was dropped, is below.
+- ROTATABLE — met, and with no trigger to wire: rotation is an age check inside `mint` and
+  `open`, which are the production path, so D7 WIRED holds by construction. A `rotate` added
+  today with no caller WOULD be a violation; that is exactly why the three candidate triggers
+  below were all dropped in favour of the lazy check.
 - RETAINED — met. Old kids stay verifiable for the max lifetime; `open` already selects
   by kid and already refuses once dropped.
 - VERSIONED — unchanged.
@@ -113,61 +113,62 @@ Consequences that fall out rather than being designed:
 ### Where the trigger comes from — the one place this design could have been wrong
 
 The ROTATABLE claim originally rested entirely on "config reload is a real production
-caller". It no longer does — the interval task below carries the cadence, and reload survives
-only as the operator's explicit rotate verb. What follows is the source check that decided
-which of reload's two callers stays.
+caller". It no longer rests on a trigger at all — see the revision below, where the last of
+them is dropped. What follows is the source check that started that unravelling, kept because
+it is what moved the design.
 
 Checked at source rather than assumed, because a wrong answer here does not weaken the design
 — it moves the trigger somewhere else and rewrites this section.
 
-| caller | reaches `ContinuationState`? | cost |
-|---|---|---|
-| `gateway_reload_config` meta-tool (`src/gateway/meta_mcp/invoke.rs:2836`) | YES | zero. It runs on `&self` of `MetaMcp`, which already owns `continuation: Arc<ContinuationState>` (`src/gateway/meta_mcp/mod.rs:230`). One call after the reload returns. |
-| file watcher (`ConfigWatcher::start`, called at `src/gateway/server/mod.rs:1276`) | NO | one new parameter. It takes `config_path`, `live_config`, `registry`, `initial_config`, `env`, `shutdown_rx` (`src/config_reload/mod.rs:1010-1017`) and forwards them to `spawn_reload_task`. Neither it nor `ReloadContext` (`:1371-1388`) holds any handle to `MetaMcp` or the continuation state. |
-
-The watcher's plumbing is cheap but it is not free, and the design claimed free. It is a
-parameter rather than a restructure because `meta_mcp` is built at `server/mod.rs:1011` and
-the watcher starts at `:1276` in the same function, so the `Arc` is already in scope at the
-call site.
+Superseded by the revision below — both rows are dropped triggers now — but recorded because
+the check is what moved the design: neither `ConfigWatcher::start` nor `ReloadContext`
+holds any handle to `MetaMcp` or the continuation state, so the watcher leg was never the free
+trigger the first draft claimed. The meta-tool leg does reach it, on `&self` of `MetaMcp`, which
+owns `continuation: Arc<ContinuationState>`.
 
 Third fact, and it is why the reload trigger is wrong: **there is no continuation or key section
 in `Config` at all**, because the key is process-random and written nowhere. So no config
 FIELD can change to signal a rotation, and `pending_restart_fields` (`src/config_reload/mod.rs:550`)
 has nothing to say about it either.
 
-### Revised after review: the watcher leg is dropped and a timer is added
+### Revised twice under review: no trigger at all — rotation is lazy
 
-A reviewer's finding, accepted rather than argued: reload is a POOR trigger and choosing it
-manufactured the whole two-caller problem above. A replica that never reloads never rotates,
-so ROTATABLE would be met as a capability and never in practice; and because no continuation
-setting exists, a reload-driven rotation fires on an unrelated backend-URL edit — a behaviour
-nobody asked for.
+Round 1 finding, accepted: reload is a POOR trigger and choosing it manufactured the whole
+two-caller problem above. A replica that never reloads never rotates, so ROTATABLE would be met
+as a capability and never in practice; and because no continuation setting exists, a
+reload-driven rotation fires on an unrelated backend-URL edit — a behaviour nobody asked for.
+That round replaced the watcher with an interval task.
 
-The revision is strictly smaller than what it replaces:
+Round 2 finding, from the other vendor, also accepted, and it deletes more than round 1 did:
+**the interval task is a second clock this module does not need.** `Keyring::open` already takes
+an injected `now: u64` (`src/protocol/continuation.rs:473`) and `Keyring::mint` has the same
+instant in `payload.issued_at` (`:161-168`, `:408`). Rotation is an age check against a clock
+already in hand at both call sites. A timer adds a second, independent clock, and a time split
+between the two is exactly the `UnknownKey` failure that RETAINED exists to prevent.
 
-| trigger | keep? | why |
+So: **rotate lazily, inside `mint` and `open`, off the `now` already passed in.** If the minting
+key is older than the rotation interval, retire it and mint a fresh one before proceeding; drop
+retained keys whose retirement is more than `CONTINUATION_LIFETIME_SECS` behind `now` in the same
+pass. Nothing is spawned, nothing is shut down, no constructor changes.
+
+| trigger | verdict | why |
 |---|---|---|
-| `gateway_reload_config` meta-tool (`src/gateway/meta_mcp/invoke.rs:2836`) | KEEP | free — runs on `&self` of `MetaMcp`, which already owns `continuation`. It is the operator-invocable lever, which is what makes ROTATABLE a verb rather than a property. |
-| file watcher (`ConfigWatcher::start`) | **DROP** | this was the only piece needing new plumbing, and it was coupling rotation to file edits that say nothing about keys. Removing it deletes the new parameter, the `ReloadContext` question and the two-caller table. |
-| interval task, spawned beside the server's other background tasks | **ADD** | guaranteed cadence: rotation no longer depends on an operator ever reloading. It also gives eager retention pruning a home, so the ring holds only keys inside the 300s window instead of only pruning at the next rotation. |
+| file watcher (`ConfigWatcher::start`) | **DROPPED** (round 1) | the only piece needing new plumbing, and it coupled rotation to file edits that say nothing about keys. |
+| interval task | **DROPPED** (round 2) | a second clock. It also forced a spawn site, a shutdown subscription, and a `tokio::spawn`-outside-a-runtime hazard in eight synchronous `ContinuationState::new()` call sites. All three concerns vanish with the task. |
+| `gateway_reload_config` meta-tool | **DROPPED** (round 2) | the same coupling argument that killed the watcher: rotating keys because an operator edited a backend URL is a side effect, not a verb. |
+| age check inside `mint` / `open` | **THE MECHANISM** | zero plumbing, one clock, and it is on the production path by construction — which is also how D7 WIRED is satisfied, without a meta-tool nobody calls. |
 
-Two decisions the timer forces, named here rather than left to the implementer:
+This is the shape the module already uses elsewhere: `ContinuationState`'s own
+`ConsumedLedger::evict_expired(now)` (`:619`) is a lazy evictor with no timer behind it, and the
+response cache and the signing nonce store both call their own `evict_expired` inline from the
+operation itself.
 
-**Where it is spawned — NOT in `ContinuationState::new`.** `MetaMcp::build`
-(`src/gateway/meta_mcp/mod.rs:427`) and `MetaMcp::new` (`:488`) are plain synchronous
-functions, and `ContinuationState::new()` is called from `build` at `:438` and from seven
-synchronous test constructors in `src/gateway/router/tests.rs`. `tokio::spawn` panics outside
-a runtime, so a constructor that spawns turns every one of those into a panic. The task is
-spawned at the server, exactly where `spawn_idle_reaper` already is
-(`src/gateway/server/mod.rs:1393`, defined `:2124`), with the identical signature shape:
-`(Arc<ContinuationState>, Option<broadcast::Receiver<()>>)`.
-
-**How it stops.** From the same shutdown broadcast every other background task uses —
-`shutdown_tx.subscribe()` at the call site, `select!`-ed against the interval tick, exactly as
-`ConfigWatcher::start` (`src/gateway/server/mod.rs:1282`) and the cost sweeper (`:1400-1416`)
-do. Without it the task holds its `Arc<ContinuationState>` alive past shutdown and never
-stops. This is the one line of new plumbing the design has, and it is a line this file already
-writes five times.
+**No operator rotate verb in v1, and that is deliberate.** The criterion says the key is
+*rotatable*; age-based rotation rotates it, unprompted, on every live replica. A manual verb
+would cost either a new meta-tool — against this repo's locked decision to keep the Meta-MCP
+surface compact — or the reload coupling just dropped. If the requester wants an explicit
+operator lever, that is a decision for them and it is cheap to add later; it is not needed to
+meet the criterion.
 
 The interval is a compile-time constant beside `CONTINUATION_LIFETIME_SECS`
 (`src/protocol/continuation.rs:128`), not new config — same reasoning that kept the retention
@@ -177,8 +178,10 @@ deadline; the rotation code must not carry a second copy of the number.
 ### The real mechanical work
 
 `ContinuationState` lives behind an `Arc` (`src/gateway/meta_mcp/mod.rs:230`) and `open`
-takes `&self`, so the key vector must become interior-mutable — a read-write lock, read on
-every open, written once per rotation. That is a LOCAL lock change, not a distributed one,
+takes `&self`, so the key vector must become interior-mutable — **`std::sync::RwLock`**, read on
+every open, written once per rotation. Explicitly NOT the `tokio::sync::Mutex` that
+`ConsumedLedger` and `InFlight` use (`:561`, `:668`): those are `async fn`s already, `mint` and
+`open` are not, and copying their lock type would make every call site of both `async`. That is a LOCAL lock change, not a distributed one,
 and it is the whole of the concurrency work.
 
 The lock must cover `minting_kid` AND `keys` AS ONE UNIT. They are separate fields today
@@ -188,12 +191,15 @@ Two locks, or a lock around only the vector, reintroduces exactly the race the r
 supposed to be too simple to have.
 
 Second point, easy to miss: `Keyring` also carries a minted counter and a mint budget
-(`:297-301`). Rotation must decide what happens to that budget. Carrying the old counter
-forward makes rotation pointless as a budget reset; resetting it silently gives an attacker
-who can trigger reloads an unbounded mint budget. Named here as a decision, not assumed.
+(`:297-301`). **Decided: `minted` resets to 0 on the new key.** The NIST bound the budget
+encodes is per-key, so carrying the counter forward is simply wrong arithmetic — and it strands
+a long-lived replica that exhausted one key with no way to mint again short of a restart. The
+draft framed this as two equal traps, which was wrong: the "unbounded budget via repeated
+rotation" half assumed an attacker-triggerable rotation, and after the revision above there is
+no operator trigger at all. Rotation is age-driven, so the mint rate is bounded by the clock.
 
 Third: `kid` is a `u8`. 256 kids before wrap. Decided rather than left open, because the
-timer trigger makes the rate knowable: at one rotation per interval the live ring holds
+age-based rotation makes the rate knowable: at one rotation per interval the live ring holds
 `ceil(300 / interval) + 1` kids, so a kid is REUSED only once its previous holder has been
 dropped — safe by definition, since a dropped key's envelopes can no longer open. A rotation
 that cannot find a free kid does NOT fail its caller: it logs and keeps the current minting
@@ -251,7 +257,7 @@ them gets built first.
 |---|---|---|
 | 1 | Does the criterion's author read "rotatable" as requiring operator-supplied material? If yes, (c) does not meet it and (b) returns. | ASKABLE, not checkable — asked of the team lead in the message accompanying this design. Blocks all four pieces. |
 | 2 | What is "the max lifetime" as a number, and is it bounded anywhere today? RETAINED is unimplementable without it. | RESOLVED, checkable. `rg CONTINUATION_LIFETIME_SECS src/` — `const CONTINUATION_LIFETIME_SECS: u64 = 300` at `src/protocol/continuation.rs:128`, not a parameter and deliberately not one. The retention window is therefore 300 seconds, a compile-time constant. It changed the design: the retention deadline needs no new config and no new plumbing. |
-| 3 | Can the config-reload path actually REACH the live keyring? The whole ROTATABLE claim, and the D7 WIRED argument with it, rests on this. | RESOLVED, checkable. `rg -n "MetaMcp\|continuation\|ContinuationState" src/config_reload/` — zero hits; `ReloadContext` (`:1371-1388`) holds config path, live config, registry, failsafe, TTL and env, and no gateway handle. The meta-tool caller reaches it for free, the file watcher does not. It changed the design twice: first the "free trigger" claim turned out half true, and then review showed the reload trigger was the wrong choice altogether. The watcher leg is dropped, the meta-tool leg is kept as the operator's rotate verb, and an interval task supplies the cadence. Written up above rather than left as a table cell. |
+| 3 | Can the config-reload path actually REACH the live keyring? The whole ROTATABLE claim, and the D7 WIRED argument with it, rests on this. | RESOLVED, checkable. `rg -n "MetaMcp\|continuation\|ContinuationState" src/config_reload/` — zero hits; `ReloadContext` (`:1371-1388`) holds config path, live config, registry, failsafe, TTL and env, and no gateway handle. The meta-tool caller reaches it for free, the file watcher does not. It changed the design twice: first the "free trigger" claim turned out half true, and then review showed the reload trigger was the wrong choice altogether. Every trigger was eventually dropped: the watcher for its plumbing, then the meta-tool and the interval task in round 2, in favour of an age check on the `now` already injected into `open` and `mint`. Written up above rather than left as a table cell. |
 
 Question 1 is load-bearing: a yes reverses the recommendation.
 
@@ -272,3 +278,8 @@ and already stating the coupling this design argues for independently: persisten
 durable ledger ship TOGETHER or MRTR.5 breaks. So (b) is not being refused here — it is being
 left where the codebase already put it. What (c) adds is that SEC.3's three clauses need not
 wait for MIK-7312, because none of them asks for a persistent key.
+
+
+**T1c (PQC readiness) — N/A, recorded rather than skipped.** This design adds no key-agreement
+and no signature primitive. It rotates an existing symmetric AES key, which is the DoR T1c
+symmetric-only fast path (`HMAC`/`AES`/`ChaCha` = auto-PASS).
