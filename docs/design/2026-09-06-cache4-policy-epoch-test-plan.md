@@ -9,8 +9,10 @@ Plan rows in scope: 4.d, 4.e, 4.f.1, 4.f.2, 4.f.3, 4.g of
 Every row below answers both plan-review questions: **does this criterion have a case, or a
 stated reason it has none**, and **can that case actually fail**. An empty cell is the finding;
 none are empty, and three rows say "none, because —" rather than inventing a case. The last of
-those three is not a plan row at all but a property the design asserts in prose, carried here so
-that a claimed guarantee with no case is visible rather than absent.
+those three is not a plan row at all but a property the design asserts in prose. Two further such
+properties are carried **inside** the rows that come closest to them, in the same form: 4.g's
+authorization window and 4.f.1's writer-side ordering. A claimed guarantee with no case is
+visible here rather than absent — that is the whole reason these five appear at all.
 
 ## Rows
 
