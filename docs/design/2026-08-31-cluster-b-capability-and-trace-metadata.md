@@ -151,6 +151,18 @@ Added 2026-09-06, after review, as a source correction: §3.3 decides the carrie
 OTEL.1 closes when the fields "are read from the inbound `_meta`", but no section named the read
 site, and the obvious one is dead.
 
+Every file:line below was re-read against the checkout on 2026-09-06 (round 2), not inferred:
+`extract_tools_call_params` returns `(tool_name, arguments)` and nothing else
+(`src/gateway/router/helpers.rs:190-195`); both callers destructure exactly that pair
+(`src/gateway/router/handlers.rs:976`, `src/gateway/server/mod.rs:1827`); the one production
+`from_meta` call reads `args.get("_meta")` (`src/gateway/meta_mcp/invoke.rs:1845-1847`); the
+`arguments` schema is a bare `{"type": "object"}` with no `additionalProperties`
+(`src/gateway/meta_mcp_tool_defs.rs:148`); stdio passes `retry: &NO_RETRY`
+(`src/gateway/server/mod.rs:1862`) with `#[ignore]` on the watcher test naming that reason
+(`:3601`); `RetryFields::from_params` already parses `params._meta`
+(`src/protocol/mrtr.rs:117-127`). A citation that had drifted would have made this section
+false, so it was checked rather than asserted.
+
 `extract_tools_call_params` (`src/gateway/router/helpers.rs:185-195`) returns `params.name` and
 `params.arguments` and nothing else, at both callers — `src/gateway/router/handlers.rs:976` (HTTP)
 and `src/gateway/server/mod.rs:1827` (stdio). Protocol-level `params._meta`, the carrier 3.3
