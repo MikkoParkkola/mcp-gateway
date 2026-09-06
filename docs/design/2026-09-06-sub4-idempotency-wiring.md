@@ -121,6 +121,18 @@ two-rung chain would hand every API-key client the same empty namespace and
 reinstate the cross-principal replay the previous repair removed, one layer
 down.
 
+The third rung is not reachable today, and wiring it is part of this change.
+`MetaMcpCallerContext` (`src/gateway/meta_mcp/mod.rs:113-132`) carries
+`api_key_name` — the operator-chosen display name, which `auth.rs:348-351`
+explicitly warns is not a principal because two keys may share one — plus
+`agent_id` and `verified_identity`. It does not carry `principal`, so
+`invoke.rs:1140-1142` cannot reach it. The change adds
+`caller_principal: Option<&'a str>` to that context, populated from
+`AuthenticatedClient.principal` at the router boundary where the authenticated
+client is already in hand, and the fallback chain reads it there. Named as a
+design event (§P3): it widens a public struct that eleven call sites construct,
+which is a decision the first draft of this design did not make.
+
 `AuthenticatedClient` also records `authenticated` (`auth.rs:353-358`), false
 for the anonymous identity used when authentication is disabled and for public
 paths, and `principal` is empty exactly then. So the residual is now stated
