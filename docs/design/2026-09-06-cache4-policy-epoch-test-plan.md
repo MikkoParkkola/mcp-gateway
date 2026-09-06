@@ -66,19 +66,16 @@ Dual-vendor, adversarial, on identical material: the plan above plus the review 
 Round 1 findings were repaired one commit per finding; each vendor then re-checked **its own**
 findings (repair protocol step 6 — closure returns to the finder, never to the other vendor).
 
-| leg | vendor | round 1 | closure | reconciled by |
+| leg | vendor | round 1 | closure | ledger row |
 |---|---|---|---|---|
-| 1 | Kimi | 3 findings | **SHIP** | payload digest `1625260010763a577be63f82fb21a4ff332bca687cb36ce7b3ab6e7d8905308d` (39,525 B), exact |
-| 2 | Grok | 1 finding | see below | scope string + `head` + response body — **not** by digest |
+| 1 | Kimi | 3 findings | **SHIP** | payload digest `1625260010763a577be63f82fb21a4ff332bca687cb36ce7b3ab6e7d8905308d`, 39,525 B |
+| 2 | Grok | 1 finding + 6 improvements | **SHIP** | `2026-09-06T07:58:40Z`, `head` = `head_live` = `829089d2`, `process_status: ok`, payload digest `b7b48ac4f63d4058ba9f6c8ba7a14580b7bd0326775c6c5c63dcf90f2d9f7d6b`, 18,259 B |
 
-**Why leg 2 cannot reconcile by digest.** The grok wrapper prepends repository context to the
-submitted material before hashing, so its ledger `material_sha256` covers payload *plus* context
-and can never equal the payload digest computed here (`b7b48ac4f63d4058ba9f6c8ba7a14580b7bd0326775c6c5c63dcf90f2d9f7d6b`,
-18,259 B). Matching is by the wrapper-recorded `scope` field —
-`CACHE.4 policy-epoch test plan — confirmation pass round 1` — cross-checked against `head`.
-A row whose `head` and `head_live` differ read a worktree that moved mid-review and is **not**
-accepted, whatever its verdict string says; this branch is shared with another session that
-committed three times in four minutes during round 1.
+Both rows reconcile by the **payload digest**, exactly. An earlier draft of this section claimed
+the grok leg could not — that its wrapper hashes the payload together with repository context it
+adds itself. That inference came from a neighbouring row carrying 75,739 material bytes for a
+smaller-looking payload; the row was another session's, on this shared branch, and the inference
+was wrong. Corrected here rather than quietly, because the wrong version was committed.
 
 **Kimi's SHIP is against the pre-repair text, and it holds.** It was issued at `84618a2e`,
 before the 4.f.1 cell gained its cache-handle clause. Its three findings were 4.f.1's
@@ -86,3 +83,20 @@ writer-order sentence, 4.g's third invoke, and the five-step order of work. The 
 additive within a *different* clause of 4.f.1 and touches none of the three. Re-firing kimi
 would buy a round and no information.
 
+**What grok actually returned, stated as it stands.** `IMPROVEMENTS: NONE IDENTIFIED`, then a
+single verdict line naming three things: the third invoke fails a skipped write, the held cache
+`Arc` makes `stats().size` reachable, and neither repair stages a vacuous pass. That covers
+round-1 finding 1 and the self-disclosed item 8 by name, and answers the "did a repair introduce
+a new defect" question directly. It did **not** answer CLOSED/NOT CLOSED per finding as the
+prompt asked. Findings 2-7 were improvements grok itself raised, and the verdict closes them
+only by implication. Recorded as an implication, not as seven closures.
+
+**The tree moved eleven commits under the review, and the citations survived it.**
+`head` and `head_live` agreeing says the two samples agreed, not that nothing moved: this branch
+is shared, and between the run's start (`02fcccb4`) and the row (`829089d2`) eleven commits
+landed, two of them touching `invoke.rs` and `mod.rs` — files this plan cites by line. Checked
+individually at the row's head: `invoke.rs:906`, `:954`, `:1214`, `:1787` and `mod.rs:493`,
+`:890` all still name what the plan says they name. `mod.rs:1786` did not survive — the
+`authz_tests` declaration moved to `:1793` inside that window, correct at both review heads and
+stale by the time the row landed. Re-pointed in the commit after this one. That is the whole
+contamination check; the head-pair equality is not it.
