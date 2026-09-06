@@ -176,10 +176,13 @@ Added 2026-09-06, after review, as a source correction: §3.3 decides the carrie
 OTEL.1 closes when the fields "are read from the inbound `_meta`", but no section named the read
 site, and the obvious one is dead.
 
-Every file:line below was re-read against the checkout on 2026-09-06 (round 2), not inferred:
-`extract_tools_call_params` returns `(tool_name, arguments)` and nothing else
-(`src/gateway/router/helpers.rs:190-195`); both callers destructure exactly that pair
-(`src/gateway/router/handlers.rs:976`, `src/gateway/server/mod.rs:1827`); the one production
+Every citation below was re-read against the checkout on 2026-09-06 (round 2), not inferred. Anchors
+are SYMBOL names, not line numbers: this is a shared checkout and concurrent edits move lines
+(measured — three of these citations had drifted by 2026-09-07 while the symbols had not):
+`extract_tools_call_params` (`src/gateway/router/helpers.rs`) returns `(tool_name, arguments)`
+and nothing else; both production callers destructure exactly that pair — the HTTP `tools/call`
+arm in `src/gateway/router/handlers.rs` and `dispatch_single_with_sink` in
+`src/gateway/server/mod.rs`; the one production
 `from_meta` call reads `args.get("_meta")` (`src/gateway/meta_mcp/invoke.rs:1845-1847`); the
 `arguments` schema is a bare `{"type": "object"}` with no `additionalProperties`
 (`src/gateway/meta_mcp_tool_defs.rs:148`); stdio passes `retry: &NO_RETRY`
@@ -188,9 +191,10 @@ Every file:line below was re-read against the checkout on 2026-09-06 (round 2), 
 (`src/protocol/mrtr.rs:117-127`). A citation that had drifted would have made this section
 false, so it was checked rather than asserted.
 
-`extract_tools_call_params` (`src/gateway/router/helpers.rs:185-195`) returns `params.name` and
-`params.arguments` and nothing else, at both callers — `src/gateway/router/handlers.rs:976` (HTTP)
-and `src/gateway/server/mod.rs:1827` (stdio). Protocol-level `params._meta`, the carrier 3.3
+`extract_tools_call_params` (`src/gateway/router/helpers.rs`) returns `params.name` and
+`params.arguments` and nothing else, at both callers — the `tools/call` arm in
+`src/gateway/router/handlers.rs` (HTTP) and `dispatch_single_with_sink` in
+`src/gateway/server/mod.rs` (stdio). Protocol-level `params._meta`, the carrier 3.3
 decides on, never reaches `invoke_tool`.
 
 `TraceContext::from_meta` has exactly one production caller,
