@@ -125,8 +125,13 @@ Five pieces, in dependency order.
    the record at the moment it acts. Nothing derives a deadline once and keeps it, so "the reaper
    and the record disagree about the TTL" is not a sentence that can be said about this design.
    That is what makes it an elimination rather than a no-caching rule someone has to remember.
-   `src/config_reload/` makes it live rather than theoretical: a reload can change the default TTL
-   while tasks are running, and it changes only tasks created after it.
+   `src/config_reload/` is why the rule is not theoretical — put in the tense it is true in: the
+   reload path exists today and carries no task TTL (`rg 'ttl_ms|TtlMs|ttlMs' src/` finds only
+   `LIST_TTL_MS`, the `tools/list` cache value at `router/handlers.rs:1411`, and the meta-MCP
+   `cache_ttl` the reload already threads, `config_reload/mod.rs:1375`). The task default-TTL key
+   arrives with piece 2; from that day a reload changes the default while tasks are running, and
+   changes it only for tasks created after it. The ownership rule is written before the key exists
+   so the reaper never acquires a deadline that can go stale.
 
    *Who "the server" is.* The gateway — §3's opening sentence: it originates tasks, it does not
    proxy a backend's. So "a server changes the value mid-task" means the gateway changing a value
