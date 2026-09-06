@@ -1,6 +1,8 @@
 # CONFIRM.2 — a destructive meta-tool a modern client cannot confirm
 
-Date: 2026-09-06 · Release: 4.0.0 · Status: DESIGN, awaiting requester answers (Q1-Q3)
+Date: 2026-09-06 · Release: 4.0.0 · Status: DESIGN, **fork closed 2026-09-06** — Option I is the
+branch. Q1 answered by the standing ruling, Q3 moot with it, Q2's build half settled and its
+defer half still the operator's alone. See *Fork closed*, below.
 
 ## The requirement, verbatim
 
@@ -20,7 +22,26 @@ exactly one answer for it today — refuse. The requirement says the gate must i
 *reachable*, "so a modern client can confirm".
 
 Two readings of that sentence produce different releases. That is the design's central
-question, and it is not the implementer's to settle (Q1, below).
+question, and it was not the implementer's to settle (Q1, below) — it has since been settled by a
+standing ruling, recorded in the next section.
+
+## Fork closed — Option I is the branch (2026-09-06)
+
+`docs/requirements/RELEASE-4.0.0-blocking-rollup.md:18-47` carries a standing ruling for the whole
+release: where a row offers *build the mechanism* or *rewrite the criterion so what exists already
+satisfies it*, the recorded operator agreement is to build. It answers Q1 in the negative — a
+refusal does not count as the modern-path answer — and it answers it without a third asking,
+because the instruction the release runs under ("implement the full 4.0.0 scope, with all gaps
+fixed with the full scope") is the recorded agreement the repair protocol requires before a
+requirement may be narrowed, and it points the other way. Everything below stands as reviewed; the
+options are kept because the reasoning that chose between them is what makes the choice
+auditable, not because either is still live.
+
+What the ruling does NOT license, and what therefore stays where it was: dropping an acceptance
+criterion, deferring the row, or judging the build not worth doing. Those remain operator calls.
+So U1 — the client-ecosystem unknown — does not become a licence to defer; it becomes a scheduled
+unknown on the critical path, and its bad-resolution field says who hears about it rather than
+what the slice may do unilaterally.
 
 ## Measured constraints
 
@@ -48,7 +69,7 @@ question to the requester rather than a flat "defer".
 
 ## Options
 
-### Option R — refusal *is* the modern-path answer (RECOMMENDED, conditional on Q1)
+### Option R — refusal *is* the modern-path answer (NOT TAKEN — the ruling closed against it)
 
 The gate stays as it is. A modern client asking for a destructive meta-tool gets a refusal
 naming the reason and the channel that would work. §3.7's own preamble says "Each requirement
@@ -83,8 +104,8 @@ the cheaper of the two options by a wide margin; a shared closure is not a messa
 **Why this is not a ruling I can make.** The requirement's own words are "so a modern client
 **can confirm**". Refusal is not confirming. Adopting Option R therefore *changes what CONFIRM.2
 asks for*, and per the repair protocol, eliminating or narrowing a requirement needs the
-requester's recorded agreement before it happens — not the implementer's reading. Q1 is that
-request.
+requester's recorded agreement before it happens — not the implementer's reading. Q1 was that
+request, and the standing ruling answered it against this option.
 
 Consequence if adopted: **a modern client cannot kill a server at all** in 4.0.0. That is a
 product decision (Q3), not an engineering one.
@@ -230,8 +251,8 @@ What each option owes:
 This is a gap the design NAMES, not one it closes. Closing it is a change to the gate's logging,
 not to the option chosen, and it applies whichever branch the requester rules for. Naming a gap is
 not scheduling one, so it is carried as **U2** in the deferred unknowns below, with the four fields
-a deferral owes. It blocks DEPLOYMENT of either branch, never the ruling on Q1: a branch can be
-chosen without it and cannot ship without it. Read the cost lines above with that attached — Option
+a deferral owes. It blocks DEPLOYMENT, never the choice of branch — which is now made: the branch
+was choosable without U2 and is shippable only with it. Read the cost lines above with that attached — Option
 R's "cheapest of the three" is cheapest *given* U2 is answered, and a refusal nobody can later
 evidence is not the control it looks like.
 
@@ -271,8 +292,8 @@ writing it would pick the branch the requester has not picked. Scheduled, with t
 |---|---|
 | owner | the requester, as part of ruling Q2 — it is the same decision |
 | what would resolve it | a versioned schema for the gateway-originated `InputRequired` and for the `inputResponses` shape accepted back at the gate, reviewed as a protocol change |
-| when | before any Option I implementation begins; a YES to Q2 is what triggers it |
-| if it resolves badly | if the shape cannot be versioned inside the 4.0.0 window, Option I is not available in 4.0.0 and Option R is the only live answer — which is the decision Q1 already puts in front of the requester |
+| when | **TRIGGERED 2026-09-06** — the standing ruling settled Q2's build half, which is what this row waited on. Before any Option I implementation begins, and the emit side is the first thing built, so this is the next artefact |
+| if it resolves badly | if the shape cannot be versioned inside the 4.0.0 window, Option I is not available in 4.0.0 — and since neither refusal-as-answer nor deferral is the slice's to elect, that is a finding carried to the operator with the measurement, not a quiet fall back to Option R |
 
 Nothing that depends on this is implemented, which is the condition a scheduled deferral has to meet.
 
@@ -300,11 +321,12 @@ Nothing that depends on this is implemented, which is the condition a scheduled 
   `ConfirmationPolicy::for_modern()` is an unconditional refusal — governing them here would
   refuse a large slice of the tool surface with no confirmation path." Two consequences belong
   to the requester, not to this design:
-  - **The third reason is coupled to Q1.** It holds only while refusal *is* the modern-path
-    answer. Rule Q1 for Option R and it calcifies: the modern path refuses, so gating backend
-    tools means refusing them. Rule for Option I and it evaporates: a confirmation path exists,
-    and the reason for the exclusion goes with it. The other two reasons — no annotation source,
-    a substring guess — survive either ruling, and they are the ones that would cost real work.
+  - **The third reason was coupled to Q1, and Q1 is answered.** It held only while refusal *was*
+    the modern-path answer; the ruling chose Option I, so a confirmation path will exist and the
+    reason evaporates rather than calcifying. It is spent, not load-bearing. The exclusion still
+    stands on the other two reasons — no annotation source, a substring guess — which survive
+    either ruling and are the ones that would cost real work. Anyone revisiting the exclusion
+    should argue against those two; quoting the third is quoting a dead clause.
   - **The gate/cache ordering hazard is unreachable today.** A tool that is both
     destructive-annotated and backend-routing would place the confirmation gate and the
     idempotency cache in an order this design has not specified. No such tool exists. Two
@@ -342,10 +364,13 @@ without it, and the omission is recorded rather than backfilled silently.
 NIH verdict: **no new mechanism is warranted.** Both live options reuse what exists.
 Honest limit, SCHEDULED rather than confessed: the two RFCs are cited from knowledge, not fetched
 in this session, so they are marked I. Naming that is not discharging it, so the check is booked.
-**Owner** — whoever records the Q1 answer. **What resolves it** — fetch RFC 9470 §1 and RFC 8628
-§1 and confirm each row's "shape" column against the text. **When** — before Q1's answer is
-written into the requirement row; it is a minutes-long fetch and there is no reason it should
-trail the ruling. **If it resolves badly** — the claim that challenge-then-reissue is the
+**Owner** — this design's author. **What resolves it** — fetch RFC 9470 §1 and RFC 8628 §1 and
+confirm each row's "shape" column against the text. **When** — **the original trigger fired unrun**:
+it was "before Q1's answer is written into the requirement row", and the standing ruling answered
+Q1 on 2026-09-06 without the fetch happening. Recorded that way rather than quietly re-dated,
+because a trigger that passes unnoticed is the failure mode scheduling exists to prevent.
+Re-booked to: before the Option I test plan is reviewed, which is the next artefact that would
+lean on these rows. **If it resolves badly** — the claim that challenge-then-reissue is the
 conventional shape falls, and Option I loses its prior-art argument (not its cost argument, which
 rests on in-repo mechanisms read this session). Option R is unaffected either way, which is why
 this schedules rather than blocks.
@@ -354,23 +379,25 @@ this schedules rather than blocks.
 
 | # | assumption | impact | uncertainty | rank | cheapest check |
 |---|---|---|---|---|---|
-| A1 | The requester reads CONFIRM.2 as Reading A, refusal satisfies it | decides the whole change | high — a question of intent, not fact | **1** | ask. It is Q1, outstanding |
+| A1 | ~~The requester reads CONFIRM.2 as Reading A, refusal satisfies it~~ **FALSIFIED** | decided the whole change | resolved | **1** | asked and answered: the standing ruling (`blocking-rollup.md:18-47`) closes the fork toward build. Reading B holds |
 | A2 | No client shipping in the 4.0.0 window both declares a modern version and exercises input responses | decides whether Option I has a consumer | high | **2** | U1, deferred with an owner |
 | A3 | The continuation retry path is live on the production invoke path | turns Option I from a protocol build into a wiring job | low — measured | 3 | done: C6, `invoke.rs:1327,1559` |
 | A4 | The admin credential is the real access control, so confirmation is courtesy | carries the security argument for Reading A | low | 4 | done: C4 |
 | A5 | Every consumer of `Payload.backend_id` reads it as a backend | sizes Option I item 3 | low — measured, now repaired by a typed origin | 5 | done: C8 |
 
-A1 outranks everything and is not the designer's to answer. That is why this design ends in a
-question rather than a decision.
+A1 outranked everything and was not the designer's to answer. It has been answered against the
+recommendation, which is the outcome a question exists to allow. What remains ranked #1 in
+practice is A2/U1, and it no longer decides *whether* to build — only what the build is worth if
+no client walks the path.
 
 ## Exit criteria (G18)
 
 | criterion | value |
 |---|---|
-| **kill-metric** | Option I is killed if U1 returns no client that both declares a modern version and declares input capabilities within the 4.0.0 window. An affirmative path no client can walk is the cost this criterion exists to refuse |
-| **pivot-trigger** | the requester answers Reading B on Q1, or answers Q3 that a version-scoped inability to kill is unacceptable product behaviour. Either flips the recommendation from R to I |
+| **kill-metric** | ~~Option I is killed if U1 returns no client...~~ **RETIRED by the standing ruling.** A U1 that returns no client is now a FINDING carried to the operator, not a kill the slice may take: killing the row and deferring it are exactly the two moves `blocking-rollup.md:18-47` withholds. The measurement is unchanged and still worth running — what changed is who acts on it |
+| **pivot-trigger** | **FIRED.** The ruling answers Q1 as Reading B, which is the trigger this row named; the recommendation flipped from R to I on 2026-09-06 |
 | **success-floor** | the criterion closes with a recorded requester ruling, named tests, and no regression to the legacy path's warn-and-proceed behaviour. The tests, each named with the branch it belongs to — a floor demanding a refusal test of the branch that does not refuse is not a floor: **refusal branch (Option R) only** — `modern_path_refuses_unconfirmable_destructive_call`, asserting the wire string carries all three required contents (the tool, that this request's declared protocol version has no confirmation channel, and which channel does). Under Option I that assertion is false by construction: the version *does* have a channel and this caller did not declare it, so the affirmative branch's refusal case is the C3 capability refusal, a different string. **Affirmative branch (Option I) only** — `retry_after_redeemed_confirmation_returns_recorded_result`, which drives item 7's at-least-once scenario end to end: a redeemed continuation, a successful kill, a duplicate delivery, and the recorded result rather than a refusal. That test is the one that fails if an implementer reads item 7 as inheriting a cache the gate does not have. **Either branch, conditional on U2** — a test that the record U2's ruling requires is emitted for a refused kill. Conditional on purpose: U2's bad-resolution field accepts "4.0.0 needs no record" as a recorded residual, so a floor making this test unconditional would have decided U2 by making it a gate. If the ruling owes a record, this test is what makes "a refused kill is exactly the event an operator later asks about" a fact rather than a hope; if it owes none, the floor loses this row and nothing else. A design that ships without the ruling has not met the floor, whatever code lands |
-| **time-box** | the ruling is wanted before the 4.0.0 requirements freeze; absent it, CONFIRM.2 defers out of 4.0.0 with a recorded deferral, which its own Source column already contemplates ("Depends on MIK-7212", itself blocked by MIK-7388) |
+| **time-box** | met — the ruling landed 2026-09-06, before the 4.0.0 requirements freeze. The clause that followed it ("absent a ruling, CONFIRM.2 defers out of 4.0.0") is spent and would now be wrong twice over: there is a ruling, and deferral was never the slice's to elect |
 
 ## Unknowns — every one scheduled
 
@@ -393,17 +420,21 @@ Format per §P1: resolved unknowns carry a recorded ANSWER; deferred ones carry 
 **U1 — Does a modern client that declares in-band `elicitation` actually exist, and would it
 retry?** MRTR.8b already records that the spec *permits* a client never to retry. If no shipping
 client answers a gateway-authored `InputRequired`, Option I builds a confirmation path nobody
-walks, and every minted continuation expires unredeemed.
+walks, and every minted continuation expires unredeemed. **On the critical path since the fork
+closed** — it no longer decides whether to build, only what the build delivers.
 
 | field | value |
 |---|---|
-| owner | the requester (MIK-7212 owner) — this is a client-ecosystem fact, not a repo fact |
-| what would resolve it | name one 2026-protocol client that declares `elicitation` in its `initialize` capabilities *and* implements the multi-round retry; failing that, a decision to ship the surface ahead of clients |
-| when | before any Option I implementation begins — it is the gate on Option I, not a parallel task |
-| what if it resolves badly | Option I is worth building only as spec conformance, not as capability. Fall back to Option R and record CONFIRM.2 as met-by-refusal, or defer the row out of 4.0.0 |
+| owner | the requester (MIK-7212 owner) — this is a client-ecosystem fact, not a repo fact, and nothing in the repo can settle it |
+| what would resolve it | name one 2026-protocol client that declares `elicitation` in its `initialize` capabilities *and* implements the multi-round retry; failing that, a recorded decision to ship the surface ahead of clients. Either is an answer; only silence is not |
+| when | **before the redeem path is wired**, not before the branch is chosen — the branch is chosen. Concretely: the emit side (Option I items 1-3) and the MRTR.9/9a capability check (item 5) do not depend on U1 and start now; items 4, 6 and 7 — precedence, continuation bounds and cache-first — are the ones whose worth turns on a client that retries, and they are where this unknown lands |
+| what if it resolves badly | Option I is built as spec conformance rather than as delivered capability, and that is a FINDING carried to the operator with the measurement attached — not a fallback the slice takes. Falling back to refusal is narrowing the criterion and deferring the row is deferring the row; the standing ruling (`blocking-rollup.md:18-47`) withholds both from the slice owner. The operator may still elect either; the slice may only report |
 
-U1 **blocks Option I**. Nothing depending on it may be implemented while it is open. Option R
-does not depend on it and may proceed the moment Q1 is answered.
+U1 was written when it gated the choice of branch. It no longer does: the fork is closed and the
+build proceeds. What it gates now is narrower and further in — see the `when` row — and it sits on
+the critical path rather than beside it, because the branch it qualifies is the branch being
+built. A deferral inherited from a fork that has since closed is a stale caveat, and this is the
+edit that stops it becoming one.
 
 **U2 — What must a destructive confirmation, or a refusal, persist?** The audit-record section
 above shows nothing is persisted today beyond a log line naming the tool. Every option owes a
@@ -413,15 +444,17 @@ record; no option's cost line prices one; and that is how the cheapest branch ca
 |---|---|
 | owner | the requester (MIK-7212 owner) — what an operator must be able to reconstruct after a kill is a policy call, not a repo fact, and the record's contents follow from it |
 | what would resolve it | a ruling on the minimum record — at least principal, tool, arguments digest and outcome; on the affirmative branch also the answer given and the redemption that authorised the kill. The emission then joins the chosen option's deliverable and its cost line, and stops being free |
-| when | before either branch DEPLOYS. Not before Q1: the branch is choosable without this and shippable only with it |
+| when | before the chosen branch DEPLOYS. Not before the branch is chosen — that is done — and not before the test plan: Option I was choosable without this and is shippable only with it |
 | what if it resolves badly | a ruling that 4.0.0 needs no record is an accepted residual, recorded here as one with its reason, rather than left as an unremarked silence. It is not a finding that dies by being ignored |
 
-U2 blocks **deployment of either branch** and blocks nothing before that, so it does not sit on the
-path from Q1 to a decision.
+U2 blocks **deployment** and blocks nothing before that, so it did not sit on the path to closing the
+fork and does not sit on the path to the test plan.
 
 ## Questions for the requester
 
-Sequenced so that an answer to Q1 discharges exactly one of the two that follow — **not both**,
+**Answered 2026-09-06 by the standing ruling; kept as the record of what was asked and how the
+answer propagates.** Sequenced so that an answer to Q1 discharges exactly one of the two that
+follow — **not both**,
 and which one depends on the answer. Reading A (refusal satisfies the criterion, the recommended
 answer) makes Q2 moot and makes Q3 **required**, because refusal on the modern path is precisely
 what Q3 asks the requester to accept. Reading B makes Q3 moot and makes Q2 required. An earlier
@@ -429,7 +462,15 @@ draft said an answer to Q1 "may make Q2 and Q3 unnecessary", which invited the r
 the recommendation while skipping the question the recommendation depends on. Corrected
 2026-09-06 after a review finding.
 
-**Q1 — Does CONFIRM.2 accept a *refusal* as the modern-path answer for 4.0.0?**
+**Q1 — Does CONFIRM.2 accept a *refusal* as the modern-path answer for 4.0.0?** — **ANSWERED: no**
+(standing ruling, `docs/requirements/RELEASE-4.0.0-blocking-rollup.md:18-47`, 2026-09-06). Reading
+B holds; Option I is the branch. The two readings are kept below as the record of what was
+weighed, and the recommendation below is preserved unedited — a recommendation the requester
+overruled is evidence about this design's judgment, and rewriting it to agree with the answer
+would delete that evidence. Consequence for the rest of this section: **Q3 is moot** (it asks the
+requester to accept refusal as the product behaviour, which is the branch not taken) and **Q2's
+first half is settled** — build the gateway-originated `InputRequired`. Q2's second half, deferring
+the row out of 4.0.0, is not settled and is not the slice's to elect either way.
 
 - *Reading A — refusal satisfies it.* §3.7's preamble demands a refusal rather than a
   computation; the admin credential (C4) is the actual control, so the security posture is
