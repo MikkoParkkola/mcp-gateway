@@ -109,18 +109,30 @@ Keying both on one `caller_principal` is the elimination, not a coincidence: the
 two caches then agree about WHO a call belongs to, and there is no second answer
 to that question for them to disagree about later.
 
-`caller_principal` is itself `Option`, and the repair does not invent a principal
-where none exists: with no binding AND no verified identity it is `None`, and
-callers are then indistinguishable to the key. That case is not introduced here
-and is not narrowed to idempotency — `response_cache_key_for` takes the same
-`principal: Option<&str>` and passes it to `ResponseCache::response_key`
-(`support.rs:65-77`), so a gateway that cannot tell its callers apart already
-shares every cached response between them. What the repair removes is the
-strictly larger case the code named: a gateway that CAN tell its callers apart,
-by verified identity, and keyed on the binding anyway because propagation was
-off. Closing the remaining case means requiring an authenticated principal
-before the guard engages, which is a policy decision about who may call an
-unauthenticated gateway, not a property of this key.
+`caller_principal` is the value the response cache already uses, and its
+fallback chain has three rungs, not two: the propagated `cache_binding`, then
+the verified OIDC subject via `stable_actor_id`, then the credential digest
+`AuthenticatedClient.principal` (`src/gateway/auth.rs:352`). The third rung is
+not decoration. That field is documented there as "a digest of the validated
+secret, not the display name", carried by every client that presented an API
+key, and it is populated when identity propagation is off and no OIDC identity
+exists — which is to say, under the shipped default this change turns on. A
+two-rung chain would hand every API-key client the same empty namespace and
+reinstate the cross-principal replay the previous repair removed, one layer
+down.
+
+`AuthenticatedClient` also records `authenticated` (`auth.rs:353-358`), false
+for the anonymous identity used when authentication is disabled and for public
+paths, and `principal` is empty exactly then. So the residual is now stated
+precisely: `caller_principal` is `None` only for a caller that presented no
+credential at all, and those callers are indistinguishable to the key. That case
+is not introduced here and is not specific to idempotency —
+`response_cache_key_for` takes the same `principal: Option<&str>` and passes it
+to `ResponseCache::response_key` (`support.rs:65-77`), so a gateway with
+authentication disabled already shares every cached response between its
+callers. Closing it means refusing the guard without an authenticated principal,
+which is a policy decision about who may call an unauthenticated gateway, not a
+property of this key.
 
 ## Decision: default ON is not a behaviour change (§P3, named)
 
