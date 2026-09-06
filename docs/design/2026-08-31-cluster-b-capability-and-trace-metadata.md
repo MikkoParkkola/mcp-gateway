@@ -7,8 +7,14 @@ not from the working tree — four other sessions hold uncommitted edits in this
 line read live may be someone's unmerged change. Spec citations are the MCP core schema for
 protocol revision `2026-07-28`, fetched 2026-08-31 from
 `raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/schema/2026-07-28/schema.json`
-(181,835 bytes) and queried by parsing `$defs`. `main` is mutable; the bytes reviewed are pinned by
-that size and by the `$defs` extracts quoted in 2.1. SEP-414 is cited at its immutable permalink
+(181,835 bytes) and queried by parsing `$defs`. `main` is mutable, and it moved: a re-fetch on
+2026-09-06 returned **181,474 bytes**, sha256
+`ef70b61f99b6d2e5e3b46863822eab08dff6a45bedc7a08914e0e5b133f40203`. Every claim this document
+draws from the schema was re-checked against those bytes and none changed — `ServerCapabilities`
+and `ClientCapabilities` carry the same property sets with no `tasks` member (2.1), `extensions`
+has the same shape, and `traceparent`/`tracestate`/`baggage` still occur zero times (2.2). Size
+alone was never a sufficient pin, which the drift has now demonstrated; the sha256 above is, and
+it is what a later reader should re-compute. SEP-414 is cited at its immutable permalink
 (4.1), not at a branch tip.
 
 ## 1. Problem
