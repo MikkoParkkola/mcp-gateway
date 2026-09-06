@@ -173,6 +173,17 @@ plausible number of concurrent principals is not what threatens this release. Na
 that a later change to `principal_of`'s width knows it now has a second consumer with a
 stricter requirement than logging.
 
+The correlation key this design leans on has a second residual, and it is the same seam.
+`invoke_tool` reads the trace id from its own `args["_meta"]`
+(`src/gateway/meta_mcp/invoke.rs:1843-1847`), but every production caller builds `args` as
+`{server, tool, arguments}` and the router strips `params._meta` before a tool sees it
+(`src/gateway/router/helpers.rs:185-195`), so the trace-id branch never fires and
+`session_id` — the thing this design removes — is the only key the log ever gets. That is
+what `MIK-7215.CONTROL.3a` and `CONTROL.3b` are both waiting on: not two mechanisms, one
+absent seam carrying a conforming client's `params._meta` down to this read. Wiring it is
+IN scope for whichever change claims those rows, and its test must go red first — the
+existing one stages `_meta` where the code looks rather than where a client puts it.
+
 ## Open for the operator — asked, awaiting an answer
 
 **How long is a departed caller's per-principal state retained?**
