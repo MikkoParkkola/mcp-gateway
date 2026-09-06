@@ -317,3 +317,50 @@ Any change to the capacities themselves. `CONSUMED_LEDGER_CAPACITY` and `IN_FLIG
 deployment decisions about availability (`continuation.rs:715-729` argues both), and this document
 changes when a slot is freed, never how many there are. Making them configurable is a separate
 question nobody has asked.
+
+---
+
+## Design-receipt update — 2026-09-06
+
+Three of this document's recorded answers have gone stale at source. The premise moved in the
+direction that helps: what it described as latent is live, and half of what it proposed is built.
+
+### What changed under the document
+
+| the document says | what is true on `fix/mrtr2-continuation-handle` |
+|---|---|
+| the file is `src/gateway/continuation.rs`, `hold` at `:619` | the file is `src/protocol/continuation.rs`; `InFlight` `:664`, `hold` `:696`, `begin_exchange` `:854`. **Every line anchor in the sections above is stale — do not cite them** |
+| "nothing in production calls `InFlight::hold`" — the wedge is *latent* | **falsified.** `begin_exchange` calls `hold` (`continuation.rs:864`) and production calls `begin_exchange` (`src/gateway/meta_mcp/invoke.rs:385`). The wedge is live. The document's own second closure condition — wiring evidence alongside the soak — is met by that pair |
+| `hold` has no clock and the inline retain is unbuilt | **built.** `hold(&self, backend_id, expires_at, now)` reclaims at capacity via `reclaim_abandoned` (`:675-677`, `:708`), and `complete` (`:752`) releases on the ordinary path. The **count clause of `NFR.PERF.3` is satisfied by mechanism** |
+
+### What is still missing, stated as the remaining scope
+
+**FOR:** make the *lifetime* half of `NFR.PERF.3` true and checkable — an abandoned exchange's slot
+is reclaimed on a clock, not only when someone else hits the ceiling — and give `NFR.PERF.4` a
+ceiling assertion that fails when the model-facing meta-tool count exceeds 16.
+
+**OUT:** the capacities themselves (unchanged from the section above); the 14–16 target itself;
+`NFR.PERF.1`'s end-to-end client-to-backend harness (exists at no revision of this repo, and the
+release owner ruled on 2026-09-05 that 4.0.0 ships on headroom); `NFR.PERF.2`; `MRTR.7`; deleting
+the seventeenth meta-tool, which is gated on the operator's breaking-change question.
+
+Two mechanisms, both absent:
+
+1. **`InFlight::reap(&self, now) -> usize`** — `reclaim_abandoned` under the lock, returning how
+   many slots came back. It is the same body `hold` already calls; the missing part is a caller
+   that runs without capacity pressure.
+2. **`spawn_continuation_maintenance`** — a 60 s interval task with a shutdown branch, modelled on
+   the per-user idle sweep at `src/gateway/server/mod.rs:2136` (`SWEEP_INTERVAL`, `tokio::select!`
+   on `interval.tick()` and the shutdown receiver). Wired where the router is constructed
+   (`server/mod.rs:1175`), so the reclaimer has a production consumer the day it exists.
+
+**A reaper callable only from tests is the failure this document is about, one level up.** Neither
+mechanism lands without the other.
+
+### Unknowns opened by this update
+
+| unknown | state |
+|---|---|
+| Does the at-capacity refusal still amplify? | **Resolved: yes.** `hold` retains over the whole table on *every* refused attempt (`:698-709`) with no earliest-deadline guard, so a caller that keeps pushing at capacity pays O(4 096) under the lock per attempt and needs no privilege to do it. The guard this document proposed was not built with the retain. Fixing it is in scope here: track the earliest deadline and skip the sweep when nothing can have expired |
+| What soak bound does the requirement name? | **Resolved: none.** `RELEASE-4.0.0-performance.md:77-88` says "MUST NOT grow unboundedly" and "a soak MUST show reclamation" — no duration, no abandonment rate, no reclamation threshold. Changed the design: the criterion is made checkable by a **deterministic driven-clock test**, not a wall-clock soak — abandon 8 192 exchanges (2x `IN_FLIGHT_CAPACITY`, `:811`), advance the clock past the deadline plus one tick, assert occupied count returns to 0, then assert a fresh `hold` succeeds. A wall-clock soak is neither runnable in the suite nor a controlled observation |
+| Would an RSS-based soak assertion fail today? | **Resolved: no — and that is why it is the wrong assertion.** Memory is bounded at 4 096 entries either way, so a memory soak passes against the unfixed code. The assertion has to be on *occupancy coming down on the tick*, which cannot go green before the interval task has a production caller |
