@@ -3,146 +3,167 @@
 
 # NFR.PERF.4 — holding the Meta-MCP surface inside 14..=16
 
-Status: proposed, awaiting dual review. No code written.
+Status: **revision 2**, awaiting dual review. Revision 1's selected option is
+WITHDRAWN — see §0. No code written.
+
+## 0. What revision 1 got wrong
+
+Revision 1 selected a three-tool breaking fold. Dual review returned
+DO-NOT-SHIP with two HIGH findings, both verified at source against clean HEAD
+`5d359559` before being accepted:
+
+| # | finding | verified at |
+|---|---|---|
+| 1 | Supported configurations serve fewer than 14 tools, so "every configuration lands in 14..=16" is unachievable by any rearrangement of the surface | `src/gateway/meta_mcp/mod.rs:1265` (Code Mode serves 2), `:1297` and `:1307` (`meta_tool_exposure.filter` applies to both branches) |
+| 2 | The 13-tool floor was read from a builder combination the served path never produces | `src/gateway/meta_mcp/mod.rs:1304`, verbatim: `true, // cost_report always enabled (tracker is always present)` |
+
+Finding 2 inverts the diagnosis. The served floor is **14**, not 13, so the
+constraint revision 1 derived — "at least one non-base tool must become
+unconditional" — was already satisfied before the change. Only the ceiling is
+out of band. That makes the three-tool fold a breaking rename bought for
+nothing, and it is withdrawn rather than patched: the finding it answered does
+not exist.
+
+It also falsifies revision 1's own correction of the operator. Revision 1
+claimed removing `gateway_webhook_status` would drop the floor to 13 and break
+the `minimum: 14` claim. It would not — the floor is held by
+`gateway_cost_report`, unconditionally. **The 2026-09-02 prescription was
+correct as given.**
 
 ## 1. Problem, measured
 
-`NFR.PERF.4` requires the Meta-MCP surface to stay within **14..=16** tools. The
-shipped surface is a band of **13..=17** and nothing clamps either end.
-
 | fact | evidence |
 |---|---|
-| 13 tools with all four flag gates off | `src/gateway/meta_mcp_tool_defs_tests.rs:16-17`, asserts `== 13` |
-| four independent flag gates | `src/gateway/meta_mcp_tool_defs.rs:544-573` — `stats_enabled`, `cost_report_enabled`, `webhooks_enabled`, `reload_enabled` |
+| `cost_report` is unconditional on every served list | `src/gateway/meta_mcp/mod.rs:1304` |
+| three conditional tools remain: stats, webhooks, reload | `src/gateway/meta_mcp/mod.rs:1301-1303` |
+| 13 base tools with all four builder flags off | `src/gateway/meta_mcp_tool_defs_tests.rs:16-17` — a builder-level assertion, NOT a served surface |
 | webhooks default on | `src/config/features/webhooks.rs:28-36`, `enabled: true` |
 | claimed band | `benchmarks/public_claims.json:4-6` — `minimum: 14`, `readme_benchmark: 16`, `with_webhook_status: 17` |
 
-Two consequences the earlier diagnosis missed:
+Served band today: **14..=17**. `13 base + cost_report` = 14 floor; all three
+conditionals on = 17 ceiling. The criterion is violated at the ceiling only.
 
-- **`gateway_webhook_status` is the 14th tool, not the 17th.** It is on by default, so
-  it is exactly the tool the `minimum: 14` claim counts. The 2026-09-02 prescription —
-  remove it — would have dropped the default floor to 13, breaking the floor claim while
-  leaving the ceiling reachable.
-- **The band is violated at both ends.** 13 when an operator disables webhooks; 17 when
-  all four gates are on. A ceiling-only fix leaves the criterion false.
+## 2. Constraint
 
-## 2. Constraint every option must satisfy
-
-A floor of 14 over 13 base tools means **at least one non-base tool must be
-unconditional**. A ceiling of 16 means **at most two more may be conditional**. So any
-solution reduces four independent gates to at most two and makes at least one of the
-removed ones unconditional. That is arithmetic, not preference, and it rules out every
-option that edits only the ceiling.
+14 floor with 13 base and one unconditional extra is fixed. A ceiling of 16
+permits **at most two conditional tools**. There are three. So exactly one
+conditional tool leaves the enumeration. That is the whole arithmetic.
 
 ## 3. Options
 
-| # | option | floor | ceiling | verdict |
-|---|---|---|---|---|
-| a | clamp the count at startup, error outside the band | 13 | 17 | **rejected** — turns a configuration an operator is entitled to set into a startup failure, and does not change the surface |
-| b | exclude flag-gated tools from "the counted surface" | 13 | 17 | **rejected** — the count stops describing what the client sees. That drift is precisely what `public_claims.json` and its CI check exist to catch |
-| c | widen the requirement to 13..=17 | — | — | **rejected** — reverses the operator ruling of 2026-09-02 and raises the ceiling to match whatever shipped |
-| d | fold the three status/report tools into one unconditional `gateway_status` with a `scope` argument; leave `reload_config` gated | 14 | 15 | **selected** |
+| # | option | band after | verdict |
+|---|---|---|---|
+| a | clamp the count at startup, error outside the band | 14..=17 | **rejected** — turns a configuration an operator may set into a startup failure and does not change the surface |
+| b | exclude gated tools from "the counted surface" | 14..=17 | **rejected** — the count stops describing what the client sees, which is the drift `public_claims.json` exists to catch |
+| c | widen the requirement to 14..=17 | — | **rejected** — reverses the 2026-09-02 ruling |
+| d | fold three status tools into one `gateway_status(scope)` | 14..=15 | **withdrawn** — see §0; answers a floor problem that does not exist, at the cost of three breaking renames |
+| e | remove `gateway_webhook_status` from the enumeration | 14..=16 | **selected** |
 
-## 4. Selected: fold the status surface
-
-`gateway_get_stats`, `gateway_cost_report` and `gateway_webhook_status` are three
-read-only status queries over three registries. They differ in which registry they read,
-which is an argument, not a tool.
+## 4. Selected: remove `gateway_webhook_status`
 
 ```
 13 base
-+ 1 gateway_status            (unconditional)
-+ 1 gateway_reload_config     (reload_enabled)
-= 14..=15
++ 1 gateway_cost_report   (unconditional today)
++ 1 gateway_get_stats     (stats_enabled)
++ 1 gateway_reload_config (reload_enabled)
+= 14..=16
 ```
 
-`14..=15` sits inside `14..=16` with one tool of headroom, so the next unconditional
-meta-tool does not immediately re-break the criterion.
+This is the 2026-09-02 prescription, unmodified. It matches
+`public_claims.json` exactly: `minimum: 14` is the floor, `readme_benchmark: 16`
+is the ceiling, and `with_webhook_status: 17` is the row that goes away.
 
-`scope` is an enum, not a bool — `stats | cost | webhooks` — per the boolean-trap rule in
-the codegen-craft block. A scope whose feature is disabled is refused with a typed error
-naming the disabled feature, so an operator can tell "not built" from "no data".
+Why elimination rather than a patch: afterwards "the unfiltered surface can
+leave 14..=16" cannot be restated — no combination of the remaining gates
+produces 17. Clamping or reclassifying leaves the defect describable and merely
+unreachable.
 
-Why this is an elimination rather than a patch: afterwards the finding "the surface can
-leave 14..=16" cannot be restated — no configuration produces 13 or 17. Clamping or
-reclassifying leaves the defect describable and merely unreachable.
+One tool changes, not three. Nothing is renamed, so no client contract moves.
 
 ## 5. Out of scope
 
 - The README badge and the prose around the token-savings headline.
-- **Correction, after answering question 2 (see 6.2): the `readme_benchmark` figure is NOT
-  separable and is IN scope.** `tests/public_claims_validation.rs:269` asserts
-  `readme_token_savings.gateway_tools == meta_tools.readme_benchmark`, so changing the surface
-  count necessarily changes the token-savings denominator in the same commit. The first draft
-  of this section put it out of scope; that was wrong.
-- Any change to the 13 base tools.
-- `gateway_reload_capabilities`, already unconditional and inside the base count.
+- Any change to the 13 base tools, or to `gateway_reload_capabilities`
+  (already unconditional and inside the base count).
+- The `handle_tools_list` filtering machinery itself (`meta_tool_exposure`,
+  Code Mode). Question 4 decides whether it is in scope at all; until it is
+  answered nothing here touches it.
+- **In scope, contrary to the first draft:** the benchmark figures.
+  `tests/public_claims_validation.rs:269` asserts
+  `readme_token_savings.gateway_tools == meta_tools.readme_benchmark`, so the
+  surface count and the savings denominator move together and ship in one
+  commit. Under option (e) `minimum` and `readme_benchmark` are unchanged and
+  the `with_webhook_status: 17` row is deleted — a smaller claims delta than
+  revision 1, which moved all three.
 
 ## 6. Open questions — scheduled, not assumed
 
 | # | question | form | state |
 |---|---|---|---|
-| 1 | Do any published clients call `gateway_get_stats` / `gateway_cost_report` / `gateway_webhook_status` by name? | checkable — searched the repo, the capability catalogue and the docs | **resolved**, see 6.1 |
-| 2 | Is the 16 in `readme_benchmark` a measured scenario or a target? | checkable — read `tests/public_claims_validation.rs` | **resolved**, see 6.2 |
-| 3 | Does the operator accept a breaking rename of three meta-tools in 4.0.0, or must the old names alias for one release? | askable — operator | **open**, blocks implementation |
+| 1 | Do published clients call `gateway_webhook_status` by name? | checkable | **resolved**, see 6.1 |
+| 2 | Is `readme_benchmark: 16` measured or a target? | checkable | **resolved**, see 6.2 |
+| 4 | Does the 14..=16 band govern only the unfiltered traditional surface, or every served list including Code Mode and `exposed_meta_tools`? | askable — operator | **open**, blocks the acceptance criterion's wording, not the implementation |
+| 5 | When the tool goes, where does webhook status become observable? | askable — operator | **open**, blocks implementation |
 
 ### 6.1 Answer to question 1
 
-Searched every tracked file for the three names (`rg --hidden --no-ignore`, `target/` excluded):
-21 files name `gateway_get_stats`, 14 name `gateway_cost_report`, 18 name `gateway_webhook_status`.
-**No published client and no capability definition is among them, and `README.md` names none of
-the three.** So the rename is not externally breaking, and `src/commands/upgrade.rs` — whose
-migration framework only handles configuration keys, with no tool-rename precedent — does not
-need a new migration.
+18 tracked files name `gateway_webhook_status`; none is a published client, a
+capability definition, or `README.md`. Removal is not externally breaking, and
+`src/commands/upgrade.rs` — whose migration framework handles configuration
+keys only — needs no new migration.
 
-It is, however, load-bearing in three in-tree places the design did not list, all of which must
-change in the same PR:
-
-| site | what it is | consequence if missed |
-|---|---|---|
-| `src/gateway/meta_mcp/resources.rs:117,121` | model-facing guidance shipped as an MCP resource, telling the model to call `gateway_cost_report()` and `gateway_get_stats()` | the gateway would instruct the model to call tools that no longer exist — the closest thing to a published client this change has |
-| `src/commands/stats.rs:51` | CLI JSON output with a literal `"name": "gateway_get_stats"` field | an operator's parser sees a name the surface no longer offers |
-| `src/gateway/destructive_confirmation.rs:336` | test asserting `gateway_get_stats` is **not** destructive | the fold must carry the non-destructive classification to `gateway_status`, or a read-only query starts demanding confirmation |
-
-The third is the one worth stating as a requirement rather than a chore: `gateway_status` is
-read-only for every `scope`, so it must be classified non-destructive, and the test that pins
-that must name the new tool.
+`src/gateway/meta_mcp/resources.rs` — model-facing guidance shipped as an MCP
+resource, and the closest thing to a published client this change has — names
+`gateway_cost_report` and `gateway_get_stats` but **not**
+`gateway_webhook_status`. Verified, not assumed: that file was the single site
+that would have made revision 1's fold user-visible, and option (e) does not
+touch it. NFR.PERF.4.4 pins the property rather than the current absence, so a
+later addition cannot reintroduce the hazard silently.
 
 ### 6.2 Answer to question 2
 
-**Measured, not a target.** `tests/public_claims_validation.rs:105-106` computes both figures at
-test time and asserts them against the JSON: `minimum` from a bare `MetaMcp::new(...)`,
-`readme_benchmark` from `operational_meta_mcp(false)`. The JSON is a pinned expectation of a
-measurement, so it moves whenever the surface does — it cannot be left alone.
+**Measured, not a target.** `tests/public_claims_validation.rs:105-106`
+computes the figures at test time from `MetaMcp::new(...)` and
+`operational_meta_mcp(false)` and asserts them against the JSON. The JSON is a
+pinned expectation of a measurement, so it moves whenever the surface does.
+`:265`, `:269` and `:359` spell the same number three ways; all three are
+checked by CI.
 
-The same file couples the surface count to the headline savings claim:
+### 6.3 Why question 4 does not block the code
 
-| line | assertion | consequence for this design |
-|---|---|---|
-| `:265` | the measured triple equals `claims.meta_tools` | all three of `minimum` / `readme_benchmark` / `with_webhook_status` must be restated |
-| `:269` | `readme_token_savings.gateway_tools == meta_tools.readme_benchmark` | the token-savings denominator is pinned to the surface count and changes with it |
-| `:359` | a `README_META_TOOLS` constant equals that same denominator | a third spelling of the same number, also to be updated |
+Finding 1 is correct that `exposed_meta_tools` and Code Mode serve fewer than
+14 tools, and no arrangement of the enumeration can prevent that — an operator
+who exposes one meta-tool gets one. So either the criterion governs the
+unfiltered surface, or it is unsatisfiable as written. Option (e) is the right
+change under the first reading and a necessary part of any change under the
+second, so implementation proceeds; only the AC's wording waits.
 
-So the fold moves the savings arithmetic: the denominator goes 16 -> 15, which *raises* the
-computed saving rather than lowering it (fewer gateway tokens against the same 100-tool
-baseline). That is a claim moving in our favour, which is exactly the direction that most needs
-stating out loud rather than being allowed to drift upward unremarked.
+## 7. Assumptions and reversibility (DoR G10, G17)
 
-Consequence for the plan: `NFR.PERF.4.4` is not an afterthought CI check, it is the case that
-fails first, and the claims update ships in the same commit as the fold.
+| # | assumption | impact if wrong | uncertainty | check |
+|---|---|---|---|---|
+| 1 | no consumer outside the tree calls `gateway_webhook_status` | a client breaks silently | low | 6.1, done |
+| 2 | webhook status has another observable path, or none is required | operators lose a diagnostic | **high** | question 5, open |
+| 3 | tool count is an adequate proxy for context cost | the band passes while tokens rise | medium | NFR.PERF.4.5 below |
 
-Question 3 is load-bearing: an alias period keeps the old names in the surface and puts
-the count straight back to 17, defeating the design. Nothing is implemented until it is
-answered.
+Reversibility: **two-way door.** Re-adding a tool definition behind its
+existing `webhooks_enabled` gate restores the prior surface and moves the
+claims figures back. No data migration, no persisted state, no renamed
+contract. No ADR required.
 
-## 7. Test obligations (plan, not tests)
+## 8. Test obligations (plan, not tests)
 
 | AC | case | level |
 |---|---|---|
-| NFR.PERF.4.1 | every combination of the remaining gates yields a count in `14..=16` | unit, exhaustive over the gate powerset |
-| NFR.PERF.4.2 | `gateway_status` is present with all gates off | unit |
-| NFR.PERF.4.3 | a `scope` whose feature is disabled returns the typed refusal, not an empty success | unit |
-| NFR.PERF.4.4 | `public_claims.json` agrees with the measured band | CI drift check |
+| NFR.PERF.4.1 | every combination of the remaining gates yields a served count in `14..=16` | unit, exhaustive over the gate powerset |
+| NFR.PERF.4.2 | the count is measured through `handle_tools_list`, not by re-deriving builder arithmetic | unit |
+| NFR.PERF.4.3 | `public_claims.json` agrees with the measured band and no longer carries `with_webhook_status` | CI drift check |
+| NFR.PERF.4.4 | no model-facing resource text names the removed tool | unit |
+| NFR.PERF.4.5 | serialized schema token count of the surface does not rise | bench assertion |
 
-NFR.PERF.4.1 is the case that makes the criterion decidable: it can fail, and today it
-fails at both ends.
+NFR.PERF.4.1 is the case that makes the criterion decidable: it can fail, and
+today it fails at the ceiling. NFR.PERF.4.2 exists because revision 1's whole
+error was trusting a builder-level count that the served path contradicts —
+`tests/public_claims_validation.rs:103` duplicates that arithmetic and is the
+line that let a 13 through. NFR.PERF.4.5 answers the review's improvement note:
+a count can satisfy the band while the surface costs more context.
