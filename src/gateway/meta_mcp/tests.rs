@@ -4730,3 +4730,76 @@ async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
         "list_tools_single_server does not honour the FSM state"
     );
 }
+
+/// B-09 — ORDER.2b on the FSM leg: a `gateway_set_state` must not change what
+/// the connection that issued it is subsequently shown.
+///
+/// Every observation is pinned to the same default-state literal rather than
+/// compared with the one before it: comparing two observations would pass both
+/// when the set_state silently did nothing and when a regression moved both
+/// lists in step.
+///
+/// Q4 — whether `gateway_set_state` is refused outright on a sessionless
+/// modern connection — is with the operator, and the answer decides what the
+/// call's own outcome must be asserted to be. This case asserts only the half
+/// that holds under either answer: the lists. The outcome pin lands when Q4 is
+/// answered.
+#[tokio::test]
+async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
+    let meta = meta_with_state_staged_capabilities().await;
+
+    let list_before = discovery_names(&meta.list_tools(&json!({}), MODERN_SESSIONLESS).await.unwrap());
+    let search_before = discovery_names(
+        &meta
+            .search_tools(&json!({"query": "staged"}), MODERN_SESSIONLESS)
+            .await
+            .unwrap(),
+    );
+    let single_before = discovery_names(
+        &meta
+            .list_tools(&json!({"server": "staged"}), MODERN_SESSIONLESS)
+            .await
+            .unwrap(),
+    );
+
+    // Driven through the real meta-tool, not `SessionStateStore::set_state`:
+    // the defect is the argument passed at `mod.rs:1689`, and a fixture
+    // touching the store directly bypasses the line under test.
+    let _ = meta
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_set_state",
+            json!({"state": TARGET_STATE}),
+            MODERN_SESSIONLESS,
+            allow_all_ctx(),
+        )
+        .await;
+
+    let list_after = discovery_names(&meta.list_tools(&json!({}), MODERN_SESSIONLESS).await.unwrap());
+    let search_after = discovery_names(
+        &meta
+            .search_tools(&json!({"query": "staged"}), MODERN_SESSIONLESS)
+            .await
+            .unwrap(),
+    );
+    let single_after = discovery_names(
+        &meta
+            .list_tools(&json!({"server": "staged"}), MODERN_SESSIONLESS)
+            .await
+            .unwrap(),
+    );
+
+    for (label, observed) in [
+        ("gateway_list_tools, before", &list_before),
+        ("gateway_search_tools, before", &search_before),
+        ("gateway_list_tools server=staged, before", &single_before),
+        ("gateway_list_tools, after", &list_after),
+        ("gateway_search_tools, after", &search_after),
+        ("gateway_list_tools server=staged, after", &single_after),
+    ] {
+        assert_eq!(
+            observed, STAGED_DEFAULT_TOOLS,
+            "{label}: a gateway_set_state on this connection changed what it is shown"
+        );
+    }
+}

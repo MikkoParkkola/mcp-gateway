@@ -7,7 +7,7 @@ use mcp_gateway::config::TransportConfig;
 use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
 use mcp_gateway::security::{
     diagnostic_url, request_error_category, safe_http_status_error, safe_oauth_http_error,
-    safe_reqwest_message, summarize_stdio_command,
+    safe_request_error, safe_reqwest_message, summarize_stdio_command,
 };
 use reqwest::StatusCode;
 
@@ -143,4 +143,11 @@ async fn sweep_decode_error_must_not_echo_url_credentials() {
     let safe = safe_reqwest_message("Failed to parse token response", &err);
     assert!(!safe.contains(CANARY), "{safe}");
     assert_eq!(request_error_category(&err), "response parse failed");
+
+    // `safe_request_error` is the wrapper the HTTP transport and the A2A client
+    // actually call (8 sites). It delegates to `safe_reqwest_message` today, and
+    // nothing but this line stops it being rewritten back to interpolate `{e}`.
+    let wrapped = safe_request_error("Request failed", &err).to_string();
+    assert!(!wrapped.contains(CANARY), "{wrapped}");
+    assert!(wrapped.contains("response parse failed"), "{wrapped}");
 }
