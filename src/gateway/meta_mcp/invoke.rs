@@ -4615,4 +4615,75 @@ mod error_budget_tests {
         assert_eq!(captured[0].0.get("server").map(String::as_str), Some("srv"));
         assert_eq!(captured[0].0.get("tool").map(String::as_str), Some("tool"));
     }
+
+    /// GH475.OBS.1 — each exclusion arm of `record_error_budget` is
+    /// independently observable via a metrics scrape, not only through the
+    /// OBS.2 debug event. The population under test is derived from
+    /// `BudgetOutcome` itself (`Success`, `Failure`, `IgnoredRateLimit`) —
+    /// exactly one arm excludes today — rather than from a codebase grep, so
+    /// a future exclusion variant grows this criterion's population by
+    /// definition instead of needing a new search. Scoped to
+    /// `#[cfg(feature = "metrics")]` because both the recorder install and
+    /// the render call live behind that feature (`src/metrics.rs`); the
+    /// counter itself (`telemetry_metrics::counter!` in
+    /// `record_error_budget`) fires unconditionally — a no-op recorder just
+    /// swallows it when the feature is off.
+    ///
+    /// Each case uses a server label unique to that test function: the
+    /// Prometheus recorder installed by `crate::metrics::install()` is
+    /// process-global (`OnceLock`), so two tests sharing a label would let
+    /// one test's increment leak into another's scrape under parallel
+    /// `cargo test` execution.
+    #[cfg(feature = "metrics")]
+    fn suppressed_counter_value_for(text: &str, server: &str) -> Option<u64> {
+        text.lines()
+            .find(|line| {
+                line.starts_with("mcp_error_budget_suppressed_total")
+                    && line.contains(&format!("server=\"{server}\""))
+            })
+            .and_then(|line| line.rsplit(' ').next())
+            .and_then(|n| n.parse::<u64>().ok())
+    }
+
+    #[cfg(feature = "metrics")]
+    #[test]
+    fn ignored_rate_limit_increments_the_suppressed_counter_exactly_once() {
+        crate::metrics::install();
+        let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        m.record_error_budget("obs1-ignored-rl", "tool", BudgetOutcome::IgnoredRateLimit);
+        let text = crate::metrics::render();
+        assert_eq!(
+            suppressed_counter_value_for(&text, "obs1-ignored-rl"),
+            Some(1),
+            "the one exclusion arm must increment the suppression counter exactly once: {text}"
+        );
+    }
+
+    #[cfg(feature = "metrics")]
+    #[test]
+    fn success_outcome_does_not_increment_the_suppressed_counter() {
+        crate::metrics::install();
+        let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        m.record_error_budget("obs1-success", "tool", BudgetOutcome::Success);
+        let text = crate::metrics::render();
+        assert_eq!(
+            suppressed_counter_value_for(&text, "obs1-success"),
+            None,
+            "a success sample must not appear under the suppression counter: {text}"
+        );
+    }
+
+    #[cfg(feature = "metrics")]
+    #[test]
+    fn ordinary_failure_does_not_increment_the_suppressed_counter() {
+        crate::metrics::install();
+        let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        m.record_error_budget("obs1-failure", "tool", BudgetOutcome::Failure);
+        let text = crate::metrics::render();
+        assert_eq!(
+            suppressed_counter_value_for(&text, "obs1-failure"),
+            None,
+            "an ordinary failure sample must not appear under the suppression counter: {text}"
+        );
+    }
 }
