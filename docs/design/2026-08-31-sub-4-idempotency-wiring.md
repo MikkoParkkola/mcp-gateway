@@ -39,17 +39,18 @@ build that has ever shipped.
 
 Two further gaps compound it, both found in review and verified at source.
 
-**No advertised way for a client to send a key.** `resolve_idempotency_key` reads
-`args["idempotency_key"]` (`src/gateway/meta_mcp/support.rs:40`), and that string appears in
-exactly six places in the tree, all internal: the module doc, the function, and its call site.
-It is in no tool schema. A client cannot discover it, so today the *only* reachable protection
+**No advertised way for a client to send a key.** The carrier plumbing exists — the meta
+route reads `caller.retry.idempotency_key` (the MRTR retry envelope, `src/protocol/mrtr.rs`)
+and passes it to `idempotency_key_for` (`src/gateway/meta_mcp/support.rs:35-44`,
+`invoke.rs:1148`). What does not exist is any way for a client to *learn* that it may send one:
+the field is in no tool schema. A client cannot discover it, so today the *only* reachable protection
 is the automatic derivation — which is itself defect P2 below. This is the finding that
 reshapes the design: "enforce only on an explicit client key" is not an available option until
 a carrier exists on both routes.
 
 **The direct route bypasses the machinery entirely.** `POST /mcp/{name}`
 (`src/gateway/router/backend_handlers.rs:338-353`) does not go through `invoke_tool_traced` and
-never calls `resolve_idempotency_key`, whose sole call site is `meta_mcp/invoke.rs:782`.
+never reaches `idempotency_key_for`, whose sole call site is `meta_mcp/invoke.rs:1148`.
 Revision 1 attributed that bypass to "ADR-008 rung 2"; that was a misreading. ADR-008 rung 2 is
 client-native OAuth passthrough and says nothing about HTTP routing. No ADR sanctions the
 bypass.
@@ -64,11 +65,13 @@ then `cache.mark_in_flight(key)` as two separate `DashMap` operations. Two concu
 both observe `Proceed` and both execute — the exact duplication SUB.4 exists to prevent. Fix: one
 atomic entry transition, with a concurrent same-key falsifier proving the old code fails it.
 
-**P2 — a keyless call gets an automatic key.** `resolve_idempotency_key`
-(`src/gateway/meta_mcp/support.rs:26-45`) derives a key from `(server, tool, arguments)` whenever a
-cache is active, whether or not the client supplied one. Turning the cache on therefore silently
-deduplicates *intentional* identical side effects for 24 hours. Fix depends on the carrier
-question below: deleting the derivation is only safe once clients can send a key.
+**P2 — a keyless call gets an automatic key. LANDED.** The automatic derivation is gone:
+`idempotency_key_for` (`src/gateway/meta_mcp/support.rs:35-44`) returns `None` when the client
+sent no key (`let key = client_key?`), so a keyless call is not deduplicated at all. This
+prerequisite therefore needs REGRESSION COVERAGE, not a repair — a red test would be red against
+a defect nobody can reach. What survives is the *other* half of the same concern, and it is not
+P2: a keyless side-effecting call is now unprotected rather than wrongly protected, which is the
+gap gpt's rev-4 verdict named and the carrier decision below answers.
 
 **P3 — the entry map is unbounded.** `IdempotencyCache { entries: DashMap<...> }`
 (`src/idempotency.rs:93`) has no capacity policy and `COMPLETED_TTL` is 24 hours. RESOLVED: take
@@ -77,17 +80,19 @@ reject its policy. `ResponseCache::enforce_max_entries` evicts the oldest
 (`src/cache.rs:185-204`), which for a side-effect guard would silently re-admit a duplicate.
 Fail closed instead: refuse a new protected side effect at the bound.
 
-**P4 — `_full` calls are unprotected.** `let idem_key = if want_full { None }`
-(`src/gateway/meta_mcp/invoke.rs:779`) forces the key to `None` for every raw-output call, so an
-irreversible tool invoked through that path can execute twice however the rest is wired. Fix:
-keep idempotency active and isolate the replay payload with an explicit key suffix, as the
-projection suffix already does.
+**P4 — `_full` calls are unprotected. LANDED.** The suppression is gone, and the code says why
+in its own comment: "`want_full` no longer suppresses the key. It selects the shape of the
+*reply*, not whether the backend acts, and a directive that switches off duplicate protection is
+a bypass any client can set" (`src/gateway/meta_mcp/invoke.rs:1144-1147`). The replay payload is
+isolated by `projection_key_suffix` exactly as this prerequisite prescribed. Regression coverage,
+not a repair.
 
-**P5 — an explicit key is not bound to the request.** The client key is used verbatim
-(`src/gateway/meta_mcp/support.rs:40`) with no fingerprint of `(server, tool, arguments)`. Reusing
-one key across two different calls replays the first result and silently skips the second
-mutation. Fix: store the canonical request fingerprint with the entry and reject mismatched reuse
-rather than replaying.
+**P5 — an explicit key is not bound to the request. LANDED, with a residue that is R6.** The
+key is no longer verbatim: `idempotency_key_for` appends the projection and identity suffixes,
+and `invoke.rs:1163-1175` derives a request fingerprint carrying the MRTR.10 retry discriminator.
+Mismatched reuse is rejected, not replayed. The residue is HOW the suffixes are appended — raw
+and unlength-prefixed — which is R6 below, and R6 is live. Regression coverage for the binding;
+a real repair for the spelling.
 
 **P6 — a reservation can be abandoned.** `enforce` marks in-flight before dispatch, but
 post-dispatch early returns exist — the contract-gate block at
