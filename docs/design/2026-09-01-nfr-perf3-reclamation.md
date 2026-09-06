@@ -415,3 +415,21 @@ The at-capacity amplifier resolved above survives into Design A unchanged: recla
 *every* read rather than only on refusal, so the O(capacity) walk under the lock is more frequent,
 not less. That is a finding **against MRTR.8b's design**, raised there rather than repaired here,
 because the file is theirs.
+
+## Residual risk carried by this document
+
+| risk | owner | why it stays open |
+|---|---|---|
+| the at-capacity O(4 096) retain under the lock, with no earliest-deadline guard | **MRTR.8b** | This document specified the guard; MRTR.8b's Design A does not carry it and accepts the walk as cost, so "raised there" is not the same as *treated as a defect there*. It is recorded here as residual, with a named owner, so it survives on a ledger rather than in a clause of a draft that has already declined it. Not repaired in this slice because every change to `InFlight`'s entry points is now OUT |
+| `NFR.PERF.3` is not closed by this slice's test alone | this slice + `MRTR.6` | A component test proves the table reclaims; it does not prove production reaches the table. Stated at the head of this document and repeated here so the closure argument is not read out of one section |
+
+## Review record
+
+| leg | vendor | verdict | evidence |
+|---|---|---|---|
+| design delta, 2026-09-06 | synthetic Kimi-K3 | `SHIP-WITH-FIXES` | ledger `2026-09-06T06:57:25Z`, `material_bytes: 14228`, `process_status: ok`, run `synthetic-20260906T065626Z-13238` |
+| design delta, 2026-09-06 | grok-default | `SHIP-WITH-FIXES` | ledger `2026-09-06T07:04:21Z`, same `material_sha256`, `process_status: ok`, run `grok-20260906T065625Z-13103` |
+
+Both legs returned. The grok leg's headline finding — that `NFR.PERF.4` was already specified in
+`docs/design/2026-09-02-perf4-meta-tool-ceiling.md` — is what removed the ceiling from this slice's
+scope above; its citation and withdrawal findings are applied in the sections they name.
