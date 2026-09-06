@@ -412,9 +412,19 @@ affirmative reading, which is why yes is a **requirement change needing recorded
 an interpretation the team may adopt on its own. Two questions fall out only if the answer is no:
 whether a gateway-originated `InputRequired` is an acceptable 4.0.0 surface addition given
 MIK-7212 is blocked by MIK-7388, or whether CONFIRM.2 is deferred with a recorded deferral, which
-the row's own Source column would support; and whether "a modern client cannot kill a server at
-all" is acceptable product behaviour, noting that it is also the *current* behaviour, so a no
-there is a request for new capability rather than a regression report. One unknown is deferred and
+the row's own Source column would support; and whether requiring a *legacy* protocol
+declaration to reach destructive confirmation is acceptable product behaviour. That question was
+first put to the operator on a false premise -- "a modern client cannot kill a server at all" --
+which `router/handlers.rs:568-597` refutes: `declares_modern_by_header` is computed per request
+from the `mcp-protocol-version` header, the modern arm returns `(String::new(), None)` while the
+legacy arm calls `get_or_create_session_for`, and nothing persists an era between requests. The
+same client therefore reaches elicitation on any request where it declares legacy. The capability
+is not absent; it is conditioned on a header the client itself controls, one request at a time.
+That lowers the cost of the refusal branch materially -- yes to Q1 gives up a header-conditioned
+convenience, not a capability -- and it is recorded here rather than silently repriced, because
+the operator was asked to weigh a loss larger than the one that exists. The counterweight stands:
+asking a modern client to downgrade a header to obtain a confirmation is a workaround, not a
+design. One unknown is deferred and
 belongs to the operator or the MIK-7212 owner because it is a client-ecosystem fact and not a repo
 fact: does a modern client that declares in-band `elicitation` exist, and would it retry? It
 blocks the build-it branch and not the refusal branch.
