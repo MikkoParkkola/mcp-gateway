@@ -541,6 +541,7 @@ text predicate because a transport error there genuinely has no typed status.
 | Can the classification avoid the public enum entirely by staying crate-internal? | read `CapabilityBackend::call_tool_with_context` `src/capability/backend.rs:390`, `pub mod capability` `src/lib.rs:36`, plus the Rust rule that variants inherit enum visibility | no: no `pub(crate)` variant exists as a language feature, and the alternative carrier is an equally public signature | O1b's conclusion (no gate-free crate-internal route) is retained as the answer to a narrower, still-live question: O1b now compares against O1's *actual* mechanism (reusing `Error::Http`) rather than a hypothetical new variant, and still finds no cheaper carrier — see O1b as revised |
 | Does `error_for_status_ref()` lose the response body needed for diagnostics? | read reqwest 0.13.4 source `src/async_impl/response.rs:409`, `src/error.rs:180` | the returned error is built from status/URL/reason only, borrowing nothing from the body; the borrow ends immediately so `response.text().await` remains legal after | confirms O1's mechanism is sound: call `error_for_status_ref()` first, log the body via `tracing::warn!`, then convert — no diagnostic information is silently lost, it moves to a log line (DESIGN EVENT 1, section 4) |
 | Does the borrow-then-consume ordering actually compile at the **REST** site, where `handle_response` moves `response` into `.text().await` in the same block? | inserted `let http_err = response.error_for_status_ref().err();` immediately before the `.text()` call at `params.rs:46` and ran `cargo check --lib` (2026-09-06), then put the original content back | `Finished dev profile ... in 23.49s` — compiles clean; the `Err` arm yields an owned `reqwest::Error`, so the `&Response` borrow ends before `.text()` moves the value | closes the one site where O1's ordering was not obviously free. The reqwest source read above establishes the mechanism; this establishes it **at the site the DETECTION test pins**, so no reviewer round is spent on it |
+| Does the same ordering hold at the **JSON-RPC** and **GraphQL** sites, with `.without_url()` in the chain? | inserted `let _probe = response.error_for_status_ref().err().map(|e| e.without_url());` immediately before the `.text()` call at `jsonrpc.rs:200` and `graphql.rs:256`, ran `cargo check --lib` (2026-09-06), restored both files and confirmed an empty `git diff` | `Finished dev profile ... in 9.32s` — both compile clean | closes the ordering question at all three sites rather than one, and covers the `.without_url()` call DESIGN EVENT 1 now requires. Raised as an improvement by the Kimi leg; the answer cost 9 seconds |
 | What JSON-RPC code does a capability `429` surface as, once it is carried as `Error::Http`? | read `to_rpc_code` `src/error.rs:193-209`; `rg` confirms nothing in the capability path constructs `Error::Http` today | `Protocol(_)` has its own arm (`-32600`); `Http` has none and falls through `_ => -32603` — named as DESIGN EVENT 2, then **ruled on**: a guarded `Self::Http(e) if e.status() == Some(429) => -32000` arm, same class as the existing `BackendUnavailable\|CircuitOpen\|BackendTimeout\|Transport\|TransportPermanent => -32000` arm four lines above it; non-429 `Http` still falls through to `-32603`, unchanged | DESIGN EVENT 2 (section 4): resolved to `-32000`, not left as `-32603` — moving the whole `Http` arm was rejected (blast radius across every `?`'d reqwest call in the crate, not checked call-by-call); the guarded arm costs no new mechanism since it reuses the `.status()` discriminator `BudgetOutcome::of` already keys on |
 | Does reusing `Error::Http` on the capability path create a retry-storm risk? | read `is_retryable` `src/chains/retry.rs:179` and `src/failsafe/retry.rs:96`; traced their sole callers `src/backend/ops.rs:218` (MCP-backend) and `src/chains/executor.rs:175`; read `send_with_retry` `src/capability/executor/mod.rs:111-160` | `is_retryable` treats `Error::Http` as retryable, but capability's own retry logic never calls `is_retryable` — it is self-contained | no risk: an `Error::Http` returned from the capability path cannot trigger a retry it would not already trigger under today's behaviour; closed rather than left as an unstated risk |
 | Does any other match on `crate::Error` discriminate `Protocol` from `Http` on the dispatch path O1 touches? | `rg 'Error::Protocol\|Error::Http' src/`, read `classify_dispatch_error` `invoke.rs:2940-2958` and its call site `invoke.rs:1461`, traced back to the shared `dispatch_result` also read at `invoke.rs:1384` | yes: `classify_dispatch_error` gives `Protocol` a `classify_from_detail` arm and lets `Http` fall through `_ => BackendError` — the same shape of gap `to_rpc_code` has | DESIGN EVENT 3 (section 4): unlike the JSON-RPC code, this one is not accepted as-is — O1's implementation must add the missing `Http` arm so the RecoveryHint category does not degrade |
@@ -655,4 +656,44 @@ section 4 and recorded as Resolved above, and none blocks implementation
 
 ## 8. Reviews
 
-§12 dual-vendor review of this document: NOT YET RUN.
+§12 dual-vendor review of this document: **RUN 2026-09-06, both legs returned.**
+Verdicts are the ledger rows, not text scraped from the output (§PA).
+
+| leg | vendor | verdict | ledger row |
+|---|---|---|---|
+| 1 | Kimi K3 | **SHIP-WITH-FIXES** | `kimi-review-ledger.jsonl`, `2026-09-06T06:53:20Z`, `process_status: ok`, output `synthetic-20260906T065320Z-87663.md` |
+| 2 | Grok | **SHIP-WITH-FIXES** | `grok-review-ledger.jsonl`, `2026-09-06T07:01:17Z`, `process_status: ok`, output `grok-20260906T065254Z-82892.md` |
+
+Both legs SHIP-WITH-FIXES. Neither raised a SCOPE-CHALLENGE; the §P0 FOR/OUT
+stands. The two legs converged, independently, on the same two blocking
+defects — and one narrowing killed both, which is why the fix list is shorter
+than the finding list.
+
+### Findings and their disposal
+
+| # | leg | crit | finding | disposal |
+|---|---|---|---|---|
+| 1 | both | CRITICAL/HIGH | the returned `Error::Http`'s `Display` carries the backend URL, query-string credentials included | **fixed in this change** — `.without_url()` before wrapping, the `redact_url` helper already at `executor/mod.rs:107`. DESIGN EVENT 1 |
+| 2 | both | HIGH/MEDIUM | gating on `error_for_status_ref()`'s `Err` re-carriers every 4xx/5xx and flattens their classification to `BackendError` | **fixed in this change** — the gate is `status == 429`; every other status keeps today's `Error::Protocol` byte for byte. Verified against `classify_from_detail` (`meta_mcp/invoke.rs:3029-3060`) |
+| 3 | Kimi | MEDIUM | §7 item 3 specifies no test pinning the typed classification, replacing an unpinned text mechanism with an unpinned typed one | **written into the test plan** — C1–C3 (typed status at each site), C4/C5 (typed classification, both directions), C5b/C5c (the narrowing), C7b (the URL canary), C8/C9. §7 item 3 lands with the plan's cases, not after them |
+| 4 | Kimi | MEDIUM | scope says `cap_test` is OUT, but O1 rewrites format sites `cap_test` executes through | **written into the design** — disclosed below. Narrowed by the 429 gate: `cap_test` now loses the response body only on a 429, and keeps today's full text on every other status |
+| 5 | Kimi | LOW | the `Retry-After` claim is false | **fixed in this change** — sentence corrected against `reqwest-0.13.4 src/error.rs:26-30`, `:343-360`. Grok raised the same point |
+| 6 | Kimi | LOW | "nothing constructs `Error::Http` today" is overstated | **refuted at source, premise kept and strengthened** — every reqwest error on the path is mapped explicitly, never `?`'d. No repair; the evidence is now the exhaustive audit rather than one `rg` |
+| 7 | Kimi | LOW | the `.status() == Some(429)` discriminator is not provenance-scoped | **recorded as residual risk** — nothing else on the crate produces a status-bearing `Error::Http`, and after this change only the 429 branch does. Named here so a future `error_for_status` elsewhere is a known decision, not a surprise |
+| 8 | Grok | IMPROVEMENT | DESIGN EVENT 2 names `to_rpc_code` as "what an MCP client sees"; the invoke path never calls it | **fixed in this change** — the event's surface is stated accurately |
+| 9 | Grok | IMPROVEMENT | the RL.10 mutation probe scrubs error text, which cannot falsify a typed path | **written into the test plan's intent** — the probe for a typed path flips the status predicate (`429` → `430`); a text scrub leaves `429 Too Many Requests` in reqwest's `Display` and proves nothing |
+| 10 | Kimi | IMPROVEMENT | three separately-written `status() == Some(429)` guards can drift | **recorded as an observation, not fixed** — the doc's "cannot disagree" claim was about the shared `.status()` accessor, which is true, and three call sites are not yet a shared-predicate's worth of duplication. Revisit at the third edit, not before |
+| 11 | Kimi | IMPROVEMENT | extend the borrow-ordering probe to the other two format sites | **done** — see the row added to §6 |
+| 12 | Kimi | IMPROVEMENT | render the DoR output line explicitly | **not done, and deliberately** — this is a design document inside an in-flight change, not a ticket's DoR section; the applicable gates are answered in substance where they arise. Recorded so the omission is visible rather than silent |
+
+### `cap_test` — the disclosure finding 4 asked for
+
+§P0 lists the `cap_test` CLI path (`src/commands/cap.rs:220-256`) as OUT, on the
+grounds that it never routes through the meta-MCP invoke surface. That is true
+of the *budget* mechanism and false of the *code*: `cap_test` executes through
+the same three format sites this change rewrites. After the 429-only narrowing
+the effect is small and worth stating exactly — on a **429 only**, an operator
+running `mcp-gateway cap test` sees `429 Too Many Requests` instead of the
+upstream response body, unless their tracing subscriber surfaces the `warn!`
+line carrying it. Every other status is unchanged. The scope line stands as
+written for budgets; this paragraph is the code half it did not cover.
