@@ -227,15 +227,16 @@ A third disposition was made and then **deleted** (round-2 confirmation pass, gr
 Read at source, that test asserts `retry: &NO_RETRY` is gone from the file — it watches
 cluster-G's MRTR convergence work, not this trace read, and a params-level `_meta` read on stdio
 would not turn it green. Keeping it would have gated OTEL.1 on another cluster's ticket. Stdio
-coverage for OTEL.1 is the route-level ingestion row the test plan's §6.6 now requires, and
-nothing else. The watcher stays ignored and stays cluster-G's.
+coverage for OTEL.1 is the route-level ingestion row the test plan carries as **T13** (§5.2),
+and nothing else. The watcher stays ignored and stays cluster-G's.
 
 The test plan's §6.6 residual once allowed OTEL.1.a to close on extractor evidence with the route
 gap merely named. It may not: route-level ingestion on both transports is a close condition, not a
-residual. That clause was struck in the test plan itself on 2026-09-06
-(`docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md` §6.6) rather than
-superseded by reference — a superseded clause left standing is read by whoever opens that file
-first, which is the drift this cluster has already paid for once.
+residual. That clause was struck in the test plan itself on 2026-09-06 rather than superseded by
+reference — a superseded clause left standing is read by whoever opens that file first, which is
+the drift this cluster has already paid for once. The gap now has cases rather than a deferral:
+**T11 (the carrier), T12 (HTTP), T13 (stdio), T14 (precedence) and T15 (the realigned fixture)**,
+in that plan's §5.2, with §6.6 kept only as the record of what was closed and how.
 
 This does not change what 3.3, 3.4 or 3.4a decide. It names where the read they assume must go.
 
