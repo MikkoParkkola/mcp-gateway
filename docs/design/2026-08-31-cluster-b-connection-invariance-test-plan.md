@@ -186,22 +186,56 @@ assertion unsatisfiable rather than strict.
 
 ### B-07 — promoted tools
 
-Promote tool `T` for session A (`spec-preview`). Modern `tools/list` on A and on
-B, **with `params.query` set**, so the promotion merge at `spec_preview.rs:111`
-is the code actually executing. Without that, the `:111` skip can be deleted and
-every case in this plan stays green — B-06 exercises `:46` only.
+**Repaired 2026-09-06. As previously written this case could not fail against the
+defect it pins** — the finding, verified at source, is that it promoted `T` for a
+**legacy-era** session A and then asserted on two modern lists.
+`invoke.rs:1826-1828` writes the promotion under the *caller's own* session id,
+so a legacy promotion lands under a legacy non-empty id, while modern HTTP
+presents `Some("")` and both modern lists read the key `""` — an entry that
+promotion never touched. The case therefore stayed green whether or not modern
+connections shared promotions with each other, which is exactly the behaviour it
+exists to catch. It is repaired rather than deleted because the criterion it
+pins, `MIK-7272.ORDER.2a` on the promotion leg, has no other case.
 
-- **premise, and it must name an observable (reverse A5):** in a legacy-era
-  `tools/list` for session A the returned set **contains the literal `T`**, and
-  session B's does not. "Assert the promotion was recorded" names nothing a test
-  can read without reaching into `MetaMcp` (A8), and a promotion that silently
-  no-ops would otherwise make the case green against an implementation that still
-  leaks promotions.
+Promote through **a modern connection's own successful `gateway_invoke`**, not
+through a legacy session. Then modern `tools/list` on that connection A and on an
+independently opened modern connection B, **with `params.query` set**, so the
+promotion merge at `spec_preview.rs:111-112` is the code actually executing.
+Without the query the `:111` skip can be deleted and every case in this plan
+stays green — B-06 exercises `:46` only.
+
+- **the promotion must be observable somewhere, or a silent no-op makes this case
+  green.** The old premise bought that observability by promoting under a legacy
+  session and reading `T` back from a legacy list — and that purchase is what
+  broke the case, because the promotion then never reached the key the assertion
+  reads. So the observation moves to a **control connection**: the same promotion
+  driven a second time over a **legacy** connection, whose own next list is
+  asserted to contain the literal `T`. `session_key` filters the empty string
+  only, so a legacy non-empty id is unaffected by the ORDER.2 fix and the control
+  keeps working after it. A promotion mechanism that silently no-ops fails the
+  control; the modern assertion below is then never reached on a false green.
+  "Assert the promotion was recorded" still names nothing a test can read without
+  reaching into `MetaMcp` (A8), and is still rejected.
 - assert both modern sets equal the same pinned literal, and that the literal
-  **does not contain `T`**.
-- *falsifier:* today's `mod.rs:1156` append, and — because the query is set — a
-  fix that skips the profile at `:46` while leaving the promotion merge at `:111`
-  intact.
+  **does not contain `T`**. Pinned literal, not a comparison of A against B: a
+  regression that leaks the promotion into *both* modern lists moves them in step
+  and a two-way equality assertion passes through it.
+- assert the `gateway_invoke` **succeeded**. An invoke that errored promotes
+  nothing, so both lists match the literal and the case goes green having
+  exercised none of the path.
+- this case is `MIK-7272.ORDER.2a` — the **cross-connection** half. The
+  same-connection half, where A's own next list must also be unchanged, is B-10
+  in `docs/design/2026-09-06-order-2-per-connection-list-variance-test-plan.md`.
+  Splitting them keeps each failure attributable to one clause.
+- the fixture must not stub `promote_tool_for_session`. The defect is the
+  *argument* passed at `invoke.rs:1826-1828`; a fixture supplying its own asserts
+  against itself.
+- *falsifier:* today's promotion append on the `tools/list` path — `mod.rs:1330`
+  reads `promoted_tools_for_session(session_id)` and the loop at `:1331-1332`
+  merges the result. (The pre-repair text cited `mod.rs:1156` for this; at this
+  revision that line is a `_meta` `serverInfo` literal and the citation had
+  drifted.) And — because the query is set — a fix that skips the profile at
+  `:46` while leaving the promotion merge at `spec_preview.rs:111-112` intact.
 
 ### S-01 — POST content negotiation
 
