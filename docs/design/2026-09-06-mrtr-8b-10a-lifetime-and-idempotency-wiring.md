@@ -295,13 +295,31 @@ dying with this section:
 > `identity_suffix` (`src/gateway/meta_mcp/invoke.rs:1128-1132`) is `caller_credential.cache_binding`
 > alone, therefore EMPTY whenever identity propagation is off — which the adjacent comment at
 > `:1133-1139` calls the shipped default. Two authenticated callers issuing the same tool with the
-> same arguments and the same key string collide on one fingerprint (`:1164-1168`), and
-> `AdmitOutcome::Completed` replays the first caller's stored response to the second
-> (`:1178-1199`). The response cache does *not* have this defect: `caller_principal` (`:1140-1142`)
+> same arguments and the same key string derive **one key**: `idempotency_key_for` is literally
+> `format!("{key}{projection_key_suffix}{identity_suffix}")` (`support.rs:43`), and an empty suffix
+> contributes nothing to tell them apart. `admit` then looks the entry up by that key
+> (`idempotency.rs:256`) and `matches` (`:130-131`) compares fingerprints, which agree because the
+> two calls genuinely *are* the same `(server, tool, arguments)` — `idem_fingerprint`
+> (`invoke.rs:1163-1167`) is `derive_key` plus the retry discriminator and carries no principal by
+> design, at any setting. So `AdmitOutcome::Completed` (`idempotency.rs:278`) replays the first
+> caller's stored response to the second (`:582`).
+>
+> **The noun matters here.** The keys COLLIDE; the fingerprints MATCH. Written as "both fingerprints
+> collide" — how this first travelled, corrected by `sub-ext` in `28d22d5b` — an implementer is sent
+> to add a principal to `idem_fingerprint` instead of to `identity_suffix`. That fix would also
+> work, and a wrong noun pointing at a working repair is dangerous rather than merely imprecise.
+> The response cache does *not* have this defect: `caller_principal` (`:1140-1142`)
 > already falls back to `VerifiedIdentity::stable_actor_id`. The fix is for `identity_suffix` to
 > adopt the same fallback chain, twelve lines away. SUB.4 `:125-128` independently decided the
 > binding belongs *inside* the derivation rather than at the call site — the same conclusion, and
 > the place to implement it.
+>
+> **The fix carries a comment obligation.** `invoke.rs:1133-1139` explains that `caller_principal`
+> is "kept separate from `identity_suffix` above: that one keys retry de-duplication, a different
+> contract with a different lifetime." The fallback chain does not merge them, so that separation
+> survives — but the same comment's account of why binding-alone keying was acceptable here turns
+> false the moment the suffix gains a fallback. It is updated in the repair's own commit; a stale
+> comment is model input, not neutral documentation. Raised by `sub-ext` on receipt of the transfer.
 >
 > These are **two prerequisites, not one.** Moving the binding into `derive_key` relocates
 > `identity_suffix`; it does not make it non-empty. With identity propagation off — the shipped
