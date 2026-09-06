@@ -264,7 +264,8 @@ Nothing that depends on this is implemented, which is the condition a scheduled 
   and capability tools are deliberately absent: they are not part of `meta_mcp_tool_defs.rs`,
   `infer_destructive_tool()` only guesses their hints by substring match, and
   `ConfirmationPolicy::for_modern()` is an unconditional refusal — governing them here would
-  refuse a large slice of the tool surface with no confirmation path." Two consequences belong to the requester, not to this design:
+  refuse a large slice of the tool surface with no confirmation path." Two consequences belong
+  to the requester, not to this design:
   - **The third reason is coupled to Q1.** It holds only while refusal *is* the modern-path
     answer. Rule Q1 for Option R and it calcifies: the modern path refuses, so gating backend
     tools means refusing them. Rule for Option I and it evaporates: a confirmation path exists,
@@ -277,8 +278,8 @@ Nothing that depends on this is implemented, which is the condition a scheduled 
     `destructive_hint: Some(false)`: `gateway_invoke` (`src/gateway/meta_mcp_tool_defs.rs:156`)
     and Code Mode's `gateway_execute`, which the governed set deliberately includes because it
     reaches every backend tool (`:707` via `write_non_idempotent_open_world_annotations`,
-    `:278-284`). Neither reaches the gate. The one
-    meta-tool that is destructive-annotated is `gateway_kill_server` (`:309` via
+    `:278-284`). Neither reaches the gate. The one meta-tool that is destructive-annotated is
+    `gateway_kill_server` (`:309` via
     `destructive_idempotent_annotations`, `:254-263`), and it acts on a backend rather than
     routing a call to one, so it touches no backend tool's idempotency cache. The hazard becomes
     real on the first tool that is both, and not before.
