@@ -387,12 +387,37 @@ the assumption gives up is recorded with it: thirty seconds would hold less aban
 churn, and an hour would never lose a long human-in-the-loop elicitation. Neither is wrong; both
 were the operator's to pick.
 
-`MIK-7246.CONFIRM.2` names a confirmation mechanism; what exists is `elicitation/create`
-over SSE, a different mechanism reaching the same outcome. Both readings are consistent
-with everything in the tree, so no amount of reading code settles it. It is also
-downstream of cluster A: even under the generous reading, reachability depends on the
-continuation-envelope wiring, so it cannot close before A does and is not an independent
-item on the critical path.
+`MIK-7246.CONFIRM.2` requires that the destructive-confirmation gate "be reachable through the
+MRTR path, so a modern client can confirm". Designed 2026-09-06
+(`docs/design/2026-09-06-confirm-2-destructive-confirmation.md`); the design settles the
+mechanism question that stood here before, and replaces it with a narrower one only the operator
+can answer. The gate knows exactly one channel, elicitation, which needs a session, and the
+modern path deliberately mints none (`router/handlers.rs:583-587`, a recorded decision:
+per-request minting "grew a table of sessions nothing could reach, and handed the
+sequence-anomaly detector a fresh identity every call"). There is no request-scoped channel back;
+only `send_to_session` exists. So: **does a refusal count as the modern-path answer for 4.0.0?**
+Yes closes the row with documentation, one test and a requirement-row edit, and does not move the
+security posture, because the admin gate runs first and every governed tool is already admin-only
+(`meta_mcp/mod.rs:1578-1584`), so the credential is the real control and the confirmation is the
+courtesy an honest client extends to its user. No means building a gateway-originated in-band
+`InputRequired` with a continuation redeem on retry: seven measured needs, all costed in the
+design, reusing the continuation primitives (`Keyring`, `InFlight`, `Payload`) and none of its
+call sites, because the live `redeem_retry`/`mint_continuation` pair serves *backend*-originated
+exchanges on the invoke path while the confirmation case is gateway-originated at a meta-tool
+gate. The honest counterweight, recorded rather than buried: the row's own words are "so a modern
+client **can confirm**", and refusing is not confirming. CONFIRM.1a already mandates refusal when
+confirmation cannot be obtained and 1b already forbids proceeding on a warning, so a CONFIRM.2
+that also meant "refuse" would restate its two neighbours. That adjacency argues for the
+affirmative reading, which is why yes is a **requirement change needing recorded agreement**, not
+an interpretation the team may adopt on its own. Two questions fall out only if the answer is no:
+whether a gateway-originated `InputRequired` is an acceptable 4.0.0 surface addition given
+MIK-7212 is blocked by MIK-7388, or whether CONFIRM.2 is deferred with a recorded deferral, which
+the row's own Source column would support; and whether "a modern client cannot kill a server at
+all" is acceptable product behaviour, noting that it is also the *current* behaviour, so a no
+there is a request for new capability rather than a regression report. One unknown is deferred and
+belongs to the operator or the MIK-7212 owner because it is a client-ecosystem fact and not a repo
+fact: does a modern client that declares in-band `elicitation` exist, and would it retry? It
+blocks the build-it branch and not the refusal branch.
 
 ### A fifth decision, from correcting the `NFR.COMPAT.1` paragraph
 
