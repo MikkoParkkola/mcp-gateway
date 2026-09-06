@@ -145,6 +145,39 @@ one at random.
 ADR sanctions it. OTEL.1 inherits it: any `_meta`-carried trace context covers the meta-MCP route
 and not the direct route.
 
+### 2.7 The inbound `_meta` is discarded before the invoke funnel, and the one read site reads the wrong level
+
+Added 2026-09-06, after review, as a source correction: §3.3 decides the carrier and §7 says
+OTEL.1 closes when the fields "are read from the inbound `_meta`", but no section named the read
+site, and the obvious one is dead.
+
+`extract_tools_call_params` (`src/gateway/router/helpers.rs:185-195`) returns `params.name` and
+`params.arguments` and nothing else, at both callers — `src/gateway/router/handlers.rs:976` (HTTP)
+and `src/gateway/server/mod.rs:1827` (stdio). Protocol-level `params._meta`, the carrier 3.3
+decides on, never reaches `invoke_tool`.
+
+`TraceContext::from_meta` has exactly one production caller,
+`src/gateway/meta_mcp/invoke.rs:1845-1847`, and it reads `args.get("_meta")` — a field of
+`gateway_invoke`'s *argument object*, one level below the carrier. No meta-tool input schema
+declares `_meta` (`src/gateway/meta_mcp_tool_defs.rs`) and nothing copies `params._meta` into
+`arguments`, so for a spec-conformant client that read is always `None`. The existing test
+(`src/gateway/meta_mcp/trace_correlation_tests.rs:104-130`) passes because its fixture nests
+`_meta` inside the argument object: it exercises the shape the code reads, not the shape a client
+sends, which is why a green suite did not surface this.
+
+Two consequences for the implementation this design authorises:
+
+- The read is a **params-level sibling read at the handler**, not an `arguments` read at the
+  funnel. That seam already exists and already carries exactly this shape:
+  `RetryFields::from_params(params.as_ref())` (`handlers.rs:990`) reads params-level siblings and
+  carries them to the invoke funnel on the caller context.
+- Wiring it at `handlers.rs:990` alone covers **one transport of two**. Stdio builds no such
+  context — `retry: &crate::protocol::mrtr::NO_RETRY` (`src/gateway/server/mod.rs:1862`), with an
+  ignored watcher test at `:3601` holding that gap open. `2026-09-03-post-session-caller-identity.md`
+  refused the same shape for its reaper ("in both serve modes"); the same refusal applies here.
+
+This does not change what 3.3, 3.4 or 3.4a decide. It names where the read they assume must go.
+
 ## 3. Options considered
 
 ### 3.1 EXT.1 — where the declaration lives
@@ -460,7 +493,9 @@ Today the field is populated from an empty set, because the only extension the m
 Tasks and TASK.1 has not landed (3.1a). An empty `extensions` object is the honest declaration,
 and it is not the same wire value as omitting the field.
 
-OTEL.1 closes when the three W3C fields are read from the inbound `_meta`, bounded, validated by
+OTEL.1 closes when the three W3C fields are read from the inbound **params-level** `_meta` —
+at the handler, beside `RetryFields::from_params`, on both transports, never from the tool
+argument object (2.7) — bounded, validated by
 a predicate that matches the W3C grammar (3.4b), and written unchanged into the outbound `_meta`
 at `dispatch_to_backend` unconditionally (3.4a) — never minted, never interpreted, subject to the
 CONTROL.3 carve-out in 3.4. Deleting `src/tracing_context/` is NOT part of it: 4.3 already says a
