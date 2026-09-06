@@ -262,3 +262,15 @@ requester answers. Work elsewhere in TASK.1 is not blocked.
 No test code. No verdict trailers — no vendor has reviewed this document, and stamping one would
 be a forgery of the thing that makes the gate worth having. This plan enters the §P2 plan-review
 round riding with the TASK.1 implementation hop; the `.12`/`.13` additions travel with it.
+
+It also does not adopt `tests/mik_7272_task_1_acs.rs`, which is sitting untracked in the worktree
+and whose module doc names the design's §8 as its plan. §8 is now a pointer, so that file was
+written against a table this change superseded, and it was written before any vendor reviewed the
+plan that replaced it. The order §P2 asks for is plan, then plan review, then failing tests, and
+this file arrived at step three while step two is still outstanding. It therefore stays on disk,
+uncommitted and unedited, until the plan passes review and the file is reconciled against the
+33-row coverage map rather than the superseded table — reconciled by its own author, because
+rewriting another session's uncommitted work is how two sessions produce one file neither of them
+recognises. Nothing here is a criticism of the file: its `use mcp_gateway::protocol::cacheable::is_final`
+independently corroborates the `.8f` anchor correction, which is a second measurement of the same
+fact and worth more than the file cost.
