@@ -1,6 +1,6 @@
 # NFR.SEC.3 — rotatable continuation keys, retained for the max lifetime
 
-Status: DESIGN, not reviewed yet. No code exists. Author: `sec-nfr`, 2026-09-06.
+Status: DESIGN, under dual review (glm-5.3 substitution leg returned SHIP-WITH-FIXES; second leg in flight). No code exists. Author: `sec-nfr`, 2026-09-06.
 
 ## MRTR.5 is the constraint that decides this design — and its text is narrower than the first draft claimed
 
@@ -40,8 +40,10 @@ up, which forces the partition dichotomy — fail closed and lose liveness, or f
 lose 5a.
 
 The binding objection to (b) is therefore not this prose at all. It is a test-plan row that
-already exists and is already marked blocking
-(`docs/requirements/RELEASE-4.0.0-test-plan.md:301`):
+already exists: the §P2 coverage row for `MIK-7212.MRTR.5` at
+`docs/requirements/RELEASE-4.0.0-test-plan.md:301`. Stated exactly — that plan's header still
+reads `Status: DRAFT for review`, and its trailing `Yes` column is *Can it fail?*, not a
+blocking marker. What gives the row its force is not a status label but what it asserts:
 
 > A token minted by one `AppState` is refused by a second one built through the production
 > constructor from the same configuration, the refusal is `NotAuthentic`, and it is decided
@@ -49,9 +51,11 @@ already exists and is already marked blocking
 > configuration or reads it from the environment gives both processes the same key, and
 > fails here while passing every single-process row.
 
-Option (b) is config-supplied key material. That row fails by construction under (b). Meeting
-(b) therefore requires REWRITING an accepted, blocking acceptance criterion — which the repair
-protocol reserves to the requester, recorded, before it happens.
+Option (b) is config-supplied key material. That row fails by construction under (b) — not on
+a judgement call, on the row's own sentence. Meeting (b) therefore means DROPPING the planned
+coverage of an acceptance criterion, and the repair protocol reserves that to the requester,
+recorded, before it happens. The plan being formally draft lowers the ceremony, not the
+substance: the row states a property of MRTR.5 that (b) cannot hold.
 
 ## What the criterion actually says
 
@@ -108,10 +112,13 @@ Consequences that fall out rather than being designed:
 
 ### Where the trigger comes from — the one place this design could have been wrong
 
-The ROTATABLE claim rests entirely on "config reload is a real production caller". Reload
-has TWO callers and only one of them can reach the keyring today. Checked at source rather
-than assumed, because a wrong answer here does not weaken the design — it moves the trigger
-somewhere else and rewrites this section.
+The ROTATABLE claim originally rested entirely on "config reload is a real production
+caller". It no longer does — the interval task below carries the cadence, and reload survives
+only as the operator's explicit rotate verb. What follows is the source check that decided
+which of reload's two callers stays.
+
+Checked at source rather than assumed, because a wrong answer here does not weaken the design
+— it moves the trigger somewhere else and rewrites this section.
 
 | caller | reaches `ContinuationState`? | cost |
 |---|---|---|
@@ -142,7 +149,25 @@ The revision is strictly smaller than what it replaces:
 |---|---|---|
 | `gateway_reload_config` meta-tool (`src/gateway/meta_mcp/invoke.rs:2836`) | KEEP | free — runs on `&self` of `MetaMcp`, which already owns `continuation`. It is the operator-invocable lever, which is what makes ROTATABLE a verb rather than a property. |
 | file watcher (`ConfigWatcher::start`) | **DROP** | this was the only piece needing new plumbing, and it was coupling rotation to file edits that say nothing about keys. Removing it deletes the new parameter, the `ReloadContext` question and the two-caller table. |
-| interval task inside `ContinuationState` | **ADD** | guaranteed cadence with no plumbing at all: rotation no longer depends on an operator ever reloading. It also gives eager retention pruning a home, so the ring holds only keys inside the 300s window instead of only pruning at the next rotation. |
+| interval task, spawned beside the server's other background tasks | **ADD** | guaranteed cadence: rotation no longer depends on an operator ever reloading. It also gives eager retention pruning a home, so the ring holds only keys inside the 300s window instead of only pruning at the next rotation. |
+
+Two decisions the timer forces, named here rather than left to the implementer:
+
+**Where it is spawned — NOT in `ContinuationState::new`.** `MetaMcp::build`
+(`src/gateway/meta_mcp/mod.rs:427`) and `MetaMcp::new` (`:488`) are plain synchronous
+functions, and `ContinuationState::new()` is called from `build` at `:438` and from seven
+synchronous test constructors in `src/gateway/router/tests.rs`. `tokio::spawn` panics outside
+a runtime, so a constructor that spawns turns every one of those into a panic. The task is
+spawned at the server, exactly where `spawn_idle_reaper` already is
+(`src/gateway/server/mod.rs:1393`, defined `:2124`), with the identical signature shape:
+`(Arc<ContinuationState>, Option<broadcast::Receiver<()>>)`.
+
+**How it stops.** From the same shutdown broadcast every other background task uses —
+`shutdown_tx.subscribe()` at the call site, `select!`-ed against the interval tick, exactly as
+`ConfigWatcher::start` (`src/gateway/server/mod.rs:1282`) and the cost sweeper (`:1400-1416`)
+do. Without it the task holds its `Arc<ContinuationState>` alive past shutdown and never
+stops. This is the one line of new plumbing the design has, and it is a line this file already
+writes five times.
 
 The interval is a compile-time constant beside `CONTINUATION_LIFETIME_SECS`
 (`src/protocol/continuation.rs:128`), not new config — same reasoning that kept the retention
@@ -199,7 +224,7 @@ fixed with the full scope". Cited, not re-argued.
 **(b) Config-supplied shared keys + reload-time rotation + shared consumed-ledger +
 in-flight continuity.** Feasible, and it does meet MRTR.5's text — a linearizable shared
 ledger prevents a second spend, it does not merely notice one. Two things stand against it,
-and only the first is decisive. It fails an accepted blocking test-plan row as written
+and only the first is decisive. It fails the planned MRTR.5 coverage row as written
 (`RELEASE-4.0.0-test-plan.md:301`, quoted above), so adopting it requires the requester to
 rewrite that criterion, recorded, before the work starts. And it moves single-use from a
 property that holds by construction to one conditional on an external store being
