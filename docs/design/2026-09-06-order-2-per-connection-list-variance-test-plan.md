@@ -43,8 +43,8 @@ each reach both surfaces — which is why some cells are empty on purpose.
 
 | leg | reaches `tools/list` | reaches the discovery surface | cases |
 |---|---|---|---|
-| routing profile | yes — `mod.rs:1263`, `spec_preview.rs:47` | yes — `search.rs:376,629,728`, `surfaced.rs:107` | B-01 (2a), B-02 (2b), on `tools/list` |
-| spec-preview promotion | yes — `mod.rs:1330`, `spec_preview.rs:112` | **no reader**: `promoted_tools_for_session` is not called from `search.rs` or `surfaced.rs` at all | B-07 (2a), B-06 (2a), B-10 (2b) |
+| routing profile | yes — `surfaced.rs:107` (reached only from `mod.rs:1310`), `spec_preview.rs:47`. **Not** `mod.rs:1263`: that `active_profile` read feeds `observe_tools_list` telemetry (`:1259-1262`) and shapes no list | yes — `search.rs:376,629,728` | B-01 (2a), B-02 (2b) on `tools/list`; **B-06 (2a)** on the filtered `tools/list` path, which is a profile case (`spec_preview.rs:47`), not a promotion one |
+| spec-preview promotion | yes — `mod.rs:1330`, `spec_preview.rs:112` | **no reader**: `promoted_tools_for_session` is not called from `search.rs` or `surfaced.rs` at all | B-07 (2a), B-10 (2b) |
 | FSM workflow state | **no reader**: nothing on the `tools/list` path reads it | yes, and only here — four entry points: `code_mode_search` (`search.rs:378`), `search_tools` (`:730`), and `list_tools` / `list_tools_single_server`, which today read the store directly (`:647-650`, `:581-584`) | B-08 (2a), B-09 (2b) |
 
 Two empty cells need no case, because there is no behaviour in them to assert:
