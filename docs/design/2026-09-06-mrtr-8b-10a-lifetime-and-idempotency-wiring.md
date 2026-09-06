@@ -390,6 +390,15 @@ transcript. A prerequisite recorded where nobody will look is the inertness the 
 diagnoses, one level up. The durable record is now a cluster-C note in
 `RELEASE-4.0.0-blocking-rollup.md`; the message stays as the notification, not as the evidence.
 
+**Provenance note, recorded because the repair protocol requires a commit per finding and this
+change did not get one.** The three round-2 repair commits were written but never landed as
+themselves: a concurrent session in this shared checkout ran `git commit` against the shared index
+while these files were staged, so all three diffs were swept into `38db0dff`
+("docs(otel.1): eliminate the second copy of the source correction") and one rollup hunk into
+`498fc415`. The content is intact and on the branch; only the attribution is wrong, and history is
+not being rewritten to fix it while another session is committing to the same branch. Later commits
+here use `git commit -- <path>`, which ignores the index.
+
 **One defect in the test plan, found in the same pass**, before either vendor saw the plan: C1 was
 written as "deadline at or before the supplied `now`" while `reclaim_abandoned` retains on
 `now <= *deadline` (`continuation.rs:676`) — the two disagree at `deadline == now`, and no row sat
