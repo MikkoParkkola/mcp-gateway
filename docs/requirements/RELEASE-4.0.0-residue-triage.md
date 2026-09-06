@@ -22,9 +22,9 @@ non-blocking, 35 blocking` — was already stale when it was pasted: `GH475.OBS.
 the same day) flipped their `criteria-status.md` rows without recomputing this document's own
 headline or `RELEASE-4.0.0-blocking-rollup.md` row H, which still declared cluster H at `5` rows
 against an actual `3` (`RL.9`, `RL.10`, `OBS.1`) at that point — itself a transient count, since
-this same pass also lands `GH475.RL.9` (see below), which drops row H to its current `2`
-(`RL.10`, `OBS.1`); the `3` describes the moment right after `78bd401a`, not the state this pass
-leaves behind. `GH475.MIG.2` is NOT
+this same pass also lands `GH475.RL.9` (see below), which dropped row H to `2`
+(`RL.10`, `OBS.1`) at that point; the `3` describes the moment right after `78bd401a`, not the
+state this pass leaves behind. `GH475.MIG.2` is NOT
 part of this drift and never was: it was already MET (`version-coupled`), blocking `no`, before
 `78bd401a` — confirmed at `78bd401a^` and five commits further back — and was never a member of
 cluster H (`git show HEAD:RELEASE-4.0.0-blocking-rollup.md` names no `MIG.2`); `98bef5d1` the
