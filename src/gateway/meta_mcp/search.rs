@@ -158,6 +158,14 @@ impl MetaMcp {
         }
     }
 
+    /// The FSM workflow state every discovery entry point filters capabilities
+    /// by: `code_mode_search` (`:378`), `list_tools_single_server` (`:581`),
+    /// `list_tools` (`:645`) and `search_tools` (`:724`).
+    ///
+    /// It is the only read of `session_state` on that path, and keeping it the
+    /// only one is the point: two of those callers each carried their own copy
+    /// of this body, so a filter applied here would have left them reading the
+    /// store unguarded (`MIK-7272.ORDER.2`, test-plan precondition 1).
     fn current_search_state(&self, session_id: Option<&str>) -> String {
         session_id.map_or_else(
             || crate::gateway::state::DEFAULT_STATE.to_string(),
@@ -578,10 +586,7 @@ impl MetaMcp {
         if let Some(cap) = self.get_capabilities()
             && server == cap.name
         {
-            let current_state = session_id.map_or_else(
-                || crate::gateway::state::DEFAULT_STATE.to_string(),
-                |sid| self.session_state.get_state(sid),
-            );
+            let current_state = self.current_search_state(session_id);
             let tools: Vec<_> = cap
                 .get_tools_for_state(&current_state)
                 .into_iter()
@@ -645,10 +650,7 @@ impl MetaMcp {
         if let Some(cap) = self.get_capabilities()
             && profile.backend_allowed(&cap.name)
         {
-            let current_state = session_id.map_or_else(
-                || crate::gateway::state::DEFAULT_STATE.to_string(),
-                |sid| self.session_state.get_state(sid),
-            );
+            let current_state = self.current_search_state(session_id);
             let cap_killed = self.kill_switch.is_killed(&cap.name);
             for tool in cap.get_tools_for_state(&current_state) {
                 if !profile.tool_allowed(&tool.name) || !tool_matches_role(&tool, role_filter) {
