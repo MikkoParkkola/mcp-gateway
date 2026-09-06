@@ -25,14 +25,16 @@ OUT:
 
 The idempotency machinery is complete and unreachable, and it has no way in.
 
-- `MetaMcp::idempotency_cache` is initialised to `None` (`src/gateway/meta_mcp/mod.rs:393`).
-- Its only populator, `MetaMcp::enable_idempotency` (`src/gateway/meta_mcp/mod.rs:580`), has
-  zero callers: `rg --hidden --no-ignore 'enable_idempotency' .` returns its own definition.
+- `MetaMcp::idempotency_cache` is initialised to `None` in `MetaMcp`'s constructor, and that is
+  its only initialiser.
+- Its only populator, `MetaMcp::enable_idempotency`, has zero PRODUCTION callers:
+  `rg --hidden --no-ignore 'enable_idempotency' .` returns its own definition and one call from
+  `src/gateway/meta_mcp/tests.rs`.
 - No configuration key gates it: `rg -n 'idempotency' src/config/mod.rs` returns nothing.
 - It carries `#[allow(dead_code)]`, which silences the warning the `-D warnings` gate would
   otherwise have raised. That the attribute is *why* it survived is inferred (I), not read.
 
-So the enforcement site (`src/gateway/meta_mcp/invoke.rs:792`) takes the `None` branch in every
+So the enforcement site in `invoke_tool` takes the `None` branch in every
 build that has ever shipped.
 
 Two further gaps compound it, both found in review and verified at source.
@@ -142,7 +144,7 @@ closes the ADR-008 finding while leaving the replay. Dormant while the cache is 
 the moment this change wires it on, which is what makes it blocking for activation rather than a
 follow-up.
 
-## Risks inherited with activation
+## Risks that fire on activation
 
 R4 and R5 arrived 2026-09-06 from the MRTR.8b/10a design when Change B was withdrawn. They were
 risks *of activating the cache*; that change activates nothing, so they are this one's from the
