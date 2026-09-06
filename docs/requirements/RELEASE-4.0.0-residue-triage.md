@@ -11,7 +11,7 @@ than transcribed from the rollup, and sorted by what each one is waiting on.
 `python3 scripts/release/count-release-criteria.py --check`, verbatim (re-run 2026-09-06):
 
 ```
-Coverage: 146 criteria, 182 rows, 146 met or non-blocking, 36 blocking.
+Coverage: 146 criteria, 182 rows, 147 met or non-blocking, 35 blocking.
 ```
 
 The line this document carried until 2026-09-06 — `146 criteria, 146 rows, 102 met or
