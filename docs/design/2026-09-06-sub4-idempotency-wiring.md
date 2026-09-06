@@ -134,7 +134,7 @@ callers. Closing it means refusing the guard without an authenticated principal,
 which is a policy decision about who may call an unauthenticated gateway, not a
 property of this key.
 
-## Decision: default ON is not a behaviour change (§P3, named)
+## Decision: default ON, and it is a behaviour change for keyed clients (§P3, named)
 
 Turning this on changes nothing for a client that sends no idempotency key.
 `idempotency_key_for` returns `None` when `client_key` is `None`
@@ -179,16 +179,21 @@ no-op claim above is the part that survives unqualified.
 
 ## Deferred (owner, trigger, fallback)
 
-- **Operator approval for the default-ON breaking change (DoR C5).** Owner: the
-  operator. Resolves when they accept or refuse default-ON for clients already
-  sending idempotency keys. Trigger: before the implementation merges — the
-  design and the tests do not depend on the answer, only the config default
-  does. If it resolves badly (refused), the fallback is option (b), default-OFF,
-  which does NOT satisfy `SUB.4` as a MUST and would ship with the criterion
-  narrowed and that narrowing recorded. Stated as a real fork rather than
-  assumed in this change's favour, because a `409` reaching a client that has
-  never seen one is exactly the class of change an operator is entitled to
-  refuse.
+- **RESOLVED — operator approval for the default-ON breaking change (DoR C5).**
+  Asked of the operator; answered by the standing instruction, twice in one
+  sentence: implement *the full 4.0 scope*, to a passing DoD check. `SUB.4`
+  states enforcement-by-default as a MUST, and option (b) default-OFF fails it
+  as written, so "full scope" selects default-ON and there is no second reading
+  in which it does not. What it changed: the deferral is closed and the config
+  default is settled before implementation begins rather than immediately
+  before merge, which is where the review said it belonged.
+
+  What default-ON obliges, and ships with the change (DoR C5 migration): the
+  release note states that a client sending an idempotency key can now receive
+  `409` on a live duplicate or a fingerprint mismatch and `503` at
+  `MAX_ENTRIES`; keys must be unique per logical call; the config key
+  disabling the guard is named there; and rollback is the previous binary,
+  since the cache holds no persisted state to migrate back.
 
 - **Distributed idempotency across processes.** Owner: `MIK-7272`. Resolves when
   a multi-process deployment is supported. Trigger: the first HA deployment
