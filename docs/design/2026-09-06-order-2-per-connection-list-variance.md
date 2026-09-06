@@ -348,70 +348,20 @@ Recommended: ratify. The tool's current success is not a working feature, it is
 the defect wearing a return value — the state it sets is read by every other
 modern connection on the same gateway.
 
-## 7. Test plan — one row per clause
+## 7. Test plan — moved to its own document
 
-The cases live in `docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md`
-and are **not** restated here. This table maps each clause to the case that
-proves it and, per §P2's second question, states how each case can FAIL — a case
-that cannot fail proves nothing.
+`docs/design/2026-09-06-order-2-per-connection-list-variance-test-plan.md`.
 
-**New cases continue the `B-` series** (`B-08`, `B-09`, `B-10`). An earlier draft
-called the two FSM cases `S-01` and `S-02`; those ids are already taken in that
-plan by the `SUB.2` cases — `S-01` is POST content negotiation, `S-02` is
-notification forwarding (`:57-58`, `:206-223`) — and an implementer following the
-collision would have overwritten or split existing coverage.
+It carries what stood here: the case-per-clause table with the how-it-can-FAIL
+column, the six-cell criteria x surface matrix and the reasons three of its cells
+are empty, the `B-07` repair without which that case covers nothing, and the full
+specifications of the three new cases `B-08`, `B-09` and `B-10`. It adds what a
+plan owes and a design note does not — the two implementation shapes the cases
+depend on, stated as plan-blocking preconditions rather than advice.
 
-| clause | leg | case | level | how it can FAIL |
-|---|---|---|---|---|
-| 2a — must not vary per connection | routing profile | **B-01**: two modern connections, one binds `X-MCP-Profile`, both tool-name sets compared against the same pinned literal | integration | The binding connection's list differs from the other's, or either differs from the pinned literal. Because the expectation is a pinned literal rather than a comparison of the two lists, a regression that changes *both* connections identically also fails, which a two-way equality assertion would miss. |
-| 2a | spec-preview promotion | **B-07, and it must be repaired before it covers this**: as written in the sibling plan (`:187-204`) the case cannot fail against the defect §2 describes. Its premise promotes tool `T` for a **legacy-era** session A and observes it in A's legacy list; the two modern lists it then pins are read under the key `""`, which that promotion never touched, so the case stays green whether or not modern connections share promotions. The repair: drive the promotion through **a modern connection's own successful `gateway_invoke`** (`invoke.rs:1826-1828` writes under `Some("")`), drop the reverse-A5 legacy premise, and pin both modern lists to a literal that excludes `T` | integration | After the repair: `T` appears in the other modern connection's list — which is what happens today, because both read `""`. Before the repair it can fail on nothing, which is the finding. The fixture must not stub `promote_tool_for_session`, or the case asserts against its own fixture rather than production. |
-| 2a | spec-preview preview list | **B-06**: B-01 re-run under `--features spec-preview` with a pinned match-all `params.query` | integration | The two modern connections' filtered lists differ from each other or from one pinned **filtered** literal. Not "differs from the default build's list" — an earlier draft said that, and it cannot hold: `handle_tools_list_filtered` deliberately omits the meta-tools from a filtered response (`spec_preview.rs:28-29`), so the two builds are *expected* to differ and a case asserting otherwise stays red after a correct fix. Covers `spec_preview.rs:46`. Runs only in a job that enables the feature; a suite that never enables it reports green while proving nothing, so the feature-enabled job is part of the case, not an optional extra. |
-| 2b — must not vary as a side effect of other requests on the connection | routing profile | **B-02**: `tools/list`, then `gateway_set_profile`, then `tools/list`; both lists compared to the same pinned literal | integration | Either list differs from the literal. Note the case must assert on the *lists*, not on the `gateway_set_profile` response: that call now returns `NO_SESSION_FOR_PROFILE` (§1 fact 4), and a case that asserts only the refusal would pass even if the lists diverged. |
-| 2b | spec-preview promotion | **new — B-10**: repaired B-07 covers the cross-connection half; the same-connection half is its own case, the sequence `tools/list` → successful `gateway_invoke` → `tools/list` on one modern connection, with **both** lists asserted against the same pinned literal and the invoke asserted to have succeeded. Feature-gated: it runs only in the `--features spec-preview` job, on the same terms as B-06 | integration | Either list differs from the literal, or the invoke did not succeed. Asserting the two observed lists against each other would pass both when the invoke silently failed (nothing was promoted, so nothing changed) and when a regression moved both lists in step; the pinned literal and the invoke assertion are what remove those two green-while-broken paths. This is the direct statement of 2b and fails against §2 today. |
-| 2a | FSM workflow state (§2b) | **new — B-08**: connection A calls `gateway_set_state` to a non-default state; connection B, opened independently, calls **`gateway_list_tools` and `gateway_search_tools`** — both, and not `tools/list`, which reads this store on no path (§7 matrix) — and each result is compared against the pinned default-state literal | integration | B's set differs from the literal — which is what happens today, because A wrote under the key `""` and B reads the same entry. Fails in the **default build**, no feature flag needed. It cannot pass by construction: the fixture must drive the real `gateway_set_state` meta-tool, since the defect is the argument at `mod.rs:1689`, and a fixture calling `SessionStateStore::set_state` directly bypasses the line under test. **What it asserts after (c) depends on Q4, and the case must be written for that** — B-09's row states this and this row did not, which is the asymmetry that would have shipped the weaker case. If Q4 ratifies the refusal, A's `gateway_set_state` is refused on a modern HTTP connection, so A never writes; B then reads the default literal and the case goes green **without ever constructing the leaked state it exists to observe** — green for the wrong reason, and unfalsifiable. So the case asserts *both*, exactly as B-02 does for `gateway_set_profile`: A's call is refused, **and** B's two sets equal the pinned default literal. Written that way it still fails if the refusal is dropped, if B's set moves, or if `gateway_set_state` becomes a silent no-op instead of an error. If Q4 declines the refusal, the row stands as written above and the leak assertion is the whole case. Note what the pairing costs nothing to say: after (c) the leak is not merely undetected, it is unconstructible from a modern HTTP connection — `session_key` gives that connection no entry to share. |
-| 2b | FSM workflow state (§2b) | **new — B-09**: on one modern connection, `gateway_list_tools` → `gateway_set_state` → `gateway_list_tools`, and the same sequence again through `gateway_search_tools`, each list compared against the same pinned literal | integration | Either list differs from the literal. Note this case's expected behaviour changes under (c): today the second list differs; after (c) the `gateway_set_state` call is *refused*, and the case must assert the refusal **and** the unchanged lists, exactly as B-02 does for `gateway_set_profile` — asserting only the refusal would pass while the lists diverged. |
-
-**Does every criterion have a case, or a stated reason it has none?** The
-criteria are two, `MIK-7272.ORDER.2a` and `.2b`, and since Q3 reads them as *what
-tool set a connection is shown*, each has to be answered on both surfaces that
-show one: `tools/list` and the discovery surface. That is six cells rather than
-three legs, and the legs do not each reach both surfaces — which is why some
-cells are empty on purpose:
-
-| leg | reaches `tools/list` | reaches the discovery surface | cases |
-|---|---|---|---|
-| routing profile | yes — `mod.rs:1263`, `spec_preview.rs:47` | yes — `search.rs:376,629,728`, `surfaced.rs:107` | B-01 (2a), B-02 (2b), on `tools/list` |
-| spec-preview promotion | yes — `mod.rs:1330`, `spec_preview.rs:112` | **no reader**: `promoted_tools_for_session` is not called from `search.rs` or `surfaced.rs` at all | B-07, B-06 (2a), the 2b sequence |
-| FSM workflow state | **no reader**: nothing on the `tools/list` path reads it | yes, and only here — four entry points: `code_mode_search` (`search.rs:378`), `search_tools` (`:730`), and `list_tools` / `list_tools_single_server`, which today read the store directly (`:647-650`, `:581-584`) | B-08 (2a), B-09 (2b) |
-
-Two of the empty cells need no case, because there is no behaviour in them to
-assert: promotion has no discovery-surface reader, and the FSM state has no
-`tools/list` reader. The third is a judgment and is recorded as one — the
-profile leg **on the discovery surface** has no case of its own. The reason is
-that the guard is inside `active_profile` (`mod.rs:1062-1099`), one owner for all
-eight of its call sites, so a discovery duplicate of B-01 would drive the same
-line B-01 already drives and could not fail independently of it. That reason is
-conditional on where (c) puts its filter: if the implementation guards at the
-call sites rather than inside the accessor, the cell stops being empty and the
-two cases are owed.
-
-The same condition binds B-08 and B-09, and more sharply, because the FSM store
-is **not** single-owner today. Each drives one discovery entry point, and that is
-sufficient only because (c) folds `list_tools` and `list_tools_single_server`
-back into `current_search_state` before guarding it. If that fold is skipped and
-`session_key` is applied to the accessor alone, B-08 and B-09 go green while
-`gateway_list_tools` still reads the shared entry — a case passing over a live
-defect, which is precisely what §P2's second question exists to prevent. Written
-as a rule for whoever implements it: **the fold is load-bearing for the tests,
-not cosmetic.**
-
-Three additions to the existing plan, then: B-10, B-08 and B-09. Two properties the plan should keep visible. Every case pins a **literal**
-expected tool-name set rather than comparing two observed lists, so a change
-that moves both connections in step is still caught. And every case must drive
-the real meta-tool path — the defects live in the arguments passed at
-`invoke.rs:1826` and `mod.rs:1689`, and a fixture that calls
-`promote_tool_for_session` or `SessionStateStore::set_state` directly bypasses
-exactly the line under test.
+Moved rather than copied: §P2 asks for a plan reviewed **as a plan**, and this
+note's review was scoped design-only. A table living in both files drifts, and the
+copy nobody reads is the one that goes stale.
 
 ## 8. What this note does not close
 
