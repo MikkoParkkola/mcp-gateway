@@ -267,20 +267,19 @@ something to be reverted from, and the same row becomes writable and red.
 - if it resolves badly (TASK.1 ships no gated behaviour in this release): EXT.1.d closes on
   construction and review, recorded as such, never on E7 alone
 
-### 6.6 OTEL.1.a is covered at the extractor, not at the route
+### 6.6 OTEL.1.a needs route-level evidence; the extractor alone does not close it
 
 T0 feeds a request body to the production extractor and asserts the recovered context. That proves
 the *parse* is real. It does not prove either transport hands the extractor a body to parse:
-neither the HTTP nor the stdio route is exercised by any row here.
+neither the HTTP nor the stdio route is exercised by any row here. **If a route never calls the
+extractor, every row in §5 still passes.**
 
-The split is deliberate — the transports are being edited concurrently under other tickets in this
-cluster, and a row asserting their internals would be written against a moving target. The
-consequence is stated instead of hidden: **if a route never calls the extractor, every row in §5
-still passes.** T0 and T1 together bound the defect to "the fields are parsed and emitted
-correctly once something on the request path reads them"; wiring that read is checked by the same
-backend-capture harness §6.4 waits on, which observes the whole route rather than a seam inside it.
+*The argument this section used to make — that the split was deliberate because the transports
+were moving under other tickets, and that extractor evidence would therefore do — is WITHDRAWN,
+not merely annotated. It is kept in one sentence only so a reader who remembers it can see it was
+answered rather than lost.*
 
-**SUPERSEDED 2026-09-06 by the design's §2.7 and §7.** That correction found the inbound
+**Withdrawn 2026-09-06 by the design's §2.7 and §7.** That correction found the inbound
 `params._meta` is discarded before the invoke funnel on both transports and the one production
 read site reads a level below the carrier, so "a route never calls the extractor" is not a
 hypothetical this plan may close around — it is the state of the tree. Extractor evidence is

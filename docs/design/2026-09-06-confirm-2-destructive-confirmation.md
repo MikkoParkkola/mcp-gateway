@@ -73,8 +73,12 @@ the exact string is specified with the option: it must name the tool, say that t
 declared protocol version has no confirmation channel, and name the channel that does have one.
 Whoever implements R writes that string into the test, not into the log line only.
 
-Cost: a documentation change, a test asserting the refusal shape on the modern path, and one
-requirement-row edit.
+Cost: a documentation change, one requirement-row edit, a test asserting the refusal shape on the
+modern path — and a code edit, which the earlier costing of this option omitted. The wire string
+is a `format!` literal inside the `refused` closure that the `Unavailable` arm and the `Elicit`
+arm both call (`src/gateway/meta_mcp/mod.rs:1847-1859`), so a modern-path-specific string means
+either a second message path or threading the caller's declared version into that closure. Still
+the cheaper of the two options by a wide margin; a shared closure is not a message detail.
 
 **Why this is not a ruling I can make.** The requirement's own words are "so a modern client
 **can confirm**". Refusal is not confirming. Adopting Option R therefore *changes what CONFIRM.2
@@ -126,7 +130,9 @@ What it needs, all measured:
    as inherited ships the gate with no cache at all, which is exactly that refusal.
 
 Cost: a protocol-surface addition late in the release, touching the continuation and idempotency
-rows. Not rejected on merit — rejected, if it is rejected, on release timing (Q2).
+rows — and, per item 7, a cache-first check at the gate that has to be BUILT. This line costed
+that as inherited for as long as item 7 said it was inherited; item 7 was repaired and this line
+was not, which is the same free-lunch reading one paragraph down. Not rejected on merit — rejected, if it is rejected, on release timing (Q2).
 
 ### Option I′ — the same thing, stateless, by signed token (COLLAPSES INTO OPTION I)
 
@@ -363,7 +369,7 @@ question rather than a decision.
 |---|---|
 | **kill-metric** | Option I is killed if U1 returns no client that both declares a modern version and declares input capabilities within the 4.0.0 window. An affirmative path no client can walk is the cost this criterion exists to refuse |
 | **pivot-trigger** | the requester answers Reading B on Q1, or answers Q3 that a version-scoped inability to kill is unacceptable product behaviour. Either flips the recommendation from R to I |
-| **success-floor** | the criterion closes with a recorded requester ruling, named tests, and no regression to the legacy path's warn-and-proceed behaviour. The tests, so the floor is checkable rather than described: **either branch** — `modern_path_refuses_unconfirmable_destructive_call`, asserting the wire string carries all three required contents (tool, that this protocol version has no confirmation channel, which channel does), and a test that the U2 record is emitted for a refused kill, so "a refused kill is exactly the event an operator later asks about" is a fact and not a hope. **Affirmative branch only** — `retry_after_redeemed_confirmation_returns_recorded_result`, which drives Option I item 7's at-least-once scenario end to end: a redeemed continuation, a successful kill, a duplicate delivery, and the recorded result rather than a refusal. That test is the one that fails if an implementer reads item 7 as inheriting a cache the gate does not have. A design that ships without the ruling has not met the floor, whatever code lands |
+| **success-floor** | the criterion closes with a recorded requester ruling, named tests, and no regression to the legacy path's warn-and-proceed behaviour. The tests, each named with the branch it belongs to — a floor demanding a refusal test of the branch that does not refuse is not a floor: **refusal branch (Option R) only** — `modern_path_refuses_unconfirmable_destructive_call`, asserting the wire string carries all three required contents (the tool, that this request's declared protocol version has no confirmation channel, and which channel does). Under Option I that assertion is false by construction: the version *does* have a channel and this caller did not declare it, so the affirmative branch's refusal case is the C3 capability refusal, a different string. **Affirmative branch (Option I) only** — `retry_after_redeemed_confirmation_returns_recorded_result`, which drives item 7's at-least-once scenario end to end: a redeemed continuation, a successful kill, a duplicate delivery, and the recorded result rather than a refusal. That test is the one that fails if an implementer reads item 7 as inheriting a cache the gate does not have. **Either branch, conditional on U2** — a test that the record U2's ruling requires is emitted for a refused kill. Conditional on purpose: U2's bad-resolution field accepts "4.0.0 needs no record" as a recorded residual, so a floor making this test unconditional would have decided U2 by making it a gate. If the ruling owes a record, this test is what makes "a refused kill is exactly the event an operator later asks about" a fact rather than a hope; if it owes none, the floor loses this row and nothing else. A design that ships without the ruling has not met the floor, whatever code lands |
 | **time-box** | the ruling is wanted before the 4.0.0 requirements freeze; absent it, CONFIRM.2 defers out of 4.0.0 with a recorded deferral, which its own Source column already contemplates ("Depends on MIK-7212", itself blocked by MIK-7388) |
 
 ## Unknowns — every one scheduled

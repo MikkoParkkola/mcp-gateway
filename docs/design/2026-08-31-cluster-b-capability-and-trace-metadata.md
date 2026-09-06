@@ -230,10 +230,12 @@ would not turn it green. Keeping it would have gated OTEL.1 on another cluster's
 coverage for OTEL.1 is the route-level ingestion row the test plan's §6.6 now requires, and
 nothing else. The watcher stays ignored and stays cluster-G's.
 
-This supersedes the test plan's §6.6 residual
-(`docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md:270-287`), which
-allows OTEL.1.a to close on extractor evidence with the route gap merely named. It may not:
-route-level ingestion on both transports is a close condition, not a residual.
+The test plan's §6.6 residual once allowed OTEL.1.a to close on extractor evidence with the route
+gap merely named. It may not: route-level ingestion on both transports is a close condition, not a
+residual. That clause was struck in the test plan itself on 2026-09-06
+(`docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md` §6.6) rather than
+superseded by reference — a superseded clause left standing is read by whoever opens that file
+first, which is the drift this cluster has already paid for once.
 
 This does not change what 3.3, 3.4 or 3.4a decide. It names where the read they assume must go.
 
