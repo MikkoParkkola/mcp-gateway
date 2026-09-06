@@ -79,7 +79,10 @@ fn all_meta_tool_schemas() -> Vec<(String, serde_json::Value)> {
         );
         for tool in tools {
             names.push(format!("{mode}/{}", tool.name));
-            schemas.push((format!("{mode}/{}", tool.name), tool.input_schema));
+            schemas.push((
+                format!("{mode}/{} [inputSchema]", tool.name),
+                tool.input_schema,
+            ));
             // Both schema fields are published to a client, so both are in the
             // population. Only some tools declare an `outputSchema`.
             if let Some(output) = tool.output_schema {
@@ -306,7 +309,7 @@ async fn capability_schemas_are_valid_2020_12_and_resolve_their_own_refs() {
 
     for definition in &definitions {
         let tool = definition.to_mcp_tool();
-        let mut published = vec![(tool.name.clone(), tool.input_schema)];
+        let mut published = vec![(format!("{} [inputSchema]", tool.name), tool.input_schema)];
         if let Some(output) = tool.output_schema {
             published.push((format!("{} [outputSchema]", tool.name), output));
         }

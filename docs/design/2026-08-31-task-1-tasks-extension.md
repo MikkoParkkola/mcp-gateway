@@ -419,12 +419,16 @@ go green against any stub — that is stated, not papered over.
 | `MIK-7272.TASK.1.12` | a `subscriptions/listen` naming a `taskId` created by a different principal is refused, and the refusal is indistinguishable from listening on a `taskId` that never existed — no status, no result, no error that confirms the id | integration: create as principal A, open a listen stream on that id as principal B, assert B's stream is byte-identical to B listening on a fabricated id, and that nothing is ever pushed to it | integration | **No — vacuous until both TASK.1 and SUB.2 land**, and that is exactly why it is written now. Nothing admits a subscription today, so an empty stream passes for the wrong reason. It goes red the moment a stream is admitted without an ownership check, which is the state the code would otherwise ship in: §3 ¶6's principal check is stated for the three retrieval methods, and admission is a fourth surface reaching the same records. The byte-identical half is the assertion — a distinct error code for "not yours" is itself the disclosure. |
 | `MIK-7272.TASK.1.13` | a client that has not declared the extension **on that request** is refused `-32021` when it calls `subscriptions/listen` carrying `taskIds`, not only when it calls the `tasks/*` family | integration: declare on request 1, open a listen stream carrying `taskIds` without declaring on that request, assert `-32021` with the same `data.requiredCapabilities` payload AC `.4` asserts | integration | **Partially, and for a real reason.** The per-request capability read exists (`.4` asserts it on the `tools/call` path and is red today for behaviour, not absence), so the assertion is not waiting on the dispatcher — it is waiting on the subscription path. Written separately from `.4` because a gate implemented per *method family* passes `.4` and fails this: `subscriptions/listen` is not in the `tasks/*` family and reaches the extension anyway. |
 
-Seven rows out of thirteen cannot fail for a behavioural reason today. That is the finding: TASK.1 is
+Six rows out of thirteen cannot fail for a behavioural reason today. That is the finding: TASK.1 is
 mostly new surface, and the tests that constrain it are the five that assert against *existing*
-code (`.13` is the partial case: its gate exists, its call path does not) — `ADDED_IN_2026_07_28`, `mcp_name_body_field`, the `Task` shape, the `is_final` guards, and
+code (`.13` reaches them partially: its gate exists, its call path does not) — `ADDED_IN_2026_07_28`, `mcp_name_body_field`, the `Task` shape, the `is_final` guards, and
 the per-request capability read. Those five are where the failing-tests step (§P2) has real work
 on day one; the rest wait on the dispatcher and must be written against the spec text, not
 against whatever the dispatcher turns out to do.
+
+`MIK-7272.TASK.1.12` and `MIK-7272.TASK.1.13` are **blocking for 4.0.0** (team-lead ruling,
+2026-09-06, recorded in §11.6). They are separate criteria on purpose: folding a distinct
+authorisation surface into `.11` is what produced RL.5's "MET (narrowed)".
 
 ## 8a. The existing `ac_task_1_*` cases do not cover the criterion
 
