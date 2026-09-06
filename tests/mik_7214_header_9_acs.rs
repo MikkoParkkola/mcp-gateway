@@ -42,7 +42,7 @@ struct Wire {
 
 type Recorder = Arc<Mutex<Vec<Wire>>>;
 
-/// Whether the fixture peer answers `server/discover` as a modern peer.
+/// How the fixture peer answers `server/discover`.
 ///
 /// Named rather than a bare `bool` at the call site: `spawn_peer(true)` does
 /// not say which era it means.
@@ -219,6 +219,16 @@ async fn a_modern_peer_gets_the_modern_protocol_version() {
         MODERN_VERSIONS[0],
         "a peer that answered discovery modernly must be sent the modern \
          revision, not the legacy handshake constant"
+    );
+    // The other half of the legacy pin. Same fixture, same issued session,
+    // opposite outcomes by era: without this, "the modern shape strips
+    // `MCP-Session-Id`" (MIK-7215.STATELESS.3a) is prose in two comments and
+    // nothing here proves the legacy pin is about a header that can move.
+    assert!(
+        wire.headers.get("MCP-Session-Id").is_none(),
+        "the modern shape is stateless and must not echo the session the peer \
+         issued; it sent {:?}",
+        wire.headers
     );
 }
 
