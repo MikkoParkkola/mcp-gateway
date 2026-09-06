@@ -41,9 +41,19 @@ concurrency one, the finding that forced the `AtomicU64`, out of the record of i
 closure. Two improvements came with it, both adopted below: the `NotAuthentic` sources the
 rotation log line correlates with, and the increment discipline for the counter.
 
-The 3d digest closes the same way rows 2 and 3 do: 63,910 bytes submitted + 96 bytes of
-scope string + one NUL = 64,007, the `material_bytes` in the row. An arithmetic that does
-not close means the row is not the review you think you are reading.
+The 3d digest closes the way row 3's does: 63,910 bytes submitted + 96 bytes of scope
+string + one NUL = 64,007, the `material_bytes` in the row. Both were recomputed from the
+submitted files rather than assumed; row 3's is worked through below. An arithmetic that
+does not close means the row is not the review you think you are reading, and the rows above
+these two have not had theirs recomputed — stated so that nobody reads this paragraph as
+covering the whole table.
+
+Five passages POST-DATE row 3d and no reviewer has read them: the two improvements adopted
+above, the sentence in the exhaustion section naming the increment discipline,
+the age-check paragraph reverted alongside it, and the STRIDE repudiation row. GLM asked for
+both improvements, so the ASKS are attested even though the answers are not. That gap is not
+theoretical: the first draft of the increment-discipline paragraph contradicted a decision
+made two sections below it, and a re-read caught it rather than a review.
 
 Keyed on `material_sha256` rather than on the ledger's `head`: `head` pins the branch tip at run
 time and this branch is shared, so every row above carries a `head` belonging to some other
@@ -262,8 +272,9 @@ documenting it: `open` takes a read lock, resolves whatever the ring holds, and 
 returns is decided by the payload.
 
 Rotation belonging to `mint` is also the plainer reading of the bound. The budget and the age
-limit are about the material that SEALS envelopes; a process that has stopped minting has no
-reason to mint a key.
+limit both constrain the material that SEALS envelopes, and a process that has stopped minting
+has no reason to mint a key. They are not two triggers: only the age limit rotates, and the
+budget decides a refusal — see the counter discipline below.
 
 | trigger | verdict | why |
 |---|---|---|
