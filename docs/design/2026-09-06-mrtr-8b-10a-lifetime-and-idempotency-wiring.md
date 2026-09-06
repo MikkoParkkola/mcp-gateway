@@ -118,6 +118,25 @@ wants, and re-reading the clock per call would make one request observe two diff
 It is stated because an absolute reading of the elimination claim would be false, and `guard`'s
 doc comment carries the same sentence so a future call site cannot inherit the absolute reading.
 
+**What the reclaim actually buys, and what it does not.** Found while writing the test plan, not
+raised by a reviewer: MRTR.8b's reclaim is **unobservable through the retry path**. `invoke.rs`
+captures `now` at `:546` and hands it to `Keyring::open` at `:547`, which refuses with `Expired`
+exactly when `now > payload.expires_at` (`continuation.rs:508`); only if that succeeds does control
+reach the `route` call at `:584`. The two deadlines are the same number — `hold(&backend_id,
+expiry_for(now), now)` feeds `expiry_for(now)` to the table and to the minted envelope in one
+expression (`continuation.rs:864`). So on every retry the envelope refuses first, and no caller can
+tell a reclaimed table from an unreclaimed one.
+
+Named here rather than left in the plan because it is a design event by §P3's test: it changes what
+the criterion's observable surface *is*. It does not weaken the change — the payoff was never
+routing behaviour, it is **capacity**. An abandoned exchange that keeps its slot is what drives
+`hold` into the refusal branch at `:694-710`; the observable consequence of the reclaim is that
+`hold` admits where it used to refuse. Two things follow. The criterion has no honest integration
+row, and the test plan records that with its reason instead of carrying one that cannot fail. And
+`len`'s enumeration below stops being only a cost footnote: `len` is the reader through which the
+reclaim is most directly visible, which is why the first production consumer to call it deserves
+the sentence it will find there.
+
 `complete` takes `now` for its own reasons, not to satisfy a "every path goes through the guard"
 convention — a convention is what this repair is replacing. `complete` returns `bool`, meaning
 *an entry was there*. Without the reclaim it returns `true` for an exchange whose deadline passed
