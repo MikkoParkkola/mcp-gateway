@@ -20,8 +20,9 @@ use super::authorization::{
 };
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
-    build_http_error_response, build_http_response, build_response, extract_tools_call_params,
-    parse_elicitation_params, parse_request, parse_sampling_params,
+    build_error_response_with_data, build_http_error_response, build_http_response,
+    build_json_response, build_response, extract_tools_call_params, parse_elicitation_params,
+    parse_request, parse_sampling_params,
 };
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
@@ -144,6 +145,103 @@ fn session_owner(client: Option<&AuthenticatedClient>) -> String {
             }
         },
     )
+}
+
+/// The extension a task-augmented request must declare.
+pub(super) const TASKS_EXTENSION: &str = "io.modelcontextprotocol/tasks";
+
+/// Whether this request reaches the tasks extension AT ALL.
+///
+/// Deliberately not a method-family test: `subscriptions/listen` is not a
+/// `tasks/*` method and reaches the extension the moment it names a task, so a
+/// gate keyed on the prefix refuses the wrong set.
+fn reaches_tasks_extension(method: &str, params: Option<&Value>) -> bool {
+    match method {
+        "tools/call" => params.is_some_and(|p| p.get("task").is_some()),
+        "tasks/get" | "tasks/update" | "tasks/cancel" => true,
+        "subscriptions/listen" => params.is_some_and(|p| p.get("taskIds").is_some()),
+        _ => false,
+    }
+}
+
+/// Whether THIS request declared the extension.
+///
+/// Per request, never remembered: a declaration is a statement about the
+/// message carrying it, and a client that declared once is not thereby a client
+/// that can handle a task handle on every later call.
+fn declares_tasks_extension(params: Option<&Value>) -> bool {
+    params
+        .and_then(|p| {
+            p.pointer("/_meta/io.modelcontextprotocol~1clientCapabilities/extensions")
+                .or_else(|| {
+                    p.get("_meta")?
+                        .get("io.modelcontextprotocol/clientCapabilities")?
+                        .get("extensions")
+                })
+        })
+        .is_some_and(|ext| ext.get(TASKS_EXTENSION).is_some())
+}
+
+/// The task ids a `subscriptions/listen` names, if it names any.
+fn listened_task_ids(params: Option<&Value>) -> Vec<String> {
+    params
+        .and_then(|p| p.get("taskIds"))
+        .and_then(Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| id.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The wire view of a task, shared by the handle `tools/call` hands out and by
+/// every `tasks/get` that resolves it.
+///
+/// One producer on purpose: two spellings of this object are two contracts, and
+/// a client polling the second cannot tell it is reading a different one.
+fn task_view(task: &crate::protocol::tasks::Task) -> Value {
+    use crate::protocol::tasks::TaskStatus;
+    let mut view = json!({
+        "resultType": "task",
+        "taskId": task.id(),
+        "status": match task.status() {
+            TaskStatus::Working => "working",
+            TaskStatus::Completed => "completed",
+            TaskStatus::Failed => "failed",
+        },
+        // Present and nullable: the specification's `ttlMs: number | null`. A
+        // 4.0.0 task has no deadline, and omitting the field would report an
+        // undetermined deadline where the answer is "none".
+        "ttlMs": Value::Null,
+    });
+    if let Some(map) = view.as_object_mut() {
+        if let Some(result) = task.result() {
+            map.insert("result".into(), result.clone());
+        }
+        if let Some(error) = task.error() {
+            map.insert(
+                "error".into(),
+                serde_json::from_str(error).unwrap_or_else(|_| Value::String(error.into())),
+            );
+        }
+    }
+    view
+}
+
+/// The `taskId` a task method names, if it names one.
+fn task_id_param(params: Option<&Value>) -> Option<&str> {
+    params?.get("taskId")?.as_str()
+}
+
+/// The one answer a caller gets for a task that is absent, or that belongs to
+/// another principal.
+///
+/// Deliberately carries no id: a message naming the task would let a caller
+/// tell "not yours" from "never existed", which is the whole disclosure the
+/// ownership rule exists to prevent.
+fn missing_task_error(id: crate::protocol::RequestId) -> JsonRpcResponse {
+    JsonRpcResponse::error(Some(id), -32602, "no such task")
 }
 
 /// The stable identity of a caller with no session.
@@ -855,6 +953,43 @@ pub(super) async fn meta_mcp_handler(
         );
     }
 
+    // A request reaching the tasks extension must DECLARE it, on that request.
+    // Handing a task handle to a client that never said it could hold one
+    // strands the work: the client reads a handle it will never redeem.
+    if reaches_tasks_extension(method.as_str(), params.as_ref())
+        && !declares_tasks_extension(params.as_ref())
+    {
+        return build_error_response_with_data(
+            Some(id.clone()),
+            crate::protocol::era::MISSING_REQUIRED_CLIENT_CAPABILITY,
+            format!("'{method}' requires the '{TASKS_EXTENSION}' extension to be declared"),
+            json!({ "requiredCapabilities": { "extensions": { TASKS_EXTENSION: {} } } }),
+            &session_id,
+            StatusCode::BAD_REQUEST,
+        );
+    }
+
+    let owner = session_owner_key(client.as_ref());
+
+    // A `subscriptions/listen` naming tasks and nothing else HAS said what it
+    // wants, so the empty notification filter is synthesised rather than
+    // refused. Ownership narrows the stream in silence: a task another
+    // principal owns must be indistinguishable from one that never existed, and
+    // a refusal would announce the difference.
+    let mut params = params;
+    if method == "subscriptions/listen" {
+        let ids = listened_task_ids(params.as_ref());
+        if !ids.is_empty() {
+            let owned = state.tasks.owns_all(&owner, ids.iter().map(String::as_str));
+            if let Some(map) = params.as_mut().and_then(Value::as_object_mut) {
+                map.entry("notifications").or_insert_with(|| json!({}));
+                if !owned {
+                    map.insert("taskIds".into(), json!([]));
+                }
+            }
+        }
+    }
+
     // Route to appropriate handler
     let response = match method.as_str() {
         "subscriptions/listen" => {
@@ -974,6 +1109,25 @@ pub(super) async fn meta_mcp_handler(
         }
         "tools/call" => {
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
+
+            // A task-augmented call is answered with a handle, not a result.
+            // The record is created before anything is dispatched: a handle the
+            // client cannot resolve on its very next request is worse than a
+            // refusal, because the client has no way to tell it apart from one
+            // that will resolve a moment later.
+            if params.as_ref().is_some_and(|p| p.get("task").is_some()) {
+                let task_id = state.tasks.create(&owner, &tool_name);
+                let view = state
+                    .tasks
+                    .get(&owner, &task_id)
+                    .map_or_else(|| json!({}), |task| task_view(&task));
+                return build_json_response(
+                    serde_json::to_value(JsonRpcResponse::success(id.clone(), view))
+                        .unwrap_or_else(|_| json!({})),
+                    &session_id,
+                    StatusCode::OK,
+                );
+            }
 
             // A multi-round-trip retry carries `inputResponses` and
             // `requestState` as siblings of `name` and `arguments` (MIK-7212).
@@ -1308,6 +1462,33 @@ pub(super) async fn meta_mcp_handler(
                 .await
         }
 
+        "tasks/get" => task_id_param(params.as_ref())
+            .and_then(|task_id| state.tasks.get(&owner, task_id))
+            .map_or_else(
+                || missing_task_error(id.clone()),
+                |task| JsonRpcResponse::success(id.clone(), task_view(&task)),
+            ),
+        // `tasks/update` and `tasks/cancel` differ only in what they do to the
+        // record; both acknowledge with the bare completion the specification
+        // asks for, and neither echoes the task back.
+        "tasks/update" | "tasks/cancel" => {
+            let cancel = method == "tasks/cancel";
+            let changed = task_id_param(params.as_ref()).is_some_and(|task_id| {
+                state.tasks.update(&owner, task_id, |task| {
+                    if cancel {
+                        task.fail_with_code(
+                            crate::protocol::tasks::REQUEST_CANCELLED,
+                            "cancelled by the client",
+                        );
+                    }
+                })
+            });
+            if changed {
+                JsonRpcResponse::success(id.clone(), json!({}))
+            } else {
+                missing_task_error(id.clone())
+            }
+        }
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
     };
 
