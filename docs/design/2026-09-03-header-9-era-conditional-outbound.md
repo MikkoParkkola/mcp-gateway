@@ -13,7 +13,9 @@ against it until it is reviewed.
 
 **FOR**: era-conditional outbound emission in `build_mcp_headers` — a request the gateway
 sends to a peer it has classified `Modern` carries the modern shape; a request to any
-other peer carries exactly what it carries today.
+other peer carries exactly what it carries today. **Every outbound HTTP exchange with a
+modern peer is in scope, not only the JSON-RPC bodies** — the SSE reconnect included, which
+is a `GET` the gateway issues to a peer it has already classified.
 
 **OUT**:
 
@@ -26,6 +28,34 @@ other peer carries exactly what it carries today.
   outbound requirement resolved below — out of scope to change, not out of scope to read.
 - any change to `Era`, `EraCache`, or when the probe runs. This design consumes the era; it
   does not decide it.
+
+### Design receipt — the `Modern`/`Sse` cell, a §P0 scope move after first dual review
+
+The scope above was frozen at the first dual review, and this paragraph is what moving it
+costs. The change: the test plan's `Modern`, `Sse` protocol-version cell moves from `=`
+(inherit whatever the builder emits) to `M` (carry the modern value), and the FOR sentence
+widens from "a request" to every outbound exchange with a modern peer.
+
+The evidence is a reachability chain, not a reading of the criteria. The era cache is
+attached to the transport in `src/backend/lifecycle.rs:380`, before the first `initialize()`.
+`initialize()` is re-entered when the session expires (`src/transport/http/mod.rs:1295`).
+`establish_sse_connection` then calls `build_mcp_headers(HeaderMode::Sse, None)`, and that
+arm reaches neither finalisation site. So a peer already classified `Modern` is sent a
+**legacy** `MCP-Protocol-Version` on every reconnect, today, on the production path.
+
+That is why the cell could not stay `=`. The original justification — the `Sse` arm "never
+reaches either finalisation site" — is a true statement about the code and a false reason to
+exclude the cell: it describes the defect the criterion names rather than a case the
+criterion does not cover. A cell excluded on the grounds that the bug exists would have
+shipped the bug with a test plan agreeing it was intended.
+
+Two things this receipt deliberately does **not** claim. The `Sse` session-header cell stays
+`·` on every era: `establish_sse_connection` passes `None` and no criterion asks for a
+session header there — that cell was examined and produced no decision. And the encoder
+`encode_header_value` landing in `src/protocol/headers.rs` ahead of the outbound rows that
+consume it is **sequencing, not a scope move**: it was already inside FOR as the mechanism
+that lets a legal non-ASCII tool name reach a header field at all, and writing it beside its
+existing inverse was the placement decision, not a new surface.
 
 ## The problem, at source
 

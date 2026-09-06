@@ -30,7 +30,7 @@ it reads as settled rather than missing.
 | `Modern`, `Request` (unnamed method) | M | + | · | · | + |
 | `Modern`, `Notify` | M | + | · | · | + |
 | `Modern`, `Close` | = | · | · | S | · |
-| `Modern`, `Sse` | = | · | · | · | · |
+| `Modern`, `Sse` | M | · | · | · | · |
 
 **The collapsed rows are run per `HeaderMode` arm, not once.** Three arms read
 as one row because they expect the same five values, but the session cell is
@@ -55,9 +55,17 @@ re-opened as if it were open.
   dual-era backend mints a session during the legacy handshake that runs *before* the era
   resolves. Both are real and both must be tested against the same backend state — a fixture
   where the session map is empty proves neither.
-- **`Close` and `Sse` inherit the protocol-version cell (`=`, not `M`).** Both arms call
-  `build_mcp_headers` directly and pass no modern value, so they never reach either
-  finalisation site. Their cells are what the builder already emits, on every era.
+- **`Close` inherits the protocol-version cell (`=`, not `M`); `Modern`/`Sse` does not.**
+  `Close` calls `build_mcp_headers` directly and passes no modern value, so its cell is what
+  the builder already emits, on every era. `Sse` reaches the builder the same way — and that
+  is the defect, not the exclusion. The era cache is attached in `backend/lifecycle.rs:380`
+  before the first `initialize()`; `initialize()` is re-entered on session expiry
+  (`transport/http/mod.rs:1295`); `establish_sse_connection` then calls
+  `build_mcp_headers(HeaderMode::Sse, None)` into an arm that never finalises. So a peer
+  already classified `Modern` receives a **legacy** `MCP-Protocol-Version` on every
+  reconnect. "Never reaches either finalisation site" describes that bug; it does not
+  excuse the cell from the criterion. `Modern`/`Sse` is therefore `M`, and the reconnect
+  is the case that proves it.
 - **`Modern`/`Notify` method cell is `+`.** `HeaderMode::Notify` carries no
   method today (`src/transport/http/mod.rs:206-210`), so this cell cannot be
   filled without widening the arm. The cell is the reason the widening exists.
