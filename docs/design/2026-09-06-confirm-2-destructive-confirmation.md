@@ -73,12 +73,8 @@ the exact string is specified with the option: it must name the tool, say that t
 declared protocol version has no confirmation channel, and name the channel that does have one.
 Whoever implements R writes that string into the test, not into the log line only.
 
-Cost: a documentation change, one requirement-row edit, a test asserting the refusal shape on the
-modern path — and a code edit, which the earlier costing of this option omitted. The wire string
-is a `format!` literal inside the `refused` closure that the `Unavailable` arm and the `Elicit`
-arm both call (`src/gateway/meta_mcp/mod.rs:1847-1859`), so a modern-path-specific string means
-either a second message path or threading the caller's declared version into that closure. Still
-the cheaper of the two options by a wide margin; a shared closure is not a message detail.
+Cost: a documentation change, a test asserting the refusal shape on the modern path, and one
+requirement-row edit.
 
 **Why this is not a ruling I can make.** The requirement's own words are "so a modern client
 **can confirm**". Refusal is not confirming. Adopting Option R therefore *changes what CONFIRM.2
@@ -130,9 +126,7 @@ What it needs, all measured:
    as inherited ships the gate with no cache at all, which is exactly that refusal.
 
 Cost: a protocol-surface addition late in the release, touching the continuation and idempotency
-rows — and, per item 7, a cache-first check at the gate that has to be BUILT. This line costed
-that as inherited for as long as item 7 said it was inherited; item 7 was repaired and this line
-was not, which is the same free-lunch reading one paragraph down. Not rejected on merit — rejected, if it is rejected, on release timing (Q2).
+rows. Not rejected on merit — rejected, if it is rejected, on release timing (Q2).
 
 ### Option I′ — the same thing, stateless, by signed token (COLLAPSES INTO OPTION I)
 
