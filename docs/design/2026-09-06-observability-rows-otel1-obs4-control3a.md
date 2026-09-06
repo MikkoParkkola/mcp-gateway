@@ -40,7 +40,21 @@ close on the meta-MCP route alone, or must the direct route carry trace `_meta`
 too? This is **cluster-b §4.4.3**, inherited from SUB.4 and already collected as
 operator-only. Cluster-b §7 says it is the only thing that moves the estimate.
 It is not re-asked here; a second copy of an open question is the same defect
-one scale smaller.
+one scale smaller. No ADR sanctions the bypass — cluster-b §2.6 records that
+absence, inherited from SUB.4, so meta-MCP-only coverage stands by inheritance
+and not by a decision anyone made.
+
+Deferral fields (§P1), because a deferred unknown without them is an assumption
+with better manners:
+
+- owner: the operator, via cluster-b §4.4.3
+- what resolves it: the operator's answer — one route or two
+- when: before the OTEL.1 test plan freezes, since it is the only question that
+  moves that estimate
+- if it resolves badly (both routes are required): cluster-b §7's close condition
+  widens to the direct route, the direct handler takes the same params-level
+  read, and the test plan gains a third ingestion row. Nothing is invalidated,
+  because no code exists yet — which is the whole reason this is asked now.
 
 WITHDRAWN, each answered at source rather than by the operator:
 - *Does the minted trace id plus a rung marker satisfy CONTROL.3a?* Decided in
