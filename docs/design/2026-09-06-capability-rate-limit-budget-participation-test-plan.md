@@ -17,7 +17,7 @@ can read MET.
 | C1 | A capability 429 leaves the executor as an error carrying a **typed** HTTP status, not prose | drive `handle_response` with a 429 (REST); assert the returned `Error::Http`'s `status()` is `Some(429)` | unit | positive | yes — today the site returns `Error::Protocol`, so the match arm does not exist and the case cannot compile-and-pass until O1 lands. Free failure, no probe needed |
 | C2 | Same, at the JSON-RPC format site | drive `jsonrpc.rs` execute path with a 429; same assertion | unit | positive | yes, same reason |
 | C3 | Same, at the GraphQL format site | drive `graphql.rs` execute path with a 429; same assertion | unit | positive | yes, same reason |
-| C4 | Classification reads the **type**, not the text | build the `Error::Http` for a 429 whose body and reason phrase contain **no** rate-limit token at all (body `{"detail":"x"}`, and assert `is_rate_limited(&err.to_string())` is `false` for that same string); assert `BudgetOutcome::of(&Err(err))` is still `IgnoredRateLimit` | unit | **discriminating** — this is the one case that distinguishes O1 from the status quo | yes: under today's code the outcome is `Failure`. This is the case whose failure IS the criterion |
+| C4 | Classification reads the **type**, not the text | drive a real 429 through a real format site; assert `BudgetOutcome::of(&Err(err))` is `IgnoredRateLimit`. Discrimination comes from a **mandatory mutation probe**, not from the assertion: flip the guard `e.status() == Some(429)` to `Some(430)` and the case must go red | unit + mutation probe | **discriminating** — the probe is what distinguishes O1 from the status quo | yes, but ONLY via the probe. See the note below: the assertion alone cannot fail once O1 lands |
 | C5 | A non-429 HTTP failure is still counted as a failure | 500 through the same path; assert `BudgetOutcome::of` is `Failure` | unit | negative | yes — a match arm that returned `IgnoredRateLimit` for any `Http` would pass C4 and fail here. C4 without C5 is passable by a stub |
 | C5b | A non-429 status is **not** re-carriered at all: it stays `Error::Protocol` with today's text | drive 500, 504 and 403 through each format site; assert the returned error matches `Error::Protocol(_)` and its string still contains the status and the body fragment | unit | **discriminating** — this is the row that pins the review's one substantive revision | yes: an implementation that gates on `error_for_status_ref()`'s `Err` rather than on `status == 429` returns `Error::Http` here and fails immediately. That implementation is the obvious one to write, which is why this row exists |
 | C5c | The agent-facing classification of a non-429 failure is byte-for-byte unchanged | assert `classify_dispatch_error` yields `Timeout` for the 504 error and `BackendError` for the 500, exactly as it does before O1 | unit | regression | yes — under the wide gate a 504 becomes `BackendError`, which is the degradation both review legs raised. This row goes red on it |
@@ -43,9 +43,26 @@ per §P2 that is the whole point of reviewing a plan rather than the tests.
    shape to distrust is C4: it is the only row whose failure *is* the criterion,
    and a fixture that hands `BudgetOutcome::of` an error it built itself would
    make it true by construction. C4's fixture must come from a real HTTP
-   response through the real format site, exactly as the DETECTION tests do —
-   and C4 additionally asserts that the **text** predicate says `false` on the
-   same string, so a passing C4 cannot be explained by the substring path.
+   response through the real format site, exactly as the DETECTION tests do.
+
+   **C4's original mechanism was unsatisfiable and has been replaced.** It
+   asked for a 429 whose error string carries no rate-limit token, and asserted
+   `is_rate_limited` says `false` on it. No such string exists: `is_rate_limited`
+   (`gateway/recovery.rs:286-307`) matches the bare token `429` after splitting
+   on non-alphanumerics, and reqwest's `Display` for a status error always
+   carries the numeric status — `.without_url()` removes the URL, not the code.
+   So under O1 the text predicate and the typed predicate agree on every real
+   429, and no assertion over a single run can tell them apart. That is the
+   §P2 question-2 failure mode — a case whose staging removes the condition it
+   observes — caught in this plan's own table.
+
+   What separates them is a second run against mutated code. Flipping the
+   guard to `Some(430)` breaks the typed path and leaves the text path intact:
+   a C4 that still passes is reading the string. The probe is therefore not an
+   optional strengthening of C4, it IS C4's discriminating power, and a C4
+   landed without it proves nothing the DETECTION half did not already prove.
+   Raised by the Grok leg as an improvement; promoted here because at source it
+   is the difference between a case that can fail and one that cannot.
 
 ## Out of scope for this plan
 

@@ -669,6 +669,18 @@ stands. The two legs converged, independently, on the same two blocking
 defects — and one narrowing killed both, which is why the fix list is shorter
 than the finding list.
 
+A ledger row's `head` records when the row was WRITTEN, not what was reviewed:
+the Grok row carries `031ac2f2`, a commit this session made *during* the run.
+The reviewed material is the payload snapshot, not that HEAD.
+
+**OUTSTANDING — the confirmation pass has not run.** Both verdicts are
+SHIP-WITH-FIXES and every fix below landed *after* they were returned, so no
+leg has seen the repaired document. §12 closes on "incorporate confirmed
+findings → confirmation pass → record verdict", and only the first of those
+three is done. Both legs raised both blocking findings, so either qualifies as
+the finder for the closure re-check (repair protocol step 6). Until that row
+exists this section records a review that was RUN, never one that CLOSED.
+
 ### Findings and their disposal
 
 | # | leg | crit | finding | disposal |
@@ -681,7 +693,7 @@ than the finding list.
 | 6 | Kimi | LOW | "nothing constructs `Error::Http` today" is overstated | **refuted at source, premise kept and strengthened** — every reqwest error on the path is mapped explicitly, never `?`'d. No repair; the evidence is now the exhaustive audit rather than one `rg` |
 | 7 | Kimi | LOW | the `.status() == Some(429)` discriminator is not provenance-scoped | **recorded as residual risk** — nothing else on the crate produces a status-bearing `Error::Http`, and after this change only the 429 branch does. Named here so a future `error_for_status` elsewhere is a known decision, not a surprise |
 | 8 | Grok | IMPROVEMENT | DESIGN EVENT 2 names `to_rpc_code` as "what an MCP client sees"; the invoke path never calls it | **fixed in this change** — the event's surface is stated accurately |
-| 9 | Grok | IMPROVEMENT | the RL.10 mutation probe scrubs error text, which cannot falsify a typed path | **written into the test plan's intent** — the probe for a typed path flips the status predicate (`429` → `430`); a text scrub leaves `429 Too Many Requests` in reqwest's `Display` and proves nothing |
+| 9 | Grok | IMPROVEMENT | the RL.10 mutation probe scrubs error text, which cannot falsify a typed path | **PROMOTED to a blocking test-plan repair** — filing it as intent was wrong. `is_rate_limited` (`recovery.rs:286-307`) matches the bare token `429`, and reqwest's `Display` always carries the status, so C4's stated mechanism ("assert the text predicate says `false`") is unsatisfiable and C4 could never fail. The predicate flip (`Some(429)` → `Some(430)`) is now C4's mechanism, not an addition to it |
 | 10 | Kimi | IMPROVEMENT | three separately-written `status() == Some(429)` guards can drift | **recorded as an observation, not fixed** — the doc's "cannot disagree" claim was about the shared `.status()` accessor, which is true, and three call sites are not yet a shared-predicate's worth of duplication. Revisit at the third edit, not before |
 | 11 | Kimi | IMPROVEMENT | extend the borrow-ordering probe to the other two format sites | **done** — see the row added to §6 |
 | 12 | Kimi | IMPROVEMENT | render the DoR output line explicitly | **not done, and deliberately** — this is a design document inside an in-flight change, not a ticket's DoR section; the applicable gates are answered in substance where they arise. Recorded so the omission is visible rather than silent |
