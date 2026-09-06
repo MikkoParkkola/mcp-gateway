@@ -250,6 +250,15 @@ MET when all four behavioural tests pass:
    parser the meta route already uses (`src/protocol/mrtr.rs:117`) rather than a
    literal written at each site, so route naming stays single-owner too.
 
+   Parameterized over the principal rung, not run once at one rung. The
+   principal is the part of the key most likely to be derived differently at
+   the two sites, so exercising a single rung would leave the other three
+   untested: propagated `cache_binding`, OIDC subject, static-key digest, and
+   the anonymous `None` case. The same assertion holds at each — two entries,
+   differing only in the discriminator — and a derivation that reads the rung
+   correctly at one site and falls to a different rung at the other fails at
+   whichever rung diverges.
+
    The routes must NOT share one entry, and criterion 3 previously required
    that they do. `GuardOutcome::CachedResult(Value)` (`src/idempotency.rs:551`)
    serves a stored body, not an admission token, and the two routes do not
