@@ -419,6 +419,17 @@ belongs to the operator or the MIK-7212 owner because it is a client-ecosystem f
 fact: does a modern client that declares in-band `elicitation` exist, and would it retry? It
 blocks the build-it branch and not the refusal branch.
 
+Put to the operator 2026-09-06 with the three branches and their costs; no answer has come back.
+Recorded for the same reason `CONTROL.4` is: a week later an unanswered question and an unasked
+one look identical, and only one of them is a process failure. Unlike `CONTROL.4`, this row does
+**not** proceed under a stated assumption. The assumption there was one default value and one call
+site, reversible by an edit. Here the assumption *is* the requirement change, and the repair
+protocol reserves narrowing a requirement to the requester's recorded agreement — "we found a
+simpler way to meet this" is engineering, "we decided you did not need this" is a scope change in
+engineering's clothes. So the row stays blocking and open, and the work that does not depend on
+the answer proceeds: the design presents all three branches, so its dual-vendor review is useful
+whichever way the operator rules.
+
 ### A fifth decision, from correcting the `NFR.COMPAT.1` paragraph
 
 That paragraph was published wrong and is now repaired. What the repair exposes is a decision
