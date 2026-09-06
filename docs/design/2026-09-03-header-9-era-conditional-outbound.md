@@ -380,6 +380,27 @@ a case believed unreachable and would have sent an undeclared modern request on 
 one. It is now a local failure, and the test plan's non-object `_meta` case is a real case
 rather than a defensive one.
 
+**Is the SSE GET reachable for a peer the era cache has already classified `Modern`?** — the
+matrix cell for `Modern, Sse` was written `=` on the reasoning that the arm never reaches a
+finalisation site, which describes the defect rather than justifying it; the criteria row
+(`docs/requirements/RELEASE-4.0.0-criteria-status.md:113`) independently names the SSE GET as
+remaining for MET, so the cell was checked rather than inherited. Traced the call chain:
+`build_mcp_headers` inserts `MCP-Protocol-Version` unconditionally with the legacy value
+(`src/transport/http/mod.rs:746`) and the `Sse` arm finalises nothing (`:600`);
+`establish_sse_connection` (`:867`) is called from `initialize()` on the non-streamable-HTTP
+branch (`:598`); `initialize()` is **re-entered on session expiry** (`:1295`); and
+`transport.attach_era` runs before the first `initialize()` (`src/backend/lifecycle.rs:380`).
+— **yes, on the reconnect.** The first handshake legitimately reads `None` and sends the
+legacy value, which is correct. The session-expiry reconnect re-runs the whole handshake with
+the era cache already populated, so a peer classified `Modern` is sent a legacy
+protocol-version header on the SSE GET, on a production path with no fixture priming. —
+**changed what the design covers**: the `Modern, Sse` cell is a live defect and not an
+inherited exclusion. Widening `FOR` after the first dual review is a §P0 scope move, so it is
+the team lead's call, not this design's; reported with the evidence above on 2026-09-07 and
+carried in the receipt paragraph that accompanies the ruling. The `Sse` **session** cell is
+untouched by this and stays `·` on every era — `establish_sse_connection` passes `None` and
+there is no session header there to shape.
+
 The question this design was expected to defer — emit or omit the protocol version — turned
 out checkable, is recorded above, and was confirmed by the team lead on 2026-09-03. Recorded
 in checkable form in `docs/requirements/RELEASE-4.0.0-residue-triage.md`, which no longer
