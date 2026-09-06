@@ -275,6 +275,11 @@ impl LiveConfig {
     /// fields proven to be re-read on the request path. A field wrongly counted
     /// tells an operator to restart when they need not, which is the safe
     /// direction; the reverse tells them a change took effect when it did not.
+    ///
+    /// MIK-7249 is this fail-closed direction. Grep finds it here and nowhere
+    /// else: the fix is a subtraction in `pending_restart_fields`, so there is
+    /// no added symbol carrying the ticket, and it is otherwise findable only
+    /// by reading the comparison.
     #[must_use]
     pub fn restart_required(&self) -> bool {
         !pending_restart_fields(&self.running, &self.get()).is_empty()
