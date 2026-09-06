@@ -364,3 +364,32 @@ mechanism lands without the other.
 | Does the at-capacity refusal still amplify? | **Resolved: yes.** `hold` retains over the whole table on *every* refused attempt (`:698-709`) with no earliest-deadline guard, so a caller that keeps pushing at capacity pays O(4 096) under the lock per attempt and needs no privilege to do it. The guard this document proposed was not built with the retain. Fixing it is in scope here: track the earliest deadline and skip the sweep when nothing can have expired |
 | What soak bound does the requirement name? | **Resolved: none.** `RELEASE-4.0.0-performance.md:77-88` says "MUST NOT grow unboundedly" and "a soak MUST show reclamation" — no duration, no abandonment rate, no reclamation threshold. Changed the design: the criterion is made checkable by a **deterministic driven-clock test**, not a wall-clock soak — abandon 8 192 exchanges (2x `IN_FLIGHT_CAPACITY`, `:811`), advance the clock past the deadline plus one tick, assert occupied count returns to 0, then assert a fresh `hold` succeeds. A wall-clock soak is neither runnable in the suite nor a controlled observation |
 | Would an RSS-based soak assertion fail today? | **Resolved: no — and that is why it is the wrong assertion.** Memory is bounded at 4 096 entries either way, so a memory soak passes against the unfixed code. The assertion has to be on *occupancy coming down on the tick*, which cannot go green before the interval task has a production caller |
+
+### Correction, same day — the two mechanisms above are already owned, and one of them is rejected
+
+Recorded within the hour of the section above, after finding a peer's draft at
+`docs/design/2026-09-06-mrtr-8b-10a-lifetime-and-idempotency-wiring.md`. Two of that section's
+claims do not survive it, and leaving them would have produced a duplicate change and a rejected
+one.
+
+| what the section above says | what supersedes it |
+|---|---|
+| add `InFlight::reap(&self, now)` | **rejected at source.** `reap` was deleted in `ec11dcec` deliberately: a reclaimer someone must remember to call is the defect, not the fix, and `hold`'s own doc comment says so. Re-adding it re-opens a closed decision |
+| add `spawn_continuation_maintenance`, a 60 s interval task | **not needed, and worse than the alternative.** The peer's Design A gives `InFlight` a single `guard(now)` entry point that reclaims under the lock, so `hold`, `route`, `complete` and `len` all reclaim on every read. Reclamation on a clock is then reclamation nobody has to schedule |
+| the lifetime clause is this slice's work | **it is MRTR.8b's slice**, and that document declares `NFR.PERF.3` explicitly out of its own scope. The division that holds: the peer builds the mechanism; this slice proves it |
+
+**Revised FOR:** the two checks the mechanism is unobservable without — a deterministic
+reclamation test standing in for `NFR.PERF.3`'s unstated soak, and a `NFR.PERF.4` ceiling
+assertion. No production code in this slice beyond what those two need.
+
+**Added to OUT:** every change to `InFlight`'s own entry points. They belong to MRTR.8b.
+
+The reclamation test is unchanged in shape by this correction and gets simpler: with `guard(now)`
+in place, abandon 8 192 exchanges (2x `IN_FLIGHT_CAPACITY`), advance the driven clock past the
+deadline, and `len(now)` is 0 with a fresh `hold` succeeding — no tick to wait for, no wall clock,
+and it cannot go green before Design A lands.
+
+The at-capacity amplifier resolved above survives into Design A unchanged: reclamation now runs on
+*every* read rather than only on refusal, so the O(capacity) walk under the lock is more frequent,
+not less. That is a finding **against MRTR.8b's design**, raised there rather than repaired here,
+because the file is theirs.
