@@ -20,6 +20,8 @@ CACHE.4b (stale-authorization serving) are the same digest read at two moments.
 - Wiring the negotiated protocol revision down from the router (see U5 / 4.e, deferred).
 - `src/capability/definition/mod.rs`, `src/capability/executor/`, `src/error.rs`,
   `RELEASE-4.0.0-criteria-status.md:344` and `:393` — owned by others; findings reported, not fixed.
+  The executor's own unkeyed response cache is exactly such a reported finding: it bounds what the
+  FOR sentence above can be true of, and it is the first row of the residual table below.
 - Cache size, eviction, TTL. CACHE.4b is a security row, not a caching row.
 
 ## Problem, stated at source

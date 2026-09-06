@@ -34,7 +34,10 @@ that a claimed guarantee with no case is visible rather than absent.
 ## What this plan does not claim
 
 CACHE.4b reads "invalidates it on a grant **or profile** change". These cases close the **grant**
-half (4.f.1) and the identity reading of the profile half (4.d — a different profile *name* is
+half **at the `MetaMcp` layer only** (4.f.1) — the executor holds a second response cache keyed on
+capability name and a params digest alone (`src/capability/executor/mod.rs:313-318`, `:347-349`),
+so a post-bump miss can still be refilled from a pre-bump body; that layer is a named residual in
+the design and no row here covers it. They also close the identity reading of the profile half (4.d — a different profile *name* is
 already a different key). They do **not** close the contents reading: `routing_profile` is wired
 to `&profile.name` at both sites (`invoke.rs:1214`, `:1787`), so a profile whose permissions
 change under the same name keys identically. That is 4.f.2/4.f.3, deferred. **"Epoch landed" is
