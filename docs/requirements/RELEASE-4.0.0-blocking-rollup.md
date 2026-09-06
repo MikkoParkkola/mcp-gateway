@@ -4,7 +4,9 @@
 # 4.0.0 release readiness — what the blocking criteria actually are
 
 The ledger (`RELEASE-4.0.0-criteria-status.md`) carries the counts; run
-`scripts/release/count-release-criteria.py --check` for them rather than reading a figure here.
+`scripts/release/count-release-criteria.py --check` for them rather than reading a figure here,
+and `--blocking` for the list of ids behind that count rather than hand-writing a regex over the
+ledger — one such regex found 10 of the 28.
 Whatever the blocking count is on the day, it is not that many decisions. The ledger's own
 evidence cells say so — `NFR.SEC.2`, `.3`, `.4`, `NFR.OBS.4` and `NFR.PERF.3` all read
 "same envelope", and `NFR.OBS.3` observes the era detection MIK-7217.DISCOVER.4-5 built. Grouping on those

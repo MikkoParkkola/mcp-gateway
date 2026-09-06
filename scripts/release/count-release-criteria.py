@@ -451,6 +451,14 @@ def main():
         return 1
 
     blocking = sum(1 for _, b, _s in criteria if b == "yes")
+    if "--blocking" in sys.argv:
+        # The count alone sends every reader back to a hand-written regex over
+        # the ledger, and a partial one found 10 of 28. The list is the same
+        # parse the count already trusts, so the two cannot disagree.
+        for _i, b, suffixed in criteria:
+            if b == "yes":
+                print(suffixed)
+        return 0
     # Matched against `declared` WITH the suffix. Folding `MRTR.10a` onto
     # `MRTR.10` here would report a requirement as covered by a row that
     # gives a verdict on a different clause of it -- the substitution this
