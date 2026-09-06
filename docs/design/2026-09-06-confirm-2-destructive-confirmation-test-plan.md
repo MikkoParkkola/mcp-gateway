@@ -31,11 +31,27 @@ states the call site it observes; a case that exercises `enforce` satisfies none
 | `MIK-7212.MRTR.10a` / `.10b` | **at the gate**: duplicate delivery of a call whose confirmation was redeemed and whose kill succeeded returns the **recorded result**. This is the floor's `retry_after_redeemed_confirmation_returns_recorded_result` | integration | idempotency | Option I (item 7) |
 | item 4 — gate precedence | a valid retry is redeemed **before** gate re-entry: assert the gate was **not entered** (refusal absent, gate counter unmoved), not merely that the retry succeeded | integration | ordering | Option I (item 4) |
 | item 3 — typed origin | a gateway-authored continuation is **not** routed as a backend by `retry_origin_backend` (`invoke.rs:497-513`) | unit | correctness | Option I (item 3) |
+| `MIK-7246.CONFIRM.3` (dependency, not derivation) | every tool in the governed set is also admin-gated — `is_destructive_meta_tool` ⊆ `is_admin_meta_tool` (`src/gateway/destructive_confirmation.rs:218`, `src/gateway/router/authorization.rs:80`; the gate that consumes it, `src/gateway/meta_mcp/mod.rs:1585`). Option I does not change how the set derives; it **leans** on the snapshot, and this pins it. **In-crate `#[cfg(test)]`, not `tests/`** — `is_admin_meta_tool` is `pub(crate)` | unit | invariant | Option I (mitigation E) |
 | U2 record | a record is emitted for a **refused** kill — **CONDITIONAL, and U2 is open.** U2's bad-resolution field accepts "4.0.0 needs no record" as a recorded residual, so this row exists only if the ruling owes a record. Listed rather than dropped so its absence is visible | integration | audit | either, conditional |
 
 Items 1 and 2 (emit-side constructor/serializer; mint-and-redeem reachable from the gate) get **no
 row of their own, and that is the answer, not an omission**: they are mechanism serving CONFIRM.2,
 and the CONFIRM.2 system case fails if either is wrong. Seven design items are not seven criteria.
+
+**`MIK-7212.MRTR.7a` / `.7b` get no row, and the reason is the design's own scope line.** They
+are the *other* direction — a modern **backend** returning `InputRequiredResult` to a legacy
+client. Option I makes the gateway the **author** of the question, never a relay for a backend's,
+so no item in it touches the bridge. Both were scored unwired in `f2bcbd1d`, and the design lists
+the InputBridge under what it does not touch: "not unblocked, not partially wired, not worked
+around by this design" (blocked by MIK-7388). A case here would be a case for a different change.
+
+**`MIK-7246.CONFIRM.3` gets a row, but not the row it looks like it wants.** Its derivation
+requirement is already met and is declared OUT — "the set is what `is_destructive_meta_tool` says
+it is". What Option I adds is a *dependency* on it: mitigation E (a confirmation must not widen
+what the caller may do) rests on C4, the admin gate running first, and C4 is a **snapshot**, not
+an invariant. If the derived governed set ever stops being a subset of the admin-gated set, E
+lapses silently. Option R does not carry this — it refuses, so nothing widens. The row pins the
+subset relation and nothing else; the meta-tools-only question stays the requester's.
 
 `modern_path_refuses_unconfirmable_destructive_call` is **absent on purpose**. It is the floor's
 Option R test, asserting a wire string stating that this request's declared protocol version has
@@ -57,9 +73,24 @@ plan is where a reviewer can still argue with it.
 
 ## §P2 plan-review questions, answered
 
-**Q1 — does every acceptance criterion have a case, or a stated reason it has none?** Yes. Nine
-rows above; items 1-2 carry their stated reason; the U2 row carries its condition. No empty cell
-is left unexplained.
+**Q1 — does every acceptance criterion have a case, or a stated reason it has none?** Yes, and
+the check is not a count of the rows above. Counting one's own table cannot find a criterion
+nobody thought of: an empty cell is visible, an **absent row is not** — the same defect as the
+"at the gate" warning, one level higher. So the criteria register was enumerated independently
+and diffed against the table:
+
+```
+rg -o 'MRTR\.[0-9]+[ab]?|CONFIRM\.[0-9]+[ab]?' <the design> | sort -u
+```
+
+That diff found two IDs the table did not carry, `MRTR.7a/7b` and `CONFIRM.3`, both dispositioned
+above — one as a stated reason, one as a row that had to be *reframed* rather than added. Neither
+was visible from the table alone, which is the point.
+
+Standing: ten rows. **Seven carry a criterion ID** (CONFIRM.2, 1a, 1b, 3; MRTR.9/9a, 8a/8b,
+10a/10b). **Three are not criteria** and say so — items 4 and 3 are design items whose failure is
+invisible in the CONFIRM.2 case, and the U2 row carries its condition. Items 1-2 carry their
+stated reason. MRTR.7a/7b carry theirs. No cell is empty and unexplained.
 
 **Q2 — can each named case actually FAIL?** Two rows could not, as first drafted, and are written
 above in the form that can:
