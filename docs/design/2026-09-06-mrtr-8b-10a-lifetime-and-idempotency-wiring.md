@@ -1,6 +1,8 @@
-# MRTR.8b in-flight lifetime, MRTR.10a idempotency wiring
+# MRTR.8b in-flight lifetime (MRTR.10a wiring withdrawn to SUB.4)
 
-Status: draft for dual-vendor review (grok + kimi). No code written.
+Status: revision 2, repaired after round 1. No code written. Round 1 withdrew Change B entirely;
+what remains for implementation is Change A, and the MRTR.10a material is retained as the evidence
+and the prerequisite that travel to `2026-08-31-sub-4-idempotency-wiring.md`.
 Criteria source: `docs/requirements/RELEASE-4.0.0-criteria-status.md:140` (MRTR.8b PARTIAL),
 `:143` (MRTR.10a UNWIRED). `:359` (NFR.PERF.3 ABSENT) depends on both and is OUT of scope here.
 
@@ -10,8 +12,11 @@ These are not one change and must not be reviewed as one.
 
 **Change A — FOR:** make an abandoned in-flight exchange unobservable once its deadline has
 passed, so MRTR.8b's lifetime bound holds without a reclaimer anyone must remember to call.
-**Change B — FOR:** make the idempotency key path reachable from a production deployment, so
-MRTR.10a's derivation stops being tests-only code.
+**Change B — WITHDRAWN 2026-09-06, before any code.** It was FOR making the idempotency key
+path reachable from a production deployment. A sibling design already owns that decision and
+already had it answered by the operator; the mechanism this document proposed is one that design
+explicitly rejected. Removal, not repair — see *Design B, withdrawn* below. What survives is one
+transferred prerequisite, and this document's remaining FOR is Change A alone.
 
 OUT (both):
 - NFR.PERF.3 soak. It depends on A and B landing; it is its own slice.
@@ -23,8 +28,9 @@ OUT (both):
   today. Owned by the destructive-confirmation slice, not by this one.
 - `enable_message_signing`, which has the same no-production-caller shape as
   `enable_idempotency` (`src/gateway/meta_mcp/authz_tests.rs` is its only caller). Recorded as an
-  observation, not filed: the fix is the same shape as Change B and belongs with whoever owns
-  message signing.
+  observation, not filed: it belongs with whoever owns message signing, and round 1's lesson
+  applies to it first — search `docs/design/` for a slice that already owns it before designing
+  one.
 - Any change to `ConsumedLedger`, envelope minting, or replica affinity.
 
 ## Problem A — what MRTR.8b actually still fails
@@ -146,6 +152,12 @@ any that call `len`.
   public on `hold` (`:696`), so this change widens no surface. Named because passing `now` in is
   what makes it possible at all. Mitigation is the freshness sentence above living in `guard`'s
   doc comment, not a reviewer remembering.
+- **R2a** — the bound A delivers is *observability-relative*, not absolute: an expired hold stays
+  in the map until the next call through `guard`, so on an idle gateway a dead entry can occupy a
+  slot indefinitely in memory while being unobservable through every public reader. That is the
+  bargain deliberately taken over a clock-driven reaper (Alternatives), and `IN_FLIGHT_CAPACITY`
+  bounds the residue at 4 096 entries. It is stated because "lifetime is bounded" and "lifetime is
+  bounded *to a reader*" are different claims and the criterion is met by the second one.
 - **R2** — a wall-clock jump backwards makes `now <= deadline` true for records that had expired,
   briefly resurrecting them in `len`. Pre-existing (the same comparison already gates `hold` and
   the envelope check); not made worse; not fixed here.
@@ -178,7 +190,9 @@ ledger, never this key.
 
 ### The key is not bound to the caller, and wiring it on is what makes that reachable
 
-Found in review, verified at source, and it changes what Change B has to do.
+Found in review, verified at source. It was the reason Change B could not ship as drafted; with
+Change B withdrawn it is a **prerequisite transferred to SUB.4**, and the paragraphs below are kept
+verbatim as the evidence that travels with it.
 
 The idempotency key is `format!("{client_key}{projection_key_suffix}{identity_suffix}")`
 (`src/gateway/meta_mcp/support.rs:35-44`). `identity_suffix` is built at `invoke.rs:1128-1132`
@@ -199,67 +213,86 @@ the shipped default" (`invoke.rs:1133-1139`). The idempotency key was left on th
 with the reason "a different contract with a different lifetime" — which is true of the *lifetime*
 and says nothing about the *identity*. The fix already exists twelve lines away.
 
-**§P3 design event.** This is a decision the design did not make, named at the moment of making
-it: it changes a material security property, and it widens Change B beyond the reachability repair
-§P0 declared. Disposal per §P0 is *fix it in this change* — the repair is `identity_suffix`
-adopting the same verified-subject fallback `caller_principal` already has, which is smaller than
-the ticket describing it would be, and this change is the one that makes the path reachable at
-all. Shipping the wiring without it would be turning on a cross-principal replay.
+**§P3 design event, and its disposal changed with the withdrawal.** Naming it was correct and the
+name stands: it changes a material security property. Its §P0 disposal was *fix it in this change*
+while this change was the one making the path reachable. It no longer is. The disposal is now
+*write it into the design* — SUB.4's, which owns activation and independently decided the binding
+belongs inside the derivation (`:125-128`). A fix here would repair a path nothing reaches, and the
+guarantee that matters — **no activation before the key binds the principal** — is enforced where
+activation happens, not where it doesn't. Default-OFF was never the safety here either: the first
+operator to flip a switch gets the defect, which is one more reason the switch is gone.
 
-**Change B does not enable the flag until the key binds the principal.** The order is not
-negotiable and it is not a sequencing preference: default-OFF does not make it safe either, since
-the first operator to set `enabled: true` gets the defect. The binding lands in the same change,
-with its own acceptance row.
+## Design B — withdrawn, and why removal was the response
 
-## Design B — one config section, one construction site
+The proposed mechanism was: `enable_idempotency` becomes a builder method called on
+`meta_mcp_builder` before `Arc::new` (`src/gateway/server/mod.rs:580`), gated by a new
+`idempotency: { enabled, cleanup_interval }` config section, with the shipped default recommended
+OFF.
 
-`enable_idempotency` becomes a builder method in the style of every other feature on this struct
-(`with_cost_governance`, `with_attestation`, `with_secret_injector`), called on
-`meta_mcp_builder` before `Arc::new` at `src/gateway/server/mod.rs:580` — it takes `&mut self`, so
-it cannot be called after the `Arc` the way `set_context_integrity_kernel` is. `#[allow(dead_code)]`
-comes off; if the wiring is ever removed again the compiler says so.
+**Every load-bearing part of that is already decided elsewhere, differently, by the operator.**
+`docs/design/2026-08-31-sub-4-idempotency-wiring.md` (MIK-7272.SUB.4, proposed revision 4, two
+vendor reviews returning SHIP-WITH-FIXES on revision 2) opens on the identical finding — "its only
+populator, `MetaMcp::enable_idempotency` … has zero callers" (`:23-24`) — and settles three axes
+this document reopened without knowing they were closed:
 
-New config section, shaped like the existing `error_budget:` and `cache:` sections:
+| axis | SUB.4's recorded decision | what Design B proposed |
+|---|---|---|
+| activation | **mandatory, no kill switch** (`:137-143`). Decided on the requirement: a switch makes a MUST unverifiable wherever the running configuration differs from the shipped default | an `enabled` config key, recommended default OFF |
+| coverage | **both routes** (`:145-147`). Meta-only leaves `POST /mcp/{name}` unprotected, which the criterion does not permit | the meta route's builder only; the direct route was never considered |
+| the key carrier | **client-carried, ASKED and ANSWERED by the operator 2026-08-31** (`:154-176`): `_meta["io.mcp-gateway/idempotency-key"]` on the meta route, `Idempotency-Key` header on the direct route. Automatic derivation is rejected *by name* as defect P2 — "deriving a key for a client that never asked for one silently collapses deliberate repeats for 24 hours. Protection applies when a key is present and never otherwise" | flip on the existing automatic derivation, which is precisely P2 |
 
-```
-idempotency:
-  enabled: <bool>                # default settled by U4
-  cleanup_interval: <duration>   # passed to spawn_cleanup_task; default 60s
-```
+Repair-protocol step 0 asks what the finding killed. It killed the mechanism's purpose, not its
+implementation: switching on automatic derivation is the behaviour SUB.4 rejected, and a config
+kill switch is the shape SUB.4 refused. **Removal, not repair.** A repaired Design B — mandatory,
+both routes, client-carried key — is not a repaired Design B; it is SUB.4, rewritten in a second
+document, which is the duplicate-change failure this design already caught once in the other
+direction (`2026-09-01-nfr-perf3-reclamation.md:375`).
 
-Absent section keeps whatever the default is, exactly as `error_budget:` does. No other knob:
-`MAX_ENTRIES` and `IN_FLIGHT_TIMEOUT` are existing constants and stay constants until an operator
-has a reason to move them, and inventing a knob for a value nobody has needed to change is the
-config-for-a-constant this repo already refuses.
+**This does not drop MRTR.10a.** The criterion reads *"idempotency key MUST include
+`inputResponses`/`requestState`"* and its status row says the derivation is correct and folded in;
+UNWIRED is on REACHABILITY alone. SUB.4 already names MRTR.10a as its own **prerequisite**
+(`:131-133`) and owns the reachability it is blocked on. Nothing is eliminated — one criterion's
+open half moves to the slice that holds the operator's answer about it. That is a re-assignment, not
+the requirement-elimination the repair protocol gates on the requester's recorded agreement.
 
-`want_full` deliberately does not suppress the key (`src/gateway/meta_mcp/invoke.rs:1120-1145`);
-that stays.
+### The one thing that transfers, not evaporates
+
+The caller-binding hole in the idempotency key is real, verified at source, and now belongs to
+SUB.4 as a **blocking prerequisite of its activation**, recorded here so it travels rather than
+dying with this section:
+
+> `identity_suffix` (`src/gateway/meta_mcp/invoke.rs:1128-1132`) is `caller_credential.cache_binding`
+> alone, therefore EMPTY whenever identity propagation is off — which the adjacent comment at
+> `:1133-1139` calls the shipped default. Two authenticated callers issuing the same tool with the
+> same arguments and the same key string collide on one fingerprint (`:1164-1168`), and
+> `AdmitOutcome::Completed` replays the first caller's stored response to the second
+> (`:1178-1199`). The response cache does *not* have this defect: `caller_principal` (`:1140-1142`)
+> already falls back to `VerifiedIdentity::stable_actor_id`. The fix is for `identity_suffix` to
+> adopt the same fallback chain, twelve lines away. SUB.4 `:125-128` independently decided the
+> binding belongs *inside* the derivation rather than at the call site — the same conclusion, and
+> the place to implement it.
+
+Dormant while the cache is unreachable, live the moment SUB.4 wires it on. Fixing it here would
+repair a path nothing reaches, in a change whose remaining scope is Change A.
 
 ### Alternatives rejected
 
-- **Enable unconditionally, no config key.** Rejected: it changes an observable contract for every
-  existing client that already sends a key (today a repeat does nothing; after, it replays or
-  409s), and a release-criteria fix is the wrong place to ship that silently.
-- **Delete `enable_idempotency` and the key path.** The honest elimination, and it is available:
-  the finding "the derivation is unwired" cannot be stated about code that does not exist. Rejected
-  because MRTR.10a is a REQUIREMENT, and dropping it needs the requester's recorded agreement
-  (repair protocol), not an engineering preference. Named here so the option is on the record
-  rather than assumed away.
+- **Repair Design B to match SUB.4** (mandatory, both routes, `_meta` carrier). Rejected: that is
+  SUB.4's design, and writing it twice produces two documents that must agree forever.
+- **Keep the builder plumbing here and leave activation to SUB.4.** Rejected: a builder method with
+  no caller is the exact defect this document opened by describing. Plumbing that nothing switches
+  on is `enable_idempotency` again, one layer out.
+- **Supersede SUB.4.** Available and rejected: its activation and carrier decisions are the
+  operator's, recorded with the options that were put and the reasons the others lost. Overruling
+  them is the requester's call, in one line, not this document's.
 
-### Risks
+### Risks retired with the section
 
-- **R3** — with the cache on, `MAX_ENTRIES` capacity turns into a live 503 refusal path nobody has
-  operated. It refuses rather than evicts on purpose (eviction readmits a duplicate,
-  `src/idempotency.rs:590-596`), so the failure is loud and correct, but it is new.
-- **R4** — a client that reuses one key loosely across different calls now gets 409 `Mismatch`
-  where it previously got a second execution. That is the criterion working, and it is still a
-  behaviour change a release note must carry.
-- **R5** — binding the idempotency key to the verified subject means a caller whose identity the
-  gateway cannot verify at all gets an unbound key, exactly as today. That case is narrower than
-  it sounds — an unauthenticated caller on a single-tenant gateway is the only principal there is
-  — but it is the residual, and it is the reason the binding is a *fallback chain* rather than a
-  refusal: refusing a key for want of an identity would break every single-tenant deployment to
-  close a multi-tenant hole.
+R3 (`MAX_ENTRIES` becoming a live 503 path), R4 (loose key reuse getting 409 `Mismatch`) and R5
+(unverifiable identity leaving an unbound key) were risks *of activating the cache*. Nothing here
+activates it, so none of them is this change's. R4 and R5 are restated in the transfer above,
+because they are SUB.4's the moment it activates; R3 is a capacity policy SUB.4 already re-decided
+at source (`:181`, bound 10 000, fail closed).
 
 ## §P1 scheduled open questions
 
@@ -270,23 +303,20 @@ Each is resolved by a recorded ANSWER or carries the four deferral fields. None 
 | U1 | Is any past-deadline exchange dispatchable today? | **resolved** — checkable — read `src/protocol/continuation.rs:495-515` and `src/gateway/meta_mcp/invoke.rs:540-620` — `keyring().open` refuses `Expired` at `:509` and is called at `invoke.rs:546`, before `route` at `:584`; the hold deadline is the same `expiry_for(now)` (`:864`) — **changed the design**: A became a lifetime/observability repair, not a dispatch repair, so its failing test asserts on `len`/`route` under a driven clock rather than on a dispatched retry. |
 | U2 | Does MRTR.10a own the idempotency-vs-confirmation ordering? | **resolved** — checkable — read `src/gateway/destructive_confirmation.rs:160-220` and `src/gateway/meta_mcp_tool_defs.rs:135-160,254-262` — the gate governs only meta-tools annotated `destructiveHint: true`, `gateway_invoke` is annotated false, backend tools are never in the set — **changed the design**: the ordering left this document's scope and stays with the destructive-confirmation slice. |
 | U3 | Does the idempotency key carry single-use semantics? | **resolved** — checkable — read `src/idempotency.rs:547-600` — `enforce` replays `CachedResult` on `Completed` and refuses only `InFlight`/`Mismatch` — **changed the design**: recorded explicitly in Problem B, because a stateless-confirmation option elsewhere was about to hang single-use on this key. |
-| U4 | Default ON or OFF for `idempotency.enabled`, **and does a default-OFF wiring satisfy MRTR.10a's acceptance**? | **deferred** — the second half was missing until review pointed out that §P4a flips `:143` to wired on the strength of an answer that may not cover the criterion's acceptance semantics. Both halves now travel in one ask. Fields below. |
+| U4 | Default ON or OFF for `idempotency.enabled`, **and does a default-OFF wiring satisfy MRTR.10a's acceptance**? | **resolved — askable, and the answer already existed** — asked of the team lead 2026-09-06 and widened the same day; before it returned, review pointed at `docs/design/2026-08-31-sub-4-idempotency-wiring.md`, where the operator had already answered both halves on 2026-08-31: there is no `enabled` key to give a default to (activation is mandatory, `:137-143`), and reachable-but-off does not satisfy a MUST (`:139-142`, in terms) — **changed the design**: Change B was withdrawn rather than defaulted, and `:143` is not edited by this change at all. The question was not merely deferred to the wrong owner; it was answered before it was asked, in a document this design had not read. |
 
-U4's four deferral fields, because it is deferred and a recommendation is not a schedule:
-
-| field | value |
-|---|---|
-| owner | the team lead; asked 2026-09-06, ask widened the same day to carry the acceptance half |
-| what would resolve it | the recorded answer to both halves — the default, and whether reachable-but-off meets MRTR.10a |
-| when | before the config default line is written and before `:143`'s status is edited; the builder method, the config section, the principal binding and every test are identical either way and are not waiting on it |
-| what if it resolves badly | *ON* — the release note carries R4's 409 as a behaviour change and the change needs a migration line, which is why OFF is recommended. *Reachable-but-off does not satisfy MRTR.10a* — `:143` stays UNWIRED, Change B ships as the mechanism and the criterion closes when an operator default flips, which is a scope call for the requester, not a repair |
+The deferral table U4 carried is deleted with the deferral. What replaces it is a check that
+should have run first: **before deferring a question about a criterion, search the design corpus
+for a slice that already owns it.** `rg -l 'idempotency' docs/design/` returns SUB.4 in one call.
+This design ran that search against `src/` and not against `docs/design/`, which is how it spent a
+round designing an answer the operator had already given.
 
 ## §P4 review record
 
 | leg | vendor | verdict | evidence |
 |---|---|---|---|
 | 1 | Kimi K3 (`synthetic-review`) | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/synthetic-20260906T065936Z-43480.md`, rc=0 |
-| 2 | Grok (`grok-review`) | *in flight at the time of this revision* | recorded when the run exits |
+| 2 | Grok (`grok-review`) | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/grok-20260906T065932Z-42426.md`, rc=0 |
 | — | Codex/GPT (`gpt-review`) | **MISSING** | rc=0 but no verdict and no run file: `ERROR: You've hit your usage limit … try again at Sep 12th, 2026`. Per §PA a nonzero-or-absent row is `MISSING`, never a scraped verdict |
 
 **Stated deviation.** The shared pair for a Claude-authored change is `gpt-review` + `grok-review`.
@@ -294,45 +324,57 @@ Codex is usage-limited until 2026-09-12, so leg 1 is Kimi. This is a substitutio
 ratification rather than discovered at it; `ratify` requires a SHIP from each vendor and will read
 these rows, not this paragraph.
 
-Findings incorporated this round: the caller-binding hole in the idempotency key (verified at
-source, promoted into Change B), the freshness precondition on Design A's elimination claim, the
-widened U4 ask, and the three test-plan constraints above. The `#[cfg(test)]` clock improvement was
-rejected with its reason in Alternatives. One finding died at source: nothing was found to support
-the *response*-cache half of the cross-principal claim — `caller_principal` already carries the
-verified-subject fallback (`invoke.rs:1140-1142`); only the idempotency key was unbound.
+**Round 1, Kimi.** Incorporated: the caller-binding hole in the idempotency key (verified at
+source), the freshness precondition on Design A's elimination claim, the widened U4 ask, the real
+`IN_FLIGHT_CAPACITY` value, and three test-plan constraints. The `#[cfg(test)]` clock improvement
+was rejected with its reason in Alternatives. One finding **died at source**: nothing supports the
+*response*-cache half of the cross-principal claim — `caller_principal` already carries the
+verified-subject fallback (`invoke.rs:1140-1142`); only the idempotency key was unbound. No round
+spent on it.
+
+**Round 1, Grok.** Two findings, both HIGH, opposite fates:
+
+| finding | source verification | outcome |
+|---|---|---|
+| F1 — Change B's kill switch contradicts SUB.4, which decided activation is mandatory and coverage is both routes | **CONFIRMED**, and worse than stated: SUB.4 also rejects automatic derivation by name as defect P2, which is the path Change B would have switched on | Change B **withdrawn**. The single most valuable finding of either round: it removed a change rather than repairing one |
+| F2 — lazy reclaim-on-next-lock is not an elimination, *and* rejecting the reaper silently reverses PERF.3's accepted reclamation | first half **CONFIRMED** → recorded as R2a. Second half **died at source**: `2026-09-01-nfr-perf3-reclamation.md:375-388` is a same-day correction by that document's own author, withdrawing its reaper and its interval task explicitly in favour of *this* design's `guard(now)` — "reclamation on a clock is then reclamation nobody has to schedule" | half repaired, half closed with no round spent |
+
+The PERF.3 correction also **transfers an obligation inbound**, recorded here so it is not lost:
+its earliest-deadline guard on `hold` moves to this slice, raised against Design A on the grounds
+that reclaim-on-every-read makes an unguarded capacity walk *more* frequent, not less
+(`:375-388`). Change A's test plan carries it.
 
 ## §P4a documentation delta
 
 - `docs/requirements/RELEASE-4.0.0-criteria-status.md:140` — MRTR.8b PARTIAL, and its note asserts
   a dispatch defect U1 disproved. Both the status and the note change with Change A.
-- `docs/requirements/RELEASE-4.0.0-criteria-status.md:143` — MRTR.10a UNWIRED. Changes with B
-  **only if** U4's second half comes back saying reachable-but-off satisfies the criterion. Until
-  that answer is recorded the row is not edited; writing it first would be the certification
-  flipping on a pending answer, which is the finding that widened U4.
-- Operator config reference — the new `idempotency:` section.
-- Release notes — R4's behaviour change, in whichever direction U4 lands.
+- `docs/requirements/RELEASE-4.0.0-criteria-status.md:143` — MRTR.10a UNWIRED. **Not edited by this
+  change.** With Change B withdrawn nothing here makes the row untrue; it closes when SUB.4 lands.
+  The earlier revision made this edit conditional on U4; the answer that arrived removes the
+  condition and the edit together.
+- Operator config reference — **no delta.** The `idempotency:` section went with Change B.
+- Release notes — **no delta.** R4's behaviour change belongs to whichever change activates the
+  cache, and that is SUB.4.
 - `docs/design/2026-08-30-shared-continuation-state.md:116` is cited by `route`'s doc comment and
   stays true: nothing here touches the no-affinity bargain.
 
 ## Test plan
 
-Follows as a separate document, one row per clause, before any test code is written. Three
-constraints on it are settled here rather than left to the plan, because each one is a way the
-plan could pass while proving nothing:
+Follows as a separate document, one row per clause, before any test code is written. With Change B
+withdrawn the plan covers Change A only, and three constraints are settled here rather than left to
+it:
 
-- **Change B's acceptance row builds `MetaMcp` through the production builder**
-  (`src/gateway/server/mod.rs:539-580`) with an idempotency-enabled config fixture. A test that
-  constructs the cache itself is exactly what `tests.rs:3515` already does, and it is why the
-  criterion reads as met while no deployed retry reaches the key. A fixture that reproduces the
-  defect cannot be the proof it is fixed.
-- **A negative case with the section absent**, asserting the default the way the code computes it.
-  The assertion's *value* waits on U4; the row does not — it is written now and marked blocked on
-  the recorded answer, rather than written later against a guessed default.
-- **A cross-principal case for the key binding**: two callers, distinct verified subjects,
-  identity propagation off, same client-chosen key, same tool, same arguments. Today's code serves
-  the second caller the first's stored response; after the binding it admits the second call. The
-  old behaviour is what makes the case able to fail, so the falsifier probe is available without
-  reconstructing anything.
+- **Change A's rows assert on `len` and `route` under a driven clock**, per U1 — not on a
+  dispatched retry, which U1 showed cannot happen.
+- **A case for R2a's bargain**: after a deadline passes with no intervening call, the entry is
+  still resident; the first call through `guard` is what makes it gone. The test states the bound
+  the design actually delivers, so a future reader cannot mistake it for an absolute one.
+- **A case for the earliest-deadline guard transferred in from PERF.3**: `hold` at capacity, with
+  expired entries present, admits rather than refuses — and the walk it does is bounded by
+  `IN_FLIGHT_CAPACITY`, not by anything a client sizes.
 
-Change A's rows assert on `len` and `route` under a driven clock, per U1 — not on a dispatched
-retry, which U1 showed cannot happen.
+The three constraints the previous revision recorded for Change B (production-builder
+construction, an absent-section negative, a cross-principal binding case) are **not deleted, they
+are transferred**: the first two are SUB.4's activation tests, and the third travels with the
+caller-binding prerequisite above. A test plan for a withdrawn change would be the duplicate this
+withdrawal exists to avoid.
