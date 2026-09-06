@@ -545,26 +545,26 @@ operator].
 Everything below was counted or read at source today. Where it contradicts a cell
 above, this section is the later reading, not a second opinion.
 
-### The blocking count is 38, and five of them were invisible to every prior count
+### Five blocking rows were invisible to every prior count
 
-`RELEASE-4.0.0-criteria-status.md` holds 158 criterion rows (plus 12 rows belonging
-to the setter table and the group summary, which are not criteria and are excluded
-here). Parsed by the column the header names `blocking`, not by transcription:
+The count itself is not transcribed here, and this section no longer carries a status
+table. Ask the ledger:
 
-| status | blocking rows |
-|---|---|
-| ABSENT | 17 |
-| PARTIAL | 9 |
-| UNWIRED | 7 |
-| UNTESTED | 4 |
-| REVISED, NOT MET | 1 |
-| **total open and blocking** | **38** |
+```
+python3 scripts/release/count-release-criteria.py --check
+```
+
+It parses `RELEASE-4.0.0-criteria-status.md` by the column the header names `blocking`
+and refuses the whole file on a malformed row, so its number is the only one that
+cannot drift. A copy of it in this document has now gone stale three times — 37, then
+38, and a per-status table that outlived the rows it counted — which is the argument
+for deleting the copy rather than correcting it again.
 
 No blocking row is MET: the `blocking` column is maintained as *still blocking* and
-flipped to `no` on close, so `blocking=yes` and *open* are the same set. 109 rows
-read `blocking=no`; 99 of those are plain `MET`, 2 are `N/A`, 7 carry a qualified
-MET (`MET (structural)` x3, `MET (I)` x2, `MET (caveat)`, `MET (residual)`), and one
-— `NFR.OBS.5` — reads `REVISED, NOT MET` while marked non-blocking.
+flipped to `no` on close, so `blocking=yes` and *open* are the same set. The
+non-blocking rows are mostly plain `MET`, with a handful of qualified spellings
+(`MET (structural)`, `MET (I)`, `MET (caveat)`, `MET (residual)`), two `N/A`, and one
+— `NFR.OBS.5` — reading `REVISED, NOT MET` while marked non-blocking.
 
 **The count was 37 and is now 38: `NFR.OBS.5` was open and flagged non-blocking.**
 Its status cell reads `REVISED, NOT MET` — a spelling outside the file's stated

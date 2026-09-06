@@ -333,11 +333,38 @@ When the cluster-D review is called, scope its material to `src/cache.rs`,
 The general rule this is an instance of: on a branch with concurrent sessions, stage explicit
 paths. `git add -A` is a claim about the whole tree, and on a shared tree that claim is false.
 
-### Two more operator decisions, surfaced from the residue
+### Three more operator decisions, surfaced from the residue
 
 The four decisions above were derived from the clusters and are answered. The residue rows
-carry two more, and neither is settled by "close the full scope" — both answers to each are a
-defensible release. These two are the open ones.
+carry three more, and none is settled by "close the full scope" — every answer to each is a
+defensible release. These three are the open ones.
+
+`MIK-6865.SCHEMA.1c` asks what "the revision's `$ref` and composition bounds" names, and the
+answer decides whether the row is already at its boundary or has a defect behind it. The
+first-party surface is measured and clean: all 19 `gateway_*` schemas and all 110+ capability
+schemas are valid under 2020-12, every published `$ref` resolves in its own document, and none
+of them composes at all — no `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, at any depth
+(`tests/schema_2020_12_validity.rs`, walking the emitted surface rather than the source tree,
+each row probed by hand-editing a violation in). So the question is not a measurement. It is
+what the sentence asks for: **(a)** a numeric limit the 2026-11-25 revision states, which needs
+the clause pointed to or the row asserts an invented number; **(b)** the gateway's own
+publishing policy, which makes today's zero a commitment and would refuse a legitimate `oneOf`
+in a future capability; or **(c)** nothing beyond 2020-12 validity plus `$ref` resolution, which
+is what the evidence already supports and leaves the words "and composition" doing no work.
+The scope half changes the answer under all three: `tools/list` also forwards a connected
+server's own tool descriptors verbatim — `get_cached_tool` through
+`project_tool_descriptor_trust_card`, with no resolution, no meta-validation and no composition
+check anywhere on that path, demonstrated by putting an `allOf` and a dangling `$ref` through it
+and watching them arrive untouched. Reading it as everything the gateway *publishes* means the
+gateway must start inspecting and refusing a third party's schema, which stops a backend being
+routable — a product decision about what we refuse to carry. Reading it as what the gateway
+*authors* leaves the forwarding gap as its own row. Recommendation, from the agent that
+measured it and not an answer: **(c) plus authored-only**, with the forwarding gap filed
+separately. Under (c) the row goes MET; under (a) or (b) it stays PARTIAL and the bound gets
+written as a real assertion. Asked 2026-09-06, unanswered; recorded as U9 in
+`docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity-test-plan.md`. The row stays
+blocking either way while it is open, because an unanswered bound gives the test nothing to
+assert against.
 
 `MIK-7215.CONTROL.4` is not blocked on ownership. `SessionLifecycle::register` takes a
 closure, so registration lives at gateway startup and needs no edit to a firewall file.
