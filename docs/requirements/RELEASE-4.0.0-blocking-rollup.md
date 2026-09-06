@@ -717,3 +717,18 @@ Used to verify `a694dce5` (48 passed, 0 failed) after the same command failed to
 compile in the shared tree. This is a way to obtain evidence, not a licence to edit a
 held file from a second checkout — that is working around the collision, not
 respecting it.
+
+### What that classification does not tell you
+
+It sorts rows by the files their **evidence** cites. That is not the same as the files
+a **fix** must touch, and the gap is not academic: `MIK-7272.OTEL.1` classifies as clear
+— its evidence names `invoke.rs`, `trace.rs`, `mcp_provider.rs`, none of them held — yet
+wiring it requires carrying the inbound `_meta` down to `dispatch_to_backend`, and the
+only structure travelling that path is `MetaMcpCallerContext`, defined at
+`src/gateway/meta_mcp/mod.rs:113`. Held. The row is blocked; the classification says
+otherwise.
+
+Read the classification as a **first pass that narrows twenty-eight to fifteen**, then
+confirm the fix's own file set before scheduling one. The six rows it marks held are
+reliable — a cited held file is a real block. The fifteen it marks clear are candidates,
+not clearances.
