@@ -424,6 +424,46 @@ written as "deadline at or before the supplied `now`" while `reclaim_abandoned` 
 on that boundary, so the plan could not have caught its own ambiguity. C1 restated to the source
 predicate and row .04a added.
 
+### §P2 plan review — the test plan, revision 1
+
+A separate review of a separate artifact (`docs/design/2026-09-06-mrtr-8b-lifetime-test-plan.md`),
+recorded here because this is where a verdict lives. **Not** a third design round: the design was
+supplied as context only and neither leg was asked to re-review it.
+
+| leg | vendor | verdict | evidence |
+|---|---|---|---|
+| 1 | Kimi K3 (`kimi-review`) | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/synthetic-20260906T073535Z-21028.md`, rc=0 |
+| 2 | Grok (`grok-review`) | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/grok-20260906T073535Z-20881.md`, rc=0 |
+| — | Codex/GPT (`gpt-review`) | **MISSING** | still usage-limited until 2026-09-12; same deviation as the design rounds above |
+
+**Q1 compliance, stated rather than assumed.** §P2 requires a plan review to answer both its
+questions, and an unanswered Q1 is not compliant. Grok answered both: it audited the clause map
+directly (its C2 finding on row .06 and its re-mapping of .09) as well as falsifiability. Kimi
+answered Q2 only — its three findings are all falsifiability, and it never states whether every
+clause has a case. **Kimi's leg is recorded as Q2-only**; Q1 rests on Grok's leg alone, which is one
+vendor, not two. Recording that is cheaper than pretending a SHIP-WITH-FIXES verdict covered a
+question nobody asked.
+
+**Both vendors independently found the same two defects**, which is the strongest signal either
+produced: row .11 could not fail for the reason it named (the envelope refuses before the retry path
+reaches the table), and row .07's named falsifier — a `guard` reading the wall clock — was
+unreachable from its own real-clock fixture. Both rows were eliminated or re-anchored rather than
+patched, per the repair protocol's default on a test-plan finding.
+
+Disposition of every finding, in the plan's own commits (`0cdd280b`, `a0e88234`, `ea2723b6`,
+`4f4bc869`):
+
+| finding | vendor | disposal |
+|---|---|---|
+| .11 cannot fail — envelope refuses first | both | row DELETED; the consequence promoted to this design (capacity, not routing) |
+| .07's falsifier unreachable from its fixture | both | fixture re-anchored to a synthetic epoch T = 1_000; every row now shares it |
+| .10 pins a walk length no reader can observe | grok | row DELETED; the 4_096 bound pinned by a literal assertion instead |
+| .06 mis-mapped to C2 / green anyway | grok | **REFUSED at source**: .06's second half — residency ends at the first `guard` — is precisely what the pass-through does not do, so .06 fails on its assertion. Its C2 mapping stands |
+| the never-RED enumeration miscounts | kimi | recounted to four with a mechanical membership rule; `.06` moved to the honest-RED list |
+| V/I/A marks absent | kimi | evidence block added; boundary predicate and envelope ordering marked **V**, single-file reads **I** |
+| `tests/mik_7212_acs.rs` wrongly excluded | grok | **CONFIRMED at source**: `mod inflight` at `:434` holds MRTR.8's own cases at `:491`/`:509`; revision 1 grepped `in_flight` and the module is `inflight`. Both suites now named as call sites to update |
+| identity on .04/.04a, table-driven .05, capacity 4 on .08/.09, .09 → C2 | grok | all four adopted |
+
 ## §P4a documentation delta
 
 - `docs/requirements/RELEASE-4.0.0-criteria-status.md:140` — MRTR.8b PARTIAL, and its note asserts
