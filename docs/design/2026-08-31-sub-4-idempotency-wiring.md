@@ -80,6 +80,17 @@ reject its policy. `ResponseCache::enforce_max_entries` evicts the oldest
 (`src/cache.rs:185-204`), which for a side-effect guard would silently re-admit a duplicate.
 Fail closed instead: refuse a new protected side effect at the bound.
 
+  AMENDED, rev-5 review: a *global* fail-closed bound is a cross-tenant denial of service. One
+  principal issuing 10,000 distinct keyed calls refuses protected side effects to every other
+  principal for the full 24-hour TTL, and fail-closed is what makes that a denial rather than a
+  degradation — the strictness is the weapon. The bound must therefore be PER PRINCIPAL, not
+  global. This is decidable where the key is derived: `identity_suffix` and `caller_principal`
+  are already in hand at `invoke.rs:1140-1152`, so the partition key is the one the binding
+  already uses. The global 10,000 stays as the total ceiling; what changes is that one principal
+  cannot consume all of it. The per-principal figure is an implementation choice, not a design
+  commitment — what this decides is that a single caller's exhaustion must not be another
+  caller's refusal. Marked overrulable.
+
 **P4 — `_full` calls are unprotected. LANDED.** The suppression is gone, and the code says why
 in its own comment: "`want_full` no longer suppresses the key. It selects the shape of the
 *reply*, not whether the backend acts, and a directive that switches off duplicate protection is
@@ -320,6 +331,7 @@ answer somewhere the question is not asked.
 
 | question | how it is settled | state |
 |---|---|---|
+| What is CACHED, as distinct from what carries the key? | DECIDED with Axis 3 and following from it: the stored value is the route-neutral *result*, never a serialised envelope. Each route rebuilds its own reply around it — the direct route with the retrying call's own JSON-RPC id, the meta route with its projection. Caching an envelope would replay the first caller's request id to the second, which a retrying client cannot correlate; and it would let a meta-route-shaped payload be served to a raw passthrough caller. The projection shape is already bound into the key by `projection_key_suffix`, so the two routes cannot collide on one entry. | RESOLVED — overrulable |
 | What carries a retry key, on both routes? | ASKED 2026-08-31, four options put, ANSWERED: `_meta` on the meta route, an `Idempotency-Key` header on the direct route. Rejected in the ask: an HTTP header alone (a stdio client has no HTTP layer, so protection stays unreachable for local setups), `_meta` alone (spec-native and stdio-safe, but the direct route is raw JSON-RPC passthrough needing new plumbing, and no client sends it today), and keeping automatic derivation (ships fastest, keeps P2's silent 24-hour collapse of deliberate repeats). | RESOLVED — hybrid carrier, spelled out in Axis 3; code unblocked |
 | May an operator disable protection a criterion states as MUST? | DECIDED on the requirement rather than asked: no. A switch makes the criterion unverifiable wherever the running configuration differs from the shipped default. Recorded so it can be overruled, not so it can be confirmed. | RESOLVED — overrulable |
 | Does ADR-008 bear on the direct route's bypass? | CHECKED end to end. It does not; rung 2 is client-native OAuth passthrough. What it does bind is INV-3. CHANGED: the bypass loses its justification and axis 2 gains a placement constraint. | RESOLVED |
@@ -351,6 +363,8 @@ an invariant is what stops the defect returning row by row.
 | key/request binding (P5) | one key reused for a different `(server, tool, arguments)`; the second call must be refused, not replayed | GREEN ONCE WIRED — the binding is derived today but unreachable while the cache is `None`, so this row goes red only against a build that wires the cache without it |
 | reservation release (P6) | a call that trips the contract gate after dispatch; a later same-key call must not be locked out | the entry stays `InFlight` until timeout |
 | bound (P3) | fill to 10_000, assert a new protected side effect is refused rather than admitted | unbounded map admits it |
+| bound is per-principal (P3, rev-5 amendment) | principal A fills its share; principal B's first protected call must still be admitted | a global bound refuses B, so B's protection is denied by A's traffic for the full 24-hour TTL — the row goes red against exactly the shape P3 originally specified |
+| direct-route replay is route-neutral (Axis 3) | a call made through `POST /mcp/{name}`, then reissued with a DIFFERENT JSON-RPC id; the replay must carry the new id and the direct route's own envelope, not the first call's id or the meta route's projected shape | nothing stores a route-neutral result, so a replay would hand back whatever the first caller's envelope happened to be, and a retrying client cannot correlate it |
 | MRTR.10b regression | a non-final `InputRequired` result through the newly wired path must leave the call retryable, not stored as completed | SUB.4 is the change that first populates the cache, so this guard has never run in production; its only coverage calls `mark_completed` directly |
 
 The assertion is a mutation counter on the tool, never the response body: two identical bodies
