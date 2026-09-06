@@ -61,9 +61,14 @@ posture does not regress — the admin credential is the control, and the confir
 courtesy an honest client extends to its user.
 
 If Option R is chosen, the refusal **text is part of the deliverable, not a message detail**.
-Today's refusal names the action and no channel: `destructive_confirmation.rs:246` emits
-"Destructive meta-tool invoked without active SSE session", which tells a modern caller what it
-lacks and not what would work. The criterion's test needs a wire oracle rather than a shape, so
+Today's refusal names the action and no channel. What a modern caller actually receives is the
+wire string built by `confirmation_refusal_response` on the `ConfirmationChannel::Unavailable`
+branch — "Destructive action requires confirmation and none could be obtained: {action}"
+(`src/gateway/meta_mcp/mod.rs:1852-1857`, reached at `:1866`). It says the confirmation could not
+be obtained and not what would obtain one. (An earlier draft cited the `NoSession` log line in
+`src/gateway/destructive_confirmation.rs:245-249` here. That line is a `warn!` the caller never
+sees, and it belongs to the elicitation path whose session went away — not to the modern path,
+which never had one. A test written against it would assert on a log, not on the wire.) The criterion's test needs a wire oracle rather than a shape, so
 the exact string is specified with the option: it must name the tool, say that this request's
 declared protocol version has no confirmation channel, and name the channel that does have one.
 Whoever implements R writes that string into the test, not into the log line only.
