@@ -4,12 +4,12 @@ Status: DESIGN, dual-reviewed, no code exists. Author: `sec-nfr`, 2026-09-06.
 Round-by-round verdicts live in the table below, not in this line — a status line carrying round
 state is stale the moment a leg returns, and it was, twice.
 
-| round | leg | verdict | material_sha256 | ledger ts |
-|---|---|---|---|---|
-| 1 | glm-5.3 (substituting for kimi) | DO-NOT-SHIP | `3eff9bec…` | 08:04:40Z |
-| 1 | grok | SHIP-WITH-FIXES | `3eff9bec…` | 08:10:02Z |
-| 2 | glm-5.3 | SHIP-WITH-FIXES | `e56ef494…` | 08:15:06Z |
-| 2 | grok | SHIP-WITH-FIXES | `7462c16f…` | 08:25:19Z |
+| round | leg | verdict | material_sha256 | material_bytes | ledger ts |
+|---|---|---|---|---|---|
+| 1 | glm-5.3 (substituting for kimi) | DO-NOT-SHIP | `3eff9bec…` | 205 | 08:04:40Z |
+| 1 | grok | SHIP-WITH-FIXES | `3eff9bec…` | 205 | 08:10:02Z |
+| 2 | glm-5.3 | SHIP-WITH-FIXES | `e56ef494…` | 15824 | 08:15:06Z |
+| 2 | grok | SHIP-WITH-FIXES | `7462c16f…` | 15822 | 08:25:19Z |
 
 Keyed on `material_sha256` rather than on the ledger's `head`: `head` pins the branch tip at run
 time and this branch is shared, so every row above carries a `head` belonging to some other
@@ -278,8 +278,11 @@ These are the invariants the implementation must hold, written here so the concu
 has checkable properties rather than prose:
 
 1. `minting_kid` is always a member of `keys`.
-2. No envelope is ever OPENED under a key past its retention window. This is a property of the
-   refusal, not of the ring's shape, and it holds without pruning: `issued_at` is at most the
+2. No envelope is ever ACCEPTED under a key past its retention window — ACCEPTED, not opened:
+   `expires_at` is inside the sealed payload, so the envelope is necessarily decrypted first and
+   then refused, and a wording that forbade opening would contradict the reason rotation lives in
+   `mint` alone. This is a property of the refusal, not of the ring's shape, and it holds
+   without pruning: `issued_at` is at most the
    retirement instant `R`, so `expires_at` is at most `R + CONTINUATION_LIFETIME_SECS`, and the
    expiry check at `continuation.rs:508` refuses every such envelope on its own. Stating the
    invariant over the ring instead — *every retained key is within the lifetime of its
