@@ -111,8 +111,13 @@ something on an extension.
 Every row below states its fixture direction explicitly, because the propagation trap is a
 fixture trap: a case that seeds the **outbound** `_meta` and then asserts the value survives has
 verified serde, not the hop. In every case **in this section's table** the trace values are placed
-**only** on the inbound request body, and the assertion is made on the **outbound** params object
-that `dispatch_to_backend` produces. §5.2 keeps the fixture direction and moves the observation
+**only** on the inbound request body. The *observation* point is not uniform and the earlier
+version of this sentence said it was: T1-T9 and T14 assert on the **outbound** params object
+`dispatch_to_backend` produces; **T0 asserts on the production extractor's recovered values**,
+which is the read side and the whole reason the .a/.b split exists; and **T10 asserts on the
+cache key and the resolved backend and tool**, because non-interpretation is observable there and
+nowhere in the outbound object. Fixture direction is what this paragraph fixes for the whole
+table; observation point is stated per row. §5.2 keeps the fixture direction and moves the observation
 point; it says so there, because a preamble that claimed to cover it would be false.
 
 The red/green column below rests on one verified statement of HEAD, re-checked at source on
@@ -167,17 +172,29 @@ checks in §12 — checks a reviewer demanded and this plan had until then only 
 
 ### 5.1 A testability requirement this plan places on the implementation
 
-E3 and T9 both need an input the test can vary. Two constraints, stated here because discovering
-them during implementation is what turns them into "we asserted the empty value instead":
+Four constraints, stated here because discovering them during implementation is what turns them
+into "we asserted the empty value instead". The first two are what E3 and T9 need; the second two
+are what §5.2's rows and §8's ERROR-is-not-FAILURE rule need, and they were cited from §8 and §11
+before this section contained them — a defect both review legs raised independently:
 
 1. `build_initialize_result` must take the implemented-extension set as a **parameter or
    injectable source**. A module-level constant read internally makes E3 unwritable, and EXT.1.b
    then loses its only honest case.
 2. The bounded-read limits (design §4.2) must be **named constants**, so T9 can perturb them.
+3. The outbound `_meta` construction must be reachable as `build_outbound_meta(inbound_meta,
+   cache_key_opt)` — a seam a test can call without standing up `dispatch_to_backend`. Without
+   it T1 and T2 go red on harness setup, and §8 already says an ERROR is not a FAILURE and buys
+   the red suite nothing.
+4. The invoke funnel's **resolved `TraceContext`** must be observable to a test entering at a
+   route — an assertion hook, a returned value, or a recorded field. T11-T14 are specified to
+   observe there and forbidden from naming `extract_tools_call_params` or reading the outbound
+   object; with no probe, those two rules leave the rows unwritable, which is the same
+   empty-cell defect one level down.
 
-Neither is a design change — §3.1a already says the map is populated from a set, and §4.2
-already says each bound is a named constant carrying its provenance. They are recorded as
-test-visible consequences of decisions already taken.
+The first two are not design changes — §3.1a already says the map is populated from a set, and
+§4.2 already says each bound is a named constant carrying its provenance. The last two are: they
+name shapes the design left to the implementer. They are recorded here as **testability
+requirements**, not as chosen seams — any construction satisfying them serves.
 
 ### 5.2 The carrier and the two routes — the rows §6.6 was holding open
 
@@ -187,7 +204,9 @@ tree, and a close condition without cases is a close condition nobody can fail. 
 are those cases. §6.6 now points here rather than standing beside them as a second live close
 condition.
 
-**All five rows below observe at the invoke funnel, not at the outbound `_meta`.** That is the
+**Four of the five rows below observe at the invoke funnel, not at the outbound `_meta`.** T15
+is the exception and says so in its own cell: it keeps the transparency-log assertions of the
+test it realigns, which observe downstream of the funnel. That is the
 point the design's own close condition names — *"reaching the invoke funnel on both transports"*
 (§7) — and it is not a stylistic choice: the read is upstream of the write, so a row that observed
 the outbound object would go red when the unconditional write of clause .b is missing — .b's defect reddening a .a row, which is
@@ -210,7 +229,7 @@ than a hedge.
 | OTEL.1.a | **T12 (HTTP ingestion)** post a whole JSON-RPC `tools/call` body over the HTTP route with all three `params._meta` fields populated, and assert the invoke funnel sees all three values. Nothing is handed in at a seam; the body enters where a client's body enters, and the observation is the same one T11 makes — what changes is who delivered the params object. | integration | contract | Yes. The HTTP handler destructures exactly the pair `extract_tools_call_params` returns (`handlers.rs:976`), so the trace fields are dropped before any dispatch. Note what this row buys over T11: T11 can pass against an implementation that reads `params._meta` at the funnel while the HTTP route still never delivers a params object that has it. That is the gap §6.6 named, and it is why the carrier row does not subsume the route rows. |
 | OTEL.1.a | **T13 (stdio ingestion)** the same body over the stdio route, same assertion at the funnel (`server/mod.rs:1827`). | integration | contract | Yes, same cause, independently: stdio destructures the same pair at its own call site. **This row asserts the trace read and nothing else.** It does not touch `stdio_should_present_a_retry_when_the_context_declares_one` (`server/mod.rs:3599-3611`), does not un-ignore it, and does not assert anything about `retry`: that watcher observes cluster-G's MRTR stdio `RetryFields` seam, and coupling OTEL.1's close to a criterion another cluster owns is the defect that removed disposition 3 from the design. |
 | OTEL.1.a | **T14 (precedence)** populate **both** carriers in one request with **different** trace ids — `params._meta.traceparent` = A, `arguments._meta.traceparent` = B — and assert the funnel resolves to A. Then assert B is not reachable at all: no field carries it, no fallback restores it. | integration | contract | Yes, on the second assertion at minimum. This row is the one in this set most likely to be born unable to fail, and the failure mode is in the fixture, not the coverage: **a fixture carrying only `params._meta` passes under both implementations** — the one that prefers params and the one that never reads params but finds nothing at the args level either. Both carriers, different values, is what makes the row discriminating. The second assertion is what makes it observe disposition 1 of design §2.7 (the args-level read is REMOVED, not demoted to a fallback) rather than merely observe an ordering. |
-| OTEL.1.a | **T15 (the realigned fixture)** `trace_correlation_tests.rs:104-130` today seeds `arguments._meta` and passes. Re-point it at `params._meta` — the carrier the protocol specifies and T11 asserts — leaving its assertions otherwise as they are. | integration | contract | **Grade pending.** It must go red before it is repaired, and the redness is T11's cause: no params-level `_meta` survives `extract_tools_call_params`. The cell is not filled because this test is one of the two cited as evidence for **CONTROL.3b = MET** (`docs/requirements/RELEASE-4.0.0-criteria-status.md:175`), and criteria-ledger has not yet answered whether that grade survives the finding that it rests on a read of the wrong carrier. If 3b stays MET, this row is a regression test for a criterion already graded met; if 3b moves, it is a missing specification. Those are different rows, and which one it is is not this plan's call. |
+| OTEL.1.a | **T15 (the realigned fixture)** `trace_correlation_tests.rs:104-130` today passes because it drives `meta.invoke_tool(&args, ..)` directly with `{"server", "tool", "arguments", "_meta"}` — the meta-tool's own argument object, which is `params.arguments` once a real `tools/call` arrives, and exactly what `invoke.rs:1845` reads. **Re-pointing it needs the call site moved first**: `invoke_tool` takes that argument object and never sees a `CallToolRequestParams`, so moving `_meta` up to `params._meta` while leaving the test where it is gives the value no recipient — the case would ERROR on a missing `server`/`tool`, not fail on its assertion. So: enter at the same production `tools/call` entry T11 and T12 use, put `_meta` at the params level, and keep the three transparency-log assertions unchanged. | integration | contract | **Grade pending.** It must go red before it is repaired, and the redness is T11's cause: no params-level `_meta` survives `extract_tools_call_params`. The cell is not filled because this test is one of the two cited as evidence for **CONTROL.3b = MET** (`docs/requirements/RELEASE-4.0.0-criteria-status.md:175`), and criteria-ledger has not yet answered whether that grade survives the finding that it rests on a read of the wrong carrier. If 3b stays MET, this row is a regression test for a criterion already graded met; if 3b moves, it is a missing specification. Those are different rows, and which one it is is not this plan's call. |
 
 ## 6. The empty cells, each with its reason
 
@@ -375,8 +394,9 @@ a table row of its own: a sweep is a pass over cases, not a case.
 
 **Q1 — does every clause these rows touch have a case, or a stated reason it has none?**
 OTEL.1.a now has six (T0, T11, T12, T13, T14 after the re-key below, T15) where it had one, and
-its route-level cell is filled rather than deferred. Two claims the design's §2.7 makes have **no case, deliberately**,
-and the empty cell is the finding rather than an oversight:
+its route-level cell is filled rather than deferred. **Two** claims the design's §2.7 makes have **no case,
+deliberately**, and the empty cell is the finding rather than an oversight; a **third** has a
+case but only one, and is listed after them so the count stays checkable:
 
 - *"the constraint is the reduction, not the function"* — no row asserts anything about
   `extract_tools_call_params` by name, and none should. T12 and T13 enter at the route and assert
@@ -385,6 +405,8 @@ and the empty cell is the finding rather than an oversight:
 - *"the watcher stays ignored and stays cluster-G's"* — a scope statement, not a behaviour. It is
   asserted by no case because there is nothing to observe: it is a decision about which cluster
   owns a test, and a test asserting it would be this plan reaching into cluster G's.
+The third, which does have a case:
+
 - *"the args-level read is REMOVED rather than kept as a fallback"* — asserted **behaviourally**
   by T14's second assertion and by nothing else. No case asserts the source line is gone; that is
   a grep, not a test, and a plan that promises one is promising something a suite cannot deliver.
@@ -519,6 +541,25 @@ verification against the implementation. Four of them — 2, 4, 5 and 11 — wer
 claimed could fail an incorrect implementation and could not, which is precisely the class §P2's
 plan review exists to catch and which no later code review would have recovered.
 
+
+### 11.1 Review round 2 — findings and their disposal
+
+Both legs reviewed the plan as it stood **before** the §12 checks were run, so their findings are
+independent of the baggage correction and none was closed by it. Two were raised by both vendors.
+
+| # | finding | raised by | disposal |
+|---|---|---|---|
+| 16 | §8 step 3 and §11 #15 both cite a `build_outbound_meta` seam "§5.1 requires", and §5.1 contained two constraints, neither of them that. #15 recorded it as fixed and it was not. | gpt (MEDIUM/CERTAIN), claude (MEDIUM/CERTAIN) | **Fixed here.** §5.1 carries it as constraint 3. The two citations are now true; before this they pointed at nothing, and T1/T2 would have gone red on harness ERROR — which §8 itself says buys the red suite nothing. |
+| 17 | T11-T14 are told to observe at the invoke funnel and forbidden to name `extract_tools_call_params` or read the outbound object, and §5.1 named no funnel probe — so the rows are unwritable without breaking one of the plan's own rules. | claude (HIGH) | **Fixed here** as §5.1 constraint 4, stated as an observability requirement rather than a chosen seam. Same defect class as #16, one level down: the plan specified an assertion and not the surface it asserts against. |
+| 18 | T15 re-points `trace_correlation_tests.rs:104-130` at `params._meta` while leaving it on `meta.invoke_tool`, which takes the meta-tool argument object and never sees a `CallToolRequestParams` — the case would ERROR on a missing `server`/`tool`, not fail. | claude (HIGH) | **Fixed here**, and the finding was sharper than stated. Verified at source: the test seeds `_meta` at the top of the gateway-invoke argument object — a sibling of `arguments`, not inside it — which is `params.arguments._meta` once a real `tools/call` arrives, and exactly what `invoke.rs:1845` reads. The row now moves the call site to the production `tools/call` entry first, then re-points the carrier. |
+| 19 | §5's preamble claims every case in its table asserts on the outbound params object. False of T0 (asserts the extractor) and T10 (asserts the cache key and resolved backend). | gpt (MEDIUM/CERTAIN) | **Fixed here.** The preamble now fixes fixture direction for the whole table and states that observation point is per-row, naming T0 and T10 as the two that observe elsewhere. Following the old sentence would have made T0 a duplicate of T1 and destroyed the .a/.b split round 1 was spent creating. |
+| 20 | §5.2's preamble says all five rows observe at the invoke funnel; T15 keeps assertions that observe the transparency log, downstream of it. | gpt (LOW/POSSIBLE) | **Fixed here** — four of five, with T15 excepted by name. Confirmed at source while checking #18. |
+| 21 | §7.1 says "Two claims ... have no case" and lists three bullets, the third of which does have a case (T14). | gpt (LOW/CERTAIN), claude (LOW/CERTAIN) | **Fixed here.** Two are listed as having no case; the third is listed separately as having exactly one. The count was the whole point of the device, and a reader who miscounts it re-raises a closed row. |
+
+Two round-2 improvements were **already closed** by the pin repair that preceded this disposal:
+pin the SHA every red-on-HEAD grade is asserted against (§5), and retarget T11-T14's `baggage`
+exclusion because the field has existed since `baa318b2` (§5.2, and the elimination recorded
+there). Both were raised against the pre-repair text and both are moot against this one.
 
 ## 12. Evidence — the checks, run on 2026-09-06, with their output
 
