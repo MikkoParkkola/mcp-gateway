@@ -190,6 +190,18 @@ async fn ordinary_request(peer: Peer) -> Wire {
         .await
         .expect("the fixture peer answers every method");
     let seen = recorder.lock().expect("recorder poisoned").clone();
+    // Positive control for the session-header pins. The peer issues
+    // `Mcp-Session-Id` only on `initialize`, so a flow that never handshook
+    // would satisfy "the modern shape carries no session header" for the
+    // boring reason and never traverse the code that strips it.
+    assert!(
+        seen.iter().any(|wire| wire.method == "initialize"),
+        "the fixture flow must handshake, else the session-header assertions \
+         are vacuous; the peer saw {:?}",
+        seen.iter()
+            .map(|wire| wire.method.as_str())
+            .collect::<Vec<_>>()
+    );
     seen.into_iter()
         .find(|wire| wire.method == "tools/list")
         .expect("the ordinary request must reach the peer")
