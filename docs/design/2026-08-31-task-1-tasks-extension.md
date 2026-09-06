@@ -399,6 +399,22 @@ smaller than a ticket describing the correction would be).
 
 ## 8. Acceptance criteria and test plan
 
+> **This section owns the TASK.1 test plan.** Team-lead ruling, 2026-09-06. A standalone
+> `*-task-1-*-test-plan.md` is a second copy of this table, and two artefacts claiming one job
+> drift the moment either is edited. If a separate file is genuinely wanted, this section is
+> **replaced by a one-line pointer to it in the same commit** — not trimmed, not left as a
+> summary. Finer granularity (one case per *clause* rather than per criterion, which row `.2`
+> alone would justify) belongs in these rows. Failing test code is being written from this table
+> now, so a row that moves must be announced, not moved silently.
+>
+> `docs/requirements/RELEASE-4.0.0-test-plan.md:409` lists TASK.1 in its phase-10 row. That is a
+> phase *ordering*, not a per-criterion table, so it neither satisfies nor rivals this section.
+>
+> Row order `.1`-`.9`, `.11`, `.10`, `.12`, `.13` is **deliberate**. Identifiers are stable
+> references; renumbering desynchronises every citation in the ledger, the review record and two
+> commits. Do not "fix" it.
+
+
 One row per criterion. The last column is the honest one: whether the named case can *fail
 today*, and how that is known. A case that can only fail because no dispatcher exists yet would
 go green against any stub — that is stated, not papered over.
