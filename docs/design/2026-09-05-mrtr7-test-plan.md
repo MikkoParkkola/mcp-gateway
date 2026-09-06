@@ -177,3 +177,35 @@ its diagnosis cost is the price of that proof.
 That rows 1-7 prove the feature works. They prove the **decision** is right at
 the call site. `WIRE.8` is the only row that proves the wiring, and a plan that
 shipped rows 1-7 alone would report full coverage of a disconnected bridge.
+
+## Rows added after the D-A ruling — the roots repair
+
+The ruling funded an id-bearing `roots/list` forward, so the repair is now in
+scope and needs cases. These rows are written BEFORE the repair exists, which is
+what makes their first failure free and real: `ROOTS.1` and `ROOTS.2` fail today
+against the shipped forward, for exactly the reason the design names, and no
+later reading of the code can talk them into agreeing with it.
+
+| AC | criterion | case | level | type | how it can fail |
+|---|---|---|---|---|---|
+| `MIK-7212.ROOTS.1` | The forwarded `roots/list` frame carries a JSON-RPC request id | call the forward against a session with a captured SSE sink; assert the emitted frame has an `id` field matching `roots-<uuid>` | unit | positive | fails TODAY — the shipped frame has no `id`, so it is a notification. Cannot pass by accident: the assertion reads the emitted frame, not the return value, which is `true` either way |
+| `MIK-7212.ROOTS.2` | The frame rides the MCP-standard envelope a compliant client reads | same capture; assert `event_type` is `message`, not `proxy_request` | unit | positive | fails TODAY. This row exists because `ROOTS.1` alone would pass on a frame no conforming client ever reads as a request — an id on a non-standard envelope is the defect one layer down |
+| `MIK-7212.ROOTS.3` | A client reply to that id reaches the awaiting caller | drive the forward, capture the minted id from the emitted frame, resolve it from the SAME session, assert the caller's await returns that value | integration | positive | the id must come FROM THE FRAME, never from a fixture constant — a hand-written id would let the test pass over a forward that mints a different one, which is the exact break it exists to catch |
+| `MIK-7212.ROOTS.4` | A reply from a session that was not prompted is refused | resolve the captured id from a different session; assert refusal AND that the caller is still waiting | integration | negative | a matcher keyed on id alone accepts it. Asserting refusal is not enough on its own — the entry must survive, or a refused reply has silently consumed the real one's slot |
+| `MIK-7212.ROOTS.5` | An abandoned roots request strands no pending entry | drop the caller before any reply; assert the registry no longer holds the id | unit | negative | the guard is what makes this pass; without it the map grows without bound on every timeout. Same obligation `WIRE.11` places on the `ClientChannel` implementor, asserted here on the roots path specifically |
+
+### The two existing roots tests are updated, not worked around
+
+`forward_roots_list_to_nonexistent_session_returns_false` and
+`forward_roots_list_to_existing_session` encode the notification behaviour the
+repair removes. They will fail, and that failure is CORRECT — it is the wire
+change being observed, not a regression. They are rewritten against the request
+shape as part of this change. A test suite that stayed green across this repair
+would be proof the repair did not happen.
+
+### What these rows do not claim
+
+That roots works end to end for a real client. They prove the frame is
+answerable and the answer is routed to the right caller. Whether a given client
+implementation actually answers is the functional pass's question, not a unit
+test's, and it is named here so nobody reads five green rows as that guarantee.
