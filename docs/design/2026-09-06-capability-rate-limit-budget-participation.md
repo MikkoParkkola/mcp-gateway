@@ -226,20 +226,59 @@ less; an operator reading logs sees the same information at a different level.
 Named because it is a real observable-contract change even though it breaks no
 type.
 
-**DESIGN EVENT 2 — the JSON-RPC error code an MCP client sees changes.**
+**DESIGN EVENT 2 — the JSON-RPC error code an MCP client sees changes, and
+this was disclosed, then ruled on — RESOLVED, not accepted-as-consequence.**
 `to_rpc_code` (`src/error.rs:193-209`) gives `Protocol(_)` its own arm,
 `-32600`; `Error::Http` has no explicit arm and falls through the trailing
 `_ => -32603`. Confirmed via `rg` that nothing in the capability path
 constructs `Error::Http` today — this option is the first thing to route a
-capability-originated error through it. Net effect: a capability `429` that
-today would (under the *current*, unfixed text-matching path) map to whatever
-the formatted-string route produces changes, under O1, to `-32603`
-(internal error) rather than `-32600` (invalid request/protocol). This is a
-genuine widening of what `Error::Http` means — until now it represented only
-transport failures (a request that never got a response); O1 makes it also
-represent a capability backend's HTTP status. No new symbol, no broken match,
-but a real semantic reuse, named rather than left to be discovered by whoever
-next greps `Error::Http`'s call sites.
+capability-originated error through it. Left unaddressed, a capability `429`
+would surface as `-32603` (internal error) — wrong, and no more right than
+today's `-32600` was, since a throttled upstream provider is neither an
+invalid request nor a gateway fault.
+
+Disclosing the consequence surfaced that `to_rpc_code` already reasons about
+exactly this shape of case, four lines above the trailing arm:
+
+```rust
+Self::BackendUnavailable(_) | Self::CircuitOpen(_) | Self::BackendTimeout(_) | Self::Transport(_)
+// Same class as `Transport` to a JSON-RPC caller: a backend-side
+// failure, not a gateway fault. Omitting it reported a missing
+// backend command as an internal error.
+| Self::TransportPermanent(_) => -32000,
+```
+
+A capability `429` is that class: a backend-side failure, not a gateway
+fault. **Ruling (operator, via team-lead): map it to `-32000`, not `-32603`.**
+Moving `-32603` to a differently-wrong code was rejected as a trade not worth
+taking while the correct arm already exists.
+
+**Keyed on the discriminator, not the variant.** O1 adds a guarded arm ahead
+of the trailing fallthrough — `Self::Http(e) if e.status() == Some(429) =>
+-32000` — rather than moving the whole `Error::Http` arm to `-32000`.
+`#[from]` populates `Error::Http` at every `?`'d reqwest call in the crate,
+including outbound gateway calls that are not backend dispatch; moving the
+arm wholesale would change their code too, and that blast radius has not been
+checked call site by call site. A non-429 `Error::Http` (a transport error,
+a 5xx, anything else) still falls through to `-32603`, unchanged from
+before O1 — the semantic widening named below is scoped to the `429` case
+only, not to `Error::Http` in general. `.status()` is the same predicate
+`BudgetOutcome::of` and `is_rate_limited` already use, so this costs no new
+mechanism and the three checks cannot disagree on what a `429` is.
+
+This is still a genuine widening of what `Error::Http` carries — until now it
+represented only transport failures (a request that never got a response);
+O1 makes it also represent a capability backend's HTTP status, discriminated
+by status code at the one site that needs to tell them apart. No new symbol,
+no broken match, but a real semantic reuse, named rather than left to be
+discovered by whoever next greps `Error::Http`'s call sites.
+
+If mapping `.status()` at this site turns out to need more than the one
+guarded match arm — a signature change, a new call path, anything touching
+dispatch — that is a second hop and stops here for a report, not a silent
+widening. Same if `.status()` is not reachable at the mapping site: report it
+and pick, with the operator, between narrowing this document's claim and
+accepting `-32603` explicitly, with the reason recorded.
 
 Checked and closed, not left as risk: reusing `Error::Http` for capability
 status errors introduces **no retry-storm risk**. `is_retryable`
@@ -417,7 +456,7 @@ text predicate because a transport error there genuinely has no typed status.
 | Does a rate-limit-shaped variant already exist, so that O1 would only construct an existing symbol differently? | read all 22 variants of `src/error.rs:15-179` | none; the nearest precedent is `Forbidden`, which does carry a typed HTTP `status` | **superseded, closed not dropped:** answered a question the revised O1 no longer asks — it reuses `Error::Http`, an existing transport-error variant, rather than adding a new one |
 | Can the classification avoid the public enum entirely by staying crate-internal? | read `CapabilityBackend::call_tool_with_context` `src/capability/backend.rs:390`, `pub mod capability` `src/lib.rs:36`, plus the Rust rule that variants inherit enum visibility | no: no `pub(crate)` variant exists as a language feature, and the alternative carrier is an equally public signature | O1b's conclusion (no gate-free crate-internal route) is retained as the answer to a narrower, still-live question: O1b now compares against O1's *actual* mechanism (reusing `Error::Http`) rather than a hypothetical new variant, and still finds no cheaper carrier — see O1b as revised |
 | Does `error_for_status_ref()` lose the response body needed for diagnostics? | read reqwest 0.13.4 source `src/async_impl/response.rs:409`, `src/error.rs:180` | the returned error is built from status/URL/reason only, borrowing nothing from the body; the borrow ends immediately so `response.text().await` remains legal after | confirms O1's mechanism is sound: call `error_for_status_ref()` first, log the body via `tracing::warn!`, then convert — no diagnostic information is silently lost, it moves to a log line (DESIGN EVENT 1, section 4) |
-| What JSON-RPC code does a capability `429` surface as, once it is carried as `Error::Http`? | read `to_rpc_code` `src/error.rs:193-209`; `rg` confirms nothing in the capability path constructs `Error::Http` today | `Protocol(_)` has its own arm (`-32600`); `Http` has none and falls through `_ => -32603` | DESIGN EVENT 2 (section 4): a capability `429` now surfaces as `-32603` rather than `-32600` — named explicitly rather than left for a client integrator to discover |
+| What JSON-RPC code does a capability `429` surface as, once it is carried as `Error::Http`? | read `to_rpc_code` `src/error.rs:193-209`; `rg` confirms nothing in the capability path constructs `Error::Http` today | `Protocol(_)` has its own arm (`-32600`); `Http` has none and falls through `_ => -32603` — named as DESIGN EVENT 2, then **ruled on**: a guarded `Self::Http(e) if e.status() == Some(429) => -32000` arm, same class as the existing `BackendUnavailable\|CircuitOpen\|BackendTimeout\|Transport\|TransportPermanent => -32000` arm four lines above it; non-429 `Http` still falls through to `-32603`, unchanged | DESIGN EVENT 2 (section 4): resolved to `-32000`, not left as `-32603` — moving the whole `Http` arm was rejected (blast radius across every `?`'d reqwest call in the crate, not checked call-by-call); the guarded arm costs no new mechanism since it reuses the `.status()` discriminator `BudgetOutcome::of` already keys on |
 | Does reusing `Error::Http` on the capability path create a retry-storm risk? | read `is_retryable` `src/chains/retry.rs:179` and `src/failsafe/retry.rs:96`; traced their sole callers `src/backend/ops.rs:218` (MCP-backend) and `src/chains/executor.rs:175`; read `send_with_retry` `src/capability/executor/mod.rs:111-160` | `is_retryable` treats `Error::Http` as retryable, but capability's own retry logic never calls `is_retryable` — it is self-contained | no risk: an `Error::Http` returned from the capability path cannot trigger a retry it would not already trigger under today's behaviour; closed rather than left as an unstated risk |
 | Does any other match on `crate::Error` discriminate `Protocol` from `Http` on the dispatch path O1 touches? | `rg 'Error::Protocol\|Error::Http' src/`, read `classify_dispatch_error` `invoke.rs:2940-2958` and its call site `invoke.rs:1461`, traced back to the shared `dispatch_result` also read at `invoke.rs:1384` | yes: `classify_dispatch_error` gives `Protocol` a `classify_from_detail` arm and lets `Http` fall through `_ => BackendError` — the same shape of gap `to_rpc_code` has | DESIGN EVENT 3 (section 4): unlike the JSON-RPC code, this one is not accepted as-is — O1's implementation must add the missing `Http` arm so the RecoveryHint category does not degrade |
 
@@ -513,11 +552,13 @@ section 4 and recorded as Resolved above, and none blocks implementation
 3. O1 — no longer gated on section 6 (that gate is closed, moot; see the
    Deferred-table closure note). Implementation proceeds directly; its three
    named DESIGN EVENTs (section 4) travel with it into §P4 review. DESIGN
-   EVENT 3 is not optional polish: the `classify_dispatch_error` `Error::Http`
-   arm lands in the same commit as the three format-site rewrites, not as a
-   follow-up, since a capability `429` reaching `to_rpc_code`'s new code path
-   without it also reaching `classify_dispatch_error`'s is a state the design
-   never intends to exist even transiently.
+   EVENT 2's ruling (`-32000` via a guarded `Self::Http(e) if e.status() ==
+   Some(429)` arm, not a moved `Http` arm) and DESIGN EVENT 3's
+   `classify_dispatch_error` `Error::Http` arm land in the same commit as the
+   three format-site rewrites, not as a follow-up — a capability `429`
+   reaching `to_rpc_code`'s new code path without both also reaching
+   `classify_dispatch_error`'s and mapping to `-32000` rather than `-32603`
+   is a state the design never intends to exist even transiently.
 
 ## 8. Reviews
 
