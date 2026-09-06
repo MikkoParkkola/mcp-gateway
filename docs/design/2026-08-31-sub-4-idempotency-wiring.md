@@ -195,6 +195,16 @@ not before.
   suffix unspellable — hash it as `response_key` does, length-prefix it, or move the client-supplied
   key to the tail. Landing P8's fallback chain while the append stays raw reintroduces the exact
   class the response cache hashes to prevent.
+  R6's disposal is the second of §P0's four — *write it into the design* — and this bullet is it,
+  riding this document's rev-5 review rather than a round of its own. Whether it ALSO warrants a
+  ticket is the team lead's call, put to them 2026-09-06 and unanswered as this is written. That
+  leaves one outcome §P0 does not offer, silence, so the escalation is written down rather than
+  remembered: **if rev-5's review opens with no ruling, file it.** Not a competing disposal — the
+  same one, escalated, because a spoofable key in a shipped default may need a human timeline
+  independent of a review that can slip. ISSUE-DOR then applies: acceptance criteria, ROI,
+  fail-fast, and a source. The source is commit `a1578b81`, the ADR-008 bullet repair this was
+  found during; the derivation is the P8 transfer blockquote in the MRTR.8b/10a lifetime-and-
+  idempotency-wiring design, which records the same three repairs and leaves the choice here.
 
 
 ## Constraints, measured
