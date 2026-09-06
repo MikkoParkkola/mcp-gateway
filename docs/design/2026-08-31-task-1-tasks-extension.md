@@ -144,7 +144,14 @@ Five pieces, in dependency order.
    the caps count every unreaped record and capacity is released only on deletion or expiry, so an
    extendable `ttlMs` is one principal holding a capacity slot for as long as it likes. A later
    release can make either field mutable as a write through the record's single writer, and the
-   reaper needs no change to follow it — which is the point of stating the rule this way.
+   reaper needs no change to follow it — **provided the reaper's delete is conditional on the
+   record's current `ttlMs` and is one store-level operation**, never a read followed by an
+   unconditional delete. A read-then-delete reaps a task extended between the two steps, which is
+   the original finding wearing a race rather than a defect the ownership rule removed. The
+   condition rides the same insert-if-absent primitive the store already needs (§4), so it costs
+   a predicate and not a mechanism (kimi, HIGH, 2026-09-06). Recording it now is the point of
+   stating the rule this way: a later mutable release inherits the constraint instead of
+   rediscovering the race.
 
    *Two consequences, stated so they are not re-asked.* The gateway does **not** rate-limit clients
    polling faster than the published `pollIntervalMs` — `tasks.md:308` makes that a server **MAY**,
