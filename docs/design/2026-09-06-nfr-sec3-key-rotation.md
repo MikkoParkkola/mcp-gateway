@@ -51,6 +51,12 @@ vendors reviewed the same material, and neither verdict can be explained by one 
 been shown something different. Round 1's shared `3eff9bec…` proves nothing of the kind — it is
 the digest of a scope argument, equal because the argument was equal.
 
+One provenance note for anyone re-checking the table: the GLM leg's row is written to
+`~/.claude/data/kimi-review-ledger.jsonl`, not to `glm-review-ledger.jsonl`. The synthetic
+wrapper names its ledger after the wrapper, not after the model it drove, so a scope-filtered
+query against the file the model's name suggests returns NOTHING for a row that exists. Query
+by digest, not by filename.
+
 kimi is not in the table because it produced no row at all: `synthetic-review`'s trusted preamble
 tells the model it may inspect the repository read-only, kimi has no filesystem, and it answered
 with a hallucinated tool call three times running. Per §PA that is `MISSING`, never a scraped
@@ -310,23 +316,34 @@ clock, injected, testable by passing a different instant. A key stamped from any
 reintroduces the split this revision removed, and it would do so invisibly, because both
 clocks agree until they do not.
 
-The arithmetic that follows is then checkable rather than asserted. At one rotation per 60
-seconds against a 300-second retention window the live ring holds `ceil(300 / 60) + 1 = 6`
-kids. Kid space is 256, so a kid is reused 256 intervals — 15,360 seconds — after the one
-before it retired, against a retention window of 300. Fifty-one times the margin, and the
-bound to keep is simply `256 * CONTINUATION_ROTATION_SECS > CONTINUATION_LIFETIME_SECS`.
-Choosing an interval that violates it does not corrupt anything; it makes the no-free-kid
-fallback fire permanently, which silently disables rotation. That is the failure worth a test.
+The SUCCESSOR RULE is the other half of that schedule, and naming the interval without it
+would leave the arithmetic below open to two readings: the new kid is always
+`minting_kid.wrapping_add(1)`, NEVER the lowest free slot. One clause, and it is what makes
+the reuse distance a function of the interval at all. A lowest-free-slot search over a
+six-key ring hands a retired kid straight back on the very next rotation, so the distance
+would collapse from the number below to roughly the retention window itself — the same
+mechanism, no margin, and nothing in the prose to say which was meant.
+
+With the successor fixed the arithmetic is checkable rather than asserted. At one rotation
+per 60 seconds against a 300-second retention window the live ring holds
+`ceil(300 / 60) + 1 = 6` kids. Kid space is 256 and the counter advances by exactly one per
+rotation, so a kid comes round again 256 intervals — 15,360 seconds — after its previous use,
+against a retention window of 300. Fifty-one times the margin, and the bound to keep is
+simply `256 * CONTINUATION_ROTATION_SECS > CONTINUATION_LIFETIME_SECS`. Choosing an interval
+that violates it does not corrupt anything: the successor kid is still live when its turn
+comes round, so the fallback below fires every time and rotation silently stops. That is the
+failure worth a test.
 
 The age check is evaluated TWICE: once under the read guard to decide a rotation is due, and
 again under the write guard before performing it. Two mints arriving either side of the
 interval boundary would otherwise both see a due rotation and mint two new keys, burning kid
 space at twice the designed rate. The second check costs one comparison on the rare path.
 
-Fourth: `kid` is a `u8`. 256 kids before wrap. Decided rather than left open, because the
-arithmetic above makes the reuse distance knowable — a kid comes back only long after its
-previous holder was dropped, and a dropped key's envelopes can no longer open. A rotation
-that cannot find a free kid does NOT fail its caller: it logs and keeps the current minting
+Fourth: `kid` is a `u8`, so the wrapping counter above returns to a value after 256
+rotations. Decided rather than left open, because the successor rule and the interval
+together make that distance knowable — a kid comes back only long after its previous holder
+was dropped, and a dropped key's envelopes can no longer open. A rotation whose successor
+kid is somehow still live does NOT fail its caller: it logs and keeps the current minting
 key. Rotation is a hygiene operation, and failing an operator's reload because key hygiene
 could not run is a worse outcome than skipping one rotation.
 
@@ -371,7 +388,7 @@ Rotation changes the LIFETIME of key material and nothing about the primitive.
 | Tampering | no | AEAD over the payload with the kid in the AAD; a rewritten kid fails the tag, it does not select a different key quietly |
 | Repudiation | yes, improved | the rotation log line (old kid, new kid, retained count) is what makes a key ceremony auditable; without it a `NotAuthentic` cluster has no correlating event |
 | Information disclosure | no | nothing new is written to the envelope; `expires_at` was already inside the sealed payload and stays there |
-| Denial of service | yes | a rotation that cannot find a free kid keeps the current key rather than failing its caller; a per-key budget exhausted early stalls minting for at most one interval, bounded above |
+| Denial of service | yes | a rotation whose successor kid is still live keeps the current key rather than failing its caller; a per-key budget exhausted early stalls minting for at most one interval, bounded above |
 | Elevation of privilege | no | the handle carries no authority beyond resuming its own continuation; rotation does not widen what a valid handle can do |
 
 ### DoR conformance at the §P1 gate
