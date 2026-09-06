@@ -85,11 +85,14 @@ transparency-log key and then dropped. Nothing writes `_meta` outbound;
 `to_meta()` is dead in production. The row is correct that OTEL.1 is UNWIRED,
 and wrong about where the outbound request is built.
 
-Chosen: a SECOND task-local beside `TRACE_ID` holding the inbound
-`TraceContext`, set in the same `with_trace_id` scope at `invoke.rs:767-775`
-(parse `_meta` once, there, instead of at `:1847`); read at
-`provider/mcp_provider.rs:83-86`, which merges `to_meta()` into a
-params-level `_meta` key on the `tools/call` object.
+Chosen (CORRECTED after round 1 — see the review section): a SECOND task-local
+beside `TRACE_ID` holding the inbound `TraceContext`, set in the same
+`with_trace_id` scope at `invoke.rs:767-775` (parse `_meta` once, there,
+instead of at `:1847`); read where the outbound `tools/call` params are built —
+`invoke.rs:2547-2552`, immediately beside the existing `inject_cache_key`,
+which already writes params-level `_meta` and is the precedent this follows.
+Both dispatch branches (`:2564` plain, `:2567` with propagated headers) share
+those params, so one injection covers both.
 
 Why params-level and not inside `arguments`: `_meta` is a protocol field of the
 request, not a tool argument. Writing it into `arguments` would hand the

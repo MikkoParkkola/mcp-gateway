@@ -272,9 +272,20 @@ refused. The rejected option B is exactly what a fail-open default would
 reintroduce through the back door.
 
 **The store is not a store.** Declarations are co-owned by each transport's
-existing session state and cleared or replaced atomically on `initialize`,
-disconnect, session `DELETE` and reap. A session id is client-supplied and
-reusable; a declaration that outlives its session is inherited permission.
+existing session state. Removal happens at exactly two places, both of which
+exist today: replacement on `initialize`, and session `DELETE`
+(`handlers.rs:354`). There is no disconnect hook and no reaper, and an earlier
+revision of this paragraph claimed both.
+
+A session id is client-supplied and reusable, so that alone would leave a
+declaration readable by a connection that never made it — inherited permission.
+The window is closed where it opens rather than guarded downstream: a stored
+declaration is readable only by the connection generation that wrote it. The
+gateway mints the generation; `initialize` bumps it. A client that reuses a
+session id without a fresh `initialize` therefore reads no declaration and
+falls to the MRTR.9 refusal — the safe direction, and the same answer it would
+have received before the bridge existed. That is why no reaper is needed for
+CORRECTNESS; the memory question is separate and deferred below.
 
 ### Change surface, stated
 
