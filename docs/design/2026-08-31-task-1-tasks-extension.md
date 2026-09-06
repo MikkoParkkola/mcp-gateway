@@ -23,7 +23,7 @@ already carries the overturn; `dod-check.md` does not. Two status documents in t
 disagree until that is fixed, and this note may only write one path.
 
 **Scheduled** — owner: whoever lands the first TASK.1 code commit. What resolves it: replacing
-the `dod-check.md:557-584` disposition with a pointer to this note. When: in the same commit
+the `dod-check.md:829-858` disposition with a pointer to this note. When: in the same commit
 series as the first implementation change, before it merges. If it resolves badly (nobody
 updates it): a reviewer reads `dod-check.md`, believes the extension is deliberately absent,
 and rejects the implementation as out of scope — which is exactly how a stale status document
@@ -368,10 +368,11 @@ decision without being scheduled, which is an assumption with better manners. Sc
 
 ## 7. MIK-7311 — reconciled, not routed around
 
-`dod-check.md:557-584` names MIK-7311 as owner of the conformant implementation, already filed,
-carrying seven acceptance criteria, and records that those criteria "were derived from the
-overview and inherit these errors" and must be "corrected against the schema before that ticket
-is worked".
+`dod-check.md:857-858` names MIK-7311 as owner of the conformant implementation, already filed,
+carrying seven acceptance criteria; `:674-675`, under "What is honestly NOT finished", records
+that those criteria "were derived from the overview and inherit these errors" and are "corrected
+against the schema before that ticket is worked". Two passages, not one: the earlier `:557-584`
+this paragraph cited is the continuation-ledger repairs table and names neither.
 
 **MIK-7311 stays the implementation ticket. This note is the correction.** The criteria below
 supersede the seven derived-from-overview ones; MIK-7311's description is updated to point here
@@ -690,13 +691,16 @@ either way, because no reader of the old text can now miss it.
 
 ### 11.4 Citation repairs — applied in this commit
 
-The GO confirmation in §10.4 and the same pointers in §0 and §9 cited passages that do not carry
-the TASK.1 overturn: `RELEASE-4.0.0-plan.md:110-112` is `NFR.COMPAT.1` (checked: it is the
+The GO confirmation in §10.4, the same pointers in §0 and §9, and the MIK-7311 reconciliation in
+§7 cited passages that do not carry what they were cited for: `RELEASE-4.0.0-plan.md:110-112` is `NFR.COMPAT.1` (checked: it is the
 `server.modern_protocol` flip) and `dod-check.md:557-584` is the continuation-ledger repairs table
 (checked: HIGH/MEDIUM/LOW rows about token decoding and lock contention). Retargeted to
 `RELEASE-4.0.0-plan.md:605-606` — "the operator directed the full scope on 2026-08-31, so TASK.1
 ships in v4.0.0" — and `RELEASE-4.0.0-dod-check.md:829-858`, the "Disposition of 3 and 4 — the
-extension ships not implemented" section whose first line is the "does not advertise" sentence.
+extension ships not implemented" section whose first line is the "does not advertise" sentence
+and whose last content line is `:858` (the next heading opens at `:860`, so the range does not
+overrun the section). §7's two quotations were retargeted separately, to `:857-858` and `:674-675`
+— they were never in one passage.
 The GO claim itself survives; only its evidence pointers were wrong. The deferred-row citation for
 "2025-11-25 must be served" moves from `RELEASE-4.0.0-requirements.md:210` to `:261`, which is
 `NFR.COMPAT.1` in the requirements table. **A citation that lands
@@ -726,6 +730,6 @@ exact failure §0 of this note was written about, and it reproduced within six d
 The confirmation pass required by §12 — *are the gaps closed* — returns to the vendor that raised
 each finding, per repair-protocol step 6: gpt for the subscription-admission, `-32021`, dedupe and
 `ttlMs` set; grok for the `tasks/update` MUST and the citation set. It has NOT run. This commit
-carries §11.1 plus the §11.2 amendment stamps described above; the final criterion numbering and
-§11.4's citation retargets are still owed. The functional leg (D6:E2E) is **N/A: this change has no running surface** —
+carries §11.1, the §11.2 amendment stamps described above, and §11.4's citation retargets; the
+final criterion numbering is still owed. The functional leg (D6:E2E) is **N/A: this change has no running surface** —
 it is a design note; nothing was built, so there is nothing to drive.
