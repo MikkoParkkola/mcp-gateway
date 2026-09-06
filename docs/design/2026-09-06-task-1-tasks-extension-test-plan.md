@@ -227,6 +227,36 @@ blocked when SUB.2 slips.
 
 **Q3 — no third question is open.** Recorded so silence is not read as an omission.
 
+### Answers
+
+**Q2 — answered: SUB.2 owns the fields; these rows cite, they do not restate.** Two documents
+carrying the same four fields is two owners for one fact, and the repair protocol's remedy for
+"two components can disagree about X" is one owner of X, not a check that detects the
+disagreement. So `.9` and `.12` name SUB.2 as owner and stop there; when SUB.2 slips, one date
+moves and both rows follow it.
+
+That answer exposes a gap in the other document rather than closing one here.
+`docs/design/2026-08-29-subscriptions-listen-stream.md` is 135 lines with no deferred-unknown
+section at all — measured 2026-09-06, zero matches for owner, defer or fallback across the file —
+so the fields this plan cites do not yet exist to be cited. That is a §P1 finding against SUB.2,
+disposed as **write it into the design**, owner the SUB.2 author, and it is not this plan's to
+repair: editing another workstream's committed design to supply its missing fields would put a
+second author's words under the first author's name. Until they land, `.9` and `.12` are blocked
+on a dependency whose own schedule is unrecorded, and the rows should say exactly that rather
+than implying a date nobody has given.
+
+**Q1 — not answered, and deliberately not.** Narrowing an acceptance criterion needs the
+requester's recorded agreement before it happens, and no lead can supply it on their behalf; a
+ruling written here would be the agreement forging itself. The recommendation that goes to the
+requester is (1), for the reason this section already gives. Until they answer, the plan holds at
+the shape of (2) — `.2d` stays, red, marked deferred with its four fields — because that is the
+state that presupposes neither answer, and (1) destroys the row that records the question.
+
+The consequence is worth stating plainly rather than leaving to be discovered: a deferred item
+blocks whatever depends on it, and the `TaskStatus` variant list depends on this one. That list
+is where the decision becomes irreversible in code, so it does not get written until the
+requester answers. Work elsewhere in TASK.1 is not blocked.
+
 ## 9. What this plan does not do
 
 No test code. No verdict trailers — no vendor has reviewed this document, and stamping one would
