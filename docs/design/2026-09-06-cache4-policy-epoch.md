@@ -132,8 +132,10 @@ under the post-bump epoch and the plan's assertion (ii) — "a post-bump reader 
 it" — goes red. A test that only asserts the epoch is *in* the key stays green under that
 mutation and therefore proves nothing about 4.g.
 
-For 4.f.1 the falsifier is simpler: remove the bump (or pin the source to 0) → the post-change
-response equals the pre-change body → red.
+For 4.f.1 the falsifier is the **backend call counter**, the same observable the test plan uses,
+and never body text: remove the bump (or pin the source to 0) → the post-change invoke is served
+from cache → the counted backend's count stays at 1 → red. The counted backend returns a constant
+body, so a response-inequality assertion cannot go red and is not the falsifier.
 
 ## Row-by-row disposition
 
