@@ -319,12 +319,69 @@ fn parse_sse_response(text: &str) -> Result<JsonRpcResponse> {
 /// emitting it, and the prohibition is on emission rather than on minting, so
 /// the session a legacy handshake left behind must be dropped here rather than
 /// never taken.
-fn finalise_modern_headers(headers: &mut header::HeaderMap) {
+///
+/// `Mcp-Name` mirrors the body field the *method* selects
+/// (`crate::protocol::headers::mcp_name_body_field`), never a search for a
+/// plausible field: a `resources/read` carrying a decoy `name` beside the `uri`
+/// it actually uses would otherwise be routed on a value the body never agreed
+/// to. A method that must carry a name and cannot produce one fails here rather
+/// than on the wire — a modern peer rejects it `-32602`, and doing it locally
+/// keeps the reason attached to the call that caused it.
+fn finalise_modern_headers(
+    headers: &mut header::HeaderMap,
+    method: &str,
+    params: Option<&Value>,
+) -> Result<()> {
     headers.insert(
         "MCP-Protocol-Version",
         header::HeaderValue::from_static(MODERN_VERSIONS[0]),
     );
     headers.remove("MCP-Session-Id");
+    headers.insert(
+        "Mcp-Method",
+        modern_header_value(method, "Mcp-Method", method)?,
+    );
+
+    let Some(field) = crate::protocol::headers::mcp_name_body_field(method) else {
+        // Not every method names something. Writing the header anyway would
+        // assert a name the body does not have.
+        headers.remove("Mcp-Name");
+        return Ok(());
+    };
+    let name = params
+        .and_then(|params| params.get(field))
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            Error::TransportPermanent(format!(
+                "cannot send `{method}` to a 2026 peer: `Mcp-Name` mirrors \
+                 `params.{field}`, which is missing, empty or not a string"
+            ))
+        })?;
+    headers.insert("Mcp-Name", modern_header_value(name, "Mcp-Name", method)?);
+    Ok(())
+}
+
+/// One header value, encoded so a legal name cannot become an illegal header.
+///
+/// A tool name is backend-supplied and may hold anything UTF-8 allows, so the
+/// value is sentinel-encoded rather than trusted
+/// (`crate::protocol::headers::encode_header_value`). The residual failure is
+/// unreachable in practice — the encoder's output is visible ASCII — and is
+/// returned rather than unwrapped because a panic on the outbound path would
+/// take the whole gateway down for one malformed name.
+fn modern_header_value(
+    value: &str,
+    header: &'static str,
+    method: &str,
+) -> Result<header::HeaderValue> {
+    header::HeaderValue::from_str(&crate::protocol::headers::encode_header_value(value)).map_err(
+        |_| {
+            Error::TransportPermanent(format!(
+                "cannot send `{method}` to a 2026 peer: `{header}` could not be encoded"
+            ))
+        },
+    )
 }
 
 /// Wrap outbound `params` in the `_meta` envelope a modern peer requires.
@@ -1058,7 +1115,7 @@ impl HttpTransport {
         // AFTER every merge this path runs. Placed inside `build_mcp_headers`
         // it would be overridden by the loop just above.
         if era == Some(Era::Modern) {
-            finalise_modern_headers(&mut headers);
+            finalise_modern_headers(&mut headers, &request.method, request.params.as_ref())?;
         }
 
         let response = self
@@ -1197,7 +1254,7 @@ impl HttpTransport {
         // last writer here. Finalising only in `send_request_with_headers`
         // would leave every notification unshaped.
         if era == Some(Era::Modern) {
-            finalise_modern_headers(&mut headers);
+            finalise_modern_headers(&mut headers, method, notification.params.as_ref())?;
         }
 
         let response = self

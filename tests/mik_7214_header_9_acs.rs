@@ -27,6 +27,7 @@ use axum::http::HeaderMap;
 use mcp_gateway::backend::Backend;
 use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use mcp_gateway::protocol::PROTOCOL_VERSION;
+use mcp_gateway::protocol::headers::{decode_header_value, encode_header_value};
 use mcp_gateway::protocol::meta::{
     KEY_CLIENT_CAPABILITIES, KEY_CLIENT_INFO, KEY_PROTOCOL_VERSION, MODERN_VERSIONS,
 };
@@ -629,8 +630,18 @@ async fn a_modern_call_to_an_unnamed_method_carries_no_name_header() {
 /// string fails locally, before anything is sent.
 #[tokio::test]
 async fn a_modern_named_call_with_no_usable_name_source_fails_before_sending() {
-    let bad: &[Value] = &[json!({}), json!({ "name": 7 }), json!({ "name": null })];
-    for (method, _, _) in NAMED_METHODS {
+    for (method, field, _) in NAMED_METHODS {
+        // Built from the field the METHOD selects, not a hardcoded `name`: a
+        // `resources/read` carrying a wrong-typed `name` is missing its `uri`
+        // for the boring reason, and would pass without the check existing.
+        let bad: &[Value] = &[
+            json!({}),
+            json!({ *field: 7 }),
+            json!({ *field: null }),
+            // Empty is rejected here rather than encoded: an empty header value
+            // cannot round-trip back through `decode_header_value`.
+            json!({ *field: "" }),
+        ];
         for params in bad {
             for (path, _) in BOTH_PATHS {
                 let run =
@@ -852,6 +863,63 @@ async fn a_legacy_call_still_carries_the_minted_session() {
             "s1",
             "a legacy peer's {label} path is byte-for-byte what it was, session \
              header included"
+        );
+    }
+}
+
+/// The shapes a tool name can take, and what each one costs the encoder.
+///
+/// `transparent` is the assertion that separates a working encoder from one
+/// that wraps everything: wrapping is always *correct* and always *wrong*,
+/// because an operator reading `Mcp-Name` would never again see a plain name.
+/// The literal-sentinel row is the inverse trap — plain ASCII that must
+/// nonetheless be wrapped, which an `is_ascii()` guard gets wrong.
+const NAME_SHAPES: &[(&str, bool)] = &[
+    ("tools-alpha", true),
+    ("työkalu", false),
+    (" leading", false),
+    ("trailing ", false),
+    ("embedded\nnewline", false),
+    ("=?base64?dG9vbA==?=", false),
+];
+
+/// MIK-7214.HEADER.4a — every name shape survives the header and comes back.
+///
+/// Asserted against the repository's own `decode_header_value`, not against a
+/// second encoder written here: an encoder tested by its own inverse agrees
+/// with itself and with nothing else.
+///
+/// The empty name is absent deliberately: it cannot round-trip, because
+/// `decode_header_value` refuses an empty sentinel payload — and loosening that
+/// parser to admit one would widen a check an attacker writes the input to. The
+/// name is refused before the encoder sees it instead, which the case below
+/// pins.
+#[test]
+fn every_name_shape_round_trips_and_only_the_safe_one_stays_plain() {
+    for (name, transparent) in NAME_SHAPES {
+        // GIVEN a name of this shape, WHEN encoded for a header value,
+        let encoded = encode_header_value(name);
+        // THEN it is legal as one,
+        assert!(
+            encoded.bytes().all(|b| (0x21..=0x7e).contains(&b)),
+            "{name:?} encoded to {encoded:?}, which is not a legal header value"
+        );
+        // and decodes back to exactly what went in,
+        assert_eq!(
+            decode_header_value(&encoded).as_deref(),
+            Some(*name),
+            "{name:?} did not survive the round trip"
+        );
+        // and was left alone only when it was already safe and unambiguous.
+        assert_eq!(
+            &encoded == name,
+            *transparent,
+            "{name:?} was {} and should not have been",
+            if *transparent {
+                "wrapped"
+            } else {
+                "passed through"
+            }
         );
     }
 }
