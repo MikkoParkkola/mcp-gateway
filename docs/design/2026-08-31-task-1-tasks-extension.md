@@ -419,9 +419,13 @@ smaller than a ticket describing the correction would be).
 Citations in this document are **symbol anchors, not `file:line`** (2026-09-06). Every line number
 this section carried had drifted or was wrong: `headers.rs:36-52` for a function now at `:59`,
 `extensions.rs:52-56` for one at `:65`, `invoke.rs:1291` for a `cache.set` at `:1804`,
-`meta.rs:247` for a constant at `:244`, and `era.rs:40` for a `-32021` that lives in
-`handlers.rs` and never lived in `era.rs` at all. Re-patching the numbers would buy one commit of
-accuracy; naming the symbol removes the drift class. Do not "helpfully" restore line numbers.
+`meta.rs:247` for a constant at `:244`, and `era.rs:40` for `MISSING_REQUIRED_CLIENT_CAPABILITY`,
+which is at `era.rs:58` — the file was right, the line was stale.
+(Re-measured 2026-09-06: an earlier draft of this note claimed the constant never lived in
+`era.rs`. It does. What lives in `handlers.rs:804` is a **bare literal** `-32021` that does not
+reference the constant — a separate finding, recorded in the test plan's `.4b` row.)
+Re-patching the numbers would buy one commit of accuracy; naming the symbol removes the drift
+class. Do not "helpfully" restore line numbers.
 
 
 Six criteria out of thirteen cannot fail for a behavioural reason today (the plan's coverage
