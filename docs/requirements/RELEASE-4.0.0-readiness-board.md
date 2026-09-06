@@ -163,7 +163,7 @@ is left without a next step.
    that turn out to be code queue behind whichever cluster owns their file.
 
 Order is dependency, not preference: everything in cluster A waits on step 1, and
-F waits on A **and** C, which is why the default flip is the last thing to land.
+F waits on A **and** C. The default flip did NOT wait — it landed in `83c98902` (2026-09-04) ahead of A; per the operator ruling of 2026-09-06 it stands, and A is now a hard gate on the RELEASE rather than on the flag.
 Steps 3, 5 and 7 wait on nothing at all, so steps 1, 3 and 5 can run at the same time.
 
 ## One question is open, and it is the operator's
@@ -478,7 +478,7 @@ not that one's.
    and C code, D code, the residue's `HEADER.9` — whose design is CONFIRMED unable
    to activate (`resolve_with` holds the era mutex across the probe await,
    `src/protocol/era.rs:150-161`) and needs an elimination and a fresh round, not a
-   patch — and `NFR.COMPAT.1` last, since the default flip cannot precede A and C.
+   patch — and `NFR.COMPAT.1` last. The ordering claim that the default flip cannot precede A and C was falsified on 2026-09-04: it did. `NFR.COMPAT.1` is still last, now because the release is gated on A, not because the flag is.
 
 ### Three blocking items the order above did not carry
 
@@ -972,6 +972,21 @@ recorded agreement.
 Nothing depending on it is being implemented. `MIK-7212.MRTR.7a` and `7b` are parked, not
 abandoned; `NFR.COMPAT.1` and `NFR.OBS.5` stay blocked behind them. Every cluster that does
 not depend on the answer continues meanwhile.
+
+**RESOLVED 2026-09-06.** *Does 4.0.0 serve the modern revision by default?* — asked of the
+operator — **yes, and the flip stands as landed**; the condition it was made conditional on moves
+to a hard release gate on `MIK-7212.MRTR.7a`/`7b` — *what it changed*: the recommendation below was
+NOT taken. `modern_protocol` had already defaulted to true in `83c98902` (2026-09-04,
+`src/config/mod.rs:1236`), ahead of cluster A. The operator declined both a revert and a silent
+acceptance, and chose the third option: leave the flag true, and block the 4.0.0 release until the
+legacy-client bridge is reachable from production. This is the "if it resolves the other way" branch
+below — the bridge is now the release's critical path, not parked work. `NFR.OBS.5` is consequently
+MET (`cargo test --test nfr_obs5_flag` = 6 passed), while `NFR.COMPAT.1` and the release itself stay
+blocked behind 7a/7b. The six operator-facing documents stating the revision is off by default are
+now FALSE and need edits — that was the cost the deferred option would have avoided, and it is
+accepted knowingly.
+
+Superseded recommendation follows, kept because it states the risk the gate now carries.
 
 The recommendation on the table is to ship opt-in and defer the flip. The increment is the
 single riskiest change in the backlog — it refactors the stdio serve loop, which today

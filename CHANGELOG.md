@@ -24,6 +24,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default. The section is read when the meta-MCP server is built, so an edit to
   it is reported as restart-required rather than appearing to take effect.
 
+### Changed
+
+- **BREAKING: an HTTP backend that uses OAuth must be reached over TLS or on
+  loopback** (CodeQL `rust/cleartext-transmission` #90, #91; CWE-319). The
+  bearer token this transport attaches is a replayable credential, so it is no
+  longer put on the wire in cleartext. `https://` is always accepted;
+  `http://` is accepted only when the host is loopback — `localhost`, any
+  address in `127.0.0.0/8`, or `::1` — because a local MCP backend has no
+  certificate and its traffic never leaves the machine. Anything else is
+  refused twice: the backend fails to start with
+  `refusing to send an OAuth token in cleartext to <origin>`, and the token is
+  refused again at request time if an SSE-advertised message endpoint ever
+  downgrades the scheme. IPv4-mapped IPv6 (`http://[::ffff:127.0.0.1]`) is
+  deliberately treated as non-loopback; use `http://127.0.0.1` instead.
+  **Migration**: put TLS in front of the backend, or move it to a loopback
+  address. There is no configuration flag to opt out — a flag would re-enable
+  the finding, and 4.0.0 is the release allowed to break this. Backends without
+  OAuth are unaffected and may still use plaintext `http://`.
+
 ### Removed
 
 - Removed the ungrounded savings estimates from gateway statistics: the
@@ -186,8 +205,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requests, required result and cacheability fields, and the standard request
   headers.
 
-  **The switch is off by default and stays off until the revision is served
-  completely.** With it off, a client asking for 2026-07-28 is refused with
+  **The switch is on by default in 4.0.0.** A stock gateway serves 2026-07-28 to
+  a client that asks for it, and downgrades to the highest revision the client
+  supports otherwise. Set `server.modern_protocol: false` to serve the legacy
+  generation only. With it off, a client asking for 2026-07-28 is refused with
   `UnsupportedProtocolVersion` — an answer it can act on — rather than served
   half a revision, where the half that works hides the half that does not.
   Clients on 2025-11-25 and earlier are unaffected either way, and the gateway

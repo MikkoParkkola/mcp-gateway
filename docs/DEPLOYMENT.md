@@ -132,9 +132,14 @@ replica can spend it a second time — but a retry that lands elsewhere is
 refused rather than served, and a restart invalidates every continuation
 outstanding against the process it replaced.
 
-This trade-off binds only on the modern protocol path. `server.modern_protocol`
-is off by default, and with it off there is no such consideration at all: scale
-horizontally as the rest of this document describes.
+This trade-off binds only on the modern protocol path — and as of 4.0.0 that path
+is **on by default**. `server.modern_protocol` defaults to `true`, so a stock
+multi-replica deployment is subject to the retry-affinity behaviour above from the
+first request. Set `modern_protocol: false` to opt out, and with it off there is no
+such consideration at all: scale horizontally as the rest of this document describes.
+
+Earlier drafts of this section said the switch was off by default. That was true
+until 2026-09-04 and is no longer.
 
 The shipped Helm chart and Kubernetes manifests default to two replicas, and that
 default stays correct with the switch on. Set `replicaCount: 1` only if you need

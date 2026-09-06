@@ -596,6 +596,6 @@ Full model: [LICENSES.md](LICENSES.md).
 
 ## Credits
 
-Created by [Mikko Parkkola](https://github.com/MikkoParkkola). Implements [Model Context Protocol](https://modelcontextprotocol.io/) version 2025-11-25, with 2026-07-28 available behind a switch.
+Created by [Mikko Parkkola](https://github.com/MikkoParkkola). Implements [Model Context Protocol](https://modelcontextprotocol.io/) versions 2025-11-25 and 2026-07-28; the newer revision is served by default and can be switched off.
 
 [Changelog](CHANGELOG.md) | [Releases](https://github.com/MikkoParkkola/mcp-gateway/releases)
