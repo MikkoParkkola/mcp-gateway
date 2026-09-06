@@ -91,8 +91,8 @@ API so it won't compile":
 **A compile error is not the RED we want.** `route`, `complete` and `len` gain a parameter, so
 every row would fail to build before the change — a failure that proves nothing about behaviour.
 The order that produces an honest red: land the signature change and `guard` **as a pass-through
-that takes the lock and does not reclaim**, run the rows, and watch .01, .02, .03, .05, .08 and
-.11 fail *on their assertions*. Then add the `reclaim_abandoned` call inside `guard` and watch
+that takes the lock and does not reclaim**, run the rows, and watch .01, .02, .03, .05, .06 and
+.08 fail *on their assertions*. Then add the `reclaim_abandoned` call inside `guard` and watch
 them go green. The pass-through step is a real intermediate state, not a ceremony: it is exactly
 today's behaviour behind tomorrow's signature, so the assertion failures it produces are the
 defect the criterion names.
@@ -103,18 +103,22 @@ mis-wired to return a frozen instant, and no fixture that constructs the map in 
 claims to observe. Row .06 inspects the map directly precisely because every public reader would
 launder the answer through the reclaim it is trying to catch.
 
-**Six rows never go RED, and that is the correct behaviour, not a gap.** The honest-red list above
-names .01, .02, .03, .05, .08 and .11. The other six — .04, .04a, .06, .07, .09, .10 — are green
-under the pass-through *and* green after the reclaim lands, because each asserts something the
-change must NOT break rather than something it must start doing. A row whose RED never arrives is a
-defect when it is the only evidence for a clause; here every clause is also carried by a row that
-does go red, so these six are guards, not coverage. Each still names a concrete wrong implementation
-it catches: .04 an over-eager reclaim anywhere, .04a an over-eager reclaim at exactly the deadline —
-the one `now` .04 cannot see, .06 a background reaper quietly redefining the criterion, .07 a `guard`
-that reads the wall clock, .09 a capacity refusal deleted instead of re-ordered, .10 a walk whose
-bound a client can grow. Their falsifier is the wrong implementation, not the absent one, so they are
-verified by writing that implementation and watching them fail — not by waiting for a red that
-correct code would have to produce.
+**Four rows never go RED, and that is correct rather than a gap.** Membership is decided
+mechanically, not by taste: a row is in this set if it is green under the pass-through *and* green
+after the reclaim lands. That leaves .04, .04a, .07 and .09. The other six — .01, .02, .03, .05,
+.06, .08 — fail on their assertions at the pass-through step and go green when `reclaim_abandoned`
+moves into `guard`; .06 belongs with them because its second half, *residency ends at the first
+`guard`*, is exactly what the pass-through does not do.
+
+A row whose RED never arrives is a defect when it is the only evidence for a clause. Neither clause
+depends on one here: C1's red comes from .01-.03, C2's from .05, .06 and .08. So the four are
+guards, and each names a concrete wrong implementation it catches — .04 an over-eager reclaim
+anywhere, .04a an over-eager reclaim at exactly the deadline (the one `now` .04 cannot see), .07 a
+`guard` that reads the wall clock, .09 a capacity refusal deleted rather than re-ordered. Their
+falsifier is the wrong implementation, not the absent one, so each is verified by writing that
+implementation and watching the row fail — never by waiting for a red that correct code would have
+to produce. That verification is a real step, not a figure of speech: revision 1 asserted it of
+.07 while .07's fixture made it impossible, which is what this review caught.
 
 ## Not tested here, with reasons
 
