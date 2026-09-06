@@ -274,8 +274,12 @@ reintroduce through the back door.
 **The store is not a store.** Declarations are co-owned by each transport's
 existing session state. A declaration is removed from the map exactly once, on
 session `DELETE` (`handlers.rs:354`), and replaced in place exactly once, on
-`initialize`. There is no disconnect hook and no reaper, and an earlier
-revision of this paragraph claimed both.
+`initialize`. There is no disconnect hook. There IS a reaper, and an
+earlier revision of this paragraph denied it: `NotificationMultiplexer::spawn_reaper_on`
+(`streaming.rs:105`) spawns a ticker whose `reap_expired_sessions` (:128)
+`retain`s away every session that is past `session_ttl` AND has no active
+receivers. Its doc comment records that `server.rs`, `webhooks.rs` and
+`proxy.rs` all call it, so it runs in production.
 
 A session id is client-supplied, and `get_or_create_session_for`
 (`handlers.rs:300`) will CREATE a session under an id the client chose, so the
@@ -294,8 +298,9 @@ The rule, stated once: **a declaration is session-scoped.** Reattaching to a
 session inherits its declaration, because that is what reattaching means. The
 protection is the session id's secrecy, and it is exactly the protection every
 other piece of session state in the gateway already has — this change adds no
-new exposure and inherits the existing one. That inheritance is recorded as a
-deferred unknown below, with the memory question it travels with.
+new exposure and inherits the existing one. That inheritance is stated below
+alongside the session lifetime, and it is not deferred: it is a property this
+change reads off the gateway it is being wired into.
 
 ### Change surface, stated
 
@@ -422,27 +427,32 @@ document are one rule and not a contradiction. An earlier revision
 of this paragraph also cited `streaming.rs:578` as a stream-end removal. It is
 a line inside a test — the same defect that disqualified `SessionLifecycle`
 four paragraphs down, made while writing the sentence that disqualified it.
-Nothing reaps a session that is never DELETEd, so its declaration lives until
-the process exits. That was parked as a "named residual", which the process
-does not accept as a state. It is now a DEFERRED unknown, carrying both halves
-of what an unreaped session costs: the map grows without bound, and the
-declaration stays readable to whoever holds the session id. The second half is
-the gateway's existing session-state property, not one this change introduces —
-which is why both travel in one row rather than becoming a second policy.
+A third removal exists that no `rg remove_session` can see, because it does not
+call it: the reaper `retain`s. Grok raised it (round 6, MEDIUM, CERTAIN) and it
+is confirmed at source — `streaming.rs:75` is the map the reaper walks and the
+map that holds `ClientSession`, so the same eviction that ends a streaming
+session ends its declaration.
 
-| field | value |
-|---|---|
-| owner | the team lead, accountable now, until they name someone in the session-store work package. Not this change. |
-| what would resolve it | a measurement: session-map size against a client population that connects and never issues `DELETE` |
-| when | before 4.0.0 ships — the growth is unbounded in time, and this is the first release that keeps per-session declarations at all |
-| if it resolves badly | an idle-timeout reaper on the session map. The same table row carries the read-access residual: a declaration is readable by whoever presents the session id, which is the gateway's existing session-state property and not new here; if that is judged unacceptable, server-minted unguessable session ids are the fix, and they belong to the session store, not to this change. |
+This CLOSES the unknown rather than deferring it. It was parked first as a
+"named residual", then as a DEFERRED unknown with four fields; both were wrong,
+and wrong in the expensive direction — a deferral schedules work for a question
+already answered in the tree.
 
-Nothing in MRTR.7a or 7b depends on the answer, which is what makes deferring
-it legitimate rather than convenient. The
-declaration is captured at the `initialize` call site in
-`src/gateway/router/handlers.rs:926`, which holds both the params and
-`state.multiplexer`; `handle_initialize` itself does not need to change.
-`ClientSession` stays private.
+```
+resolved (checkable): does anything reclaim a session that is never DELETEd?
+  — rg -n 'spawn_reaper_on|reap_expired_sessions' src/ then read streaming.rs:105-152
+  — a production ticker retains away sessions past session_ttl with zero receivers,
+    and it walks the same `sessions` map (:75) whose value type is Arc<ClientSession>
+  — the four-field deferred table is deleted; a declaration's lifetime is DELETE,
+    or the reaper, and the memory bound the deferral was going to measure is
+    already enforced by session_ttl
+```
+
+The read-access property is NOT part of that answer and is not deferred either:
+a declaration is readable by whoever presents the session id, exactly like every
+other piece of session state in this gateway. That is inherited, not introduced,
+and if it is judged unacceptable the fix is server-minted unguessable session
+ids, which belong to the session store and not to this change.
 
 
 
@@ -530,8 +540,11 @@ superseded sentence is gone, not footnoted.
 
    **The declarations therefore live in the `NotificationMultiplexer` session
    map** (`src/gateway/streaming.rs:75`) — the only session-keyed store with a
-   production removal path, on `DELETE` (`router/handlers.rs:354`) and at
-   stream end (`streaming.rs:578`). This answer first named `ClientSession`
+   production removal path, on `DELETE` (`router/handlers.rs:354`) and in
+   the session reaper (`streaming.rs:128`). An earlier revision of this answer
+   cited `streaming.rs:578` as a stream-end removal; that line is inside a
+   test, and the real second path is the reaper, which removes by `retain`
+   rather than by calling `remove_session`. This answer first named `ClientSession`
    itself; amendment 3 records why that owner cannot hold it — the struct is
    private, is built only at `streaming.rs:188,202`, and never sees
    `initialize`. Eviction is then not a mechanism this change adds; it is an
@@ -579,7 +592,7 @@ was taken on the reviewer's word.
 | finding | disposal |
 |---|---|
 | the write site is still named twice, HTTP-only in one place and `MetaMcp::handle_initialize` in another (HIGH, CERTAIN) | confirmed. The round-4 repair fixed the stdio paragraph and left two passages carrying the old instruction — the change-surface bullet and the answer recorded against the first scheduled question. Both now name `router/handlers.rs:926`, and the recorded answer says which amendment superseded it rather than being quietly rewritten |
-| the store's owner is not concrete, and the cited stream-end removal does not exist (HIGH, LIKELY) | confirmed, and the citation was worse than the finding said. `streaming.rs:578` is a line inside a test; the only production removal is `handlers.rs:354` on DELETE (I: `rg -n 'remove_session' src/` returns those two and nothing else — one grep is one source, however carefully it was run). Eliminated rather than patched: the declaration becomes a field on `ClientSession`, which the map already holds as its value type, so it cannot drift from or outlive the session and no second keyed map needs removal wiring. The absence of a reaper was first parked as a named residual; it is now a DEFERRED unknown with its four fields, carrying the map-growth bound and the inherited read-access property together |
+| the store's owner is not concrete, and the cited stream-end removal does not exist (HIGH, LIKELY) | confirmed, and the citation was worse than the finding said. `streaming.rs:578` is a line inside a test; the only production removal is `handlers.rs:354` on DELETE (I: `rg -n 'remove_session' src/` returns those two and nothing else — one grep is one source, however carefully it was run). Eliminated rather than patched: the declaration becomes a field on `ClientSession`, which the map already holds as its value type, so it cannot drift from or outlive the session and no second keyed map needs removal wiring. The follow-on claim that no reaper exists was itself false, and round 6 killed it: `spawn_reaper_on` runs in production over the same map, so the unknown is RESOLVED rather than deferred |
 | `WIRE.9`'s follow-up call is answered by the settled idempotency entry, so the cache gate never runs (MEDIUM, CERTAIN) | confirmed by reading the row: it reused the key it had just asserted settled, which is exactly the shape `test-plan-honesty` calls a case that cannot fail. The follow-up now carries a different idempotency key and the same response-cache key, and settlement is asserted separately |
 
 Two improvements taken, both in the test plan: `WIRE.10` sat outside the
