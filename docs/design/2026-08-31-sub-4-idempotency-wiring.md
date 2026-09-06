@@ -210,7 +210,11 @@ not before.
   riding this document's rev-5 review rather than a round of its own. Whether it ALSO warrants a
   ticket is the team lead's call, put to them 2026-09-06 and unanswered as this is written. That
   leaves one outcome §P0 does not offer, silence, so the escalation is written down rather than
-  remembered: **if rev-5's review opens with no ruling, file it.** Not a competing disposal — the
+  remembered: **if rev-5's review opens with no ruling, file it.** It opened 2026-09-06 with no
+  ruling, so it was filed: **MIK-7408**, carrying the three acceptance criteria the repair must meet
+  and putting the one decision that is genuinely a human's — *is P8 blocked on the suffix repair, or
+  may P8 land first with this tracked behind it?* — where a human will see it. The escalation is
+  therefore closed, not pending. Not a competing disposal — the
   same one, escalated, because the repair constraint binds whoever lands P8, and P8's landing does
   not wait on this review. Nothing is exposed in a running deployment today — the bullet above says
   why, and that WEAKENS the ticket case rather than carrying it: the defect is dormant, activation
