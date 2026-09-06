@@ -52,6 +52,9 @@ enum Peer {
     Modern,
     /// Answers discovery `method not found`, the way a 2025 server does.
     Legacy,
+    /// Answers discovery with a well-formed document that names only a 2025
+    /// revision — the peer that has discovery and is still not modern.
+    LegacyDiscovering,
 }
 
 /// Answer one request the way the chosen peer would.
@@ -71,11 +74,24 @@ fn answer(peer: Peer, request: &Value) -> Value {
                     "supportedVersions": MODERN_VERSIONS,
                 }
             }),
-            // Silence and every error but the modern-only codes read as legacy.
+            // An error reads as legacy. A probe that never answers at all is
+            // the one input this file does not give the era machinery: it is a
+            // timeout, and asserting on one buys a slow test rather than a
+            // sharper claim. Recorded as untested, not covered by these cases.
             Peer::Legacy => json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "error": { "code": -32601, "message": "method not found" }
+            }),
+            // The other half of "positive evidence": a document that IS a
+            // discovery document and still names no modern revision.
+            Peer::LegacyDiscovering => json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "capabilities": {},
+                    "supportedVersions": ["2025-06-18"],
+                }
             }),
         };
     }
@@ -115,7 +131,16 @@ async fn spawn_peer(peer: Peer) -> (String, Recorder) {
                         headers,
                         body: request.clone(),
                     });
-                    axum::Json(answer(peer, &request))
+                    // The peer issues a session the way a real server does,
+                    // so the legacy path has something to be pinned against:
+                    // the modern shape STRIPS `MCP-Session-Id`
+                    // (MIK-7215.STATELESS.3a), which makes "the legacy request
+                    // is unchanged" a claim about a header that can now move.
+                    let mut out = HeaderMap::new();
+                    if request.get("method").and_then(Value::as_str) == Some("initialize") {
+                        out.insert("Mcp-Session-Id", "s1".parse().expect("ascii"));
+                    }
+                    (out, axum::Json(answer(peer, &request)))
                 }
             },
         ),
@@ -251,6 +276,42 @@ async fn a_legacy_peer_still_gets_the_handshake_version_and_no_meta() {
             .and_then(|params| params.get("_meta"))
             .is_none(),
         "a legacy peer must not be sent a 2026 envelope; it received {}",
+        wire.body
+    );
+    assert_eq!(
+        header(&wire, "MCP-Session-Id"),
+        "s1",
+        "the session the peer issued must come back verbatim on the legacy \
+         path; the modern shape strips this header, so \"unchanged\" is a \
+         claim about a header this change can move"
+    );
+}
+
+/// MIK-7214.HEADER.9a — a discovery document that names no modern revision is
+/// still legacy.
+///
+/// The `answer` fixture asserts in prose that `classify` requires POSITIVE
+/// evidence, and only the `method not found` half of that was exercised: every
+/// legacy case here came from a peer with no discovery at all. A 2025 server
+/// that does implement discovery is the likelier peer of the two, and it is the
+/// one a loose `classify` would send a 2026 envelope to. `src/protocol/era.rs`
+/// has no unit test covering this arm either.
+#[tokio::test]
+async fn a_discovery_document_naming_no_modern_revision_stays_legacy() {
+    let wire = ordinary_request(Peer::LegacyDiscovering).await;
+    assert_eq!(
+        header(&wire, "MCP-Protocol-Version"),
+        PROTOCOL_VERSION,
+        "a discovery document naming only 2025 is not positive evidence of a \
+         modern peer, and must not raise the version"
+    );
+    assert!(
+        wire.body
+            .get("params")
+            .and_then(|params| params.get("_meta"))
+            .is_none(),
+        "a peer that named no modern revision must not be sent a 2026 \
+         envelope; it received {}",
         wire.body
     );
 }
