@@ -1,10 +1,13 @@
-# MCP 2026-07-28 protocol revision, behind a default-off switch
+# MCP 2026-07-28 protocol revision, served by default behind a switch
 
 ## What this is for
 
 Bring the gateway onto the MCP `2026-07-28` revision without moving any existing
-deployment onto it. `server.modern_protocol` defaults **off**, and with it off no
-client can reach the new revision.
+deployment onto it. `server.modern_protocol` defaulted **off** when this
+was written; it defaults **on** as of `83c98902` (2026-09-04), so a stock 4.0.0
+does serve the new revision and a deployment opts out with
+`server.modern_protocol: false`. The paragraphs below describe the off case,
+which is now the opt-out rather than the default.
 
 "Unchanged" is narrower than the switch, and the difference is stated rather than
 implied. Off, the 2025 request path behaves as it did. The release still changes

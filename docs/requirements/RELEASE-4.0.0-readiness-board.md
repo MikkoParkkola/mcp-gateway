@@ -973,6 +973,10 @@ Nothing depending on it is being implemented. `MIK-7212.MRTR.7a` and `7b` are pa
 abandoned; `NFR.COMPAT.1` and `NFR.OBS.5` stay blocked behind them. Every cluster that does
 not depend on the answer continues meanwhile.
 
+*(Falsified 2026-09-06 by the resolution below, and left in place as the record: `7a`/`7b`
+are the release's critical path rather than parked work, and `NFR.OBS.5` is MET. Only
+`NFR.COMPAT.1` is still blocked behind them.)*
+
 **RESOLVED 2026-09-06.** *Does 4.0.0 serve the modern revision by default?* — asked of the
 operator — **yes, and the flip stands as landed**; the condition it was made conditional on moves
 to a hard release gate on `MIK-7212.MRTR.7a`/`7b` — *what it changed*: the recommendation below was
@@ -984,7 +988,12 @@ below — the bridge is now the release's critical path, not parked work. `NFR.O
 MET (`cargo test --test nfr_obs5_flag` = 6 passed), while `NFR.COMPAT.1` and the release itself stay
 blocked behind 7a/7b. The six operator-facing documents stating the revision is off by default are
 now FALSE and need edits — that was the cost the deferred option would have avoided, and it is
-accepted knowingly.
+accepted knowingly. **Edited 2026-09-06**, and named so the count is checkable rather than
+asserted: `README.md`, `CHANGELOG.md`, `docs/DEPLOYMENT.md`,
+`docs/release/v4.0.0-release-notes-DRAFT.md`, `docs/requirements/RELEASE-4.0.0-pr-body.md`
+and `deploy/helm/mcp-gateway/values.yaml`. A sweep for the flag outside markdown
+(`rg -i modern_protocol -g '!*.md' -g '!target/**'`) returns the Helm chart and nothing else —
+no config schema, example file or CLI help states the default.
 
 Superseded recommendation follows, kept because it states the risk the gate now carries.
 

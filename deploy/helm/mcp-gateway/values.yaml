@@ -8,8 +8,8 @@
 # nameOverride: ""
 # fullnameOverride: ""
 
-# Two replicas are correct for the default configuration, and remain correct with
-# the gateway's `server.modern_protocol` switch on. Continuation key material is
+# Two replicas are correct for the default configuration, which has the gateway's
+# `server.modern_protocol` switch ON as of 4.0.0. Continuation key material is
 # generated per process and never shared, so a continuation cannot be spent twice
 # across replicas. The cost is that a retry succeeds only on the replica that minted
 # it and is refused elsewhere; set this to 1 if you need every retry to be served.
