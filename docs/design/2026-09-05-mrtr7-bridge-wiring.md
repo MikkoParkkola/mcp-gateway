@@ -716,20 +716,56 @@ plumbing. This SHRINKS the change surface; it does not delete the blocker, and
 the change-surface section is amended to say which of the two it is rather than
 leaving a reader to size it as new machinery.
 
-Restating what is still owed, so the shrink is not read as a pass: the trait
-implementation, the timeout translation from `SamplingError` to `DeliveryError`
-(the bridge's `Timeout` and `ClientRefused` must stay distinguishable for
-NFR.OBS.4), and the roots gap below.
+**WHICH LAYER THE ADAPTER SITS ON, corrected.** An earlier revision of this
+section wrapped the two `*_with_response` forwarders. Grok raised it in round 6
+and it is confirmed at source: that adapter cannot satisfy the trait it
+implements.
 
-### 3. The gap the shrink exposes: `Roots` has no response-awaiting forwarder
+| `ClientChannel::send_request` is given | `forward_*_with_response` does |
+|---|---|
+| `id: &str`, minted by the bridge (`input_bridge.rs:69-75`) | mints its OWN `sampling-{uuid}` / `elicitation-{uuid}` (`proxy.rs:212`, `:279`) and never sees the bridge's |
+| `params: Option<Value>`, the backend's object verbatim | takes `&SamplingCreateMessageParams` / `&ElicitationCreateParams` and re-serializes with `serde_json::to_value` (`proxy.rs:225`, `:292`) |
+| `method: &str` | is one method per function |
+
+`SamplingCreateMessageParams` (`protocol/messages.rs:525-543`) is six named
+fields with NO `#[serde(flatten)]` catch-all, so the round trip through it is
+LOSSY BY CONSTRUCTION: every field a backend declared and this gateway does not
+model is silently gone by the time the client sees the question. That is exactly
+what row 308 forbids, and no amount of adapter code can put back what the type
+dropped. The minted-id half is as bad in a quieter way — the bridge hands the
+adapter an id and the forwarder discards it, so the id the client answers is not
+the id the bridge is waiting on, and WIRE.11 cannot assert on a value that never
+reached the wire.
+
+The repair is not a patch to the adapter. It is one layer down, over the pieces
+the forwarders are themselves built from — the same three lines, in the same
+file, already exercised by the tests at `proxy.rs:503-561`:
+
+```
+register_pending(the BRIDGE-minted id, session_id)   -> proxy.rs:128
+PendingSampleGuard held across the await             -> proxy.rs:97
+send_to_session(session_id, raw method + raw params) -> streaming.rs:254
+tokio::time::timeout on the receiver
+```
+
+Raw `Value` in, bridge id out, one function for all three methods. The typed
+forwarders keep their existing callers (`handlers.rs:1275`, `:1294`,
+`destructive_confirmation.rs:241`) and the bridge does not go through them.
+
+Restating what is still owed, so the shrink is not read as a pass: the trait
+implementation over those four lines, and the timeout translation from the
+receiver's outcome to `DeliveryError` (the bridge's `Timeout` and
+`ClientRefused` must stay distinguishable for NFR.OBS.4).
+
+### 3. The gap the shrink appeared to expose, and why it is gone
 
 `proxy.rs` line 396 is `pub fn forward_roots_list(&self, session_id: &str) ->
 bool` — fire-and-forget. No `register_pending`, no receiver, no timeout, not
 `async`. There is no roots counterpart to the two `*_with_response` forwarders.
 
 The design does not mention this, because it treated the whole channel as
-unbuilt. Once the channel is an adapter over existing forwarders, the missing
-third forwarder becomes the concrete piece of new code the wiring needs.
+unbuilt. While this section still wrapped the typed forwarders, the missing
+third forwarder read as the concrete piece of new code the wiring needs.
 
 Is it reachable? Yes, and it is one grep: `InputBridge::prompt`
 (`input_bridge.rs`) maps a backend request to a kind through
@@ -740,15 +776,25 @@ a `Roots` prompt, which `ask` sends by
 with `params` of `None` (line 127). Nothing in `plan` or `prompt` excludes the
 kind. The gap is therefore live, not theoretical.
 
-Disposition — fix it in this change (§P0 disposal 1): the repair is one
-`forward_roots_list_with_response` shaped exactly like its two siblings, which is
-smaller than the ticket describing it would be. Named here so the implementation
-does not discover it as a compile error and invent a shape under pressure.
+The reachability stands; the gap does not. Correcting section 2 to adapt over
+`register_pending` + `send_to_session` DELETED this item rather than repairing
+it. There is no third forwarder to write, because the adapter uses no forwarder:
+`roots/list` is the same call with a different method string and `None` params,
+and the bridge already mints its `roots-` id and admits it back
+(`is_bridge_reply_id`, `input_bridge.rs:144`). A sibling
+`forward_roots_list_with_response` would have been a fourth typed function whose
+only caller was about to stop existing.
 
-Rejected alternative, recorded: refuse `roots/list` at the bridge and let it fall
-to MRTR.9. That narrows what the bridge is FOR by removing a declared capability
-from the answerable set, which is a requester decision, not an engineering one
-(repair protocol, step 0). Not taken.
+That is worth recording rather than quietly dropping: this section was a real
+finding against a wrong mechanism, and fixing the mechanism removed the finding.
+Grok raised both halves in one round — the layer error and the roots sibling it
+implies — and the second was the cheaper tell.
+
+Rejected alternative, still recorded because it is still available: refuse
+`roots/list` at the bridge and let it fall to MRTR.9. That narrows what the
+bridge is FOR by removing a declared capability from the answerable set, which is
+a requester decision, not an engineering one (repair protocol, step 0). Not
+taken, and now unnecessary.
 
 ### 4. MRTR.7b's accounting blocker: one gate and eight emissions around one dispatch, read at source (I)
 
@@ -934,16 +980,18 @@ turned out to be worse than stated.
 | the deferred owner cell names no accountable party; §4 over-grades a count the same round marked I | closure finder | both taken. The team lead is accountable until the session-store work package has a name in it; the heading says "read at source (I)" |
 | "nothing reaps a session that is never DELETEd" is false — `spawn_reaper_on` runs in production (MEDIUM, CERTAIN) | grok | confirmed and larger than stated. The reaper walks the same map (`streaming.rs:75`) that holds `ClientSession`, and it removes by `retain`, which is why the write-side grep could not see it. The four-field deferred table is DELETED and the unknown recorded as resolved |
 | open question 3 still cites `streaming.rs:578` as a stream-end removal (MEDIUM, CERTAIN) | grok | confirmed. The main passage had been corrected and the recorded answer had not. It now names the reaper |
-| the `ClientChannel` shrink wraps typed forwarders that re-serialize params and mint a second id (HIGH, CERTAIN) | grok | OPEN, unverified. Named here rather than disposed: it is a change-the-approach finding against round 5's own repair, and it has not been read at source. It carries into round 7 as the first thing checked |
+| the `ClientChannel` shrink wraps typed forwarders that re-serialize params and mint a second id (HIGH, CERTAIN) | grok | CONFIRMED at source and the approach changed, not patched. `send_request` is handed a bridge-minted id and raw `Value` params; `forward_sampling_with_response` mints its own uuid (`proxy.rs:212`) and re-serializes a six-field struct with no `serde(flatten)` (`messages.rs:525-543`), so the wrap is lossy by construction and WIRE.11 could never see the id it was given. The adapter now sits one layer down, on `register_pending` + `PendingSampleGuard` + `send_to_session` |
 | the accounted helper omits `enforcer.check`, and the retry overlay's shape is unstated (HIGH, LIKELY) | grok | CONFIRMED at source and repaired. `invoke.rs:1289` refuses with `-32003` before the dispatch is awaited and `src/gateway/input_bridge.rs` names no enforcer at all, so a path extracted from a COUNT OF EMISSIONS would leave every bridged round after the first unmetered. §4 now states the invariant over the whole boundary — gate included — and states what the accounted path does with `retry_params`: merge it as siblings via the existing `OutboundRetry::apply`, and never run `redeem_retry` on a backend's own echoed state |
-| the wait on MIK-7388 has nothing left to wait for (MEDIUM, CERTAIN) | grok | OPEN, unverified. It bears on sequencing, not on correctness, so it does not block the two HIGHs above |
+| the wait on MIK-7388 has nothing left to wait for (MEDIUM, CERTAIN) | grok | OPEN, unverified. It bears on sequencing, not on correctness, so it did not block the two HIGHs, which are now both closed. It is the one finding of round 6 still carrying into round 7 |
 | WIRE.8 should assert elicitation params arrive whole on the production wire; record the invoke-loop as a rejected alternative | grok | the second is already in §4's shape table with its rejection reason. The first is a test-plan change and goes to the test plan, not here |
 
-Two findings left open is the honest state, not an oversight: a finding is a
-lead until it is read at source, and closing one on the reviewer's word is the
-failure this document has already recorded twice. The third — the accounted
-helper — was read at source after the table was first written and moved from
-OPEN to repaired above, which is what the open state is FOR.
+One finding left open is the honest state, not an oversight: a finding is a lead
+until it is read at source, and closing one on the reviewer's word is the failure
+this document has already recorded twice. The other two — the accounted helper
+and the `ClientChannel` layer — were read at source after the table was first
+written and moved from OPEN to repaired above, which is what the open state is
+FOR. Both were confirmed, and both cost an elimination rather than a patch: a
+count of emissions that lost its gate, and an adapter one layer too high.
 
 **Grok's verdict is recorded with a caveat about its own provenance.** The
 ledger row exists with `process_status: ok` and verdict SHIP-WITH-FIXES, but its
