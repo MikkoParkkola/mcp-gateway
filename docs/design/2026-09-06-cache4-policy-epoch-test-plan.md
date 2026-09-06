@@ -132,5 +132,6 @@ payload is a verbatim substring of that revision's file, and of no other revisio
 the plan — checked against every commit that has touched it. That split is the
 whole point of the kimi paragraph above, and an earlier draft of this line collapsed both legs
 onto `6dd1c4fa`, contradicting it two paragraphs apart.
-This verdicts section was appended after both — recomputing either digest from the current file
-will not reproduce it, and that is expected, not drift.
+This verdicts section was appended after both, so rebuilding either payload from the plan as it
+now stands reproduces neither row — expected, not drift. That is a statement about the plan
+file, not about the payloads: the two payload files on disk still hash to their rows exactly.
