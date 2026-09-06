@@ -46,8 +46,10 @@ conditionals on = 17 ceiling. The criterion is violated at the ceiling only.
 ## 2. Constraint
 
 14 floor with 13 base and one unconditional extra is fixed. A ceiling of 16
-permits **at most two conditional tools**. There are three. So exactly one
-conditional tool leaves the enumeration. That is the whole arithmetic.
+permits **at most two conditional tools** in the all-enabled enumeration.
+There are three. So at least one conditional entry must be absent from that
+enumeration. Which entry, and whether it is deleted or merged into another, is
+the selection in section 3 — the arithmetic forces the count, not the choice.
 
 ## 3. Options
 
@@ -79,6 +81,33 @@ produces 17. Clamping or reclassifying leaves the defect describable and merely
 unreachable.
 
 One tool changes, not three. Nothing is renamed, so no client contract moves.
+
+### 4.1 Deleting the entry alone is a security regression
+
+Review finding, verified at source. `MetaToolExposure::is_exposed`
+(`src/gateway/meta_mcp_tool_defs.rs:823`) reads:
+
+```rust
+Some(allowed) => allowed.contains(name) || !governed_meta_tool_names().contains(name),
+```
+
+`governed_meta_tool_names()` is **derived from the builder** with all flags on.
+The right-hand disjunct therefore fails open for any name outside that set, and
+the same predicate gates `tools/call` as well as `tools/list`. Removing
+`gateway_webhook_status` from the builder drops it out of the governed set, so
+`is_exposed` begins returning `true` for it under *every* operator allow-list —
+while the dispatch arm at `src/gateway/meta_mcp/invoke.rs:2879` still serves
+endpoint paths and delivery counts.
+
+A change made to shrink the surface would widen what a restricted client can
+reach. The comment at `meta_mcp_tool_defs.rs:747` records this same escape
+hatch being closed once already for Code Mode's `gateway_execute`; this design
+would reopen it under a different name.
+
+Binding consequence: **the enumeration entry and its dispatch arm leave
+together**, so the name becomes unrecognised rather than merely unlisted. Any
+resolution of question 5 that keeps the handler alive must instead keep the
+name in the governed set. NFR.PERF.4.6 pins the property either way.
 
 ## 5. Out of scope
 
@@ -129,14 +158,32 @@ pinned expectation of a measurement, so it moves whenever the surface does.
 `:265`, `:269` and `:359` spell the same number three ways; all three are
 checked by CI.
 
-### 6.3 Why question 4 does not block the code
+### 6.3 Questions 4 and 5 are deferred, and both block
 
-Finding 1 is correct that `exposed_meta_tools` and Code Mode serve fewer than
-14 tools, and no arrangement of the enumeration can prevent that — an operator
-who exposes one meta-tool gets one. So either the criterion governs the
-unfiltered surface, or it is unsatisfiable as written. Option (e) is the right
-change under the first reading and a necessary part of any change under the
-second, so implementation proceeds; only the AC's wording waits.
+An earlier draft argued implementation could proceed with question 4 open.
+Both reviewers rejected that, correctly: if the band governs every served
+list, the frozen scope — which puts the filtering machinery out — *cannot*
+satisfy the criterion, and the change would be built against an acceptance
+criterion its own scope forecloses. A residual-risk paragraph is not a
+resolution.
+
+Both unknowns therefore carry the four deferral fields, and nothing depending
+on them is implemented:
+
+| field | Q4 — which surfaces the band governs | Q5 — where webhook status goes |
+|---|---|---|
+| owner | operator | operator |
+| what resolves it | a ruling on whether Code Mode and `exposed_meta_tools` surfaces are in the acceptance population | a ruling among fold into `gateway_get_stats`, a new CLI subcommand, or removal with no replacement |
+| when | before implementation; asked 2026-09-06, unanswered | before implementation; asked 2026-09-06, unanswered |
+| if it resolves badly | "every served list" makes the criterion unsatisfiable inside the frozen scope — §P0 reopens and option (e) is insufficient, not merely incomplete | "no replacement" makes this a breaking capability removal under DoR C5, needing recorded approval rather than an inference from a repository search |
+
+Q5's fallback is the sharper one. Section 6.1 establishes that removal is not
+breaking *as a name*; it does not establish that removing the only path to a
+diagnostic is non-breaking *as a capability*. The first draft ran those two
+claims together.
+
+**NFR.PERF.4 is blocked on the operator.** No code is written until both
+rulings land.
 
 ## 7. Assumptions and reversibility (DoR G10, G17)
 
@@ -159,7 +206,8 @@ contract. No ADR required.
 | NFR.PERF.4.2 | the count is measured through `handle_tools_list`, not by re-deriving builder arithmetic | unit |
 | NFR.PERF.4.3 | `public_claims.json` agrees with the measured band and no longer carries `with_webhook_status` | CI drift check |
 | NFR.PERF.4.4 | no model-facing resource text names the removed tool | unit |
-| NFR.PERF.4.5 | serialized schema token count of the surface does not rise | bench assertion |
+| NFR.PERF.4.5 | serialized schema token count of the surface does not rise, measured with the serializer and tokenizer pinned in the test, against the pre-change surface as baseline | bench assertion |
+| NFR.PERF.4.6 | an operator allow-list omitting the removed name **refuses a direct `tools/call`** to it — absence from `tools/list` is not sufficient | unit, the §4.1 regression |
 
 NFR.PERF.4.1 is the case that makes the criterion decidable: it can fail, and
 today it fails at the ceiling. NFR.PERF.4.2 exists because revision 1's whole
