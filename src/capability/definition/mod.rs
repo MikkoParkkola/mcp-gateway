@@ -1113,6 +1113,20 @@ pub fn creates_caller_addressed_external_state(def: &CapabilityDefinition) -> bo
     if def.metadata.read_only {
         return false;
     }
+    // An explicit declaration wins over EVERY inference below, which is why it
+    // is read here rather than further down. Name inference is a fallback, not
+    // the contract: `gws_gmail_watch` registers a Pub/Sub topic, whose
+    // destination is not a URL and whose name is not "webhook", and inference
+    // alone missed it. Read after the inference short-circuits — as it was
+    // until MIK-7262 — the declaration lost to the very heuristics it exists to
+    // overrule: a GET-reached or `properties`-less definition returned `false`
+    // before anyone looked at what its author said.
+    // It stays BELOW `read_only` deliberately: that flag is also an author
+    // declaration, and the older one. Two explicit declarations in conflict
+    // resolve to read-only rather than silently reversing the ruling above.
+    if let Some(declared) = def.metadata.registers_external_callback {
+        return declared;
+    }
     let mutating = def
         .providers
         .named
@@ -1143,14 +1157,6 @@ pub fn creates_caller_addressed_external_state(def: &CapabilityDefinition) -> bo
     // admin would take ordinary tools away from the single-user client for no
     // security gain. What matters is REGISTERING an address the third party
     // will later deliver to.
-    // An explicit declaration wins. Name inference is a fallback, not the
-    // contract: `gws_gmail_watch` registers a Pub/Sub topic, whose destination
-    // is not a URL and whose name is not "webhook", and inference alone missed
-    // it. A capability author can say so instead of hoping the heuristic holds.
-    if let Some(declared) = def.metadata.registers_external_callback {
-        return declared;
-    }
-
     let name = def.name.to_ascii_lowercase();
     let registers_a_callback = ["webhook", "subscribe", "callback", "watch", "notify"]
         .iter()
@@ -1338,6 +1344,48 @@ mod caller_addressed_state_tests {
             "inference alone must flag this, or the test proves nothing"
         );
         d.metadata.registers_external_callback = Some(false);
+        assert!(!creates_caller_addressed_external_state(&d));
+    }
+
+    #[test]
+    fn a_declared_registration_survives_a_non_mutating_method() {
+        // MIK-7262. The declaration used to be read AFTER the method inference
+        // had already returned, so an author who said "this registers a
+        // callback" on a GET-reached capability was silently overruled by the
+        // heuristic the declaration exists to beat.
+        let mut d = named_def(
+            "gws_gmail_watch",
+            "GET",
+            &serde_json::json!({"properties": {"topic": {"type": "string"}}}),
+        );
+        d.metadata.read_only = false;
+        d.metadata.registers_external_callback = Some(true);
+        assert!(creates_caller_addressed_external_state(&d));
+    }
+
+    #[test]
+    fn a_declared_registration_survives_a_schema_without_properties() {
+        // The second short-circuit: a definition whose input carries no
+        // `properties` map bailed out before the declaration was read.
+        let mut d = named_def("gws_gmail_watch", "POST", &serde_json::json!({}));
+        d.metadata.registers_external_callback = Some(true);
+        assert!(creates_caller_addressed_external_state(&d));
+    }
+
+    #[test]
+    fn read_only_still_beats_a_declared_registration() {
+        // Precedence pin (design event, MIK-7262): `read_only` is ALSO an author
+        // declaration, and the older one. Two explicit declarations in conflict
+        // resolve to read-only, so the fix above cannot quietly reverse the
+        // ruling recorded at the top of the function. Without this test the next
+        // refactor re-hoists the callback check and nothing fails.
+        let mut d = named_def(
+            "linear_create_webhook",
+            "POST",
+            &serde_json::json!({"properties": {"url": {"type": "string"}}}),
+        );
+        d.metadata.read_only = true;
+        d.metadata.registers_external_callback = Some(true);
         assert!(!creates_caller_addressed_external_state(&d));
     }
 }
