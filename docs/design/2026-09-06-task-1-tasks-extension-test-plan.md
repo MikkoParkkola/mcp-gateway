@@ -257,6 +257,12 @@ blocks whatever depends on it, and the `TaskStatus` variant list depends on this
 is where the decision becomes irreversible in code, so it does not get written until the
 requester answers. Work elsewhere in TASK.1 is not blocked.
 
+Asked and not yet answered, 2026-09-06: the three readings above were put to the requester
+verbatim, with the consequence of each, and no answer has come back. Recorded because an
+unanswered question and an unasked one look identical in a document a week later, and only one
+of them is a process failure. The position is unchanged until they reply — nothing has been
+decided by their silence, and this row is the evidence that it was not.
+
 ## 9. What this plan does not do
 
 No test code. No verdict trailers — no vendor has reviewed this document, and stamping one would
