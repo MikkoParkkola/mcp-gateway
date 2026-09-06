@@ -316,8 +316,8 @@ advertised and validated. Nothing in the tree advertises one. This axis is upstr
 two: with the automatic derivation already deleted and no advertised carrier, the criterion is
 unsatisfiable as things stand — which is why this axis is decided rather than deferred.
 
-DECIDED 2026-08-31. Asked of the operator, four options put with their costs, answered:
-the key travels in `_meta` on the meta route and an `Idempotency-Key` header on the direct route.
+DECIDED 2026-08-31. Asked of the operator, four options put with their costs, answered
+**`_meta` on both routes** (`RELEASE-4.0.0-operator-decisions.md` row 7).
 An earlier revision recorded this axis as already
 settled by an operator instruction the session record does not contain; that attribution was
 withdrawn and the question re-put. The reasoning below is the design's, the choice is the
@@ -327,12 +327,18 @@ The specification is not silent. `_meta` is the protocol's own field for out-of-
 request, so the meta route carries the key at `params._meta["io.mcp-gateway/idempotency-key"]`.
 That is protocol-native, survives over stdio where a client has no HTTP layer at all, and adds
 nothing to the tool schema, so the compact-surface decision in `CLAUDE.md` is untouched. The
-direct route `POST /mcp/{name}` has no schema to advertise into and is raw JSON-RPC passthrough,
-so it takes the key from an `Idempotency-Key` HTTP header, which is the industry spelling.
+direct route `POST /mcp/{name}` carries the key in the same place, which is new plumbing: it is
+raw JSON-RPC passthrough that forwards the request body without inspecting it, and no client
+sends the field today. That cost was put to the operator with the option and accepted, because
+one carrier on both routes means one extraction site, one validation rule, and one thing for a
+client to learn.
 
 Rejected: an `idempotency_key` tool argument, because it puts a gateway-internal concern into
 every backend tool's advertised surface. Rejected: a header on both routes, because a stdio
-client has no headers and would be left unprotected. Rejected: keeping automatic derivation as a
+client has no headers and would be left unprotected. Rejected: a hybrid — `_meta` on the meta
+route, an `Idempotency-Key` header on the direct route — cheaper to build on the HTTP side and
+the industry spelling there, but it splits the carrier in two and leaves both to maintain.
+Rejected: keeping automatic derivation as a
 fallback, because that would REINSTATE defect P2, already removed from the tree — deriving a key
 for a client that never asked for one silently collapses deliberate repeats for 24 hours. Protection applies when a key is present and never
 otherwise.
@@ -360,7 +366,7 @@ is not the one that filled the entry. Stated in the open-questions table, first 
 | question | how it is settled | state |
 |---|---|---|
 | What is CACHED, as distinct from what carries the key? | DECIDED with Axis 3 and following from it: the stored value is the route-neutral *result*, never a serialised envelope. Each route rebuilds its own reply around it — the direct route with the retrying call's own JSON-RPC id, the meta route with its projection. Caching an envelope would replay the first caller's request id to the second, which a retrying client cannot correlate; and it would let a meta-route-shaped payload be served to a raw passthrough caller. The projection shape is already bound into the key by `projection_key_suffix`, so the two routes cannot collide on one entry. | RESOLVED — overrulable |
-| What carries a retry key, on both routes? | ASKED 2026-08-31, four options put, ANSWERED: `_meta` on the meta route, an `Idempotency-Key` header on the direct route. Rejected in the ask: an HTTP header alone (a stdio client has no HTTP layer, so protection stays unreachable for local setups), `_meta` alone (spec-native and stdio-safe, but the direct route is raw JSON-RPC passthrough needing new plumbing, and no client sends it today), and keeping automatic derivation (ships fastest, keeps P2's silent 24-hour collapse of deliberate repeats). | RESOLVED — hybrid carrier, spelled out in Axis 3; code unblocked |
+| What carries a retry key, on both routes? | ASKED 2026-08-31, four options put, ANSWERED: **`_meta` on both routes** (`RELEASE-4.0.0-operator-decisions.md` row 7). Rejected in the ask: an HTTP header alone (a stdio client has no HTTP layer, so protection stays unreachable for local setups), a hybrid of the two (industry-spelled on the HTTP side, but two carriers to build and two spellings to learn), and keeping automatic derivation (ships fastest, keeps P2's silent 24-hour collapse of deliberate repeats). The chosen option's own cost was stated in the ask and accepted: the direct route is raw JSON-RPC passthrough needing new `_meta` extraction, and no client sends the field today. | RESOLVED — single carrier, spelled out in Axis 3; code unblocked |
 | May an operator disable protection a criterion states as MUST? | DECIDED on the requirement rather than asked: no. A switch makes the criterion unverifiable wherever the running configuration differs from the shipped default. Recorded so it can be overruled, not so it can be confirmed. | RESOLVED — overrulable |
 | Does ADR-008 bear on the direct route's bypass? | CHECKED end to end. It does not; rung 2 is client-native OAuth passthrough. What it does bind is INV-3. CHANGED: the bypass loses its justification and axis 2 gains a placement constraint. | RESOLVED |
 | What capacity bound, and what happens at the bound? | CHECKED `src/config/features/cache.rs:12` and `src/cache.rs:185-204`: bound 10_000, policy evict-oldest. CHANGED: take the number, reject the policy, fail closed. | RESOLVED |
