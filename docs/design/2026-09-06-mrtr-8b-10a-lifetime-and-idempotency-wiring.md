@@ -331,8 +331,10 @@ dying with this section:
 > digest of `(tool, canonical arguments)` (`src/idempotency.rs:440-443`), and the only other
 > ingredient — the retry discriminator concatenated after it — is itself either empty or
 > `|mrtr:` plus a fixed 64-hex digest of the responses and request state
-> (`src/protocol/mrtr.rs:182-195`). Both halves are fixed-width and hashed, so a principal appended
-> to that pair has no variable-length client-controlled prefix to hide in. That second half is the
+> (`src/protocol/mrtr.rs:182-195`). No free-form client bytes reach either half — each is a hashed
+> digest or nothing at all — so a principal appended to that pair has no client-controlled prefix to
+> hide in. The property is the absence of raw client input, not the width: an appended field that
+> happened to be fixed-width but client-authored would reopen this. That second half is the
 > load-bearing one: it sits exactly where R6's spoofable client key sits, and had it been free-form
 > the fingerprint route would carry all three constraints too.
 >
@@ -340,9 +342,13 @@ dying with this section:
 > disagrees, and `admit` returns `AdmitOutcome::Mismatch` (`src/idempotency.rs:270`), which
 > `enforce` turns into a 409 (`src/idempotency.rs:583`) — the second honest caller is denied
 > rather than given its own entry. `matches` short-circuits true on an empty stored fingerprint
-> (`:130-131`), but not here: `idem_fingerprint` is `Some` exactly when `idem_key` is, and
-> `enforce` is reached only when both are (`invoke.rs:1174-1177`), so the empty case is unreachable
-> on this path and does not soften the refusal. Binding the KEY separates the two callers; binding
+> (`:130-131`) — the field on the ENTRY, written by whoever created it, not the argument being
+> compared — so the refusal survives only if no entry can carry an empty one. None can: `admit` is
+> the only writer and has exactly one call site, inside `enforce` (`src/idempotency.rs:573`), whose
+> only non-test caller is `invoke.rs:1177`, reached solely under `if let (Some, Some, Some)`
+> (`:1174-1177`). Every fingerprint stored on this cache is therefore a SHA-256 digest plus the
+> discriminator, never empty, and the short-circuit is unreachable for every entry rather than
+> merely bypassed on this path. Binding the KEY separates the two callers; binding
 > only the fingerprint collides them and then declines. That is why the repair goes to `identity_suffix`
 > even though the fingerprint is the cheaper edit.
 >
