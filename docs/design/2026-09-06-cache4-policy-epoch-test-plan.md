@@ -59,3 +59,30 @@ not "4b met".**
 5. Then the implementation.
 
 4.d is a read. Nothing is written for 4.f.2/4.f.3.
+
+## §P2 plan review — verdicts
+
+Dual-vendor, adversarial, on identical material: the plan above plus the review instructions.
+Round 1 findings were repaired one commit per finding; each vendor then re-checked **its own**
+findings (repair protocol step 6 — closure returns to the finder, never to the other vendor).
+
+| leg | vendor | round 1 | closure | reconciled by |
+|---|---|---|---|---|
+| 1 | Kimi | 3 findings | **SHIP** | payload digest `1625260010763a577be63f82fb21a4ff332bca687cb36ce7b3ab6e7d8905308d` (39,525 B), exact |
+| 2 | Grok | 1 finding | see below | scope string + `head` + response body — **not** by digest |
+
+**Why leg 2 cannot reconcile by digest.** The grok wrapper prepends repository context to the
+submitted material before hashing, so its ledger `material_sha256` covers payload *plus* context
+and can never equal the payload digest computed here (`b7b48ac4f63d4058ba9f6c8ba7a14580b7bd0326775c6c5c63dcf90f2d9f7d6b`,
+18,259 B). Matching is by the wrapper-recorded `scope` field —
+`CACHE.4 policy-epoch test plan — confirmation pass round 1` — cross-checked against `head`.
+A row whose `head` and `head_live` differ read a worktree that moved mid-review and is **not**
+accepted, whatever its verdict string says; this branch is shared with another session that
+committed three times in four minutes during round 1.
+
+**Kimi's SHIP is against the pre-repair text, and it holds.** It was issued at `84618a2e`,
+before the 4.f.1 cell gained its cache-handle clause. Its three findings were 4.f.1's
+writer-order sentence, 4.g's third invoke, and the five-step order of work. The later repair is
+additive within a *different* clause of 4.f.1 and touches none of the three. Re-firing kimi
+would buy a round and no information.
+
