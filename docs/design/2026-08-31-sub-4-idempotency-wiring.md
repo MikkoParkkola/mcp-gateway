@@ -237,16 +237,14 @@ not before.
   one caller's stored result is never served to another under the same client key") and is
   therefore a stale comment to fix in the same commit as the mechanism.
 
-  Axis 4 discharges this at the derivation site rather than in the format string: the spoof needs
-  an attacker whose own `identity_suffix` is empty, and that is exactly the caller Axis 4 refuses.
-  The raw append remains a real defect in `idempotency_key_for` and stays tracked on MIK-7408 as
-  defence in depth — a second control on a function that will outlive this design's refusal — but
-  activation no longer waits on it. What activation waits on is Axis 4 being implemented as
-  decided; relax that refusal and this bullet is live again.
-  Consequence for the SUB.4 design, not a separate ticket: whatever fixes P8 must ALSO make the
-  suffix unspellable — hash it as `response_key` does, length-prefix it, or move the client-supplied
-  key to the tail. Landing P8's fallback chain while the append stays raw reintroduces the exact
-  class the response cache hashes to prevent.
+  Axis 4 bounds this at the derivation site rather than in the format string: the spoof needs an
+  attacker whose own `identity_suffix` is empty, and that is exactly the caller Axis 4 refuses. The
+  raw append remains a real defect in `idempotency_key_for` — a function that will outlive this
+  design's refusal — and is tracked on MIK-7408 with the three repair options: hash the suffix as
+  `response_key` does, length-prefix it, or move the client-supplied key to the tail. Whether P8's
+  fallback chain may land while the append is still raw is the one question MIK-7408 puts to a
+  human, and this design answers it in neither direction. What this design does assert is narrower:
+  relax Axis 4 to admit an unbound keyed caller and the spoof is live again, P8 or no P8.
   R6's disposal is the second of §P0's four — *write it into the design* — and this bullet is it,
   riding this document's rev-5 review rather than a round of its own. Whether it ALSO warrants a
   ticket is the team lead's call, put to them 2026-09-06 and unanswered as this is written. That
@@ -430,4 +428,3 @@ constraints on *this* plan because this is the change that activates the cache.
 |---|---|---|
 | cross-principal binding (P8/P9) | two *different* authenticated callers issue the same tool, same arguments and the same key string, with identity propagation OFF; the second must execute rather than receive the first's stored response | `identity_suffix` is empty at that default, so both callers derive the same *key* (`support.rs:43`); `admit` looks the entry up by key (`idempotency.rs:256`) and `matches` (`:130-131`) then compares fingerprints, which are identical because the two calls genuinely are the same `(server, tool, arguments)` — so it returns `AdmitOutcome::Completed` and replays |
 | unresolvable principal under a client key (R5 / Axis 4) | on a non-`required` propagation backend, a caller with neither a `cache_binding` nor a stable actor id sends a client key for a `destructiveHint` tool; the call must be REFUSED — neither executed unprotected nor admitted under an unbound key | no key is derived at all (`idempotency_cache` is `None`), so the call executes unprotected and the criterion's MUST fails silently. That silent branch is the whole reason Axis 4 decides rather than defers: without this row the decision is a paragraph, and a paragraph cannot go red |
-| suffix unspellability (R6's repair constraint, under Axis 4) | two callers with DIFFERENT resolvable principals: the attacker sends client key `X|idp:<the victim's binding>` while the victim sends `X`; the two must derive different keys, so the attacker is never served the victim's stored result | Axis 4 changes what this row can test, and that change is the finding. The raw append `format!("{key}{projection_key_suffix}{identity_suffix}")` collides only when the attacker's own `identity_suffix` is EMPTY — with both principals resolvable the appended suffixes differ and the spelling cannot land. The empty-suffix population is exactly the one Axis 4 REFUSES at the derivation site, so R6's cross-principal spoof is discharged by that refusal rather than by a length prefix. The row is therefore a regression guard on the refusal, not on the framing: it goes red if Axis 4 is ever relaxed to admit an unbound keyed caller, which is the one change that would revive the spoof. P8's fallback chain may land while the append stays raw, because the chain resolves MORE principals and Axis 4 refuses whatever it still cannot resolve |
