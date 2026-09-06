@@ -254,3 +254,115 @@ async fn a_legacy_peer_still_gets_the_handshake_version_and_no_meta() {
         wire.body
     );
 }
+
+/// A modern peer that hands out a session and then expires it once.
+///
+/// The expiry is what re-enters `initialize()` (`src/transport/http/mod.rs`
+/// session-expiry retry): the era cache is already `Modern` by then, which is
+/// the only state in which the handshake's era-shaping can be observed. A
+/// fixture that primed the era could not produce this ordering, because the
+/// re-handshake has to follow a *resolved* probe, not a planted verdict.
+async fn spawn_expiring_peer() -> (String, Recorder) {
+    let recorder: Recorder = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&recorder);
+    let expired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::post(
+            move |headers: HeaderMap, axum::Json(request): axum::Json<Value>| {
+                let sink = Arc::clone(&sink);
+                let expired = Arc::clone(&expired);
+                async move {
+                    let method = request
+                        .get("method")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    sink.lock().expect("recorder poisoned").push(Wire {
+                        method: method.clone(),
+                        headers,
+                        body: request.clone(),
+                    });
+                    let mut out = HeaderMap::new();
+                    if method == "initialize" {
+                        out.insert("Mcp-Session-Id", "s1".parse().expect("ascii"));
+                    }
+                    // The first ordinary request expires the session; the
+                    // retry after the fresh handshake succeeds.
+                    if method == "tools/list"
+                        && !expired.swap(true, std::sync::atomic::Ordering::SeqCst)
+                    {
+                        let id = request.get("id").cloned().unwrap_or(Value::Null);
+                        return (
+                            out,
+                            axum::Json(json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "error": { "code": -32015, "message": "session not found" }
+                            })),
+                        );
+                    }
+                    (out, axum::Json(answer(Peer::Modern, &request)))
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("the fixture peer must get a port");
+    let url = format!("http://{}/", listener.local_addr().expect("bound address"));
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (url, recorder)
+}
+
+/// MIK-7214.HEADER.9a — the handshake stays legacy-shaped whatever the era.
+///
+/// The doc comment on `ordinary_request` asserts this in prose and no case
+/// tested it: `initialize` reaches the peer through `send_request`, which
+/// refuses the era by construction, but its `notifications/initialized`
+/// travelled through the ordinary `notify` path. On a first start that reads
+/// legacy only because the probe has not landed yet — on a re-handshake it is
+/// a 2026 notification sent to a peer we are still introducing ourselves to.
+#[tokio::test]
+async fn a_reinitialize_keeps_the_initialized_notification_legacy_shaped() {
+    let (url, recorder) = spawn_expiring_peer().await;
+    let backend = backend_at(&url);
+    backend
+        .request("tools/list", None)
+        .await
+        .expect("the retry after the fresh handshake succeeds");
+    let seen = recorder.lock().expect("recorder poisoned").clone();
+
+    let handshakes: Vec<&Wire> = seen
+        .iter()
+        .filter(|wire| wire.method == "notifications/initialized")
+        .collect();
+    assert!(
+        handshakes.len() >= 2,
+        "the session-expiry retry must have re-run the handshake; saw {:?}",
+        seen.iter().map(|w| &w.method).collect::<Vec<_>>()
+    );
+    let modern_request = seen
+        .iter()
+        .any(|wire| wire.method == "tools/list" && wire.body["params"].get("_meta").is_some());
+    assert!(
+        modern_request,
+        "the era must be resolved Modern by the retry, or this case proves nothing"
+    );
+
+    let reinit = handshakes.last().expect("checked above");
+    assert_eq!(
+        header(reinit, "MCP-Protocol-Version"),
+        PROTOCOL_VERSION,
+        "the handshake notification is part of the handshake and must stay \
+         legacy-shaped, the same way `initialize` itself does"
+    );
+    assert!(
+        reinit.body.get("params").is_none()
+            || reinit.body["params"].get("_meta").is_none(),
+        "a handshake notification must not carry a 2026 envelope; it sent {}",
+        reinit.body
+    );
+}
