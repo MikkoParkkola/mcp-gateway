@@ -12,6 +12,18 @@ state is stale the moment a leg returns, and it was, twice.
 | 2 | grok | SHIP-WITH-FIXES | `7462c16f…` | 15822 | 08:25:19Z |
 | 3 | glm-5.3 | SHIP-WITH-FIXES | `a0888c5a…` | 26954 | 08:52:20Z |
 | 3 | grok | SHIP-WITH-FIXES | `a0888c5a…` | 26954 | 08:56:18Z |
+| 3c | grok — closure re-check | **SHIP** | `0ea50eb2…` | 56223 | 09:13:55Z |
+
+Row 3c is the closure re-check, and it goes to GROK because grok raised the round-3
+findings. The repair protocol sends closure back to the FINDER, not to a fresh vendor: a
+vendor that never raised a finding judges its materiality on its own line and re-opens what
+it never asked about, which is a round generator inside the closure rule. Narrow mandate,
+repair commits only, and it returned SHIP — round-3 F1 (interval, clock origin, successor
+rule), F2 (Q1 DEFERRED with its four fields) and F3 (the C6 STRIDE table) are CLOSED. Three
+residuals came back with it, all verified at source before repair and all repaired in the
+commit that carries this row: the STRIDE spoofing row named the wrong error variant, the
+startup key had no clock to be stamped from, and the no-successor fallback was justified by
+an operator reload that round 2 deleted.
 
 Keyed on `material_sha256` rather than on the ledger's `head`: `head` pins the branch tip at run
 time and this branch is shared, so every row above carries a `head` belonging to some other
@@ -316,6 +328,14 @@ clock, injected, testable by passing a different instant. A key stamped from any
 reintroduces the split this revision removed, and it would do so invisibly, because both
 clocks agree until they do not.
 
+The startup key is the one case with no `now` to be stamped from: `ContinuationState::new`
+(`continuation.rs:823`) builds it from the RNG at process start, and keeping `Keyring::new`
+clockless is the whole point. So its `created_at` is stamped by the FIRST MINT, from that
+mint's `issued_at`, BEFORE the age check runs. The alternative is a missing stamp read as
+zero, under which the first mint sees an infinitely old key and rotates a key that has never
+sealed anything — a fresh replica burning a kid on its first request, for nothing. One
+`Option` and one order of operations, not a mechanism.
+
 The SUCCESSOR RULE is the other half of that schedule, and naming the interval without it
 would leave the arithmetic below open to two readings: the new kid is always
 `minting_kid.wrapping_add(1)`, NEVER the lowest free slot. One clause, and it is what makes
@@ -344,8 +364,11 @@ rotations. Decided rather than left open, because the successor rule and the int
 together make that distance knowable — a kid comes back only long after its previous holder
 was dropped, and a dropped key's envelopes can no longer open. A rotation whose successor
 kid is somehow still live does NOT fail its caller: it logs and keeps the current minting
-key. Rotation is a hygiene operation, and failing an operator's reload because key hygiene
-could not run is a worse outcome than skipping one rotation.
+key. The caller is `mint` — reload was dropped as a trigger in round 2, so justifying the
+fallback by an operator's reload would be justifying it by a caller that no longer exists.
+Rotation is a hygiene operation riding on a mint, and failing that mint — refusing a
+continuation handle a user is waiting on — because key hygiene could not run is a worse
+outcome than skipping one rotation.
 
 Rotation emits one log line — old kid, new kid, retained-key count. It named the trigger
 until round 3 pointed out that every trigger had been deleted: the field's only honest value
@@ -387,7 +410,7 @@ Rotation changes the LIFETIME of key material and nothing about the primitive.
 
 | class | does rotation change it | mitigation |
 |---|---|---|
-| Spoofing | yes | a forged or replayed kid resolves to a key that is gone or never existed; `open` refuses `NotAuthentic` at `:489` before any payload is read |
+| Spoofing | yes | a forged or replayed kid resolves to a key that is gone or never existed; `open` refuses `UnknownKey` at `:489` (from `key()`, `:524-530`) before any payload is read. A LIVE kid presented under the wrong key is the other case and answers `NotAuthentic` at `:501`, from the AEAD tag. Two variants, two causes — a spoofing test written from the wrong one asserts nothing, and the NFR.SEC.4 tests already pin `UnknownKey` |
 | Tampering | no | AEAD over the payload with the kid in the AAD; a rewritten kid fails the tag, it does not select a different key quietly |
 | Repudiation | yes, improved | the rotation log line (old kid, new kid, retained count) is what makes a key ceremony auditable; without it a `NotAuthentic` cluster has no correlating event |
 | Information disclosure | no | nothing new is written to the envelope; `expires_at` was already inside the sealed payload and stays there |
