@@ -14,11 +14,11 @@ Criterion (`docs/requirements/RELEASE-4.0.0-criteria-status.md:160`, status ABSE
 
 ## 0. This note overturns a recorded decision
 
-`docs/requirements/RELEASE-4.0.0-dod-check.md:557-584` records the opposite disposition —
+`docs/requirements/RELEASE-4.0.0-dod-check.md:829-858` records the opposite disposition —
 "4.0.0 does not advertise the tasks extension" — put to the operator, unanswered inside the
 window, and written down as the decision with the sentence "One line overturns it."
 
-The operator's full-scope direction on 2026-08-31 is that line. `RELEASE-4.0.0-plan.md:110-112`
+The operator's full-scope direction on 2026-08-31 is that line. `RELEASE-4.0.0-plan.md:605-606`
 already carries the overturn; `dod-check.md` does not. Two status documents in the tree
 disagree until that is fixed, and this note may only write one path.
 
@@ -107,6 +107,11 @@ Five pieces, in dependency order.
    that gate rather than inventing a second one. A new store designed independently of cluster
    A's would be two mechanisms deciding the same thing.
 
+   *Amended by §11.2 (gpt, HIGH): this piece states no admission bound, and the schema permits
+   `ttlMs: null`. The store needs a finite default TTL, a global active-task cap and a
+   per-principal cap, all enforced **before** the backend call starts — the extension is what
+   makes an authenticated flood cheap. Do not implement from this paragraph alone.*
+
 3. **Capability gating is wiring, not construction.** `KEY_CLIENT_CAPABILITIES`
    (`meta.rs:44`), `classify_request` (`meta.rs:117`) and `ExtensionSet::from_capabilities`
    already read the per-request `_meta` envelope. The spec's MUST — never return a
@@ -115,8 +120,16 @@ Five pieces, in dependency order.
    performs. Non-declaring client, task-only path: `MISSING_REQUIRED_CLIENT_CAPABILITY` with
    `data.requiredCapabilities.extensions["io.modelcontextprotocol/tasks"]`.
 
+   *Amended by §11.2 (gpt, MEDIUM): the gate is per **request**, not per method-family. This
+   piece as written gates task **creation** and says nothing about `subscriptions/listen`
+   carrying `taskIds`. Any request whose params reach into the tasks extension is gated, that one
+   included. Do not implement from this paragraph alone.*
+
 4. **Method registration.** `ADDED_IN_2026_07_28` gains `tasks/cancel` and
-   `notifications/tasks`; `handlers.rs` gains the four arms;
+   `notifications/tasks`; `handlers.rs` gains **three inbound arms** — `tasks/get|update|cancel`.
+   `notifications/tasks` is server-to-client and is emitted by the §5 subscription emitter, not
+   dispatched as a fourth arm (corrected 2026-09-06, §11.3: an earlier revision said "the four
+   arms" and would have sent an implementer looking for an inbound handler that must not exist);
    `mcp_name_body_field` gains three entries mirroring `taskId`.
 
 5. **Declaration.** *Corrected after designB2's EXT.1 note
@@ -141,21 +154,19 @@ Five pieces, in dependency order.
    `gateway_declares()` from the handshake. An implementer reading the superseded paragraph would
    have built a second declaration path and could have advertised the extension while the
    honouring list stayed empty — which is the precise failure `implemented_extensions()` exists
-   to prevent. That note gives the builder's path as
-   `src/gateway/meta_mcp/meta_mcp_helpers.rs:144`; the file is at
-   `src/gateway/meta_mcp_helpers.rs:144`, a sibling of the `meta_mcp/` directory rather than a
-   member of it. The claim it carries survives the correction, and was checked here rather than
-   taken: `rg -n 'build_initialize_result\(' src/` finds two production callers,
-   `handle_initialize` (`src/gateway/meta_mcp/mod.rs:1084`) and `discover_document`
-   (`:1003`), and discovery emits `"capabilities": handshake.capabilities` (`:1037`) — the whole
-   struct, serialised as it stands. So one populate does reach both surfaces, and the second
+   to prevent.
+
+   That one edit reaches both handshake surfaces, checked here rather than taken:
+   `rg -n 'build_initialize_result\(' src/` finds two production callers — `handle_initialize`
+   (`src/gateway/meta_mcp/mod.rs:1204`) and `discover_document` (`:1119`) — and discovery emits
+   `"capabilities": handshake.capabilities` (`:1153`), the whole struct as it stands. So the
+   single `build_server_capabilities(implemented_extensions())` call at
+   `meta_mcp_helpers.rs:190` serves `initialize` and `server/discover` alike, and the second
    surface needs no code of its own.
 
-   One detail the seam has to carry: the builder sets four capabilities explicitly and closes with
-   `..Default::default()`. A new `extensions` field therefore arrives as its default on every
-   response until EXT.1 assigns it there. **TASK.1 consumes that seam and does not restate it.**
-   One seam, two consumers: EXT.1 owns the field and the call site, TASK.1 supplies the entry
-   `io.modelcontextprotocol/tasks`. Neither closes alone, and TASK.1 does not need a second site.
+   One seam, two consumers, and EXT.1 has closed its half: it owned the field and the call site,
+   TASK.1 supplies the entry `io.modelcontextprotocol/tasks` to `implemented_extensions()`.
+   TASK.1 does not need a second site.
 
 ### The two non-spec tasks capability structs
 
@@ -195,6 +206,12 @@ its answer.
    retrieval methods compare the caller's principal against it before answering — returning the
    same not-found shape either way, because a distinguishable "exists but forbidden" turns an
    authorisation check back into an enumeration oracle.
+
+   *Amended by §11.2 (gpt, CRITICAL): "the three retrieval methods" is not the whole surface.
+   Subscription **admission** is a task-related request too, and this piece does not cover it. A
+   `subscriptions/listen` whose `taskIds` name another principal's task must be refused exactly
+   as an unknown id is, and the acknowledgement MUST NOT echo it back. Do not implement from this
+   paragraph alone.*
 
    The principal is the one cluster E is making authoritative (`principal_window.rs`,
    `tenant_guard.rs` under the firewall module; TENANT.1: "keyed on authenticated principal, not
@@ -257,6 +274,13 @@ identical call resolves to the same `taskId` and the backend runs once. One stru
 the second cannot disagree with it because it is not asked. This is elimination, not a check
 that detects the disagreement.
 
+*Amended by §11.2 (gpt, CRITICAL): the secondary index as written above has no principal term
+and no client-key condition, so two tenants issuing the same call would share a handle and a
+deliberate keyless repeat would be silently collapsed. The key is
+`(authenticated principal, request fingerprint)` and it applies **only** when the client supplied
+an idempotency key; a keyless repeat gets a new task. Do not implement from the paragraph above
+alone.*
+
 The existing guards need no change, and that is a verified result rather than a hope:
 `ResponseCache::set` and `IdempotencyCache::mark_completed` both gate on `is_final`, and
 `result_type_of` returns `"task"`, so a `CreateTaskResult` cannot enter either. The change is
@@ -278,6 +302,15 @@ is not a TASK.1 detail bolted on later: `subscriptions/listen` with `taskIds` pr
 task-scoped stream and carries `notifications/tasks` only. SUB.2's design owns request-
 scoped notification routing; this is a constraint on it, recorded here because TASK.1 is what
 makes it reachable.
+
+*Amended by §11.2: this section specifies what the stream **emits** and nothing about who may
+open it. Two gates are missing here and must land with it. First, admission is authorised against
+the task's owner, so a `taskIds` entry naming another principal's task is refused exactly as an
+unknown id is, and the acknowledgement MUST NOT echo it back (gpt, CRITICAL). Second, a
+`subscriptions/listen` carrying `taskIds` from a client that did not declare the extension **on
+that request** gets `MISSING_REQUIRED_CLIENT_CAPABILITY` (gpt, MEDIUM). Without the first, a
+caller who guesses an id has the full status and result pushed to them — the leak AC `.11` was
+written for, through a door AC `.11` does not cover.*
 
 ## 6. Unknowns
 
@@ -330,7 +363,7 @@ decision without being scheduled, which is an assumption with better manners. Sc
 
 | open question | owner | what would resolve it | when | if it resolves badly |
 |---|---|---|---|---|
-| Whether `ServerTasksCapability` and `ClientTasksCapability` are retired. Kept for now: no readers, so they cost nothing, and deleting a public wire type is an API break this release has no reason to take | team lead | an operator answer on whether clients speaking the 2025-11-25 `tasks` shape are still served | when NFR.COMPAT.1 is audited. `docs/requirements/RELEASE-4.0.0-requirements.md:210` already requires that 2025-11-25 be served, which settles that such clients exist but not that these two structs serve them, since nothing reads either | deletion becomes a separate API-break change carrying its own migration note, not a line in this one. Nothing here waits on it: TASK.1 reads neither type, so this design is correct under either answer |
+| Whether `ServerTasksCapability` and `ClientTasksCapability` are retired. Kept for now: no readers, so they cost nothing, and deleting a public wire type is an API break this release has no reason to take | team lead | an operator answer on whether clients speaking the 2025-11-25 `tasks` shape are still served | when NFR.COMPAT.1 is audited. `docs/requirements/RELEASE-4.0.0-requirements.md:261` (NFR.COMPAT.1) already requires that 2025-11-25 be served, which settles that such clients exist but not that these two structs serve them, since nothing reads either | deletion becomes a separate API-break change carrying its own migration note, not a line in this one. Nothing here waits on it: TASK.1 reads neither type, so this design is correct under either answer |
 | Where the task store lives when the gateway runs multi-replica. | cluster A (MIK-7212), via the shared insert-if-absent store `dod-check.md` finding #1 already gates BEFORE-PRODUCTION | cluster A landing a shared ledger this can reuse | before production, not before merge | single-replica-only tasks: a `tasks/get` routed to another replica reports the task as missing while it is running. Same failure the continuation ledger has, same gate, deliberately not a second design |
 
 ## 7. MIK-7311 — reconciled, not routed around
@@ -355,15 +388,15 @@ go green against any stub — that is stated, not papered over.
 |---|---|---|---|---|
 | `MIK-7272.TASK.1.1` | a task-augmented `tools/call` from a declaring client returns `CreateTaskResult` with `resultType: "task"` and a `taskId` that `tasks/get` already resolves | integration: call, then `tasks/get` the returned id in the same test before any status change | integration | **No — vacuous until the dispatcher exists.** No arm in `handlers.rs`, so the case is red for absence, not for behaviour. Any stub returning a task passes it. Stated as the finding. |
 | `MIK-7272.TASK.1.2` | `tasks/get` returns the per-status shape: `working`, `input_required` + `inputRequests`, `completed` + `result`, `cancelled`, `failed` + `error` | unit over the five `TaskStatus` variants' serialisation | unit | **Yes, partially, and for a real reason.** `tasks.rs` has three of five statuses; `input_required` and `cancelled` do not exist, so the case fails to compile against today's enum. The three that exist would pass. |
-| `MIK-7272.TASK.1.3` | `tasks/update` is accepted and advances `lastUpdatedAt` | unit on the store's update path | unit | **No — vacuous twice over.** `lastUpdatedAt` does not exist on `Task` (fails to compile, so it is red) *and* nothing dispatches `tasks/update`. The compile failure is real; the behaviour is not yet observable. |
+| `MIK-7272.TASK.1.3` | `tasks/update` is accepted and advances `lastUpdatedAt` | unit on the store's update path | unit | **No — vacuous twice over.** `lastUpdatedAt` does not exist on `Task` (fails to compile, so it is red) *and* nothing dispatches `tasks/update`. The compile failure is real; the behaviour is not yet observable. **Amended by §11.2 (grok, MEDIUM): a timestamp bump is not the criterion. `tasks/update` MUST refuse `inputResponses` keys that match no outstanding input request — and with `input_required` out of scope there are never outstanding keys, so any non-empty map is refused. The row also gains the empty `resultType: "complete"` acknowledgement shape and the cooperative, eventually-consistent cancel licence.** |
 | `MIK-7272.TASK.1.4` | a client that does not declare the extension **on that request** never receives a `CreateTaskResult`, and gets `MISSING_REQUIRED_CLIENT_CAPABILITY` carrying `data.requiredCapabilities.extensions["io.modelcontextprotocol/tasks"]` — even if it declared on an earlier request | integration: declare on request 1, omit on request 2, assert request 2 is the error and not a task | integration | **Yes — this is the row that catches a stub.** A dispatcher that returns tasks unconditionally passes 1.1 and fails this. It asserts the constant from `era.rs:40`, which the pinned 2026-07-28 text confirms, so the number is settled rather than deferred. |
 | `MIK-7272.TASK.1.5` | a 2025-era peer calling `tasks/cancel` is refused `-32601` by the era gate | unit on `ADDED_IN_2026_07_28` membership, plus a router case through `handlers.rs:828` | unit + integration | **Yes, red now, for a real reason.** `meta.rs:247` does not list `tasks/cancel`, so the gate lets it through today. Independent of the dispatcher — it is a list-membership assertion. |
 | `MIK-7272.TASK.1.6` | a `failed` task carries the JSON-RPC `error` **object**; a tool result with `isError: true` is `completed` with `result`, never `failed` | unit: construct both, assert the serialised shapes | unit | **Yes, red now, for a real reason.** `tasks.rs:37` is `error: Option<String>`; an object cannot be represented, so the first half fails to compile. The second half is a classification assertion that has no implementation to agree with it. |
 | `MIK-7272.TASK.1.7` | `Mcp-Name` on `tasks/get\|update\|cancel` mirrors `params.taskId` | unit on `mcp_name_body_field` for the three methods | unit | **Yes, red now, for a real reason.** `headers.rs:36-52` returns `None` for all three ("exactly these three" methods), so the case fails on today's code with no dispatcher involved. |
-| `MIK-7272.TASK.1.8` | a retried identical task-augmented call returns the **same** `taskId` and runs the backend **once**; the `CreateTaskResult` is never written to the response cache and never marked idempotency-completed | integration with `config.cache.enabled = false` and a mutation counter on the mock tool; assert the counter is 1 and both responses carry the same `taskId` | integration | **Yes for the guards, no for the dedupe.** The two guard halves are falsifiable against the existing `is_final` gates today. The same-`taskId` half needs the store. Fixture rule is binding: the response cache is written at `invoke.rs:1291`, after the backend result and before the client stream, so a fixture that leaves it enabled passes vacuously — assert the counter, never the body. |
+| `MIK-7272.TASK.1.8` | a retried identical task-augmented call returns the **same** `taskId` and runs the backend **once**; the `CreateTaskResult` is never written to the response cache and never marked idempotency-completed | integration with `config.cache.enabled = false` and a mutation counter on the mock tool; assert the counter is 1 and both responses carry the same `taskId` | integration | **Yes for the guards, no for the dedupe.** The two guard halves are falsifiable against the existing `is_final` gates today. The same-`taskId` half needs the store. Fixture rule is binding: the response cache is written at `invoke.rs:1291`, after the backend result and before the client stream, so a fixture that leaves it enabled passes vacuously — assert the counter, never the body. **Amended by §11.2: the dedupe key is `(authenticated principal, request fingerprint)` and applies only when the client supplied an idempotency key; a keyless repeat gets a new task. This row's assertion changes with it.** |
 | `MIK-7272.TASK.1.9` | a `subscriptions/listen` carrying `taskIds` emits `notifications/tasks` and no `notifications/progress` or `notifications/message` | integration: drive a task that would emit progress, read the stream | integration | **No — vacuous until both TASK.1 and SUB.2 land.** Nothing emits task notifications, so an empty stream passes. Recorded as a constraint on SUB.2 (§5) so it is not discovered late. |
-| `MIK-7272.TASK.1.11` | a retrieval call naming a task created by a different principal is answered as not-found, identically to a `taskId` that never existed | integration: create as principal A, retrieve as principal B, assert the response is byte-identical to retrieving an unknown id as B | integration | **No — vacuous until the dispatcher exists**, and it is the row most likely to be dropped as a nicety. Recorded here so the authorisation check lands with the dispatcher rather than after a review round. The byte-identical half is what makes it a test rather than a sentiment. |
-| `MIK-7272.TASK.1.10` | the capabilities EXT.1 builds advertise `extensions["io.modelcontextprotocol/tasks"] = {}`, on both `initialize` and `server/discover` | unit on `gateway_declares()` output, plus EXT.1's discovery integration case | unit | **No, and only the honouring half is TASK.1's to close** (revised 2026-09-06, §11: the field and the populate path have landed; inserting the entry into `implemented_extensions()` has not). `gateway_declares()` already returns the entry (`extensions.rs:52-56`); the unit case is green today. It cannot go red until EXT.1 adds `extensions` to `ServerCapabilities` and populates it in `build_initialize_result` — the field does not exist yet, so this is blocked on a struct change, not on a caller. Listed so the split is visible, not to claim it. |
+| `MIK-7272.TASK.1.11` | a retrieval call naming a task created by a different principal is answered as not-found, identically to a `taskId` that never existed | integration: create as principal A, retrieve as principal B, assert the response is byte-identical to retrieving an unknown id as B | integration | **No — vacuous until the dispatcher exists**, and it is the row most likely to be dropped as a nicety. Recorded here so the authorisation check lands with the dispatcher rather than after a review round. The byte-identical half is what makes it a test rather than a sentiment. **Amended by §11.2: this row covers *retrieval* only. Subscription admission (`subscriptions/listen` carrying `taskIds`) is NOT covered here and must be added before this criterion is implemented.** |
+| `MIK-7272.TASK.1.10` | the capabilities EXT.1 builds advertise `extensions["io.modelcontextprotocol/tasks"] = {}`, on both `initialize` and `server/discover` | unit on `gateway_declares()` output, plus EXT.1's discovery integration case | unit | **No, and only the honouring half is TASK.1's to close** (revised 2026-09-06, §11: the field and the populate path have landed; inserting the entry into `implemented_extensions()` has not). `gateway_declares()` already returns the entry (`extensions.rs:52-56`); the unit case is green today. Those two landed at `types.rs:255-256` and `meta_mcp_helpers.rs:190`; what is left is the honouring entry: this row goes red the moment it asserts the served `initialize`/`server/discover` capabilities carry the identifier, because `implemented_extensions()` (`:147-150`) is still empty. That insert IS TASK.1's. Listed so the split is visible. |
 
 Five rows out of eleven cannot fail for a behavioural reason today. That is the finding: TASK.1 is
 mostly new surface, and the tests that constrain it are the five that assert against *existing*
@@ -423,7 +456,7 @@ it records the shape the spec forbids, so it is rewritten rather than kept or de
 
 ## 9. Documents this change makes untrue
 
-- `docs/requirements/RELEASE-4.0.0-dod-check.md:557-584` — scheduled in §0.
+- `docs/requirements/RELEASE-4.0.0-dod-check.md:829-858` — scheduled in §0.
 - `docs/requirements/RELEASE-4.0.0-criteria-status.md:160` — TASK.1 moves off ABSENT when the
   implementation lands, not when this note lands.
 - `src/protocol/extensions.rs:52-56` — the gap count in the doc comment is wrong (§2), and the
@@ -527,8 +560,8 @@ MUST, the cooperative-cancel licence) belong in the test plan when AC `.3` is wr
 ### 10.4 Verdict — the disposition already recorded stands; this session did not reopen it
 
 **The feasibility question was already decided, and not by this design.** §0 records the operator's
-full-scope direction of 2026-08-31, which overturned `dod-check.md:557-584`'s "4.0.0 does not
-advertise the tasks extension". `RELEASE-4.0.0-plan.md:110-112` carries the overturn. Re-issuing a
+full-scope direction of 2026-08-31, which overturned `dod-check.md:829-858`'s "4.0.0 does not
+advertise the tasks extension". `RELEASE-4.0.0-plan.md:605-606` carries the overturn. Re-issuing a
 GO/DEFER verdict here would be a fourth status document on one question — the exact failure §0
 describes. So: **GO, confirmed, not re-decided.**
 
@@ -606,6 +639,13 @@ Each of these moves what the thing should BE, so per §P0 the disposal is *write
 design*, not *file it*. They land as acceptance-criteria edits in the TASK.1 implementing change,
 and they are listed here so that change cannot start without them.
 
+**Each one is also stamped at the place an implementer reads.** A finding recorded only in a
+review section is a finding nobody reaches: §3 pieces 2, 3 and 6, §4's dedupe rule and AC rows
+`.3`, `.8` and `.11` each now carry an *Amended by §11.2* line naming the gap and saying "do not
+implement from this paragraph alone". The renumbering question — whether these become new
+criteria `.12`/`.13` or extend `.11` — is the team lead's, and is open; the hazard is closed
+either way, because no reader of the old text can now miss it.
+
 - **Subscription admission is unauthorised** (gpt, CRITICAL). Ownership is checked on
   `tasks/get|update|cancel` and on nothing else. AC `.11` covers a *retrieval* call; AC `.9`
   asserts *emission* filtering. Neither covers a `subscriptions/listen` carrying `taskIds`. The
@@ -642,19 +682,24 @@ and they are listed here so that change cannot start without them.
 
 - **`notifications/tasks` is server-to-client, so it is not a fourth inbound dispatcher arm** (gpt,
   HIGH, CERTAIN). §5 already routes it through the subscription emitter. Three inbound arms plus
-  one emitter; §3's "fourth arm" phrasing was the sloppy half and is corrected in place.
+  one emitter; §3 piece 4's "the four arms" phrasing was the sloppy half and is corrected in
+  place — it now names three inbound arms and points at the emitter for the fourth method.
 - **Restart persistence excluded** (gpt, HIGH, BEFORE-PRODUCTION). Already the second deferred row
   in §6 with all four fields and the same gate the reviewer assigns. Deferred, not missed — which
   is why the reviewer's own gate is not `NOW`.
 
-### 11.4 Citation repairs owed (grok, MEDIUM/LOW — mechanical, in the implementing change)
+### 11.4 Citation repairs — applied in this commit
 
-The GO confirmation in §10.4 and the same pointers in §0 cite passages that do not carry the
-TASK.1 overturn: a reader following them lands on `NFR.COMPAT.1` and on continuation-ledger
-repairs. Retarget to `RELEASE-4.0.0-plan.md:605-606` (the operator's full-scope line) and
-`RELEASE-4.0.0-dod-check.md:829-858` (the "does not advertise" paragraph). The GO claim itself
-survives; only its evidence pointers are wrong. Likewise the deferred-row citation for "2025-11-25
-must be served" moves from `RELEASE-4.0.0-requirements.md:210` to `:261`. **A citation that lands
+The GO confirmation in §10.4 and the same pointers in §0 and §9 cited passages that do not carry
+the TASK.1 overturn: `RELEASE-4.0.0-plan.md:110-112` is `NFR.COMPAT.1` (checked: it is the
+`server.modern_protocol` flip) and `dod-check.md:557-584` is the continuation-ledger repairs table
+(checked: HIGH/MEDIUM/LOW rows about token decoding and lock contention). Retargeted to
+`RELEASE-4.0.0-plan.md:605-606` — "the operator directed the full scope on 2026-08-31, so TASK.1
+ships in v4.0.0" — and `RELEASE-4.0.0-dod-check.md:829-858`, the "Disposition of 3 and 4 — the
+extension ships not implemented" section whose first line is the "does not advertise" sentence.
+The GO claim itself survives; only its evidence pointers were wrong. The deferred-row citation for
+"2025-11-25 must be served" moves from `RELEASE-4.0.0-requirements.md:210` to `:261`, which is
+`NFR.COMPAT.1` in the requirements table. **A citation that lands
 on the wrong paragraph is indistinguishable from a fabricated one to the reader who checks it**,
 which is why these are listed rather than waved through as typos.
 
@@ -679,6 +724,8 @@ exact failure §0 of this note was written about, and it reproduced within six d
 ### 11.6 What is NOT yet done
 
 The confirmation pass required by §12 — *are the gaps closed* — returns to the vendor that raised
-each finding, per repair-protocol step 6, once §11.2's acceptance-criteria edits land. This commit
-carries §11.1 only. The functional leg (D6:E2E) is **N/A: this change has no running surface** —
+each finding, per repair-protocol step 6: gpt for the subscription-admission, `-32021`, dedupe and
+`ttlMs` set; grok for the `tasks/update` MUST and the citation set. It has NOT run. This commit
+carries §11.1 plus the §11.2 amendment stamps described above; the final criterion numbering and
+§11.4's citation retargets are still owed. The functional leg (D6:E2E) is **N/A: this change has no running surface** —
 it is a design note; nothing was built, so there is nothing to drive.
