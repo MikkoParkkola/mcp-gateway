@@ -40,11 +40,26 @@ that captures its clock once.
 
 ## Rows
 
-Level: U = unit, in `src/protocol/continuation.rs` tests. I = integration, in
-`tests/mik_7212_mrtr_component_acs.rs`, which drives `InFlight` from outside the crate
-(`:1107`, `:1131`, `:1234`, `:1304`). Not `tests/mik_7212_acs.rs`: its only `in_flight` match is a
-test *name* (`:200`) and it exercises the ledger.
+Level: every row below is U = unit, in `src/protocol/continuation.rs` tests. **No row is at
+integration level**, and that is a finding rather than an omission — see the first entry under
+*Not tested here*: the envelope refuses an expired retry before the retry path ever reaches the
+table, so an integration row would observe `Keyring::open`, not the reclaim.
 Type: F = functional, B = boundary, N = negative.
+
+Every row's `now` is a value the test passes. All of them are anchored to **one synthetic epoch
+`T`** — a fixed second count far from the wall clock (`T = 1_000`, matching the small literals the
+existing suites already use) — never `SystemTime::now()`. The epoch is not decoration: it is the
+only thing that lets row .07 tell a `guard` that reads the clock from one that does not, because a
+fixture built on the real clock answers identically under both.
+
+Two existing suites already construct `InFlight` and will need their call sites updated with the
+new `now` parameters: `tests/mik_7212_acs.rs` `mod inflight` (`:434`, tables built at `:441`,
+`:486`, `:496`, `:510`, `:538`, and MRTR.8's own bounded-table and abandonment cases at `:491` and
+`:509`), and `tests/mik_7212_mrtr_component_acs.rs` (`:1107`, `:1131`, `:1234`, `:1304`).
+Revision 1 excluded the first on a grep for `in_flight`; the module is spelled `inflight` and the
+exclusion was false. Note also that capacity is a constructor argument
+(`InFlight::new("gw-1", 4)`), not the constant — so a capacity row is written at 4, never at
+4_096.
 
 | # | case | clause | level | type | RED comes from |
 |---|---|---|---|---|---|
@@ -60,8 +75,6 @@ call, not through a public reader — which is why it does not contradict .05, w
 | .07 | freshness precondition: capture `now` once, hold with deadline `now+1`, advance nothing, call `route(key, now)` twice — the entry survives both, because the supplied `now` never moved | C1 | U | B | asserts the contract's limit. Fails if `guard` reads the wall clock internally, which is the rejected alternative |
 | .08 | transferred from NFR.PERF.3 (`2026-09-01-nfr-perf3-reclamation.md:375-388`): `hold` at `IN_FLIGHT_CAPACITY` with expired entries present **admits** rather than refusing | C2 | U | B | today reclaim lives inside the capacity branch; after the change `hold` keeps only its refusal, so the reclaim must have happened in `guard` before the check reads `len` |
 | .09 | `hold` at capacity with all entries live still refuses | C1 | U | N | the pair to .08. Without it, .08 passes trivially if the capacity refusal is deleted rather than re-ordered |
-| .10 | the capacity walk is bounded by `IN_FLIGHT_CAPACITY = 4_096` (`continuation.rs:811`) and by nothing a client sizes: fill to capacity, assert the admitted count never exceeds it across a reclaim | C1 | U | B | pins the cost claim the design states as a number |
-| .11 | end to end through the retry path: an abandoned exchange is not observable via `invoke.rs`'s `route` call at `:584` after its deadline, with the clock captured at `:545` driven forward | C1+C2 | I | F | proves the call sites were actually updated, not just the type. An external crate cannot see a `#[cfg(test)]` seam, which is why the clock is a real parameter |
 
 Every criterion clause has a row; no cell is empty. C1 is carried by .01-.04, .04a, .07, .09-.11;
 C2 by .05, .06, .08, .11.
