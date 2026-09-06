@@ -53,7 +53,17 @@ Every row states above what makes it fail. The risks specific to this plan:
   the table through the existing branch and the row goes green with `guard(now)` never involved.
   Hence exactly 4 096 and not one more. An earlier draft filled 8 192 "so the table wraps its own
   ceiling once", which is also just wrong: attempts 4 097 onward are refused, occupancy never
-  exceeds 4 096, and nothing wraps.
+  exceeds 4 096, and nothing wraps. So the constraint is made **self-enforcing rather than
+  commented**: every `hold` in the fill asserts `Some`, and `len` at the fill clock asserts 4 096
+  before the clock moves. A later capacity-semantics change, or one stray extra hold, then fails
+  loudly on those instead of quietly draining the table through the branch that already works and
+  turning the row green for the wrong reason.
+- **Row 2 pins the deadline edge, not just the far side of it.** `len` is asserted 4 096 at
+  `now == deadline` before advancing past it. The retain predicate keeps entries whose deadline is
+  at or after `now` (`continuation.rs:675-677`), so without this assertion an over-eager reclaimer
+  that dropped not-yet-expired entries would produce exactly the same final 0 and pass. It is also
+  what makes good on this plan's claim that the driven clock shows reclamation *at the deadline*
+  rather than somewhere in an interval.
 - **The admission-recovery row was deleted, not repaired.** An earlier draft carried a third row —
   after row 2's drain, a fresh `hold` at the advanced clock returns `Some` — presented as failing
   evidence of the wedge. It is not: `hold`'s capacity branch already calls `reclaim_abandoned(now)`
