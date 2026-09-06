@@ -394,10 +394,12 @@ The two steps that get skipped, per the honesty protocol, are the two that colla
    requires, **not** through `dispatch_to_backend`, whose backend stub will `ERROR` rather than
    `FAILURE` when incomplete — an ERROR is not the free proof, it is a broken harness.
    **§5.2's route rows carry the same hazard one level up, and it is likelier there.** T12 and
-   T13 drive whole transports; a route that will not start, a stdio harness that never reads a
-   line, or an absent backend stub all produce a red T12/T13 that says nothing about whether the
-   trace read exists. Their red must be an assertion failure on the outbound params object. A
-   route row that has never once been seen to fail on its own assertion is an untested test.
+   T13 drive whole transports; a route that will not start, or a stdio harness that never reads a
+   line, produces a red T12/T13 that says nothing about whether the trace read exists. Their red
+   must be an assertion failure **at the funnel**, on the values the funnel was expected to see.
+   Observing there is what removes the third source of false red — no backend stub is needed to
+   reach the observation point, so an absent or incomplete one cannot ERROR the row. A route row
+   that has never once been seen to fail on its own assertion is an untested test.
 4. Then implement.
 
 ## 9. Readiness gates — applicable ones, checked
