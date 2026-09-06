@@ -49,7 +49,7 @@ The commit to search for is this one, not that one.
 ## Standing ruling — stage paths, never the worktree
 
 Two slice owners escalated the same thing rather than repairing it, correctly: it is a ruling,
-not a repair. Eight commits across four sessions have swept other sessions' uncommitted edits
+not a repair. Seven commits across four sessions have swept other sessions' uncommitted edits
 into an unrelated commit — `e5f76c2c`, `1967d93e`, `13975971`, `ed94ef45`, `c08c055a`,
 `5f714c7e`, `32f051e3` (89 of its 96 lines belonged to someone else). Every one of them used
 `git commit -a` or `git add -A` on a branch that eleven sessions share.
@@ -58,6 +58,12 @@ into an unrelated commit — `e5f76c2c`, `1967d93e`, `13975971`, `ed94ef45`, `c0
 `git add -A`, never `git add .`.** A shared worktree has no such thing as "my changes" that git
 can infer; the only session that knows which paths are yours is you, and the only way to say so
 is to name them.
+
+Two states where `-o` alone will not do the job, named so that nobody improvises a fallback to
+`-a`. A path git has never seen is not in the index and `-o` refuses it: `git add <that path>`
+first, naming it, then `git commit -o <that path>`. And a commit mid-merge cannot be partial at
+all — git refuses every path-limited commit until the merge concludes, so finish or abort the
+merge rather than reaching for a flag that stages everything.
 
 No content has been lost to this — the sweeps commit real work, and it stays reachable. What is
 lost is *provenance*: the message describes one slice's finding while the diff carries four, so
@@ -75,10 +81,13 @@ line in the affected design doc. A correction that is findable beats a history t
 **Not enforced mechanically, deliberately.** The obvious guard is a `pre-commit` hook, and this
 repository's hooks live in a `.git` directory shared by every worktree *including the operator's
 own checkout* — a guard that misfires there blocks their commits, not just ours. Installing one
-is the operator's call and has been put to them.
+is the operator's call and has been put to them. The predicate is checked rather than assumed:
+`git rev-parse --git-common-dir` from this worktree returns `/Users/mikko/github/mcp-gateway/.git`
+(V, 2026-09-06), which is the same directory the operator's own checkout uses, hooks included.
 
-Put on 2026-09-06 with three branches — block above a staged-file threshold with an override,
-warn only, or leave the rule in prose — and no answer has come back. Recorded rather than assumed,
+Put on 2026-09-06 in the operator's own session, as a direct question with three branches — block
+above a staged-file threshold with an override, warn only, or leave the rule in prose — and no
+answer came back inside the window the asking tool waits. Recorded rather than assumed,
 for the reason `CONFIRM.2` is recorded: a week later an unanswered question and an unasked one look
 identical. The default while it is open is the prose rule above, which is the reversible branch —
 installing a guard in hooks the operator's own checkout reads is not a thing to do on silence.
