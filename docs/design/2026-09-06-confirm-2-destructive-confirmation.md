@@ -186,6 +186,19 @@ session minting "grew a table of sessions nothing could reach, and handed the se
 detector a fresh identity every call" (`src/gateway/router/handlers.rs:583-587`). Reversing that
 to serve one confirmation would reintroduce both defects for the narrowest possible benefit.
 
+## Reversibility (G17) — which branch is a one-way door
+
+Option R is fully reversible: it is the status quo plus a specified refusal string and a test.
+Deleting it later costs the deletion, and nothing outside the gateway has come to depend on it.
+
+Option I is NOT, and that is the half Q2 is really asking about. A released gateway-authored
+`InputRequired` is a protocol surface clients build against; once one has shipped a retry that
+redeems our continuation, withdrawing the surface breaks it, and no version bump un-ships it.
+That makes a YES on Q2 a one-way door owing an ADR under `docs/adr/`, written before the surface
+is added rather than after. It is not a new schedule: the versioned-emit deferral below already
+gates the affirmative branch on a schema decision, and the ADR is the same decision's other half
+— the schema says what the emit looks like, the ADR records that we accepted living with it.
+
 ## Audit record — the repudiation cell
 
 Named because a destructive action whose confirmation leaves no record fails the R of the STRIDE
