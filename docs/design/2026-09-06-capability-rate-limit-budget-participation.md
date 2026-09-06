@@ -262,9 +262,21 @@ only HIGH finding; confirmed at source before acceptance.
 this was disclosed, then ruled on — RESOLVED, not accepted-as-consequence.**
 `to_rpc_code` (`src/error.rs:193-209`) gives `Protocol(_)` its own arm,
 `-32600`; `Error::Http` has no explicit arm and falls through the trailing
-`_ => -32603`. Confirmed via `rg` that nothing in the capability path
-constructs `Error::Http` today — this option is the first thing to route a
-capability-originated error through it. Left unaddressed, a capability `429`
+`_ => -32603`. Nothing in the capability path constructs `Error::Http` today —
+this option is the first thing to route a capability-originated error through
+it. The Kimi K3 review leg challenged that premise as overstated, on the theory
+that `#[from] reqwest::Error` plus `?` already routes connect/DNS/timeout
+failures into `Http`. **The challenge dies at source and the premise stands, on
+stronger evidence than the original `rg`:** every reqwest error in the
+capability path is mapped explicitly, never `?`'d. `send_with_retry` returns
+`Error::Transport` on both its send arms (`executor/mod.rs:129-133`, `:156`),
+and every body-consuming call maps to `Error::Protocol`
+(`params.rs:48`, `:64`, `:78`, `:92`, `:99`; `jsonrpc.rs:201`, `:212`;
+`graphql.rs:257`, `:268`). There is no bare `?` on a `reqwest::Error` anywhere
+on the path. A `status() == None` `Error::Http` therefore cannot reach the
+guarded arms from here — before O1 because the variant is never constructed,
+after O1 because `error_for_status_ref()` only ever yields a status-bearing
+error. Left unaddressed, a capability `429`
 would surface as `-32603` (internal error) — wrong, and no more right than
 today's `-32600` was, since a throttled upstream provider is neither an
 invalid request nor a gateway fault.

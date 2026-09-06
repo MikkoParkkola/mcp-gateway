@@ -360,8 +360,7 @@ async fn a_reinitialize_keeps_the_initialized_notification_legacy_shaped() {
          legacy-shaped, the same way `initialize` itself does"
     );
     assert!(
-        reinit.body.get("params").is_none()
-            || reinit.body["params"].get("_meta").is_none(),
+        reinit.body.get("params").is_none() || reinit.body["params"].get("_meta").is_none(),
         "a handshake notification must not carry a 2026 envelope; it sent {}",
         reinit.body
     );
