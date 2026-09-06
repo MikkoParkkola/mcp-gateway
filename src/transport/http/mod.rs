@@ -51,6 +51,41 @@ fn same_origin(a: &Url, b: &Url) -> bool {
         && a.port_or_known_default() == b.port_or_known_default()
 }
 
+/// Refuse to put an OAuth bearer token on the wire in cleartext.
+///
+/// CWE-319 / `CodeQL` `rust/cleartext-transmission` #90 and #91: the token this
+/// transport attaches is a bearer credential, so anyone on the path can replay
+/// it. TLS is therefore required — with one exemption, loopback, because a
+/// local MCP backend has no certificate and never leaves the machine.
+///
+/// Loopback is decided by the classifier the Origin gate and the config-load
+/// credential guard already use, so the three cannot drift; `host_str` hands it
+/// a bare host, brackets and all for an IPv6 literal. IPv4-mapped IPv6
+/// (`http://[::ffff:127.0.0.1]`) is therefore *not* loopback —
+/// `Ipv6Addr::is_loopback` says so, and the safe answer for an address form no
+/// backend uses is to refuse.
+///
+/// There is deliberately no configuration escape hatch here, and the config
+/// layer's `allow_cleartext_credentials` does not reach this guard: that flag
+/// lets an operator accept a readable static header, but a flag that re-enables
+/// a HIGH finding for OAuth would leave the alert open, and 4.0.0 is the release
+/// that may break it.
+fn require_secure_oauth_target(url: &Url) -> Result<()> {
+    let secure = match url.scheme() {
+        "https" => true,
+        "http" => crate::gateway::is_loopback_host(url.host_str().unwrap_or_default()),
+        _ => false,
+    };
+    if secure {
+        return Ok(());
+    }
+    Err(Error::Transport(format!(
+        "refusing to send an OAuth token in cleartext to {}; use https:// or a loopback host \
+         (allow_cleartext_credentials does not cover OAuth)",
+        sanitize_url_for_diagnostics(url.as_str())
+    )))
+}
+
 /// Outcome of evaluating one redirect hop for the transport's HTTP client.
 ///
 /// Extracted from the [`reqwest::redirect::Policy::custom`] closure so the
@@ -291,6 +326,12 @@ impl HttpTransport {
         // transport at all, so failing construction here is correct.
         let base_origin = Url::parse(url)
             .map_err(|e| Error::Transport(format!("Invalid transport base URL: {e}")))?;
+        // Refuse at construction, not only at request time: `initialize` runs
+        // the full authorization flow and starts a refresh task, so a
+        // request-time-only guard would mint a credential it may never send.
+        if oauth_client.is_some() {
+            require_secure_oauth_target(&base_origin)?;
+        }
         let client = Client::builder()
             .timeout(timeout)
             .pool_max_idle_per_host(10)
@@ -629,6 +670,17 @@ impl HttpTransport {
     /// Get OAuth access token if OAuth is configured
     async fn get_oauth_token(&self) -> Result<Option<String>> {
         if let Some(ref oauth_mutex) = self.oauth_client {
+            // The barrier between the token and the socket: every caller of
+            // `build_mcp_headers` posts to `get_message_url`, so checking it
+            // here covers the base URL and the SSE-advertised endpoint alike.
+            let target = self.get_message_url();
+            let parsed = Url::parse(&target).map_err(|e| {
+                Error::Transport(format!(
+                    "refusing to send an OAuth token to an unparseable target: {e}"
+                ))
+            })?;
+            require_secure_oauth_target(&parsed)?;
+
             let oauth = oauth_mutex.lock().await;
             let token = oauth.get_token().await?;
             Ok(Some(token))

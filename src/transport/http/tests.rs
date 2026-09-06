@@ -1652,3 +1652,142 @@ fn parse_sse_response_skips_notification_preceding_the_response() {
     // THEN: the caller receives the response, not the notification
     assert!(parsed.result.is_some(), "must return the response frame");
 }
+
+// =========================================================================
+// OAuth cleartext-transmission guard (CodeQL rust/cleartext-transmission
+// alerts #90/#91, CWE-319). An OAuth bearer token must never leave the
+// process over plaintext `http://` unless the peer is loopback.
+//
+// Test plan — one row per acceptance criterion:
+//   1  https + non-loopback + oauth      -> ALLOW  (guard must not over-refuse)
+//   2  http  + non-loopback + oauth      -> REFUSE (the alert itself; RED today)
+//   3  http://localhost + oauth          -> ALLOW  (operator-ruled exemption)
+//   4  http://127.0.0.2 + oauth          -> ALLOW  (127.0.0.0/8, not one address)
+//   5  http://[::1] + oauth              -> ALLOW  (v6 loopback)
+//   6  http://localhost.evil.com + oauth -> REFUSE (kills a substring host check)
+//   7  http://127.0.0.1.evil.com + oauth -> REFUSE (kills a prefix host check)
+//   8  http://[::ffff:127.0.0.1] + oauth -> REFUSE (mapped v4 is not loopback here)
+//   9  ftp://localhost + oauth           -> REFUSE (only http/https are transports)
+//  10  http + non-loopback, NO oauth     -> ALLOW  (no credential, no change)
+//  11  request time: message endpoint downgraded -> get_oauth_token refuses
+//  12  request time: no oauth configured -> Ok(None) even over cleartext
+// =========================================================================
+
+fn oauth_client_for(resource: &str) -> crate::oauth::OAuthClient {
+    use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
+    let storage =
+        Arc::new(TokenStorage::new(std::env::temp_dir().join("http_transport_tls_guard")).unwrap());
+    OAuthClient::new(
+        reqwest::Client::new(),
+        "test-backend".to_string(),
+        resource.to_string(),
+        vec![],
+        storage,
+        OAuthClientConfig {
+            token_refresh_buffer_secs: 300,
+            ..Default::default()
+        },
+    )
+}
+
+fn transport_with_oauth(url: &str) -> Result<Arc<HttpTransport>> {
+    HttpTransport::new_with_oauth(
+        url,
+        HashMap::new(),
+        Duration::from_secs(5),
+        true,
+        Some(oauth_client_for(url)),
+        None,
+    )
+}
+
+#[test]
+fn oauth_over_tls_is_allowed() {
+    assert!(
+        transport_with_oauth("https://backend.example/mcp").is_ok(),
+        "row 1: TLS is the normal case and must keep working"
+    );
+}
+
+#[test]
+fn oauth_over_cleartext_non_loopback_is_refused() {
+    let Err(err) = transport_with_oauth("http://backend.example/mcp") else {
+        panic!("row 2: a bearer token must not travel in cleartext to a remote host");
+    };
+    assert!(
+        err.to_string().contains("cleartext"),
+        "the refusal must name the reason, got: {err}"
+    );
+}
+
+#[test]
+fn oauth_over_cleartext_loopback_is_allowed() {
+    // Rows 3-5: local MCP backends legitimately bind loopback without TLS.
+    for url in [
+        "http://localhost:8080/mcp",
+        "http://127.0.0.1:8080/mcp",
+        "http://127.0.0.2:9000/mcp",
+        "http://[::1]:8080/mcp",
+    ] {
+        assert!(
+            transport_with_oauth(url).is_ok(),
+            "{url} is loopback and must stay allowed"
+        );
+    }
+}
+
+#[test]
+fn oauth_over_cleartext_loopback_lookalikes_are_refused() {
+    // Rows 6-9: hosts that a substring/prefix check would wave through, plus a
+    // scheme that is not an HTTP transport at all.
+    for url in [
+        "http://localhost.evil.com/mcp",
+        "http://127.0.0.1.evil.com/mcp",
+        "http://[::ffff:127.0.0.1]/mcp",
+        "ftp://localhost/mcp",
+    ] {
+        assert!(
+            transport_with_oauth(url).is_err(),
+            "{url} must not be treated as a loopback HTTP peer"
+        );
+    }
+}
+
+#[test]
+fn cleartext_without_oauth_is_unchanged() {
+    // Row 10: no credential is attached, so the guard must not fire.
+    assert!(
+        HttpTransport::new(
+            "http://backend.example/mcp",
+            HashMap::new(),
+            Duration::from_secs(5),
+            true,
+        )
+        .is_ok(),
+        "transports without OAuth keep working over plaintext"
+    );
+}
+
+#[tokio::test]
+async fn get_oauth_token_refuses_a_downgraded_message_endpoint() {
+    // Row 11: the request-time barrier, independent of construction. The
+    // message endpoint is the URL the token is actually posted to.
+    let t = transport_with_oauth("https://backend.example/sse").unwrap();
+    *t.message_url.write() = Some("http://backend.example/messages".to_string());
+
+    let err = t
+        .get_oauth_token()
+        .await
+        .expect_err("a downgraded message endpoint must not receive the token");
+    assert!(
+        err.to_string().contains("cleartext"),
+        "the refusal must name the reason, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn get_oauth_token_without_oauth_is_none_over_cleartext() {
+    // Row 12: the guard is about credentials, not about plaintext per se.
+    let t = make_transport("http://backend.example/mcp");
+    assert!(t.get_oauth_token().await.unwrap().is_none());
+}
