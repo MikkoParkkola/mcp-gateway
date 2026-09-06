@@ -8,9 +8,9 @@ Depends on: `docs/design/2026-09-06-mrtr-8b-10a-lifetime-and-idempotency-wiring.
 
 ## Scope of this plan
 
-One row per clause of the two criteria, as the clauses are worded in (plus one ratchet, row 4,
-which guards the PERF.4 clause while its criterion assertion is blocked), in
-`docs/requirements/RELEASE-4.0.0-performance.md:77-88`. No row asserts anything about the
+One row per clause of the two criteria, as the clauses are worded in
+`docs/requirements/RELEASE-4.0.0-performance.md:77-88`, plus one ratchet (row 4) that guards the
+PERF.4 clause while its criterion assertion is blocked. No row asserts anything about the
 capacities themselves, about NFR.PERF.1, or about deleting the seventeenth meta-tool.
 
 | # | criterion clause | the case that proves it | level | type | can it fail today, and on what |
