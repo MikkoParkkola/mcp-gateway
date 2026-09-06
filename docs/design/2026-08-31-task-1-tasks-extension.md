@@ -870,9 +870,21 @@ carries exactly one TASK.1 row (`docs/requirements/RELEASE-4.0.0-criteria-status
 `ttlMs` / `pollIntervalMs` MAY-change clauses that §10.3 found unstated are answered by the
 amendment to piece 2 in §3 — one ownership rule for both fields.
 
-**Still owed: the dual-vendor review of this note as it now stands.** The §12 confirmation pass
-re-checked findings raised before the §3 amendment existed; the amendment itself is unreviewed
-material, and no verdict trailer is stamped anywhere in this file for that reason.
+**Reviewed as of 2026-09-06, with the boundary stated.** The `ttlMs`/`pollIntervalMs` ownership
+amendment and the plan rows `.14`–`.17` that descend from it went through a full adversarial round
+and then a confirmation pass, and both vendors returned **SHIP** on the confirmation: grok, ledger
+run `grok-20260906T063048Z-57193`; kimi, run `synthetic-20260906T063051Z-57626`. Both processes
+exited 0. §PA makes the verdict that row and that exit status — this sentence is a pointer to them,
+never the verdict itself.
+
+What is still owed is narrower than it was, and naming it is the point. Three repairs were applied
+*after* those SHIPs and are therefore unreviewed: the conditional-delete requirement moved onto the
+store primitive in piece 2, this file's own boundary paragraph, and the plan's `.17` rewording plus
+the AC file's corrected carve-out. Two of the three are the reviewers' own confirmation findings
+applied verbatim, which is why no fourth round was spent on them; that is a judgement, recorded so
+it can be disagreed with, not a claim that they were reviewed. **No verdict trailer is stamped
+anywhere in this file**: a trailer would read as covering the file, and what was reviewed is the
+amendment inside it.
 
 The functional leg (D6:E2E) is **N/A: this change has no running surface** — it is a design note;
 nothing was built, so there is nothing to drive.
