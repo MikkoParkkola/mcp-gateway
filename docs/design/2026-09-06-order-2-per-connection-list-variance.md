@@ -18,8 +18,8 @@ promotion store, which cluster-b classified in its §I.2 and explicitly left to
 connection (2a) nor vary as a side effect of other requests on the same
 connection (2b), on a connection declaring MCP 2026-07-28. **List results** here
 means `tools/list` *and* the tool listings the discovery surface returns. The
-second half is in scope because that is where §2b's defect lands; whether
-ORDER.2's own wording reaches it is Q3, put to the requester in §6. This is wider
+second half is in scope because that is where §2b's defect lands; that ORDER.2's
+own wording reaches it was Q3, answered by the team lead on 2026-09-06 (§6). This is wider
 than the first draft's `tools/list`, deliberately and before any dual review
 completed, so the scope freeze has not been moved — it has not yet been set.
 
@@ -77,8 +77,8 @@ set: `Cargo.toml:179` lists `default = ["a2a","webui","config-export",
 "metrics"]`, and `Cargo.toml:193` declares `spec-preview = []`. A default build
 does not compile this path. It is a real defect in the builds that enable the
 feature, and the feature is the one this whole protocol effort exists to
-prepare. This is a severity input for the requester (§6), not a reason to leave
-it.
+prepare. Whether that lowers the criterion's severity was Q2, answered on
+2026-09-06: it does not (§6). Not a reason to leave it.
 
 **Not a discovery.** cluster-b's test plan already specifies this case as
 **B-07** ("a promoted tool must not appear in session A's modern list, nor make
@@ -105,9 +105,9 @@ to §2; materially worse, because it ships by default.
 
 **What it does not touch.** `handle_tools_list_for_session` does not consult
 `session_state`; the filtering is confined to the discovery surface. Whether the
-discovery surface's output is a "list result" for the purposes of ORDER.2 is a
-question for the requester (Q3, §6) — but the defect is the same shared key, and
-recommendation (c) closes it with the same one-line change applied at
+discovery surface's output is a "list result" for the purposes of ORDER.2 was Q3,
+answered yes on 2026-09-06 (§6) — and the defect is the same shared key either
+way, so recommendation (c) closes it with the same one-line change applied at
 `mod.rs:1689` and `search.rs:163`. No separate option analysis is needed.
 
 **Provenance.** This was not in the first draft of this note. The review leg
@@ -244,6 +244,8 @@ Every unknown is resolved with a recorded answer or deferred with four fields.
 | Is `initialize` removed in 2026-07-28, which would make the `X-MCP-Profile` guard dead code? | read `REMOVED_IN_2026_07_28` at `meta.rs:221-229` | Not in the removal list. | Nothing, but it makes fact 5 load-bearing rather than defensive. |
 | Is `spec-preview` in the default build? | read `Cargo.toml:179,193` | No; `spec-preview = []`, and it is not in `default`. | A severity input for §6. Does not change the recommendation — the option is cheap enough that non-default status is not a reason to skip it. |
 | Is the shipped refusal of `gateway_set_profile` on modern connections **intended**, or is fact 4 an unratified behaviour change? (askable, not checkable) | asked of the operator on 2026-08-31 via the cluster-b note's Part IV; answer recorded at `docs/design/2026-08-31-cluster-b-connection-invariance.md:453-458` | "RESOLVED 2026-08-31, by the operator, asked and answered: remove them outright (option b)." The break is recorded as knowingly accepted. | A great deal. §1 is a **ratified** closure, not a shipped surprise, so cluster-b option (b) is settled and option (a) is dead rather than merely expensive. This note's first draft re-asked it as an open Q1; that was wrong, and asking a closed question twice is how an answer gets lost. Q1 is struck from §6. |
+| Does `spec-preview` being a non-default feature lower ORDER.2's severity? (askable, not checkable) | asked of the team lead in this note's deliverable, answered 2026-09-06 | Hold the severity. Splitting the row by build configuration buys a distinction that (c) makes moot, and the §2b leg ships in `default` regardless, so the row is earned either way. | Nothing in the design; it closes the severity question so the ORDER.2 evidence cell can be written against one reading. Recommendation confirmed rather than overturned. |
+| Does the discovery surface's output count as a "list result" under ORDER.2? (askable, not checkable) | asked of the team lead in this note's deliverable, answered 2026-09-06 | The second reading: ORDER.2 is about *what tool set a connection is shown*, not about one method name. Both readings leave the defect identical — which is what made this the lead's call and not the operator's. | Fixes the §2b leg's label: the `session_state` half of (c) belongs to ORDER.2 itself, not to a sibling criterion, so implementation lands under one ticket. The defect, its four call sites and the cases were the same under either reading. |
 | Does prior art already cover this, making a new note a duplication? | read the cluster-b connection-invariance note, Part I and its residue list, and its sibling test plan | Part I *is* ORDER.2; its residue list explicitly leaves the promotion store "to be closed by whichever ORDER.2 option is chosen"; B-06 and B-07 already specify the cases. | Made this a delta note rather than a design. No option analysis, blast radius, or test case is restated here. |
 
 **DEFERRED**
@@ -255,49 +257,35 @@ Every unknown is resolved with a recorded answer or deferred with four fields.
 
 Nothing in this note's recommendation depends on either deferred item.
 
-## 6. Open questions for the requester
+## 6. Questions put to the requester — all three settled
 
-Neither is answerable from inside the codebase, and each carries the four fields
-a deferred item needs.
+None remain open. Recorded here because a question that was asked and answered is
+evidence; a question that quietly stopped being asked is not.
 
 **Q1 is struck.** It asked whether the `gateway_set_profile` refusal was
 intended. The operator answered that on 2026-08-31 in cluster-b Part IV §4.1 —
 "remove them outright (option b)" — and the answer is recorded in §5 above. The
 number is retired rather than reused, so citations to it stay unambiguous.
 
-**Q2 — Does `spec-preview` being a non-default feature lower ORDER.2's
-severity?** The remaining violation compiles only under `--features spec-preview`
-(`Cargo.toml:193`). If the ledger's severity describes a default build, ORDER.2's
-status arguably differs between the two build configurations, and the ledger has
-one cell. Recommendation: hold the criterion at its stated severity regardless,
-because the feature is the one the 2026-07-28 work exists to prepare, and because
-option (c) is cheap enough that the distinction does not buy anything.
-*Owner:* the requester, via this note's deliverable. *What resolves it:* their
-ruling on whether a ledger severity describes the default build. *When:* before
-the ORDER.2 evidence cell is written. *If it resolves badly* (severity is
-default-build-only): §2 drops to a lower severity, §2b does not — it is in the
-default build — so the recommendation and its four call sites are unchanged, only
-the ledger wording is.
+**Q2 — does `spec-preview` being a non-default feature lower ORDER.2's
+severity? Answered 2026-09-06 by the team lead: no, hold it.** The remaining
+promotion violation compiles only under `--features spec-preview`
+(`Cargo.toml:193`), so the question was whether one ledger cell can describe two
+build configurations. It does not have to: the §2b FSM leg ships in `default`,
+so the row is earned by the default build alone, and (c) closes both legs at a
+price low enough that the distinction would buy nothing. Recorded in §5.
 
-**Q3 — Does the discovery surface's output count as a "list result" under
-ORDER.2?** The criterion says `tools/list`. §2b's defect filters the tool set
-returned by `gateway_search` and the capability listings (`search.rs:378,586,
-653,730`), not by `handle_tools_list_for_session`. If ORDER.2 is about the
-`tools/list` method, §2b is out of scope for this criterion and belongs to its
-own. If it is about *what tool sets a connection is shown*, §2b is the more
-serious of the two legs, because it ships by default. Recommendation: the second
-reading. A client that discovers tools through `gateway_search` sees a set that
-another connection's `gateway_set_state` silently changed, which is the harm the
-criterion names — and reading the criterion as one method name is exactly what
-made this note's first draft sweep those call sites aside.
-*Owner:* the requester. *What resolves it:* their reading of ORDER.2's scope —
-askable, not checkable; no command settles it. *When:* before the ORDER.2 rows
-are marked, and before implementation, since it decides whether the
-`session_state` half of (c) belongs to this criterion or a sibling. *If it
-resolves badly* (ORDER.2 means the `tools/list` method only): the §2b defect is
-real and unchanged, but it moves to its own criterion; (c)'s `session_state` half
-lands under that one, and this note's §2b becomes its source. Nothing found here
-is discarded either way — only its label moves.
+**Q3 — does the discovery surface's output count as a "list result" under
+ORDER.2? Answered 2026-09-06 by the team lead: yes — read the criterion as *what
+tool set a connection is shown*.** The criterion's text says `tools/list`, while
+§2b's defect filters `gateway_search` and the capability listings
+(`search.rs:378,586,653,730`). The harm ORDER.2 names is a client seeing a tool
+set that another connection silently changed; which surface reveals it is a
+label, not a defect. **Both readings leave the defect, its four call sites and
+its cases identical** — that is precisely why this was the lead's call to settle
+and not an escalation to the operator, and it is why nothing in §7 moves. What it
+fixes is where the work lands: the `session_state` half of (c) belongs to ORDER.2
+itself rather than to a sibling criterion, so implementation is one ticket.
 
 ## 7. Test plan — one row per clause
 
@@ -333,8 +321,9 @@ source as of 682a709a. The ledger rows stay blocking. What has changed is what
 the evidence cell can now say: the profile leg is closed in code and measured
 here, the remaining defect is **two stores and four call sites** — the
 feature-gated promotion store of §2 and the default-build FSM state store of §2b
-— and the option to close both is chosen and priced. Whether §2b belongs to
-ORDER.2 or to a sibling criterion is Q3; the defect is the same either way.
+— and the option to close both is chosen and priced. §2b belongs to ORDER.2
+itself, per Q3's answer of 2026-09-06; it would have been the same defect under
+either reading.
 
 One coverage limit, found by review and worth more than the rest of this note:
 **(c) closes both legs on modern HTTP and neither of them on stdio.** stdio
