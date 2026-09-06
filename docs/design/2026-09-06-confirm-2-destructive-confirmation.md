@@ -131,7 +131,12 @@ What it needs, all measured:
 4. Gate precedence: a valid retry must be redeemed *before* re-entering the gate, or it loops
    (C10).
 5. The MRTR.9/9a capability check against `caller.input_capabilities` (C3) — refuse to ask a
-   question the client never said it could answer.
+   question the client never said it could answer. That refusal's wording is **constrained, not
+   free**: `tests/mik_7215_acs.rs:743` and `:990` close CONFIRM.1a by asserting the message
+   contains `none could be obtained`, and both fixtures send exactly this caller (an empty
+   `clientCapabilities`). The C3 refusal must therefore be a SUPERSET — the existing sentence,
+   plus the missing capability named — because loosening those assertions would re-open a closed
+   criterion silently, which is worse than a red test. The test plan carries the reasoning.
 6. MRTR.8a/8b bounds on the confirmation continuation. `InFlight::new(replica, capacity)` and
    `Keyring::with_mint_budget` already provide bounded primitives; a client that never retries
    (which the spec permits, and which is the expected case here) must not leak state.
@@ -357,23 +362,33 @@ without it, and the omission is recorded rather than backfilled silently.
 
 | source | shape | what it says here |
 |---|---|---|
-| RFC 9470, *OAuth 2.0 Step Up Authentication Challenge Protocol* (authoritative; cited by identifier, not fetched this session — I) | the server refuses with a challenge; the client re-issues the SAME request carrying the elevated proof | Option I is this pattern. The industry answer to "sessionless caller needs a stronger act" is challenge-then-reissue, not a minted session |
-| RFC 8628, *OAuth 2.0 Device Authorization Grant* (authoritative; same caveat — I) | a human decision reached out-of-band while the client polls | the admin credential (C4) is our out-of-band surface; it is why refusal is defensible |
+| RFC 9470, *OAuth 2.0 Step Up Authentication Challenge Protocol* (authoritative; §1 fetched and read 2026-09-06 — V) | the resource server refuses with an `insufficient_user_authentication` challenge carrying `acr_values`/`max_age`; the client obtains the stronger proof and re-issues. **Correction from the fetch**: the client reaches back to a *separate authorization server* in between — the challenger and the asker are two parties, where our gateway is one | Option I is this pattern in its load-bearing half: challenge-then-reissue, not a minted session, is the industry answer for a caller who cannot be asked in place. The correspondence is a shape, not an isomorphism, and the difference is named rather than glossed |
+| RFC 8628, *OAuth 2.0 Device Authorization Grant* (authoritative; §1 fetched and read 2026-09-06 — V) | confirmed as written: the human decision is reached out-of-band on a secondary device while the client polls. §1 adds a detail worth having — the grant exists precisely for clients with *limited input capabilities*, and its answer to one is to route the decision elsewhere, not to refuse | the admin credential (C4) is our out-of-band surface, so refusal is defensible. The added detail cuts slightly against us: 8628's device is exactly Option I's caller that declared no input capabilities, and 8628 does not refuse it. Recorded because it is the strongest available argument against item 5's refusal branch, and it should be argued at, not discovered later |
 | in-repo: `destructive_confirmation.rs`, `continuation.rs`, `invoke.rs` (V, read this session) | elicitation for the session-bearing era; sealed single-use continuations for the modern one | NIH check: the mechanism Option I needs is already built. Nothing new is invented here, which is the strongest argument for Option I on cost |
 
 NIH verdict: **no new mechanism is warranted.** Both live options reuse what exists.
-Honest limit, SCHEDULED rather than confessed: the two RFCs are cited from knowledge, not fetched
-in this session, so they are marked I. Naming that is not discharging it, so the check is booked.
-**Owner** — this design's author. **What resolves it** — fetch RFC 9470 §1 and RFC 8628 §1 and
-confirm each row's "shape" column against the text. **When** — **the original trigger fired unrun**:
-it was "before Q1's answer is written into the requirement row", and the standing ruling answered
-Q1 on 2026-09-06 without the fetch happening. Recorded that way rather than quietly re-dated,
-because a trigger that passes unnoticed is the failure mode scheduling exists to prevent.
-Re-booked to: before the Option I test plan is reviewed, which is the next artefact that would
-lean on these rows. **If it resolves badly** — the claim that challenge-then-reissue is the
-conventional shape falls, and Option I loses its prior-art argument (not its cost argument, which
-rests on in-repo mechanisms read this session). Option R is unaffected either way, which is why
-this schedules rather than blocks.
+
+**RESOLVED 2026-09-06 — the check ran.** Recorded in the §P1 checkable form:
+
+> *Do the two RFC rows' "shape" columns survive their own sources?* — fetched
+> `rfc-editor.org/rfc/rfc9470.txt` and `rfc8628.txt` and read §1 of each — **8628 confirmed as
+> written; 9470 confirmed in shape but not in parties**, because its client goes to a separate
+> authorization server between the challenge and the re-issue — **what it changed**: both rows
+> move from I to V, the 9470 row now states the one-party/two-party difference instead of
+> implying an exact match, and the 8628 row carries a point that argues *against* item 5's
+> refusal branch rather than for it.
+
+This is the second trigger this unknown had. The first — "before Q1's answer is written into the
+requirement row" — **fired unrun** when the standing ruling answered Q1 on 2026-09-06, and was
+re-booked to "before the Option I test plan is reviewed" rather than quietly re-dated, because a
+trigger that passes unnoticed is the failure mode scheduling exists to prevent. That second
+trigger is what this discharge answers: the plan (`2026-09-06-confirm-2-destructive-confirmation-test-plan.md`)
+now goes to review with these rows verified rather than asserted.
+
+It did not resolve badly. Had it — the claim that challenge-then-reissue is the conventional
+shape falling — Option I would have lost its prior-art argument but not its cost argument, which
+rests on in-repo mechanisms read this session. Option R was unaffected either way, which is why
+this scheduled rather than blocked.
 
 ## Assumptions, ranked by impact × uncertainty (G10)
 
