@@ -1,6 +1,31 @@
 # NFR.SEC.3 — rotatable continuation keys, retained for the max lifetime
 
-Status: DESIGN, under dual review (glm-5.3 substitution leg returned SHIP-WITH-FIXES; second leg in flight). No code exists. Author: `sec-nfr`, 2026-09-06.
+Status: DESIGN, dual-reviewed, no code exists. Author: `sec-nfr`, 2026-09-06.
+Round-by-round verdicts live in the table below, not in this line — a status line carrying round
+state is stale the moment a leg returns, and it was, twice.
+
+| round | leg | verdict | material_sha256 | ledger ts |
+|---|---|---|---|---|
+| 1 | glm-5.3 (substituting for kimi) | DO-NOT-SHIP | `3eff9bec…` | 08:04:40Z |
+| 1 | grok | SHIP-WITH-FIXES | `3eff9bec…` | 08:10:02Z |
+| 2 | glm-5.3 | SHIP-WITH-FIXES | `e56ef494…` | 08:15:06Z |
+| 2 | grok | SHIP-WITH-FIXES | `7462c16f…` | 08:25:19Z |
+
+Keyed on `material_sha256`, deliberately: the ledger's `head` field pins the branch tip at run
+time and this branch is shared, so every row above carries a `head` belonging to some other
+session's commit. Round 1's two legs share a digest, which is what identical material looks like.
+**Round 2's do not, and I have not reconciled why** — recorded as an open item rather than
+explained away, because "both legs saw the same bytes" is precisely the claim a digest exists to
+support and mine does not support it.
+
+kimi is not in the table because it produced no row at all: `synthetic-review`'s trusted preamble
+tells the model it may inspect the repository read-only, kimi has no filesystem, and it answered
+with a hallucinated tool call three times running. Per §PA that is `MISSING`, never a scraped
+verdict. Its earlier SHIP attests a payload from before `dd0acff5` — stale coverage, not a passed
+leg. glm-5.3 stands in.
+
+Round 2 deleted the rotation trigger outright and the text has moved again since, so a §P4
+confirmation pass against the current revision is owed before this design is called reviewed.
 
 ## MRTR.5 is the constraint that decides this design — and its text is narrower than the first draft claimed
 
@@ -90,8 +115,8 @@ first draft picked the wrong one, is settled two sections down.
 
 Against the three clauses:
 
-- ROTATABLE — met, and with no trigger to wire: rotation is an age check inside `mint` and
-  `open`, which are the production path, so D7 WIRED holds by construction. A `rotate` added
+- ROTATABLE — met, and with no trigger to wire: rotation is an age check inside `mint`,
+  which is the production path, so D7 WIRED holds by construction. A `rotate` added
   today with no caller WOULD be a violation; that is exactly why the three candidate triggers
   below were all dropped in favour of the lazy check.
 - RETAINED — met. Old kids stay verifiable for the max lifetime; `open` already selects
@@ -146,17 +171,35 @@ instant in `payload.issued_at` (`:161-168`, `:408`). Rotation is an age check ag
 already in hand at both call sites. A timer adds a second, independent clock, and a time split
 between the two is exactly the `UnknownKey` failure that RETAINED exists to prevent.
 
-So: **rotate lazily, inside `mint` and `open`, off the `now` already passed in.** If the minting
+So: **rotate lazily, inside `mint` alone, off the `now` already passed in.** If the minting
 key is older than the rotation interval, retire it and mint a fresh one before proceeding; drop
 retained keys whose retirement is more than `CONTINUATION_LIFETIME_SECS` behind `now` in the same
 pass. Nothing is spawned, nothing is shut down, no constructor changes.
+
+**`open` never mutates the ring — not the keys, not the minting kid.** The draft had both sides
+rotating, which is one line shorter and wrong. `Keyring::open` resolves the kid at
+`src/protocol/continuation.rs:489` and only reaches the expiry check at `:508`, because
+`expires_at` lives inside the sealed payload and cannot be read before the key that decrypts it.
+So an `open` that prunes can drop the key an envelope needs and answer `UnknownKey` where the
+build is supposed to answer `Expired`. The arithmetic keeps that refusal *correct* — a key is only
+prunable once every envelope under it is past its deadline — but it moves the REASON, and
+`RELEASE-4.0.0-test-plan.md:302` is a coverage row for exactly that refusal: *a token past its
+`expires_at` is refused on the replica that minted it, with the clock advanced*. A build with no
+`expires_at` derivation at all would still refuse that token via the kid-miss, so the row would go
+green on the defect it exists to catch. Pruning only in `mint` removes the interaction rather than
+documenting it: `open` takes a read lock, resolves whatever the ring holds, and the reason it
+returns is decided by the payload.
+
+Rotation belonging to `mint` is also the plainer reading of the bound. The budget and the age
+limit are about the material that SEALS envelopes; a process that has stopped minting has no
+reason to mint a key.
 
 | trigger | verdict | why |
 |---|---|---|
 | file watcher (`ConfigWatcher::start`) | **DROPPED** (round 1) | the only piece needing new plumbing, and it coupled rotation to file edits that say nothing about keys. |
 | interval task | **DROPPED** (round 2) | a second clock. It also forced a spawn site, a shutdown subscription, and a `tokio::spawn`-outside-a-runtime hazard in eight synchronous `ContinuationState::new()` call sites. All three concerns vanish with the task. |
 | `gateway_reload_config` meta-tool | **DROPPED** (round 2) | the same coupling argument that killed the watcher: rotating keys because an operator edited a backend URL is a side effect, not a verb. |
-| age check inside `mint` / `open` | **THE MECHANISM** | zero plumbing, one clock, and it is on the production path by construction — which is also how D7 WIRED is satisfied, without a meta-tool nobody calls. |
+| age check inside `mint` | **THE MECHANISM** | zero plumbing, one clock, and it is on the production path by construction — which is also how D7 WIRED is satisfied, without a meta-tool nobody calls. `open` reads the ring and never rotates or prunes it; see above for why that is a correctness requirement and not a tidiness preference. |
 
 This is the shape the module already uses elsewhere: `ContinuationState`'s own
 `ConsumedLedger::evict_expired(now)` (`:619`) is a lazy evictor with no timer behind it, and the
@@ -178,8 +221,8 @@ deadline; the rotation code must not carry a second copy of the number.
 ### The real mechanical work
 
 `ContinuationState` lives behind an `Arc` (`src/gateway/meta_mcp/mod.rs:230`) and `open`
-takes `&self`, so the key vector must become interior-mutable — **`std::sync::RwLock`**, read on
-every open, written once per rotation. Explicitly NOT the `tokio::sync::Mutex` that
+takes `&self`, so the key vector must become interior-mutable — **`std::sync::RwLock`**, taken
+for READ on every `open` and for WRITE only by the rotation inside `mint`. Explicitly NOT the `tokio::sync::Mutex` that
 `ConsumedLedger` and `InFlight` use (`:561`, `:668`): those are `async fn`s already, `mint` and
 `open` are not, and copying their lock type would make every call site of both `async`. That is a LOCAL lock change, not a distributed one,
 and it is the whole of the concurrency work.
@@ -216,8 +259,9 @@ has checkable properties rather than prose:
 1. `minting_kid` is always a member of `keys`.
 2. Every retained key is within `CONTINUATION_LIFETIME_SECS` of its retirement.
 3. Kids are unique within the live ring.
-4. The mint budget's treatment across a rotation is whatever the decision above settles, and
-   it is the same on every path.
+4. `minted` is 0 immediately after a rotation, on every path that rotates — and there is one.
+5. Only `mint` writes the ring. `open` takes the read lock and returns a refusal reason decided
+   by the payload, never by which keys happen to still be retained.
 
 ## Rejected alternatives
 
@@ -257,7 +301,7 @@ them gets built first.
 |---|---|---|
 | 1 | Does the criterion's author read "rotatable" as requiring operator-supplied material? If yes, (c) does not meet it and (b) returns. | ASKABLE, not checkable — asked of the team lead in the message accompanying this design. Blocks all four pieces. |
 | 2 | What is "the max lifetime" as a number, and is it bounded anywhere today? RETAINED is unimplementable without it. | RESOLVED, checkable. `rg CONTINUATION_LIFETIME_SECS src/` — `const CONTINUATION_LIFETIME_SECS: u64 = 300` at `src/protocol/continuation.rs:128`, not a parameter and deliberately not one. The retention window is therefore 300 seconds, a compile-time constant. It changed the design: the retention deadline needs no new config and no new plumbing. |
-| 3 | Can the config-reload path actually REACH the live keyring? The whole ROTATABLE claim, and the D7 WIRED argument with it, rests on this. | RESOLVED, checkable. `rg -n "MetaMcp\|continuation\|ContinuationState" src/config_reload/` — zero hits; `ReloadContext` (`:1371-1388`) holds config path, live config, registry, failsafe, TTL and env, and no gateway handle. The meta-tool caller reaches it for free, the file watcher does not. It changed the design twice: first the "free trigger" claim turned out half true, and then review showed the reload trigger was the wrong choice altogether. Every trigger was eventually dropped: the watcher for its plumbing, then the meta-tool and the interval task in round 2, in favour of an age check on the `now` already injected into `open` and `mint`. Written up above rather than left as a table cell. |
+| 3 | Can the config-reload path actually REACH the live keyring? The whole ROTATABLE claim, and the D7 WIRED argument with it, rests on this. | RESOLVED, checkable. `rg -n "MetaMcp\|continuation\|ContinuationState" src/config_reload/` — zero hits; `ReloadContext` (`:1371-1388`) holds config path, live config, registry, failsafe, TTL and env, and no gateway handle. The meta-tool caller reaches it for free, the file watcher does not. It changed the design twice: first the "free trigger" claim turned out half true, and then review showed the reload trigger was the wrong choice altogether. Every trigger was eventually dropped: the watcher for its plumbing, then the meta-tool and the interval task in round 2, in favour of an age check on the `now` already injected into `mint`. Written up above rather than left as a table cell. |
 
 Question 1 is load-bearing: a yes reverses the recommendation.
 
