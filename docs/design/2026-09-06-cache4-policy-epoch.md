@@ -160,9 +160,22 @@ response equals the pre-change body → red.
   silent cross-epoch hit.
 - **The bump is latent in production today.** C4: `set_identity_grants` runs once at startup,
   before any entry exists, so the 4.f.1 bump changes no production behaviour *yet*. It is not
-  dead code — it is the correct behaviour at the only mutation point that exists, and it is what
-  makes a future runtime grant-reload safe by construction rather than by a follow-up. Stated
-  here rather than discovered in review.
+  dead code — it is the correct behaviour at the only mutation point that exists. It is **not**
+  "safe by construction" for a future runtime grant-reload: a second, lower cache sits under this
+  one (see the residual table below), and until that one is keyed too, a runtime reload is safe
+  only for responses the executor never cached. Stated here rather than discovered in review.
+
+## Residual — what CACHE.4b still needs after this change
+
+One table, so a later closer of the RED row cannot miss a half this change already knew was open.
+
+| residual | why it is open | where it is tracked |
+|---|---|---|
+| **executor response cache is unkeyed** — `src/capability/executor/mod.rs:313-318` (read) and `:347-349` (write) hold a **second** cache, keyed `format!("{}:{}", capability.name, sha256(params)[..16])` (`executor/params.rs:243-258`). No identity, no profile, no epoch. A post-bump miss at the `MetaMcp` layer re-dispatches, the executor serves its **pre-bump** body, and `MetaMcp` then stores that body under the **new** epoch — a superseded-grant response laundered into the fresh epoch. | Out of scope here by size, not by importance: keying it needs one process-level epoch both constructors (`executor/mod.rs:208`, `:247`) snapshot, which is the parent design's B6 and a design event of its own. **Do not implement it in this change.** | this row + parent B6 |
+| **4.e protocol revision has no production value** | both call sites pass `None` unconditionally; the seam guard proves the digest reads the field, not that anything varies it | U5 |
+| **4.f.2 `LiveConfig` reload does not bump** | nothing wires the epoch to `ConfigWatcher::start` | U6 |
+| **4.f.3 capability watcher does not bump** | same watcher-construction seam (`src/gateway/server/mod.rs:874`) | U6 |
+| **profile *contents* under an unchanged name key identically** | `routing_profile` is `&profile.name`, not a digest of contents (`invoke.rs:1214`, `:1787`) | 4.f.2/4.f.3 above |
 
 ## §P1 Open questions — scheduled, not assumed
 
@@ -228,8 +241,8 @@ invalidates it on a grant **or profile** change". The epoch closes the *grant* h
 (different name, different key), but a profile whose **contents** change under the same name keys
 identically — `routing_profile` is wired to `&profile.name` at both sites (invoke.rs:1214, 1787),
 not to a digest of the profile's contents. That reading is exactly 4.f.2/4.f.3, deferred above.
-So: **this change makes CACHE.4b's grant half true and leaves its profile half open.** "Epoch
-landed" must not be read as "4b met". Deferring the *work* is the lead's to approve; deferring
+So: **this change makes CACHE.4b's grant half true at the `MetaMcp` layer only, and leaves both
+its profile half and the executor layer open.** "Epoch landed" must not be read as "4b met". Deferring the *work* is the lead's to approve; deferring
 the *criterion* is a scope reduction needing the operator's recorded agreement, which we do not
 have — so the row stays RED.
 
