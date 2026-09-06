@@ -21,7 +21,7 @@ constant itself, about `NFR.PERF.1`, or about the meta-tool surface.
 | # | criterion clause | the case that proves it | level | type | can it fail today, and on what |
 |---|---|---|---|---|---|
 | 1 | memory MUST NOT grow unboundedly with abandoned continuations — the bound holds | **no new case: `ac_mrtr_8_the_table_is_bounded`, `tests/mik_7212_acs.rs:491`, already is it** — fill to the injected capacity with live, unexpired holds, then `hold` once more and get `None` | unit, existing | boundary | **No — already met, and already covered.** `hold`'s capacity branch is built (`:696-717`) and a committed case asserts the refusal. This row's whole content is the citation plus the falsifier probe below, which is what turns an existing green test into evidence for *this* clause |
-| 2 | …and a soak with abandonment MUST show reclamation | abandon exactly `IN_FLIGHT_CAPACITY` (4 096) exchanges against a **driven clock** and never attempt a 4 097th, so the capacity branch is never entered; advance `now` past the deadline; `len(now)` is 0 | unit, same module | lifetime / state | **Yes — but not today, and not on the assertion.** `InFlight::len` is `len(&self)` today (`continuation.rs:756`): no clock. `len(now)` therefore does not *compile* until Design A lands, and a compile error is not evidence about reclamation. The assertion-level red is earned by a falsifier probe run *after* `guard(now)` lands: delete the reclaim call from `guard`, and the row goes red on the occupancy assertion — 4 096 entries retained past their deadline, because reclamation otherwise runs only inside the capacity branch and this fixture never enters it. Restore, re-run, and the pass is what proves the restore |
+| 2 | …and a soak with abandonment MUST show reclamation | abandon exactly the table's capacity of exchanges against a **driven clock** and never attempt one more, so the capacity branch is never entered; advance `now` past the deadline; `len(now)` is 0 | unit, own target | lifetime / state | **Yes — but not today, and not on the assertion.** `InFlight::len` is `len(&self)` today (`continuation.rs:756`): no clock. `len(now)` therefore does not *compile* until Design A lands, and a compile error is not evidence about reclamation. The assertion-level red is earned by a falsifier probe run *after* `guard(now)` lands: delete the reclaim call from `guard`, and the row goes red on the occupancy assertion — every entry retained past its deadline, because reclamation otherwise runs only inside the capacity branch and this fixture never enters it. Restore, re-run, and the pass is what proves the restore |
 
 ## Why no wall-clock soak
 
@@ -53,15 +53,15 @@ Every row states above what makes it fail. The risks specific to this plan:
   `complete` on the abandoned exchanges, or reaching capacity before asserting. The second is the
   subtle one — `hold` reclaims on a refused attempt, so a fill that overshoots the ceiling drains
   the table through the existing branch and the row goes green with `guard(now)` never involved.
-  Hence exactly 4 096 and not one more. An earlier draft filled 8 192 "so the table wraps its own
-  ceiling once", which is also just wrong: attempts 4 097 onward are refused, occupancy never
-  exceeds 4 096, and nothing wraps. So the constraint is made **self-enforcing rather than
-  commented**: every `hold` in the fill asserts `Some`, and `len` at the fill clock asserts 4 096
-  before the clock moves. A later capacity-semantics change, or one stray extra hold, then fails
+  Hence exactly the capacity and not one more. An earlier draft filled 8 192 "so the table wraps
+  its own ceiling once", which is also just wrong: attempts past the ceiling are refused, occupancy
+  never exceeds it, and nothing wraps. So the constraint is made **self-enforcing rather than
+  commented**: every `hold` in the fill asserts `Some`, and `len` at the fill clock asserts the
+  capacity before the clock moves. A later capacity-semantics change, or one stray extra hold, then fails
   loudly on those instead of quietly draining the table through the branch that already works and
   turning the row green for the wrong reason.
-- **Row 2 pins the deadline edge, not just the far side of it.** `len` is asserted 4 096 at
-  `now == deadline` before advancing past it. The retain predicate keeps entries whose deadline is
+- **Row 2 pins the deadline edge, not just the far side of it.** `len` is asserted equal to the
+  capacity at `now == deadline` before advancing past it. The retain predicate keeps entries whose deadline is
   at or after `now` (`continuation.rs:675-677`), so without this assertion an over-eager reclaimer
   that dropped not-yet-expired entries would produce exactly the same final 0 and pass. It is also
   what makes good on this plan's claim that the driven clock shows reclamation *at the deadline*
@@ -74,6 +74,28 @@ Every row states above what makes it fail. The risks specific to this plan:
   red label. Its stated justification — that a reclaimer could empty the map while leaving capacity
   accounting stale — describes a state this module cannot reach, because `held.len()` *is* the
   accounting. One map, one number, no second bookkeeping to drift.
+
+## Two corrections the test code forced, neither a design event
+
+Recorded here rather than in the design section because neither meets a §P3 trigger: no acceptance
+criterion moves, no contract changes, nothing enters or leaves what §P0 declared FOR or OUT. They
+are §P4a documentation updates, shipped in the same commit series as the test they describe, and
+are not going back through §P4 on their own account.
+
+- **Row 2's case lives in its own target, `tests/nfr_perf3_reclamation.rs`, not "the same module".**
+  Cargo builds one binary per file in `tests/`, and this row is deliberately red-because-unbuilt.
+  Put beside the MIK-7212 criteria it would take that whole binary down — including
+  `ac_mrtr_8_the_table_is_bounded`, which is *row 1's entire evidence*. Breaking a committed green
+  test for one clause in order to land an intentional red for another is not a trade this plan
+  makes, least of all on a branch eleven worktrees share.
+- **The capacity is injected as 4, not read from `IN_FLIGHT_CAPACITY`.** The constant is private to
+  the crate (`continuation.rs:811`) and widening it would be a visibility change asking for design
+  authority this row does not need. Hardcoding `4_096` beside it would duplicate a private
+  production value that drifts on the next tune. The property row 2 actually asserts is *fill
+  exactly to capacity, never one more*, which is identical at 4 and at 4 096 — so the fixture binds
+  the number once and loops over it, and `InFlight::new("gw-1", 4)` is the same shape
+  `tests/mik_7212_acs.rs:496` and MRTR.8b row .08 already use. The production number keeps its own
+  assertion in MRTR.8b .08, in the module that can see it.
 
 ## What is deliberately not covered
 

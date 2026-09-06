@@ -181,8 +181,10 @@ carrier or the route it exists to observe. Two rows red on one cause prove one t
 
 ## 6. The empty cells, each with its reason
 
-An empty evidence cell is the finding. Four exist. None is tidied away, and none is downgraded
-into a weaker case that would look green.
+An empty evidence cell is the finding. Four were opened here; **three are still empty**, and
+§6.6 is retained as a closed entry rather than deleted, because a gap that was answered is worth
+more as a record of how than as a silence. None is tidied away, and none is downgraded into a
+weaker case that would look green.
 
 ### 6.1 T8b/T9 are blocked on a number, not on a design question
 
@@ -289,31 +291,27 @@ something to be reverted from, and the same row becomes writable and red.
 - if it resolves badly (TASK.1 ships no gated behaviour in this release): EXT.1.d closes on
   construction and review, recorded as such, never on E7 alone
 
-### 6.6 OTEL.1.a needs route-level evidence; the extractor alone does not close it
+### 6.6 Route-level ingestion — no longer an empty cell; the cases are §5.2
 
-T0 feeds a request body to the production extractor and asserts the recovered context. That proves
-the *parse* is real. It does not prove either transport hands the extractor a body to parse:
-neither the HTTP nor the stdio route is exercised by any row here. **If a route never calls the
-extractor, every row in §5 still passes.**
+**This entry is closed. Its cell was filled on 2026-09-06 by T11-T15 in §5.2, and the four
+deferral fields it used to carry are struck rather than annotated.** A §6 entry exists to record
+a gap nobody has cases for; leaving one standing next to the cases that close it gives the
+document two live close conditions for one criterion, and a later reader takes whichever they
+open first.
 
-*The argument this section used to make — that the split was deliberate because the transports
-were moving under other tickets, and that extractor evidence would therefore do — is WITHDRAWN,
-not merely annotated. It is kept in one sentence only so a reader who remembers it can see it was
-answered rather than lost.*
+What the gap was, in one sentence, so a reader who remembers it can see it was answered rather
+than lost: T0 proves the parse is real and proves nothing about either transport handing the
+extractor a body to parse, so if a route never calls the extractor every row in §5 still passes.
+The earlier argument that the split was deliberate — that the transports were moving under other
+tickets and extractor evidence would therefore do — was WITHDRAWN before that, by the design's
+§2.7 and §7.
 
-**Withdrawn 2026-09-06 by the design's §2.7 and §7.** That correction found the inbound
-`params._meta` is discarded before the invoke funnel on both transports and the one production
-read site reads a level below the carrier, so "a route never calls the extractor" is not a
-hypothetical this plan may close around — it is the state of the tree. Extractor evidence is
-therefore no longer sufficient for OTEL.1.a, and the bullet that permitted it is struck rather
-than annotated: a superseded clause left standing is read by whoever opens this file first.
-
-- owner: unchanged — shared with §6.4, the same harness answers both
-- resolving action: route-level ingestion per transport is now REQUIRED, not an alternative to
-  the capture harness; the harness may supply the evidence, the gap may not be waived
-- trigger: before OTEL.1.a is closed, not "whichever lands first"
-- if it resolves badly (no route-level evidence is obtainable in this release): OTEL.1.a does
-  not close — it is recorded as open with the design's §7 close condition unmet
+What replaced it: **route-level ingestion per transport is a case, not a waiver.** §5.2's T12
+(HTTP) and T13 (stdio) are those cases, T11 asserts the carrier they must deliver to, and OTEL.1.a
+does not close while any of the three is unwritten or green-on-HEAD. The capture harness §6.4
+names may supply the evidence; it may not substitute for the rows. The one field still genuinely
+open is T15's grade, and it is recorded in that row's own cell, where the case it qualifies is —
+not here, as a fifth deferral for someone to find.
 
 ## 7. The A1-A9 sweep, and what it changed
 
@@ -387,7 +385,7 @@ Applicability class: this document is **DOCS** work that plans **CODE** work. Th
 | 3 | The injectable extension source and named bound constants (§5.1). | this ticket's implementer, at implementation time |
 | 4 | Non-interpretation over authorisation, policy and budget (§6.3) is enforced by construction and review, with no case. | recorded as a limit against OTEL.1 |
 | 5 | EXT.1.d has no behavioural case until an extension gates behaviour (§6.5). | the TASK.1 implementer |
-| 6 | Route-level ingestion of trace `_meta` on HTTP and stdio (§6.6). | shared with item 2 |
+| 6 | ~~Route-level ingestion of trace `_meta` on HTTP and stdio (§6.6).~~ **Closed 2026-09-06** — it is §5.2's T11-T13, not a handed-forward item. What remains open from it is narrower and belongs to someone else: T15's grade cell, which turns on whether CONTROL.3b's MET survives resting on a read of the wrong carrier. | criteria-ledger, on CONTROL.3b (`docs/requirements/RELEASE-4.0.0-criteria-status.md:175`) |
 | 7 | **Data protection on `baggage` (§9, gate L2).** Caller-supplied `baggage` may carry personal data, and propagating it moves that data to a backend. The W3C baggage specification says so in its own privacy considerations (https://www.w3.org/TR/baggage/#privacy-considerations). Design §4.4.4 is the question; it is unanswered, and OTEL.1.d cannot honestly be called reviewed until it is. | operator — it is a policy decision, not an engineering one |
 
 The design's operator questions (§4.4) are unchanged by this plan and are not restated. One of
