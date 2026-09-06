@@ -524,3 +524,34 @@ Prose alone would leave nothing watching it, which is what the board criticised 
 The watcher is an `#[ignore]`d test asserting the DESIRED behaviour with the reason in the
 attribute, plus a line on the readiness board's cluster G row. The current defect is NOT pinned
 as correct by any passing test.
+
+### The fixed `"stdio-session"` id defeats ORDER.2 on stdio (arrived 2026-09-06, from ORDER.2)
+
+Recorded here rather than filed, because it changes what this note's convergence point should
+**be**, and this note's owner is the one who acts on it. Source:
+`docs/design/2026-09-06-order-2-per-connection-list-variance.md` §5 and §8, whose §P0 puts stdio
+parity out of its own scope and names cluster G.
+
+`MIK-7272.ORDER.2b` requires that a tool list not vary as a side effect of other requests on the
+same connection. On modern HTTP that closes by elimination: the connection has no session, the id
+is the empty string, and `session_key` (`src/gateway/meta_mcp/mod.rs:1075-1090`) filters the empty
+string to `None`, so there is no per-connection key to vary under. stdio does not inherit this.
+`src/gateway/server/mod.rs:1604` sets `let session_id = "stdio-session";` and `:1822-1824` and
+`:1826-1828` pass `Some(session_id)` into `tools/list` and `tools/call`. That id is **non-empty**,
+so `session_key` passes it through, and a successful invoke can still promote a tool into the same
+connection's next list.
+
+Two consequences, and the second is the one that costs:
+
+1. ORDER.2's chosen option closes both clauses on modern HTTP and **neither** on stdio. Any claim
+   of transport-wide ORDER.2 coverage is false until this is settled here.
+2. The settlement is a product call, not a repair: with one client per process, a fixed id may be
+   *correct* for stdio. Either drop the fixed id, or key the two stores
+   (`session_promoted`, `mod.rs:312`; and the FSM state store) by something per-**connection**
+   rather than per-**process**, and say which, with the reason. A2A needs the same reading.
+
+Prose alone leaves nothing watching it, which is the failure this note has already named twice.
+The watcher belongs with this cluster's implementation, not with ORDER.2: an `#[ignore]`d test
+asserting that two sequential stdio requests see the same tool list across an intervening
+successful invoke, with the reason in the attribute, plus a line on the readiness board's
+cluster G row. It does not exist yet, and this paragraph is not a substitute for it.
