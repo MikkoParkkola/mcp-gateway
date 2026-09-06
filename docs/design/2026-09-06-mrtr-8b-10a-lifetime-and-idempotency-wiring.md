@@ -359,10 +359,25 @@ dying with this section:
 > that can slip, and this slice is no longer this session's. **If no ruling lands before SUB.4's
 > rev-5 review opens, it is filed** — a finding recorded only inside two documents of a slice this
 > session does not own does not survive that review being re-scoped, and disposal by silence is the
-> one outcome §P0 does not offer. **`sub-ext` holds the trigger**, told on 2026-09-06: they own
-> rev-5 and are therefore the only party who reliably sees it open, and this session may have ended
-> by then. A bound whose condition nobody is watching decays into exactly the silence it was
-> written against.
+> one outcome §P0 does not offer.
+>
+> **The argument as sent overstated the exposure, and the correction belongs next to it.** It said
+> *a spoofable key in a shipped default*. R6 is DORMANT: `MetaMcp`'s constructor initialises the
+> idempotency cache to `None`, its only writer is `MetaMcp::enable_idempotency`, and that method's
+> sole caller in the tree is the crate's own test module — no shipped configuration constructs an
+> `IdempotencyCache`, so no deployed build formats this key at all. Raised by `sub-ext`
+> (`3ca0fda0`), re-verified at source here, and cited by symbol rather than line because these
+> particular numbers have rotted three times in three windows. R6 is therefore a risk OF
+> ACTIVATION, sitting beside SUB.4's own R4 and R5, not a live defect. That weakens the case for a
+> ticket; it leaves the finding and the repair constraint exactly where they were, since landing
+> the fallback chain over the raw append is precisely the act that would create the live version.
+>
+> **The trigger is durable in two documents rather than in one session's attention.** `sub-ext`
+> was told on 2026-09-06, and then did better than remember it: rev-5's own R6 bullet now carries
+> the same condition (`e2d3e07a`), with ISSUE-DOR's four fields named in place. Both sessions can
+> end without the bound going with them. A bound whose condition nobody is watching decays into
+> exactly the silence it was written against — one written into the document the review opens does
+> not depend on anybody watching.
 >
 > **The fix carries a comment obligation.** `invoke.rs:1133-1139` explains that `caller_principal`
 > is "kept separate from `identity_suffix` above: that one keys retry de-duplication, a different
