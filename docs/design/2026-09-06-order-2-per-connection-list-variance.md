@@ -216,9 +216,17 @@ reasons.)
 
 **(e) Keep promotion, key it by something invariant across connections** — this
 is cluster-b's (c), principal re-keying, in the promotion store's clothes.
-Rejected: any key that is invariant across connections makes promotion a global
-mutation, which converts a 2a violation into a worse one — every caller's list
-changes because one caller invoked something.
+Rejected **on 2b, not on 2a** — an earlier draft rejected it as "a global
+mutation", which is a caricature of principal re-keying and would not survive an
+implementer reading it. A principal key is authorization-derived: two connections
+of the same principal agree, and two principals differ, which is precisely the
+variation ORDER.2's third clause *permits*. So (e) satisfies 2a. It fails the
+half this note is also FOR: the principal is the same before and after an
+invoke, so a successful `gateway_invoke` still changes that connection's next
+list — 2b, untouched, which is the leg (c) closes. Its second cost is the one
+cluster-b priced: an unauthenticated modern connection has no principal to key
+on, so it needs a fallback, and the only fallback available is the shared key
+this note exists to remove.
 
 ### Recommendation
 
