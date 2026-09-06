@@ -9,7 +9,11 @@ integration worktree. Existing dual-vendor SHIP receipts and independent
 92/92 public assertions remain supporting evidence. Two later mechanical
 changes are explicit: spell zero test permissions `0o0` for current Clippy,
 and format the unchanged `discovery_names` expression on the base branch.
-Their final delta review remains pending; no new behavioral claim is introduced.
+Their final delta review is now approved: GPT and Grok both SHIP at HEAD
+`35be02836e1b054831b7d1db1063cd7794b42b2d`, material SHA256
+`b1fc72b47ac0361834d48b053ee633a731104c48465b66c05ad5e1ad6ef7daff`,
+actual exits0 (`gh462-mechanical-code-r1.verified.json`). No new behavioral
+claim is introduced.
 
 Fresh isolated validation: `cargo test --all-features --jobs 4 --test
 gh462_config_preservation` passes 44/44, including CONFIG.3 real permission
@@ -21,8 +25,52 @@ GitNexus pre-commit inspection reports high aggregate impact across setup/config
 flows; the source changes stay within the reviewed mutation and setup paths.
 
 This is a draft increment into the 4.0 integration branch. Exact-commit CI,
-mechanical-delta review, integration and final issue/DoD closure remain open.
+integration and final issue/DoD closure remain open.
 GH462 is still open. This checkpoint does not claim a release or deployment.
+
+
+CI follow-through scope (configuration-only): unblock
+PR #483 validation by allowing the existing CI workflow to handle pull requests
+whose base is exactly `codex/v4-release-delivery`, alongside `main`. Preserve the
+existing push branches, tag filters, permissions, jobs and all release workflows.
+Only `.github/workflows/ci.yml` and this checkpoint are in scope. This inherits
+the GH462 delivery objective; it is not a new release-workflow redesign.
+
+Definition of Ready: the coordinator explicitly selected the exact integration
+branch and authorized commit/push to the existing draft PR. Value: replace zero
+quality-CI runs with the existing suite on an identified commit. Risks are extra
+CI runner use and latent suite failures; no secret permission or runtime surface
+changes. Reuse the existing workflow rather than duplicate its jobs. Alternatives:
+a broad `codex/**` filter runs unnecessary branches; temporarily retargeting the
+PR to `main` tests the wrong integration base. Both are rejected.
+
+| Criterion | Level/type and decisive check | Current evidence |
+|---|---|---|
+| GH462.CI.1 | Configuration/static: YAML parse and actionlint; exact PR base list contains `main` and `codex/v4-release-delivery`. | PASS: actionlint1.7.12 exits0; parsed list is exactly `main`, `codex/v4-release-delivery`. |
+| GH462.CI.2 | Configuration/regression: parsed workflow comparison permits only the PR branch-list addition; push/tag triggers, permissions and jobs remain identical. | PASS: entire parsed workflow equals pre-edit YAML after removing only the added PR base. |
+| GH462.CI.3 | Live integration: after authorized push, workflow path `.github/workflows/ci.yml`, name `CI`, event `pull_request`, pushed PR head SHA and expected19 jobs are verified;18 may run and tag-only Docker must remain skipped. | At HEAD35be028, API lists only skipped Dependabot auto-merge run34060257731; no CI run. Post-push result is unknown. |
+
+This observed missing run is the pre-change failure; it is not a failed Rust
+test. Mirror unit tests, runtime coverage/mutation and Rust rebuilds are N/A to a
+branch selector. No Rust symbol changes, so symbol impact analysis is N/A;
+pre-commit diff/graph inspection still applies. Existing GH462 reviews and runtime
+results remain valid. GitHub owns actor/run/SHA attribution and durable check
+records; no new identity, memory, mission or platform primitive is introduced.
+Design/test-plan gate: GPT `gpt-20260906T213650Z-63173` and Grok
+`grok-20260906T213650Z-63168` both SHIP, process_status=ok, actual exits0;
+identical5780-byte material SHA256
+`948f6fa8f1ba74c8a1e83dcc741fdc4117161b185f5b87ac4e94b0af7249ef03`.
+The one-line selector change now passes actionlint and parsed whole-workflow
+equality after removing only the added PR base. Final config-delta gate is also approved: GPT `gpt-20260906T214607Z-91291`
+and Grok `grok-20260906T214607Z-91290` both SHIP, process_status=ok, actual
+exits0; identical10567-byte material SHA256
+`0f3bf83a3fb1795b11b680746e3cf9f89a05955a82fa59f85fceb35524d3dc6d`.
+The reviewer-requested evidence-cell refresh changes no workflow behavior.
+Same-SHA CI is the post-push gate; results are recorded in
+[PR #483 checks](https://github.com/MikkoParkkola/mcp-gateway/pull/483/checks)
+and the delivery evidence `gh462-ci-live-run.json`. The release coordinator
+owns removing the temporary allowlist entry when the integration branch is
+retired; no broader wildcard is introduced.
 
 Status: design, tests and final code approved by both vendors; compiled RED
 followed by all-feature integration 44/44 and reduced-feature 36/36 GREEN;
