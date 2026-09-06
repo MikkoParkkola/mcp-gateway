@@ -456,6 +456,7 @@ text predicate because a transport error there genuinely has no typed status.
 | Does a rate-limit-shaped variant already exist, so that O1 would only construct an existing symbol differently? | read all 22 variants of `src/error.rs:15-179` | none; the nearest precedent is `Forbidden`, which does carry a typed HTTP `status` | **superseded, closed not dropped:** answered a question the revised O1 no longer asks — it reuses `Error::Http`, an existing transport-error variant, rather than adding a new one |
 | Can the classification avoid the public enum entirely by staying crate-internal? | read `CapabilityBackend::call_tool_with_context` `src/capability/backend.rs:390`, `pub mod capability` `src/lib.rs:36`, plus the Rust rule that variants inherit enum visibility | no: no `pub(crate)` variant exists as a language feature, and the alternative carrier is an equally public signature | O1b's conclusion (no gate-free crate-internal route) is retained as the answer to a narrower, still-live question: O1b now compares against O1's *actual* mechanism (reusing `Error::Http`) rather than a hypothetical new variant, and still finds no cheaper carrier — see O1b as revised |
 | Does `error_for_status_ref()` lose the response body needed for diagnostics? | read reqwest 0.13.4 source `src/async_impl/response.rs:409`, `src/error.rs:180` | the returned error is built from status/URL/reason only, borrowing nothing from the body; the borrow ends immediately so `response.text().await` remains legal after | confirms O1's mechanism is sound: call `error_for_status_ref()` first, log the body via `tracing::warn!`, then convert — no diagnostic information is silently lost, it moves to a log line (DESIGN EVENT 1, section 4) |
+| Does the borrow-then-consume ordering actually compile at the **REST** site, where `handle_response` moves `response` into `.text().await` in the same block? | inserted `let http_err = response.error_for_status_ref().err();` immediately before the `.text()` call at `params.rs:46` and ran `cargo check --lib` (2026-09-06), then put the original content back | `Finished dev profile ... in 23.49s` — compiles clean; the `Err` arm yields an owned `reqwest::Error`, so the `&Response` borrow ends before `.text()` moves the value | closes the one site where O1's ordering was not obviously free. The reqwest source read above establishes the mechanism; this establishes it **at the site the DETECTION test pins**, so no reviewer round is spent on it |
 | What JSON-RPC code does a capability `429` surface as, once it is carried as `Error::Http`? | read `to_rpc_code` `src/error.rs:193-209`; `rg` confirms nothing in the capability path constructs `Error::Http` today | `Protocol(_)` has its own arm (`-32600`); `Http` has none and falls through `_ => -32603` — named as DESIGN EVENT 2, then **ruled on**: a guarded `Self::Http(e) if e.status() == Some(429) => -32000` arm, same class as the existing `BackendUnavailable\|CircuitOpen\|BackendTimeout\|Transport\|TransportPermanent => -32000` arm four lines above it; non-429 `Http` still falls through to `-32603`, unchanged | DESIGN EVENT 2 (section 4): resolved to `-32000`, not left as `-32603` — moving the whole `Http` arm was rejected (blast radius across every `?`'d reqwest call in the crate, not checked call-by-call); the guarded arm costs no new mechanism since it reuses the `.status()` discriminator `BudgetOutcome::of` already keys on |
 | Does reusing `Error::Http` on the capability path create a retry-storm risk? | read `is_retryable` `src/chains/retry.rs:179` and `src/failsafe/retry.rs:96`; traced their sole callers `src/backend/ops.rs:218` (MCP-backend) and `src/chains/executor.rs:175`; read `send_with_retry` `src/capability/executor/mod.rs:111-160` | `is_retryable` treats `Error::Http` as retryable, but capability's own retry logic never calls `is_retryable` — it is self-contained | no risk: an `Error::Http` returned from the capability path cannot trigger a retry it would not already trigger under today's behaviour; closed rather than left as an unstated risk |
 | Does any other match on `crate::Error` discriminate `Protocol` from `Http` on the dispatch path O1 touches? | `rg 'Error::Protocol\|Error::Http' src/`, read `classify_dispatch_error` `invoke.rs:2940-2958` and its call site `invoke.rs:1461`, traced back to the shared `dispatch_result` also read at `invoke.rs:1384` | yes: `classify_dispatch_error` gives `Protocol` a `classify_from_detail` arm and lets `Http` fall through `_ => BackendError` — the same shape of gap `to_rpc_code` has | DESIGN EVENT 3 (section 4): unlike the JSON-RPC code, this one is not accepted as-is — O1's implementation must add the missing `Http` arm so the RecoveryHint category does not degrade |
@@ -522,12 +523,20 @@ section 4 and recorded as Resolved above, and none blocks implementation
 
    What that pin does and does not close, stated plainly so no reader has to
    infer it:
-   - it closes G2 **for the predicate leg of the REST capability path only** —
-     that a real `params.rs:51` error string is classified as rate-limited.
-     It does not assert the `BudgetOutcome` leg, which stays read off the
-     source. `jsonrpc.rs:205` and `graphql.rs:261` format their own status
-     text, are driven by no test, and stay exactly as exposed as this document
-     found them.
+   - it closes G2 **for the predicate leg of all three capability format
+     sites** — that a real error string built at `params.rs:51`,
+     `jsonrpc.rs:205` or `graphql.rs:261` is classified as rate-limited. It
+     does not assert the `BudgetOutcome` leg, which stays read off the source.
+     CORRECTION, 2026-09-06: this document as first written claimed the pin
+     covered the REST leg only and that `jsonrpc.rs:205` and `graphql.rs:261`
+     were "driven by no test". That was true when written and is no longer:
+     the DETECTION half landed
+     `a_real_jsonrpc_429_is_excluded_by_the_shared_rate_limit_predicate`
+     (`executor_tests.rs:1194`) and
+     `a_real_graphql_429_is_excluded_by_the_shared_rate_limit_predicate`
+     (`:1239`) alongside the REST case (`:1002`), each mutation-probed by
+     dropping the status from its own format literal. All three legs are now
+     pinned; none of them is pinned for G1, which is what this design is for.
    - it closes nothing of G1 at any of the three sites. Detection is not
      prevention; only O1 is.
    - it does not pin that `execute()` calls `handle_response` — the test enters
