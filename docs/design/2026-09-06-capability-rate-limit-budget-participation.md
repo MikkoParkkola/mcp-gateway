@@ -204,9 +204,17 @@ status; `is_rate_limited` stays where it is for the MCP-backend path, which has
 no typed status to match on.
 
 Eliminates rather than patches: after it, the finding "the exclusion depends on
-message text" cannot be stated of the capability path. It also gives
-`Retry-After` a place to live if anything later wants it (unchanged from the
-superseded draft).
+message text" cannot be stated of the capability path.
+
+It does **not** give `Retry-After` a place to live, and the superseded draft's
+claim that it did was wrong. `reqwest::Error` carries three fields — `kind`,
+`source`, `url` (`reqwest-0.13.4 src/error.rs:26-30`) — and the status
+constructor fills `Kind::Status(status, reason)` and nothing else
+(`:343-360`). The headers go with the response. Anything that later wants
+`Retry-After` must capture it explicitly, at the format site, before the body
+is consumed — a second value beside the error, not a field of it. Corrected
+after the Kimi K3 leg of the §12 review flagged the sentence; verified at the
+reqwest source above rather than accepted on the reviewer's word.
 
 Cost, checked rather than assumed (section 6): reusing `Error::Http` adds no
 public symbol (no D28) and breaks no exhaustive downstream `match` (no D2) —

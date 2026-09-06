@@ -13,7 +13,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use mcp_gateway::backend::BackendRegistry;
-use mcp_gateway::config::{ApiKeyConfig, AuthConfig, Config};
+use mcp_gateway::config::{ApiKeyConfig, AuthConfig, CircuitBreakerConfig, Config};
 use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 use mcp_gateway::gateway::proxy::ProxyManager;
@@ -23,6 +23,7 @@ use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 use serde_json::{Value, json};
 use std::sync::Arc;
+use std::time::Duration;
 use tower::ServiceExt;
 
 /// A modern request frame: the revision removed the handshake, so every
@@ -481,4 +482,71 @@ async fn control_2_a_modern_request_with_no_agent_token_is_refused() {
     });
     let (served, body) = post(&off, modern("tools/list", json!({})), &[]).await;
     assert_eq!(served, StatusCode::OK, "body: {body}");
+}
+
+// ============================================================================
+// NFR.SEC.1 control 5 — per-client circuit breaker
+// The breaker trips on a client's own failure count, so a modern caller whose
+// circuit is open is refused before the handler runs — and the refusal is
+// keyed to that client, not to the gateway.
+// ============================================================================
+#[tokio::test]
+async fn control_5_a_modern_caller_whose_circuit_is_open_is_refused() {
+    let app = state(Fixture {
+        auth: AuthConfig {
+            client_circuit_breaker: Some(CircuitBreakerConfig {
+                enabled: true,
+                failure_threshold: 2,
+                // Long enough that the open circuit cannot half-open under us
+                // mid-test and turn a refusal back into a 200.
+                reset_timeout: Duration::from_secs(300),
+                ..CircuitBreakerConfig::default()
+            }),
+            ..auth_with(
+                vec![
+                    api_key("k", 0, None),
+                    ApiKeyConfig {
+                        name: "second".to_string(),
+                        ..api_key("k2", 0, None)
+                    },
+                ],
+                None,
+            )
+        },
+        ..Default::default()
+    });
+    let tripped = [("authorization", "Bearer k")];
+    let other = [("authorization", "Bearer k2")];
+
+    // Falsifier: both clients are served while their circuits are closed, so
+    // the refusal below cannot be a request the gateway was rejecting anyway.
+    let (before, body) = post(&app, modern("tools/list", json!({})), &tripped).await;
+    assert_eq!(before, StatusCode::OK, "body: {body}");
+    let (peer, body) = post(&app, modern("tools/list", json!({})), &other).await;
+    assert_eq!(peer, StatusCode::OK, "body: {body}");
+
+    for _ in 0..2 {
+        app.auth_config.record_client_failure("client");
+    }
+
+    let (status, body) = post(&app, modern("tools/list", json!({})), &tripped).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body: {body}");
+    assert_eq!(body["error"]["code"], json!(-32003), "body: {body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("circuit breaker is open"),
+        "body: {body}"
+    );
+    // The gate itself refuses, not only the route that consults it.
+    assert!(
+        !app.auth_config.check_client_circuit_breaker("client"),
+        "the breaker must refuse the client whose failures tripped it"
+    );
+
+    // Per-client keying: a global breaker would refuse this one too, so this
+    // is the assertion that separates the control from a gateway-wide fuse.
+    let (unaffected, body) = post(&app, modern("tools/list", json!({})), &other).await;
+    assert_eq!(unaffected, StatusCode::OK, "body: {body}");
 }
