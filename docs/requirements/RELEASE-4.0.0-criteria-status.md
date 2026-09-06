@@ -411,22 +411,27 @@ Two things this section does not resolve, recorded rather than papered over:
 | GH475.VAL.7 | every VAL row repeats under `capability:` | MET | test `src/config/tests.rs:1995` | no |
 | GH475.VAL.8 | the accepted side of each boundary is accepted | MET | test `src/config/tests.rs:2019` | no |
 | GH475.OBS.1 | each exclusion is observable | UNTESTED | the counter exists: `src/gateway/meta_mcp/invoke.rs:1902` increments `mcp_error_budget_suppressed_total` with `reason = rate_limited` before the exclusion returns. No case asserts it, so the success and ordinary-failure controls the criterion names are unproven, and the second exclusion site `src/backend/ops.rs:258` emits nothing. [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) | yes |
-| GH475.OBS.2 | the suppression debug event is emitted | UNTESTED | the event exists: `src/gateway/meta_mcp/invoke.rs:1908` emits a `debug!` carrying the server and the tool. No case captures it, and it names the tool rather than the excluded outcome the criterion asks for. [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) | yes |
+| GH475.OBS.2 | the suppression debug event is emitted | MET | fixed 2026-09-06 (`a8b1158f`, GH #481): `rate_limited_exclusion_emits_a_debug_event` (`src/gateway/meta_mcp/invoke.rs:4540`) installs a scoped `tracing` subscriber, drives `record_error_budget(.., IgnoredRateLimit)`, and asserts exactly one `debug!` fires carrying `server` and `tool`. Residual named in the test itself, not fixed here (out of scope, still tracked at #481): the event still names the tool rather than which `BudgetOutcome` variant excluded it, which holds today only because there is exactly one exclusion arm — a second reason added later would be indistinguishable from the first except by the hardcoded message string | no |
 | GH475.MIG.1 | the 4.0.0 notice fires below 4.0.0 and writes nothing | MET | test `src/commands/upgrade.rs:1163` starts at stamp `3.9.0` and asserts the config is byte-identical | no |
-| GH475.MIG.2 | it is idempotent, and the first run advances the stamp | MET (`version-coupled`) | same test runs the upgrade twice and pins the stamp. It does not pin it at the literal `4.0.0`: both assertions (`src/commands/upgrade.rs:1177`, `:1185`) compare against `env!("CARGO_PKG_VERSION")`, which is `4.0.0` only because `Cargo.toml:3` says so today. On the next version bump the assertion re-targets itself and keeps passing while no longer pinning the 4.0.0 behaviour it was written for — a test that stops testing without anyone editing it, which is worse than a missing one because the row stays green. The production guard reads the same value (`:465`, `:522`), so GH475.MIG.3's "starts above `4.0.0`" is defined by the crate version too | no |
-| GH475.MIG.3 | the comparison direction is pinned | UNTESTED | the notice is registered at `src/commands/upgrade.rs:111` and guarded by the stamp, but no case starts above `4.0.0`, so an inverted comparison stays green. [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) | yes |
+| GH475.MIG.2 | it is idempotent, and the first run advances the stamp | MET | fixed 2026-09-06 (`98bef5d1`, GH #481): the two assertions in `migration_4_0_0_advances_the_stamp_without_touching_the_config` (`src/commands/upgrade.rs:1182`, `:1189`) now pin the literal `"4.0.0"` instead of `env!("CARGO_PKG_VERSION")`, so a future version bump can no longer make the case re-target itself silently. The two production reads of the macro (`:465`, `:522`, current-version detection) are correctly left version-agnostic — that comparison is supposed to track the running binary | no |
+| GH475.MIG.3 | the comparison direction is pinned | MET | fixed 2026-09-06 (`82d8490b`, GH #481): `upgrade_from_above_4_0_0_does_not_refire_the_notice` (`src/commands/upgrade.rs:1206`) constructs an `UpgradeContext` at `old_ver` `4.0.1` and asserts `applicable_migrations()` comes back empty, so an inverted comparison at `:404` (`old_ver < ceiling` flipped to `>`) no longer stays green. Falsifier probe run and recorded in the commit message: flipping the operator failed this test on the expected assertion, then restored | no |
 | GH475.MIG.4 | the notice says what the four changes are | MET | tests `src/commands/upgrade.rs:1148` (all four items named) and `:1218` (every command the notice tells an operator to run exists) | no |
 | GH475.NOTICE.1 | a quiet upgrade still delivers the breaking-change notices | MET | integration test `tests/gh475_quiet_upgrade_still_warns.rs:3` runs the built binary with `--quiet` over a 2.x data directory | no |
 
-Five of the six rows the test plan filed to [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481)
-are blocking here. The sixth, `GH475.RL.11`, is recorded MET (`structural`) rather than blocking
-because reading the call graph settles the criterion as stated — one predicate, every caller
-reaching it — while the case the plan wanted still does not exist. #481 stays open for it.
+Three of the six rows the test plan filed to [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481)
+are blocking here. `GH475.RL.11` is recorded MET (`structural`) rather than blocking because
+reading the call graph settles the criterion as stated — one predicate, every caller reaching it
+— while the case the plan wanted still does not exist. `GH475.MIG.2` and `GH475.MIG.3` were
+blocking until 2026-09-06, when `98bef5d1` and `82d8490b` landed the missing cases; both are
+recorded MET above. `GH475.OBS.2` was blocking until the same date, when `a8b1158f` landed its
+case; it too is recorded MET above, with its residual named in the row rather than hidden. #481
+stays open for the remaining three (`RL.9`, `RL.10`, `OBS.1`).
 
 Reading source rather than the plan moved three rows off what the plan says about them.
-`GH475.OBS.1` and `GH475.OBS.2` are recorded UNTESTED, not absent: the plan's "Rows without a
-case" table still gives "there is no suppression counter" and "no debug event is emitted" as the
-reason, and both were built at `src/gateway/meta_mcp/invoke.rs:1902`. `GH475.CFG.5`'s
+`GH475.OBS.1` is recorded UNTESTED, not absent: the plan's "Rows without a case" table still
+gives "there is no suppression counter" as the reason, and it was built at
+`src/gateway/meta_mcp/invoke.rs:1902`. `GH475.OBS.2` was UNTESTED for the same reason ("no debug
+event is emitted"; same line) and is now MET, fixed `a8b1158f` on 2026-09-06. `GH475.CFG.5`'s
 free-failure argument names two setters as callerless at `src/gateway/meta_mcp/mod.rs:961` and
 `:967`; the setters are at `:972` and `:977` and both are called from
 `src/gateway/server/mod.rs:615`. The plan is a design document and is not this ledger's to
