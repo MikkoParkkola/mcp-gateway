@@ -109,10 +109,13 @@ review of the change, not of the diff statistics. Whether the release lands as o
 sequence of them is an operator decision that has not been made, and it decides how much of the
 work below can proceed in parallel.
 
-`NFR.COMPAT.1` — flipping `server.modern_protocol` to true at `src/config/mod.rs:1174` — is the
-point at which unmerged stops being bookkeeping. Until it flips, every gap in the revision
-surface is dormant. After it flips, each one is a first-run defect for anyone who upgrades. That
-row must therefore be the last thing to land, not merely a late one.
+`NFR.COMPAT.1` — `server.modern_protocol` defaulting to true at `src/config/mod.rs:1236` — is the
+point at which unmerged stops being bookkeeping. **That flag flipped in `83c98902` on 2026-09-04
+and the operator ruled on 2026-09-06 that it stands.** Every gap in the revision surface is
+therefore no longer dormant: each one is now a first-run defect for anyone who upgrades. The
+sequencing consequence inverts — nothing is protected by a default-off flag any more, so
+`MIK-7212.MRTR.7a`/`7b` becomes a hard release gate: 4.0.0 must not ship serving the modern
+revision by default while the legacy-client bridge is unreachable from production.
 
 ## The shape of the problem
 
