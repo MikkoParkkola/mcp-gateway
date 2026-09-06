@@ -95,12 +95,18 @@ Two readings:
 - **strict** — scrub the *whole message*, status included. Fails today, because
   with the status gone there is nothing left to classify from.
 
-The headline column settles it: *"a typed rate-limit outcome needs no text."* The
-criterion is not asking whether the current string happens to survive a body
-scrub; it is asking that the outcome be carried by something other than text.
-Adopting the weak reading would let the criterion be closed by a test whose
-subject is the formatting of an error message — a test that passes for a reason
-unrelated to what the row is named after. **Strict reading adopted.** Under it,
+Strict is the face-value reading of both columns, and weak is the strained one.
+"observed at `jsonrpc.rs`" places the observation at the status check, and "the
+error text" means the text, not a half of it that the row never names. The weak
+reading needs "the error text" silently narrowed to "the body portion", and it
+makes the headline — *"a typed rate-limit outcome needs no text"* — false, since
+under it the outcome needs exactly one piece of text and always has. A later
+reader should not be able to take weak as the reasonable default: it is not the
+plain reading, it is the reading that survives the tree as it stands.
+
+Adopting it would also let the criterion be closed by a test whose subject is the
+formatting of an error message — a test that passes for a reason unrelated to what
+the row is named after. **Strict reading adopted.** Under it,
 RL.10's behaviour is delivered and its property is genuinely absent, and those
 have different fates (§5).
 
@@ -148,10 +154,45 @@ Eliminates rather than patches: after it, the finding "the exclusion depends on
 message text" cannot be stated of the capability path. It also gives
 `Retry-After` a place to live if anything later wants it.
 
-Cost, stated plainly: `crate::Error` is public, so a new variant widens the public
-API surface (D28) and every exhaustive `match` on `Error` must handle it.
-`VISIBILITY-IS-DESIGN` makes that an ask, not an edit — scheduled as an open
+Cost, stated plainly and checked rather than assumed (section 6): `crate::Error`
+is exported at the crate root (`src/lib.rs:94`), is **not** `#[non_exhaustive]`
+(`src/error.rs:14-15`), and carries **no** rate-limit-shaped variant today — the
+nearest precedent is `Forbidden`, which does carry a typed HTTP `status`. So O1
+adds a public symbol and breaks any downstream exhaustive `match`. That is D28
+(API surface counted) plus D2 (breaking → approved and migrated); it is **not**
+`VISIBILITY-IS-DESIGN`, which governs widening a field or a function, not adding
+a variant to an already-public enum. Citing the wrong gate matters here, because
+one is an ask and the other is a review.
+
+Two things make the cost smaller than it reads. `to_rpc_code` already ends in a
+`_ =>` arm, so the crate's own match sites do not all need touching. And 4.0.0 is
+a major release in preparation — a breaking enum change is never cheaper than
+during one. Neither disposes of the question of whether 4.0.0's public surface is
+still open to additions; only the requester can answer that, so it stays an open
 question in section 6.
+
+### O1b — the same classification, carried crate-internally (rejected)
+
+Named because O1's whole cost is the public enum, and both ends of the wire are
+in-crate: the status is known at `executor/jsonrpc.rs:204` and consumed at
+`invoke.rs:1384`. If the classification could ride a crate-internal carrier, the
+open question in section 6 would not exist. It cannot, for a language reason and
+a signature reason.
+
+Rust has no per-variant visibility: a variant of a `pub` enum, and its fields, are
+as public as the enum. There is no `pub(crate)` variant of `crate::Error` to add.
+
+The alternative is a capability-layer error type carried up to the dispatch site
+instead. The carrier between the two ends is the return type of
+`CapabilityBackend::call_tool_with_context` (`src/capability/backend.rs:390`) —
+`pub`, on a `pub` type, in a `pub` module (`src/lib.rs:36`). Changing it is the
+same public-API gate as O1, applied to a signature every external caller uses
+rather than to one added variant, and a converting boundary that flattens the type
+back to `crate::Error` before `BudgetOutcome::of` sees it puts the information
+loss back exactly where it is today. Same gate, worse shape.
+
+This is not O3. O3's defect is two representations that can disagree; O1b is one
+representation in the wrong place.
 
 ### O2 — one shared error constructor plus a format-contract test
 
@@ -218,8 +259,9 @@ text predicate because a transport error there genuinely has no typed status.
   named in the row (drive a capability `429` through invoke, assert
   `IgnoredRateLimit` and no budget sample) can be written against the tree as it
   stands and closes G2. This is the part that must land regardless of O1.
-- **RL.10 — property ("needs no text"):** ABSENT until O1 lands. It is a public
-  API change gated on an ask (section 6).
+- **RL.10 — property ("needs no text"):** ABSENT until O1 lands. It is a breaking
+  public API change (D2, D28), gated on an ask (section 6) — and O1b establishes
+  there is no crate-internal way around that gate.
 - If the ask is refused, RL.10's property half is recorded as OUT-OF-SCOPE-FOR-4.0.0
   with its reason — public error-enum widening declined — and G1 becomes a named
   residual risk carrying O2 as its mitigation. It is not silently downgraded to
@@ -235,14 +277,17 @@ text predicate because a transport error there genuinely has no typed status.
 | Does the 500-char body truncation break the exclusion? | read `jsonrpc.rs:204-207`, `params.rs:50-54`, `graphql.rs:260-263` | status precedes the truncated body in all three | RL.10 under the *weak* reading passes today — which is why section 3 had to settle the reading rather than assume it |
 | Is there a capability circuit breaker a `429` could trip? | `rg failsafe\|Failsafe src/capability/`, read `executor/mod.rs:65` | none; bare `HealthTracker` only | removed "must not trip the breaker" from the design as vacuous, in one line rather than a section |
 | Does capability transport health mis-count a `429`? | read `send_with_retry` `executor/mod.rs:112-158` | any HTTP status records success | no change needed at the transport layer |
+| Is `crate::Error` `#[non_exhaustive]`? If it were, O1 would add no breaking change and need no ask. | read `src/error.rs:14-15`, `rg non_exhaustive src/error.rs src/lib.rs` | no attribute; the enum is plain `pub enum Error` | the ask in the deferred row survives — but it is D2/D28, not `VISIBILITY-IS-DESIGN`, and the wrong citation is corrected in O1 |
+| Does a rate-limit-shaped variant already exist, so that O1 would only construct an existing symbol differently? | read all 22 variants of `src/error.rs:15-179` | none; the nearest precedent is `Forbidden`, which does carry a typed HTTP `status` | O1 genuinely adds a public symbol — and `Forbidden` shows the enum already accepts a typed-status variant, so the shape is not novel |
+| Can the classification avoid the public enum entirely by staying crate-internal? | read `CapabilityBackend::call_tool_with_context` `src/capability/backend.rs:390`, `pub mod capability` `src/lib.rs:36`, plus the Rust rule that variants inherit enum visibility | no: no `pub(crate)` variant exists as a language feature, and the alternative carrier is an equally public signature | added O1b, rejected on the record, so the ask cannot be dodged by a route nobody had checked |
 
 ### Deferred (must be asked before O1 is implemented)
 
 | field | value |
 |---|---|
-| question | May `crate::Error` gain a typed rate-limit variant? It widens the public API surface (D28) and `VISIBILITY-IS-DESIGN` requires the ask. |
+| question | Is 4.0.0's public API still open to a breaking addition — specifically, may `crate::Error` gain a typed rate-limit variant? It is a public enum without `#[non_exhaustive]`, so a new variant breaks downstream exhaustive matches: D2 (breaking → approved and migrated) and D28 (surface counted). Not `VISIBILITY-IS-DESIGN`, which governs fields and functions. |
 | owner | operator, via team-lead |
-| what resolves it | a yes/no on the enum widening, recorded in this document |
+| what resolves it | a yes/no on the enum widening, recorded in this document. The counter-argument to record with it: a major release is the cheapest moment such a change ever gets, and `to_rpc_code`'s `_ =>` arm means the crate's own match sites mostly do not move |
 | when | before any implementation of O1 begins; the RL.10 behavioural pin does not wait on it |
 | if it resolves badly | O2 as mitigation, RL.10's property half recorded OUT-OF-SCOPE-FOR-4.0.0 with the reason, G1 as named residual risk (section 5) |
 
@@ -252,10 +297,21 @@ does not depend on it.
 ## 7. What lands next, in order
 
 1. The RL.10 behavioural pin (G2) — an integration test driving a capability
-   `429` through the invoke path, asserting `IgnoredRateLimit` and that neither
-   budget took a sample. Written first, per §P2; it must be shown to fail against
-   a tree where the status is stripped from the executor's message (that is the
-   falsifier, and it is also the proof G1 is real).
+   `429` through the invoke path from a mock upstream. **The observable is named
+   here on purpose**: the assertion is that `mcp_error_budget_suppressed_total`
+   with `reason="rate_limited"` incremented for that server, and that the kill
+   switch and the per-capability budget took no sample. It is *not* "assert
+   `BudgetOutcome::of` returned `IgnoredRateLimit`". The existing budget tests
+   (`invoke.rs:4412`, `:4433`, `:4451`) construct `BudgetOutcome` values directly,
+   which is exactly the shape that left G2 open: asserting the classifier's return
+   value proves the classifier works, and proves nothing about whether the
+   capability path reaches it. Reaching it is the entire gap.
+
+   Written first, per §P2, and it must be shown to fail against a tree with the
+   status stripped from the executor's message. That is a **mutation** probe, not
+   §P2's retrofitting falsifier — the script there wants `git show <pre-fix-ref>:<path>`
+   and no such ref exists, because the behaviour was never broken. Nobody should
+   go hunting for one. The same mutation is also the proof G1 is real.
 2. The ledger correction at `RELEASE-4.0.0-criteria-status.md:393` — the ABSENT
    line's stated reason is false and the row splits into behaviour and property.
 3. O1, gated on section 6.
