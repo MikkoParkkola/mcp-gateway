@@ -115,20 +115,41 @@ verified serde, not the hop. In every case **in this section's table** the trace
 that `dispatch_to_backend` produces. §5.2 keeps the fixture direction and moves the observation
 point; it says so there, because a preamble that claimed to cover it would be false.
 
-The red/green column below rests on one verified statement of HEAD, checked at review rather than
-assumed. `src/protocol/trace.rs` already carries both halves of the mechanism —
-`TraceContext::from_meta` (`:32`) reads a `traceparent` and an optional `tracestate`, `to_meta`
-(`:71`) writes them back out — and **neither is called anywhere**: `rg` finds no `TraceContext`
-outside that module. `rg baggage src/` returns nothing at all. So the shape of the gap is not
-"nothing exists" but "a correct, unwired, two-thirds-complete extractor exists": the
-`traceparent`/`tracestate` parse is already right, `baggage` is absent from the struct, and no
-request path reaches either function. Rows that assert `baggage`, that assert propagation, or
-that assert a grammar predicate HEAD gets wrong are red. A row asserting only that a valid
-`traceparent` parses would be **green today**, and none is written as if it were not.
+The red/green column below rests on one verified statement of HEAD, re-checked at source on
+2026-09-06 rather than carried forward. `src/protocol/trace.rs` carries both halves of the
+mechanism and carries them **whole**: the struct has a field for each of `traceparent`,
+`tracestate` and `baggage` (`:19-24`), `TraceContext::from_meta` (`:33`) parses all three, and
+`to_meta` (`:75`) writes all three back out. The `baggage` half landed in `baa318b2` ("carry
+baggage across the gateway hop"), an ancestor of HEAD. The extractor is also **called**: the one
+production call site is `invoke.rs:1845-1847`, and it reads `args.get("_meta")` — the arguments
+map, one level below where the protocol puts `_meta`.
+
+So the gap is neither a missing field nor an unwired function. It is a **carrier and a reach**:
+`extract_tools_call_params` returns `(tool_name, arguments)` and discards the rest of `params`
+(`helpers.rs:190-195`), and both route call sites destructure exactly that pair
+(`handlers.rs:976`, `server/mod.rs:1827`), so nothing a client puts in `params._meta` reaches
+`from_meta` on any path. Rows are red when they assert a params-level read, assert propagation,
+or assert a grammar predicate HEAD gets wrong. A row that hands a `_meta` object straight to
+`from_meta` and asserts only that its fields parse — `baggage` included — would be **green
+today**, and none is written as if it were not.
+
+An earlier revision of this section said the opposite: that `baggage` was absent from the struct
+and that `TraceContext` was called nowhere. **Both were true at `5c7e64f4`** — the commit the
+companion design pins and evidences every `file:line` against — and both were false by 21:33 the
+same evening, when `baa318b2` added the `baggage` field and `d4874a25` wired `from_meta` into
+`invoke.rs`. Neither document was careless with its sources. This plan inherited claims that were
+correctly evidenced against a commit and then wrote them as statements about **HEAD**, a moving
+reference it never pinned, so the tree drifted out from under grades that read as timeless.
+
+Hence the pin, which this plan should have carried from the first draft: **every red/green grade
+below is asserted against `b8cfc7e4`, and every check in §12 was run against that
+tree on 2026-09-06.** A later reader re-derives, and does not assume. The corrections above are
+recorded in the open rather than quietly overwritten, because what exposed them was running the
+checks in §12 — checks a reviewer demanded and this plan had until then only asserted.
 
 | clause | case | level | type | red on HEAD? |
 |---|---|---|---|---|
-| OTEL.1.a | **T0 (the read case)** feed a whole JSON-RPC request body whose `params._meta` carries the three fields to the **production extractor** the request path uses (`TraceContext::from_meta`, `trace.rs:32`), reached the way the dispatch path reaches it — not by handing the fields in as a separate argument. Assert all three recovered values against the literals. Without this row, .a can be satisfied by an implementation that never reads the request body at all. **The carrier this row reaches, and the two routes that must deliver a body to it, are covered by T11-T15 in §5.2.** | unit | parsing | Yes, on the `baggage` half — verified at source: `TraceContext` (`trace.rs:19`) has fields for `traceparent`, `trace_id` and `tracestate` and **none for `baggage`**, so a three-field assertion cannot compile against HEAD, let alone pass. The `traceparent`/`tracestate` half is already green: the extractor exists and is correct. It is also **uncalled** — `rg` finds no `TraceContext` reference outside its own module — which is why .a needs the route coverage T11-T15 carry in §5.2 and not just this row. |
+| OTEL.1.a | **T0 (the read case)** feed a whole JSON-RPC request body whose `params._meta` carries the three fields to the **production extractor** the request path uses (`TraceContext::from_meta`, `trace.rs:32`), reached the way the dispatch path reaches it — not by handing the fields in as a separate argument. Assert all three recovered values against the literals. Without this row, .a can be satisfied by an implementation that never reads the request body at all. **The carrier this row reaches, and the two routes that must deliver a body to it, are covered by T11-T15 in §5.2.** | unit | parsing | Yes, on the **reach**, and on no field. Re-verified at source 2026-09-06 (§12): `TraceContext` (`trace.rs:19-24`) has a field for all three and `from_meta` (`:33`) parses all three, so a three-field assertion compiles and the parse itself is green. What is red is the delivery this row's fixture requires — *reached the way the dispatch path reaches it*: `extract_tools_call_params` keeps only `(tool_name, arguments)` (`helpers.rs:190-195`) on both routes (`handlers.rs:976`, `server/mod.rs:1827`), and the one production call site reads `args.get("_meta")` (`invoke.rs:1845-1847`), so no `params._meta` ever arrives. Hand the same three fields directly to `from_meta` and the row goes green while the gap stays open — which is why the fixture is a whole request body, and why .a still needs the route coverage T11-T15 carry in §5.2 and not just this row. |
 | OTEL.1.b | **T1 (the hop case)** inbound `_meta` carries `traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"`, `tracestate = "vendor=abc"`, `baggage = "k=v"`, and **no prompt-cache key**. Inbound `_meta` **also** carries an unrelated sentinel key `example.test/poison`. Assert the outbound `_meta` by **exact key set** — the three trace keys with those exact literal strings, and **no** `example.test/poison`. A contains-check passes an implementation that clones inbound `_meta` wholesale, which would relay attacker-controlled metadata to the backend; the exact key set refuses it (A2, and the provenance-strip rule at `invoke.rs:472`). Expected side is a literal, never `TraceContext::from_meta(inbound).to_meta()` (A8). | unit | propagation, positive | **Yes.** The `None` cache-key arm passes `base_params` through with no `_meta` at all (`invoke.rs:1934-1938`). |
 | OTEL.1.b | **T2 (the merge case)** same inbound, **with** a prompt-cache key. Assert the outbound `_meta` contains the three trace keys **and** the cache key, by exact key set (A2) — not by "contains traceparent". A merge that overwrites `_meta` wholesale passes a contains-check and fails this. | unit | propagation, regression | Yes. |
 | OTEL.1.c | **T3 (not-minted)** inbound `_meta` with **no** trace keys; assert the outbound `_meta` has **no** `traceparent`, `tracestate` or `baggage` key. Asserted as key-absence, not as "value is empty" — a minted root is a non-empty value and would be caught; an empty-string value would not be, so the absence form is the one that discriminates. | unit | negative | Partially. Today no `_meta` is written on the no-cache-key arm, so T3 passes vacuously against HEAD. **See §6.2** — this case is honest only when run beside T1, and the plan records that dependency rather than claiming an independent red. |
@@ -169,19 +190,24 @@ condition.
 **All five rows below observe at the invoke funnel, not at the outbound `_meta`.** That is the
 point the design's own close condition names — *"reaching the invoke funnel on both transports"*
 (§7) — and it is not a stylistic choice: the read is upstream of the write, so a row that observed
-the outbound object would go red when the unconditional write of clause .b is missing — .b's defect reddening a .a row, which is the same
-conflation the `baggage` rule below removes. Fixture direction is unchanged from §5: values are
+the outbound object would go red when the unconditional write of clause .b is missing — .b's defect reddening a .a row, which is
+exactly the conflation these rows are built to avoid. Fixture direction is unchanged from §5: values are
 placed only on the inbound body, never on the outbound one.
 
-One further addition matters more here than anywhere else in this plan: **T11-T14 assert `traceparent` and `tracestate` only, never `baggage`.** T0 already carries
-the `baggage` redness. A row that also asserted `baggage` would go red on the missing struct field
-— a compile error — and would then be red on HEAD for a reason that has nothing to do with the
-carrier or the route it exists to observe. Two rows red on one cause prove one thing between them.
+An earlier revision of this section restricted T11-T14 to `traceparent` and `tracestate`, on the
+reasoning that a `baggage` assertion would go red on a missing struct field and so redden four
+rows for a reason that had nothing to do with the carrier they exist to observe. **That
+restriction is removed, not relaxed.** Its premise died at source on 2026-09-06 (§12, check 4):
+`baggage` is a field on `TraceContext` and `from_meta` parses it, so asserting it introduces no
+second cause of redness — these rows are red on the carrier, and on the carrier alone, whichever
+of the three fields they name. T11-T14 therefore assert all three, as T0 does. The finding that
+produced the restriction can no longer be stated, which is the test for an elimination rather
+than a hedge.
 
 | clause | case | level | type | red on HEAD? |
 |---|---|---|---|---|
-| OTEL.1.a | **T11 (the carrier)** build the params object a `tools/call` arrives with — `{"name": ..., "arguments": {...}, "_meta": {"traceparent": ..., "tracestate": ...}}` — and drive the invoke funnel with it. Assert the funnel sees both values. The read under test is at the **params** level, which is where the protocol puts `_meta` (`CallToolRequestParams`, design §1); the one production read site today is a level below it, in `arguments` (`invoke.rs:1845-1847`). This row is what says the carrier is the params object and not the arguments map. | integration | contract | Yes, and for the carrier and not for the field: `extract_tools_call_params` returns `(tool_name, arguments)` and discards the rest of `params` (`helpers.rs:190-195`), so no params-level `_meta` reaches the funnel on any path. Populating `arguments._meta` instead would make this row green today — that is exactly the wrong-shaped fixture T15 exists to correct, and the reason this row states its carrier in its fixture rather than in its name. |
-| OTEL.1.a | **T12 (HTTP ingestion)** post a whole JSON-RPC `tools/call` body over the HTTP route with `params._meta` populated, and assert the invoke funnel sees both values. Nothing is handed in at a seam; the body enters where a client's body enters, and the observation is the same one T11 makes — what changes is who delivered the params object. | integration | contract | Yes. The HTTP handler destructures exactly the pair `extract_tools_call_params` returns (`handlers.rs:976`), so the trace fields are dropped before any dispatch. Note what this row buys over T11: T11 can pass against an implementation that reads `params._meta` at the funnel while the HTTP route still never delivers a params object that has it. That is the gap §6.6 named, and it is why the carrier row does not subsume the route rows. |
+| OTEL.1.a | **T11 (the carrier)** build the params object a `tools/call` arrives with — `{"name": ..., "arguments": {...}, "_meta": {"traceparent": ..., "tracestate": ..., "baggage": ...}}` — and drive the invoke funnel with it. Assert the funnel sees all three values. The read under test is at the **params** level, which is where the protocol puts `_meta` (`CallToolRequestParams`, design §1); the one production read site today is a level below it, in `arguments` (`invoke.rs:1845-1847`). This row is what says the carrier is the params object and not the arguments map. | integration | contract | Yes, and for the carrier and not for the field: `extract_tools_call_params` returns `(tool_name, arguments)` and discards the rest of `params` (`helpers.rs:190-195`), so no params-level `_meta` reaches the funnel on any path. Populating `arguments._meta` instead would make this row green today — that is exactly the wrong-shaped fixture T15 exists to correct, and the reason this row states its carrier in its fixture rather than in its name. |
+| OTEL.1.a | **T12 (HTTP ingestion)** post a whole JSON-RPC `tools/call` body over the HTTP route with all three `params._meta` fields populated, and assert the invoke funnel sees all three values. Nothing is handed in at a seam; the body enters where a client's body enters, and the observation is the same one T11 makes — what changes is who delivered the params object. | integration | contract | Yes. The HTTP handler destructures exactly the pair `extract_tools_call_params` returns (`handlers.rs:976`), so the trace fields are dropped before any dispatch. Note what this row buys over T11: T11 can pass against an implementation that reads `params._meta` at the funnel while the HTTP route still never delivers a params object that has it. That is the gap §6.6 named, and it is why the carrier row does not subsume the route rows. |
 | OTEL.1.a | **T13 (stdio ingestion)** the same body over the stdio route, same assertion at the funnel (`server/mod.rs:1827`). | integration | contract | Yes, same cause, independently: stdio destructures the same pair at its own call site. **This row asserts the trace read and nothing else.** It does not touch `stdio_should_present_a_retry_when_the_context_declares_one` (`server/mod.rs:3599-3611`), does not un-ignore it, and does not assert anything about `retry`: that watcher observes cluster-G's MRTR stdio `RetryFields` seam, and coupling OTEL.1's close to a criterion another cluster owns is the defect that removed disposition 3 from the design. |
 | OTEL.1.a | **T14 (precedence)** populate **both** carriers in one request with **different** trace ids — `params._meta.traceparent` = A, `arguments._meta.traceparent` = B — and assert the funnel resolves to A. Then assert B is not reachable at all: no field carries it, no fallback restores it. | integration | contract | Yes, on the second assertion at minimum. This row is the one in this set most likely to be born unable to fail, and the failure mode is in the fixture, not the coverage: **a fixture carrying only `params._meta` passes under both implementations** — the one that prefers params and the one that never reads params but finds nothing at the args level either. Both carriers, different values, is what makes the row discriminating. The second assertion is what makes it observe disposition 1 of design §2.7 (the args-level read is REMOVED, not demoted to a fallback) rather than merely observe an ordering. |
 | OTEL.1.a | **T15 (the realigned fixture)** `trace_correlation_tests.rs:104-130` today seeds `arguments._meta` and passes. Re-point it at `params._meta` — the carrier the protocol specifies and T11 asserts — leaving its assertions otherwise as they are. | integration | contract | **Grade pending.** It must go red before it is repaired, and the redness is T11's cause: no params-level `_meta` survives `extract_tools_call_params`. The cell is not filled because this test is one of the two cited as evidence for **CONTROL.3b = MET** (`docs/requirements/RELEASE-4.0.0-criteria-status.md:175`), and criteria-ledger has not yet answered whether that grade survives the finding that it rests on a read of the wrong carrier. If 3b stays MET, this row is a regression test for a criterion already graded met; if 3b moves, it is a missing specification. Those are different rows, and which one it is is not this plan's call. |
@@ -366,7 +392,7 @@ and the empty cell is the finding rather than an oversight:
 | rule | what the sweep found | what changed |
 |---|---|---|
 | A4 / A2 | T14 was keyed to OTEL.1.b. Precedence decides **which source the read takes**, which is clause .a; .b is the unconditional write. This is a trace, not a judgement call: design §7's close condition puts *"never from the tool argument object (§2.7)"* **inside the read clause**, so the carrier choice is part of what .a obliges. Keyed to .b, the row would have been counted as evidence for a clause it does not touch, and .a's count would have been one short. | Re-keyed to OTEL.1.a. |
-| A5 | T11-T14 as first drafted asserted all three W3C fields, matching T0. `baggage` is absent from `TraceContext` (`trace.rs:19`), so every row would have failed to compile — red on HEAD, and red for a reason no route or carrier defect could produce. Four rows red on one missing field prove one thing between them. | `traceparent` and `tracestate` only. The `baggage` redness stays T0's, where it discriminates. |
+| A5 | **Withdrawn 2026-09-06.** This sweep restricted T11-T14 to `traceparent` and `tracestate`, on the premise that `baggage` was absent from `TraceContext` (`trace.rs:19`) and a three-field assertion could not compile. That premise was **true at `5c7e64f4`, the commit the design pins, and false four and a half hours later**: `baa318b2` added the field and the parse (§12, checks 4-6). The sweep was sound when run and is void now. A sweep is a claim about a tree, and this plan never said which tree. | No restriction. All four rows assert the three fields T0 asserts; their one cause of redness is the carrier, which is the thing they exist to discriminate. |
 | A7 | T14's second assertion — "B is not reachable" — is a negative, and a negative is true of an implementation that dropped **both** values. | Paired with the first assertion (the resolved value **is** A). An implementation that loses both fails assertion one; an implementation with a fallback fails assertion two. Neither passes alone. |
 | A9 | T14 varies two inputs in one fixture, which reads like the "two defects at once" rule. Examined: it varies one **dimension** — which carrier holds the value — and both arms are required for the row to discriminate at all. A single-carrier fixture passes under both implementations. | Kept as written, with the reason stated in the row rather than left for a reviewer to re-derive. |
 | A5 | T15 is a case whose current fixture makes its own assertion true: it seeds `arguments._meta`, which the one production read site reads, so it passes against the shape no client sends. This is the §P2 Q2 failure mode in the tree, not a hypothetical. | Kept as a row, and its purpose stated as the repair — the fixture moves to the carrier the protocol specifies, and must go red before it goes green. |
@@ -492,3 +518,109 @@ Nothing was accepted as residual risk and nothing was disputed at source: every 
 verification against the implementation. Four of them — 2, 4, 5 and 11 — were cases this plan
 claimed could fail an incorrect implementation and could not, which is precisely the class §P2's
 plan review exists to catch and which no later code review would have recovered.
+
+
+## 12. Evidence — the checks, run on 2026-09-06, with their output
+
+A reviewer's HIGH finding on this plan was that its citations shipped as *measured* while nothing
+recorded that any had been run. The answer to that finding is this section, and running it is what
+falsified §5's baggage premise (§5 preamble, §5.2, sweep A5). The commands and their output are
+reproduced verbatim; a claim in this plan that a check contradicts is corrected in place and the
+correction says so.
+
+```
+### check 1 — extract_tools_call_params returns (tool_name, arguments)
+$ sed -n 190,195p src/gateway/router/helpers.rs
+    let arguments = params
+        .and_then(|p| p.get("arguments"))
+        .cloned()
+        .unwrap_or(json!({}));
+    (tool_name, arguments)
+}
+
+### check 2 — the two callers destructure exactly that pair
+$ sed -n 976p src/gateway/router/handlers.rs; sed -n 1827p src/gateway/server/mod.rs
+            let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
+                let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
+
+### check 3 — the one production from_meta call reads args._meta
+$ rg -n "from_meta" src/ --glob "!*tests*"
+src/gateway/meta_mcp/invoke.rs:1845:                .and_then(crate::protocol::trace::TraceContext::from_meta)
+src/protocol/trace.rs:33:    pub fn from_meta(meta: &Value) -> Option<Self> {
+src/protocol/trace.rs:109:        let onward = TraceContext::from_meta(&inbound)
+src/protocol/trace.rs:122:        let onward = TraceContext::from_meta(&json!({ "traceparent": TRACEPARENT }))
+src/protocol/trace.rs:135:            TraceContext::from_meta(&json!({ "baggage": "userId=alice" })),
+
+### check 4 — TraceContext has no baggage field; nothing references it outside its module
+$ sed -n 12,25p src/protocol/trace.rs
+//! Propagated, never re-minted. A gateway that started a fresh trace would make
+//! its own hop the root and hide the caller that caused it.
+
+use serde_json::{Value, json};
+
+/// A `traceparent`, and whatever vendor state travelled with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceContext {
+    traceparent: String,
+    trace_id: String,
+    tracestate: Option<String>,
+    baggage: Option<String>,
+}
+
+$ rg -l "TraceContext" src/
+src/gateway/meta_mcp/trace_correlation_tests.rs
+src/gateway/meta_mcp/invoke.rs
+src/protocol/trace.rs
+$ rg -c "baggage" src/ | wc -l
+       1
+```
+
+Two further checks were run after the four above, and they are the pair that moved the plan:
+
+```
+### check 5 — from_meta parses all three fields, to_meta writes all three back
+$ sed -n 53,88p src/protocol/trace.rs
+        let passthrough = |key: &str| meta.get(key).and_then(Value::as_str).map(str::to_string);
+        Some(Self {
+            traceparent: traceparent.to_string(),
+            trace_id: trace_id.to_string(),
+            tracestate: passthrough("tracestate"),
+            baggage: passthrough("baggage"),
+        })
+    ...
+    pub fn to_meta(&self) -> Value {
+        let mut meta = json!({ "traceparent": self.traceparent });
+        ... for (key, value) in [("tracestate", ...), ("baggage", ...)]
+
+### check 6 — when the baggage field landed, and that it is behind HEAD
+$ git log -1 --format='%h %ad %s' --date=short baa318b2
+baa318b2 2026-08-31 feat(trace): carry baggage across the gateway hop
+$ git merge-base --is-ancestor baa318b2 HEAD && echo "IS ANCESTOR of HEAD"
+IS ANCESTOR of HEAD
+```
+
+**What this changed, and why it was not carelessness.** Checks 4, 5 and 6 falsify a statement
+this plan carried in three places — that `baggage` was absent from `TraceContext` and that a
+three-field assertion could not compile. Check 3 falsifies a fourth — that `TraceContext` was
+called nowhere; `invoke.rs:1845-1847` calls it, at the arguments level.
+
+Both statements were **true at `5c7e64f4`**, the commit the companion design pins and reads every
+`file:line` from. `baa318b2` (21:23) added the `baggage` field and its parse; `d4874a25` (21:33)
+wired `from_meta` into the invoke path as a transparency-log correlation key. Both landed roughly
+four and a half hours after that pin, and neither is an ancestor of it. The design's evidence is
+sound; this plan's error was to inherit commit-pinned facts and restate them as facts about
+**HEAD** without pinning HEAD — a reference that moves while the sentence does not. §5 now carries
+the pin that would have caught it, which is the durable half of this repair. Every red/green grade
+that rested on the falsified statements is re-derived from the carrier and the reach, which checks
+1, 2 and 3 do support.
+
+**What it did not change.** Checks 1, 2 and 3 confirm the plan's core claim unchanged:
+`extract_tools_call_params` discards everything but `(tool_name, arguments)`, both routes
+destructure exactly that pair, and the one production read is at the args level. The gap OTEL.1.a
+exists to close is real. It is a different gap from the one this plan first described, and a
+narrower one.
+
+**Honest limit.** These are source reads, not test runs. This document is a test plan: no test it
+specifies has been written, so it produces no execution evidence and §9's G10-G12 remain
+"partially — planned, not executed". A source read proves what HEAD says; only a run proves what
+HEAD does.
