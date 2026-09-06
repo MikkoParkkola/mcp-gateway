@@ -115,10 +115,13 @@ is tracked in `RELEASE-4.0.0-readiness-board.md`. This section defines them.
 Cluster C carries one prerequisite that is not visible in its row. `SUB.4`'s activation is
 blocked on the idempotency key binding the calling principal: `identity_suffix`
 (`src/gateway/meta_mcp/invoke.rs:1128-1132`) is empty whenever identity propagation is off, which
-is the shipped default, so two authenticated callers collide on one fingerprint and the second is
-served the first's stored response. Two moves are needed, not one — the fallback chain
-`caller_principal` already uses (`:1140-1142`), and the relocation into `derive_key` that SUB.4
-`:125-128` already decided. Provenance and the full derivation:
+is the shipped default, so two authenticated callers derive one KEY — not one fingerprint, which
+is the same for both because the calls genuinely are the same `(server, tool, arguments)` — and the
+second is served the first's stored response. Three moves are needed, not one: the fallback chain
+`caller_principal` already uses (`:1140-1142`); the relocation into `derive_key` that SUB.4's own
+"Constraints, measured" already decided; and a suffix that is hashed or length-prefixed rather than
+concatenated raw after a client-supplied key, since without that third move the second one hands a
+forgeable binding to the population it just started binding. Provenance and the full derivation:
 `docs/design/2026-09-06-mrtr-8b-10a-lifetime-and-idempotency-wiring.md`, which found it while
 withdrawing its own duplicate of this wiring on 2026-09-06.
 

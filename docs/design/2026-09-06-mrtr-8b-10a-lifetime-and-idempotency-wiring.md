@@ -309,8 +309,19 @@ dying with this section:
 > to add a principal to `idem_fingerprint` instead of to `identity_suffix`. That fix would also
 > work, and a wrong noun pointing at a working repair is dangerous rather than merely imprecise.
 > The response cache does *not* have this defect: `caller_principal` (`:1140-1142`)
-> already falls back to `VerifiedIdentity::stable_actor_id`. The fix is for `identity_suffix` to
-> adopt the same fallback chain, twelve lines away. SUB.4 `:125-128` independently decided the
+> already falls back to `VerifiedIdentity::stable_actor_id`. `identity_suffix` adopting the same
+> fallback chain, twelve lines away, is the first move of the fix — **not the whole of it.**
+>
+> **The raw append constrains the repair (R6, `sub-ext`, `a1578b81`).** The suffix is concatenated
+> unhashed after the CLIENT-SUPPLIED key: `format!("{key}{projection_key_suffix}{identity_suffix}")`
+> (`support.rs:43`) over `|idp:{binding}` (`invoke.rs:1131`). So an unbound caller who sends the
+> client key `X|idp:<victim binding>` derives the same final key as a bound victim sending `X`.
+> The response cache does not have this hole either: `response_key` hashes the principal
+> (`src/cache.rs:279-294`) and its doc comment gives that as the reason, unconditionally. Landing
+> the fallback chain over the raw append converts an empty-suffix collision into a spoofable one —
+> the population that gains a binding is exactly the population that could forge it. The repair
+> therefore hashes the suffix, length-prefixes it, or moves the client key to the tail; which of
+> the three is SUB.4's call, but doing none of them is not one of the options. SUB.4 `:125-128` independently decided the
 > binding belongs *inside* the derivation rather than at the call site — the same conclusion, and
 > the place to implement it.
 >
