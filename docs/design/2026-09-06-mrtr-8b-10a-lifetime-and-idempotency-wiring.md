@@ -91,8 +91,10 @@ InFlight::guard(&self, now: u64) -> MutexGuard<'_, HashMap<String,(String,u64)>>
 the deadline without sleeping. `reclaim_abandoned` stops being called from inside `hold`'s
 capacity branch and `hold` keeps only its capacity refusal.
 
-Test of the repair, per the protocol: **after the fix, can the finding still be stated?** No. There
-is no code path that observes the map without having just reclaimed it, so "an expired hold is
+Test of the repair, per the protocol: **after the fix, can the finding still be stated, relative to
+the `now` a reader supplies?** No — and the qualifier is part of the answer, not a footnote to it
+(the freshness paragraph below is where it is spelled out). There
+is no code path that observes the map without having just reclaimed it against that `now`, so "an expired hold is
 retained" and "an expired hold routes `Here`" are not statements anyone can make about the type.
 The alternative — teaching `route` to compare deadlines — leaves the finding stateable about
 `len` and about the next reader added; that is a patch, and it is rejected for that reason.
@@ -124,8 +126,15 @@ been holding. With it, that call returns `false`. The return value is an observa
 the reclaim is what makes it honest; the uniform routing is the consequence, not the reason.
 
 Call sites to update: `invoke.rs:584` (`route`), `invoke.rs:613` (`complete`), both of which
-already have `now` in scope from `:545`. Tests in `continuation.rs`, `tests/mik_7212_acs.rs`, and
-any that call `len`.
+already have `now` in scope from `:545`. Tests in `continuation.rs` and `tests/mik_7212_acs.rs`.
+
+`len` deserves its own line, because this change turns a passive counter into a mutating,
+O(`IN_FLIGHT_CAPACITY`) read and anything downstream inherits that cost. Its callers, enumerated:
+`InFlight::is_empty` (`continuation.rs:762`), and four assertions in
+`tests/mik_7212_mrtr_component_acs.rs` (`:1107`, `:1131`, `:1234`, `:1304`). **There is no
+production consumer today** — which is why the cost is affordable now, and why the enumeration is
+recorded: the first metric or admission check to call `len` is the one that makes the walk matter,
+and it should find this sentence rather than discover the cost in a profile.
 
 ### Alternatives rejected
 
@@ -392,6 +401,12 @@ R4 and R5, and the three constraints above. **Recorded only here, they are inert
 has no reason to re-read a design that withdrew its own change. So this withdrawal is handed to the
 team lead as an explicit transfer request naming the four, and is not closed until SUB.4 carries
 them or the lead reassigns them.
+
+The request is an artifact, not an intention: message `127f088c-c180-473a-aeed-1d34347d75fd` to
+`team-lead`, 2026-09-06, naming all four items, the withdrawal, and the operator answer that forces
+it. Round 2 raised exactly this — a hand-off asserted in the sending document has the same inertness
+the withdrawal diagnoses — so the identifier is here rather than in a session transcript nobody
+will re-read.
 
 Transfer target liveness, checked rather than assumed: SUB.4 is `proposed, revision 4, no code`,
 but it is not stalled — it is a named blocker in cluster C of
