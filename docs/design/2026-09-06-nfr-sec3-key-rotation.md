@@ -63,7 +63,8 @@ drops them. Key material stays per-process and written nowhere.
 Against the three clauses:
 
 - ROTATABLE — met. Trigger is config reload, a real production caller, so no D7 WIRED
-  violation. A `rotate` added today with no caller WOULD be one.
+  violation. A `rotate` added today with no caller WOULD be one. There are TWO reload
+  callers and they do not cost the same; verified at source below.
 - RETAINED — met. Old kids stay verifiable for the max lifetime; `open` already selects
   by kid and already refuses once dropped.
 - VERSIONED — unchanged.
@@ -80,6 +81,32 @@ Consequences that fall out rather than being designed:
   IN PLACE rather than `ContinuationState` being reconstructed, the in-flight map and the
   ledger survive. That is what a rotate copying keys and the UUID could not do.
 
+### Where the trigger comes from — the one place this design could have been wrong
+
+The ROTATABLE claim rests entirely on "config reload is a real production caller". Reload
+has TWO callers and only one of them can reach the keyring today. Checked at source rather
+than assumed, because a wrong answer here does not weaken the design — it moves the trigger
+somewhere else and rewrites this section.
+
+| caller | reaches `ContinuationState`? | cost |
+|---|---|---|
+| `gateway_reload_config` meta-tool (`src/gateway/meta_mcp/invoke.rs:2836`) | YES | zero. It runs on `&self` of `MetaMcp`, which already owns `continuation: Arc<ContinuationState>` (`src/gateway/meta_mcp/mod.rs:230`). One call after the reload returns. |
+| file watcher (`ConfigWatcher::start`, called at `src/gateway/server/mod.rs:1276`) | NO | one new parameter. It takes `config_path`, `live_config`, `registry`, `initial_config`, `env`, `shutdown_rx` (`src/config_reload/mod.rs:1010-1017`) and forwards them to `spawn_reload_task`. Neither it nor `ReloadContext` (`:1371-1388`) holds any handle to `MetaMcp` or the continuation state. |
+
+The watcher's plumbing is cheap but it is not free, and the design claimed free. It is a
+parameter rather than a restructure because `meta_mcp` is built at `server/mod.rs:1011` and
+the watcher starts at `:1276` in the same function, so the `Arc` is already in scope at the
+call site.
+
+Third fact, and it changes what "trigger" means: **there is no continuation or key section
+in `Config` at all**, because the key is process-random and written nowhere. So no config
+FIELD can change to signal a rotation, and `pending_restart_fields` (`src/config_reload/mod.rs:550`)
+has nothing to say about it either. The trigger is therefore *a reload happened*, not *a
+continuation setting changed*. Named as a decision, not assumed: every reload rotates, so an
+operator editing one backend URL also rotates continuation keys. Under 300s retention that is
+invisible to in-flight callers — which is the point of RETAINED — but it is a behaviour
+nobody asked for and the team lead may want it narrowed to an explicit rotate verb instead.
+
 ### The real mechanical work
 
 `ContinuationState` lives behind an `Arc` (`src/gateway/meta_mcp/mod.rs:230`) and `open`
@@ -87,11 +114,16 @@ takes `&self`, so the key vector must become interior-mutable — a read-write l
 every open, written once per rotation. That is a LOCAL lock change, not a distributed one,
 and it is the whole of the concurrency work.
 
-Second point, easy to miss: `Keyring` also carries a minting kid, a minted counter and a
-mint budget (`:297-301`). Rotation must decide what happens to that budget. Carrying the
-old counter forward makes rotation pointless as a budget reset; resetting it silently gives
-an attacker who can trigger reloads an unbounded mint budget. Named here as a decision, not
-assumed.
+The lock must cover `minting_kid` AND `keys` AS ONE UNIT. They are separate fields today
+(`:296-302`) and a rotation that swaps the vector without atomically swapping the minting kid
+can mint under a kid that is not in the ring, or keep minting under the kid it just retired.
+Two locks, or a lock around only the vector, reintroduces exactly the race the rotation is
+supposed to be too simple to have.
+
+Second point, easy to miss: `Keyring` also carries a minted counter and a mint budget
+(`:297-301`). Rotation must decide what happens to that budget. Carrying the old counter
+forward makes rotation pointless as a budget reset; resetting it silently gives an attacker
+who can trigger reloads an unbounded mint budget. Named here as a decision, not assumed.
 
 Third: `kid` is a `u8`. 256 kids before wrap. With retention bounded by max envelope
 lifetime the live set is tiny, but wrap must refuse or reuse deliberately, not by overflow.
@@ -131,6 +163,7 @@ them gets built first.
 |---|---|---|
 | 1 | Does the criterion's author read "rotatable" as requiring operator-supplied material? If yes, (c) does not meet it and (b) returns. | ASKABLE, not checkable — asked of the team lead in the message accompanying this design. Blocks all four pieces. |
 | 2 | What is "the max lifetime" as a number, and is it bounded anywhere today? RETAINED is unimplementable without it. | RESOLVED, checkable. `rg CONTINUATION_LIFETIME_SECS src/` — `const CONTINUATION_LIFETIME_SECS: u64 = 300` at `src/protocol/continuation.rs:128`, not a parameter and deliberately not one. The retention window is therefore 300 seconds, a compile-time constant. It changed the design: the retention deadline needs no new config and no new plumbing. |
+| 3 | Can the config-reload path actually REACH the live keyring? The whole ROTATABLE claim, and the D7 WIRED argument with it, rests on this. | RESOLVED, checkable. `rg -n "MetaMcp\|continuation\|ContinuationState" src/config_reload/` — zero hits; `ReloadContext` (`:1371-1388`) holds config path, live config, registry, failsafe, TTL and env, and no gateway handle. The meta-tool caller reaches it for free, the file watcher does not. It changed the design: the "free trigger" claim was half true, the watcher needs one new parameter, and the trigger is *a reload happened* rather than *a setting changed* because no continuation setting exists. Written up above rather than left as a table cell. |
 
 Question 1 is load-bearing: a yes reverses the recommendation.
 
