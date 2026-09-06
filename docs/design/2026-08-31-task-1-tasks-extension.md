@@ -414,12 +414,14 @@ go green against any stub — that is stated, not papered over.
 | `MIK-7272.TASK.1.7` | `Mcp-Name` on `tasks/get\|update\|cancel` mirrors `params.taskId` | unit on `mcp_name_body_field` for the three methods | unit | **Yes, red now, for a real reason.** `headers.rs:36-52` returns `None` for all three ("exactly these three" methods), so the case fails on today's code with no dispatcher involved. |
 | `MIK-7272.TASK.1.8` | a retried identical task-augmented call returns the **same** `taskId` and runs the backend **once**; the `CreateTaskResult` is never written to the response cache and never marked idempotency-completed | integration with `config.cache.enabled = false` and a mutation counter on the mock tool; assert the counter is 1 and both responses carry the same `taskId` | integration | **Yes for the guards, no for the dedupe.** The two guard halves are falsifiable against the existing `is_final` gates today. The same-`taskId` half needs the store. Fixture rule is binding: the response cache is written at `invoke.rs:1291`, after the backend result and before the client stream, so a fixture that leaves it enabled passes vacuously — assert the counter, never the body. **Amended by §11.2, corrected in the confirmation pass: the dedupe key is `(authenticated principal, client idempotency key)`, the fingerprint is stored beside the entry so a same-key/different-body call is rejected, and it applies only when the client supplied a key; a keyless repeat gets a new task. "Retried identical call" in this row therefore means *same client idempotency key* — two identical calls carrying different keys are two tasks and two backend runs, and this row must assert that too.** |
 | `MIK-7272.TASK.1.9` | a `subscriptions/listen` carrying `taskIds` emits `notifications/tasks` and no `notifications/progress` or `notifications/message` | integration: drive a task that would emit progress, read the stream | integration | **No — vacuous until both TASK.1 and SUB.2 land.** Nothing emits task notifications, so an empty stream passes. Recorded as a constraint on SUB.2 (§5) so it is not discovered late. |
-| `MIK-7272.TASK.1.11` | a retrieval call naming a task created by a different principal is answered as not-found, identically to a `taskId` that never existed | integration: create as principal A, retrieve as principal B, assert the response is byte-identical to retrieving an unknown id as B | integration | **No — vacuous until the dispatcher exists**, and it is the row most likely to be dropped as a nicety. Recorded here so the authorisation check lands with the dispatcher rather than after a review round. The byte-identical half is what makes it a test rather than a sentiment. **Amended by §11.2: this row covers *retrieval* only. Subscription admission (`subscriptions/listen` carrying `taskIds`) is NOT covered here and must be added before this criterion is implemented.** |
+| `MIK-7272.TASK.1.11` | a retrieval call naming a task created by a different principal is answered as not-found, identically to a `taskId` that never existed | integration: create as principal A, retrieve as principal B, assert the response is byte-identical to retrieving an unknown id as B | integration | **No — vacuous until the dispatcher exists**, and it is the row most likely to be dropped as a nicety. Recorded here so the authorisation check lands with the dispatcher rather than after a review round. The byte-identical half is what makes it a test rather than a sentiment. **Amended by §11.2: this row covers *retrieval* only. Subscription admission (`subscriptions/listen` carrying `taskIds`) is NOT covered here.** It is now `MIK-7272.TASK.1.12`, a criterion of its own — the team lead ruled on 2026-09-06 that folding a distinct authorisation surface into this row is the failure that produced RL.5's "MET (narrowed)". |
 | `MIK-7272.TASK.1.10` | the capabilities EXT.1 builds advertise `extensions["io.modelcontextprotocol/tasks"] = {}`, on both `initialize` and `server/discover` | unit on `gateway_declares()` output, plus EXT.1's discovery integration case | unit | **No, and only the honouring half is TASK.1's to close** (revised 2026-09-06, §11: the field and the populate path have landed; inserting the entry into `implemented_extensions()` has not). `gateway_declares()` already returns the entry (`extensions.rs:52-56`); the unit case is green today. Those two landed at `types.rs:255-256` and `meta_mcp_helpers.rs:190`; what is left is the honouring entry: this row goes red the moment it asserts the served `initialize`/`server/discover` capabilities carry the identifier, because `implemented_extensions()` (`:147-150`) is still empty. That insert IS TASK.1's. Listed so the split is visible. |
+| `MIK-7272.TASK.1.12` | a `subscriptions/listen` naming a `taskId` created by a different principal is refused, and the refusal is indistinguishable from listening on a `taskId` that never existed — no status, no result, no error that confirms the id | integration: create as principal A, open a listen stream on that id as principal B, assert B's stream is byte-identical to B listening on a fabricated id, and that nothing is ever pushed to it | integration | **No — vacuous until both TASK.1 and SUB.2 land**, and that is exactly why it is written now. Nothing admits a subscription today, so an empty stream passes for the wrong reason. It goes red the moment a stream is admitted without an ownership check, which is the state the code would otherwise ship in: §3 ¶6's principal check is stated for the three retrieval methods, and admission is a fourth surface reaching the same records. The byte-identical half is the assertion — a distinct error code for "not yours" is itself the disclosure. |
+| `MIK-7272.TASK.1.13` | a client that has not declared the extension **on that request** is refused `-32021` when it calls `subscriptions/listen` carrying `taskIds`, not only when it calls the `tasks/*` family | integration: declare on request 1, open a listen stream carrying `taskIds` without declaring on that request, assert `-32021` with the same `data.requiredCapabilities` payload AC `.4` asserts | integration | **Partially, and for a real reason.** The per-request capability read exists (`.4` asserts it on the `tools/call` path and is red today for behaviour, not absence), so the assertion is not waiting on the dispatcher — it is waiting on the subscription path. Written separately from `.4` because a gate implemented per *method family* passes `.4` and fails this: `subscriptions/listen` is not in the `tasks/*` family and reaches the extension anyway. |
 
-Five rows out of eleven cannot fail for a behavioural reason today. That is the finding: TASK.1 is
+Seven rows out of thirteen cannot fail for a behavioural reason today. That is the finding: TASK.1 is
 mostly new surface, and the tests that constrain it are the five that assert against *existing*
-code — `ADDED_IN_2026_07_28`, `mcp_name_body_field`, the `Task` shape, the `is_final` guards, and
+code (`.13` is the partial case: its gate exists, its call path does not) — `ADDED_IN_2026_07_28`, `mcp_name_body_field`, the `Task` shape, the `is_final` guards, and
 the per-request capability read. Those five are where the failing-tests step (§P2) has real work
 on day one; the rest wait on the dispatcher and must be written against the spec text, not
 against whatever the dispatcher turns out to do.
@@ -757,11 +759,21 @@ work is what LOOP-CLEAN forbids, and the two notes disagree about scope in a way
 the release scope can settle. What is not in doubt: two live design notes for one criterion is the
 exact failure §0 of this note was written about, and it reproduced within six days.
 
+**Ruled 2026-09-06.** The team lead named this note the survivor and directed that
+`docs/design/2026-09-05-tasks-extension.md` be deleted as part of this change; it is gone in
+`cb00805a`. The file was committed and clean at deletion time — checked, because the ruling
+carried an explicit exception for a session still editing it. This was a release-scope decision by
+its owner, not the housekeeping LOOP-CLEAN forbids.
+
 ### 11.6 What is NOT yet done
 
 The confirmation pass required by §12 — *are the gaps closed* — has now RUN; §12 below records it.
 What is still owed after it: the final criterion numbering, which is the team lead's call and not
-this note's to make, and the `ttlMs` / `pollIntervalMs` MAY-change clauses, which §10.3 found
+this note's to make (the lead has ruled that the two new authorisation criteria are `.12` and `.13`
+rather than an extension of `.11`, but the out-of-order `.11`/`.10` rows above are untouched); the
+question of whether `.12` and `.13` become rows in
+`docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is open with the lead and stated in
+§12; and the `ttlMs` / `pollIntervalMs` MAY-change clauses, which §10.3 found
 unstated and no review round since has raised — an open conformance gap, not a superseded one. The functional leg (D6:E2E) is **N/A: this change has no running surface** —
 it is a design note; nothing was built, so there is nothing to drive.
 
@@ -791,5 +803,22 @@ ticket does not reassert itself):
 
 - *renumber the acceptance criteria so the amended ones read in order* — **filed to the lead**: a
   human decides the numbering, and this note says so in §11.6.
-- *add AC cases for subscription admission* — **write it into the implementing change**: the cases
-  belong with the code that admits the stream, not in a design note that builds nothing.
+- *add AC cases for subscription admission* — **was "write it into the implementing change";
+  OVERRULED by the team lead on 2026-09-06 and written into §8 instead**, as two criteria rather
+  than one: `MIK-7272.TASK.1.12` (subscription admission enforces the same ownership check as
+  `tasks/get|update|cancel` — a caller guessing a task id currently gets status *and* result
+  pushed) and `MIK-7272.TASK.1.13` (the `-32021` gate is per request, not per method family, so an
+  undeclared client cannot reach the extension through the subscription path). Both BLOCKING for
+  4.0.0. The reason they are separate and neither extends `.11`: folding a distinct authorisation
+  surface into an existing criterion is what produced RL.5's "MET (narrowed)". The disposal was
+  wrong in the way §P0 warns about — deferring a criterion to the change that implements it hands
+  the implementer the job of deciding what the criterion says.
+
+**Open with the lead, not decided here:** whether `.12` and `.13` also become rows in
+`docs/requirements/RELEASE-4.0.0-criteria-status.md`. That file states `146 criteria, 182 rows,
+146 met or non-blocking, 36 blocking` at `:11` — 36, not the 37 the ruling assumed — and it says
+two lines below that the total is not maintained by hand: `scripts/release/count-release-criteria.py
+--check` recounts the blocking column of every table. It carries one `MIK-7272.TASK.1` row
+(`:226`, verdict ABSENT) and no per-sub-criterion rows at all, so `.9`, `.10` and `.11` have never
+been ledger rows either. Adding two would make it 38; leaving them as design-note criteria under
+the existing row leaves it 36. Nothing was hand-edited into that file.
