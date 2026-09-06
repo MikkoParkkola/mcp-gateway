@@ -387,6 +387,11 @@ The two steps that get skipped, per the honesty protocol, are the two that colla
    T1/T2: run them against the `build_outbound_meta(inbound_meta, cache_key_opt)` seam §5.1
    requires, **not** through `dispatch_to_backend`, whose backend stub will `ERROR` rather than
    `FAILURE` when incomplete — an ERROR is not the free proof, it is a broken harness.
+   **§5.2's route rows carry the same hazard one level up, and it is likelier there.** T12 and
+   T13 drive whole transports; a route that will not start, a stdio harness that never reads a
+   line, or an absent backend stub all produce a red T12/T13 that says nothing about whether the
+   trace read exists. Their red must be an assertion failure on the outbound params object. A
+   route row that has never once been seen to fail on its own assertion is an untested test.
 4. Then implement.
 
 ## 9. Readiness gates — applicable ones, checked
@@ -397,11 +402,11 @@ Against `rules-source/workflows/quality-gates-dor.md`. "Not applicable" carries 
 |---|---|
 | B4 acceptance criteria, stable IDs | Met. `MIK-7272.EXT.1` and `MIK-7272.OTEL.1` exist upstream; §1 decomposes them into clause IDs and traces each to a design sentence. |
 | C3 test strategy | This document. |
-| C11 contract tests | E1, E2, E3, T2 are contract/serialisation cases on the wire shape. |
+| C11 contract tests | E1, E2, E3, T2 are contract/serialisation cases on the wire shape; T11-T15 add the carrier and the two routes. |
 | G6 alternatives | Held at design §3; a test plan does not re-open them. |
 | G0 biggest ROI, G4 requirements clear, G5 minimum scope | Met upstream. The criteria are release-blocking and already worded; §1 decomposes them without widening them, and §0 states what is out. |
 | O1-O3 structure, clutter, naming | Met. One document, in `docs/design/`, named for its cluster and dated like its sibling design. |
-| G8 risks | Met: §6 names four gaps and §10 hands them forward with owners. |
+| G8 risks | Met: §6 opened four gaps, three still open and one (§6.6) closed into cases at §5.2; §10 hands the open ones forward with owners. |
 | G10-G12 fail-fast | **Partially — planned, not executed.** A test plan cannot produce execution evidence; nothing has been run. What this step can do is order the work so the riskiest assumption is tested first, and it does: §6 names four gaps, and the two cheapest discriminators (E3, T5) are the first cases to write — E3 decides whether EXT.1.b is provable at all, T5 whether `baggage` was built. The gates close at §P3, not here. |
 | T0 contribution class | infrastructure/compliance — closing two spec MUSTs. |
 | L2 data protection | **Applicable and UNRESOLVED — corrected at review.** `baggage` is arbitrary caller-supplied key/value text and may carry personal data; propagating it moves that data across a backend boundary. The W3C baggage specification's own privacy considerations say as much. This plan does not decide it: design §4.4.4 is the operator question, and until it is answered OTEL.1.d ships a data flow nobody has reviewed. Recorded as an open item (§10), not as N/A. |
