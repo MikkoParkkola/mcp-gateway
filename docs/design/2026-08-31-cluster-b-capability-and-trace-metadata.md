@@ -571,8 +571,20 @@ answer is an API break this ticket does not need. Answered yes, F1 is fixed here
 unanswered, F1 goes to TASK.1 as an accepted duplicate with a named owner.
 
 Today the field is populated from an empty set, because the only extension the module names is
-Tasks and TASK.1 has not landed (3.1a). An empty `extensions` object is the honest declaration,
-and it is not the same wire value as omitting the field.
+Tasks and TASK.1 has not landed (3.1a), so the field serialises to nothing at all.
+
+An earlier revision of this section said the opposite: that an empty `extensions` object was the
+honest declaration and `{}` was not the same wire value as omitting the field. That is now false,
+and the code is the side that is right. `ServerCapabilities.extensions` carries
+`#[serde(default, skip_serializing_if = "HashMap::is_empty")]` (`src/protocol/types.rs:255`), and
+the comment above it records the reason: MIK-7217 AC discover-3 requires the initialize result to
+be byte-identical for a client asking for an already-supported protocol version, so a key that
+appears for every client is not additive discovery — it is a breaking handshake change, however
+empty it is. The distinction between "speaks the mechanism, supports nothing" and silence is
+therefore not available to us, and a gateway with no extensions is indistinguishable from one
+predating the field. That is the correct trade, and it is the contract EXT.1.b must be tested
+against. `default` covers the deserialize direction so JSON written before the field existed
+still parses.
 
 OTEL.1 closes when the three W3C fields are read from the inbound **params-level** `_meta` —
 before the request params are reduced to `(name, arguments)`, whichever code performs that
