@@ -747,9 +747,33 @@ exact failure §0 of this note was written about, and it reproduced within six d
 
 ### 11.6 What is NOT yet done
 
-The confirmation pass required by §12 — *are the gaps closed* — returns to the vendor that raised
-each finding, per repair-protocol step 6: gpt for the subscription-admission, `-32021`, dedupe and
-`ttlMs` set; grok for the `tasks/update` MUST and the citation set. It has NOT run. This commit
-carries §11.1, the §11.2 amendment stamps described above, and §11.4's citation retargets; the
-final criterion numbering is still owed. The functional leg (D6:E2E) is **N/A: this change has no running surface** —
+The confirmation pass required by §12 — *are the gaps closed* — has now RUN; §12 below records it.
+What is still owed after it: the final criterion numbering, which is the team lead's call and not
+this note's to make. The functional leg (D6:E2E) is **N/A: this change has no running surface** —
 it is a design note; nothing was built, so there is nothing to drive.
+
+## 12. Confirmation pass — 2026-09-06
+
+Not a fresh review. Each vendor was handed back **its own** findings from §11 and the amended
+passages, and asked one question per finding: *is the gap closed, as you stated it?* That is
+repair-protocol step 6 — closure re-check returns to the finder, because a second vendor judges
+materiality on its own line and re-opens what it never raised.
+
+| finding | vendor | verdict | what happened |
+|---|---|---|---|
+| subscription admission is unauthorised (CRITICAL) | gpt | **CLOSED** | §3 ¶6 and §5 now authorise the `subscriptions/listen` stream on the same principal check as retrieval |
+| `-32021` gate is per method-family, must be per request (MEDIUM) | gpt | **CLOSED** | the gate is stated per request, so `subscriptions/listen` carrying `taskId`s is gated |
+| `ttlMs` has no admission bound (HIGH) | gpt | **NOT CLOSED** | the stamp said "global active-task cap". A terminal record is retained until its TTL expires, so a flood of fast-finishing tasks exhausts memory while an active-only counter reads zero. Repaired: caps count every **unreaped** record, released on deletion or expiry |
+| dedupe key is not principal-bound (CRITICAL) | gpt | **NOT CLOSED** | principal-binding landed, but the stamp keyed on `(principal, request fingerprint)`. That collapses two deliberate mutations differing only by idempotency key into one task and skips the second backend call. Repaired: key is `(principal, client idempotency key)`, fingerprint stored beside the entry, same-key/different-body **rejected**. AC `.8` inherits it |
+| `tasks/update` under-specified (MEDIUM) | grok | **NOT CLOSED** | the three MUSTs were stamped on AC `.3` only. An implementer writes the handler from piece 4 and reaches the criterion only when writing tests. Repaired: piece 4 carries them |
+| citations land on passages that do not carry the claim | grok | **PARTIAL** | §0, §7, §9 and §10.4 verified at source and correct. §4 and §9 still cited `plan.md:48-50,110-112` for "both ship"; the claim is at `:605-606`. Repaired — §11.4 had retargeted this same pointer everywhere except here |
+
+**Both legs: SHIP-WITH-FIXES.** All six fixes are in the commit that carries this section.
+
+Two IMPROVEMENTs were **disposed, not fixed** (§P0 disposal, named so the default of filing a
+ticket does not reassert itself):
+
+- *renumber the acceptance criteria so the amended ones read in order* — **filed to the lead**: a
+  human decides the numbering, and this note says so in §11.6.
+- *add AC cases for subscription admission* — **write it into the implementing change**: the cases
+  belong with the code that admits the stream, not in a design note that builds nothing.
