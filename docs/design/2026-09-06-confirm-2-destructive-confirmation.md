@@ -33,7 +33,7 @@ Each row is a fact read out of the tree at the cited location, not an inference.
 | C3 | The gateway **does** know a modern client's declared input capabilities: `caller.input_capabilities`. | `src/protocol/meta.rs:406-411` |
 | C4 | The admin gate runs **before** the confirmation gate. Every governed tool is already admin-only, so the real access control is the credential; the confirmation is "the confirmation an honest client offers its user". | `src/gateway/meta_mcp/mod.rs:1578-1584`; module header of `src/gateway/destructive_confirmation.rs` |
 | C5 | `ConfirmationChannel::Unavailable` transports (stdio) refuse unconditionally and must keep refusing — stdio cannot answer a question it is being asked. | `src/gateway/meta_mcp/mod.rs:1874`, `:2656`; `src/gateway/meta_mcp/invoke.rs:3908,3938,3973` |
-| C6 | **The MRTR continuation machinery is LIVE, not unwired.** `redeem_retry` is called on the production invoke path at `invoke.rs:1327`; `mint_continuation` at `invoke.rs:1559`. Both sit inside `invoke_tool`. | `src/gateway/meta_mcp/invoke.rs:376,529,1327,1559` |
+| C6 | The MRTR continuation machinery is **live for backend-originated exchanges on the invoke path**: `redeem_retry` is called at `invoke.rs:1327`, `mint_continuation` at `:1559`, both inside `invoke_tool`. It is not unwired. What this does *not* say: the confirmation case is gateway-originated at a meta-tool gate, and C9/C10 show that site reaches neither. Option I therefore reuses the **primitives** (`Keyring`, `InFlight`, `Payload`) and **none of the call sites**. | `src/gateway/meta_mcp/invoke.rs:376,529,1327,1559` |
 | C7 | What *is* unwired for 4.0.0 is the **InputBridge** (MRTR.7a/7b, modern-backend → legacy-client), scored unwired in commit `f2bcbd1d`, blocked by MIK-7388, which blocks MIK-7212. | commit `f2bcbd1d`; MRTR.7a/7b rows in the requirements |
 | C8 | A continuation `Payload` names **`backend_id`** — which backend holds the exchange — plus principal fingerprint, original-request digest, origin replica, jti, and the `InFlight` `hold_key`. `backend_id` is a `String`, so the type does not forbid a meta-tool name, but every consumer reads it as a backend. | `src/protocol/continuation.rs:64-98`, `:161-175` |
 | C9 | The destructive-confirmation gate is a **free function**: `destructive_confirmation_gate(&id, tool_name, &arguments, session_id, &caller)`. It does not take `&self`, so it cannot reach `self.continuation` (`Arc<ContinuationState>`). Any mint/redeem at the gate is a signature change, not a call. | `src/gateway/meta_mcp/mod.rs:1830`; field `:230`; accessor `:508` |
@@ -52,9 +52,13 @@ question to the requester rather than a flat "defer".
 
 The gate stays as it is. A modern client asking for a destructive meta-tool gets a refusal
 naming the reason and the channel that would work. §3.7's own preamble says "Each requirement
-below therefore demands a *refusal*, not a computation", and CONFIRM.1a/1b read as
-refusal-sufficient. C4 says the security posture does not regress: the admin credential is the
-control, and the confirmation is courtesy an honest client extends to its user.
+below therefore demands a *refusal*, not a computation". CONFIRM.1a/1b are **not** support for
+this option, and the design does not claim them: 1a already mandates a refusal when confirmation
+cannot be obtained and 1b already forbids proceeding on a warning, so a CONFIRM.2 that also meant
+"refuse" would restate the two rows immediately above it. That adjacency is evidence *against*
+this reading of the text. What carries Option R is the product argument: C4 says the security
+posture does not regress — the admin credential is the control, and the confirmation is the
+courtesy an honest client extends to its user.
 
 Cost: a documentation change, a test asserting the refusal shape on the modern path, and one
 requirement-row edit.
@@ -167,11 +171,18 @@ Sequenced so that an answer to Q1 may make Q2 and Q3 unnecessary.
 **Q1 — Does CONFIRM.2 accept a *refusal* as the modern-path answer for 4.0.0?**
 
 - *Reading A — refusal satisfies it.* §3.7's preamble demands a refusal rather than a
-  computation; CONFIRM.1a/1b read the same way; the admin credential (C4) is the actual control,
-  so the security posture is unchanged. Consequence: the criterion closes with a documentation
-  and test change, no protocol work.
+  computation; the admin credential (C4) is the actual control, so the security posture is
+  unchanged. Consequence: the criterion closes with a documentation and test change, no protocol
+  work.
 - *Reading B — the words "so a modern client can confirm" require an affirmative path.* Refusal
-  is not confirming. Consequence: Option I, a protocol-surface change late in the release.
+  is not confirming, and the row's neighbours argue for this reading: CONFIRM.1a already mandates
+  refusal when confirmation cannot be obtained and 1b already forbids proceeding on a warning, so
+  a third row meaning "refuse" would say nothing the first two do not. Consequence: Option I, a
+  protocol-surface change late in the release.
+- *A third reading a reviewer may raise — "reachable" means the gate must not be bypassed on the
+  modern path*, already true since the gate moved ahead of dispatch (C10, `mod.rs:1586`). The
+  Source column answers it: a criterion satisfied by work already done would not read
+  "Depends on MIK-7212".
 
 *Recommendation: Reading A, adopted explicitly as a requirement change rather than as an
 interpretation.* Reason: the confirmation is courtesy, not access control, and shipping a
