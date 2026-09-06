@@ -15,6 +15,31 @@ This document exists so the shape of the remaining work survives outside one ses
 context. It adds no verdicts: every row below is quoted from the ledger, and the ledger
 stays the source of truth for status.
 
+## Standing ruling — narrowing a criterion is not available on this release
+
+Several rows below present the same shape of choice: build the mechanism the criterion names, or
+rewrite the criterion so that what exists already satisfies it. `MIK-7246.CONFIRM.2` and
+`NFR.SEC.3` both reach it, and more will.
+
+The repair protocol reserves narrowing a requirement to the requester's **recorded agreement**,
+and that agreement exists, in the affirmative, for the whole release. The instruction this work
+runs under is to *implement the full 4.0.0 scope, with all gaps fixed with the full scope* — the
+phrase appears twice in one sentence, which is not how someone writes who wants the scope
+trimmed. So the default is settled and does not need asking again per row: **build the mechanism.**
+
+Two consequences worth stating plainly, because they are the cost of the ruling rather than
+arguments against it. Rewriting a criterion stops being a disposal available to a slice owner, so
+a row that could have closed by an edit now closes by a change with a design, tests and two review
+legs. And a question already put to the operator and unanswered — `CONFIRM.2` was put twice — is
+answered by this ruling rather than by a third attempt, because a third attempt asks the same
+person the same thing while the answer sits in what they already said.
+
+What this does **not** license: dropping an acceptance criterion, deferring a row, or deciding a
+row is not worth building. Those are still scope changes and still need the operator, and the
+ruling makes them rarer rather than easier. It settles which way the *build-or-rewrite* fork goes,
+nothing wider. A row whose build branch turns out to be genuinely infeasible is a finding to
+report, not a licence to take the other branch.
+
 ## The clusters
 
 How far each cluster has actually got — design, test plan, review, code, owner —
