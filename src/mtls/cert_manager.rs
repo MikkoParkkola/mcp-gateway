@@ -24,8 +24,8 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use rcgen::string::Ia5String;
 use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair, SanType,
-    date_time_ymd,
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair,
+    KeyUsagePurpose, SanType, date_time_ymd,
 };
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, CertificateRevocationListDer, PrivateKeyDer};
@@ -200,6 +200,7 @@ impl CertGenerator {
         dn.push(DnType::CommonName, params.cn);
         ca_params.distinguished_name = dn;
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
         ca_params.not_after = validity_to_date(params.validity_days)?;
 
         let ca_cert = ca_params
@@ -244,6 +245,7 @@ impl CertGenerator {
         }
         leaf_params.distinguished_name = dn;
         leaf_params.not_after = validity_to_date(params.validity_days)?;
+        leaf_params.use_authority_key_identifier_extension = true;
 
         // Add SANs — rcgen 0.14 uses Ia5String (from rcgen::string) for DNS and URI SAN types
         let mut sans: Vec<SanType> = Vec::new();
