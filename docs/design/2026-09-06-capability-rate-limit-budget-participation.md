@@ -296,22 +296,59 @@ does not depend on it.
 
 ## 7. What lands next, in order
 
-1. The RL.10 behavioural pin (G2) — an integration test driving a capability
-   `429` through the invoke path from a mock upstream. **The observable is named
-   here on purpose**: the assertion is that `mcp_error_budget_suppressed_total`
-   with `reason="rate_limited"` incremented for that server, and that the kill
-   switch and the per-capability budget took no sample. It is *not* "assert
-   `BudgetOutcome::of` returned `IgnoredRateLimit`". The existing budget tests
-   (`invoke.rs:4412`, `:4433`, `:4451`) construct `BudgetOutcome` values directly,
-   which is exactly the shape that left G2 open: asserting the classifier's return
-   value proves the classifier works, and proves nothing about whether the
-   capability path reaches it. Reaching it is the entire gap.
+1. The RL.10 behavioural pin (G2) — **LANDED 2026-09-06, at a different seam
+   than this section named, and the difference matters.**
 
-   Written first, per §P2, and it must be shown to fail against a tree with the
-   status stripped from the executor's message. That is a **mutation** probe, not
-   §P2's retrofitting falsifier — the script there wants `git show <pre-fix-ref>:<path>`
-   and no such ref exists, because the behaviour was never broken. Nobody should
-   go hunting for one. The same mutation is also the proof G1 is real.
+   The seam named above — a capability `429` driven through the invoke path from
+   a mock upstream, asserting `mcp_error_budget_suppressed_total` and two
+   untouched budgets — **is not reachable, by design of the security layer, not
+   by any shortcoming of the fixture.** `CapabilityExecutor::execute_jsonrpc`
+   calls `validate_url_not_ssrf` (`capability/executor/jsonrpc.rs:153`), which
+   rejects an IP literal in a private or reserved range before the HTTP call; a
+   domain-named loopback host passes that sync check and is then stopped by
+   `PinningResolver` (`capability/executor/mod.rs:176-184`) at DNS. There is no
+   env or test escape hatch and none should be added: a fixture that opens an
+   SSRF hole to prove a rate-limit property is a bad trade. The named counter is
+   also not observable in-process — no metrics recorder is installed in the test
+   harness — so the two-budget effect was the only half of that observable that
+   could have been asserted anyway.
+
+   What landed instead: `a_real_capability_429_is_excluded_from_failure_accounting`
+   (`src/capability/executor_tests.rs:993`). It drives a real loopback `429` and
+   a real `500` whose bodies are **identical** — the status line is the only
+   difference — through the production formatter `handle_response`
+   (`capability/executor/params.rs:38`, format site `:51`) and hands each
+   resulting `Error::Protocol` message to `Failsafe::record_dispatch_failure`
+   (`failsafe/mod.rs:88`), which runs the same `is_rate_limited` predicate
+   (`gateway/recovery.rs:283`) that `BudgetOutcome::of` runs. The observable is
+   the **effect** — the throttled response leaves the circuit breaker closed,
+   the control opens it — never `BudgetOutcome`'s return value. The control is
+   what proves the path ran and discriminated.
+
+   What that pin does and does not close, stated plainly so no reader has to
+   infer it:
+   - it closes G2 **for the REST capability path only**. `jsonrpc.rs:205` and
+     `graphql.rs:261` format their own status text, are driven by no test, and
+     stay exactly as exposed as this document found them.
+   - it closes nothing of G1 at any of the three sites. Detection is not
+     prevention; only O1 is.
+   - it does not pin that `execute()` calls `handle_response` — the test enters
+     at `handle_response`, as the executor's existing response tests do
+     (`executor_tests.rs:695`, `:738`, `:787`). The production call site is
+     `executor/mod.rs:494`.
+   - the meta-MCP recorder half was already pinned, and is not re-pinned here:
+     `error_budget_tests` (`gateway/meta_mcp/invoke.rs:4396`) asserts the
+     two-budget effect for `IgnoredRateLimit`, `Failure` and `Success`. Those
+     tests construct the outcome directly — the shape objection above stands
+     against them — but with this pin the two halves meet at the shared
+     predicate rather than at a string a test wrote for itself.
+
+   Falsifier: a **mutation** probe, per §P2's retrofitting note — no pre-fix ref
+   exists, because the behaviour was never broken. Run 2026-09-06 against
+   `params.rs:51` with the status dropped from the `"API returned {}: {}"`
+   literal: the throttled case tripped the breaker and the test failed on its
+   first assertion (`a real 429 must not trip the breaker`), not on a compile
+   error. Restore verified by re-running the test to PASS, not by `git status`.
 2. The ledger correction at `RELEASE-4.0.0-criteria-status.md:393` — the ABSENT
    line's stated reason is false and the row splits into behaviour and property.
 3. O1, gated on section 6.
