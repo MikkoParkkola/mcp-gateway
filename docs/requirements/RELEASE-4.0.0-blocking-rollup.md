@@ -676,3 +676,44 @@ reviewer's objection survivable rather than merely disputed.
 
 Unanswered as of 2026-09-06. `MIK-7212.MRTR.7a` and `7b` stay UNWIRED until it is ruled on;
 the wiring itself is unaffected either way, so the ruling gates the ship gate, not the code.
+
+## What is actually reachable right now (2026-09-06)
+
+Two separate obstacles were being conflated, and only one of them is real.
+
+**Not the obstacle: file collisions.** Five source files carry another session's
+uncommitted edits. Classifying every blocking row by the source files its evidence
+cites (`scripts/`-free, done by hand against this ledger) puts only six of the
+twenty-eight behind one of them:
+
+| blocking row | held file |
+|---|---|
+| `MIK-7212.MRTR.8b` | `src/protocol/continuation.rs` |
+| `MIK-7212.MRTR.10a` | `src/gateway/meta_mcp/mod.rs` |
+| `MIK-7246.CONFIRM.1a` | `src/gateway/meta_mcp/mod.rs`, `tests.rs` |
+| `NFR.COMPAT.1` | `src/gateway/meta_mcp/mod.rs` |
+| `NFR.SEC.3` | `src/gateway/meta_mcp/mod.rs`, `continuation.rs` |
+| `GH475.RL.10` | `src/capability/executor_tests.rs` |
+
+Fifteen rows cite only files nobody holds. Seven cite no source file at all and need
+their evidence read before they can be scheduled.
+
+**The actual obstacle: the working tree does not compile.** An edit to
+`src/protocol/continuation.rs` calls `len()` with an argument the method does not
+take (`:1023`, against the definition at `:756`). The file has not been touched since
+14:20. Until it is finished or reverted, `cargo test --lib` fails for every session in
+that worktree, so no criterion can produce test evidence there — which is why the
+collision looked like the blocker. It was the compile.
+
+**Workaround that touches nothing shared.** Build a committed revision in a detached
+worktree, where the parked file is its clean committed version:
+
+```
+git worktree add --detach <path> <sha>
+cd <path> && cargo test --lib -- <filters>
+```
+
+Used to verify `a694dce5` (48 passed, 0 failed) after the same command failed to
+compile in the shared tree. This is a way to obtain evidence, not a licence to edit a
+held file from a second checkout — that is working around the collision, not
+respecting it.
