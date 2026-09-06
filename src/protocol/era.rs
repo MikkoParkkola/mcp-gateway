@@ -175,7 +175,7 @@ impl EraCache {
     /// Collapsing "held" into `None` loses nothing: a held lock means a probe
     /// is in flight, and an in-flight probe means no era is determined yet —
     /// which is what `None` already says.
-    pub fn cached_now(&self) -> Option<Era> {
+    pub(crate) fn cached_now(&self) -> Option<Era> {
         let observation = *self.observation.try_lock().ok()?;
         (observation.source == EraSource::Probed).then_some(observation.era)
     }
