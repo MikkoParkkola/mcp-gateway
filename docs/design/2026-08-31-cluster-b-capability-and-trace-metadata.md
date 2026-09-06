@@ -522,8 +522,8 @@ Tasks and TASK.1 has not landed (3.1a). An empty `extensions` object is the hone
 and it is not the same wire value as omitting the field.
 
 OTEL.1 closes when the three W3C fields are read from the inbound **params-level** `_meta` —
-at the handler, beside `RetryFields::from_params`, on both transports, never from the tool
-argument object (2.7) — bounded, validated by
+before `extract_tools_call_params` discards it, reaching the invoke funnel on both transports,
+never from the tool argument object (2.7) — bounded, validated by
 a predicate that matches the W3C grammar (3.4b), and written unchanged into the outbound `_meta`
 at `dispatch_to_backend` unconditionally (3.4a) — never minted, never interpreted, subject to the
 CONTROL.3 carve-out in 3.4. Deleting `src/tracing_context/` is NOT part of it: 4.3 already says a
