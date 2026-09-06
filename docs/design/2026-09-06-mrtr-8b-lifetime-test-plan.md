@@ -54,7 +54,9 @@ Type: F = functional, B = boundary, N = negative.
 | .04 | live entry, deadline T; `len(T-1)` reports 1, `route(key, T-1)` answers `Here` | C1 | U | N | negative control: the reclaim must not eat live records. Fails if `guard` reclaims eagerly on a clearly-live entry — an inverted `retain` predicate, or a comparison on the wrong side |
 | .04a | entry with deadline T; `len(T)` reports 1 and `route(key, T)` answers `Here` | C1 | U | B | the boundary, and the ONLY `now` at which `<` and `<=` differ — .01 (`T+1`) and .04 (`T-1`) pass under either. Fails if `guard` reclaims at `deadline == now`, which would drop a record `Keyring::open` still accepts (`continuation.rs:508`) |
 | .05 | hold, let the deadline pass, make NO intervening call, then one call through `guard`: the entry is gone on that first call | C2 | U | F | this is the abandonment case — nothing completes the exchange and no reaper exists |
-| .06 | R2a's bargain, stated as a test: after the deadline passes with no intervening call the record is *still resident* in the map; residency ends at the first `guard`. Asserted via a direct map inspection, not a public reader | C2 | U | B | pins the honest bound. Fails if someone later adds a background reaper and quietly changes what the criterion means |
+| .06 | R2a's bargain, stated as a test: after the deadline passes with no intervening call the record is *still resident* in the map; residency ends at the first `guard`. Asserted by inspecting the map directly *before* any `guard`
+call, not through a public reader — which is why it does not contradict .05, whose assertion is made
+*after* one | C2 | U | B | pins the honest bound. Fails if someone later adds a background reaper and quietly changes what the criterion means |
 | .07 | freshness precondition: capture `now` once, hold with deadline `now+1`, advance nothing, call `route(key, now)` twice — the entry survives both, because the supplied `now` never moved | C1 | U | B | asserts the contract's limit. Fails if `guard` reads the wall clock internally, which is the rejected alternative |
 | .08 | transferred from NFR.PERF.3 (`2026-09-01-nfr-perf3-reclamation.md:375-388`): `hold` at `IN_FLIGHT_CAPACITY` with expired entries present **admits** rather than refusing | C2 | U | B | today reclaim lives inside the capacity branch; after the change `hold` keeps only its refusal, so the reclaim must have happened in `guard` before the check reads `len` |
 | .09 | `hold` at capacity with all entries live still refuses | C1 | U | N | the pair to .08. Without it, .08 passes trivially if the capacity refusal is deleted rather than re-ordered |
@@ -84,10 +86,18 @@ mis-wired to return a frozen instant, and no fixture that constructs the map in 
 claims to observe. Row .06 inspects the map directly precisely because every public reader would
 launder the answer through the reclaim it is trying to catch.
 
-**Two rows exist only to stop their partners passing vacuously.** .04 fails if reclaim is too
-eager anywhere; .04a fails if it is too eager at exactly the deadline, which is the one `now` .04
-cannot see; .09 fails if the capacity refusal is deleted instead of re-ordered. Both are cheap and both
-have a concrete wrong implementation they catch.
+**Six rows never go RED, and that is the correct behaviour, not a gap.** The honest-red list above
+names .01, .02, .03, .05, .08 and .11. The other six — .04, .04a, .06, .07, .09, .10 — are green
+under the pass-through *and* green after the reclaim lands, because each asserts something the
+change must NOT break rather than something it must start doing. A row whose RED never arrives is a
+defect when it is the only evidence for a clause; here every clause is also carried by a row that
+does go red, so these six are guards, not coverage. Each still names a concrete wrong implementation
+it catches: .04 an over-eager reclaim anywhere, .04a an over-eager reclaim at exactly the deadline —
+the one `now` .04 cannot see, .06 a background reaper quietly redefining the criterion, .07 a `guard`
+that reads the wall clock, .09 a capacity refusal deleted instead of re-ordered, .10 a walk whose
+bound a client can grow. Their falsifier is the wrong implementation, not the absent one, so they are
+verified by writing that implementation and watching them fail — not by waiting for a red that
+correct code would have to produce.
 
 ## Not tested here, with reasons
 
