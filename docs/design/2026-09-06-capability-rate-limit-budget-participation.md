@@ -20,8 +20,10 @@ records RL.10 as ABSENT because "`src/capability/executor/` contains no call to
 is true of the executor directory and false as a statement about capability
 execution, which is the thing the criterion is about.
 
-What the tree actually does, on the only path by which a capability tool can be
-executed:
+What the tree actually does, on the path by which a capability tool is
+executed as agent traffic — the meta-MCP invoke path. (There is a second,
+non-agent path, a CLI diagnostic; it is disclosed and dispositioned below,
+not folded into this table.)
 
 | step | site | what happens to a capability `429` |
 |---|---|---|
@@ -41,11 +43,31 @@ matches both the `429` token and `too many requests`.
 
 Two further facts that bound the problem:
 
-- **There is no second execution path.** `call_capability_tool_with_identity` has
-  exactly one caller (`invoke.rs:2458`), and `src/gateway/router/backend_handlers.rs`
-  contains no capability route (`rg capabilit` → no match). Every other
-  `get_capabilities()` site is listing, search, policy or status. Nothing reaches
-  a capability tool while bypassing `record_error_budget`.
+- **There is no second *agent-facing* execution path.**
+  `call_capability_tool_with_identity` has exactly one caller (`invoke.rs:2458`),
+  and `src/gateway/router/backend_handlers.rs` contains no capability route
+  (`rg capabilit` → no match). Every other `get_capabilities()` site is
+  listing, search, policy or status. Nothing an agent can drive reaches a
+  capability tool while bypassing `record_error_budget`.
+
+  **One path does bypass it, and is excluded here on purpose, not missed.**
+  `cap_test` (`src/commands/cap.rs:220-256`) constructs its own
+  `CapabilityExecutor` (`:241`) and calls `.execute()` directly — an
+  operator-invoked, one-shot CLI diagnostic (`mcp-gateway cap test`). It is
+  never agent traffic and never reaches `MetaMcp::dispatch_to_backend`.
+  Routing a CLI subcommand through the meta-MCP invoke path to buy it budget
+  participation is a real architectural change for a manual diagnostic tool,
+  for no agent-facing benefit — rejected on that basis, not overlooked.
+  Residual, stated rather than silently absorbed: an operator running
+  `cap test` against a throttled capability spends the same upstream provider
+  quota a real invocation would, and the error budget never records it — no
+  auto-disable, no counter, nothing. Acceptable for a tool an operator runs
+  by hand; it would not be if `cap_test` were ever wired into unattended
+  tooling. That premise is checked, not assumed: a whole-tree search
+  (`rg --hidden --no-ignore 'cap_test|cap test'`, excluding `target/`) finds
+  exactly two hits — the dispatch arm and the definition, both in
+  `src/commands/cap.rs` — and no CI job, script, or workflow invokes it as of
+  this revision.
 - **There is no capability circuit breaker to protect.** `Failsafe` lives on
   `PooledEntry` (`src/backend/pool.rs:78`), the MCP-backend pool. `CapabilityExecutor`
   owns a bare `HealthTracker` (`executor/mod.rs:65`) and nothing else. "A 429 must
@@ -263,7 +285,7 @@ text predicate because a transport error there genuinely has no typed status.
   test this section originally named — drive a capability `429` through invoke,
   assert `IgnoredRateLimit` and no budget sample — is **not** the test that
   landed: `BudgetOutcome::of`'s recorder is private to `invoke.rs`, so the pin
-  enters at the shared predicate instead (§7.1). What is asserted is therefore
+  enters at the shared predicate instead (§7, item 1). What is asserted is therefore
   the predicate leg; the `BudgetOutcome` leg of the trace stays read off the
   source. This is the part that must land regardless of O1.
 - **RL.10 — property ("needs no text"):** ABSENT until O1 lands. It is a breaking
@@ -280,7 +302,7 @@ text predicate because a transport error there genuinely has no typed status.
 
 | question | check run | result | what it changed |
 |---|---|---|---|
-| Does any path reach a capability tool without `record_error_budget`? | `rg call_capability_tool`, `rg capabilit src/gateway/router/backend_handlers.rs`, read of every `get_capabilities()` site | one execution caller, `invoke.rs:2458`, inside the recorded window; no route in `backend_handlers.rs` | killed a suspected third gap; the design does not add a recorder for a path that does not exist |
+| Does any *agent-facing* path reach a capability tool without `record_error_budget`? | `rg call_capability_tool`, `rg capabilit src/gateway/router/backend_handlers.rs`, read of every `get_capabilities()` site — scoped to the meta-MCP invoke surface, the only surface an agent drives | one execution caller, `invoke.rs:2458`, inside the recorded window; no route in `backend_handlers.rs` | killed a suspected third gap **on the invoke surface**; the design does not add a recorder for an agent-facing path that does not exist. This search was scoped to that surface and could not see, and does not claim to see, the CLI (`src/commands/cap.rs`), which never routes through `invoke.rs` — see §1's disposition of `cap_test` for that separate, non-agent path |
 | Does the 500-char body truncation break the exclusion? | read `jsonrpc.rs:204-207`, `params.rs:50-54`, `graphql.rs:260-263` | status precedes the truncated body in all three | RL.10 under the *weak* reading passes today — which is why section 3 had to settle the reading rather than assume it |
 | Is there a capability circuit breaker a `429` could trip? | `rg failsafe\|Failsafe src/capability/`, read `executor/mod.rs:65` | none; bare `HealthTracker` only | removed "must not trip the breaker" from the design as vacuous, in one line rather than a section |
 | Does capability transport health mis-count a `429`? | read `send_with_retry` `executor/mod.rs:112-158` | any HTTP status records success | no change needed at the transport layer |
@@ -293,8 +315,9 @@ text predicate because a transport error there genuinely has no typed status.
 | field | value |
 |---|---|
 | question | Is 4.0.0's public API still open to a breaking addition — specifically, may `crate::Error` gain a typed rate-limit variant? It is a public enum without `#[non_exhaustive]`, so a new variant breaks downstream exhaustive matches: D2 (breaking → approved and migrated) and D28 (surface counted). Not `VISIBILITY-IS-DESIGN`, which governs fields and functions. |
-| owner | operator, via team-lead |
+| owner | GH [#475](https://github.com/MikkoParkkola/mcp-gateway/issues/475) / [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) — the operator decides, tracked on these tickets, not a bare role reference |
 | what resolves it | a yes/no on the enum widening, recorded in this document. The counter-argument to record with it: a major release is the cheapest moment such a change ever gets, and `to_rpc_code`'s `_ =>` arm means the crate's own match sites mostly do not move |
+| migration path (D2) | if approved: downstream exhaustive `match crate::Error` sites gain one new arm, or already fall through a `_` wildcard — no behavioural change, since the new variant is only ever constructed by O1's own code path. Called out explicitly in the 4.0.0 release notes alongside the enum addition, so a consumer's own CI catches it at compile time rather than at runtime |
 | when | before any implementation of O1 begins; the RL.10 behavioural pin does not wait on it |
 | if it resolves badly | O2 as mitigation, RL.10's property half recorded OUT-OF-SCOPE-FOR-4.0.0 with the reason, G1 as named residual risk (section 5) |
 
@@ -303,7 +326,7 @@ does not depend on it.
 
 ## 7. What lands next, in order
 
-1. The RL.10 behavioural pin (G2) — **LANDED 2026-09-06, at a different seam
+1. **(item 1)** The RL.10 behavioural pin (G2) — **LANDED 2026-09-06, at a different seam
    than this section named, and the difference matters.**
 
    The seam named above — a capability `429` driven through the invoke path from
@@ -318,7 +341,18 @@ does not depend on it.
    SSRF hole to prove a rate-limit property is a bad trade. The named counter is
    also not observable in-process — no metrics recorder is installed in the test
    harness — so the two-budget effect was the only half of that observable that
-   could have been asserted anyway.
+   could have been asserted anyway. Nor is there an alternative route around the
+   probe: `CapabilityBackend` (`capability/backend.rs:122`) and
+   `CapabilityExecutor` carry no trait or DI seam a test could substitute
+   instead — the only trait in the chain, `ProtocolExecutor` (`executor/rest.rs:48`),
+   abstracts response *formatting* (REST/JSON-RPC/GraphQL), not transport
+   substitution, and has no injection point today: `dispatch_protocol`
+   (`executor/mod.rs:361`) is private and selects concretely, and the
+   `HashMap<&'static str, Arc<dyn ProtocolExecutor>>` that would make it
+   injectable is documented at `mod.rs:356-360` as future work, not present
+   code. So the only way to drive a real `429` through the full invoke path
+   today is the SSRF-blocked loopback probe; a mockable substitute is not a
+   route nobody tried, it is a route that does not exist yet to try.
 
    What landed instead: `a_real_capability_429_is_excluded_by_the_shared_rate_limit_predicate`
    (`src/capability/executor_tests.rs:993`). It drives a real loopback `429` and
