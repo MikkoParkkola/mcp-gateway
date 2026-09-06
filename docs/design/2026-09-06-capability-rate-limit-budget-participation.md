@@ -196,8 +196,34 @@ immediately and `response.text().await` remains legal afterward on the same
 `response` value. That ordering is what makes this option not a patch:
 call `error_for_status_ref()` first, use its `Err` to log the body via
 `tracing::warn!` for diagnostics (the disposition change named below), then
-return `Err(Error::Http(err))` through the `#[from] reqwest::Error` conversion
-that already exists (`src/error.rs:168-170`). Classification reuses
+return `Err(Error::Http(err.without_url()))` through the
+`#[from] reqwest::Error` conversion that already exists (`src/error.rs:168-170`).
+
+**The gate is `status == 429`, NOT `error_for_status_ref()`'s `Err`.** Both
+review legs caught the same defect independently and it is the one substantive
+revision this review produced. `error_for_status_ref()` errors on *every*
+non-success status, so gating on it would route all 4xx and 5xx through
+`Error::Http` — whose classification arm keys on 429 and falls through to
+`BackendError` for everything else. That is a real degradation, verified at
+source: `classify_from_detail` (`meta_mcp/invoke.rs:3029-3060`) reads the
+status out of today's `Error::Protocol` *text* and returns `Timeout` for
+`408`/`504`/`"timeout"` and `BackendError` for `500`/`502`/`503`. A 504 that
+tells an agent "timeout, retry after backoff" today would tell it
+"backend error" tomorrow. DESIGN EVENT 3 refused exactly that trade for the
+429 case; taking it for every other status would have been the same mistake
+one status wider.
+
+So each format site branches:
+
+```
+if status == 429  -> Error::Http(error_for_status_ref().unwrap_err().without_url())
+otherwise         -> Error::Protocol(...)   // today's text, byte for byte
+```
+
+The non-429 path is **untouched** — same string, same classification, same
+recovery hint. Only the 429 case changes carrier, which is the only case RL.10
+is about. This is an elimination, not a patch: after it, "O1 degrades non-429
+classification" cannot be stated, because O1 no longer touches non-429. Classification reuses
 `reqwest::Error::status()`, verified to return `Some(code)` on a status error
 (`reqwest src/error.rs:180`). `BudgetOutcome::of` matches on `Error::Http`'s
 status; `is_rate_limited` stays where it is for the MCP-backend path, which has
@@ -246,17 +272,19 @@ O1 would take an API key that today never leaves the process and hand it to the
 calling agent inside an error string, at every non-success status, for every
 REST capability that authenticates by query parameter.
 
-RULING: **the reqwest `Display` never reaches an agent.** Wherever a capability
-`Error::Http` is rendered for a client, the text is built from the status alone
-— `"capability backend returned HTTP {status}"` — and reqwest's full `Display`,
-URL and all, goes only to the `tracing::warn!` line beside the body. This is a
-constraint on O1's implementation, not a change of carrier: the typed status is
-still `reqwest::Error::status()`, and classification is unaffected. It is
-recorded here rather than left to the implementer because "just return the
-error" is the obvious thing to write and it is the thing that leaks.
+RULING: **the URL never reaches the error.** `.without_url()` is called on the
+status error before it is wrapped, so `Error::Http`'s `Display` carries the
+status and reason phrase and nothing else. This is not a new mechanism — it is
+the one this module already uses: `redact_url` (`executor/mod.rs:107-109`) is
+`e.without_url()`, applied to every transport error `send_with_retry` returns
+(`:129-133`, `:156`). The capability executor already treats a reqwest URL as
+something an agent must not see; O1 was about to introduce the first path that
+did not. The full `Display`, URL and all, stays in the `tracing::warn!` line
+beside the body, where an operator reads it and an agent does not.
 
-Raised by the Kimi K3 leg of the §12 dual-vendor review, 2026-09-06, as its
-only HIGH finding; confirmed at source before acceptance.
+Both review legs raised this independently — Kimi K3 as its only HIGH,
+Grok as CRITICAL/CERTAIN — and Grok named the in-tree helper. Two vendors on
+one defect, confirmed at source before acceptance (V).
 
 **DESIGN EVENT 2 — the JSON-RPC error code an MCP client sees changes, and
 this was disclosed, then ruled on — RESOLVED, not accepted-as-consequence.**

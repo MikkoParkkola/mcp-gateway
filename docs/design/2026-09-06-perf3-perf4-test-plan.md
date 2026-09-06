@@ -8,7 +8,8 @@ Depends on: `docs/design/2026-09-06-mrtr-8b-10a-lifetime-and-idempotency-wiring.
 
 ## Scope of this plan
 
-One row per clause of the two criteria, as the clauses are worded in
+One row per clause of the two criteria, as the clauses are worded in (plus one ratchet, row 4,
+which guards the PERF.4 clause while its criterion assertion is blocked), in
 `docs/requirements/RELEASE-4.0.0-performance.md:77-88`. No row asserts anything about the
 capacities themselves, about NFR.PERF.1, or about deleting the seventeenth meta-tool.
 
@@ -31,7 +32,7 @@ already the module's shape at `:696` and in Design A), so no sleeping and no tim
 
 ## Assertion strength — the second question a plan review must answer
 
-Every row states above what makes it fail. The three risks specific to this plan:
+Every row states above what makes it fail. The four risks specific to this plan:
 
 - **Rows 1 and 4 assert properties that are already true.** That is an honest weakness, not a
   hidden one: written after the mechanism, they inherit none of the free failure. Each gets the

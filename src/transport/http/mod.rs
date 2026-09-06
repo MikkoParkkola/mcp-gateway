@@ -691,7 +691,18 @@ impl HttpTransport {
         // immediately or do not implement client notifications. The gateway
         // can still use request/response tools in that case, so notification
         // delivery must not make backend startup fail.
-        if let Err(error) = self.notify("notifications/initialized", None).await {
+        //
+        // `send_notification` with era `None`, not `notify`: this notification
+        // is the second half of the handshake, and `initialize()` is re-entered
+        // on reconnect and on session expiry — by which time the era cache can
+        // already say `Modern`. Shaping it by era would send a 2026-shaped
+        // `initialized` beside a 2025 `initialize`, to a peer we are still
+        // introducing ourselves to. `send_request` refuses the era here for the
+        // same reason.
+        if let Err(error) = self
+            .send_notification("notifications/initialized", None, None, None)
+            .await
+        {
             debug!(url = %sanitize_url_for_diagnostics(&self.base_url), error = %error, "Initialized notification failed (ignored)");
         }
 
@@ -1146,6 +1157,72 @@ impl HttpTransport {
     fn bucket_key(identity_key: Option<&str>) -> &str {
         identity_key.unwrap_or("")
     }
+
+    // MIK-6735 fix 2: threads `identity_key` into `build_mcp_headers` so a
+    // notification for a per-user identity selects that same identity's
+    // `MCP-Session-Id` bucket — previously every notification hardcoded
+    // `HeaderMode::Notify, None`, i.e. the shared bucket, even when it
+    // correlated a request that had gone out on a per-user session.
+    /// Send a notification to the message endpoint, shaped for `era`.
+    ///
+    /// `era` is a parameter rather than a read of `self.outbound_era()`, for
+    /// the reason `send_request` takes one: the handshake's own
+    /// `notifications/initialized` must stay legacy-shaped even once the cache
+    /// says `Modern`, and a path that reads the era for itself cannot make that
+    /// exception. Ordinary notifications pass `outbound_era()`.
+    async fn send_notification(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        identity_key: Option<&str>,
+        era: Option<Era>,
+    ) -> Result<()> {
+        let message_url = self.get_message_url();
+        let params = if era == Some(Era::Modern) {
+            with_modern_meta(method, params)?
+        } else {
+            params
+        };
+
+        let notification = JsonRpcNotification {
+            jsonrpc: "2.0".to_string(),
+            method: method.to_string(),
+            params,
+        };
+
+        let mut headers = self
+            .build_mcp_headers(HeaderMode::Notify, identity_key)
+            .await?;
+        // This path has no per-request merge, so the builder's return is the
+        // last writer here. Finalising only in `send_request_with_headers`
+        // would leave every notification unshaped.
+        if era == Some(Era::Modern) {
+            finalise_modern_headers(&mut headers);
+        }
+
+        let response = self
+            .client
+            .post(&message_url)
+            .headers(headers)
+            .json(&notification)
+            .send()
+            .await
+            .map_err(|e| safe_request_error("Notification failed", &e))?;
+
+        if !response.status().is_success() {
+            // Many HTTP backends (e.g. exa, beeper) do not support MCP
+            // notifications and return 4xx. This is expected behaviour — log at
+            // DEBUG so it does not spam the operator logs.
+            debug!(
+                status = %response.status(),
+                url = %sanitize_url_for_diagnostics(message_url.as_str()),
+                method = method,
+                "Notification not supported by backend (ignored)"
+            );
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -1236,64 +1313,14 @@ impl Transport for HttpTransport {
         self.notify_with_headers(method, params, None).await
     }
 
-    // MIK-6735 fix 2: threads `identity_key` into `build_mcp_headers` so a
-    // notification for a per-user identity selects that same identity's
-    // `MCP-Session-Id` bucket — previously every notification hardcoded
-    // `HeaderMode::Notify, None`, i.e. the shared bucket, even when it
-    // correlated a request that had gone out on a per-user session.
     async fn notify_with_headers(
         &self,
         method: &str,
         params: Option<Value>,
         identity_key: Option<&str>,
     ) -> Result<()> {
-        let message_url = self.get_message_url();
-
-        let era = self.outbound_era();
-        let params = if era == Some(Era::Modern) {
-            with_modern_meta(method, params)?
-        } else {
-            params
-        };
-
-        let notification = JsonRpcNotification {
-            jsonrpc: "2.0".to_string(),
-            method: method.to_string(),
-            params,
-        };
-
-        let mut headers = self
-            .build_mcp_headers(HeaderMode::Notify, identity_key)
-            .await?;
-        // This path has no per-request merge, so the builder's return is the
-        // last writer here. Finalising only in `send_request_with_headers`
-        // would leave every notification unshaped.
-        if era == Some(Era::Modern) {
-            finalise_modern_headers(&mut headers);
-        }
-
-        let response = self
-            .client
-            .post(&message_url)
-            .headers(headers)
-            .json(&notification)
-            .send()
+        self.send_notification(method, params, identity_key, self.outbound_era())
             .await
-            .map_err(|e| safe_request_error("Notification failed", &e))?;
-
-        if !response.status().is_success() {
-            // Many HTTP backends (e.g. exa, beeper) do not support MCP
-            // notifications and return 4xx. This is expected behaviour — log at
-            // DEBUG so it does not spam the operator logs.
-            debug!(
-                status = %response.status(),
-                url = %sanitize_url_for_diagnostics(message_url.as_str()),
-                method = method,
-                "Notification not supported by backend (ignored)"
-            );
-        }
-
-        Ok(())
     }
 
     fn is_connected(&self) -> bool {
