@@ -377,12 +377,17 @@ one.
 | add `InFlight::reap(&self, now)` | **rejected at source.** `reap` was deleted in `ec11dcec` deliberately: a reclaimer someone must remember to call is the defect, not the fix, and `hold`'s own doc comment says so. Re-adding it re-opens a closed decision |
 | add `spawn_continuation_maintenance`, a 60 s interval task | **not needed, and worse than the alternative.** The peer's Design A gives `InFlight` a single `guard(now)` entry point that reclaims under the lock, so `hold`, `route`, `complete` and `len` all reclaim on every read. Reclamation on a clock is then reclamation nobody has to schedule |
 | the lifetime clause is this slice's work | **it is MRTR.8b's slice**, and that document declares `NFR.PERF.3` explicitly out of its own scope. The division that holds: the peer builds the mechanism; this slice proves it |
+| the earliest-deadline guard is "in scope here" (the table above) | **transferred, not retained.** That sentence was written before this correction and is void: the guard changes `hold`'s body, and every change to `InFlight`'s entry points is now OUT. It goes to MRTR.8b with the rest of them — raised against their Design A, where reclaim-on-every-read makes the unguarded walk *more* frequent, not less — and is not repaired here |
 
 **Revised FOR:** the two checks the mechanism is unobservable without — a deterministic
 reclamation test standing in for `NFR.PERF.3`'s unstated soak, and a `NFR.PERF.4` ceiling
 assertion. No production code in this slice beyond what those two need.
 
 **Added to OUT:** every change to `InFlight`'s own entry points. They belong to MRTR.8b.
+
+**Landing order:** this slice lands **after** MRTR.8b. Its reclamation test calls `len(now)` and
+goes through `guard(now)`; merged first it would not compile, so the dependency is a landing
+constraint and not merely a logical one.
 
 The reclamation test is unchanged in shape by this correction and gets simpler: with `guard(now)`
 in place, abandon 8 192 exchanges (2x `IN_FLIGHT_CAPACITY`), advance the driven clock past the
