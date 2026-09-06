@@ -818,11 +818,19 @@ ticket does not reassert itself):
   wrong in the way §P0 warns about — deferring a criterion to the change that implements it hands
   the implementer the job of deciding what the criterion says.
 
-**Open with the lead, not decided here:** whether `.12` and `.13` also become rows in
-`docs/requirements/RELEASE-4.0.0-criteria-status.md`. That file states `146 criteria, 182 rows,
-146 met or non-blocking, 36 blocking` at `:11` — 36, not the 37 the ruling assumed — and it says
-two lines below that the total is not maintained by hand: `scripts/release/count-release-criteria.py
---check` recounts the blocking column of every table. It carries one `MIK-7272.TASK.1` row
-(`:226`, verdict ABSENT) and no per-sub-criterion rows at all, so `.9`, `.10` and `.11` have never
-been ledger rows either. Adding two would make it 38; leaving them as design-note criteria under
-the existing row leaves it 36. Nothing was hand-edited into that file.
+**Ruled by the team lead, 2026-09-06:** `.12` and `.13` stay criteria of this note under the
+existing `MIK-7272.TASK.1` row and do **not** become rows in
+`docs/requirements/RELEASE-4.0.0-criteria-status.md`. The reason is consistency, not effort:
+that file carries one `MIK-7272.TASK.1` row (`:226`, verdict ABSENT) and no per-sub-criterion
+rows at all, so `.9`, `.10` and `.11` have never been rows either, and promoting only the two
+newest would make the ledger's granularity a function of when a criterion was written rather
+than of what it is. The parent row is ABSENT and therefore blocking, so nothing is concealed by
+leaving them here.
+
+The ruling carried one requirement, applied in the same commit: the parent row's verdict text at
+`:226` now names `.12` and `.13` explicitly, with one clause each on what they assert, so a
+reader working the ledger finds them without opening this note. A criterion nobody can reach from
+the ledger is a criterion nobody checks. The blocking total is whatever
+`scripts/release/count-release-criteria.py --check` derives and was not hand-typed; the ruling's
+own earlier figure of 37 was withdrawn by its author, and the file's `:11` line said 36 before
+this edit and says whatever the script recounts after it.
