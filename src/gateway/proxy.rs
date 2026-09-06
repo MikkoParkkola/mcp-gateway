@@ -832,6 +832,69 @@ mod tests {
         assert_eq!(received.data["method"], "roots/list");
     }
 
+
+    // ── Roots forwarding: the id-bearing repair (MIK-7212.ROOTS) ───────
+    //
+    // These two are RED ON PURPOSE against the shipped forward. They encode
+    // the D-A ruling: roots stays in scope, so the forward must become a
+    // request a conforming client can answer. Both fail today for the reason
+    // the design names, and that failure is the point -- written before the
+    // repair so neither can be talked into agreeing with the code.
+
+    /// MIK-7212.ROOTS.1 — the forwarded frame carries a JSON-RPC request id.
+    ///
+    /// Without an `id` the frame is a NOTIFICATION, which a conforming client
+    /// is under no obligation to answer, and which `resolve_pending` could
+    /// never match even if one did. Asserted on the emitted frame rather than
+    /// the return value, which is `true` whether or not an id was minted.
+    #[tokio::test]
+    async fn roots_1_forwarded_frame_carries_a_request_id() {
+        // GIVEN a session listening for proxied client requests
+        let mux = make_multiplexer();
+        let (session_id, mut rx) = mux.get_or_create_session(Some("roots-id"));
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+
+        // WHEN roots/list is forwarded to it
+        assert!(proxy.forward_roots_list(&session_id));
+        let received = rx.recv().await.expect("a frame must reach the session");
+
+        // THEN the frame is a request, not a notification
+        let id = received.data.get("id").and_then(Value::as_str);
+        assert!(
+            id.is_some_and(|id| id.starts_with("roots-")),
+            "roots/list must be forwarded as a request bearing a `roots-<uuid>` id; \
+             got {:?}. Without one the client need not answer and no answer could \
+             be routed back (MIK-7212.ROOTS.1)",
+            received.data.get("id")
+        );
+    }
+
+    /// MIK-7212.ROOTS.2 — the frame rides the envelope a compliant client reads.
+    ///
+    /// Exists because ROOTS.1 alone would pass on a frame no conforming client
+    /// ever sees as a request. `forward_sampling_with_response` -- the other
+    /// response-bearing forward -- uses `message` and says why: raw JSON-RPC
+    /// for compliant clients. `proxy_request` is the fire-and-forget envelope,
+    /// which is what roots was built as and is exactly what is being repaired.
+    #[tokio::test]
+    async fn roots_2_forwarded_frame_uses_the_standard_envelope() {
+        // GIVEN a session listening for proxied client requests
+        let mux = make_multiplexer();
+        let (session_id, mut rx) = mux.get_or_create_session(Some("roots-envelope"));
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+
+        // WHEN roots/list is forwarded to it
+        assert!(proxy.forward_roots_list(&session_id));
+        let received = rx.recv().await.expect("a frame must reach the session");
+
+        // THEN it arrives on the MCP-standard event a compliant client reads
+        assert_eq!(
+            received.event_type, "message",
+            "a response-bearing forward must use the MCP-standard `message` \
+             envelope; `proxy_request` is the fire-and-forget shape and a \
+             compliant client never reads it as a request (MIK-7212.ROOTS.2)"
+        );
+    }
     // ── Roots changed broadcast ────────────────────────────────────────
 
     #[tokio::test]
