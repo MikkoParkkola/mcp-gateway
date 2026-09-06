@@ -106,14 +106,19 @@ What it needs, all measured:
    `Keyring::with_mint_budget` already provide bounded primitives; a client that never retries
    (which the spec permits, and which is the expected case here) must not leak state.
 7. MRTR.10a/10b: the retry discriminator that puts `inputResponses` + `requestState` in the
-   key already exists on the invoke path (C12, `invoke.rs:1164-1168`) — this item inherits it
-   rather than building it. What Option I adds is the rule that an
+   key exists as CODE — `RetryFields::key_discriminator`, used on the invoke path at
+   `invoke.rs:1164-1168` (C12). Option I reuses that function and **inherits nothing else**:
+   the gate is not on the invoke path and has no idempotency entry of its own, because
+   `gateway_kill_server` never enters the funnel that calls `enforce` (the out-of-scope section
+   measures this: sole production call at `invoke.rs:1177`). So cache-first at the gate is
+   something Option I must BUILD, not something it gets. What it also adds is the rule that an
    InputRequired-shaped result must never be cached as a completed call (C12). Ordering is part
-   of the requirement, not an implementation detail: the idempotency cache is consulted BEFORE
-   the gate. At-least-once delivery means a client may retry a call whose confirmation was
-   already redeemed and whose kill already succeeded; with the gate first, the continuation is
-   spent, the second redemption fails, and the caller is refused an action that has already
-   happened. Cache-first returns the recorded result instead.
+   of the requirement, not an implementation detail: the idempotency cache must be consulted
+   BEFORE the gate. At-least-once delivery means a client may retry a call whose confirmation
+   was already redeemed and whose kill already succeeded; with the gate first, the continuation
+   is spent, the second redemption fails, and the caller is refused an action that has already
+   happened. Cache-first returns the recorded result instead. An implementer who reads this item
+   as inherited ships the gate with no cache at all, which is exactly that refusal.
 
 Cost: a protocol-surface addition late in the release, touching the continuation and idempotency
 rows. Not rejected on merit — rejected, if it is rejected, on release timing (Q2).
