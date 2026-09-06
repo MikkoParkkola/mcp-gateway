@@ -13,7 +13,7 @@ are worded. An empty evidence cell is the finding, not an omission.
 
 | id | criterion | case | level | type | production entry | passes only if |
 |---|---|---|---|---|---|---|
-| S5.a | SEC.1 row 5 | an authenticated client whose circuit is open is refused | system | negative | `POST /mcp` after N authenticated calls to a method that does not exist, each asserting `-32601` | HTTP 503 **and** code `-32003` |
+| S5.a | SEC.1 row 5 | an authenticated client whose circuit is open is refused | system | negative | `POST /mcp` after N authenticated calls to a method that does not exist, each asserting `-32601`, on a key with `rate_limit: 0` | HTTP 503 **and** code `-32003` |
 | S5.b | SEC.1 row 5 | falsifier — the same frame from a client whose circuit is closed | system | positive | `POST /mcp`, fresh client name | 200, no error member |
 | C1.a | COMPAT.1 | 2026-07-28 is served | system | positive | `POST /mcp` + `MCP-Protocol-Version: 2026-07-28` | HTTP 200 with a `result` member and **no** `Mcp-Session-Id` response header — the stateless path's observables, since no response field echoes the revision |
 | C1.b | COMPAT.1 | falsifier — same frame with `modern_protocol` off | system | negative | as C1.a, flag flipped | `-32022` unsupported protocol version |
@@ -24,6 +24,12 @@ are worded. An empty evidence cell is the finding, not an omission.
 | C6 | COMPAT.1 | falsifier for C3-C5 — a revision absent from `SUPPORTED_VERSIONS` | system | negative | `initialize` with `1999-01-01` | downgraded to `PROTOCOL_VERSION` (2025-11-25), **not** echoed |
 | S15.a | SEC.1 row 15 | a `tools/call` the firewall blocks as an anomaly is refused | system | negative | `POST /mcp`, `tools/call`, firewall configured to block | HTTP 400 **and** code `-32002` |
 | S15.b | SEC.1 row 15 | falsifier — every non-anomaly firewall block | system | negative | as S15.a, non-anomaly rule | HTTP 400 **and** code `-32600`, distinguishing it from S15.a |
+
+The S5 client carries `rate_limit: 0` deliberately. `src/gateway/auth.rs:162`
+registers a limiter only when `rate_limit > 0`, so a zero leaves row 4's gate
+unarmed and row 5's refusal is the only one the frame can meet. This is the
+gate-order trap the design names, closed at the fixture rather than argued
+about after a green test.
 
 ## Can each case actually fail?
 

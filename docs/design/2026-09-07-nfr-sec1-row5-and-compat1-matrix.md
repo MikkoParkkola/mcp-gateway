@@ -60,6 +60,7 @@ testing the other wrong path.
 | C3 | 2025-06-18 served | `initialize` | negotiated version equals 2025-06-18 | a revision absent from `SUPPORTED_VERSIONS` → downgraded to `PROTOCOL_VERSION` |
 | C4 | 2025-03-26 not dropped | `initialize` | negotiated version equals 2025-03-26 | as C3 |
 | C5 | 2024-11-05 not dropped | `initialize` | negotiated version equals 2024-11-05 | as C3 |
+| S15 | the firewall gate refuses a blocked `tools/call` | `POST /mcp`, `tools/call`, a configured firewall that blocks | HTTP 400 + `-32002` for an anomaly block, `-32600` for every other (`handlers.rs:1244-1266`) | the same frame with `firewall: None` — the seven router fixtures' own state → served |
 
 C1's second clause — the wired legacy-client bridge, `MIK-7212.MRTR.7a`/`7b`
 in `src/protocol/continuation.rs` — is **not in this change**. That file is
