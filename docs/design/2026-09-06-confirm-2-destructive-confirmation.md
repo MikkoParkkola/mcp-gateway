@@ -132,8 +132,17 @@ and the tool binding — and `Keyring::mint`/`open` (`continuation.rs:408,473`) 
 The client holds the envelope; the gateway does not store its contents. Option I′ is a
 description of Option I's existing mechanism, not an alternative to it.
 
-Two things follow, and both matter more than the option did:
+Three things follow, and each matters more than the option did:
 
+- **The single-use mechanism the review proposed would have replayed, not refused.** `enforce`
+  (`src/idempotency.rs:568`) returns `GuardOutcome::CachedResult(value)` on
+  `AdmitOutcome::Completed` (`:582`) — a second presentation of the same key and fingerprint is
+  served the first call's stored result. It refuses only `InFlight` and `Mismatch` (409) and
+  `AtCapacity` (503). A confirmation token made single-use that way would let a replayed
+  confirmation hand back the first destruction's result as though it were its own, which is the
+  opposite of the property the proposal wanted from it. The burn that does refuse is
+  `ConsumedLedger::consume` (`continuation.rs:595-611`) — server-side state, which is the next
+  bullet.
 - **Statelessness is not available, from either option.** Single-use redemption needs a record of
   what has been spent: `ConsumedLedger` (`continuation.rs:552-631`), a fixed-capacity table of
   spent identifiers under one replica's mutex. Drop it and the envelope replays. So the honest
@@ -244,6 +253,33 @@ Nothing that depends on this is implemented, which is the condition a scheduled 
 - **The legacy (session-bearing) confirmation path.** Unchanged in all options.
 - **Any change to which meta-tools are destructive.** The set is what
   `is_destructive_meta_tool` says it is.
+- **Backend and capability tools — out of scope, and by an operator decision rather than a
+  derivation.** Raised after the first dual review, so this is a §P0 scope touch and is recorded
+  as one; the bullet above it presupposes meta-tools and therefore does not cover it. CONFIRM.3
+  says "The governed tool set MUST derive from the `destructiveHint` annotation"
+  (`docs/requirements/RELEASE-4.0.0-requirements.md:199`), and neither it nor CONFIRM.1a, 1b or 2
+  says whether that set is meta-tools only — all four rows are textually silent on the question.
+  The code answers it deliberately, with its reasons in the module docs
+  (`src/gateway/destructive_confirmation.rs:196-200`): "Backend and capability tools are
+  deliberately absent: they are not part of `meta_mcp_tool_defs.rs`, `infer_destructive_tool()`
+  only guesses their hints by substring match, and `ConfirmationPolicy::for_modern()` is an
+  unconditional refusal — governing them here would refuse a large slice of the tool surface with
+  no confirmation path." Two consequences belong to the requester, not to this design:
+  - **The third reason is coupled to Q1.** It holds only while refusal *is* the modern-path
+    answer. Rule Q1 for Option R and it calcifies: the modern path refuses, so gating backend
+    tools means refusing them. Rule for Option I and it evaporates: a confirmation path exists,
+    and the reason for the exclusion goes with it. The other two reasons — no annotation source,
+    a substring guess — survive either ruling, and they are the ones that would cost real work.
+  - **The gate/cache ordering hazard is unreachable today.** A tool that is both
+    destructive-annotated and backend-routing would place the confirmation gate and the
+    idempotency cache in an order this design has not specified. No such tool exists:
+    `gateway_invoke`, the one meta-tool that routes to a backend, is annotated
+    `destructive_hint: Some(false)` (`src/gateway/meta_mcp_tool_defs.rs:156`), so it never reaches
+    the gate. The hazard becomes real on the first tool that is both, and not before.
+
+  Disposal per §P0: **operator decision**. Not fixed here, not filed as a ticket, and not narrowed
+  by this design — CONFIRM.3's silence is the requester's to resolve. Naming the ambiguity is the
+  closure available at this level; closing the gap is not.
 - **Code.** Per §P1 this design contains none, and the option write-ups above are shapes, not
   signatures.
 
