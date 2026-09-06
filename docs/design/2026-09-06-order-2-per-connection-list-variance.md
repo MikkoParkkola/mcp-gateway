@@ -58,7 +58,7 @@ does **not** pass through `session_key`.
 | 7 | After a successful `gateway_invoke`, the tool is promoted for the session: `if let Some(sid) = session_id { self.promote_tool_for_session(sid, &tool_key); }`. `Some("")` satisfies this. | `src/gateway/meta_mcp/invoke.rs:1826-1828` |
 | 8 | `promote_tool_for_session` writes `session_promoted.entry(session_id.to_string()).or_default()`. The empty string is a valid `DashMap` key. | `src/gateway/meta_mcp/spec_preview.rs:228-245`; store at `mod.rs:312`, init `mod.rs:467`, cleared `mod.rs:1048-1049` |
 | 9 | `promoted_tools_for_session(session_id)` reads the raw id, no `session_key`. | `mod.rs:1021-1030` |
-| 10 | The router passes `Some(session_id.as_str())` on both the invoke and the list path, i.e. `Some("")` for a modern connection. | `handlers.rs:660`, `handlers.rs:935` |
+| 10 | The router passes `Some(session_id.as_str())` on both the list and the call path, i.e. `Some("")` for a modern connection. | `handlers.rs:971` (`tools/list`), `handlers.rs:1162` (`tools/call`) |
 | 11 | Promoted tools are appended to the assembled list inside `handle_tools_list_for_session`, immediately after the surfaced-tool loop. | `mod.rs:1284-1330`, surfaced loop at `mod.rs:1310` |
 
 **Both clauses fail on this leg.** 2b: a successful `gateway_invoke` changes the
@@ -81,6 +81,37 @@ it differ from B") and **B-06** (B-01 re-run under `--features spec-preview`).
 What is new here is the measurement that the production path is still open and
 that the profile leg around it has closed, which changes which option is cheap.
 
+## 2b. A second store with the same defect — the FSM workflow state
+
+Review found a second store keyed by the raw session id. It is the same defect
+as §2, in a different place, and unlike §2 it is in the **default build**.
+
+| # | fact | source |
+|---|---|---|
+| 12 | `gateway_set_state` guards with `let Some(sid) = session_id else { ... }`, **not** with `session_key`. `Some("")` passes, and the FSM workflow state is written under the empty key. | `src/gateway/meta_mcp/mod.rs:1688-1696` |
+| 13 | `current_search_state` reads it the same way: `session_id.map_or_else(|| DEFAULT_STATE, |sid| self.session_state.get_state(sid))`. `Some("")` reads the shared entry rather than falling back to the default. | `src/gateway/meta_mcp/search.rs:161-165` |
+| 14 | That state filters the tools returned by the discovery surface: `search_tools` and the code-mode search both derive `current_state` from it, and the capability branch returns `cap.get_tools_for_state(&current_state)`. | `search.rs:378`, `search.rs:586`, `search.rs:653`, `search.rs:730` |
+| 15 | The store is `session_state: SessionStateStore` at `mod.rs:319`, initialised at `mod.rs:468`. Nothing in it is feature-gated. | `mod.rs:319,468` |
+
+So on a modern connection, `gateway_set_state` mutates state under the key `""`,
+and every subsequent `gateway_search` / capability tool listing on **every**
+sessionless modern connection sees the changed tool set. Mechanically identical
+to §2; materially worse, because it ships by default.
+
+**What it does not touch.** `handle_tools_list_for_session` does not consult
+`session_state`; the filtering is confined to the discovery surface. Whether the
+discovery surface's output is a "list result" for the purposes of ORDER.2 is a
+question for the requester (Q3, §6) — but the defect is the same shared key, and
+recommendation (c) closes it with the same one-line change applied at
+`mod.rs:1689` and `search.rs:163`. No separate option analysis is needed.
+
+**Provenance.** This was not in the first draft of this note. The review leg
+raised it, and it was confirmed at source before being written down. The §3
+sweep below is corrected accordingly — its earlier claim that `search.rs:376,
+629,728` were "not list-shaping for ORDER.2" was right about `tools/list` and
+wrong about the criterion, because it read the criterion as being about one
+method name rather than about list results.
+
 ## 3. The negative sweep — what else shapes a list, and why each is not a violation
 
 A "nothing else found" claim is only worth what it enumerates. Every input that
@@ -93,13 +124,15 @@ reaches list assembly was read:
 | Code Mode | `handlers.rs:497` `code_mode_url_active` | **not a violation** — read from the request's own URL query, per-request input, not connection state |
 | meta-tool set | global configuration | invariant across connections by construction |
 | backend tool cache contents | shared, time-varying | out of scope; cluster-b Part III item 1 |
-| spec-preview promotion | §2 | **the remaining violation** |
+| spec-preview promotion | §2 | **a remaining violation** |
+| FSM workflow state, via the discovery surface | §2b, `mod.rs:1688-1696` and `search.rs:161-165` | **a remaining violation**, in the default build |
 
-Other `active_profile` call sites were checked and do not shape a list for
-ORDER.2 purposes: `search.rs:376,629,728` and `invoke.rs:1065` (dispatch and
-search filtering), `mod.rs:1263` (`shadow_tools_list_assembly`, telemetry only),
+Other `active_profile` call sites were checked. `invoke.rs:1065` is dispatch.
+`mod.rs:1263` (`shadow_tools_list_assembly`) is telemetry only, as is
 `mod.rs:1758`. `spec_preview.rs:47` shapes the preview list and is covered by
-B-06.
+B-06. `search.rs:376,629,728` shape the discovery surface, and that surface is
+where §2b's defect lands — the first draft of this note wrote them off as "not
+list-shaping" and was wrong to.
 
 One protocol check worth recording because it could have made §1 moot:
 `REMOVED_IN_2026_07_28` at `src/protocol/meta.rs:221-229` is
@@ -165,7 +198,7 @@ Every unknown is resolved with a recorded answer or deferred with four fields.
 | question | how | what came back | what it changed |
 |---|---|---|---|
 | Is the profile leg actually unguarded, as the audit row says? | read `handlers.rs:574-589`, `mod.rs:1062-1099`, `mod.rs:1186`, `mod.rs:1725-1739` | a guard exists, and its doc comment names ORDER.2 as its reason | Inverted the note. Scope shrank from "design the ORDER.2 fix" to "close the one remaining leg". |
-| Does any modern-declaring path reach list assembly with a **non-empty** session id, which would put a hole in fact 1? | `rg` for every caller of `handle_tools_list_for_session` and `promoted_tools_for_session` outside `mod.rs`; read `handlers.rs:660,935`; read the stdio transport module | Only `spec_preview.rs:43` and `mod.rs:1247`, which passes `None`. The stdio transport carries no session id at all. HTTP is the only path that supplies one, and it supplies the empty string for modern. | Nothing. Fact 1 holds, so the recommendation stands as written. Had it come back otherwise, §1 would have been the design and §2 a footnote. |
+| Does any modern-declaring path reach list assembly with a **non-empty** session id, which would put a hole in fact 1? | `rg` for every caller of `handle_tools_list_for_session` and `promoted_tools_for_session` outside `mod.rs`; read `handlers.rs:971,1162`; read the stdio transport module | Only `spec_preview.rs:43` and `mod.rs:1247`, which passes `None`. The stdio transport carries no session id at all. HTTP is the only path that supplies one, and it supplies the empty string for modern. | Nothing. Fact 1 holds, so the recommendation stands as written. Had it come back otherwise, §1 would have been the design and §2 a footnote. |
 | Is `initialize` removed in 2026-07-28, which would make the `X-MCP-Profile` guard dead code? | read `REMOVED_IN_2026_07_28` at `meta.rs:221-229` | Not in the removal list. | Nothing, but it makes fact 5 load-bearing rather than defensive. |
 | Is `spec-preview` in the default build? | read `Cargo.toml:179,193` | No; `spec-preview = []`, and it is not in `default`. | A severity input for §6. Does not change the recommendation — the option is cheap enough that non-default status is not a reason to skip it. |
 | Does prior art already cover this, making a new note a duplication? | read the cluster-b connection-invariance note, Part I and its residue list, and its sibling test plan | Part I *is* ORDER.2; its residue list explicitly leaves the promotion store "to be closed by whichever ORDER.2 option is chosen"; B-06 and B-07 already specify the cases. | Made this a delta note rather than a design. No option analysis, blast radius, or test case is restated here. |
