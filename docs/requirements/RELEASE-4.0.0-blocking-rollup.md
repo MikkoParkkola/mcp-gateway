@@ -267,6 +267,24 @@ who owns the work.
 | G stdio dispatch path | unowned. `NFR.OBS.1` and `NFR.OBS.2` have both closed and left the cluster; what remains is `MIK-7246.CONFIRM.1a`, whose code is in the tree and which waits on the dual-vendor review verdict, not on an agent |
 | — residue | `residue-r` takes the decision rows; `HEADER.9a`/`9b` belong to the header increment and wait on B |
 
+### Three blocking rows have no owning ticket, 2026-09-06
+
+A ticket-state sweep on 2026-09-06 reconciled the 28 blocking rows against every `MIK-####`
+reference in the ledger: 21 are owned by six In-Progress tickets, 3 are evidentially tied to
+`MIK-7212`'s bridge work, 1 is `GH475.RL.10`, and **`NFR.SEC.1`, `NFR.SEC.3` and `NFR.PERF.4`
+have no owning Linear ticket at all**.
+
+They are recorded here rather than filed. The criteria ledger already tracks them with more
+detail than a ticket would carry, and a Linear row would be a second copy that drifts — the
+same failure this document was written to stop. What the gap costs is visibility outside this
+file, which is exactly what this paragraph buys back.
+
+The same sweep corrected `MIK-7262` from Backlog to Done — its five acceptance criteria are
+met by a source-verified, mutation-probed fix that `NFR.SEC.6` already documents — and left
+`MIK-7256` alone: `NFR.SEC.6` asserts it is closed by mechanism while its own prose still
+hedges that "a restart-only edit published by an earlier reload is still outstanding". That
+hedge is a human read, not a state correction.
+
 ### Ownership status, 2026-09-02: named everywhere, in flight nowhere
 
 The table above is a list of assignments. It is not evidence that anyone is working, and today
