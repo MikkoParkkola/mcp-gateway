@@ -95,29 +95,40 @@ Needing this section at all means §P2 was skipped for EXT.1.a-b. It is a recove
 
 ## 4. Where a case cannot distinguish two implementations — said plainly
 
-### 4.1 The empty-set trap: `extensions: {}` proves less than it looks
+### 4.1 The empty-set trap: an absent `extensions` key proves less than it looks
 
-`{}` is what a correctly wired populate emits today, and it is **also** what a struct field
-added and never assigned emits, because `build_initialize_result` ends in
-`..Default::default()` (`meta_mcp_helpers.rs:164`). Design §3.1b names this a silent-success
-shape. Restated as a test fact:
+`implemented_extensions()` returns an empty map today (`meta_mcp_helpers.rs`), and the field
+carries `skip_serializing_if = "HashMap::is_empty"` (`types.rs`), so the wire currently shows **no
+`extensions` key at all**. That absence is what a correctly wired populate emits, and it is
+**also** what a field that was declared and never populated emits. Design §3.1b names this a
+silent-success shape. Restated as a test fact:
 
-- E2 asserting `extensions == {}` passes against the wired implementation.
-- E2 also passes against a one-line struct change with no builder assignment at all.
-- E2 therefore proves the **field exists**, not that the **wiring exists**. It is a real case
-  for EXT.1.a and a vacuous one for EXT.1.b.
+- E2, asserting the key is **absent** from `capabilities`, passes against the wired
+  implementation.
+- E2 also passes against a one-line struct addition with no builder assignment at all.
+- E2 therefore proves the **field exists and stays quiet while empty**, not that the **wiring
+  exists**. It is a real case for EXT.1.a and a vacuous one for EXT.1.b.
+
+An earlier revision of this section asserted the shape was `extensions: {}` and blamed
+`..Default::default()`. Both were wrong at source and are corrected here: `extensions` is
+**explicitly assigned** in `build_server_capabilities`, so `Default` never reaches it, and the
+serde attribute means an empty map produces silence rather than `{}`. The trap survives the
+correction unchanged — it never depended on which empty shape reached the wire, only on wired and
+unwired producing the *same* one.
 
 The only honest discriminator is E3: perturb the input, require the output to change (A7). It
-converts E2 from "the value is empty" into "the value is empty **because the source is empty**",
+converts E2 from "the key is absent" into "the key is absent **because the source is empty**",
 which is the clause's actual claim. If the implementation makes the source non-injectable, E3
 becomes impossible and **EXT.1.b has no honest case** — the plan would then carry an empty cell,
-not a weaker assertion. §5.1 states the requirement that keeps that from happening.
+not a weaker assertion. §5.1 states the requirement that keeps that from happening. That
+requirement is currently met: `build_server_capabilities` takes the map as a parameter, and its
+own doc comment names this section as the reason.
 
-A second thing E2/E3 cannot see: whether `{}` is *correct*. The declaration is honest only
-because no extension is implemented today. Nothing in this suite would catch a future change
-that implements an extension and forgets to register it — the map would still read `{}` and
-every case would stay green. That guard belongs to TASK.1, which adds the first entry, and this
-plan records it as inherited rather than claiming coverage it does not have.
+A second thing E2/E3 cannot see: whether the empty declaration is *correct*. It is honest only
+because no extension is implemented today. Nothing in this suite would catch a future change that
+implements an extension and forgets to register it — the key would still be absent and every case
+would stay green. That guard belongs to TASK.1, which adds the first entry, and this plan records
+it as inherited rather than claiming coverage it does not have.
 
 ### 4.2 E7 is a weak case and is labelled one
 
