@@ -4746,10 +4746,12 @@ async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
 /// lists in step.
 ///
 /// Q4 — whether `gateway_set_state` is refused outright on a sessionless
-/// modern connection — is with the operator, and the answer decides what the
-/// call's own outcome must be asserted to be. This case asserts only the half
-/// that holds under either answer: the lists. The outcome pin lands when Q4 is
-/// answered.
+/// modern connection — was ratified 2026-09-06: it is refused. Both halves are
+/// pinned here, the call's outcome as well as the lists, and the outcome pin
+/// is not redundant with them. Measured: with the refusal guard removed from
+/// `set_state`, every list assertion below still passes, because unchanged
+/// lists are equally what an accepted-then-silently-dropped write produces.
+/// Only the outcome pin tells the two apart.
 #[tokio::test]
 async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
     let meta = meta_with_state_staged_capabilities().await;
@@ -4782,7 +4784,7 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
     // Driven through the real meta-tool, not `SessionStateStore::set_state`:
     // the defect is the argument passed at `mod.rs:1689`, and a fixture
     // touching the store directly bypasses the line under test.
-    let _ = meta
+    let set = meta
         .handle_tools_call(
             RequestId::Number(1),
             "gateway_set_state",
@@ -4791,6 +4793,17 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
             allow_all_ctx(),
         )
         .await;
+
+    // Q4: the write is refused, not filtered on read.
+    let refusal = set
+        .error
+        .expect("a sessionless modern connection has no state to set");
+    assert!(
+        refusal.message.contains("no session"),
+        "the refusal must name the missing session rather than fail for some \
+         unrelated reason: {}",
+        refusal.message
+    );
 
     let list_after = discovery_names(
         &meta
@@ -4849,9 +4862,10 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
 /// state A selected. B-09 asserts the same connection is unaffected by its own
 /// call; this asserts a bystander is unaffected by someone else's.
 ///
-/// The Q4 outcome pin — whether A's call is refused outright — is deferred on
-/// the same terms as B-09's: this case asserts the half that holds under
-/// either answer.
+/// The Q4 outcome pin — whether A's call is refused outright — is asserted on
+/// the same terms as B-09's: ratified 2026-09-06, and load-bearing rather than
+/// redundant, since B's unchanged lists are equally what a silently-dropped
+/// write would produce.
 #[tokio::test]
 async fn b08_one_connections_set_state_does_not_change_another_connections_set() {
     let meta = meta_with_state_staged_capabilities().await;
@@ -4859,7 +4873,7 @@ async fn b08_one_connections_set_state_does_not_change_another_connections_set()
     // Connection A. Driven through the real meta-tool: the defect is the
     // argument passed at `mod.rs:1689`, and a fixture touching
     // `SessionStateStore::set_state` directly bypasses the line under test.
-    let _ = meta
+    let set = meta
         .handle_tools_call(
             RequestId::Number(1),
             "gateway_set_state",
@@ -4868,6 +4882,17 @@ async fn b08_one_connections_set_state_does_not_change_another_connections_set()
             allow_all_ctx(),
         )
         .await;
+
+    // Q4: A's write is refused outright, not accepted and dropped.
+    let refusal = set
+        .error
+        .expect("a sessionless modern connection has no state to set");
+    assert!(
+        refusal.message.contains("no session"),
+        "the refusal must name the missing session rather than fail for some \
+         unrelated reason: {}",
+        refusal.message
+    );
 
     // Connection B, which has issued no state change of its own.
     let list = discovery_names(

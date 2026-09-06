@@ -1104,6 +1104,13 @@ const NO_SESSION_FOR_PROFILE: &str = "Routing profiles are per-session, and this
      MCP 2026-07-28 removed protocol-level sessions; the tool set is decided \
      by the authorization presented on each request.";
 
+/// The same refusal for the FSM workflow state, and for the same reason: the
+/// state is stored per session, and a connection with no session would be
+/// storing it under a key every other sessionless connection also reads.
+const NO_SESSION_FOR_STATE: &str = "The workflow state is per-session, and this connection has no session. \
+     MCP 2026-07-28 removed protocol-level sessions; capability visibility is \
+     decided by the authorization presented on each request.";
+
 // ============================================================================
 // MCP protocol handlers — initialize + tools
 // ============================================================================
@@ -1693,10 +1700,14 @@ impl MetaMcp {
     /// Returns the previous state, the new state, and the number of capability
     /// tools visible in the new state (across all capability backends).
     fn set_state(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
-        let Some(sid) = session_id else {
-            return Err(Error::Protocol(
-                "gateway_set_state requires a session (send Mcp-Session-Id header)".to_string(),
-            ));
+        // Refused rather than filtered, and refused HERE rather than inside
+        // `SessionStateStore`: the write is the whole point of this call, so a
+        // store that quietly dropped it would turn a refusal the caller can see
+        // into a silent no-op — a worse defect than the one being fixed. The
+        // read side is guarded in the store's readers instead (`ORDER.2` Q4,
+        // ratified 2026-09-06).
+        let Some(sid) = session_key(session_id) else {
+            return Err(Error::Protocol(NO_SESSION_FOR_STATE.to_string()));
         };
 
         let new_state = extract_required_str(args, "state")?;

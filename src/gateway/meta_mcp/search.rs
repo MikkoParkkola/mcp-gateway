@@ -167,7 +167,7 @@ impl MetaMcp {
     /// of this body, so a filter applied here would have left them reading the
     /// store unguarded (`MIK-7272.ORDER.2`, test-plan precondition 1).
     fn current_search_state(&self, session_id: Option<&str>) -> String {
-        session_id.map_or_else(
+        super::session_key(session_id).map_or_else(
             || crate::gateway::state::DEFAULT_STATE.to_string(),
             |sid| self.session_state.get_state(sid),
         )
