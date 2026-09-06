@@ -399,53 +399,33 @@ smaller than a ticket describing the correction would be).
 
 ## 8. Acceptance criteria and test plan
 
-> **This section owns the TASK.1 test plan.** Team-lead ruling, 2026-09-06. A standalone
-> `*-task-1-*-test-plan.md` is a second copy of this table, and two artefacts claiming one job
-> drift the moment either is edited. If a separate file is genuinely wanted, this section is
-> **replaced by a one-line pointer to it in the same commit** — not trimmed, not left as a
-> summary. Finer granularity (one case per *clause* rather than per criterion, which row `.2`
-> alone would justify) belongs in these rows. Failing test code is being written from this table
-> now, so a row that moves must be announced, not moved silently.
+> **The TASK.1 test plan lives in `docs/design/2026-09-06-task-1-tasks-extension-test-plan.md`.**
+> That file is its sole owner: the thirteen criteria decompose into 33 clause rows, and it carries
+> the fixture hazards, the assertion rules and the per-row "can this fail today?" verdict.
+>
+> This section held a per-criterion copy of that table until 2026-09-06. Two artefacts claiming one
+> job drift the moment either is edited, so the copy is gone rather than trimmed — the team-lead
+> ruling of the same day allowed a standalone file **only** if this section became a pointer to it,
+> and this is that pointer. What remains below is what the plan does not carry: the criteria's
+> release status, and the open question the plan defers here.
 >
 > `docs/requirements/RELEASE-4.0.0-test-plan.md:409` lists TASK.1 in its phase-10 row. That is a
-> phase *ordering*, not a per-criterion table, so it neither satisfies nor rivals this section.
+> phase *ordering*, not a per-criterion table, so it neither satisfies nor rivals the plan.
 >
 > Row order `.1`-`.9`, `.11`, `.10`, `.12`, `.13` is **deliberate**. Identifiers are stable
 > references; renumbering desynchronises every citation in the ledger, the review record and two
 > commits. Do not "fix" it.
 
-
-One row per criterion. The last column is the honest one: whether the named case can *fail
-today*, and how that is known. A case that can only fail because no dispatcher exists yet would
-go green against any stub — that is stated, not papered over.
-
-Citations in this table are **symbol anchors, not `file:line`** (2026-09-06). Every line number
-this table carried had drifted or was wrong: `headers.rs:36-52` for a function now at `:59`,
+Citations in this document are **symbol anchors, not `file:line`** (2026-09-06). Every line number
+this section carried had drifted or was wrong: `headers.rs:36-52` for a function now at `:59`,
 `extensions.rs:52-56` for one at `:65`, `invoke.rs:1291` for a `cache.set` at `:1804`,
 `meta.rs:247` for a constant at `:244`, and `era.rs:40` for a `-32021` that lives in
 `handlers.rs` and never lived in `era.rs` at all. Re-patching the numbers would buy one commit of
-accuracy; naming the symbol removes the drift class. Do not "helpfully" restore line numbers here.
+accuracy; naming the symbol removes the drift class. Do not "helpfully" restore line numbers.
 
-The per-criterion §P2 test plan, which decomposes these compound criteria into 33 clause rows and
-carries the fixture hazards, is `docs/design/2026-09-06-task-1-tasks-extension-test-plan.md`.
 
-| AC | criterion | case | V-model | can it fail today? |
-|---|---|---|---|---|
-| `MIK-7272.TASK.1.1` | a task-augmented `tools/call` from a declaring client returns `CreateTaskResult` with `resultType: "task"` and a `taskId` that `tasks/get` already resolves | integration: call, then `tasks/get` the returned id in the same test before any status change | integration | **No — vacuous until the dispatcher exists.** No arm in `handlers.rs`, so the case is red for absence, not for behaviour. Any stub returning a task passes it. Stated as the finding. |
-| `MIK-7272.TASK.1.2` | `tasks/get` returns the per-status shape: `working`, `input_required` + `inputRequests`, `completed` + `result`, `cancelled`, `failed` + `error` | unit over the five `TaskStatus` variants' serialisation | unit | **Yes, partially, and for a real reason.** `tasks.rs` has three of five statuses; `input_required` and `cancelled` do not exist, so the case fails to compile against today's enum. The three that exist would pass. |
-| `MIK-7272.TASK.1.3` | `tasks/update` is accepted and advances `lastUpdatedAt` | unit on the store's update path | unit | **No — vacuous twice over.** `lastUpdatedAt` does not exist on `Task` (fails to compile, so it is red) *and* nothing dispatches `tasks/update`. The compile failure is real; the behaviour is not yet observable. **Amended by §11.2 (grok, MEDIUM): a timestamp bump is not the criterion. `tasks/update` MUST refuse `inputResponses` keys that match no outstanding input request — and with `input_required` out of scope there are never outstanding keys, so any non-empty map is refused. The row also gains the empty `resultType: "complete"` acknowledgement shape and the cooperative, eventually-consistent cancel licence.** |
-| `MIK-7272.TASK.1.4` | a client that does not declare the extension **on that request** never receives a `CreateTaskResult`, and gets `MISSING_REQUIRED_CLIENT_CAPABILITY` carrying `data.requiredCapabilities.extensions["io.modelcontextprotocol/tasks"]` — even if it declared on an earlier request | integration: declare on request 1, omit on request 2, assert request 2 is the error and not a task | integration | **Yes — this is the row that catches a stub.** A dispatcher that returns tasks unconditionally passes 1.1 and fails this. It asserts the `-32021` the `required_capability()` / `declares_capability()` guard in `src/gateway/router/handlers.rs` emits, which the pinned 2026-07-28 text confirms, so the number is settled rather than deferred. |
-| `MIK-7272.TASK.1.5` | a 2025-era peer calling `tasks/cancel` is refused `-32601` by the era gate | unit on `ADDED_IN_2026_07_28` membership, plus a router case through the `ADDED_IN_2026_07_28.contains(&method)` guard in `src/gateway/router/handlers.rs` | unit + integration | **Yes, red now, for a real reason.** `ADDED_IN_2026_07_28` (`src/protocol/meta.rs`) does not list `tasks/cancel`, so the gate lets it through today. Independent of the dispatcher — it is a list-membership assertion. |
-| `MIK-7272.TASK.1.6` | a `failed` task carries the JSON-RPC `error` **object**; a tool result with `isError: true` is `completed` with `result`, never `failed` | unit: construct both, assert the serialised shapes | unit | **Yes, red now, for a real reason.** the `error` field on `Task` (`src/protocol/tasks.rs`) is `Option<String>`; an object cannot be represented, so the first half fails to compile. The second half is a classification assertion that has no implementation to agree with it. |
-| `MIK-7272.TASK.1.7` | `Mcp-Name` on `tasks/get\|update\|cancel` mirrors `params.taskId` | unit on `mcp_name_body_field` for the three methods | unit | **Yes, red now, for a real reason.** `mcp_name_body_field` (`src/protocol/headers.rs`) returns `None` for all three ("exactly these three" methods), so the case fails on today's code with no dispatcher involved. |
-| `MIK-7272.TASK.1.8` | a retried identical task-augmented call returns the **same** `taskId` and runs the backend **once**; the `CreateTaskResult` is never written to the response cache and never marked idempotency-completed | integration with `config.cache.enabled = false` and a mutation counter on the mock tool; assert the counter is 1 and both responses carry the same `taskId` | integration | **Yes for the guards, no for the dedupe.** The two guard halves are falsifiable against the existing `is_final` gates today. The same-`taskId` half needs the store. Fixture rule is binding: the response cache is written by the `cache.set` call in `src/gateway/meta_mcp/invoke.rs`, after the backend result and before the client stream, so a fixture that leaves it enabled passes vacuously — assert the counter, never the body. **Amended by §11.2, corrected in the confirmation pass: the dedupe key is `(authenticated principal, client idempotency key)`, the fingerprint is stored beside the entry so a same-key/different-body call is rejected, and it applies only when the client supplied a key; a keyless repeat gets a new task. "Retried identical call" in this row therefore means *same client idempotency key* — two identical calls carrying different keys are two tasks and two backend runs, and this row must assert that too.** |
-| `MIK-7272.TASK.1.9` | a `subscriptions/listen` carrying `taskIds` emits `notifications/tasks` and no `notifications/progress` or `notifications/message` | integration: drive a task that would emit progress, read the stream | integration | **No — vacuous until both TASK.1 and SUB.2 land.** Nothing emits task notifications, so an empty stream passes. Recorded as a constraint on SUB.2 (§5) so it is not discovered late. |
-| `MIK-7272.TASK.1.11` | a retrieval call naming a task created by a different principal is answered as not-found, identically to a `taskId` that never existed | integration: create as principal A, retrieve as principal B, assert the response is byte-identical to retrieving an unknown id as B | integration | **No — vacuous until the dispatcher exists**, and it is the row most likely to be dropped as a nicety. Recorded here so the authorisation check lands with the dispatcher rather than after a review round. The byte-identical half is what makes it a test rather than a sentiment. **Amended by §11.2: this row covers *retrieval* only. Subscription admission (`subscriptions/listen` carrying `taskIds`) is NOT covered here.** It is now `MIK-7272.TASK.1.12`, a criterion of its own — the team lead ruled on 2026-09-06 that folding a distinct authorisation surface into this row is the failure that produced RL.5's "MET (narrowed)". |
-| `MIK-7272.TASK.1.10` | the capabilities EXT.1 builds advertise `extensions["io.modelcontextprotocol/tasks"] = {}`, on both `initialize` and `server/discover` | unit on `gateway_declares()` output, plus EXT.1's discovery integration case | unit | **No, and only the honouring half is TASK.1's to close** (revised 2026-09-06, §11: the field and the populate path have landed; inserting the entry into `implemented_extensions()` has not). `gateway_declares()` (`src/protocol/extensions.rs`) already returns the entry; the unit case is green today. Those two landed as the `extensions` field on `ServerCapabilities` (`src/protocol/types.rs`) and the `build_server_capabilities(implemented_extensions())` call site (`src/gateway/meta_mcp_helpers.rs`); what is left is the honouring entry: this row goes red the moment it asserts the served `initialize`/`server/discover` capabilities carry the identifier, because `implemented_extensions()` is still empty. That insert IS TASK.1's. Listed so the split is visible. |
-| `MIK-7272.TASK.1.12` | a `subscriptions/listen` naming a `taskId` created by a different principal is refused, and the refusal is indistinguishable from listening on a `taskId` that never existed — no status, no result, no error that confirms the id | integration: create as principal A, open a listen stream on that id as principal B, assert B's stream is byte-identical to B listening on a fabricated id, and that nothing is ever pushed to it | integration | **No — vacuous until both TASK.1 and SUB.2 land**, and that is exactly why it is written now. Nothing admits a subscription today, so an empty stream passes for the wrong reason. It goes red the moment a stream is admitted without an ownership check, which is the state the code would otherwise ship in: §3 ¶6's principal check is stated for the three retrieval methods, and admission is a fourth surface reaching the same records. The byte-identical half is the assertion — a distinct error code for "not yours" is itself the disclosure. |
-| `MIK-7272.TASK.1.13` | a client that has not declared the extension **on that request** is refused `-32021` when it calls `subscriptions/listen` carrying `taskIds`, not only when it calls the `tasks/*` family | integration: declare on request 1, open a listen stream carrying `taskIds` without declaring on that request, assert `-32021` with the same `data.requiredCapabilities` payload AC `.4` asserts | integration | **Partially, and for a real reason.** The per-request capability read exists (`.4` asserts it on the `tools/call` path and is red today for behaviour, not absence), so the assertion is not waiting on the dispatcher — it is waiting on the subscription path. Written separately from `.4` because a gate implemented per *method family* passes `.4` and fails this: `subscriptions/listen` is not in the `tasks/*` family and reaches the extension anyway. |
-
-Six rows out of thirteen cannot fail for a behavioural reason today. That is the finding: TASK.1 is
+Six criteria out of thirteen cannot fail for a behavioural reason today (the plan's coverage
+map is the authority on the per-clause count; this is the criterion-level summary). That is the finding: TASK.1 is
 mostly new surface, and the tests that constrain it are the five that assert against *existing*
 code (`.13` reaches them partially: its gate exists, its call path does not) — `ADDED_IN_2026_07_28`, `mcp_name_body_field`, the `Task` shape, the `is_final` guards, and
 the per-request capability read. Those five are where the failing-tests step (§P2) has real work
@@ -455,6 +435,13 @@ against whatever the dispatcher turns out to do.
 `MIK-7272.TASK.1.12` and `MIK-7272.TASK.1.13` are **blocking for 4.0.0** (team-lead ruling,
 2026-09-06, recorded in §11.6). They are separate criteria on purpose: folding a distinct
 authorisation surface into `.11` is what produced RL.5's "MET (narrowed)".
+
+**Open question, owned elsewhere:** whether `.2` asserts a status shape 4.0.0 does not ship —
+`input_required` is out of scope per §11.2, and the plan's `.2d` row is red for a reason no
+implementation of the agreed scope can clear. The question, its two readings and a
+recommendation are the test plan's §8 Q1; it is not restated here. It is for the requester,
+because narrowing an acceptance criterion needs their recorded agreement, and it must be
+answered before the `TaskStatus` variant list is written — that list is the decision.
 
 ## 8a. The existing `ac_task_1_*` cases do not cover the criterion
 
