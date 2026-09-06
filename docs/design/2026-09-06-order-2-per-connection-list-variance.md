@@ -222,9 +222,14 @@ surface: `gateway_set_state` starts refusing on modern connections, priced in
 (c) above.
 
 The consequence to state plainly: with (b) already shipped and (c) applied, a
-modern connection has **no per-connection list state at all**. That is the
-strongest form of the criterion, and it is reached by removing state rather than
-by adding checks.
+modern connection **over HTTP** has **no per-connection list state at all**.
+That is the strongest form of the criterion, and it is reached by removing state
+rather than by adding checks. The qualifier is load-bearing and it is not a
+hedge: stdio dispatches under the fixed non-empty id `"stdio-session"`
+(`server/mod.rs:1604,1822-1824`), which `session_key` passes untouched, so (c)
+closes both legs on modern HTTP and neither on stdio. Fact 1 in §1 is an HTTP
+fact — it cites the router — and it should be read as one. §8 carries the limit;
+transport parity is cluster-g's per §P0.
 
 ## 5. Unknowns
 
