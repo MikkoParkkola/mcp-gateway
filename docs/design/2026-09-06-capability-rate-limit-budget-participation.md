@@ -68,6 +68,20 @@ Two further facts that bound the problem:
   exactly two hits — the dispatch arm and the definition, both in
   `src/commands/cap.rs` — and no CI job, script, or workflow invokes it as of
   this revision.
+
+  **A third bypass exists and was never in this design's scope to begin
+  with — not implemented and skipped, simply outside §P0's FOR.** `CapabilityBackend`
+  (`pub struct`, `capability/backend.rs:122`) and `CapabilityExecutor`
+  (`pub struct`, `executor/mod.rs:51`) live in `pub mod capability`
+  (`src/lib.rs:36`), and `CapabilityBackend::call_tool_with_context`
+  (`capability/backend.rs:390`) is a `pub async fn`. mcp-gateway ships as a
+  crate on crates.io; an external Rust program depending on it can construct
+  either type and call it directly, never touching `MetaMcp::dispatch_to_backend`
+  or `record_error_budget`. §P0 scopes this design to mcp-gateway's *own*
+  execution paths — the meta-MCP invoke path and the `cap_test` CLI above —
+  not to what a downstream library consumer does with an already-public API.
+  Named so a reader does not read the invoke path as the only caller of
+  `CapabilityExecutor::execute`; disposed as out-of-scope, not fixed.
 - **There is no capability circuit breaker to protect.** `Failsafe` lives on
   `PooledEntry` (`src/backend/pool.rs:78`), the MCP-backend pool. `CapabilityExecutor`
   owns a bare `HealthTracker` (`executor/mod.rs:65`) and nothing else. "A 429 must
@@ -199,9 +213,15 @@ question in section 6.
 
 ### O1b — the same classification, carried crate-internally (rejected)
 
-Named because O1's whole cost is the public enum, and both ends of the wire are
-in-crate: the status is known at `executor/jsonrpc.rs:204` and consumed at
-`invoke.rs:1384`. If the classification could ride a crate-internal carrier, the
+Named because O1's whole cost is the public enum, and both ends of *this*
+wire — the meta-MCP invoke path's classification hookup, the only wire O1
+touches — are in-crate: the status is known at `executor/jsonrpc.rs:204` and
+consumed at `invoke.rs:1384`. That is narrower than "nothing here is
+externally reachable": §1 discloses a separate, out-of-scope path where a
+library consumer calls `CapabilityBackend`/`CapabilityExecutor`'s public API
+directly, and this section's in-crate claim is not about that path — it is
+unaffected by O1b either way, since O1b never proposes changing those
+signatures. If the classification could ride a crate-internal carrier, the
 open question in section 6 would not exist. It cannot, for a language reason and
 a signature reason.
 
