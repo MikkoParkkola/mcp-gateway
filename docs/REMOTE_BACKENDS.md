@@ -190,12 +190,11 @@ yourself, say — set `allow_cleartext_credentials: true` on that backend.
 That opt-out does not cover OAuth. Since 4.0.0 a backend whose `oauth` section is
 `enabled: true` is refused at the *transport* layer whatever
 `allow_cleartext_credentials` says: the backend fails to start with `refusing to
-send an OAuth token in cleartext to <origin>`, and the token is refused a second
-time at request time if an SSE-advertised message endpoint downgrades the scheme
-after the handshake. A bearer token is replayable by anyone on the path for as
-long as it is valid, and no flag makes that acceptable — the flag remains the way
-to accept a readable static header, identity propagation, secret injection, or a
-credential-bearing URL. Loopback is still exempt: `http://localhost`,
+send an OAuth token in cleartext to <origin>`, and the token is checked again at
+request time against the endpoint actually being posted to. A bearer token is
+replayable by anyone on the path for as long as it is valid, and no flag makes
+that acceptable — the flag remains the way to accept a readable static header,
+identity propagation, secret injection, or a credential-bearing URL. Loopback is still exempt: `http://localhost`,
 `127.0.0.0/8` and `::1`. `http://[::ffff:127.0.0.1]` is deliberately *not*
 loopback — write `http://127.0.0.1`.
 

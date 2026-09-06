@@ -70,6 +70,12 @@ fn same_origin(a: &Url, b: &Url) -> bool {
 /// lets an operator accept a readable static header, but a flag that re-enables
 /// a HIGH finding for OAuth would leave the alert open, and 4.0.0 is the release
 /// that may break it.
+///
+/// The error is `TransportPermanent`, not `Transport`: waiting never makes a
+/// cleartext origin secure, and warm-start treats a plain `Transport` error as
+/// "not ready yet" and retries it forever at `debug` level, so the operator
+/// sees a backend that silently never starts. Permanent gets one `warn!` and
+/// stops.
 fn require_secure_oauth_target(url: &Url) -> Result<()> {
     let secure = match url.scheme() {
         "https" => true,
@@ -79,7 +85,7 @@ fn require_secure_oauth_target(url: &Url) -> Result<()> {
     if secure {
         return Ok(());
     }
-    Err(Error::Transport(format!(
+    Err(Error::TransportPermanent(format!(
         "refusing to send an OAuth token in cleartext to {}; use https:// or a loopback host \
          (allow_cleartext_credentials does not cover OAuth)",
         sanitize_url_for_diagnostics(url.as_str())
@@ -675,7 +681,7 @@ impl HttpTransport {
             // here covers the base URL and the SSE-advertised endpoint alike.
             let target = self.get_message_url();
             let parsed = Url::parse(&target).map_err(|e| {
-                Error::Transport(format!(
+                Error::TransportPermanent(format!(
                     "refusing to send an OAuth token to an unparseable target: {e}"
                 ))
             })?;

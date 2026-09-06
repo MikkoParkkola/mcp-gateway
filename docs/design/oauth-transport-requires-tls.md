@@ -21,9 +21,14 @@ traces:
    transport's `initialize()` runs `oauth.initialize()`/`authorize()` and spawns
    the refresh task *before* any header is built, so a request-time-only check
    would mint a credential it is then forbidden to send.
-2. `get_oauth_token`, on `self.get_message_url()`, before the token is fetched —
-   the SSE handshake can move the message endpoint after construction, and this
-   is the only placement between CodeQL's source and its sink.
+2. `get_oauth_token`, on `self.get_message_url()`, before the token is fetched.
+   The SSE handshake moves the message endpoint after construction, and this is
+   the only placement between CodeQL's source and its sink. It is a second line,
+   not the primary one: `resolve_message_url` already refuses an endpoint that
+   is not same-origin with the checked base, and `same_origin` compares the
+   scheme, so a downgrade to `http://` is unreachable through that path today.
+   The guard holds if that invariant is ever weakened, and it is what CodeQL can
+   see.
 
 Loopback (`localhost`, `127.0.0.0/8`, `::1`) is exempt: a local backend has no
 certificate and the packet never leaves the machine. The classifier is
@@ -57,6 +62,31 @@ a bearer credential.
 an IPv4-mapped address; rather than widen the classifier for a form no backend
 uses, the safe answer is to refuse and write `http://127.0.0.1`. Pinned by a
 test so it cannot become an accident.
+
+## The refusal is permanent, not "not ready yet"
+
+Driving the built binary showed the guard firing correctly and the operator
+never seeing it: warm-start classifies `Error::Transport` as a readiness
+failure, so a refused OAuth backend retried once a minute forever and logged
+only at `debug`. The guard therefore returns `Error::TransportPermanent` — the
+variant warm-start already reserves for "the configuration cannot work" — which
+turns the silent loop into one `warn!` at the default level and stops retrying.
+A cleartext origin does not become secure by waiting.
+
+## Residual, and what was checked
+
+*A2A does not mint an OAuth token* — verified, not assumed: `src/a2a/` contains
+no reference to `OAuthClient` or `oauth`, so there is no sibling transport on
+which `allow_cleartext_credentials` still governs a gateway-minted bearer token.
+
+*The authorization server's own token endpoint is not covered.* Nothing checks
+the scheme of the `token_endpoint` an authorization server advertises in its
+metadata (`src/oauth/metadata.rs`), so an `https` AS that names an `http://`
+token endpoint would still put client credentials and the refresh token on a
+cleartext hop. That is a different hop, a different credential and a different
+layer from #90/#91, and this change neither creates nor worsens it. Recorded
+here as residual risk and escalated rather than fixed inside this change; the
+repair is a scheme check in the OAuth client's discovery and refresh path.
 
 ## Not verified here
 

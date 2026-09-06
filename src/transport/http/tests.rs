@@ -1718,6 +1718,13 @@ fn oauth_over_cleartext_non_loopback_is_refused() {
         err.to_string().contains("cleartext"),
         "the refusal must name the reason, got: {err}"
     );
+    // Permanent, not transient: warm-start retries a plain `Transport` error
+    // forever at debug level, so a misclassification hides the refusal from the
+    // operator entirely.
+    assert!(
+        matches!(err, Error::TransportPermanent(_)),
+        "a cleartext origin never becomes secure by waiting, got: {err}"
+    );
 }
 
 #[test]
