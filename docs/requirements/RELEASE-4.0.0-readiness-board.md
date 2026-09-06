@@ -1067,3 +1067,20 @@ when its constituent slices each carry their verdicts, not per slice.
 
 Corollary: no agent amends or rebases a commit that a returned verdict was issued against. Carried
 findings that do not change code — a C11 size waiver, a substitution note — go in the PR body.
+
+## 2026-09-06 — the blocking count, and how to read it without getting it wrong
+
+Twenty-eight rows in `RELEASE-4.0.0-criteria-status.md` carry `yes` in the blocking column. Three
+of those are roll-up rows in the closing summary table (`MIK-7217.DISCOVER`, `MIK-7246.CONFIRM`,
+`MIK-7214.HEADER.7-9`), which restate sections above rather than adding criteria. Twenty-five are
+criterion-level and open. `GH475.RL.10` is among them, so cluster H is tracked by the same count as
+everything else.
+
+The count comes from the LAST CELL of each table row, keyed on an identifier matching
+`MIK-<n>.`, `NFR.` or `GH<n>.` in the first cell. Reading it any other way gives a wrong answer:
+a text scan for the word `blocking` near a `yes` matches evidence prose instead of the column and
+returned nine, missing sixteen open rows and including rows that are closed. The word appears in
+the header once and in cell prose often; only position identifies the column.
+
+Four cells hold a sentence rather than `yes` or `no`. They are roll-ups and a correction note, not
+criteria, and they are excluded above.
