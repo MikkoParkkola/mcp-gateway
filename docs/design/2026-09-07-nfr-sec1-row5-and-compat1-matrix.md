@@ -130,10 +130,27 @@ own table is the correction, so the line is repaired here rather than recorded
 against someone else; the team lead assigned it in this change (`§P4a`: a
 document the change makes untrue is updated inside the change).
 
-## Out of scope
+## Scope move — the firewall row is not blocked by file ownership
 
-- The firewall gate (inventory's blocked 15th) — needs `src/security/firewall/**`,
-  owned by another session.
+This document first listed the firewall gate (the inventory's blocked 15th
+control) as out of scope, on the ground that it "needs
+`src/security/firewall/**`, owned by another session". That ground is false and
+the surface moves accordingly (§P0: a move costs a paragraph saying why).
+
+The refusal is not emitted from the firewall crate. It is emitted from the
+`tools/call` arm of `src/gateway/router/handlers.rs` (the block ending at the
+`build_error_response` call, ~`:1244-1266`): an anomaly block answers `-32002`,
+every other firewall block answers `-32600`, both with HTTP 400. A test that
+drives `POST /mcp` and asserts that pair reads the same production path row 15
+names while touching no file another session owns. Ownership of the firewall
+*source* never blocked a test of the gateway's *refusal*; the two were
+conflated.
+
+The fixture question that remained — whether a test can stand up a gateway
+whose firewall blocks — is answered in the unknowns table below, and answered
+yes: the router's own tests already set that field, they just set it to `None`.
+
+## Out of scope
 - The legacy-client bridge (`src/protocol/continuation.rs`) — peer-held.
 - Any edit to `docs/requirements/RELEASE-4.0.0-criteria-status.md`. Evidence is
   reported; the team lead regrades.
@@ -146,6 +163,7 @@ document the change makes untrue is updated inside the change).
 | Which path serves 2026-07-28? | read `MODERN_VERSIONS` and its consumers | The stateless POST path via the version header, gated on `server.modern_protocol`; never `initialize`. | Split C1 from C2-C5. Without this the C1 test would have driven `initialize` and failed for a non-defect. |
 | Does `modern_protocol` default on? | `src/config/mod.rs:1236` | true, since `83c98902` (2026-09-04) | C1 needs no config mutation for its positive arm; its falsifier flips the flag off. |
 | Does the breaker's refusal have a signature distinct from the gates around it? | read `errors.rs:20,:29` | 503/`-32003` vs the rate limiter's 429/`-32000` | Made the S5 falsifier decidable. |
+| Is the firewall row testable without editing the peer-held firewall source? | read the refusal site and the state the router tests build | Yes twice over. The refusal is emitted by `handlers.rs` (~`:1244-1266`), not by the firewall crate; and `firewall` is a settable field on the router's state, `None` in seven existing fixtures (`src/gateway/router/tests.rs:82` and after). The `firewall` feature is on by default (`Cargo.toml` `[features] default`). | Killed the out-of-scope bullet. Row 15 is a fixture change, not a peer-file edit. |
 
 No deferred unknowns.
 
