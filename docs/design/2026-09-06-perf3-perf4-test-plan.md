@@ -35,11 +35,16 @@ already the module's shape at `:696` and in Design A), so no sleeping and no tim
 
 Every row states above what makes it fail. The risks specific to this plan:
 
-- **Row 1 asserts a property that is already true.** That is an honest weakness, not a hidden
-  one: written after the mechanism, it inherits none of the free failure. It gets the
-  retrofitting falsifier probe from the process — restore the pre-`ec11dcec` body of the
-  capacity branch and show the case fails on the occupancy assertion, then restore and show it
-  passes. Without the probe it is not evidence.
+- **Row 1 asserts a property that is already true.** That is an honest weakness, not a hidden one:
+  written after the mechanism, it inherits none of the free failure, so it needs the retrofitting
+  falsifier probe from the process. The probe is a **mutation, not a revert.** An earlier draft
+  named "restore the pre-`ec11dcec` body of the capacity branch", and that probe cannot go red:
+  `ec11dcec` added the reclaim call and deleted `reap`, but the `held.len() >= self.capacity ->
+  None` refusal predates it, and this row's fixture holds nothing expired, so the reclaim is a
+  no-op against it and the restored body refuses identically. A probe that passes both ways is a
+  ceremony. Delete the refusal itself instead — the two lines that return `None` — and the case
+  goes red on the occupancy assertion (4 097 held, `Some` returned), which is the assertion the
+  row exists for. Restore, re-run, and the pass is what proves the restore, never `git status`.
 - **Row 2 must not reclaim through the path that already works.** Two ways it could: calling
   `complete` on the abandoned exchanges, or reaching capacity before asserting. The second is the
   subtle one — `hold` reclaims on a refused attempt, so a fill that overshoots the ceiling drains
