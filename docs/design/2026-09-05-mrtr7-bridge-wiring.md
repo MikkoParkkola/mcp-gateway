@@ -15,6 +15,16 @@ still running — the wrapper writes the file at completion, so an empty read is
 race, not a missing verdict, and this document briefly recorded it as the
 latter. Findings disposed below.
 
+Round 5 (2026-09-06) is reviewed by the pair the release board binds instead:
+`grok-review` and `kimi-review`. Reviewer identity verified rather than assumed —
+`~/.claude/bin/kimi-review` is a 1.1K transition shim that `exec`s
+`synthetic-review --model "${KIMI_REVIEW_MODEL:-kimi-k3}"`. Same wrapper binary
+as the round-2/3 open-weights leg, DIFFERENT model: that leg ran `glm-5.3`, this
+one runs `kimi-k3`. The pair is therefore two distinct models, not one wrapper
+counted twice. `gpt-review` is unavailable for this round (Codex usage-limited
+until 2026-09-12; its ledger rows read `process_status=error, exit_code=1` since
+2026-09-06T05:41Z) — an availability gap, recorded as such and never as a pass.
+
 ## Problem
 
 `src/gateway/input_bridge.rs` implements `InputBridge::run` and 18 acceptance
@@ -580,3 +590,207 @@ before this was written.
 **Cost of the alternative history**: the plan would have shipped a WIRE.5 whose
 budget assertion could never go green, and the defect would have been found in
 implementation, against code written to the wrong contract.
+
+---
+
+## Round 5 amendments — 2026-09-06, measured at source
+
+Five measurements taken against `fix/mrtr2-continuation-handle` before this
+round's review. Three change what the design claims; two close unknowns it left
+open. The reviewers for this round are the pair the release board binds
+(`grok-review` + `kimi-review`), neither of which reviewed rounds 2-4.
+
+### 1. The stdio block is TWO blocks, not one
+
+`## Second blocker — stdio` (line 188) says the answer arrives on a stdin nobody
+is reading. That is true, and it is the smaller half.
+
+Measured: `src/gateway/server/mod.rs` line 1606 is
+`while let Ok(Some(line)) = reader.next_line().await {`, and its body awaits
+`Self::dispatch_batch_with_sink(...)` (line 1629) and
+`Self::dispatch_single_with_sink(...)` (line 1646) INLINE. No `tokio::spawn`
+occurs in that path — the spawn sites in the file are 223, 897, 1321, 1401,
+2081, 2135 and 3250, none in the read loop. Line 1598 is the sole gateway
+consumer of stdin; the tree's other stdin reads are CLI prompts
+(`src/cli/invoke.rs` lines 102 and 104, `src/commands/setup.rs` lines 47 and
+241).
+
+Second block, independent of the first: `let mut stdout = stdout;` at line 1601
+is exclusively `&mut`-borrowed by the in-loop `Self::write_response(&mut stdout,
+…)`. So on stdio the bridge cannot WRITE THE QUESTION either, not merely fail to
+read the answer.
+
+Why this earns a paragraph rather than a footnote: it kills a repair that looks
+obvious and fixes half the problem. "Just `tokio::spawn` the dispatch" frees the
+reader and leaves the writer contended — the question still cannot go out. Any
+stdio concurrency design must own the reader and the writer together, and that
+design is out of scope here by the requester's 2026-09-05 ruling.
+
+The design's stale citation (line 1581) is corrected to 1606; the line moved,
+the loop did not.
+
+### 2. "No production `ClientChannel`" is true of the TRAIT and false of the MACHINERY
+
+`## Blocker — capability store missing` and the change-surface section (line 269)
+count a production `ClientChannel` implementation among the things that must be
+built. The trait half is correct and re-verified: `pub trait ClientChannel: Send
++ Sync` at `src/gateway/input_bridge.rs` line 268 has exactly one implementation
+repo-wide, `impl ClientChannel for FakeClient` at
+`tests/mik_7212_mrtr7_bridge_acs.rs` line 145. Zero production implementations.
+
+What the design does not say is that the request-response machinery such an
+implementation would wrap is already in production, on the HTTP path, with
+callers:
+
+| piece | location | state |
+|---|---|---|
+| mint id + register waiter | `src/gateway/proxy.rs` line 128 `register_pending` | production |
+| resolve waiter from a reply | `src/gateway/proxy.rs` line 151 `resolve_pending` | production |
+| send-and-await, sampling | `src/gateway/proxy.rs` line 206 `forward_sampling_with_response` | production, called at `router/handlers.rs` line 1275 |
+| send-and-await, elicitation | `src/gateway/proxy.rs` line 271 `forward_elicitation_with_response` | production, called at `router/handlers.rs` line 1294 and `destructive_confirmation.rs` line 241 |
+| reply ingress | `router/handlers.rs` lines 627-642 | production: no `method`, has `result` or `error`, `input_bridge::is_bridge_reply_id(resp_id)` at line 630, then `resolve_pending` at line 635 |
+
+Both forwarders mint `sampling-{uuid}` / `elicitation-{uuid}`, hold a
+`PendingSampleGuard` across the await, deliver via
+`multiplexer.send_to_session(session_id, …)`, and wrap the receiver in
+`tokio::time::timeout`, returning Ok / Cancelled / Timeout. The id prefixes
+MATCH the bridge's: `ServerRequestKind::prefix()` (`input_bridge.rs` lines 69-75)
+mints `sampling-`, `elicitation-`, `roots-`, and `is_bridge_reply_id` (line 144)
+admits exactly those back.
+
+So the HTTP `ClientChannel` is an ADAPTER over machinery that already exists, is
+already called from production, and already uses the same id space — not new
+plumbing. This SHRINKS the change surface; it does not delete the blocker, and
+the change-surface section is amended to say which of the two it is rather than
+leaving a reader to size it as new machinery.
+
+Restating what is still owed, so the shrink is not read as a pass: the trait
+implementation, the timeout translation from `SamplingError` to `DeliveryError`
+(the bridge's `Timeout` and `ClientRefused` must stay distinguishable for
+NFR.OBS.4), and the roots gap below.
+
+### 3. The gap the shrink exposes: `Roots` has no response-awaiting forwarder
+
+`proxy.rs` line 396 is `pub fn forward_roots_list(&self, session_id: &str) ->
+bool` — fire-and-forget. No `register_pending`, no receiver, no timeout, not
+`async`. There is no roots counterpart to the two `*_with_response` forwarders.
+
+The design does not mention this, because it treated the whole channel as
+unbuilt. Once the channel is an adapter over existing forwarders, the missing
+third forwarder becomes the concrete piece of new code the wiring needs.
+
+Is it reachable? Yes, and it is one grep: `InputBridge::prompt`
+(`input_bridge.rs`) maps a backend request to a kind through
+`ServerRequestKind::from_method(method)`, and line 52 maps `"roots/list"` to
+`Self::Roots`. A backend that names `roots/list` in an `input_required` produces
+a `Roots` prompt, which `ask` sends by
+`self.channel.send_request(session_id, &id, prompt.kind.method(), prompt.params)`
+with `params` of `None` (line 127). Nothing in `plan` or `prompt` excludes the
+kind. The gap is therefore live, not theoretical.
+
+Disposition — fix it in this change (§P0 disposal 1): the repair is one
+`forward_roots_list_with_response` shaped exactly like its two siblings, which is
+smaller than the ticket describing it would be. Named here so the implementation
+does not discover it as a compile error and invent a shape under pressure.
+
+Rejected alternative, recorded: refuse `roots/list` at the bridge and let it fall
+to MRTR.9. That narrows what the bridge is FOR by removing a declared capability
+from the answerable set, which is a requester decision, not an engineering one
+(repair protocol, step 0). Not taken.
+
+### 4. MRTR.7b's accounting blocker, measured: five emission points around one dispatch
+
+The 7b criterion names two blockers. The first is already recorded as a design
+event at line 546 (`BackendInvoker::invoke` returns a bare `Value`, so a
+budget-refused retry has no way to propagate a refusal). The second was named but
+never measured. Measured now, in `src/gateway/meta_mcp/invoke.rs`:
+
+| emission | line | condition |
+|---|---|---|
+| `stats.record_invocation(server, tool)` | 1263 | unconditional, BEFORE dispatch |
+| `ranker.record_use(server, tool)` | 1266 | unconditional, before dispatch |
+| `dispatch_to_backend(...).await` | 1344 | the single paid call |
+| `counter!("mcp_tool_invocations_total")` | after 1357 | unconditional, after |
+| `histogram!("mcp_tool_invocation_duration_seconds")` | after 1357 | unconditional, after |
+| `stats.record_cached_tokens(...)` | in the `Ok` arm | on success with cached tokens |
+| `self.record_error_budget(server, tool, BudgetOutcome::of(&dispatch_result))` | 1384 | unconditional, after |
+| `self.cost_tracker.record(sid, api_key_name, server, tool, 0, …)` | after 1386 | on success |
+| `enforcer.record_spend(tool, api_key_name, cost)` | 1409 | on success, `cost-governance` |
+
+Eight accounting and telemetry emissions, none of them factored into a function,
+arranged as a straight-line prologue and epilogue around ONE awaited
+`dispatch_to_backend`. There is no "invoke the backend once, accounted" callable
+in this file — the accounting IS the surrounding statements.
+
+That is what makes the 7b blocker structural rather than a missing call. A
+bridged retry has exactly two shapes available today and both are wrong:
+
+- call `dispatch_to_backend` again from inside the bridge's `BackendInvoker`: a
+  second paid backend call that is invisible to all eight emissions. Billed
+  once, invoked twice, and a per-tool daily budget can be exceeded with no
+  record that it happened.
+- add a second set of the eight around the retry: two owners of the same
+  counter, which the repair protocol's own table calls the patch (a check
+  detecting the disagreement) rather than the elimination (one owner).
+
+The design's requirement stands and is now evidenced: ONE ACCOUNTED DISPATCH
+PATH, shared by the initial invocation and every bridged retry — the eight
+emissions extracted around the single await, and the bridge's `BackendInvoker`
+implemented over that extraction rather than over `dispatch_to_backend`.
+
+Consequence for sequencing, stated because it is easy to get wrong: this
+extraction is a prerequisite of 7b, not a part of it. It changes the accounting
+path for every invocation in the gateway, including the ones that never touch the
+bridge, and its own regression evidence is the existing counter tests
+(`record_error_budget` has arm-level tests at lines 4412-4681). It must land, and
+be green, before a retry is wired through it.
+
+### 5. What this round does NOT settle — one question for the requester
+
+Both rulings this change stands on are recorded and neither answers the other.
+
+- 2026-09-05, requester: the bridge lands on HTTP only; legacy stdio keeps the
+  MRTR.9 refusal; stdio concurrency is a separate, lower-priority work package
+  whose 4.0.0 membership is decided after its own design exists. Recorded as out
+  of THIS CHANGE, explicitly not out of the RELEASE.
+- 2026-09-06, operator (`RELEASE-4.0.0-readiness-board.md` lines 984-1008):
+  `server.modern_protocol` stays true, and 4.0.0 is blocked until the
+  legacy-client bridge is REACHABLE FROM PRODUCTION. The ruling names no
+  transport.
+
+Stdio is the dominant MCP client transport. An HTTP-only bridge makes the bridge
+reachable from production on one transport and leaves legacy stdio callers
+refused. Whether that satisfies the release gate is not checkable by running
+anything, and it must not be assumed: nothing on the record shows the 09-06
+ruling had the 09-05 descope in view.
+
+**Question, scheduled per §P1 (askable, not checkable)**: does an HTTP-only
+bridge satisfy the 4.0.0 gate, with legacy stdio callers keeping the MRTR.9
+refusal?
+
+- asked of: the requester, via team-lead
+- what would resolve it: a recorded yes or no on the readiness board
+- when: before implementation of 7a begins — it decides whether stdio
+  concurrency is in the release, and a yes written after the code lands is a
+  ruling with a sunk cost arguing for it
+- if it resolves badly (HTTP-only does NOT satisfy the gate): the stdio
+  concurrency design becomes a 4.0.0 blocker and must start now, against the
+  two-block finding in section 1 above. 7a and 7b are unaffected in shape; the
+  release date is not.
+
+Nothing in sections 1-4 depends on the answer, so this amendment is reviewable
+while the question is open. Implementation of 7a is not.
+
+### Amendment provenance
+
+Every claim in sections 1-4 was read at source on 2026-09-06 against
+`fix/mrtr2-continuation-handle` — no claim here is carried from a previous
+round's summary. Line numbers are as of that revision and will drift; the
+symbols are the durable anchors. Section 5 quotes two records rather than
+measuring anything, and says so.
+
+Inherited test evidence, unchanged and re-run 2026-09-06:
+`cargo test --test mik_7212_mrtr7_bridge_acs` = 23 passed, 0 failed. That suite
+exercises the bridge through `FakeClient`; it is what makes the module live, and
+it is not evidence of a production path. That distinction is the whole of
+MRTR.7a.
