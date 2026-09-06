@@ -235,12 +235,16 @@ MET when all four behavioural tests pass:
 1. A keyed call driven twice through the meta route dispatches once.
 2. A keyed call driven twice through the direct route dispatches once.
 3. The same logical call with the same client key, driven once through each
-   route, produces TWO entries whose keys differ ONLY in the route
-   discriminator. This is the falsifier for the divergent-derivation defect
-   above; without it the single-owner claim is structural inference, and the
-   hoist could be reverted with every other test still green. A hand-rolled
-   second derivation that drops the projection suffix or the principal makes
-   the keys differ in more than the discriminator, and the test fails.
+   route, produces TWO entries, and each is under exactly the key the single
+   owner computes for that route. Criterion 5 makes the key a hash, which has
+   no substring structure, so the falsifier cannot be "the two keys differ only
+   in the discriminator" — it is "each key is the one the owner produces". That
+   is the stronger form: a hand-rolled second derivation dropping the
+   projection suffix or the principal yields a different hash, so the expected
+   entry is ABSENT and the test fails, whereas a substring assertion could only
+   have caught a difference it knew how to spell. Without it the single-owner
+   claim is structural inference, and the hoist could be reverted with every
+   other test still green.
 
    Stated limit: this catches a derivation that DIVERGES between the two call
    sites, not one that is consistently wrong at both. That is the defect the
@@ -284,7 +288,10 @@ MET when all four behavioural tests pass:
    that caller `alice` created with the key `X`. The composition therefore
    becomes a hash of a length-prefixed tuple via `sha256_hex_chunks`
    (`src/hashing.rs`, already used this way by `derive_key`,
-   `src/idempotency.rs:442`), not a concatenation. This is a defect in the
+   `src/idempotency.rs:442`), not a concatenation. The tuple is exactly four
+   fields, hashed in this order: client key, projection suffix, principal, route
+   discriminator. Stating the order here makes it one authoritative fact rather
+   than something an implementer re-decides. This is a defect in the
    SHIPPED helper, not one this change introduces — but this change is what
    makes it reachable, because the guard is inert today, and composition is
    inside scope per the receipt above.
