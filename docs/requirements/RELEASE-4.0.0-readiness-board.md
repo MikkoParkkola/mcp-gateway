@@ -1006,3 +1006,49 @@ single riskiest change in the backlog — it refactors the stdio serve loop, whi
 deadlocks if a dispatch awaits a client reply — and what it buys is a default value. The
 six operator-facing documents stating that the revision is off by default are true under
 that option and need no edits.
+
+## Review-pair and delivery-shape rulings (team lead, 2026-09-06)
+
+Two rulings that bind every workstream on this branch. Recorded here rather than left in agent
+mailboxes, because a ruling delivered to four inboxes governs four agents and the branch has more
+than four.
+
+### The vendor pair is `grok-review` + `kimi-review` while gpt is quota-limited
+
+`gpt-review` has returned `process_status=error, exit_code=1` on every attempt since
+2026-09-06T05:41Z; the Codex account is usage-limited until 2026-09-12 06:33. That is an
+AVAILABILITY gap, not a verdict, and never a pass. `~/.claude/bin/grok-review` is live —
+`~/.claude/data/grok-review-ledger.jsonl` carries six `process_status=ok` rows on 2026-09-06,
+latest 06:35:57Z.
+
+`~/.grok/bin/claude-review` is FORBIDDEN on this branch. It runs Claude Code CLI on Opus 5, every
+change here is Claude-authored, and `--safe-mode` isolates the CONTEXT, not the MODEL — a fresh
+instance carries the identical blind spot. Two workstreams reached for it independently while a
+fleet-wide claim that grok was unavailable was in circulation. That claim was wrong; it is
+withdrawn here so the correction outlives the message that carried it.
+
+`synthetic-review --model glm-5.3` is the third-string substitute, used only when grok or kimi
+returns an error row — not a free swap. Every substitution is recorded in the PR body with its
+reason, so the pair is auditable after the fact rather than inferred from which files exist.
+
+Verdicts come from the LEDGER ROW, never from scraping the run file (§PA). A wrapper's exit status
+and its ledger row have disagreed in both directions today: `gpt` exits 1 with an error row, and one
+`kimi` row at 06:31:50Z carries `exit_code=0` with `process_status=error`. Neither ledger records
+`material_sha` — it is null on every row — so attributing a row to a run rests on run-file mtime
+matching the row timestamp. That is one source, not two: mark such attributions `I`, never `V`.
+
+### One release branch, one PR — no per-slice refs, no rebase
+
+A dozen agents commit to this branch concurrently, so slice commits interleave. HEADER.9's reviewed
+range `51efa6f3~1..4f4c0134` contains four commits from three other workstreams, and fourteen more
+sit above it. No ref isolates a slice, and isolating one by rebase would move the material out from
+under a SHIP already issued against it.
+
+The earlier "push an explicit ref" instruction was defective and was correctly refused. The fix is
+not a better ref: it is that per-slice PRs are the wrong shape for a shared release branch. This
+release is ONE change. One branch, one PR, with each slice's dual-vendor verdicts recorded against
+its own commit range in the PR body. The delivery-chain gate is unchanged — the branch is pushed
+when its constituent slices each carry their verdicts, not per slice.
+
+Corollary: no agent amends or rebases a commit that a returned verdict was issued against. Carried
+findings that do not change code — a C11 size waiver, a substitution note — go in the PR body.
