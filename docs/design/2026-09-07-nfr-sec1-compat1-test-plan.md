@@ -22,6 +22,8 @@ are worded. An empty evidence cell is the finding, not an omission.
 | C4 | COMPAT.1 | 2025-03-26 not dropped | system | positive | `initialize` | negotiated version **equals** 2025-03-26 |
 | C5 | COMPAT.1 | 2024-11-05 not dropped | system | positive | `initialize` | negotiated version **equals** 2024-11-05 |
 | C6 | COMPAT.1 | falsifier for C3-C5 — a revision absent from `SUPPORTED_VERSIONS` | system | negative | `initialize` with `1999-01-01` | downgraded to `PROTOCOL_VERSION` (2025-11-25), **not** echoed |
+| S15.a | SEC.1 row 15 | a `tools/call` the firewall blocks as an anomaly is refused | system | negative | `POST /mcp`, `tools/call`, firewall configured to block | HTTP 400 **and** code `-32002` |
+| S15.b | SEC.1 row 15 | falsifier — every non-anomaly firewall block | system | negative | as S15.a, non-anomaly rule | HTTP 400 **and** code `-32600`, distinguishing it from S15.a |
 
 ## Can each case actually fail?
 
@@ -75,6 +77,12 @@ Neither is permitted in this shared checkout regardless.
 
 ## Out of plan
 
-Firewall (inventory row 15) and the legacy-client bridge
-(`src/protocol/continuation.rs`) — both owned elsewhere. Named here so the
-plan is visibly short rather than silently so.
+The legacy-client bridge (`src/protocol/continuation.rs`) — peer-held. Named
+here so the plan is visibly short rather than silently so.
+
+The firewall (inventory row 15) was listed here and is not any more. The
+design's scope move records why: the refusal S15 names is emitted by
+`src/gateway/router/handlers.rs` (the `-32002`/`-32600` pair at `:1244`), not
+by the firewall crate, so the case is a fixture change rather than an edit to
+a peer-held file. A scope move that reaches the design and not the plan
+leaves the row with no executable evidence, which is the defect this repairs.
