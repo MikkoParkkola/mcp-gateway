@@ -4648,11 +4648,15 @@ fn discovery_names(v: &Value) -> Vec<String> {
     let mut names: Vec<String> = arr
         .iter()
         .map(|t| {
-            t.get("name")
+            let raw = t
+                .get("name")
                 .or_else(|| t.get("tool"))
                 .and_then(Value::as_str)
-                .unwrap_or_else(|| panic!("discovery entry names no tool: {t}"))
-                .to_string()
+                .unwrap_or_else(|| panic!("discovery entry names no tool: {t}"));
+            // `gateway_search` names a tool `server:tool_name`; the other three
+            // readers name it bare. Compare on the bare name so one pinned
+            // literal covers all four entry points.
+            raw.rsplit_once(':').map_or(raw, |(_, name)| name).to_string()
         })
         .collect();
     names.sort();
@@ -4768,6 +4772,12 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
             .await
             .unwrap(),
     );
+    let code_mode_before = discovery_names(
+        &meta
+            .code_mode_search(&json!({"query": "staged"}), MODERN_SESSIONLESS)
+            .await
+            .unwrap(),
+    );
 
     // Driven through the real meta-tool, not `SessionStateStore::set_state`:
     // the defect is the argument passed at `mod.rs:1689`, and a fixture
@@ -4800,14 +4810,22 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
             .await
             .unwrap(),
     );
+    let code_mode_after = discovery_names(
+        &meta
+            .code_mode_search(&json!({"query": "staged"}), MODERN_SESSIONLESS)
+            .await
+            .unwrap(),
+    );
 
     for (label, observed) in [
         ("gateway_list_tools, before", &list_before),
         ("gateway_search_tools, before", &search_before),
         ("gateway_list_tools server=staged, before", &single_before),
+        ("gateway_search, before", &code_mode_before),
         ("gateway_list_tools, after", &list_after),
         ("gateway_search_tools, after", &search_after),
         ("gateway_list_tools server=staged, after", &single_after),
+        ("gateway_search, after", &code_mode_after),
     ] {
         assert_eq!(
             observed, STAGED_DEFAULT_TOOLS,
@@ -4870,11 +4888,18 @@ async fn b08_one_connections_set_state_does_not_change_another_connections_set()
             .await
             .unwrap(),
     );
+    let code_mode = discovery_names(
+        &meta
+            .code_mode_search(&json!({"query": "staged"}), MODERN_SESSIONLESS)
+            .await
+            .unwrap(),
+    );
 
     for (label, observed) in [
         ("gateway_list_tools", &list),
         ("gateway_search_tools", &search),
         ("gateway_list_tools server=staged", &single),
+        ("gateway_search", &code_mode),
     ] {
         assert_eq!(
             observed, STAGED_DEFAULT_TOOLS,

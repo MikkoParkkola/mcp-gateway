@@ -176,7 +176,7 @@ carrier or the route it exists to observe. Two rows red on one cause prove one t
 | OTEL.1.a | **T11 (the carrier)** build the params object a `tools/call` arrives with — `{"name": ..., "arguments": {...}, "_meta": {"traceparent": ..., "tracestate": ...}}` — and drive the invoke funnel with it. Assert the funnel sees both values. The read under test is at the **params** level, which is where the protocol puts `_meta` (`CallToolRequestParams`, design §1); the one production read site today is a level below it, in `arguments` (`invoke.rs:1845-1847`). This row is what says the carrier is the params object and not the arguments map. | integration | contract | Yes, and for the carrier and not for the field: `extract_tools_call_params` returns `(tool_name, arguments)` and discards the rest of `params` (`helpers.rs:190-195`), so no params-level `_meta` reaches the funnel on any path. Populating `arguments._meta` instead would make this row green today — that is exactly the wrong-shaped fixture T15 exists to correct, and the reason this row states its carrier in its fixture rather than in its name. |
 | OTEL.1.a | **T12 (HTTP ingestion)** post a whole JSON-RPC `tools/call` body over the HTTP route with `params._meta` populated, and assert on the outbound params object `dispatch_to_backend` produces. Nothing is handed in at a seam; the body enters where a client's body enters. | integration | contract | Yes. The HTTP handler destructures exactly the pair `extract_tools_call_params` returns (`handlers.rs:976`), so the trace fields are dropped before any dispatch. Note what this row buys over T11: T11 can pass against an implementation that reads `params._meta` at the funnel while the HTTP route still never delivers a params object that has it. That is the gap §6.6 named, and it is why the carrier row does not subsume the route rows. |
 | OTEL.1.a | **T13 (stdio ingestion)** the same body over the stdio route, same assertion on the outbound params object (`server/mod.rs:1827`). | integration | contract | Yes, same cause, independently: stdio destructures the same pair at its own call site. **This row asserts the trace read and nothing else.** It does not touch `stdio_should_present_a_retry_when_the_context_declares_one` (`server/mod.rs:3599-3611`), does not un-ignore it, and does not assert anything about `retry`: that watcher observes cluster-G's MRTR stdio `RetryFields` seam, and coupling OTEL.1's close to a criterion another cluster owns is the defect that removed disposition 3 from the design. |
-| OTEL.1.b | **T14 (precedence)** populate **both** carriers in one request with **different** trace ids — `params._meta.traceparent` = A, `arguments._meta.traceparent` = B — and assert the funnel resolves to A. Then assert B is not reachable at all: no field carries it, no fallback restores it. | integration | contract | Yes, on the second assertion at minimum. This row is the one in this set most likely to be born unable to fail, and the failure mode is in the fixture, not the coverage: **a fixture carrying only `params._meta` passes under both implementations** — the one that prefers params and the one that never reads params but finds nothing at the args level either. Both carriers, different values, is what makes the row discriminating. The second assertion is what makes it observe disposition 1 of design §2.7 (the args-level read is REMOVED, not demoted to a fallback) rather than merely observe an ordering. |
+| OTEL.1.a | **T14 (precedence)** populate **both** carriers in one request with **different** trace ids — `params._meta.traceparent` = A, `arguments._meta.traceparent` = B — and assert the funnel resolves to A. Then assert B is not reachable at all: no field carries it, no fallback restores it. | integration | contract | Yes, on the second assertion at minimum. This row is the one in this set most likely to be born unable to fail, and the failure mode is in the fixture, not the coverage: **a fixture carrying only `params._meta` passes under both implementations** — the one that prefers params and the one that never reads params but finds nothing at the args level either. Both carriers, different values, is what makes the row discriminating. The second assertion is what makes it observe disposition 1 of design §2.7 (the args-level read is REMOVED, not demoted to a fallback) rather than merely observe an ordering. |
 | OTEL.1.a | **T15 (the realigned fixture)** `trace_correlation_tests.rs:104-130` today seeds `arguments._meta` and passes. Re-point it at `params._meta` — the carrier the protocol specifies and T11 asserts — leaving its assertions otherwise as they are. | integration | contract | **Grade pending.** It must go red before it is repaired, and the redness is T11's cause: no params-level `_meta` survives `extract_tools_call_params`. The cell is not filled because this test is one of the two cited as evidence for **CONTROL.3b = MET** (`docs/requirements/RELEASE-4.0.0-criteria-status.md:175`), and criteria-ledger has not yet answered whether that grade survives the finding that it rests on a read of the wrong carrier. If 3b stays MET, this row is a regression test for a criterion already graded met; if 3b moves, it is a missing specification. Those are different rows, and which one it is is not this plan's call. |
 
 ## 6. The empty cells, each with its reason
@@ -334,6 +334,44 @@ same treatment as the rest, and it has not been run.
 | A3 | E4 asserted the recovered set contained no forbidden identifier. True of an empty set. | Asserts the identifier that **did** arrive, and E5 supplies the negative. |
 | A1 | T7's future-version row asserted only that a five-field input is accepted. | Also asserts the propagated value — as the whole five-field literal, after review corrected the first draft's truncation to four (§11 item 5). |
 | A6 | No relative rule in this cluster — no time, freshness or ordering predicate. | N/A, stated. |
+
+### 7.1 The same sweep over T11-T15, and the two questions a plan review asks
+
+Run 2026-09-06, when §5.2 was written, against the same A1-A9 rules. Recorded here rather than in
+a table row of its own: a sweep is a pass over cases, not a case.
+
+**Q1 — does every clause these rows touch have a case, or a stated reason it has none?**
+OTEL.1.a now has five (T0, T11, T12, T13, T15) where it had one, and its route-level cell is
+filled rather than deferred. Two claims the design's §2.7 makes have **no case, deliberately**,
+and the empty cell is the finding rather than an oversight:
+
+- *"the constraint is the reduction, not the function"* — no row asserts anything about
+  `extract_tools_call_params` by name, and none should. T12 and T13 enter at the route and assert
+  at `dispatch_to_backend`; they hold across a rename, a rewrite, or a different reduction
+  entirely. A row naming the function would convert the implementation choice §2.7 explicitly
+  left open into an acceptance criterion.
+- *"the watcher stays ignored and stays cluster-G's"* — a scope statement, not a behaviour. It is
+  asserted by no case because there is nothing to observe: it is a decision about which cluster
+  owns a test, and a test asserting it would be this plan reaching into cluster G's.
+- *"the args-level read is REMOVED rather than kept as a fallback"* — asserted **behaviourally**
+  by T14's second assertion and by nothing else. No case asserts the source line is gone; that is
+  a grep, not a test, and a plan that promises one is promising something a suite cannot deliver.
+
+| rule | what the sweep found | what changed |
+|---|---|---|
+| A4 / A2 | T14 was keyed to OTEL.1.b. Precedence decides **which source the read takes**, which is clause .a; .b is the unconditional write. Keyed to .b, the row would have been counted as evidence for a clause it does not touch, and .a's count would have been one short. | Re-keyed to OTEL.1.a. |
+| A5 | T11-T14 as first drafted asserted all three W3C fields, matching T0. `baggage` is absent from `TraceContext` (`trace.rs:19`), so every row would have failed to compile — red on HEAD, and red for a reason no route or carrier defect could produce. Four rows red on one missing field prove one thing between them. | `traceparent` and `tracestate` only. The `baggage` redness stays T0's, where it discriminates. |
+| A7 | T14's second assertion — "B is not reachable" — is a negative, and a negative is true of an implementation that dropped **both** values. | Paired with the first assertion (the resolved value **is** A). An implementation that loses both fails assertion one; an implementation with a fallback fails assertion two. Neither passes alone. |
+| A9 | T14 varies two inputs in one fixture, which reads like the "two defects at once" rule. Examined: it varies one **dimension** — which carrier holds the value — and both arms are required for the row to discriminate at all. A single-carrier fixture passes under both implementations. | Kept as written, with the reason stated in the row rather than left for a reviewer to re-derive. |
+| A5 | T15 is a case whose current fixture makes its own assertion true: it seeds `arguments._meta`, which the one production read site reads, so it passes against the shape no client sends. This is the §P2 Q2 failure mode in the tree, not a hypothetical. | Kept as a row, and its purpose stated as the repair — the fixture moves to the carrier the protocol specifies, and must go red before it goes green. |
+| A1, A3, A6, A8 | No relative, temporal or self-referential predicate in these five rows; no expected-side value computed by the module under test (each asserts against literals placed in the fixture). | N/A, stated. |
+
+**Q2 — can each row actually fail?** T11-T13 fail on HEAD because no params-level `_meta` survives
+the reduction, and the redness is checked at source rather than assumed (`helpers.rs:190-195` and
+its two callers). T14 fails on HEAD for the same reason, and would still fail against a *fallback*
+implementation that the other four rows would pass — that is its whole job. T15 is the one row
+whose grade is not filled in, and §5.2 says which answer fills it. A row that cannot fail is worth
+less than no row, because it is counted.
 
 ## 8. Execution order, before this suite is trusted
 
