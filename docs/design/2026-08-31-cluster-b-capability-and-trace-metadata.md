@@ -213,7 +213,7 @@ What this entails, and what it deliberately does not:
   watcher test at `:3601` holding that gap open. `2026-09-03-post-session-caller-identity.md`
   refused a one-mode fix for its reaper ("in both serve modes"); the same refusal applies.
 
-Three dispositions this correction owes, decided here rather than left to the implementer
+Two dispositions this correction owes, decided here rather than left to the implementer
 (§P3: a decision the design did not make is a design event, so it is made here and named):
 
 1. **Precedence.** Params-level `_meta` wins, and when the read lands the args-level read at
@@ -222,8 +222,13 @@ Three dispositions this correction owes, decided here rather than left to the im
 2. **The fixture.** `trace_correlation_tests.rs:104-130` nests `_meta` in the argument object and
    is realigned to params level. Green today against the shape no client sends; left as it is, it
    re-conceals the gap this section documents.
-3. **The watcher test.** `src/gateway/server/mod.rs:3601` is un-ignored by the stdio half of this
-   read; the test plan carries a row for it.
+A third disposition was made and then **deleted** (round-2 confirmation pass, grok): un-ignoring
+`stdio_should_present_a_retry_when_the_context_declares_one` (`src/gateway/server/mod.rs:3601`).
+Read at source, that test asserts `retry: &NO_RETRY` is gone from the file — it watches
+cluster-G's MRTR convergence work, not this trace read, and a params-level `_meta` read on stdio
+would not turn it green. Keeping it would have gated OTEL.1 on another cluster's ticket. Stdio
+coverage for OTEL.1 is the route-level ingestion row the test plan's §6.6 now requires, and
+nothing else. The watcher stays ignored and stays cluster-G's.
 
 This supersedes the test plan's §6.6 residual
 (`docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md:270-287`), which
