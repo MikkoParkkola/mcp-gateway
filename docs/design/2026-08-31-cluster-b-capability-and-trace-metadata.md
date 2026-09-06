@@ -269,7 +269,7 @@ This does not change what 3.3, 3.4 or 3.4a decide. It names where the read they 
 
 | option | verdict |
 |---|---|
-| **A. Add `extensions` to `ServerCapabilities`; populate it from the extensions this gateway can actually honour today — which is none — so the wire carries `"extensions": {}`. `gateway_declares()` stays TASK.1's payload.** | **Chosen.** One builder (2.3) means one edit covers both `initialize` and `server/discover`. The spec has exactly one declaration surface (2.1), so a second one cannot be right. An empty object is a declaration: it says *this gateway speaks the extensions mechanism and currently supports none*, which is different from omitting the field. See 3.1a for why `gateway_declares()` is not the source. |
+| **A. Add `extensions` to `ServerCapabilities`; populate it from the extensions this gateway can actually honour today — which is none. `gateway_declares()` stays TASK.1's payload.** | **Chosen.** One builder (2.3) means one edit covers both `initialize` and `server/discover`. The spec has exactly one declaration surface (2.1), so a second one cannot be right. An empty map serialises to no key at all — 4.1 owns that wire shape and the MIK-7217 reason for it — so on an empty gateway this change is observable as the rule and the assignment, never as a new key. See 3.1a for why `gateway_declares()` is not the source. |
 | B. Add `extensions`, keep `ServerCapabilities.tasks` as well. | Rejected. Two surfaces declaring one capability is the defect §P0's repair protocol says to eliminate, not to patch: a client reading `tasks` and a client reading `extensions` can be told different things, and nothing keeps them equal. `tasks` is also not in the schema, so it is unreadable by a conforming client. |
 | C. Declare only in `server/discover`, per TASK.1 §3.5. | Rejected as under-specified rather than wrong. Both entry points share `build_initialize_result` (2.3), so "declare in discover" and "declare in initialize" are the same edit. Declaring only in discover would require *removing* the field for the `initialize` path, leaving a legacy client blind to an extension the gateway supports. |
 | D. `experimental` instead of `extensions`. | Rejected. `extensions` is the field the criterion names and the field the schema defines for this purpose. |
@@ -299,30 +299,30 @@ signal that the mechanism was wrong, not that the citation needed tightening.
 
 Only the parse side of `ExtensionSet` exists (`extensions.rs:71-90`), so the emit shape is pinned
 here rather than invented by the builder: a JSON object keyed by extension identifier, each value
-an object. With Tasks honoured that is `{"io.modelcontextprotocol/tasks": {}}`; today it is `{}`.
+an object. With Tasks honoured that is `{"io.modelcontextprotocol/tasks": {}}`; today the map is
+empty, and an empty map emits no key at all (4.1).
 
-The four states this criterion has to keep apart, and what each selects:
+The states this criterion has to keep apart, and what each selects:
 
 | gateway declares | client declares | selected behaviour |
 |---|---|---|
-| absent (today, before this change) | anything | core; client cannot tell the mechanism is understood |
-| `{}` | anything | core, and the client knows it asked a gateway that speaks the mechanism |
+| absent — no field, or a field holding an empty map | anything | core; the two are indistinguishable on the wire, by design (4.1) |
 | identifier present | identifier absent or no `_meta` capabilities | core fallback — 3.2 |
 | identifier present | identifier present | extension behaviour, after `negotiate()` |
 
-Row two is what this change ships and row one is what it replaces, which is why the honest
-red-on-HEAD case is a serialisation check: `build_initialize_result`
-(`meta_mcp_helpers.rs:144`) and `discover_document` (`mod.rs:1002`) emit no `extensions` key at
-all, because `ServerCapabilities` (`types.rs:232-254`) has no such field. The existing
-`ac_ext_1_*` tests stay green either way, so they cannot prove EXT.1 — a test plan that only
-extends them proves nothing new.
+There is no state in which this gateway emits an empty object, so the table has three rows and
+not four: row one covers both "the field did not exist" and "the field exists and holds nothing".
 
-Adding the field is not the same as wiring it. `build_initialize_result` ends in
-`..Default::default()` (`meta_mcp_helpers.rs:164`), so a newly added `extensions` field arrives
-at its default on every response until the builder assigns it explicitly. That is a
-silent-success shape: the struct change compiles, the key appears on the wire, and the value is
-empty. The populate is the work; the struct change on its own closes nothing, and a test that
-only asserts the key is present would pass against it.
+**The declaration half of EXT.1 has already landed, and no honest case here is red.**
+`ServerCapabilities.extensions` is on HEAD (4.1); `build_server_capabilities` takes the map as a
+parameter and assigns it explicitly, so its trailing `..Default::default()` never reaches the
+field; `build_initialize_result` calls that builder with `implemented_extensions()`. What is empty
+is the SOURCE, not the wiring. Consequently the emit side is graded on evidence of INJECTABILITY —
+E3 hands the builder a literal identifier and asserts that identifier on the wire — and not on a
+key-present or key-absent assertion, both of which a builder ignoring its argument would also
+satisfy. The red criterion in EXT.1 is the recovery half (EXT.1.c): `from_capabilities()` still has
+zero production callers. The existing `ac_ext_1_*` tests are green against all of this, so a plan
+that only extends them proves nothing new.
 
 ### 3.2 EXT.1 — honouring a client that does not support an extension
 
