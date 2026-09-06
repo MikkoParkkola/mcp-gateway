@@ -431,6 +431,15 @@ declaration is captured at the `initialize` call site in
 `state.multiplexer`; `handle_initialize` itself does not need to change.
 `ClientSession` stays private.
 
+- **the connection generation**, minted by the gateway when a connection is
+  accepted and bumped by `initialize`, stored beside the declaration and
+  compared on every read. This is a change this design ADDS rather than one it
+  found: it is what makes "a declaration is readable only by the connection
+  that made it" true without a disconnect hook or a reaper, neither of which
+  exists. A read whose generation does not match is treated exactly as an
+  absent declaration — the MRTR.9 refusal — so the fail-closed rule above
+  covers it with no second policy.
+
 Two stores were rejected on the same test, applied to each in turn — does
 anything outside a test remove from it. `SessionProfileStore`
 (`src/routing_profile/mod.rs:430`) is already owned by `MetaMcp` and keyed by
@@ -564,7 +573,7 @@ was taken on the reviewer's word.
 | finding | disposal |
 |---|---|
 | the write site is still named twice, HTTP-only in one place and `MetaMcp::handle_initialize` in another (HIGH, CERTAIN) | confirmed. The round-4 repair fixed the stdio paragraph and left two passages carrying the old instruction — the change-surface bullet and the answer recorded against the first scheduled question. Both now name `router/handlers.rs:926`, and the recorded answer says which amendment superseded it rather than being quietly rewritten |
-| the store's owner is not concrete, and the cited stream-end removal does not exist (HIGH, LIKELY) | confirmed, and the citation was worse than the finding said. `streaming.rs:578` is a line inside a test; the only production removal is `handlers.rs:354` on DELETE (I: `rg -n 'remove_session' src/` returns those two and nothing else — one grep is one source, however carefully it was run). Eliminated rather than patched: the declaration becomes a field on `ClientSession`, which the map already holds as its value type, so it cannot drift from or outlive the session and no second keyed map needs removal wiring. The absence of a reaper is now a named residual instead of an invented removal path |
+| the store's owner is not concrete, and the cited stream-end removal does not exist (HIGH, LIKELY) | confirmed, and the citation was worse than the finding said. `streaming.rs:578` is a line inside a test; the only production removal is `handlers.rs:354` on DELETE (I: `rg -n 'remove_session' src/` returns those two and nothing else — one grep is one source, however carefully it was run). Eliminated rather than patched: the declaration becomes a field on `ClientSession`, which the map already holds as its value type, so it cannot drift from or outlive the session and no second keyed map needs removal wiring. The absence of a reaper was first parked as a named residual; it is now a DEFERRED unknown with its four fields, narrowed to memory growth alone by the generation-binding above |
 | `WIRE.9`'s follow-up call is answered by the settled idempotency entry, so the cache gate never runs (MEDIUM, CERTAIN) | confirmed by reading the row: it reused the key it had just asserted settled, which is exactly the shape `test-plan-honesty` calls a case that cannot fail. The follow-up now carries a different idempotency key and the same response-cache key, and settlement is asserted separately |
 
 Two improvements taken, both in the test plan: `WIRE.10` sat outside the

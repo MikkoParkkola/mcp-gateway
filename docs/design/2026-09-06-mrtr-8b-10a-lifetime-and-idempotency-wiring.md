@@ -176,6 +176,41 @@ key bound to a different fingerprint). Burn-on-redemption is `ConsumedLedger::co
 the continuation path, a different primitive. Anything that needs "usable once" must ride the
 ledger, never this key.
 
+### The key is not bound to the caller, and wiring it on is what makes that reachable
+
+Found in review, verified at source, and it changes what Change B has to do.
+
+The idempotency key is `format!("{client_key}{projection_key_suffix}{identity_suffix}")`
+(`src/gateway/meta_mcp/support.rs:35-44`). `identity_suffix` is built at `invoke.rs:1128-1132`
+from `caller_credential.cache_binding` **and nothing else** — it is the empty string whenever
+identity propagation is off, which `invoke.rs:1133-1139` states is the shipped default. The
+fingerprint that would otherwise separate two callers is
+`derive_key("{server}:{tool}", &arguments)` + the retry discriminator (`invoke.rs:1164-1168`):
+same tool, same arguments, same key string ⇒ same fingerprint ⇒ `AdmitOutcome::Completed` ⇒
+`GuardOutcome::CachedResult`, and `invoke.rs:1178-1199` returns that stored response. Two
+authenticated callers who happen to choose the same opaque key string are served each other's
+results.
+
+The response cache does not have this hole, and the code says why in its own comment: the
+`caller_principal` it keys on (`invoke.rs:1140-1142`) falls back to
+`VerifiedIdentity::stable_actor_id` when the binding is absent, precisely because "keying on the
+binding alone let two authenticated callers share one entry whenever propagation was off, which is
+the shipped default" (`invoke.rs:1133-1139`). The idempotency key was left on the binding alone
+with the reason "a different contract with a different lifetime" — which is true of the *lifetime*
+and says nothing about the *identity*. The fix already exists twelve lines away.
+
+**§P3 design event.** This is a decision the design did not make, named at the moment of making
+it: it changes a material security property, and it widens Change B beyond the reachability repair
+§P0 declared. Disposal per §P0 is *fix it in this change* — the repair is `identity_suffix`
+adopting the same verified-subject fallback `caller_principal` already has, which is smaller than
+the ticket describing it would be, and this change is the one that makes the path reachable at
+all. Shipping the wiring without it would be turning on a cross-principal replay.
+
+**Change B does not enable the flag until the key binds the principal.** The order is not
+negotiable and it is not a sequencing preference: default-OFF does not make it safe either, since
+the first operator to set `enabled: true` gets the defect. The binding lands in the same change,
+with its own acceptance row.
+
 ## Design B — one config section, one construction site
 
 `enable_idempotency` becomes a builder method in the style of every other feature on this struct
@@ -219,6 +254,12 @@ that stays.
 - **R4** — a client that reuses one key loosely across different calls now gets 409 `Mismatch`
   where it previously got a second execution. That is the criterion working, and it is still a
   behaviour change a release note must carry.
+- **R5** — binding the idempotency key to the verified subject means a caller whose identity the
+  gateway cannot verify at all gets an unbound key, exactly as today. That case is narrower than
+  it sounds — an unauthenticated caller on a single-tenant gateway is the only principal there is
+  — but it is the residual, and it is the reason the binding is a *fallback chain* rather than a
+  refusal: refusing a key for want of an identity would break every single-tenant deployment to
+  close a multi-tenant hole.
 
 ## §P1 scheduled open questions
 
