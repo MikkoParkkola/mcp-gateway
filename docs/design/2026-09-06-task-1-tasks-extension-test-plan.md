@@ -132,7 +132,7 @@ row, it is a wish.
 | `.15` | capacity is released when the record is **deleted or expires**, never when the task reaches a terminal state: with the per-principal cap at N, N `completed`-but-unreaped tasks refuse the N+1th admission, and the slot frees once the record is gone | integration | negative | **No — vacuous until the caps and expiry semantics both exist**, and vacuous in the dangerous direction: the default an implementer reaches for is an active-only counter, which reads zero and admits forever, so a case asserting only that admission succeeds after expiry passes on the broken code. The assertion that carries the row is the **refusal at N with terminal-state records**; advance the clock past the TTL and assert admission second. The row does not require a distinct reaper process (kimi and grok both, 2026-09-06): a lazy expiry check at admission time satisfies the design's "deleted or expires" exactly as a sweeper does, and naming the sweeper in the trigger would have made a conformant implementation look like a miss. **Trigger:** §11.2's caps and whatever releases an expired record; owner TASK.1. |
 | `.16` | a client polling `tasks/get` more frequently than the recorded `pollIntervalMs` is served normally — no throttle, no error | integration | negative | **No — vacuous until `tasks/get` exists**, and the weakest of the three: it asserts the absence of a behaviour nobody has written. Per A3 the case asserts the **observed responses** — N successes carrying the same shape — never "no rate-limit error occurred". Kept because `tasks.md:308` says servers **MAY** rate-limit below the recorded interval: declining that permission is a design decision, and this row is where a later implementer learns that adding a limiter changes our design rather than improving our conformance. |
 
-| `.17` | an in-flight task follows the `ttlMs` recorded **at creation**, not a default a later configuration reload changed: create a task under a default TTL of T1, reload a configuration whose default is T2 **< T1**, and both `tasks/get` and expiry still use T1 — the task is retrievable after T2 has elapsed and disappears at T1 | integration | negative | **No — vacuous until piece 2's task default-TTL key and a store exist.** Added 2026-09-06 (grok, HIGH): it is the ownership rule's **only** failure observable inside 4.0.0's own behaviour, and it had no row. `.14`–`.16` each run under one static configuration, so a reaper that reads live config rather than the record passes all three — the rule would have shipped with nothing able to contradict it. The direction is pinned deliberately: a reload **downward** makes live handles vanish while the backend call is still running, which is the failure the ownership rule exists to prevent; a reload upward merely extends a task and is barely observable, so a case run in that direction would be vacuous in the safe direction. **Trigger:** piece 2's task default-TTL configuration key; owner TASK.1 piece 2. |
+| `.17` | an in-flight task follows the `ttlMs` recorded **at creation**, not a default a later configuration reload changed: create a task under a default TTL of T1, reload a configuration whose default is T2 **< T1**, and both `tasks/get` and expiry still use T1 — the task is retrievable after T2 has elapsed, and the T1 half is asserted in `.14`'s terms rather than as a disappearance at an instant: poll across the T1 boundary and require every response to be the live status or not-found, reaching not-found. Written that way on grok's confirmation pass (SMALL, 2026-09-06) because a periodic sweep that re-reads the record — the ownership rule implemented correctly — deletes at the first tick after T1, not at T1, so an instant-check at T1+ε reads a correct implementation as a miss | integration | negative | **No — vacuous until piece 2's task default-TTL key and a store exist.** Added 2026-09-06 (grok, HIGH): it is the ownership rule's **only** failure observable inside 4.0.0's own behaviour, and it had no row. `.14`–`.16` each run under one static configuration, so a reaper that reads live config rather than the record passes all three — the rule would have shipped with nothing able to contradict it. The direction is pinned deliberately: a reload **downward** makes live handles vanish while the backend call is still running, which is the failure the ownership rule exists to prevent; a reload upward merely extends a task and is barely observable, so a case run in that direction would be vacuous in the safe direction. **Trigger:** piece 2's task default-TTL configuration key; owner TASK.1 piece 2. |
 **Tally.** Of 33 clause rows — 32 cases plus `.12c`, which is a verdict rule and not a test — 11
 can fail against HEAD for a behavioural or compile reason: `.2a`,
 `.2b`, `.2c`, `.4a`, `.4b`, `.5`, `.6a`, `.7`, `.8e`, `.8f`, `.10b` — with `.13a`/`.13b` partial.
@@ -296,18 +296,27 @@ decided by their silence, and this row is the evidence that it was not.
 
 ## 9. What this plan does not do
 
-No test code. No verdict trailers — no vendor has reviewed this document, and stamping one would
-be a forgery of the thing that makes the gate worth having. This plan enters the §P2 plan-review
-round riding with the TASK.1 implementation hop; the `.12`/`.13` additions travel with it.
+No test code. **Partially reviewed, and the boundary matters more than the verdict.** Two vendors
+reviewed the 2026-09-06 `.14`–`.17` amendment and the §11.2 design delta it descends from, and both
+returned SHIP on the confirmation pass (grok, run `grok-20260906T063048Z-57193`; kimi, run
+`synthetic-20260906T063051Z-57626`; both processes exited 0, and per §PA the verdict is that ledger
+row and that exit status, never text read out of the stream). Neither vendor reviewed the clause
+rows `.1`–`.13`, which predate that round — so this document has NOT passed the §P2 plan review as
+a whole, and a trailer claiming it had would be a forgery of the thing that makes the gate worth
+having. The plan still enters the §P2 plan-review round riding with the TASK.1 implementation hop;
+the `.12`/`.13` additions travel with it.
 
-It also does not adopt `tests/mik_7272_task_1_acs.rs`, which is sitting untracked in the worktree
-and whose module doc names the design's §8 as its plan. §8 is now a pointer, so that file was
+It also does not adopt `tests/mik_7272_task_1_acs.rs`, whose module doc names the design's §8 as
+its plan. That file was untracked when this paragraph was first written; it is now committed
+(`9f573b87`), which changes who may touch it but not what it covers. §8 is now a pointer, so that file was
 written against a table this change superseded, and it was written before any vendor reviewed the
 plan that replaced it. The order §P2 asks for is plan, then plan review, then failing tests, and
-this file arrived at step three while step two is still outstanding. It therefore stays on disk,
-uncommitted and unedited, until the plan passes review and the file is reconciled against the
-33-row coverage map rather than the superseded table — reconciled by its own author, because
-rewriting another session's uncommitted work is how two sessions produce one file neither of them
-recognises. Nothing here is a criticism of the file: its `use mcp_gateway::protocol::cacheable::is_final`
+this file arrived at step three while step two is still outstanding. It therefore stays
+unreconciled until the plan passes review and the file is checked against the 33-row coverage map
+rather than the superseded table. Its scope carve-out has been corrected (grok, LOW, 2026-09-06:
+it still called the `ttlMs`/`pollIntervalMs` gap open after §11.2 closed it, so an agent reading
+the file as the scope source of truth would re-open a settled question) — a stale comment in a
+committed file is a model input that poisons output, and correcting one is not the same act as
+rewriting the coverage its author still owns. Nothing here is a criticism of the file: its `use mcp_gateway::protocol::cacheable::is_final`
 independently corroborates the `.8f` anchor correction, which is a second measurement of the same
 fact and worth more than the file cost.
