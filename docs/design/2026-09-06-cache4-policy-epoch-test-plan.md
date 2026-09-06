@@ -45,5 +45,15 @@ not "4b met".**
 
 ## Order of work
 
-Failing tests first, in the order 4.e (seam guard) → 4.f.1 → 4.g, then the implementation.
+1. **4.e first, and it is green on HEAD.** The seam already exists — `protocol_revision` is hashed today and
+   both call sites pass `None` — so this is a guard, not a failing test. It costs nothing and blocks nothing.
+2. **4.f.1 next: the free red.** No epoch writer exists, so it fails on its own assertion against unchanged
+   production code. This is the one genuine written-before-implementation failure in the set.
+3. **Then the epoch field and its accessor — skeleton only, no bump wiring.** Out of order for a strict
+   tests-first reading, and deliberately so: 4.g cannot compile without the handle, and a case that does not
+   compile does not fail — it freezes the whole in-crate test target and takes 4.f.1's demonstrated red with it.
+   A field that is only declared changes no behaviour, so 4.f.1 stays red across this step.
+4. **Then 4.g**, whose first red is the named assertion against the naive shape rather than a compile error.
+5. Then the implementation.
+
 4.d is a read. Nothing is written for 4.f.2/4.f.3.
