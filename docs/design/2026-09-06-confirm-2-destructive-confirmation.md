@@ -337,9 +337,14 @@ Nothing that depends on this is implemented, which is the condition a scheduled 
     idempotency cache in an order this design has not specified. No such tool exists. Two
     meta-tools route a caller's arguments to a backend tool, and both are annotated
     `destructive_hint: Some(false)`: `gateway_invoke` (`src/gateway/meta_mcp_tool_defs.rs:156`)
-    and Code Mode's `gateway_execute`, which the governed set deliberately includes because it
-    reaches every backend tool (`:707` via `write_non_idempotent_open_world_annotations`,
-    `:278-284`). Neither reaches the gate. The one meta-tool that is destructive-annotated is
+    and Code Mode's `gateway_execute` (`:707` via `write_non_idempotent_open_world_annotations`,
+    `:278-284`). Code Mode's two tools are fed into the **scan** that derives the governed set,
+    deliberately, because Code Mode replaces the traditional tool list rather than adding to it —
+    but scanning is not governing, and with `destructive_hint: Some(false)` the scan does not
+    select them. The governed set is `{gateway_kill_server}` today: the sole
+    `destructive_hint: Some(true)` in `meta_mcp_tool_defs.rs` (`:259`, via
+    `destructive_idempotent_annotations`) plus the floor, which names the same tool. Neither
+    routing tool reaches the gate. The one meta-tool that is destructive-annotated is
     `gateway_kill_server` (`:309` via
     `destructive_idempotent_annotations`, `:254-263`), and it acts on a backend rather than
     routing a call to one: it is dispatched straight to `kill_server`
