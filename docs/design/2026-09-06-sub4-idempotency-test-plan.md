@@ -44,7 +44,7 @@ with more ways to pass for the wrong reason.
 ## Q2 — can each case actually fail?
 
 Rows 1, 2, 4a and 4b fail today, before any implementation exists: the direct
-route has no `enforce` call at all, so row 2 fails on the count and rows 3, 4b
+route has no `enforce` call at all, so row 2 fails on the count and rows 3 and 4b
 fail on the direct leg. Row 1 fails only if the config default is off — which is
 this change's decision to make it on, so the row is a genuine check of that
 decision and not of the guard. Row 4a is the one row expected to pass BEFORE the
@@ -52,11 +52,27 @@ change as well as after; it is a regression guard, and it earns its place becaus
 the design's keyless no-op claim is load-bearing (`support.rs:45`) and a future
 edit adding a derived key would silently break every unkeyed caller.
 
+Row 5 fails today with certainty rather than by expectation: the shipped helper
+concatenates (`support.rs:43`), so its two inputs produce the identical string
+and the assertion that they differ cannot pass until the composition is hashed.
+Row 6 fails if the off switch is read on one route only — the direct route
+constructs no guard today, so the row passes vacuously before the change and
+becomes a real check the moment the guard is wired, which is the only point at
+which an operator can lose the switch.
+
 No row's fixture constructs the condition it observes: the dispatch counter lives
-in the test backend, not in the guard, and the key strings in row 3 are read out
-of the cache rather than recomputed by the test. A test that recomputed the key
-by calling `idempotency_key_for` would agree with the implementation by
-construction and prove nothing.
+in the test backend, not in the guard. Row 3 does call `idempotency_key_for` to
+compute its expected keys, and that is worth being precise about rather than
+waving through. It is NOT circular for the property row 3 tests — that both call
+sites route through the single owner — because a call site deriving its own key
+puts the entry under a different hash and the owner-computed key is then absent.
+It IS circular for the property row 3 does not test: whether the owner's
+composition is correct. That is why criteria 1, 2 and 4b assert behaviour the key
+must produce, and row 5 attacks the composition adversarially. An earlier draft
+of this section claimed the keys were enumerated out of the cache and that
+recomputing them would prove nothing; the cache exposes no enumeration
+(`src/idempotency.rs` has `len` and `check`, no key iterator), so that claim was
+both unimplementable and wrong about what the probe proves.
 
 ## Placement
 
