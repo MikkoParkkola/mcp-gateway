@@ -334,9 +334,15 @@ without it, and the omission is recorded rather than backfilled silently.
 | in-repo: `destructive_confirmation.rs`, `continuation.rs`, `invoke.rs` (V, read this session) | elicitation for the session-bearing era; sealed single-use continuations for the modern one | NIH check: the mechanism Option I needs is already built. Nothing new is invented here, which is the strongest argument for Option I on cost |
 
 NIH verdict: **no new mechanism is warranted.** Both live options reuse what exists.
-Honest limit: the two RFCs are cited from knowledge, not fetched in this session, so they are
-marked I. If either is misdescribed, the claim they support — that challenge-then-reissue is the
-conventional shape — is the part to re-check.
+Honest limit, SCHEDULED rather than confessed: the two RFCs are cited from knowledge, not fetched
+in this session, so they are marked I. Naming that is not discharging it, so the check is booked.
+**Owner** — whoever records the Q1 answer. **What resolves it** — fetch RFC 9470 §1 and RFC 8628
+§1 and confirm each row's "shape" column against the text. **When** — before Q1's answer is
+written into the requirement row; it is a minutes-long fetch and there is no reason it should
+trail the ruling. **If it resolves badly** — the claim that challenge-then-reissue is the
+conventional shape falls, and Option I loses its prior-art argument (not its cost argument, which
+rests on in-repo mechanisms read this session). Option R is unaffected either way, which is why
+this schedules rather than blocks.
 
 ## Assumptions, ranked by impact × uncertainty (G10)
 
@@ -357,7 +363,7 @@ question rather than a decision.
 |---|---|
 | **kill-metric** | Option I is killed if U1 returns no client that both declares a modern version and declares input capabilities within the 4.0.0 window. An affirmative path no client can walk is the cost this criterion exists to refuse |
 | **pivot-trigger** | the requester answers Reading B on Q1, or answers Q3 that a version-scoped inability to kill is unacceptable product behaviour. Either flips the recommendation from R to I |
-| **success-floor** | the criterion closes with a recorded requester ruling, a test proving the modern path cannot proceed unconfirmed, and no regression to the legacy path's warn-and-proceed behaviour. A design that ships without the ruling has not met the floor, whatever code lands |
+| **success-floor** | the criterion closes with a recorded requester ruling, named tests, and no regression to the legacy path's warn-and-proceed behaviour. The tests, so the floor is checkable rather than described: **either branch** — `modern_path_refuses_unconfirmable_destructive_call`, asserting the wire string carries all three required contents (tool, that this protocol version has no confirmation channel, which channel does), and a test that the U2 record is emitted for a refused kill, so "a refused kill is exactly the event an operator later asks about" is a fact and not a hope. **Affirmative branch only** — `retry_after_redeemed_confirmation_returns_recorded_result`, which drives Option I item 7's at-least-once scenario end to end: a redeemed continuation, a successful kill, a duplicate delivery, and the recorded result rather than a refusal. That test is the one that fails if an implementer reads item 7 as inheriting a cache the gate does not have. A design that ships without the ruling has not met the floor, whatever code lands |
 | **time-box** | the ruling is wanted before the 4.0.0 requirements freeze; absent it, CONFIRM.2 defers out of 4.0.0 with a recorded deferral, which its own Source column already contemplates ("Depends on MIK-7212", itself blocked by MIK-7388) |
 
 ## Unknowns — every one scheduled
