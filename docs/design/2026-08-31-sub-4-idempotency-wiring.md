@@ -200,8 +200,11 @@ not before.
   ticket is the team lead's call, put to them 2026-09-06 and unanswered as this is written. That
   leaves one outcome §P0 does not offer, silence, so the escalation is written down rather than
   remembered: **if rev-5's review opens with no ruling, file it.** Not a competing disposal — the
-  same one, escalated, because a spoofable key in a shipped default may need a human timeline
-  independent of a review that can slip. ISSUE-DOR then applies: acceptance criteria, ROI,
+  same one, escalated, because the repair constraint binds whoever lands P8, and P8's landing does
+  not wait on this review. Nothing is exposed in a running deployment today — the bullet above says
+  why, and that WEAKENS the ticket case rather than carrying it: the defect is dormant, activation
+  is SUB.4's own act, so the only timeline at stake is the ordering of the repair against the
+  activation, not production exposure. ISSUE-DOR then applies: acceptance criteria, ROI,
   fail-fast, and a source. The source is commit `a1578b81`, the ADR-008 bullet repair this was
   found during; the derivation is the P8 transfer blockquote in the MRTR.8b/10a lifetime-and-
   idempotency-wiring design, which records the same three repairs and leaves the choice here.
