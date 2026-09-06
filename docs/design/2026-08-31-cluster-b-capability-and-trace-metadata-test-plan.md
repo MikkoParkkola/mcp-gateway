@@ -73,6 +73,22 @@ E1, E2 and E3 assert against code that already shipped (`ServerCapabilities.exte
 
 The restore must be of content, not of working-tree state. `git stash` around a committed change removes only later edits; `git checkout -- <path>` discards an uncommitted repair. Use `git show <pre-fix-ref>:<path>`, under a `trap` that copies a `mktemp` backup back on `EXIT INT TERM`.
 
+**`<pre-fix-ref>` is pinned, not left to the runner.** A recipe naming no ref is decorative — it
+cannot be run as written, which is the empty cell this section exists to forbid. The two refs, both
+found with `git log -S` against the file under test rather than assumed:
+
+| what the probe restores | ref | why that one |
+| --- | --- | --- |
+| `src/protocol/types.rs` without `ServerCapabilities.extensions` | `6daf020f^` (parent of `feat(capabilities): declare the extensions map in server capabilities`) | `6daf020f` is the commit that added the field; its parent is the last tree in which the field does not exist. Verified: `git show 6daf020f^:src/protocol/types.rs` contains no `pub extensions`. |
+| `src/gateway/meta_mcp_helpers.rs` with the builder unwired | `6daf020f^` | the same commit rewrote `build_server_capabilities` to take the map as an argument, so one ref restores both halves of the retrofit. |
+
+Do **not** reach for `f8fcbcb1` (`fix(protocol): omit empty extensions from server capabilities`)
+as the pre-fix ref. It added `skip_serializing_if = "HashMap::is_empty"` a day after the field
+landed; restoring its parent gives a tree where the field exists and always serialises, which is
+the state E2 was inverted to reject (§3, E2) — a probe against it would show E2 failing for the
+right reason on the wrong question. `f8fcbcb1` is the ref for a probe of the **omission** rule
+itself, and nothing in E1-E3 asserts that rule directly.
+
 E3 is the probe that carries the section. E1 and E2 both survive a builder that ignores its argument — E1 because a hardcoded non-empty map still emits the key, E2 because absence is also what an unwired field emits (§4.1). Only E3 pins identity: mutate `build_server_capabilities` to ignore the map it is handed, and E3 must fail on the literal `example.test/probe` assertion. A probe run on E1 or E2 alone is evidence of nothing.
 
 Needing this section at all means §P2 was skipped for EXT.1.a-b. It is a recovery mechanism, recorded as one.
