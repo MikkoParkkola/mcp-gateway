@@ -286,8 +286,20 @@ Both review legs raised this independently — Kimi K3 as its only HIGH,
 Grok as CRITICAL/CERTAIN — and Grok named the in-tree helper. Two vendors on
 one defect, confirmed at source before acceptance (V).
 
-**DESIGN EVENT 2 — the JSON-RPC error code an MCP client sees changes, and
-this was disclosed, then ruled on — RESOLVED, not accepted-as-consequence.**
+**DESIGN EVENT 2 — the JSON-RPC error code changes on the paths that emit one,
+and this was disclosed, then ruled on — RESOLVED, not accepted-as-consequence.**
+
+*Scope correction, from the Grok leg:* the heading of this event used to say
+"what an MCP client sees", and on the meta-MCP invoke path that is wrong.
+`invoke.rs:1452-1479` converts an `Err` into a tool-level result —
+`isError: true`, `content: [e.to_string()]`, plus a `RecoveryHint` from
+`classify_dispatch_error` — and deliberately never promotes it to a JSON-RPC
+protocol error, so `to_rpc_code` is not called there at all. What an agent on
+that path reads is the `Display` string and the recovery hint, which is why
+DESIGN EVENT 1 and DESIGN EVENT 3 are the ones that bind the agent contract.
+This event is still real and still worth ruling on — `to_rpc_code` is live for
+the paths that do emit a protocol error — but it governs a narrower surface
+than the original wording claimed. Verified at source before the correction.
 `to_rpc_code` (`src/error.rs:193-209`) gives `Protocol(_)` its own arm,
 `-32600`; `Error::Http` has no explicit arm and falls through the trailing
 `_ => -32603`. Nothing in the capability path constructs `Error::Http` today —
