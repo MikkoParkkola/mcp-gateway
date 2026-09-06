@@ -92,6 +92,10 @@ for the reason `CONFIRM.2` is recorded: a week later an unanswered question and 
 identical. The default while it is open is the prose rule above, which is the reversible branch —
 installing a guard in hooks the operator's own checkout reads is not a thing to do on silence.
 
+Two review legs, both SHIP: Grok on the ruling as first written (`829089d2`), and Kimi on the
+repair that closed its four findings (`66fa059f`) — the closure re-check returned to the vendor that
+raised them, judged all four closed, and raised nothing new.
+
 ## The clusters
 
 How far each cluster has actually got — design, test plan, review, code, owner —
