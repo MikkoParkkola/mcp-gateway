@@ -8,11 +8,17 @@ than transcribed from the rollup, and sorted by what each one is waiting on.
 
 ## How the population was derived
 
-`python3 scripts/release/count-release-criteria.py --check`, verbatim:
+`python3 scripts/release/count-release-criteria.py --check`, verbatim (re-run 2026-09-06):
 
 ```
-Coverage: 146 criteria, 146 rows, 102 met or non-blocking, 44 blocking.
+Coverage: 146 criteria, 182 rows, 146 met or non-blocking, 36 blocking.
 ```
+
+The line this document carried until 2026-09-06 — `146 criteria, 146 rows, 102 met or
+non-blocking, 44 blocking` — was a transcript of the run made when the document was written,
+not a broken gate: the check passes today, and the ledger has grown sub-rows and closed
+criteria since. A pasted count is a measurement with a date on it, so this one now carries
+its date.
 
 Every row in `docs/requirements/RELEASE-4.0.0-criteria-status.md` whose blocking cell
 reads `yes` was enumerated, then the seven clusters named in
@@ -25,8 +31,9 @@ of the same counts would be a copy nothing maintains — the mechanism `24f8b91e
 `2bf64e6f` removed from the plan and the status document for drifting three times.
 
 What is left after the subtraction is the ten below. The rollup's prose list under *The
-residue, one line each* names nine, because `MIK-7214.HEADER.9` was split into `9a` and
-`9b` in the ledger and the prose was not resplit with it. The ten below are the ledger's.
+residue, one line each* named nine until 2026-09-06, because `MIK-7214.HEADER.9` was split
+into `9a` and `9b` in the ledger and neither the cluster row nor the prose was resplit with
+it. Both now carry the ledger's ten names. The ten below are the ledger's.
 
 ## The ten
 

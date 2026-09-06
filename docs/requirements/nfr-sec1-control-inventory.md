@@ -81,7 +81,7 @@ hit them and should not have to guess whether they were missed.
 | # | control | source symbol (file:line) | input whose absence must cause refusal | refusal test |
 |---|---|---|---|---|
 | 1 | Origin / DNS-rebinding gate | `origin_guard_middleware` — `src/gateway/router/mod.rs:304` | an `Origin` header that is on the allowlist | `src/gateway/router/tests.rs:2227`, `:2253` |
-| 2 | Agent JWT validity | `agent_auth_middleware` — `src/gateway/router/mod.rs:255`, body at `src/gateway/oauth/mod.rs:113` | a bearer JWT that validates against the agent registry | NONE — see *Not closed* below |
+| 2 | Agent JWT validity | `agent_auth_middleware` — `src/gateway/router/mod.rs:255`, body at `src/gateway/oauth/mod.rs:113` | a bearer JWT that validates against the agent registry | **`tests/nfr_sec1_controls.rs`** — NEW (two arms: an unverifiable token and an absent one) |
 | 3 | Authentication | `auth_middleware` — `src/gateway/auth.rs:894`, `:945` | a bearer token or API key | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 4 | Per-client rate limit | `client_preflight` — `src/gateway/auth.rs:956` | remaining budget in the client's window | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 5 | Client circuit breaker | `client_preflight` — `src/gateway/auth.rs:963` | a closed circuit for that client | NONE — see *Not closed* below |
@@ -102,9 +102,17 @@ Not tested here, not edited here, recorded so the set is not silently short.
 
 ## Not closed, and why
 
+Row 2 was listed here and is now closed. The reason recorded for leaving it
+open — "needs an agent registry and a signed token" — was half right: a signed
+token is needed to prove the *accepting* path, but this criterion asks for
+refusal when the input is ABSENT, and removing a JWT needs no valid one to
+exist. Both refusal arms drive with an empty registry. `tests.rs:1508`, cited
+for this row in an earlier draft, never reached the gate at all: it exercises
+`authorize_tool_target`'s agent-scope branch, which is row 13's symbol, and
+never crosses `mod.rs:255`.
+
 | # | control | why no test |
 |---|---|---|
-| 2 | agent JWT validity | The middleware refuses a request carrying no bearer token, an unknown agent, or a JWT that fails validation. Driving any of those needs an agent registry and a signed token — a fixture this file does not own. `tests.rs:1508` was cited here in an earlier draft and does not reach this gate: it exercises `authorize_tool_target`'s agent-scope branch, which is row 13's symbol, and never crosses `mod.rs:255`. Row stands as a gap. |
 | 5 | client circuit breaker | Refuses on a *trip count*, not an absent input. **This is a scope argument, not a cost one**: the criterion says "refusal when its input is absent", and a circuit breaker has no absent input to remove. Under the derivation rule that reads as N/A-with-reason rather than a gap — but reclassifying a row is the operator's call, not this document's, so it is flagged here and left counted as a gap. |
 
 ## Controls that are NOT in the set (new in 4.0.0)
@@ -125,15 +133,15 @@ one, is the substance of the defect — not merely that the list was short.
 
 ## Verdict
 
-Set closed and derivable: 14 controls plus one blocked (firewall). **Twelve**
-carry a refusal test (rows 1, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14); **two**
-are open (rows 2 and 5, and row 5 only because reclassifying it is the
+Set closed and derivable: 14 controls plus one blocked (firewall).
+**Thirteen** carry a refusal test (rows 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12,
+13, 14); **one** is open (row 5, and only because reclassifying it is the
 operator's call — see the table above); one — the firewall — is blocked on a
 file this session must not touch.
 
-`NFR.SEC.1` remains unmet until row 2 carries a test and row 5 is either
-tested or reclassified. Neither is a code gap in the control: both are
-fixture and scope questions, and both are named rather than estimated away.
+`NFR.SEC.1` remains unmet until row 5 is either tested or reclassified. That
+is not a code gap in the control: it is a scope question, named rather than
+estimated away.
 
 An earlier draft of this table said twelve. It reached that number by citing,
 for rows 2 and 8, a test that asserts a *nearby* claim rather than the row's
