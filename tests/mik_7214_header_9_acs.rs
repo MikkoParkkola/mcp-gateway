@@ -364,4 +364,12 @@ async fn a_reinitialize_keeps_the_initialized_notification_legacy_shaped() {
         "a handshake notification must not carry a 2026 envelope; it sent {}",
         reinit.body
     );
+    // The modern shape also strips `MCP-Session-Id` (MIK-7215.STATELESS.3a), so
+    // a modern-shaped re-handshake would have dropped the session the peer just
+    // issued. Pinning the header is what makes the third symptom observable.
+    assert_eq!(
+        header(reinit, "MCP-Session-Id"),
+        "s1",
+        "the legacy handshake keeps the session the peer issued"
+    );
 }
