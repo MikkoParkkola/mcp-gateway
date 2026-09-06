@@ -122,6 +122,19 @@ to produce. That verification is a real step, not a figure of speech: revision 1
 
 ## Not tested here, with reasons
 
+- **An end-to-end row through the retry path.** There is none, and the reason is a source fact
+  rather than a scheduling one. `invoke.rs` captures `now` at `:546` and hands it to
+  `Keyring::open` at `:547`, which refuses with `Expired` exactly when `now > payload.expires_at`
+  (`continuation.rs:508`) — *before* control ever reaches the `route` call at `:584`. The two
+  deadlines are the same number: `hold(&backend_id, expiry_for(now), now)` feeds `expiry_for(now)`
+  to the table and to the minted envelope in one expression (`continuation.rs:864`). So on the
+  retry path the envelope refuses first, always, and the table's reclaim changes nothing a caller
+  can observe. Revision 1 carried row .11 asserting exactly that observation; it was deleted rather
+  than restated, because a row that cannot fail for the reason it names is the defect a plan review
+  exists to find. The consequence is a design fact, not a test gap, and is recorded in the design:
+  **MRTR.8b's reclaim buys capacity, not routing behaviour** — the payoff is that an abandoned
+  exchange stops occupying a slot, which is what rows .08 and .09 assert.
+
 - **R2 (wall-clock jump backwards).** Pre-existing, gates `hold` and the envelope check
   identically today, not made worse by this change. Testing it here would assert a behaviour this
   change neither introduces nor fixes.
@@ -131,3 +144,18 @@ to produce. That verification is a real step, not a figure of speech: revision 1
 - **MRTR.10a reachability.** SUB.4's, with the caller-binding prerequisite that travels to it.
 - **NFR.PERF.3 soak.** Its own slice; depends on Change A landing and on SUB.4 activating the
   cache.
+
+## Evidence
+
+Per DoR E1-E4 and the V/I/A marking rule — V = two or more independent sources, I = one, A = none.
+
+| claim | mark | source |
+|---|---|---|
+| an entry is live *at* its deadline; reclaim is `now > deadline` | **V** | three independent surfaces agree at equality: `reclaim_abandoned` retains on `now <= *deadline` (`continuation.rs:676`), `Keyring::open` refuses only on `now > expires_at` (`:508`), `Consumed::consume` retains on `now <= *deadline` (`:605`) |
+| the envelope refuses an expired retry before `route` is reached | **V** | the order in `invoke.rs` (`:546`, `:547`, `:584`) and the shared `expiry_for(now)` at `continuation.rs:864` |
+| `len` has no production consumer; its only non-test caller is `is_empty` | I | `continuation.rs:756`, `:762` — one file read |
+| `IN_FLIGHT_CAPACITY = 4_096`, private, used once at construction | I | `continuation.rs:811`, `:836` |
+| `InFlight` is constructed by two external suites, capacity as a constructor argument | I | `tests/mik_7212_acs.rs:434` ff., `tests/mik_7212_mrtr_component_acs.rs:1107` ff. |
+| `complete` returns `true` today for an entry whose deadline has passed | I | `continuation.rs:735-742` and the absence of any deadline read on that path |
+
+No claim in this plan is unmarked, and none is A.
