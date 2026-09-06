@@ -92,11 +92,33 @@ The alternative — teaching `route` to compare deadlines — leaves the finding
 
 Cost: `retain` over a map bounded by `IN_FLIGHT_CAPACITY` on every read. The lock was already
 being taken; this adds an O(capacity) walk under it. Accepted because the capacity is the bound
-that makes it O(1) in the size of anything a client controls, and because `SpentLedger::consume`
-(`:600-611`) already pays exactly this price for exactly this reason — same shape, deliberately.
+that makes it O(1) in the size of the table, whose bound is `IN_FLIGHT_CAPACITY = 4_096`
+(`src/protocol/continuation.rs:811`) — a client can drive occupancy up to that ceiling but no
+further, and `hold` refuses past it. Stated as a number rather than as "anything a client
+controls" so that a future capacity bump is visibly a change to every reader's cost, not a silent
+one. `SpentLedger::consume` (`src/idempotency.rs:600-611`) already pays exactly this price for
+exactly this reason — same shape, deliberately.
+
+**The guarantee is relative to the supplied `now`, and that is the whole contract.** After this
+change the table holds no record whose deadline is at or before the `now` most recently passed in.
+It does *not* hold that the table is free of records expired against the wall clock at the instant
+a caller reads the result: `invoke.rs` captures `now` once at `:545` and reuses it at `:584` and
+`:613`, so an exchange expiring inside that window survives the reclaim and still routes. That is
+correct — a dispatch decided against a single consistent instant is the property the call path
+wants, and re-reading the clock per call would make one request observe two different presents.
+It is stated because an absolute reading of the elimination claim would be false, and `guard`'s
+doc comment carries the same sentence so a future call site cannot inherit the absolute reading.
+
+`complete` takes `now` for its own reasons, not to satisfy a "every path goes through the guard"
+convention — a convention is what this repair is replacing. `complete` returns `bool`, meaning
+*an entry was there*. Without the reclaim it returns `true` for an exchange whose deadline passed
+while it was in flight, telling the caller it completed something the table should no longer have
+been holding. With it, that call returns `false`. The return value is an observable contract and
+the reclaim is what makes it honest; the uniform routing is the consequence, not the reason.
 
 Call sites to update: `invoke.rs:584` (`route`), `invoke.rs:613` (`complete`), both of which
-already have `now` in scope from `:545`. Tests in `continuation.rs` and any that call `len`.
+already have `now` in scope from `:545`. Tests in `continuation.rs`, `tests/mik_7212_acs.rs`, and
+any that call `len`.
 
 ### Alternatives rejected
 
@@ -104,16 +126,26 @@ already have `now` in scope from `:545`. Tests in `continuation.rs` and any that
   deleted-reaper comment in `hold` is the record of why it went. A background task also introduces
   a clock the tests cannot drive deterministically.
 - **Deadline check in `route` only.** Rejected above: patch, leaves the finding stateable.
+- **Read `now_unix_secs()` inside `guard`, inject a test clock behind `#[cfg(test)]`.** Raised in
+  review as the way to make R1 unstateable at the type level, and it would — but it is not
+  available here. `hold` is already `pub async fn hold(&self, backend_id: &str, expires_at: u64,
+  now: u64)` (`src/protocol/continuation.rs:696`): the clock is *already* a public parameter of
+  this type, so narrowing the three siblings would leave the surface inconsistent rather than
+  narrow. Worse, `InFlight` is driven from `tests/mik_7212_acs.rs`, an external integration crate,
+  where a `#[cfg(test)]` seam in the library is invisible — the option removes the tests that
+  prove the behaviour in order to remove the parameter that lets them.
 - **Store no deadline; rely on the envelope's `Expired`.** Rejected: it makes the table's
   correctness depend on every future reader holding an envelope, which is the coupling that
   produced this finding. It also loses `len`'s meaning entirely.
 
 ### Risks
 
-- **R1** — a caller that passes a stale or attacker-influenced `now` reclaims live exchanges. The
-  clock is process-local (`now_unix_secs`) and no caller derives it from input; the parameter is
-  reachable only from gateway code. Named because passing `now` in is what makes it possible at
-  all, and the mitigation is the review noticing if a future call site does otherwise.
+- **R1** — a caller that passes a stale or attacker-influenced `now` reclaims live exchanges, or
+  fails to reclaim dead ones. The clock is process-local (`now_unix_secs`, `:147`) and no caller
+  derives it from input; the parameter is reachable only from gateway code, and it is already
+  public on `hold` (`:696`), so this change widens no surface. Named because passing `now` in is
+  what makes it possible at all. Mitigation is the freshness sentence above living in `guard`'s
+  doc comment, not a reviewer remembering.
 - **R2** — a wall-clock jump backwards makes `now <= deadline` true for records that had expired,
   briefly resurrecting them in `len`. Pre-existing (the same comparison already gates `hold` and
   the envelope check); not made worse; not fixed here.

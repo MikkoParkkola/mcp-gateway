@@ -318,16 +318,17 @@ Wiring one call is the smallest part of this.
   the deadlock the descope exists to prevent stays unreachable.
 - `shape` threaded to each of those sites, and production implementations of
   the bridge's three traits, which today exist only as test fakes.
-- **one dispatch path, not two.** `record_invocation`
-  (`invoke.rs:1246`), `record_error_budget` (:1369) and `record_spend` (:1394)
-  each fire exactly once, around the single `dispatch_to_backend` at :1327. A
-  bridged retry invokes the backend a *second* time, after all three — so
-  without this, a paid backend is called twice and billed once, and a
+- **one dispatch path, not two.** The accounting emissions around the single
+  `dispatch_to_backend` are enumerated once, in the section 4 table — this
+  bullet deliberately does not restate them, because the earlier three-item
+  copy here had already drifted from the eight the table lists, with stale line
+  numbers. A bridged retry invokes the backend a *second* time, after all of
+  them, so without this a paid backend is called twice and billed once and a
   configured budget is exceeded with no record. Factor the backend attempt and
   its accounting into one helper that the initial invocation and every bridge
-  retry both go through. Stated as elimination rather than patch: adding a
-  second accounting call would leave "a dispatch path that is not accounted
-  for" still describable; one path leaves it undescribable.
+  retry both go through. Elimination rather than patch: a second accounting
+  call would leave "a dispatch path that is not accounted for" still
+  describable; one path leaves it undescribable.
 - `CallerContext::input_capabilities` currently documents itself as "what this
   caller declared on **this** request". That contract changes to the merged
   value; the comment changes with it.
@@ -843,7 +844,13 @@ symbols are the durable anchors. Section 5 quotes two records rather than
 measuring anything, and says so.
 
 Inherited test evidence, unchanged and re-run 2026-09-06:
-`cargo test --test mik_7212_mrtr7_bridge_acs` = 23 passed, 0 failed. That suite
+`cargo test --test mik_7212_mrtr7_bridge_acs` = 23 passed, 0 failed. Three
+counts appear in this document — 18 acceptance rows, 21 bridge rows, 23
+passing — and they are one suite at three moments, not three suites. The
+current count is measured, not remembered: `rg -c '#\[tokio::test\]|#\[test\]'
+tests/mik_7212_mrtr7_bridge_acs.rs` = 23 (I). The lower two are snapshots taken
+while rows were still being added on 2026-09-05; where an earlier paragraph
+quotes one, it is quoting its own moment. That suite
 exercises the bridge through `FakeClient`; it is what makes the module live, and
 it is not evidence of a production path. That distinction is the whole of
 MRTR.7a.
