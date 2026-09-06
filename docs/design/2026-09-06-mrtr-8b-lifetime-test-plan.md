@@ -159,3 +159,10 @@ Per DoR E1-E4 and the V/I/A marking rule — V = two or more independent sources
 | `complete` returns `true` today for an entry whose deadline has passed | I | `continuation.rs:735-742` and the absence of any deadline read on that path |
 
 No claim in this plan is unmarked, and none is A.
+
+**One property is claimed in prose and asserted nowhere, deliberately.** The walk `reclaim_abandoned`
+performs is bounded by `IN_FLIGHT_CAPACITY`, and the plan says so; what the suite asserts is the
+literal `IN_FLIGHT_CAPACITY == 4_096`, which pins the constant, not the walk. No public reader
+exposes a walk length, so no honest row can observe it — row .10 tried and was deleted for exactly
+that. Recorded here rather than left implicit, because a property stated in prose with no assertion
+behind it is the gap a plan review exists to name.

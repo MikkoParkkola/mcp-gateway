@@ -466,10 +466,21 @@ Disposition of every finding, in the plan's own commits (`0cdd280b`, `a0e88234`,
 
 ## §P4a documentation delta
 
-- `docs/requirements/RELEASE-4.0.0-criteria-status.md:140` — MRTR.8b PARTIAL, and its note asserts
-  a dispatch defect U1 disproved. Both the status and the note change with Change A.
+- `docs/requirements/RELEASE-4.0.0-criteria-status.md:140` — MRTR.8b PARTIAL. **Edited by this
+  change, now, ahead of the code.** The note asserted that an abandoned exchange past its deadline
+  "still routes as live", and U1 disproved that half at source: `Keyring::open` (`invoke.rs:547`)
+  refuses an `Expired` envelope before the `route` call at `:584` is reached, and both deadlines
+  come from the one `expiry_for(now)` (`continuation.rs:864`). A note asserting a defect the code
+  does not have is false *today*, not pending Change A, so it is corrected now rather than carried.
+  The correction keeps what survives — reclamation runs only inside the `held.len() >= capacity`
+  branch, so below capacity an abandoned hold keeps its slot past its deadline — and the status
+  stays **PARTIAL** for that capacity reason. Change A later moves the status; this edit only stops
+  the row claiming something untrue in the meantime.
 - `docs/requirements/RELEASE-4.0.0-criteria-status.md:143` — MRTR.10a UNWIRED. **Not edited by this
-  change.** With Change B withdrawn nothing here makes the row untrue; it closes when SUB.4 lands.
+  change**, and that holds against a team-lead message asking for it to be updated now: that message
+  is the older relay, the later one says to leave the row alone, and U4's answer removes the edit
+  along with its condition. Naming the contradiction here so the next reader does not have to
+  reconcile two messages they cannot see. With Change B withdrawn nothing here makes the row untrue; it closes when SUB.4 lands.
   The earlier revision made this edit conditional on U4; the answer that arrived removes the
   condition and the edit together.
 - Operator config reference — **no delta.** The `idempotency:` section went with Change B.
@@ -489,9 +500,9 @@ than assumed, because silence cannot be disagreed with. The plan's repairs delet
 re-anchored every fixture to a synthetic epoch, and widened four assertions; none of that moved a
 criterion status, a citation or a line number, so `criteria-status:143`, `blocking-rollup:88` and
 `execution-plan:206` are unaffected. `criteria-status:140` is the one row whose text the review
-brushed against — its note asserts a dispatch defect and says the entry "still routes as live" —
-and it needs no edit now: the row above already commits both its status and its note to change with
-Change A, which is when the code exists to make either statement true or false. Correcting this
+brushed against — its note said the entry "still routes as live" — and that clause **has now been
+corrected in place**, because U1 disproved it at source and a false note is not a pending edit.
+The bullet above records what replaced it. Correcting this
 document's own *summary* of a plan that was itself dual-reviewed, using that review's findings, is
 bookkeeping and does not re-enter §P4: it changes what this document reports, not what the change
 claims.
