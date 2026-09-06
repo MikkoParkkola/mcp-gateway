@@ -379,9 +379,18 @@ one.
 | the lifetime clause is this slice's work | **it is MRTR.8b's slice**, and that document declares `NFR.PERF.3` explicitly out of its own scope. The division that holds: the peer builds the mechanism; this slice proves it |
 | the earliest-deadline guard is "in scope here" (the table above) | **transferred, not retained.** That sentence was written before this correction and is void: the guard changes `hold`'s body, and every change to `InFlight`'s entry points is now OUT. It goes to MRTR.8b with the rest of them — raised against their Design A, where reclaim-on-every-read makes the unguarded walk *more* frequent, not less — and is not repaired here |
 
-**Revised FOR:** the two checks the mechanism is unobservable without — a deterministic
-reclamation test standing in for `NFR.PERF.3`'s unstated soak, and a `NFR.PERF.4` ceiling
-assertion. No production code in this slice beyond what those two need.
+**Revised FOR:** the one check the mechanism is unobservable without — a deterministic reclamation
+test standing in for `NFR.PERF.3`'s unstated soak. No production code in this slice beyond what
+that test needs.
+
+**`NFR.PERF.4` is not this slice's, and the earlier revision that claimed it is withdrawn.**
+`docs/design/2026-09-02-perf4-meta-tool-ceiling.md` already owns the ceiling end to end: the
+mechanism (stop enumerating the seventeenth tool, so it stops counting), the `<= 16` assertion
+against the live filtered configuration, and the breaking-change classification carried there as a
+properly deferred question with its owner, its trigger and its fallback. Annexing the assertion
+here would have written the same test in two slices while leaving the production change in
+neither — and this slice could not have turned it green, because the deletion it depends on is
+gated on a ruling that document is waiting for. Deleted rather than split.
 
 **Added to OUT:** every change to `InFlight`'s own entry points. They belong to MRTR.8b.
 
