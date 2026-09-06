@@ -964,3 +964,106 @@ async fn redact_url_strips_a_credential_bearing_backend_url() {
         "credential survived redaction: {redacted}"
     );
 }
+
+/// GH475.RL.10 — the linkage between a capability backend's *real* HTTP 429
+/// and the failure accounting that must exclude it.
+///
+/// PINNED OBSERVABLE: the circuit state after one dispatch failure. A real
+/// throttled response leaves the circuit closed; a real server error opens it.
+/// The two responses differ **only in the status line** — same body, same
+/// route shape — so the thing being pinned is that the status reaches the
+/// accounting at all, not that some word in the payload happened to.
+///
+/// The error text is produced by the production formatter in
+/// `executor/params.rs` (`handle_response`), not composed here: a test that
+/// writes its own `"429 Too Many Requests"` string pins a copy of the format
+/// and stays green when the format changes.
+///
+/// FALSIFIER: a mutation probe, not a pre-fix ref — the exclusion and this
+/// test arrived together, so §P2's retrofit probe does not apply. Dropping the
+/// status from the `"API returned {}: {}"` literal makes the throttled case
+/// count as an ordinary failure and this test fails on its first assertion.
+///
+/// NOT PINNED: the same format site in `executor/jsonrpc.rs` and the GraphQL
+/// path — each formats its own status text and neither is driven here. Nor is
+/// the meta-MCP error-budget effect: `record_error_budget` is private to
+/// `gateway::meta_mcp::invoke`, where `error_budget_tests` pins it against the
+/// same `is_rate_limited` predicate this path uses.
+#[tokio::test]
+async fn a_real_capability_429_is_excluded_from_failure_accounting() {
+    use crate::config::{CircuitBreakerConfig, FailsafeConfig};
+    use crate::failsafe::Failsafe;
+    use std::time::Duration;
+
+    // Same body on both routes: the status line is the only discriminator.
+    async fn throttled() -> AxumResponse {
+        AxumResponse::builder()
+            .status(429)
+            .body(Body::from(r#"{"detail":"slow down"}"#))
+            .unwrap()
+    }
+    async fn broken() -> AxumResponse {
+        AxumResponse::builder()
+            .status(500)
+            .body(Body::from(r#"{"detail":"slow down"}"#))
+            .unwrap()
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/throttled", get(throttled))
+                .route("/broken", get(broken)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let executor = CapabilityExecutor::new();
+    let config = RestConfig::default();
+    let mut errors = Vec::new();
+    for route in ["/throttled", "/broken"] {
+        let response = executor
+            .client
+            .get(format!("http://{addr}{route}"))
+            .send()
+            .await
+            .unwrap();
+        errors.push(
+            executor
+                .handle_response(response, &config)
+                .await
+                .unwrap_err()
+                .to_string(),
+        );
+    }
+
+    let failsafe_config = FailsafeConfig {
+        circuit_breaker: CircuitBreakerConfig {
+            enabled: true,
+            failure_threshold: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let latency = Duration::from_millis(1);
+
+    let throttled_backend = Failsafe::new("throttled-capability", &failsafe_config);
+    throttled_backend.record_dispatch_failure(&errors[0], latency);
+    assert!(
+        throttled_backend.circuit_breaker.can_proceed(),
+        "a real 429 must not trip the breaker; error text was: {}",
+        errors[0]
+    );
+
+    let broken_backend = Failsafe::new("broken-capability", &failsafe_config);
+    broken_backend.record_dispatch_failure(&errors[1], latency);
+    assert!(
+        !broken_backend.circuit_breaker.can_proceed(),
+        "the control must still trip: same body, only the status differs; error text was: {}",
+        errors[1]
+    );
+}
