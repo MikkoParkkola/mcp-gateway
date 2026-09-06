@@ -4428,3 +4428,146 @@ async fn a_denied_agent_is_not_served_the_cached_body() {
     );
     assert!(text.contains("Identity grant denied"), "{text}");
 }
+
+// ============================================================================
+// MIK-7272.ORDER.2b — a connection's tool set must not vary as a side effect
+// of other requests on that same connection.
+//
+// Plan: docs/design/2026-09-06-order-2-per-connection-list-variance-test-plan.md
+// ============================================================================
+
+/// The session id a connection declaring MCP 2026-07-28 arrives with.
+///
+/// The revision removed protocol-level sessions and the router spells that
+/// absence as an empty id rather than `None` (`session_key`, `mod.rs`). Tests
+/// that pass a named session do not reach the defect at all, so the empty id
+/// is the condition under test, not an incidental fixture detail.
+const MODERN_SESSIONLESS: Option<&str> = Some("");
+
+/// A mock streamable-http MCP backend that answers `tools/list` and
+/// `tools/call`, so a promotion can be driven through the production
+/// `gateway_invoke` path instead of by calling `promote_tool_for_session`.
+async fn start_invokable_mock() -> String {
+    use axum::Json;
+    use axum::Router;
+    use axum::routing::post;
+
+    async fn handle(Json(req): Json<serde_json::Value>) -> Json<serde_json::Value> {
+        let id = req["id"].clone();
+        let resp = match req["method"].as_str().unwrap_or("") {
+            "initialize" => serde_json::json!({
+                "jsonrpc": "2.0", "id": id,
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {"tools": {"listChanged": true}},
+                    "serverInfo": {"name": "mock", "version": "0.1.0"},
+                }
+            }),
+            "tools/list" => serde_json::json!({
+                "jsonrpc": "2.0", "id": id,
+                "result": {"tools": [{
+                    "name": "echo",
+                    "description": "echo the arguments back",
+                    "inputSchema": {"type": "object", "properties": {}},
+                }]}
+            }),
+            "tools/call" => serde_json::json!({
+                "jsonrpc": "2.0", "id": id,
+                "result": {"content": [{"type": "text", "text": "ok"}]}
+            }),
+            _ => serde_json::json!({
+                "jsonrpc": "2.0", "id": id,
+                "error": {"code": -32601, "message": "Method not found"}
+            }),
+        };
+        Json(resp)
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route("/mcp", post(handle));
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://{addr}/mcp")
+}
+
+/// The tool names in a `tools/list` response, in the order returned.
+fn tools_list_names(resp: &JsonRpcResponse) -> Vec<String> {
+    resp.result.as_ref().unwrap()["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// B-10 — `tools/list` → successful `gateway_invoke` → `tools/list`, on one
+/// connection declaring MCP 2026-07-28.
+///
+/// Both lists are asserted against the SAME pinned literal rather than against
+/// each other: comparing the two observations would pass when the invoke
+/// silently failed (nothing promoted, so nothing changed) and when a
+/// regression moved both lists in step. The invoke is separately asserted to
+/// have succeeded for the same reason.
+#[cfg(feature = "spec-preview")]
+#[tokio::test]
+async fn b10_a_successful_invoke_does_not_change_the_connections_tool_list() {
+    let url = start_invokable_mock().await;
+    let meta = meta_with_backend(&url, Duration::from_secs(5));
+
+    // Production prefetches every backend's tools at startup; without a warm
+    // cache `promoted_tools_for_session` silently omits the promoted entry and
+    // the case could not fail whatever the promotion did.
+    meta.list_tools(&json!({"server": "mock"}), MODERN_SESSIONLESS)
+        .await
+        .expect("the mock backend's tools must be fetchable");
+
+    let before = tools_list_names(
+        &meta.handle_tools_list_for_session(RequestId::Number(1), MODERN_SESSIONLESS),
+    );
+
+    let invoked = meta
+        .invoke_tool(
+            &json!({"server": "mock", "tool": "echo", "arguments": {}}),
+            MODERN_SESSIONLESS,
+            &allow_all_ctx(),
+        )
+        .await;
+    assert!(
+        invoked.is_ok(),
+        "the invoke must succeed or nothing is promoted and the case proves nothing: {invoked:?}"
+    );
+
+    let after = tools_list_names(
+        &meta.handle_tools_list_for_session(RequestId::Number(2), MODERN_SESSIONLESS),
+    );
+
+    assert_eq!(
+        before, B10_EXPECTED_TOOLS,
+        "the list before any invoke is not the pinned set"
+    );
+    assert_eq!(
+        after, B10_EXPECTED_TOOLS,
+        "a successful gateway_invoke changed what this connection is shown"
+    );
+}
+
+/// The tool-name set a modern sessionless connection is shown, pinned.
+#[cfg(feature = "spec-preview")]
+const B10_EXPECTED_TOOLS: &[&str] = &[
+    "gateway_list_servers",
+    "gateway_list_tools",
+    "gateway_search_tools",
+    "gateway_invoke",
+    "gateway_cost_report",
+    "gateway_run_playbook",
+    "gateway_kill_server",
+    "gateway_revive_server",
+    "gateway_set_profile",
+    "gateway_get_profile",
+    "gateway_list_disabled_capabilities",
+    "gateway_list_profiles",
+    "gateway_set_state",
+    "gateway_reload_capabilities",
+];
