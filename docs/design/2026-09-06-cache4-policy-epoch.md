@@ -261,12 +261,12 @@ latent limit, not a criterion miss.
 - **One mechanism or two rows?** — asked of the lead — one mechanism — **changed the design**:
   CACHE.4a and CACHE.4b share the epoch and are not split into independent work.
 - **Still open, asked in the accompanying report:** whether the ledger corrections below are
-  mine to apply (the do-not-touch list named lines 344 and 393, not 86 and 87), and whether
+  mine to apply (the do-not-touch list named lines 344 and 393, not 93 and 94), and whether
   4.e's deferral is acceptable for a 4.0.0 release or whether the cross-layer wiring must land.
 
 ## §P4a Documentation delta — inside this change
 
-- `docs/requirements/RELEASE-4.0.0-criteria-status.md` lines 86 and 87 — the six corrections below.
+- `docs/requirements/RELEASE-4.0.0-criteria-status.md` lines 93 and 94 — the six corrections below.
 - `docs/design/2026-08-31-cluster-f-response-cache-keying-test-plan.md` — its 4.d/4.e "Blocked:
   `build_key` has no revision parameter and the finished key has no callable form" note is
   stale; `response_key` plus `KeyContext` lifted that block.
