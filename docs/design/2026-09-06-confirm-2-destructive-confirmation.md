@@ -281,8 +281,11 @@ Nothing that depends on this is implemented, which is the condition a scheduled 
     `:278-284`). Neither reaches the gate. The one meta-tool that is destructive-annotated is
     `gateway_kill_server` (`:309` via
     `destructive_idempotent_annotations`, `:254-263`), and it acts on a backend rather than
-    routing a call to one, so it touches no backend tool's idempotency cache. The hazard becomes
-    real on the first tool that is both, and not before.
+    routing a call to one: it is dispatched straight to `kill_server`
+    (`src/gateway/meta_mcp/mod.rs:1616` -> `src/gateway/meta_mcp/invoke.rs:2766`), which touches
+    only the kill switch, and never enters the invoke funnel that consults the idempotency cache
+    (the sole production call of `enforce`, `src/gateway/meta_mcp/invoke.rs:1177`). The hazard
+    becomes real on the first tool that is both, and not before.
 
   Disposal per §P0: **operator decision**. Not fixed here, not filed as a ticket, and not narrowed
   by this design — CONFIRM.3's silence is the requester's to resolve. Naming the ambiguity is the
