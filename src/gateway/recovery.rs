@@ -278,7 +278,10 @@ pub fn attach_recovery(mut value: Value, hint: RecoveryHint) -> Value {
 /// rather than naming the feature — is matched, because "request throttled by
 /// upstream" is a shape this gateway has actually seen, unless negated
 /// ("not throttled", "unthrottled"): those report an ordinary failure, and a
-/// wrong exclusion there is the worse of the two mistakes above.
+/// wrong exclusion there is the worse of the two mistakes above. The negated
+/// forms are stripped before the match runs, per-occurrence rather than as a
+/// whole-payload veto, so a negated phrase never suppresses a separate,
+/// genuine "throttled" elsewhere in the same text (GH475.RL.5 review fix).
 #[must_use]
 pub fn is_rate_limited(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
@@ -288,7 +291,10 @@ pub fn is_rate_limited(text: &str) -> bool {
         || lower.contains("rate-limit")
         || lower.contains("ratelimit")
         || lower.contains("resource_exhausted")
-        || (lower.contains("throttled") && !throttled_is_negated(&lower))
+        || lower
+            .replace("not throttled", "")
+            .replace("unthrottled", "")
+            .contains("throttled")
     {
         return true;
     }
@@ -298,14 +304,6 @@ pub fn is_rate_limited(text: &str) -> bool {
     lower
         .split(|c: char| !c.is_ascii_alphanumeric())
         .any(|tok| tok == "429")
-}
-
-/// Whether `throttled` appears negated in an already-lowercased text.
-///
-/// Scoped to the two negated forms of this one word -- "not throttled" and
-/// "unthrottled" -- not a general negation parser (GH475.RL.5).
-fn throttled_is_negated(lower: &str) -> bool {
-    lower.contains("not throttled") || lower.contains("unthrottled")
 }
 
 // ============================================================================
@@ -520,5 +518,18 @@ mod tests {
         ] {
             assert!(!is_rate_limited(s), "expected NOT rate-limited for {s:?}");
         }
+    }
+
+    // §12 review (gpt-review + kimi-review, both HIGH, confirmed independently):
+    // the first version of RL.5 vetoed on ANY negated occurrence appearing
+    // anywhere in the text, so a negated phrase silently suppressed a
+    // separate, genuine "throttled" elsewhere in the same payload -- exactly
+    // the false-exclusion mistake RL.5 exists to prevent. Fixed by stripping
+    // the negated forms before matching, so only what remains decides.
+    #[test]
+    fn rate_limit_predicate_still_matches_genuine_throttled_alongside_a_negation() {
+        assert!(is_rate_limited(
+            "not throttled earlier, but request throttled by upstream"
+        ));
     }
 }
