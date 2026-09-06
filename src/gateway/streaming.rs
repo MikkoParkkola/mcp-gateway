@@ -222,6 +222,18 @@ impl NotificationMultiplexer {
         }
     }
 
+    /// Remove only a matching owner, with lookup and removal under one write lock.
+    pub(crate) fn remove_session_for(&self, session_id: &str, owner: &str) -> bool {
+        let mut sessions = self.sessions.write();
+        match sessions.entry(session_id.to_owned()) {
+            std::collections::hash_map::Entry::Occupied(entry) if entry.get().owner == owner => {
+                entry.remove();
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Check if a session exists
     pub fn has_session(&self, session_id: &str) -> bool {
         self.sessions.read().contains_key(session_id)
