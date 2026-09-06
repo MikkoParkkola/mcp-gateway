@@ -391,6 +391,18 @@ on 2026-09-06 (§6 Q4). §2b belongs to ORDER.2
 itself, per Q3's answer of 2026-09-06; it would have been the same defect under
 either reading.
 
+**Disposal of that limit, named rather than defaulted (§P0).** Of the four
+disposals, the one that holds is *write it into the design* — cluster-g's, not this
+note's, because the finding changes what that cluster's convergence point should be
+and its owner is who acts on it. Done on 2026-09-06: a section at the end of
+`docs/design/2026-09-02-cluster-g-stdio-dispatch-parity.md` records the non-empty
+`"stdio-session"` id, the two stores that would have to be re-keyed, and the fact
+that the settlement is a product call rather than a repair. It was **not** filed as a
+ticket: filing is the most expensive disposal, cluster-g already owns a design note
+and a board row, and a new ticket would have added a queue entry without adding a
+decision. What the disposal does not do is build the watcher — that stays cluster-g's
+implementation step and is named as missing there.
+
 One coverage limit, found by review and worth more than the rest of this note:
 **(c) closes both legs on modern HTTP and neither of them on stdio.** stdio
 dispatches under the fixed non-empty id `"stdio-session"`
