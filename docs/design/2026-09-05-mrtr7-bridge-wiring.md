@@ -272,9 +272,9 @@ refused. The rejected option B is exactly what a fail-open default would
 reintroduce through the back door.
 
 **The store is not a store.** Declarations are co-owned by each transport's
-existing session state. Removal happens at exactly two places, both of which
-exist today: replacement on `initialize`, and session `DELETE`
-(`handlers.rs:354`). There is no disconnect hook and no reaper, and an earlier
+existing session state. A declaration is removed from the map exactly once, on
+session `DELETE` (`handlers.rs:354`), and replaced in place exactly once, on
+`initialize`. There is no disconnect hook and no reaper, and an earlier
 revision of this paragraph claimed both.
 
 A session id is client-supplied, and `get_or_create_session_for`
@@ -416,7 +416,9 @@ remember. `get_or_create_session` returns the existing session, so a stream
 reconnect keeps the declaration instead of silently losing the client's
 capabilities.
 
-The sole production removal is `handlers.rs:354` on DELETE. An earlier revision
+The sole production REMOVAL is `handlers.rs:354` on DELETE; `initialize`
+replaces in place and removes nothing, which is why the two counts in this
+document are one rule and not a contradiction. An earlier revision
 of this paragraph also cited `streaming.rs:578` as a stream-end removal. It is
 a line inside a test — the same defect that disqualified `SessionLifecycle`
 four paragraphs down, made while writing the sentence that disqualified it.
