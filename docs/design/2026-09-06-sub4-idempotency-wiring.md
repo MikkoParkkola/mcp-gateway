@@ -203,10 +203,22 @@ MET when all four behavioural tests pass:
 1. A keyed call driven twice through the meta route dispatches once.
 2. A keyed call driven twice through the direct route dispatches once.
 3. The same logical call with the same client key, driven once through each
-   route, hits ONE cache entry — the cross-route key-equivalence test. This is
-   the falsifier for the divergent-derivation defect above; without it the
-   single-owner claim is structural inference, and the hoist could be reverted
-   with every other test still green.
+   route, produces TWO entries whose keys differ ONLY in the route
+   discriminator. This is the falsifier for the divergent-derivation defect
+   above; without it the single-owner claim is structural inference, and the
+   hoist could be reverted with every other test still green. A hand-rolled
+   second derivation that drops the projection suffix or the principal makes
+   the keys differ in more than the discriminator, and the test fails.
+
+   The routes must NOT share one entry, and criterion 3 previously required
+   that they do. `GuardOutcome::CachedResult(Value)` (`src/idempotency.rs:551`)
+   serves a stored body, not an admission token, and the two routes do not
+   produce the same body: the key carries the projection suffix but nothing
+   about route-specific scanning or stamping, so a shared entry hands the
+   direct route a value the meta route's pipeline produced. Adding the route to
+   the key removes the collision rather than testing for it. The cost is
+   explicit and small — a client that retries the same logical call across two
+   routes gets one dispatch per route, which is the behaviour it has today.
 4. A keyless call is unaffected on both routes, and a key bound to a different
    fingerprint returns 409 on each route.
 
