@@ -1,8 +1,14 @@
 # MIK-7272.SUB.4 — idempotency protection for reissued side-effecting calls
 
-Status: proposed, revision 4. No code written. Revisions 1 and 2 were reviewed by GPT-5.x and
+Status: proposed, revision 5. No code written. Revisions 1 and 2 were reviewed by GPT-5.x and
 Grok; both returned `SHIP-WITH-FIXES` on revision 2. Revision 3 was the repair. Revision 4 settles
 the last question a check could settle, and records what happens to the two that need a person.
+
+Revision 5 is NOT reviewed. It is P8, P9, the "Risks inherited with activation" section and the
+test-plan transfer, which arrived 2026-09-06 from the MRTR.8b/10a design when that change withdrew
+its Change B, plus the reference corrections of the same date. No reviewer has seen any of it: the
+`SHIP-WITH-FIXES` above is a verdict on revision 2 and says nothing about this material. It rides
+the next dual-vendor design review, before SUB.4 writes code.
 
 ## Scope
 
@@ -119,10 +125,16 @@ shipped default. Two authenticated callers issuing the same tool with the same a
 same key string collide on one fingerprint (`:1164-1168`), and `AdmitOutcome::Completed` replays the
 first caller's stored response to the second (`:1178-1199`). The response cache does *not* have this
 defect: `caller_principal` (`:1140-1142`) already falls back to `VerifiedIdentity::stable_actor_id`.
-Fix: `identity_suffix` adopts the same fallback chain, twelve lines away.
+Fix: `identity_suffix` adopts the same fallback chain, twelve lines away. That does not merge the
+two — the separation the comment at `:1133-1139` records survives — but it does falsify that
+comment's account of why binding-alone keying was acceptable here, so the repair updates it in the
+same commit. A stale comment is model input, not neutral documentation.
 
 **P9 — the relocation in "Constraints, measured" does not subsume P8.** Moving the binding into
-`derive_key` (this document `:125-128`, the same conclusion reached independently) *relocates*
+`derive_key` (this document, "Constraints, measured", the ADR-008 INV-3 bullet — cited by section, not
+line, because a line reference inside the document it points into is invalidated by the next edit
+to that document, which is how both references in this material arrived wrong; the same conclusion
+reached independently) *relocates*
 `identity_suffix`; it does not make it non-empty. With identity propagation off — the shipped
 default — the relocated suffix is still empty and two authenticated callers still share a
 fingerprint. SUB.4 needs the fallback chain **and** the relocation; satisfying only the second
@@ -141,7 +153,9 @@ does.
   `Mismatch`. That is the intended behaviour and it is still a client-visible change, so it belongs
   in this change's release note rather than being discovered in production.
 - **R5 — an unverifiable identity leaves the key unbound.** When neither `cache_binding` nor a
-  stable actor id resolves, the fingerprint carries no principal at all. The choice is this
+  stable actor id resolves, the *key* carries no principal at all — the fingerprint never carries
+  one by design (`invoke.rs:1163-1167` is `derive_key(server:tool, arguments)` plus the retry
+  discriminator). The choice is this
   change's to make and to state: refuse to protect the call, or protect it with an unbound key and
   accept cross-caller replay. Left unstated it defaults to the second by accident.
 
@@ -159,10 +173,14 @@ does.
 - TTLs already exist: `COMPLETED_TTL` 24h and `IN_FLIGHT_TIMEOUT` 5m (`src/idempotency.rs:30-37`).
   Copying `config.cache.default_ttl` instead would shrink protection to a minute.
 - ADR-008 INV-3 requires the `cache_binding` (user + audience) in both cache keys, and it is —
-  but at the CALL SITE. `invoke.rs:773` builds an `identity_suffix` and appends it at `:789`,
-  `:831` and `:1263`. Neither `derive_key` nor `ResponseCache::build_key` knows about it. DECIDED:
-  extending coverage pushes the binding INTO the derivation. Copying the suffix to a second call
-  site is exactly the shape ADR-008:117 already records failing.
+  but at the CALL SITE. `invoke.rs:1128` builds an `identity_suffix` and `:1151` passes it to
+  `idempotency_key_for`, which concatenates it (`support.rs:43`). Neither `derive_key` nor
+  `ResponseCache::build_key` knows about it. DECIDED: extending coverage pushes the binding INTO
+  the derivation. CORRECTED 2026-09-06: this bullet cited `:773`, `:789`, `:831` and `:1263` —
+  written against 08-31 source and false against current source, where there is ONE append site,
+  not three. The decision survives the correction because it rests on the binding living outside
+  the derivation, not on how many places copy it; the "copying to a second call site" argument
+  does NOT survive, and is withdrawn rather than restated.
 - `IdempotencyCache::check` evicts on access (`src/idempotency.rs:147-176`), so the background
   cleanup task is an optimisation, not a correctness requirement.
 - MIK-7212.MRTR.10a (continuation fields inside the key) is promoted from a noted dependency to a
@@ -256,10 +274,10 @@ constraints on *this* plan because this is the change that activates the cache.
   failure mode (`src/gateway/meta_mcp/mod.rs:657`, `#[allow(dead_code)]`, field initialised `None`
   at `:437`) that a test could have caught and did not.
 - **A negative case for the absent section is transferred NOWHERE, deliberately.** There is no
-  optional `idempotency.enabled` key here — activation is mandatory (`:137-143`) — so a row
+  optional `idempotency.enabled` key here — activation is mandatory ("Two decisions, plus one the review created", Axis 1) — so a row
   asserting behaviour when the section is absent could only be written by reintroducing the kill
   switch this design refused. Recorded so its absence reads as a decision rather than a gap.
 
 | criterion | case | how it fails today |
 |---|---|---|
-| cross-principal binding (P8/P9) | two *different* authenticated callers issue the same tool, same arguments and the same key string, with identity propagation OFF; the second must execute rather than receive the first's stored response | `identity_suffix` is empty at that default, so both fingerprints collide and `AdmitOutcome::Completed` replays |
+| cross-principal binding (P8/P9) | two *different* authenticated callers issue the same tool, same arguments and the same key string, with identity propagation OFF; the second must execute rather than receive the first's stored response | `identity_suffix` is empty at that default, so both callers derive the same *key* (`support.rs:43`); `admit` looks the entry up by key (`idempotency.rs:256`) and `matches` (`:130-131`) then compares fingerprints, which are identical because the two calls genuinely are the same `(server, tool, arguments)` — so it returns `AdmitOutcome::Completed` and replays |
