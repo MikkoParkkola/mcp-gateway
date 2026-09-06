@@ -11,7 +11,7 @@ state is stale the moment a leg returns, and it was, twice.
 | 2 | glm-5.3 | SHIP-WITH-FIXES | `e56ef494…` | 15824 | 08:15:06Z |
 | 2 | grok | SHIP-WITH-FIXES | `7462c16f…` | 15822 | 08:25:19Z |
 | 3 | glm-5.3 | SHIP-WITH-FIXES | `a0888c5a…` | 26954 | 08:52:20Z |
-| 3 | grok | *in flight* | — | — | — |
+| 3 | grok | SHIP-WITH-FIXES | `a0888c5a…` | 26954 | 08:56:18Z |
 
 Keyed on `material_sha256` rather than on the ledger's `head`: `head` pins the branch tip at run
 time and this branch is shared, so every row above carries a `head` belonging to some other
@@ -44,10 +44,12 @@ the review process makes and cannot support.
 Round 3 is the first row whose digest attests what it claims to. The payload was PIPED rather
 than named by a path, so the wrapper staged it and hashed it: 26,954 bytes = the 26,874-byte
 material plus the 79-byte scope argument plus the NUL between them, arithmetic that closes
-exactly. Round 1's 205 is the argument text with nothing staged behind it. Both legs were given
-a byte-identical scope string this time, so when the second row lands, equal digests will mean
-identical material and unequal digests will mean a real difference — which is the property the
-field was always supposed to have and did not.
+exactly. Round 1's 205 is the argument text with nothing staged behind it. Both legs were given a
+byte-identical scope string this time, and BOTH ROUND-3 DIGESTS ARE `a0888c5a…` OVER 26,954
+BYTES. That equality is the proof the field was always supposed to carry and never did: the two
+vendors reviewed the same material, and neither verdict can be explained by one of them having
+been shown something different. Round 1's shared `3eff9bec…` proves nothing of the kind — it is
+the digest of a scope argument, equal because the argument was equal.
 
 kimi is not in the table because it produced no row at all: `synthetic-review`'s trusted preamble
 tells the model it may inspect the repository read-only, kimi has no filesystem, and it answered
@@ -269,6 +271,13 @@ and a kid, there is no partial update a panic can leave half-applied — rotatio
 fields under one guard — so a poisoned lock here signals a bug elsewhere, and refusing every
 subsequent continuation would turn that bug into an outage on the authentication path.
 
+One consequence of the lock that the current shape hides: `Keyring::key` returns
+`Result<&LessSafeKey, _>` (`continuation.rs:524-530`), a borrow into `self.keys`. A borrow
+cannot outlive the guard it came from, so the seal and the open happen INSIDE the guarded
+scope rather than the key being handed back out of it. The alternative — cloning key material
+out of the lock — puts a second copy of a secret on the stack for no reason, and widening
+`mint`/`open` to `async` to use an async lock is the change this design already refused.
+
 The lock must cover `minting_kid` AND `keys` AS ONE UNIT. They are separate fields today
 (`:296-302`) and a rotation that swaps the vector without atomically swapping the minting kid
 can mint under a kid that is not in the ring, or keep minting under the kid it just retired.
@@ -288,15 +297,42 @@ draft framed this as two equal traps, which was wrong: the "unbounded budget via
 rotation" half assumed an attacker-triggerable rotation, and after the revision above there is
 no operator trigger at all. Rotation is age-driven, so the mint rate is bounded by the clock.
 
-Third: `kid` is a `u8`. 256 kids before wrap. Decided rather than left open, because the
-age-based rotation makes the rate knowable: at one rotation per interval the live ring holds
-`ceil(300 / interval) + 1` kids, so a kid is REUSED only once its previous holder has been
-dropped — safe by definition, since a dropped key's envelopes can no longer open. A rotation
+Third, and it is the piece round 3 caught missing: the interval and the key's clock origin
+are part of this design, not the implementer's to invent — deleting the timer deleted the schedule, and a schedule left unnamed comes back as a
+second clock. Both are named here.
+
+**`CONTINUATION_ROTATION_SECS: u64 = 60`**, a sibling constant to `CONTINUATION_LIFETIME_SECS`
+at `src/protocol/continuation.rs:128` and, like it, deliberately not configurable. Each key
+carries a `created_at` stamped from THE `now` HANDED TO `mint` — the same value that becomes
+`payload.issued_at` (`:161-168`, `:408`), never a wall-clock read inside `Keyring::new` and
+never a fresh `SystemTime::now()`. That is the whole point of having deleted the timer: one
+clock, injected, testable by passing a different instant. A key stamped from any other source
+reintroduces the split this revision removed, and it would do so invisibly, because both
+clocks agree until they do not.
+
+The arithmetic that follows is then checkable rather than asserted. At one rotation per 60
+seconds against a 300-second retention window the live ring holds `ceil(300 / 60) + 1 = 6`
+kids. Kid space is 256, so a kid is reused 256 intervals — 15,360 seconds — after the one
+before it retired, against a retention window of 300. Fifty-one times the margin, and the
+bound to keep is simply `256 * CONTINUATION_ROTATION_SECS > CONTINUATION_LIFETIME_SECS`.
+Choosing an interval that violates it does not corrupt anything; it makes the no-free-kid
+fallback fire permanently, which silently disables rotation. That is the failure worth a test.
+
+The age check is evaluated TWICE: once under the read guard to decide a rotation is due, and
+again under the write guard before performing it. Two mints arriving either side of the
+interval boundary would otherwise both see a due rotation and mint two new keys, burning kid
+space at twice the designed rate. The second check costs one comparison on the rare path.
+
+Fourth: `kid` is a `u8`. 256 kids before wrap. Decided rather than left open, because the
+arithmetic above makes the reuse distance knowable — a kid comes back only long after its
+previous holder was dropped, and a dropped key's envelopes can no longer open. A rotation
 that cannot find a free kid does NOT fail its caller: it logs and keeps the current minting
 key. Rotation is a hygiene operation, and failing an operator's reload because key hygiene
 could not run is a worse outcome than skipping one rotation.
 
-Rotation emits one log line — old kid, new kid, trigger, retained-key count. Without it the
+Rotation emits one log line — old kid, new kid, retained-key count. It named the trigger
+until round 3 pointed out that every trigger had been deleted: the field's only honest value
+would be the constant "age", so it is a field whose value is a lie by omission. Without it the
 residual `NotAuthentic` failures around a rotation window have no correlating event, and a key
 ceremony with no trail is not auditable.
 
@@ -333,7 +369,7 @@ Rotation changes the LIFETIME of key material and nothing about the primitive.
 |---|---|---|
 | Spoofing | yes | a forged or replayed kid resolves to a key that is gone or never existed; `open` refuses `NotAuthentic` at `:489` before any payload is read |
 | Tampering | no | AEAD over the payload with the kid in the AAD; a rewritten kid fails the tag, it does not select a different key quietly |
-| Repudiation | yes, improved | the rotation log line (old kid, new kid, trigger, retained count) is what makes a key ceremony auditable; without it a `NotAuthentic` cluster has no correlating event |
+| Repudiation | yes, improved | the rotation log line (old kid, new kid, retained count) is what makes a key ceremony auditable; without it a `NotAuthentic` cluster has no correlating event |
 | Information disclosure | no | nothing new is written to the envelope; `expires_at` was already inside the sealed payload and stays there |
 | Denial of service | yes | a rotation that cannot find a free kid keeps the current key rather than failing its caller; a per-key budget exhausted early stalls minting for at most one interval, bounded above |
 | Elevation of privilege | no | the handle carries no authority beyond resuming its own continuation; rotation does not widen what a valid handle can do |
@@ -396,7 +432,13 @@ fields, and nothing depending on an open one gets built first.
 | 2 | What is "the max lifetime" as a number, and is it bounded anywhere today? RETAINED is unimplementable without it. | RESOLVED, checkable. `rg CONTINUATION_LIFETIME_SECS src/` — `const CONTINUATION_LIFETIME_SECS: u64 = 300` at `src/protocol/continuation.rs:128`, not a parameter and deliberately not one. The retention window is therefore 300 seconds, a compile-time constant. It changed the design: the retention deadline needs no new config and no new plumbing. |
 | 3 | Can the config-reload path actually REACH the live keyring? The whole ROTATABLE claim, and the D7 WIRED argument with it, rests on this. | RESOLVED, checkable. `rg -n "MetaMcp\|continuation\|ContinuationState" src/config_reload/` — zero hits; `ReloadContext` (`:1371-1388`) holds config path, live config, registry, failsafe, TTL and env, and no gateway handle. The meta-tool caller reaches it for free, the file watcher does not. It changed the design twice: first the "free trigger" claim turned out half true, and then review showed the reload trigger was the wrong choice altogether. Every trigger was eventually dropped: the watcher for its plumbing, then the meta-tool and the interval task in round 2, in favour of an age check on the `now` already injected into `mint`. Written up above rather than left as a table cell. |
 
-Question 1 is load-bearing: a yes reverses the recommendation. It is DEFERRED rather than
+Question 1 is load-bearing: a yes reverses the recommendation. One documentation delta rides
+on it, recorded here rather than done: `docs/requirements/RELEASE-4.0.0-criteria-status.md:353`
+states **"Branch (b) is the one taken"**, which this design contradicts. It is deliberately NOT
+edited yet — that cell is the ledger's record of a decision only the team lead can change, and
+rewriting it to match my own recommendation before the ruling would be the design marking its
+own homework. It is a §P4a obligation attached to the Q1 answer: (c) confirmed, the cell is
+rewritten in this change; (b) confirmed, the cell was right and this document becomes history. It is DEFERRED rather than
 resolved because only the requester can settle it, and a design that recorded it as "asked"
 would be claiming a third state the process does not have.
 
