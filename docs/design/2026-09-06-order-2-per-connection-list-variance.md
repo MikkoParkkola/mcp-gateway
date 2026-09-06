@@ -218,8 +218,12 @@ mechanism that already exists, is already reviewed, and already carries the
 ORDER.2 rationale in its own doc comment, so it adds no new concept to the
 codebase. And it needs no new per-request input, and no change to the
 `gateway_set_profile` surface beyond what already shipped. It does change one
-surface: `gateway_set_state` starts refusing on modern connections, priced in
-(c) above.
+surface: `gateway_set_state` starts refusing on **sessionless** callers — the
+empty-id condition, which is what a modern connection over HTTP presents — priced
+in (c) above. Not "on modern connections": the refusal fires on what `session_key`
+filters, and stdio's fixed `"stdio-session"` is not filtered, so a modern stdio
+caller keeps `gateway_set_state`. The cases must pin the empty id rather than the
+era, or S-02 goes red against a correct fix.
 
 The consequence to state plainly: with (b) already shipped and (c) applied, a
 modern connection **over HTTP** has **no per-connection list state at all**.
