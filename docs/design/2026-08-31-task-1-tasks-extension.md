@@ -553,6 +553,12 @@ names the notification `notifications/tasks`. The design was the outlier, not th
 
 Every row checked against `schema.ts` and `tasks.md` this session.
 
+**Four verdicts in this table are SUPERSEDED by §11.2 and §12 — read those, not these rows.** The
+`ttlMs` and `pollIntervalMs` MAY-change clauses, the `tasks/update` key-matching MUST with its
+empty-ack shape, and the cooperative-cancel licence are all now stamped on piece 4 and AC `.3`.
+The rows below still read "design is silent" / "is not stated" because they record what this
+conformance pass found; leaving them unmarked would re-teach a closed defect to the next reader.
+
 | spec fact | §3 | verdict |
 |---|---|---|
 | 5 statuses `working\|input_required\|completed\|failed\|cancelled` | piece 1 | matches |
@@ -575,8 +581,10 @@ Every row checked against `schema.ts` and `tasks.md` this session.
 | `TaskSubscriptionNotifications{taskIds?}` / `TaskSubscriptionAcknowledgedNotifications{taskIds?}` | §5 | matches |
 | reserved: `tasks/` prefix, `notifications/tasks/` prefix, `resultType: "task"`, the label itself | — | **design is silent.** No action: the gateway defines nothing under those prefixes |
 
-Three silences, no contradictions. None of them moves the design; two (the `inputResponses` key
-MUST, the cooperative-cancel licence) belong in the test plan when AC `.3` is written.
+Three silences, no contradictions. None of them moves the design. Two — the `inputResponses` key
+MUST and the cooperative-cancel licence — were closed in §11.2 and, after the §12 confirmation
+pass found the stamp had landed on AC `.3` alone, on piece 4 as well. The third (the reserved
+`tasks/` prefixes) needs no action: the gateway defines no method in that namespace.
 
 ### 10.4 Verdict — the disposition already recorded stands; this session did not reopen it
 
