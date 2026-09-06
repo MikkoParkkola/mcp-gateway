@@ -22,44 +22,14 @@ none of them states — the read side of `_meta` on the meta-MCP route.
 OUT: re-deciding anything in the table above; the counter schema; the carrier;
 the TTL; the reclaimer's owner; any code.
 
-## The correction — the inbound `_meta` a client sends is never the one that is read
+## The correction — pointer only
 
-Four measured facts, at HEAD of `fix/mrtr2-continuation-handle`:
-
-1. `extract_tools_call_params` (`src/gateway/router/helpers.rs:185-195`) returns
-   `params.name` and `params.arguments` and nothing else. Protocol-level
-   `params._meta` — the carrier cluster-b §3.3 decides on — is discarded at both
-   callers: `src/gateway/router/handlers.rs:976` (HTTP) and
-   `src/gateway/server/mod.rs:1827` (stdio).
-2. `TraceContext::from_meta` has exactly one production caller,
-   `src/gateway/meta_mcp/invoke.rs:1845-1847`, and it reads
-   `args.get("_meta")` — a field of `gateway_invoke`'s **argument object**, one
-   level below the protocol carrier. No meta-tool input schema declares `_meta`
-   (`src/gateway/meta_mcp_tool_defs.rs`), and nothing anywhere copies
-   `params._meta` into `arguments`.
-3. Consequently CONTROL.3a's first rung is unreachable today for a
-   spec-conformant client: `otel_trace_id` at `invoke.rs:1846` is always `None`,
-   and the transparency log always falls to the minted id or the session id.
-   `src/gateway/meta_mcp/trace_correlation_tests.rs:104-130` passes because its
-   fixture puts `_meta` inside the argument object — the shape the code reads,
-   not the shape a client sends. That is a fixture staging its own condition
-   (§P2 `test-plan-honesty`), and it is why the gap survived a green suite.
-4. The seam for the fix already exists and is used for exactly this shape:
-   `RetryFields::from_params(params.as_ref())` (`handlers.rs:990`) reads
-   params-level siblings and carries them to the invoke funnel on the caller
-   context. A trace read belongs beside it, not inside `arguments`.
-
-Second-transport consequence, and it has a precedent in this repo: the stdio
-path builds no such context — `retry: &crate::protocol::mrtr::NO_RETRY`
-(`src/gateway/server/mod.rs:1862`), with an ignored watcher test at `:3601`
-recording that gap. A params-level read wired only at `handlers.rs:990` closes
-OTEL.1 and CONTROL.3a on one transport of two. CONTROL.3a's own design already
-refused that shape once, for the reaper: "in both serve modes".
-
-Where this belongs: as a measured constraint in cluster-b §2, not here. An
-implementer reading cluster-b alone still walks into `args["_meta"]` and gets
-nothing. Filed as a post-review source correction against a reviewed document,
-flagged to the team lead — see the companion commit.
+The measured correction lives in
+`docs/design/2026-08-31-cluster-b-capability-and-trace-metadata.md` §2.7, which
+owns it. It is deliberately not restated here: a second copy drifts, and the two
+copies had already begun to disagree on how strong the claim is. Round 1
+eliminated exactly this defect one scale larger. Read §2.7 for the facts, their
+citations and the consequences.
 
 ## Open — one question, and it is not new
 

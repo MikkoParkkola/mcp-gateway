@@ -5,11 +5,13 @@ Design: `docs/design/2026-09-06-mrtr-8b-10a-lifetime-and-idempotency-wiring.md` 
 Criterion: MRTR.8b — *in-flight exchange state MUST be bounded in lifetime and reclaimed on
 abandonment* (`docs/requirements/RELEASE-4.0.0-criteria-status.md:140`).
 
-Change B was withdrawn before any code, so this plan covers Change A alone. The three constraints
-the earlier revision held for Change B (production-builder construction, an absent-section
-negative, a cross-principal binding case) transferred to
+Change B was withdrawn before any code, so this plan covers Change A alone. Two of the three
+constraints the earlier revision held for Change B (production-builder construction, a
+cross-principal binding case) transferred to
 `docs/design/2026-08-31-sub-4-idempotency-wiring.md` and are deliberately absent here — a plan for
-a withdrawn change is the duplicate the withdrawal exists to avoid.
+a withdrawn change is the duplicate the withdrawal exists to avoid. The third — an absent-section
+negative — went nowhere on purpose: SUB.4 has no optional `idempotency.enabled` section to be
+absent, so transferring it would smuggle back the kill switch the withdrawal removed.
 
 ## What the plan asserts against
 
@@ -21,8 +23,15 @@ Two clauses, and the second is where the criterion actually failed:
 
 | clause | what it demands |
 |---|---|
-| C1 bounded lifetime | no reader observes a record whose deadline is at or before the `now` it supplied |
+| C1 bounded lifetime | no reader observes a record whose deadline is **strictly before** the `now` it supplied: reclaimed when `now > deadline`, live while `now <= deadline` |
 | C2 reclaimed on abandonment | an abandoned hold — one nobody ever completes — leaves the table without anyone scheduling a reclaimer |
+
+The predicate is not a detail the plan may leave to the implementation. Three surfaces already
+compare a deadline to a `now` and all three agree at equality: `reclaim_abandoned` retains while
+`now <= *deadline` (`continuation.rs:676`), `Keyring::open` refuses only when `now > expires_at`
+(`:508`), and `Consumed::consume` retains on the same `now <= *deadline` (`:605`). An entry is
+therefore **live at its own deadline**, and a `guard` that reclaimed at `deadline == now` would
+drop a record the envelope still accepts. Row .04a is the only row that sits on that boundary.
 
 The guarantee is **relative to the supplied `now`**, per the design's freshness paragraph. Row .07
 asserts that limit rather than papering over it: a plan that asserted an absolute bound would be
@@ -32,7 +41,9 @@ that captures its clock once.
 ## Rows
 
 Level: U = unit, in `src/protocol/continuation.rs` tests. I = integration, in
-`tests/mik_7212_acs.rs`, which drives `InFlight` from outside the crate.
+`tests/mik_7212_mrtr_component_acs.rs`, which drives `InFlight` from outside the crate
+(`:1107`, `:1131`, `:1234`, `:1304`). Not `tests/mik_7212_acs.rs`: its only `in_flight` match is a
+test *name* (`:200`) and it exercises the ledger.
 Type: F = functional, B = boundary, N = negative.
 
 | # | case | clause | level | type | RED comes from |
@@ -40,7 +51,8 @@ Type: F = functional, B = boundary, N = negative.
 | .01 | `hold` an exchange with deadline T; `len(T+1)` reports 0 | C1 | U | F | `len` counts the dead today (`continuation.rs:756`) |
 | .02 | same fixture; `route(key, T+1)` does not answer `Here` | C1 | U | F | `route` answers from presence alone (`:735-742`) |
 | .03 | same fixture; `complete(key, T+1)` returns `false` | C1 | U | F | `complete` returns `true` for an expired entry today, telling the caller it completed something the table should not have held |
-| .04 | live entry, deadline T; `len(T-1)` reports 1, `route(key, T-1)` answers `Here` | C1 | U | N | negative control: the reclaim must not eat live records. Fails if `guard` reclaims on `<` rather than `<=`, or on the wrong side of the comparison |
+| .04 | live entry, deadline T; `len(T-1)` reports 1, `route(key, T-1)` answers `Here` | C1 | U | N | negative control: the reclaim must not eat live records. Fails if `guard` reclaims eagerly on a clearly-live entry — an inverted `retain` predicate, or a comparison on the wrong side |
+| .04a | entry with deadline T; `len(T)` reports 1 and `route(key, T)` answers `Here` | C1 | U | B | the boundary, and the ONLY `now` at which `<` and `<=` differ — .01 (`T+1`) and .04 (`T-1`) pass under either. Fails if `guard` reclaims at `deadline == now`, which would drop a record `Keyring::open` still accepts (`continuation.rs:508`) |
 | .05 | hold, let the deadline pass, make NO intervening call, then one call through `guard`: the entry is gone on that first call | C2 | U | F | this is the abandonment case — nothing completes the exchange and no reaper exists |
 | .06 | R2a's bargain, stated as a test: after the deadline passes with no intervening call the record is *still resident* in the map; residency ends at the first `guard`. Asserted via a direct map inspection, not a public reader | C2 | U | B | pins the honest bound. Fails if someone later adds a background reaper and quietly changes what the criterion means |
 | .07 | freshness precondition: capture `now` once, hold with deadline `now+1`, advance nothing, call `route(key, now)` twice — the entry survives both, because the supplied `now` never moved | C1 | U | B | asserts the contract's limit. Fails if `guard` reads the wall clock internally, which is the rejected alternative |
@@ -49,7 +61,7 @@ Type: F = functional, B = boundary, N = negative.
 | .10 | the capacity walk is bounded by `IN_FLIGHT_CAPACITY = 4_096` (`continuation.rs:811`) and by nothing a client sizes: fill to capacity, assert the admitted count never exceeds it across a reclaim | C1 | U | B | pins the cost claim the design states as a number |
 | .11 | end to end through the retry path: an abandoned exchange is not observable via `invoke.rs`'s `route` call at `:584` after its deadline, with the clock captured at `:545` driven forward | C1+C2 | I | F | proves the call sites were actually updated, not just the type. An external crate cannot see a `#[cfg(test)]` seam, which is why the clock is a real parameter |
 
-Every criterion clause has a row; no cell is empty. C1 is carried by .01-.04, .07, .09-.11;
+Every criterion clause has a row; no cell is empty. C1 is carried by .01-.04, .04a, .07, .09-.11;
 C2 by .05, .06, .08, .11.
 
 ## Q2 — can each case actually fail?
@@ -73,7 +85,8 @@ claims to observe. Row .06 inspects the map directly precisely because every pub
 launder the answer through the reclaim it is trying to catch.
 
 **Two rows exist only to stop their partners passing vacuously.** .04 fails if reclaim is too
-eager; .09 fails if the capacity refusal is deleted instead of re-ordered. Both are cheap and both
+eager anywhere; .04a fails if it is too eager at exactly the deadline, which is the one `now` .04
+cannot see; .09 fails if the capacity refusal is deleted instead of re-ordered. Both are cheap and both
 have a concrete wrong implementation they catch.
 
 ## Not tested here, with reasons

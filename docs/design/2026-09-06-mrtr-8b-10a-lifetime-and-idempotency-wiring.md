@@ -126,7 +126,8 @@ been holding. With it, that call returns `false`. The return value is an observa
 the reclaim is what makes it honest; the uniform routing is the consequence, not the reason.
 
 Call sites to update: `invoke.rs:584` (`route`), `invoke.rs:613` (`complete`), both of which
-already have `now` in scope from `:545`. Tests in `continuation.rs` and `tests/mik_7212_acs.rs`.
+already have `now` in scope from `:545`. Tests in `continuation.rs` and
+`tests/mik_7212_mrtr_component_acs.rs`.
 
 `len` deserves its own line, because this change turns a passive counter into a mutating,
 O(`IN_FLIGHT_CAPACITY`) read and anything downstream inherits that cost. Its callers, enumerated:
@@ -147,7 +148,8 @@ and it should find this sentence rather than discover the cost in a profile.
   available here. `hold` is already `pub async fn hold(&self, backend_id: &str, expires_at: u64,
   now: u64)` (`src/protocol/continuation.rs:696`): the clock is *already* a public parameter of
   this type, so narrowing the three siblings would leave the surface inconsistent rather than
-  narrow. Worse, `InFlight` is driven from `tests/mik_7212_acs.rs`, an external integration crate,
+  narrow. Worse, `InFlight` is driven from `tests/mik_7212_mrtr_component_acs.rs` (`:1107`,
+  `:1131`, `:1234`, `:1304`), an external integration crate,
   where a `#[cfg(test)]` seam in the library is invisible — the option removes the tests that
   prove the behaviour in order to remove the parameter that lets them.
 - **Store no deadline; rely on the envelope's `Expired`.** Rejected: it makes the table's
@@ -281,6 +283,12 @@ dying with this section:
 > adopt the same fallback chain, twelve lines away. SUB.4 `:125-128` independently decided the
 > binding belongs *inside* the derivation rather than at the call site — the same conclusion, and
 > the place to implement it.
+>
+> These are **two prerequisites, not one.** Moving the binding into `derive_key` relocates
+> `identity_suffix`; it does not make it non-empty. With identity propagation off — the shipped
+> default — the relocated suffix is still empty and two authenticated callers still share a
+> fingerprint. SUB.4 needs the fallback chain AND the relocation; satisfying only the second closes
+> the ADR-008 finding while leaving the replay.
 
 Dormant while the cache is unreachable, live the moment SUB.4 wires it on. Fixing it here would
 repair a path nothing reaches, in a change whose remaining scope is Change A.
@@ -323,11 +331,13 @@ round designing an answer the operator had already given.
 
 ## §P4 review record
 
-| leg | vendor | verdict | evidence |
-|---|---|---|---|
-| 1 | Kimi K3 (`synthetic-review`) | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/synthetic-20260906T065936Z-43480.md`, rc=0 |
-| 2 | Grok (`grok-review`) | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/grok-20260906T065932Z-42426.md`, rc=0 |
-| — | Codex/GPT (`gpt-review`) | **MISSING** | rc=0 but no verdict and no run file: `ERROR: You've hit your usage limit … try again at Sep 12th, 2026`. Per §PA a nonzero-or-absent row is `MISSING`, never a scraped verdict |
+| round | leg | vendor | verdict | evidence |
+|---|---|---|---|---|
+| 1 | 1 | Kimi K3 (`synthetic-review`) | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/synthetic-20260906T065936Z-43480.md`, rc=0 |
+| 1 | 2 | Grok (`grok-review`) | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/grok-20260906T065932Z-42426.md`, rc=0 |
+| 2 | 1 | Kimi K3 | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/synthetic-20260906T072511Z-35490.md`, rc=0 — K1-K4 all **CLOSED**; one new finding on the repair |
+| 2 | 2 | Grok | **SHIP** | `~/.claude/data/reviews/runs/grok-20260906T072510Z-35222.md`, rc=0 — F1 and F2 **CLOSED**, no new finding |
+| 1-2 | — | Codex/GPT (`gpt-review`) | **MISSING** | rc=0 but no verdict and no run file: `ERROR: You've hit your usage limit … try again at Sep 12th, 2026`. Per §PA a nonzero-or-absent row is `MISSING`, never a scraped verdict |
 
 **Stated deviation.** The shared pair for a Claude-authored change is `gpt-review` + `grok-review`.
 Codex is usage-limited until 2026-09-12, so leg 1 is Kimi. This is a substitution recorded before
@@ -356,6 +366,36 @@ its earliest-deadline guard on `hold` moves to this slice, raised against Design
 that reclaim-on-every-read makes an unguarded capacity walk *more* frequent, not less
 (`:375-388`). Change A's test plan carries it.
 
+**Round 2 — closure re-check.** Per the repair protocol, each vendor re-checked only the findings
+it raised, under the narrow closure mandate.
+
+Grok returned **SHIP**: F1 cannot be restated once Change B is deleted (it judged the withdrawal a
+re-assignment to a live blocker, not a dropped requirement needing recorded agreement), and F2's
+overclaim is now R2a with the reaper half dead at source. It raised no finding and three
+improvements, all three applied: distinguish the two SUB.4 activation prerequisites (the fallback
+chain is not the relocation); stop calling the transferred-in PERF.3 obligation an
+"earliest-deadline guard" when what this design accepted is *admit-when-expired plus a bounded
+walk*; and drop the absent-section negative from the SUB.4 transfer, because SUB.4 has no optional
+section for it to be absent from.
+
+Kimi returned **SHIP-WITH-FIXES**, closing K1-K4 and raising one finding on the repair itself: the
+SUB.4 transfer, now the sole vehicle carrying K1 and K3, existed only as an assertion in the
+sending document. Repaired by citing the artifact. Its two improvements — the freshness qualifier
+inside the elimination self-test, and an enumeration of `len`'s callers now that it mutates — are
+applied above.
+
+**One finding neither vendor raised, found in the confirmation pass** and repaired here: the
+message id was the *only* record of the transfer, and a message id resolves to a session
+transcript. A prerequisite recorded where nobody will look is the inertness the withdrawal
+diagnoses, one level up. The durable record is now a cluster-C note in
+`RELEASE-4.0.0-blocking-rollup.md`; the message stays as the notification, not as the evidence.
+
+**One defect in the test plan, found in the same pass**, before either vendor saw the plan: C1 was
+written as "deadline at or before the supplied `now`" while `reclaim_abandoned` retains on
+`now <= *deadline` (`continuation.rs:676`) — the two disagree at `deadline == now`, and no row sat
+on that boundary, so the plan could not have caught its own ambiguity. C1 restated to the source
+predicate and row .04a added.
+
 ## §P4a documentation delta
 
 - `docs/requirements/RELEASE-4.0.0-criteria-status.md:140` — MRTR.8b PARTIAL, and its note asserts
@@ -367,6 +407,13 @@ that reclaim-on-every-read makes an unguarded capacity walk *more* frequent, not
 - Operator config reference — **no delta.** The `idempotency:` section went with Change B.
 - Release notes — **no delta.** R4's behaviour change belongs to whichever change activates the
   cache, and that is SUB.4.
+- `docs/requirements/RELEASE-4.0.0-blocking-rollup.md:26` — cluster C names SUB.4 without the
+  activation prerequisite this change hands it. **Updated by this change**: a cluster-C note
+  records the caller-binding prerequisite, with this document as provenance. That note, not the
+  team-lead message, is the durable artifact — a message id resolves to a transcript, and the next
+  SUB.4 implementer greps the repository.
+- `docs/requirements/RELEASE-4.0.0-execution-plan.md:206` — step 8 orders SUB.4's activation.
+  **No delta.** The prerequisite constrains what step 8 must contain, not where it sits.
 - `docs/design/2026-08-30-shared-continuation-state.md:116` is cited by `route`'s doc comment and
   stays true: nothing here touches the no-affinity bargain.
 - This document's own filename still names MRTR.10a and idempotency wiring. **Kept deliberately**:
@@ -384,14 +431,17 @@ it:
 - **A case for R2a's bargain**: after a deadline passes with no intervening call, the entry is
   still resident; the first call through `guard` is what makes it gone. The test states the bound
   the design actually delivers, so a future reader cannot mistake it for an absolute one.
-- **A case for the earliest-deadline guard transferred in from PERF.3**: `hold` at capacity, with
-  expired entries present, admits rather than refuses — and the walk it does is bounded by
+- **A case for what PERF.3's reclamation obligation actually became here**: `hold` at capacity,
+  with expired entries present, admits rather than refuses — and the walk it does is bounded by
   `IN_FLIGHT_CAPACITY`, not by anything a client sizes.
 
-The three constraints the previous revision recorded for Change B (production-builder
-construction, an absent-section negative, a cross-principal binding case) are **not deleted, they
-are transferred**: the first two are SUB.4's activation tests, and the third travels with the
-caller-binding prerequisite above. A test plan for a withdrawn change would be the duplicate this
+Two of the three constraints the previous revision recorded for Change B (production-builder
+construction, a cross-principal binding case) are **not deleted, they are transferred**: the first
+is SUB.4's activation test, the second travels with the caller-binding prerequisite above. The
+third — an absent-section negative — is transferred NOWHERE, and that is the correct disposal, not
+an oversight: SUB.4 has no optional `idempotency.enabled` section, so a test asserting behaviour
+when the section is absent could only be implemented there by reintroducing the kill switch the
+withdrawal removed. A test plan for a withdrawn change would be the duplicate this
 withdrawal exists to avoid.
 
 ### The transfer is a request, not a note (BLOCKING for this document's closure)
