@@ -259,12 +259,12 @@ Nothing that depends on this is implemented, which is the condition a scheduled 
   says "The governed tool set MUST derive from the `destructiveHint` annotation"
   (`docs/requirements/RELEASE-4.0.0-requirements.md:199`), and neither it nor CONFIRM.1a, 1b or 2
   says whether that set is meta-tools only — all four rows are textually silent on the question.
-  The code answers it deliberately, with its reasons in the module docs
-  (`src/gateway/destructive_confirmation.rs:196-200`): "Backend and capability tools are
-  deliberately absent: they are not part of `meta_mcp_tool_defs.rs`, `infer_destructive_tool()`
-  only guesses their hints by substring match, and `ConfirmationPolicy::for_modern()` is an
-  unconditional refusal — governing them here would refuse a large slice of the tool surface with
-  no confirmation path." Two consequences belong to the requester, not to this design:
+  The code answers it deliberately, with its reasons in the doc comment on the governed-tool
+  table `DESTRUCTIVE_META_TOOLS` (`src/gateway/destructive_confirmation.rs:196-200`): "Backend
+  and capability tools are deliberately absent: they are not part of `meta_mcp_tool_defs.rs`,
+  `infer_destructive_tool()` only guesses their hints by substring match, and
+  `ConfirmationPolicy::for_modern()` is an unconditional refusal — governing them here would
+  refuse a large slice of the tool surface with no confirmation path." Two consequences belong to the requester, not to this design:
   - **The third reason is coupled to Q1.** It holds only while refusal *is* the modern-path
     answer. Rule Q1 for Option R and it calcifies: the modern path refuses, so gating backend
     tools means refusing them. Rule for Option I and it evaporates: a confirmation path exists,
@@ -272,10 +272,16 @@ Nothing that depends on this is implemented, which is the condition a scheduled 
     a substring guess — survive either ruling, and they are the ones that would cost real work.
   - **The gate/cache ordering hazard is unreachable today.** A tool that is both
     destructive-annotated and backend-routing would place the confirmation gate and the
-    idempotency cache in an order this design has not specified. No such tool exists:
-    `gateway_invoke`, the one meta-tool that routes to a backend, is annotated
-    `destructive_hint: Some(false)` (`src/gateway/meta_mcp_tool_defs.rs:156`), so it never reaches
-    the gate. The hazard becomes real on the first tool that is both, and not before.
+    idempotency cache in an order this design has not specified. No such tool exists. Two
+    meta-tools route a caller's arguments to a backend tool, and both are annotated
+    `destructive_hint: Some(false)`: `gateway_invoke` (`src/gateway/meta_mcp_tool_defs.rs:156`)
+    and Code Mode's `gateway_execute`, which the governed set deliberately includes because it
+    reaches every backend tool (`:707` via `write_non_idempotent_open_world_annotations`,
+    `:278-284`). Neither reaches the gate. The one
+    meta-tool that is destructive-annotated is `gateway_kill_server` (`:309` via
+    `destructive_idempotent_annotations`, `:254-263`), and it acts on a backend rather than
+    routing a call to one, so it touches no backend tool's idempotency cache. The hazard becomes
+    real on the first tool that is both, and not before.
 
   Disposal per §P0: **operator decision**. Not fixed here, not filed as a ticket, and not narrowed
   by this design — CONFIRM.3's silence is the requester's to resolve. Naming the ambiguity is the
