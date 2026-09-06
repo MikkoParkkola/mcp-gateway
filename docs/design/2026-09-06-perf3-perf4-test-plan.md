@@ -1,6 +1,6 @@
 # Test plan — NFR.PERF.3 reclamation
 
-Status: draft for dual-vendor review as a PLAN. No test code written.
+Status: reviewed as a PLAN by both vendors, twice. No test code written. Provenance at the foot.
 Design: `docs/design/2026-09-01-nfr-perf3-reclamation.md`, including its 2026-09-06 receipt update
 and the same-day correction that hands the lifetime mechanism to MRTR.8b.
 Depends on: `docs/design/2026-09-06-mrtr-8b-10a-lifetime-and-idempotency-wiring.md` Design A
@@ -86,3 +86,52 @@ Every row states above what makes it fail. The risks specific to this plan:
   `NFR.PERF.4`, including the deletion of the seventeenth tool, the matching
   `benchmarks/public_claims.json` edit, and the operator question gating both.
 
+## Review record
+
+Verdicts below are read from the review ledger rows, never from a run file's trailing text.
+A row counts only with `process_status: ok` and a `material_bytes` matching the payload actually
+sent.
+
+| round | payload | vendor | verdict | ledger row | run |
+|---|---|---|---|---|---|
+| 1 | 11246 B | kimi | `SHIP-WITH-FIXES` | `2026-09-06T07:05:54Z`, `ok` | `synthetic-20260906T070343Z-88057` |
+| 1 | 11246 B | grok | `SHIP-WITH-FIXES` | `2026-09-06T07:10:47Z`, `ok` | `grok-20260906T070343Z-88052` |
+| 2 | 10054 B | kimi | `SHIP-WITH-FIXES` | `2026-09-06T07:26:38Z`, `ok` | `synthetic-20260906T072110Z-3246` |
+| 2 | 10054 B | grok | `SHIP-WITH-FIXES` | `2026-09-06T07:34:15Z`, `ok` | `grok-20260906T072820Z-71115` |
+
+**Two ledger rows in this window are transport failures wearing verdicts, and are excluded.**
+Both satisfy the positive `verdict_bearing` test — a row exists, `process_status` is `ok`, the
+verdict is in the set — while having read nothing, which is exactly why they are named rather
+than left for a later reader to match on `material_bytes` alone:
+
+- `grok`, `2026-09-06T07:18:11Z`, `material_bytes: 11246`, run `grok-20260906T071013Z-16076`. The
+  run died at the preamble; its output is 382 bytes of narration with no finding in it. It also
+  carried the round-1 payload, so its bytes collide with the genuine round-1 grok row above.
+- `kimi`, run `synthetic-20260906T071840Z-85930`, `DO-NOT-SHIP`. The reviewer was handed a
+  filesystem path and has no filesystem, so it reviewed the path string; its single finding says
+  so. `synthetic-review` must receive material on **stdin**.
+
+### What each round changed
+
+Round 1 produced four findings across the two vendors and **every one was answered by deletion**:
+the admission-recovery row, both `NFR.PERF.4` rows, and the 8 192-entry fill. In particular the
+`NFR.PERF.4` finding was closed by removing the criterion from this plan altogether, *not* by the
+earlier ratchet-plus-`#[ignore]` split that the design's own repair note describes — that split
+was the design-round answer to a different finding, and carrying it into the test plan would have
+left two documents specifying one assertion.
+
+Round 2 is the confirmation pass, returned to the vendor that raised each finding. Both vendors
+independently landed on the same defect — row 2 claimed an assertion-level red that was in fact a
+compile error, because `InFlight::len` takes no clock today — which is the strongest evidence in
+this record that it was real. grok reviewed the payload as it stood before the kimi repairs, so
+its first finding and two of its three improvements were already closed by the time its verdict
+was written; its fourth, that row 1 duplicated a committed test, was the only new one and is the
+last repair commit.
+
+### Residual
+
+Neither row's falsifier probe has been run, and neither can be: both are specified against
+`InFlight::guard(now)`, which lands with MRTR.8b. The probes are the only thing making either row
+evidence rather than a green test, so **this plan is not discharged until they run** — owner: this
+slice, trigger: the first commit after MRTR.8b lands. If a probe fails to go red, the row it
+belongs to is not a case and the clause it claims to cover is uncovered.
