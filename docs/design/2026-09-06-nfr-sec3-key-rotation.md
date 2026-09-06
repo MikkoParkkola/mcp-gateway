@@ -6,10 +6,12 @@ state is stale the moment a leg returns, and it was, twice.
 
 | round | leg | verdict | material_sha256 | material_bytes | ledger ts |
 |---|---|---|---|---|---|
-| 1 | glm-5.3 (substituting for kimi) | DO-NOT-SHIP | `3eff9bec…` | 205 | 08:04:40Z |
-| 1 | grok | SHIP-WITH-FIXES | `3eff9bec…` | 205 | 08:10:02Z |
+| 1 | glm-5.3 (substituting for kimi) | DO-NOT-SHIP | `3eff9bec…` — **unattested** | 205 | 08:04:40Z |
+| 1 | grok | SHIP-WITH-FIXES | `3eff9bec…` — **unattested** | 205 | 08:10:02Z |
 | 2 | glm-5.3 | SHIP-WITH-FIXES | `e56ef494…` | 15824 | 08:15:06Z |
 | 2 | grok | SHIP-WITH-FIXES | `7462c16f…` | 15822 | 08:25:19Z |
+| 3 | glm-5.3 | SHIP-WITH-FIXES | `a0888c5a…` | 26954 | 08:52:20Z |
+| 3 | grok | *in flight* | — | — | — |
 
 Keyed on `material_sha256` rather than on the ledger's `head`: `head` pins the branch tip at run
 time and this branch is shared, so every row above carries a `head` belonging to some other
@@ -38,6 +40,14 @@ So the round-2 legs did review the same bytes, and round 1 is weaker than a DO-N
 SHIP-WITH-FIXES on one design make it look: its verdicts may rest on a scope line and a path. Recorded because the fix is mechanical and belongs to the wrappers,
 not here: a digest whose name says `material` and whose input can omit the material is a claim
 the review process makes and cannot support.
+
+Round 3 is the first row whose digest attests what it claims to. The payload was PIPED rather
+than named by a path, so the wrapper staged it and hashed it: 26,954 bytes = the 26,874-byte
+material plus the 79-byte scope argument plus the NUL between them, arithmetic that closes
+exactly. Round 1's 205 is the argument text with nothing staged behind it. Both legs were given
+a byte-identical scope string this time, so when the second row lands, equal digests will mean
+identical material and unequal digests will mean a real difference — which is the property the
+field was always supposed to have and did not.
 
 kimi is not in the table because it produced no row at all: `synthetic-review`'s trusted preamble
 tells the model it may inspect the repository read-only, kimi has no filesystem, and it answered
@@ -243,10 +253,21 @@ deadline; the rotation code must not carry a second copy of the number.
 
 `ContinuationState` lives behind an `Arc` (`src/gateway/meta_mcp/mod.rs:230`) and `open`
 takes `&self`, so the key vector must become interior-mutable — **`std::sync::RwLock`**, taken
-for READ on every `open` and for WRITE only by the rotation inside `mint`. Explicitly NOT the `tokio::sync::Mutex` that
+for READ on every `open` and for WRITE only by the rotation inside `mint`. That split only
+works because the mint counter is NOT inside the lock: `minted` is an `AtomicU64` on the key
+itself, so an ordinary mint increments it under the read guard and only a rotation needs the
+write guard. Left as a plain field it would have made every mint a writer, and the read/write
+split above would have been unimplementable as written — a read guard cannot be upgraded, and
+the workaround is a write lock on the authentication path. Explicitly NOT the `tokio::sync::Mutex` that
 `ConsumedLedger` and `InFlight` use (`:561`, `:668`): those are `async fn`s already, `mint` and
 `open` are not, and copying their lock type would make every call site of both `async`. That is a LOCAL lock change, not a distributed one,
-and it is the whole of the concurrency work.
+and with the counter moved out of the lock it is the whole of the concurrency work.
+
+The lock is `std::sync::RwLock`, so a panic while holding it poisons it. `open` and `mint`
+both take the inner value and continue rather than propagating: the ring is a `Vec` of keys
+and a kid, there is no partial update a panic can leave half-applied — rotation swaps both
+fields under one guard — so a poisoned lock here signals a bug elsewhere, and refusing every
+subsequent continuation would turn that bug into an outage on the authentication path.
 
 The lock must cover `minting_kid` AND `keys` AS ONE UNIT. They are separate fields today
 (`:296-302`) and a rotation that swaps the vector without atomically swapping the minting kid
@@ -258,6 +279,11 @@ Second point, easy to miss: `Keyring` also carries a minted counter and a mint b
 (`:297-301`). **Decided: `minted` resets to 0 on the new key.** The NIST bound the budget
 encodes is per-key, so carrying the counter forward is simply wrong arithmetic — and it strands
 a long-lived replica that exhausted one key with no way to mint again short of a restart. The
+budget can still exhaust before the key is old enough to rotate, and the decision there is
+that `mint` FAILS until the age check rotates it — at most one interval of stalled minting for
+a replica minting fast enough to burn a per-key NIST bound in under an interval. Rotating on
+exhaustion instead would hand the mint rate back to the caller, which is the attacker-triggered
+rotation this design removed. The
 draft framed this as two equal traps, which was wrong: the "unbounded budget via repeated
 rotation" half assumed an attacker-triggerable rotation, and after the revision above there is
 no operator trigger at all. Rotation is age-driven, so the mint rate is bounded by the clock.
@@ -291,8 +317,44 @@ has checkable properties rather than prose:
    with no invariant riding on it.
 3. Kids are unique within the live ring.
 4. `minted` is 0 immediately after a rotation, on every path that rotates — and there is one.
+   It is an `AtomicU64` on the key, not a field of the locked ring, so this is a property of
+   the new key's construction rather than of the write guard.
 5. Only `mint` writes the ring. `open` takes the read lock and returns a refusal reason decided
    by the payload, never by which keys happen to still be retained.
+
+### C6 security pre-analysis — STRIDE short-form
+
+Trust domain: `unauth` at the boundary (a continuation handle arrives from whatever holds it);
+the keyring itself never leaves the process. Crypto: AES-256-GCM, unchanged by this design —
+symmetric only, so T1c is an auto-PASS and no key agreement or signature is introduced.
+Rotation changes the LIFETIME of key material and nothing about the primitive.
+
+| class | does rotation change it | mitigation |
+|---|---|---|
+| Spoofing | yes | a forged or replayed kid resolves to a key that is gone or never existed; `open` refuses `NotAuthentic` at `:489` before any payload is read |
+| Tampering | no | AEAD over the payload with the kid in the AAD; a rewritten kid fails the tag, it does not select a different key quietly |
+| Repudiation | yes, improved | the rotation log line (old kid, new kid, trigger, retained count) is what makes a key ceremony auditable; without it a `NotAuthentic` cluster has no correlating event |
+| Information disclosure | no | nothing new is written to the envelope; `expires_at` was already inside the sealed payload and stays there |
+| Denial of service | yes | a rotation that cannot find a free kid keeps the current key rather than failing its caller; a per-key budget exhausted early stalls minting for at most one interval, bounded above |
+| Elevation of privilege | no | the handle carries no authority beyond resuming its own continuation; rotation does not widen what a valid handle can do |
+
+### DoR conformance at the §P1 gate
+
+Recorded as a block because a gate that has to be reconstructed from prose is a gate nobody
+checks.
+
+- **G6, two alternatives with reasons for rejection** — (a) rewrite the criterion, (b) shared
+  key material; both below, with why.
+- **G8, risks** — kid wrap at 256; the mint budget stranding a long-lived replica; a rotation
+  timer as a second clock against the injected `now`; an `open` that prunes answering a kid
+  miss where the build owes `Expired`. Each is analysed above and each changed the design.
+- **G9, devil's advocate** — the trigger analysis overturned itself: three successive triggers
+  (file watcher, meta-tool, interval task) were each argued for and then dropped, the last one
+  deleted rather than tightened. That record is the devil's-advocate artifact.
+- **C14, protocol first** — no wire change. `VERSION` stays 1, the kid is already carried in
+  the AAD, and no field is added, removed or reinterpreted. A design that needed a schema bump
+  would need it here; this one does not.
+- **T1c, PQC** — symmetric only (AES-256-GCM). Auto-PASS, stated rather than assumed.
 
 ## Rejected alternatives
 
@@ -325,16 +387,18 @@ MRTR.5.
 
 ## Scheduled unknowns
 
-Neither is a caveat; both have a check that can come back "no", and nothing depending on
-them gets built first.
+None is a caveat. Each is either RESOLVED with a recorded answer or DEFERRED with the four
+fields, and nothing depending on an open one gets built first.
 
 | # | question | fail-fast |
 |---|---|---|
-| 1 | Does the criterion's author read "rotatable" as requiring operator-supplied material? If yes, (c) does not meet it and (b) returns. | ASKABLE, not checkable — asked of the team lead in the message accompanying this design. Blocks all four pieces. |
+| 1 | Does the criterion's author read "rotatable" as requiring operator-supplied material? If yes, (c) does not meet it and (b) returns. | **DEFERRED** — askable, not checkable. *Owner:* the team lead. *What resolves it:* the ruling on whether `RELEASE-4.0.0-test-plan.md:301` stands as written, asked and unanswered. *When:* before ANY implementation begins — this design ships as design either way, and no code is written against an unanswered Q1. *If it resolves badly:* option (b) returns and this document becomes the record of why (c) was preferred, not the plan. Blocks all four implementation pieces; blocks nothing in the design itself. |
 | 2 | What is "the max lifetime" as a number, and is it bounded anywhere today? RETAINED is unimplementable without it. | RESOLVED, checkable. `rg CONTINUATION_LIFETIME_SECS src/` — `const CONTINUATION_LIFETIME_SECS: u64 = 300` at `src/protocol/continuation.rs:128`, not a parameter and deliberately not one. The retention window is therefore 300 seconds, a compile-time constant. It changed the design: the retention deadline needs no new config and no new plumbing. |
 | 3 | Can the config-reload path actually REACH the live keyring? The whole ROTATABLE claim, and the D7 WIRED argument with it, rests on this. | RESOLVED, checkable. `rg -n "MetaMcp\|continuation\|ContinuationState" src/config_reload/` — zero hits; `ReloadContext` (`:1371-1388`) holds config path, live config, registry, failsafe, TTL and env, and no gateway handle. The meta-tool caller reaches it for free, the file watcher does not. It changed the design twice: first the "free trigger" claim turned out half true, and then review showed the reload trigger was the wrong choice altogether. Every trigger was eventually dropped: the watcher for its plumbing, then the meta-tool and the interval task in round 2, in favour of an age check on the `now` already injected into `mint`. Written up above rather than left as a table cell. |
 
-Question 1 is load-bearing: a yes reverses the recommendation.
+Question 1 is load-bearing: a yes reverses the recommendation. It is DEFERRED rather than
+resolved because only the requester can settle it, and a design that recorded it as "asked"
+would be claiming a third state the process does not have.
 
 ## The repo already ticketed option (b), and sequenced it after this release
 
