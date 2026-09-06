@@ -182,60 +182,109 @@ Rejected, three reasons, any one sufficient:
    identically — as a success. A capability answering `500` to everything would
    read as perfectly healthy forever.
 
-### O1 — typed rate-limit error from the executor (RECOMMENDED)
+### O1 — typed rate-limit error from the executor, via existing `Error::Http` (RECOMMENDED)
 
-The executor classifies at the point it holds the `StatusCode`
-(`jsonrpc.rs:204`, `params.rs:50`, `graphql.rs:260`) and returns a *typed*
-rate-limit error rather than a formatted one. `BudgetOutcome::of` matches on the
-type; `is_rate_limited` stays where it is for the MCP-backend path, which has no
-typed status to match on.
+Revised from an earlier draft of this option, which proposed a new
+`crate::Error` variant (see the superseded cost discussion this replaced, now
+folded into the two DESIGN EVENTs below). Reuse beats addition here: at each of
+the three format sites (`jsonrpc.rs:204`, `params.rs:50`, `graphql.rs:260`),
+call `response.error_for_status_ref()` *before* the body is consumed. Verified
+at source (reqwest 0.13.4, `src/async_impl/response.rs:409`): on `Err`, the
+returned `reqwest::Error` is built from status, URL and the canonical reason
+phrase only — it borrows nothing from the response body, so the borrow ends
+immediately and `response.text().await` remains legal afterward on the same
+`response` value. That ordering is what makes this option not a patch:
+call `error_for_status_ref()` first, use its `Err` to log the body via
+`tracing::warn!` for diagnostics (the disposition change named below), then
+return `Err(Error::Http(err))` through the `#[from] reqwest::Error` conversion
+that already exists (`src/error.rs:168-170`). Classification reuses
+`reqwest::Error::status()`, verified to return `Some(code)` on a status error
+(`reqwest src/error.rs:180`). `BudgetOutcome::of` matches on `Error::Http`'s
+status; `is_rate_limited` stays where it is for the MCP-backend path, which has
+no typed status to match on.
 
 Eliminates rather than patches: after it, the finding "the exclusion depends on
 message text" cannot be stated of the capability path. It also gives
-`Retry-After` a place to live if anything later wants it.
+`Retry-After` a place to live if anything later wants it (unchanged from the
+superseded draft).
 
-Cost, stated plainly and checked rather than assumed (section 6): `crate::Error`
-is exported at the crate root (`src/lib.rs:94`), is **not** `#[non_exhaustive]`
-(`src/error.rs:14-15`), and carries **no** rate-limit-shaped variant today — the
-nearest precedent is `Forbidden`, which does carry a typed HTTP `status`. So O1
-adds a public symbol and breaks any downstream exhaustive `match`. That is D28
-(API surface counted) plus D2 (breaking → approved and migrated); it is **not**
-`VISIBILITY-IS-DESIGN`, which governs widening a field or a function, not adding
-a variant to an already-public enum. Citing the wrong gate matters here, because
-one is an ask and the other is a review.
+Cost, checked rather than assumed (section 6): reusing `Error::Http` adds no
+public symbol (no D28) and breaks no exhaustive downstream `match` (no D2) —
+`Http` already exists at the crate root (`src/lib.rs:94`, `src/error.rs`) and
+downstream code that matches it today keeps matching it. That removes the
+breaking-change cost the earlier draft carried. What it does **not** remove is
+the obligation to name what changes, per §P3: two DESIGN EVENTs, both required
+by team-lead review, are recorded here rather than left implicit.
 
-Two things make the cost smaller than it reads. `to_rpc_code` already ends in a
-`_ =>` arm, so the crate's own match sites do not all need touching. And 4.0.0 is
-a major release in preparation — a breaking enum change is never cheaper than
-during one. Neither disposes of the question of whether 4.0.0's public surface is
-still open to additions; only the requester can answer that, so it stays an open
-question in section 6.
+**DESIGN EVENT 1 — diagnostic disposition changes.** Today the three format
+sites embed the (truncated) response body directly in the formatted error's
+`Display` string; under O1 the body moves to a `tracing::warn!` log line and
+the returned `Error::Http`'s `Display` carries only status, URL and reason
+phrase (reqwest's own formatting). An API consumer reading the error text sees
+less; an operator reading logs sees the same information at a different level.
+Named because it is a real observable-contract change even though it breaks no
+type.
+
+**DESIGN EVENT 2 — the JSON-RPC error code an MCP client sees changes.**
+`to_rpc_code` (`src/error.rs:193-209`) gives `Protocol(_)` its own arm,
+`-32600`; `Error::Http` has no explicit arm and falls through the trailing
+`_ => -32603`. Confirmed via `rg` that nothing in the capability path
+constructs `Error::Http` today — this option is the first thing to route a
+capability-originated error through it. Net effect: a capability `429` that
+today would (under the *current*, unfixed text-matching path) map to whatever
+the formatted-string route produces changes, under O1, to `-32603`
+(internal error) rather than `-32600` (invalid request/protocol). This is a
+genuine widening of what `Error::Http` means — until now it represented only
+transport failures (a request that never got a response); O1 makes it also
+represent a capability backend's HTTP status. No new symbol, no broken match,
+but a real semantic reuse, named rather than left to be discovered by whoever
+next greps `Error::Http`'s call sites.
+
+Checked and closed, not left as risk: reusing `Error::Http` for capability
+status errors introduces **no retry-storm risk**. `is_retryable`
+(`src/chains/retry.rs:179`, `src/failsafe/retry.rs:96`) treats `Error::Http(_)`
+as retryable, but it is consulted only by `failsafe::retry::with_retry` (sole
+caller `src/backend/ops.rs:218`, the MCP-backend path) and
+`chains::retry::retry_step` (sole caller `src/chains/executor.rs:175`).
+Capability's own retry logic, `send_with_retry`
+(`src/capability/executor/mod.rs:111-160`), is self-contained and never calls
+`is_retryable` — so an `Error::Http` returned from the capability path cannot
+trigger a retry it would not already have triggered under the current text-
+matching behaviour. See the new Resolved rows in section 6.
+
+4.0.0 is a major release in preparation, but that is no longer the load-bearing
+fact here — O1 as revised needs no breaking-change window, because it adds no
+public symbol and breaks no match. What still needs the requester's sign-off is
+narrower: the two DESIGN EVENTs above, not an enum-widening ask. See the revised
+section 6.
 
 ### O1b — the same classification, carried crate-internally (rejected)
 
-Named because O1's whole cost is the public enum, and both ends of *this*
-wire — the meta-MCP invoke path's classification hookup, the only wire O1
-touches — are in-crate: the status is known at `executor/jsonrpc.rs:204` and
-consumed at `invoke.rs:1384`. That is narrower than "nothing here is
-externally reachable": §1 discloses a separate, out-of-scope path where a
-library consumer calls `CapabilityBackend`/`CapabilityExecutor`'s public API
-directly, and this section's in-crate claim is not about that path — it is
-unaffected by O1b either way, since O1b never proposes changing those
-signatures. If the classification could ride a crate-internal carrier, the
-open question in section 6 would not exist. It cannot, for a language reason and
-a signature reason.
+Revised alongside O1: the question this section answers is no longer "can we
+avoid O1's public-enum cost", because reusing `Error::Http` means O1 no longer
+has one. What remains is narrower and still worth asking — could the
+classification avoid `crate::Error` entirely and stay on a purely
+crate-internal carrier, so that neither DESIGN EVENT named in O1 need apply?
+Both ends of *this* wire — the meta-MCP invoke path's classification hookup,
+the only wire O1 touches — are in-crate: the status is known at
+`executor/jsonrpc.rs:204` and consumed at `invoke.rs:1384`. That is narrower
+than "nothing here is externally reachable": §1 discloses a separate,
+out-of-scope path where a library consumer calls
+`CapabilityBackend`/`CapabilityExecutor`'s public API directly, and this
+section's in-crate claim is not about that path — it is unaffected by O1b
+either way, since O1b never proposes changing those signatures.
 
-Rust has no per-variant visibility: a variant of a `pub` enum, and its fields, are
-as public as the enum. There is no `pub(crate)` variant of `crate::Error` to add.
-
-The alternative is a capability-layer error type carried up to the dispatch site
-instead. The carrier between the two ends is the return type of
+Rejected for a signature reason, not a language one this time: the carrier
+between the two ends is the return type of
 `CapabilityBackend::call_tool_with_context` (`src/capability/backend.rs:390`) —
-`pub`, on a `pub` type, in a `pub` module (`src/lib.rs:36`). Changing it is the
-same public-API gate as O1, applied to a signature every external caller uses
-rather than to one added variant, and a converting boundary that flattens the type
-back to `crate::Error` before `BudgetOutcome::of` sees it puts the information
-loss back exactly where it is today. Same gate, worse shape.
+`pub`, on a `pub` type, in a `pub` module (`src/lib.rs:36`). A bespoke
+crate-internal carrier would still have to cross that `pub` boundary somehow —
+either as a new field/variant on an already-`pub` type (D28 again, the exact
+cost O1 now avoids by reusing `Error::Http`), or by converting to
+`crate::Error` at the boundary, which is what O1 already does and does not
+need a second carrier type to do. O1b buys nothing O1 does not already have,
+and adds a second representation of the same status alongside `Error::Http` —
+the two-representations-can-disagree defect O3 is rejected for below.
 
 This is not O3. O3's defect is two representations that can disagree; O1b is one
 representation in the wrong place.
@@ -308,13 +357,20 @@ text predicate because a transport error there genuinely has no typed status.
   enters at the shared predicate instead (§7, item 1). What is asserted is therefore
   the predicate leg; the `BudgetOutcome` leg of the trace stays read off the
   source. This is the part that must land regardless of O1.
-- **RL.10 — property ("needs no text"):** ABSENT until O1 lands. It is a breaking
-  public API change (D2, D28), gated on an ask (section 6) — and O1b establishes
-  there is no crate-internal way around that gate.
-- If the ask is refused, RL.10's property half is recorded as OUT-OF-SCOPE-FOR-4.0.0
-  with its reason — public error-enum widening declined — and G1 becomes a named
-  residual risk carrying O2 as its mitigation. It is not silently downgraded to
-  the weak reading, and the ledger row says which half is met.
+- **RL.10 — property ("needs no text"):** MET once O1 lands. Revised from an
+  earlier draft that recorded this as ABSENT pending a breaking-API ask: O1 as
+  reused (via `error_for_status_ref()` into the existing `Error::Http`, not a
+  new variant) adds no public symbol and breaks no exhaustive match, so there
+  is no D2/D28 gate to clear and O1b's "no crate-internal route around the
+  gate" finding no longer has a gate to be about — recorded below as CLOSED,
+  not silently dropped. What O1 still owes, per §P3, is naming its two DESIGN
+  EVENTs (section 4): the diagnostic-disposition change and the JSON-RPC-code
+  change. Both are named there and in the Resolved table below; neither
+  blocks implementation, because neither is a public-surface change.
+- The "if the ask is refused" branch this section previously carried is now
+  moot for the same reason and is closed explicitly rather than left to lapse:
+  there is no enum-widening ask left to refuse. See the Deferred table's
+  closure note in section 6.
 
 ## 6. Open questions — scheduled, per §P1
 
@@ -326,23 +382,24 @@ text predicate because a transport error there genuinely has no typed status.
 | Does the 500-char body truncation break the exclusion? | read `jsonrpc.rs:204-207`, `params.rs:50-54`, `graphql.rs:260-263` | status precedes the truncated body in all three | RL.10 under the *weak* reading passes today — which is why section 3 had to settle the reading rather than assume it |
 | Is there a capability circuit breaker a `429` could trip? | `rg failsafe\|Failsafe src/capability/`, read `executor/mod.rs:65` | none; bare `HealthTracker` only | removed "must not trip the breaker" from the design as vacuous, in one line rather than a section |
 | Does capability transport health mis-count a `429`? | read `send_with_retry` `executor/mod.rs:112-158` | any HTTP status records success | no change needed at the transport layer |
-| Is `crate::Error` `#[non_exhaustive]`? If it were, O1 would add no breaking change and need no ask. | read `src/error.rs:14-15`, `rg non_exhaustive src/error.rs src/lib.rs` | no attribute; the enum is plain `pub enum Error` | the ask in the deferred row survives — but it is D2/D28, not `VISIBILITY-IS-DESIGN`, and the wrong citation is corrected in O1 |
-| Does a rate-limit-shaped variant already exist, so that O1 would only construct an existing symbol differently? | read all 22 variants of `src/error.rs:15-179` | none; the nearest precedent is `Forbidden`, which does carry a typed HTTP `status` | O1 genuinely adds a public symbol — and `Forbidden` shows the enum already accepts a typed-status variant, so the shape is not novel |
-| Can the classification avoid the public enum entirely by staying crate-internal? | read `CapabilityBackend::call_tool_with_context` `src/capability/backend.rs:390`, `pub mod capability` `src/lib.rs:36`, plus the Rust rule that variants inherit enum visibility | no: no `pub(crate)` variant exists as a language feature, and the alternative carrier is an equally public signature | added O1b, rejected on the record, so the ask cannot be dodged by a route nobody had checked |
+| Is `crate::Error` `#[non_exhaustive]`? If it were, O1 would add no breaking change and need no ask. | read `src/error.rs:14-15`, `rg non_exhaustive src/error.rs src/lib.rs` | no attribute; the enum is plain `pub enum Error` | **superseded, closed not dropped:** this check was scoped to the earlier new-variant draft of O1. The revised O1 reuses `Error::Http` and never adds a variant, so `#[non_exhaustive]` is no longer load-bearing for this option — recorded so the question does not silently reappear as if never asked |
+| Does a rate-limit-shaped variant already exist, so that O1 would only construct an existing symbol differently? | read all 22 variants of `src/error.rs:15-179` | none; the nearest precedent is `Forbidden`, which does carry a typed HTTP `status` | **superseded, closed not dropped:** answered a question the revised O1 no longer asks — it reuses `Error::Http`, an existing transport-error variant, rather than adding a new one |
+| Can the classification avoid the public enum entirely by staying crate-internal? | read `CapabilityBackend::call_tool_with_context` `src/capability/backend.rs:390`, `pub mod capability` `src/lib.rs:36`, plus the Rust rule that variants inherit enum visibility | no: no `pub(crate)` variant exists as a language feature, and the alternative carrier is an equally public signature | O1b's conclusion (no gate-free crate-internal route) is retained as the answer to a narrower, still-live question: O1b now compares against O1's *actual* mechanism (reusing `Error::Http`) rather than a hypothetical new variant, and still finds no cheaper carrier — see O1b as revised |
+| Does `error_for_status_ref()` lose the response body needed for diagnostics? | read reqwest 0.13.4 source `src/async_impl/response.rs:409`, `src/error.rs:180` | the returned error is built from status/URL/reason only, borrowing nothing from the body; the borrow ends immediately so `response.text().await` remains legal after | confirms O1's mechanism is sound: call `error_for_status_ref()` first, log the body via `tracing::warn!`, then convert — no diagnostic information is silently lost, it moves to a log line (DESIGN EVENT 1, section 4) |
+| What JSON-RPC code does a capability `429` surface as, once it is carried as `Error::Http`? | read `to_rpc_code` `src/error.rs:193-209`; `rg` confirms nothing in the capability path constructs `Error::Http` today | `Protocol(_)` has its own arm (`-32600`); `Http` has none and falls through `_ => -32603` | DESIGN EVENT 2 (section 4): a capability `429` now surfaces as `-32603` rather than `-32600` — named explicitly rather than left for a client integrator to discover |
+| Does reusing `Error::Http` on the capability path create a retry-storm risk? | read `is_retryable` `src/chains/retry.rs:179` and `src/failsafe/retry.rs:96`; traced their sole callers `src/backend/ops.rs:218` (MCP-backend) and `src/chains/executor.rs:175`; read `send_with_retry` `src/capability/executor/mod.rs:111-160` | `is_retryable` treats `Error::Http` as retryable, but capability's own retry logic never calls `is_retryable` — it is self-contained | no risk: an `Error::Http` returned from the capability path cannot trigger a retry it would not already trigger under today's behaviour; closed rather than left as an unstated risk |
 
-### Deferred (must be asked before O1 is implemented)
+### Deferred
 
-| field | value |
-|---|---|
-| question | Is 4.0.0's public API still open to a breaking addition — specifically, may `crate::Error` gain a typed rate-limit variant? It is a public enum without `#[non_exhaustive]`, so a new variant breaks downstream exhaustive matches: D2 (breaking → approved and migrated) and D28 (surface counted). Not `VISIBILITY-IS-DESIGN`, which governs fields and functions. |
-| owner | GH [#475](https://github.com/MikkoParkkola/mcp-gateway/issues/475) / [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) — the operator decides, tracked on these tickets, not a bare role reference |
-| what resolves it | a yes/no on the enum widening, recorded in this document. The counter-argument to record with it: a major release is the cheapest moment such a change ever gets, and `to_rpc_code`'s `_ =>` arm means the crate's own match sites mostly do not move |
-| migration path (D2) | if approved: downstream exhaustive `match crate::Error` sites gain one new arm, or already fall through a `_` wildcard — no behavioural change, since the new variant is only ever constructed by O1's own code path. Called out explicitly in the 4.0.0 release notes alongside the enum addition, so a consumer's own CI catches it at compile time rather than at runtime |
-| when | before any implementation of O1 begins; the RL.10 behavioural pin does not wait on it |
-| if it resolves badly | O2 as mitigation, RL.10's property half recorded OUT-OF-SCOPE-FOR-4.0.0 with the reason, G1 as named residual risk (section 5) |
-
-Nothing depending on this answer is implemented. The behavioural pin closing G2
-does not depend on it.
+None. The earlier deferred question — "may `crate::Error` gain a typed
+rate-limit variant, given D2/D28" — is **closed, not dropped, because it is
+moot**: the revised O1 (section 4) reuses the existing `Error::Http` variant
+via `error_for_status_ref()` instead of adding one, so there is no enum
+widening left to ask the operator to approve. This closes what was tracked as
+finding #4 (moot given finding #2's O1 revision) explicitly, rather than
+letting it lapse silently when O1 changed underneath it. What O1 still owes —
+naming its two DESIGN EVENTs — is not a deferred question; both are named in
+section 4 and recorded as Resolved above, and neither blocks implementation.
 
 ## 7. What lands next, in order
 
@@ -420,7 +477,9 @@ does not depend on it.
    error. Restore verified by re-running the test to PASS, not by `git status`.
 2. The ledger correction at `RELEASE-4.0.0-criteria-status.md:393` — the ABSENT
    line's stated reason is false and the row splits into behaviour and property.
-3. O1, gated on section 6.
+3. O1 — no longer gated on section 6 (that gate is closed, moot; see the
+   Deferred-table closure note). Implementation proceeds directly; its two
+   named DESIGN EVENTs (section 4) travel with it into §P4 review.
 
 ## 8. Reviews
 
