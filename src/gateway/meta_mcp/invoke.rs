@@ -1824,9 +1824,7 @@ impl MetaMcp {
         // tools/list after a successful invocation so the LLM can call it
         // directly next time without going through gateway_invoke.
         #[cfg(feature = "spec-preview")]
-        if let Some(sid) = session_id {
-            self.promote_tool_for_session(sid, &tool_key);
-        }
+        self.promote_tool_for_session(session_id, &tool_key);
 
         // === POST-INVOKE: Transparency log (issue #133, D3) ==================
         //

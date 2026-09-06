@@ -225,7 +225,21 @@ impl MetaMcp {
     /// evicted (FIFO) to make room.
     ///
     /// The `tool_key` must be formatted as `"server:tool_name"`.
-    pub(super) fn promote_tool_for_session(&self, session_id: &str, tool_key: &str) {
+    ///
+    /// A caller with no session promotes nothing. The `session_key` filter is
+    /// here rather than at the invoke site so the accessor and the mutator
+    /// agree on what a session is: the empty id a modern sessionless
+    /// connection presents is shared by every such connection, so a promotion
+    /// written under it would surface in every other one's tool list
+    /// (`MIK-7272.ORDER.2`). Silent by design — promotion is an invisible side
+    /// effect of a successful invoke, so declining it tells the caller nothing
+    /// it was promised, unlike the `gateway_set_state` write this reasoning
+    /// does not extend to.
+    pub(super) fn promote_tool_for_session(&self, session_id: Option<&str>, tool_key: &str) {
+        let Some(session_id) = super::session_key(session_id) else {
+            return;
+        };
+
         let mut entry = self
             .session_promoted
             .entry(session_id.to_string())
@@ -460,7 +474,7 @@ mod tests {
         // GIVEN: MetaMcp and a session
         let m = meta();
         // WHEN: a tool is promoted
-        m.promote_tool_for_session("sess-1", "brave:brave_web_search");
+        m.promote_tool_for_session(Some("sess-1"), "brave:brave_web_search");
         // THEN: session_promoted contains the key
         let entry = m.session_promoted.get("sess-1").unwrap();
         assert!(entry.contains(&"brave:brave_web_search".to_string()));
@@ -471,8 +485,8 @@ mod tests {
         // GIVEN: MetaMcp
         let m = meta();
         // WHEN: same tool promoted twice
-        m.promote_tool_for_session("sess-2", "ecb:exchange_rates");
-        m.promote_tool_for_session("sess-2", "ecb:exchange_rates");
+        m.promote_tool_for_session(Some("sess-2"), "ecb:exchange_rates");
+        m.promote_tool_for_session(Some("sess-2"), "ecb:exchange_rates");
         // THEN: only one entry stored
         let entry = m.session_promoted.get("sess-2").unwrap();
         assert_eq!(entry.len(), 1);
@@ -483,10 +497,10 @@ mod tests {
         // GIVEN: session already at MAX_PROMOTED_PER_SESSION
         let m = meta();
         for i in 0..MAX_PROMOTED_PER_SESSION {
-            m.promote_tool_for_session("sess-3", &format!("server:tool_{i}"));
+            m.promote_tool_for_session(Some("sess-3"), &format!("server:tool_{i}"));
         }
         // WHEN: one more promotion
-        m.promote_tool_for_session("sess-3", "server:new_tool");
+        m.promote_tool_for_session(Some("sess-3"), "server:new_tool");
         // THEN: total stays at MAX_PROMOTED_PER_SESSION and oldest is gone
         let entry = m.session_promoted.get("sess-3").unwrap();
         assert_eq!(entry.len(), MAX_PROMOTED_PER_SESSION);
@@ -504,7 +518,7 @@ mod tests {
     fn clear_session_promoted_removes_session_entry() {
         // GIVEN: session with promoted tools
         let m = meta();
-        m.promote_tool_for_session("sess-4", "brave:brave_web_search");
+        m.promote_tool_for_session(Some("sess-4"), "brave:brave_web_search");
         // WHEN: clear is called
         m.clear_session_promoted("sess-4");
         // THEN: session is gone

@@ -1015,14 +1015,21 @@ impl MetaMcp {
     /// against the backend cache; entries whose backend has gone offline (cache empty)
     /// are silently omitted.
     ///
-    /// Returns an empty `Vec` when no session ID is provided or when the session has
-    /// no promoted tools.
+    /// Returns an empty `Vec` when the caller has no session — no id, or the
+    /// empty id a modern sessionless connection presents (`session_key`) — and
+    /// when the session has no promoted tools.
+    ///
+    /// The `session_key` filter lives here rather than at the three call sites
+    /// (`mod.rs:1266`, `mod.rs:1330`, `spec_preview.rs:112`) so that a future
+    /// list-shaping caller inherits it: promotions written under the shared
+    /// empty key would otherwise be read back by every other modern connection
+    /// (`MIK-7272.ORDER.2`).
     #[cfg(feature = "spec-preview")]
     pub(super) fn promoted_tools_for_session(
         &self,
         session_id: Option<&str>,
     ) -> Vec<crate::protocol::Tool> {
-        let Some(sid) = session_id else {
+        let Some(sid) = session_key(session_id) else {
             return Vec::new();
         };
         let Some(entry) = self.session_promoted.get(sid) else {
