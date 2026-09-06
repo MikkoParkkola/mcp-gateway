@@ -18,6 +18,13 @@ three times. The count is not a floor for coverage; it remains a floor for sever
 records what its evidence reached, not everything that could be wrong. Each group's disagreements with earlier documents are logged under
 `audit-notes/`.
 
+Editing this file concurrently: several sessions work this release at once, and a full-file write
+loses whichever row a peer wrote last. Change one row at a time, in place — find it with
+`rg -n '^\| <ID> '` and edit that line. Never read the file whole to rewrite it whole, and never
+`git add -A`; commit with `git commit -o` naming this path explicitly. An agent whose job is a
+source or test change should not touch this file at all: it should hand its replacement status and
+evidence text back to whoever is serialising the writes.
+
 Method: every criterion below carries a stable ID (`MIK-NNNN.COMPONENT.N`) pulled from
 `docs/requirements/RELEASE-4.0.0-requirements.md`. Status was determined by reading `src/` and
 `tests/` directly — never inferred from a requirements/test-plan/gap-plan document's own claim.
