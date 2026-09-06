@@ -432,10 +432,10 @@ which is why both travel in one row rather than becoming a second policy.
 
 | field | value |
 |---|---|
-| owner | the session-store work package, not this change; the team lead places it |
+| owner | the team lead, accountable now, until they name someone in the session-store work package. Not this change. |
 | what would resolve it | a measurement: session-map size against a client population that connects and never issues `DELETE` |
 | when | before 4.0.0 ships — the growth is unbounded in time, and this is the first release that keeps per-session declarations at all |
-| if it resolves badly | an idle-timeout reaper on the session map; a memory bound, not a permission bound |
+| if it resolves badly | an idle-timeout reaper on the session map. The same table row carries the read-access residual: a declaration is readable by whoever presents the session id, which is the gateway's existing session-state property and not new here; if that is judged unacceptable, server-minted unguessable session ids are the fix, and they belong to the session store, not to this change. |
 
 Nothing in MRTR.7a or 7b depends on the answer, which is what makes deferring
 it legitimate rather than convenient. The
@@ -737,7 +737,7 @@ to MRTR.9. That narrows what the bridge is FOR by removing a declared capability
 from the answerable set, which is a requester decision, not an engineering one
 (repair protocol, step 0). Not taken.
 
-### 4. MRTR.7b's accounting blocker, measured: eight emission points around one dispatch
+### 4. MRTR.7b's accounting blocker: eight emission points around one dispatch, read at source (I)
 
 The 7b criterion names two blockers. The first is already recorded as a design
 event at line 546 (`BackendInvoker::invoke` returns a bare `Value`, so a
