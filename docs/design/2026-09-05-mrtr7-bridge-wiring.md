@@ -277,15 +277,25 @@ exist today: replacement on `initialize`, and session `DELETE`
 (`handlers.rs:354`). There is no disconnect hook and no reaper, and an earlier
 revision of this paragraph claimed both.
 
-A session id is client-supplied and reusable, so that alone would leave a
-declaration readable by a connection that never made it — inherited permission.
-The window is closed where it opens rather than guarded downstream: a stored
-declaration is readable only by the connection generation that wrote it. The
-gateway mints the generation; `initialize` bumps it. A client that reuses a
-session id without a fresh `initialize` therefore reads no declaration and
-falls to the MRTR.9 refusal — the safe direction, and the same answer it would
-have received before the bridge existed. That is why no reaper is needed for
-CORRECTNESS; the memory question is separate and deferred below.
+A session id is client-supplied, and `get_or_create_session_for`
+(`handlers.rs:300`) will CREATE a session under an id the client chose, so the
+question "who may read this declaration" has exactly one honest answer: whoever
+presents the session id.
+
+An earlier revision of this paragraph invented a per-connection generation to
+narrow that. It was removed rather than patched: on HTTP a client reattaches to
+its session on a new connection without re-`initialize` (the SSE attach path at
+`handlers.rs:290-300` is exactly that), so a per-connection generation either
+fail-closes legitimate reattached traffic — the feature dead on the one
+transport this design ships to — or is per-session, which is the rule below
+under a longer name.
+
+The rule, stated once: **a declaration is session-scoped.** Reattaching to a
+session inherits its declaration, because that is what reattaching means. The
+protection is the session id's secrecy, and it is exactly the protection every
+other piece of session state in the gateway already has — this change adds no
+new exposure and inherits the existing one. That inheritance is recorded as a
+deferred unknown below, with the memory question it travels with.
 
 ### Change surface, stated
 
@@ -412,10 +422,11 @@ a line inside a test — the same defect that disqualified `SessionLifecycle`
 four paragraphs down, made while writing the sentence that disqualified it.
 Nothing reaps a session that is never DELETEd, so its declaration lives until
 the process exits. That was parked as a "named residual", which the process
-does not accept as a state. It is now a DEFERRED unknown, and the
-generation-binding above narrows it to memory growth alone — after that repair
-an unreaped session grants no permission, so this is a bound on the map's size
-and not on who may be asked a question.
+does not accept as a state. It is now a DEFERRED unknown, carrying both halves
+of what an unreaped session costs: the map grows without bound, and the
+declaration stays readable to whoever holds the session id. The second half is
+the gateway's existing session-state property, not one this change introduces —
+which is why both travel in one row rather than becoming a second policy.
 
 | field | value |
 |---|---|
@@ -431,14 +442,7 @@ declaration is captured at the `initialize` call site in
 `state.multiplexer`; `handle_initialize` itself does not need to change.
 `ClientSession` stays private.
 
-- **the connection generation**, minted by the gateway when a connection is
-  accepted and bumped by `initialize`, stored beside the declaration and
-  compared on every read. This is a change this design ADDS rather than one it
-  found: it is what makes "a declaration is readable only by the connection
-  that made it" true without a disconnect hook or a reaper, neither of which
-  exists. A read whose generation does not match is treated exactly as an
-  absent declaration — the MRTR.9 refusal — so the fail-closed rule above
-  covers it with no second policy.
+
 
 Two stores were rejected on the same test, applied to each in turn — does
 anything outside a test remove from it. `SessionProfileStore`
@@ -573,7 +577,7 @@ was taken on the reviewer's word.
 | finding | disposal |
 |---|---|
 | the write site is still named twice, HTTP-only in one place and `MetaMcp::handle_initialize` in another (HIGH, CERTAIN) | confirmed. The round-4 repair fixed the stdio paragraph and left two passages carrying the old instruction — the change-surface bullet and the answer recorded against the first scheduled question. Both now name `router/handlers.rs:926`, and the recorded answer says which amendment superseded it rather than being quietly rewritten |
-| the store's owner is not concrete, and the cited stream-end removal does not exist (HIGH, LIKELY) | confirmed, and the citation was worse than the finding said. `streaming.rs:578` is a line inside a test; the only production removal is `handlers.rs:354` on DELETE (I: `rg -n 'remove_session' src/` returns those two and nothing else — one grep is one source, however carefully it was run). Eliminated rather than patched: the declaration becomes a field on `ClientSession`, which the map already holds as its value type, so it cannot drift from or outlive the session and no second keyed map needs removal wiring. The absence of a reaper was first parked as a named residual; it is now a DEFERRED unknown with its four fields, narrowed to memory growth alone by the generation-binding above |
+| the store's owner is not concrete, and the cited stream-end removal does not exist (HIGH, LIKELY) | confirmed, and the citation was worse than the finding said. `streaming.rs:578` is a line inside a test; the only production removal is `handlers.rs:354` on DELETE (I: `rg -n 'remove_session' src/` returns those two and nothing else — one grep is one source, however carefully it was run). Eliminated rather than patched: the declaration becomes a field on `ClientSession`, which the map already holds as its value type, so it cannot drift from or outlive the session and no second keyed map needs removal wiring. The absence of a reaper was first parked as a named residual; it is now a DEFERRED unknown with its four fields, carrying the map-growth bound and the inherited read-access property together |
 | `WIRE.9`'s follow-up call is answered by the settled idempotency entry, so the cache gate never runs (MEDIUM, CERTAIN) | confirmed by reading the row: it reused the key it had just asserted settled, which is exactly the shape `test-plan-honesty` calls a case that cannot fail. The follow-up now carries a different idempotency key and the same response-cache key, and settlement is asserted separately |
 
 Two improvements taken, both in the test plan: `WIRE.10` sat outside the
