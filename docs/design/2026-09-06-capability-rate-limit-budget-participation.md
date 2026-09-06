@@ -226,6 +226,30 @@ less; an operator reading logs sees the same information at a different level.
 Named because it is a real observable-contract change even though it breaks no
 type.
 
+*The analysis above was half an analysis, and the missing half is a security
+regression.* It asked only what the agent-facing text LOSES. What it GAINS is
+the request URL: reqwest's `Display` appends `" for url ({url})"` unconditionally
+whenever the error carries one (verified at source, reqwest 0.13.4
+`src/error.rs:279-281`), and it redacts nothing from that URL — query string
+included. REST capabilities put resolved secrets in query parameters:
+`substitute_string` (`params.rs:164`) expands `{keychain.X}` and `{env.VAR}`,
+and `substitute_params` (`:172`) turns the result into query pairs. So a naive
+O1 would take an API key that today never leaves the process and hand it to the
+calling agent inside an error string, at every non-success status, for every
+REST capability that authenticates by query parameter.
+
+RULING: **the reqwest `Display` never reaches an agent.** Wherever a capability
+`Error::Http` is rendered for a client, the text is built from the status alone
+— `"capability backend returned HTTP {status}"` — and reqwest's full `Display`,
+URL and all, goes only to the `tracing::warn!` line beside the body. This is a
+constraint on O1's implementation, not a change of carrier: the typed status is
+still `reqwest::Error::status()`, and classification is unaffected. It is
+recorded here rather than left to the implementer because "just return the
+error" is the obvious thing to write and it is the thing that leaks.
+
+Raised by the Kimi K3 leg of the §12 dual-vendor review, 2026-09-06, as its
+only HIGH finding; confirmed at source before acceptance.
+
 **DESIGN EVENT 2 — the JSON-RPC error code an MCP client sees changes, and
 this was disclosed, then ruled on — RESOLVED, not accepted-as-consequence.**
 `to_rpc_code` (`src/error.rs:193-209`) gives `Protocol(_)` its own arm,
