@@ -13,17 +13,37 @@ state is stale the moment a leg returns, and it was, twice.
 | 3 | glm-5.3 | SHIP-WITH-FIXES | `a0888c5a…` | 26954 | 08:52:20Z |
 | 3 | grok | SHIP-WITH-FIXES | `a0888c5a…` | 26954 | 08:56:18Z |
 | 3c | grok — closure re-check | **SHIP** | `0ea50eb2…` | 56223 | 09:13:55Z |
+| 3d | glm-5.3 — closure re-check | SHIP-WITH-FIXES | `a16ca238…` | 64007 | 09:24:45Z |
 
-Row 3c is the closure re-check, and it goes to GROK because grok raised the round-3
-findings. The repair protocol sends closure back to the FINDER, not to a fresh vendor: a
-vendor that never raised a finding judges its materiality on its own line and re-opens what
-it never asked about, which is a round generator inside the closure rule. Narrow mandate,
-repair commits only, and it returned SHIP — round-3 F1 (interval, clock origin, successor
-rule), F2 (Q1 DEFERRED with its four fields) and F3 (the C6 STRIDE table) are CLOSED. Three
-residuals came back with it, all verified at source before repair and all repaired in the
-commit that carries this row: the STRIDE spoofing row named the wrong error variant, the
-startup key had no clock to be stamped from, and the no-successor fallback was justified by
-an operator reload that round 2 deleted.
+Rows 3c and 3d are closure re-checks, and there are TWO of them because both legs raised
+findings in round 3 and the repair protocol sends closure back to the FINDER. Not to a fresh
+vendor: a vendor that never raised a finding judges its materiality on its own line and
+re-opens what it never asked about, which is a round generator inside the closure rule. One
+consequence, easy to miss and missed here for one commit: closure is PER LEG. A single SHIP
+closes the findings of the vendor that gave it and says nothing about the other leg's.
+
+Row 3c is grok's, narrow mandate, repair commits only, and it returned SHIP: grok's F1
+(interval, clock origin, successor rule), F2 (Q1 DEFERRED with its four fields) and F3 (the
+C6 STRIDE table) are CLOSED. Three residuals came back with it, all verified at source
+before repair: the STRIDE spoofing row named the wrong error variant, the startup key had no
+clock to be stamped from, and the no-successor fallback was justified by an operator reload
+that round 2 deleted.
+
+Row 3d is the GLM leg's, on ITS four round-3 findings, which are different findings under
+the same numbers: the per-mint counter writing under a read lock, the missing C6 STRIDE
+table, Q1 labelled with a third state the design's own rule forbids, and the round-1 rows
+presenting an unattested digest as a verdict. All four were repaired in `0532d2f0`, whose
+subject names them; the closure row is what records that a reviewer, not the author, agrees
+they are closed. It returned SHIP-WITH-FIXES: all four closed in substance, one LOW
+finding, and that finding was THIS PARAGRAPH in its previous form — the closure narrative
+named grok's three items as though they were the round's findings and dropped the
+concurrency one, the finding that forced the `AtomicU64`, out of the record of its own
+closure. Two improvements came with it, both adopted below: the `NotAuthentic` sources the
+rotation log line correlates with, and the increment discipline for the counter.
+
+The 3d digest closes the same way rows 2 and 3 do: 63,910 bytes submitted + 96 bytes of
+scope string + one NUL = 64,007, the `material_bytes` in the row. An arithmetic that does
+not close means the row is not the review you think you are reading.
 
 Keyed on `material_sha256` rather than on the ledger's `head`: `head` pins the branch tip at run
 time and this branch is shared, so every row above carries a `head` belonging to some other
@@ -283,6 +303,21 @@ the workaround is a write lock on the authentication path. Explicitly NOT the `t
 `open` are not, and copying their lock type would make every call site of both `async`. That is a LOCAL lock change, not a distributed one,
 and with the counter moved out of the lock it is the whole of the concurrency work.
 
+The counter is incremented with `fetch_add(1, Relaxed)` and the check reads the value that
+`fetch_add` RETURNS — never a load, then a comparison, then a separate add. The returned
+value is a slot no other mint can also draw, so exactly `budget` mints get a sealing slot and
+every later one is refused. Load-check-add lets every mint in a racing set read the same
+under-budget value and all seal, so the key seals `budget + N - 1` envelopes for a racing set
+of N — a bound violated by however many threads happened to be in flight is not a bound.
+
+Drawing the slot is NOT a rotation trigger, and the distinction matters more than it looks: a
+mint that draws a slot past the budget FAILS, it does not rotate. Rotation is age-driven and
+nothing else, for the reason given two sections down — a caller who can exhaust a key can
+otherwise clock the ceremony. The counter therefore keeps climbing past the budget while a
+key is stalled, which is harmless because the comparison is `>=` and the counter dies with the
+key. `Relaxed` is sufficient because the counter orders nothing: the write guard is what
+publishes the new key.
+
 The lock is `std::sync::RwLock`, so a panic while holding it poisons it. `open` and `mint`
 both take the inner value and continue rather than propagating: the ring is a `Vec` of keys
 and a kid, there is no partial update a panic can leave half-applied — rotation swaps both
@@ -308,7 +343,10 @@ encodes is per-key, so carrying the counter forward is simply wrong arithmetic �
 a long-lived replica that exhausted one key with no way to mint again short of a restart. The
 budget can still exhaust before the key is old enough to rotate, and the decision there is
 that `mint` FAILS until the age check rotates it — at most one interval of stalled minting for
-a replica minting fast enough to burn a per-key NIST bound in under an interval. Rotating on
+a replica minting fast enough to burn a per-key NIST bound in under an interval. That stall
+begins at the exact envelope the bound names, not somewhere near it, and the `fetch_add`
+discipline above is the whole reason: the refusal is decided by a slot number no two mints
+share. Rotating on
 exhaustion instead would hand the mint rate back to the caller, which is the attacker-triggered
 rotation this design removed. The
 draft framed this as two equal traps, which was wrong: the "unbounded budget via repeated
@@ -357,7 +395,9 @@ failure worth a test.
 The age check is evaluated TWICE: once under the read guard to decide a rotation is due, and
 again under the write guard before performing it. Two mints arriving either side of the
 interval boundary would otherwise both see a due rotation and mint two new keys, burning kid
-space at twice the designed rate. The second check costs one comparison on the rare path.
+space at twice the designed rate. The second check costs one comparison on the rare path, and
+it is what makes "exactly one rotation per racing set" true rather than hoped for. It is the
+only trigger that needs the treatment, because it is the only trigger.
 
 Fourth: `kid` is a `u8`, so the wrapping counter above returns to a value after 256
 rotations. Decided rather than left open, because the successor rule and the interval
@@ -373,8 +413,20 @@ outcome than skipping one rotation.
 Rotation emits one log line — old kid, new kid, retained-key count. It named the trigger
 until round 3 pointed out that every trigger had been deleted: the field's only honest value
 would be the constant "age", so it is a field whose value is a lie by omission. Without it the
-residual `NotAuthentic` failures around a rotation window have no correlating event, and a key
-ceremony with no trail is not auditable.
+`NotAuthentic` failures that DO occur have no correlating event, and a key ceremony with no
+trail is not auditable.
+
+Which failures those are is worth stating, because "residual failures around a rotation
+window" reads like an expectation and this design does not have one. Rotation retires no key
+that can still be presented: an envelope lives 300s and a kid is not reused for
+`256 * 60 = 15,360s`, so no live envelope can meet a rotated-away key. The `NotAuthentic`
+answers an operator will actually see come from elsewhere — an envelope presented to a replica
+that did not mint it, and an envelope presented after the minting process restarted, since the
+startup key comes from the RNG and nothing survives the restart. Neither is caused by
+rotation, and the log line's job is to let an operator rule rotation out in one look. The
+third case is the one worth alerting on: a `NotAuthentic` whose kid IS live and whose envelope
+is inside its lifetime means the wrap bound above was violated, which is the invariant failing,
+not the key ceremony working.
 
 These are the invariants the implementation must hold, written here so the concurrency work
 has checkable properties rather than prose:
@@ -412,7 +464,7 @@ Rotation changes the LIFETIME of key material and nothing about the primitive.
 |---|---|---|
 | Spoofing | yes | a forged or replayed kid resolves to a key that is gone or never existed; `open` refuses `UnknownKey` at `:489` (from `key()`, `:524-530`) before any payload is read. A LIVE kid presented under the wrong key is the other case and answers `NotAuthentic` at `:501`, from the AEAD tag. Two variants, two causes — a spoofing test written from the wrong one asserts nothing, and the NFR.SEC.4 tests already pin `UnknownKey` |
 | Tampering | no | AEAD over the payload with the kid in the AAD; a rewritten kid fails the tag, it does not select a different key quietly |
-| Repudiation | yes, improved | the rotation log line (old kid, new kid, retained count) is what makes a key ceremony auditable; without it a `NotAuthentic` cluster has no correlating event |
+| Repudiation | yes, improved | the rotation log line (old kid, new kid, retained count) is what makes a key ceremony auditable; without it a cross-replica or post-restart `NotAuthentic` cluster has no correlating event, and the operator cannot tell it apart from a rotation gone wrong |
 | Information disclosure | no | nothing new is written to the envelope; `expires_at` was already inside the sealed payload and stays there |
 | Denial of service | yes | a rotation whose successor kid is still live keeps the current key rather than failing its caller; a per-key budget exhausted early stalls minting for at most one interval, bounded above |
 | Elevation of privilege | no | the handle carries no authority beyond resuming its own continuation; rotation does not widen what a valid handle can do |
