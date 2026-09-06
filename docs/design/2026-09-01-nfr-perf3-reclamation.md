@@ -406,8 +406,10 @@ that test needs.
 
 **`NFR.PERF.4` is not this slice's, and the earlier revision that claimed it is withdrawn.**
 `docs/design/2026-09-02-perf4-meta-tool-ceiling.md` already owns the ceiling end to end: the
-mechanism (stop enumerating the seventeenth tool, so it stops counting), the `<= 16` assertion
-against the live filtered configuration, and the breaking-change classification carried there as a
+mechanism (stop enumerating the seventeenth tool, so it stops counting), its assertion against the
+live filtered configuration — named here without its threshold on purpose, because a number
+restated in a document that does not own it drifts the moment the owner rules — and the
+breaking-change classification carried there as a
 properly deferred question with its owner, its trigger and its fallback. Annexing the assertion
 here would have written the same test in two slices while leaving the production change in
 neither — and this slice could not have turned it green, because the deletion it depends on is
