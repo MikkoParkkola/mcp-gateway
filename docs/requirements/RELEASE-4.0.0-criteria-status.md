@@ -8,7 +8,7 @@ stateless path, identity, all 17 MIK-7272 criteria (RESULT/ERROR/ORDER, then SUB
 the MIK-7246 destructive-confirmation gate, and the MIK-7217 discovery/era group. Every requirement ID
 in `RELEASE-4.0.0-requirements.md` now has a row, functional and non-functional alike.
 
-Coverage: 146 criteria, 182 rows, 150 met or non-blocking, 32 blocking.
+Coverage: 146 criteria, 182 rows, 151 met or non-blocking, 31 blocking.
 
 That line is the only place in this file that states totals, and it is not maintained by hand.
 `scripts/release/count-release-criteria.py --check` recounts the blocking column of every table
@@ -410,7 +410,7 @@ Two things this section does not resolve, recorded rather than papered over:
 | GH475.VAL.6 | `window_size` above the upper bound is rejected | MET | test `src/config/tests.rs:1986` | no |
 | GH475.VAL.7 | every VAL row repeats under `capability:` | MET | test `src/config/tests.rs:1995` | no |
 | GH475.VAL.8 | the accepted side of each boundary is accepted | MET | test `src/config/tests.rs:2019` | no |
-| GH475.OBS.1 | each exclusion is observable | UNTESTED | the counter exists: `src/gateway/meta_mcp/invoke.rs:1902` increments `mcp_error_budget_suppressed_total` with `reason = rate_limited` before the exclusion returns. No case asserts it, so the success and ordinary-failure controls the criterion names are unproven. `src/backend/ops.rs:258` is NOT in this criterion population: it is the MCP-backend Failsafe path, which excludes nothing from a capability error budget (no `CapabilityExecutor`, no budget bypassed) and is already observable on both branches under `mcp_backend_requests_total{status="rate_limited"}`. An earlier revision of this row claimed it emits nothing; that was false at source. [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) | yes |
+| GH475.OBS.1 | each exclusion is observable | MET | fixed 2026-09-06 (`5e0a8da2`, GH #481): three cases in `src/gateway/meta_mcp/invoke.rs`, `#[cfg(feature = "metrics")]`, install the process-global Prometheus recorder and scrape `mcp_error_budget_suppressed_total` — `ignored_rate_limit_increments_the_suppressed_counter_exactly_once` (`:4650`) asserts the sole exclusion arm increments the counter to exactly `1`; `success_outcome_does_not_increment_the_suppressed_counter` (`:4664`) and `ordinary_failure_does_not_increment_the_suppressed_counter` (`:4678`) assert the two non-excluding arms leave the label absent from the scrape. Population is derived from the `BudgetOutcome` enum's own arms (`Success`, `Failure`, `IgnoredRateLimit`), not a codebase grep, so a future exclusion variant grows this criterion's population by definition. Falsifier probe (`5e0a8da2` commit message): the `IgnoredRateLimit` branch of `record_error_budget` was forced to never fire; the "exactly once" case failed on the label assertion itself (`left: None, right: Some(1)`), not on a missing counter or empty scrape body, and two pre-existing tests in the same module failed as expected collateral; restored, 9/9 pass. `src/backend/ops.rs:258` remains out of this criterion's population, per the ruling recorded in `0961b990`: it is the MCP-backend Failsafe path, excludes nothing from a capability error budget (no `CapabilityExecutor`, no budget bypassed), and is already observable on both branches under `mcp_backend_requests_total{status="rate_limited"}`. [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481) | no |
 | GH475.OBS.2 | the suppression debug event is emitted | MET | fixed 2026-09-06 (`a8b1158f`, GH #481): `rate_limited_exclusion_emits_a_debug_event` (`src/gateway/meta_mcp/invoke.rs:4540`) installs a scoped `tracing` subscriber, drives `record_error_budget(.., IgnoredRateLimit)`, and asserts exactly one `debug!` fires carrying `server` and `tool`. Residual named in the test itself, not fixed here (out of scope, still tracked at #481): the event still names the tool rather than which `BudgetOutcome` variant excluded it, which holds today only because there is exactly one exclusion arm — a second reason added later would be indistinguishable from the first except by the hardcoded message string. Named formally as a §P3 design event, not just this parenthetical: `docs/design/2026-09-05-error-budget-test-plan.md` §"§P3 design event — GH475.OBS.2's exclusion-reason field" | no |
 | GH475.MIG.1 | the 4.0.0 notice fires below 4.0.0 and writes nothing | MET | test `src/commands/upgrade.rs:1163` starts at stamp `3.9.0` and asserts the config is byte-identical | no |
 | GH475.MIG.2 | it is idempotent, and the first run advances the stamp | MET | already MET (`version-coupled`) before 2026-09-06 and never blocking — it was not one of the rows #481 filed and never a member of blocking-rollup's cluster H. `98bef5d1` (2026-09-06, GH #481) tightened rather than fixed it: the two assertions in `migration_4_0_0_advances_the_stamp_without_touching_the_config` (`src/commands/upgrade.rs:1182`, `:1189`) now pin the literal `"4.0.0"` instead of `env!("CARGO_PKG_VERSION")`, closing the version-coupling gap the row named rather than a blocking defect. The two production reads of the macro (`:465`, `:522`, current-version detection) are correctly left version-agnostic — that comparison is supposed to track the running binary | no |
@@ -428,13 +428,15 @@ never a cluster-H member; `98bef5d1` the same day only tightened its assertion t
 `4.0.0` and did not change its blocking status — see its row above.) `GH475.OBS.2` was blocking
 until the same date, when `a8b1158f` landed its case; it too is recorded MET above, with its
 residual named in the row rather than hidden. `GH475.RL.9` was blocking until the same date, when
-the standalone-axum harness landed (see its row above); it is now recorded MET. #481 stays open
-for the remaining two (`RL.10`, `OBS.1`).
+the standalone-axum harness landed (see its row above); it is now recorded MET. `GH475.OBS.1` was
+blocking until 2026-09-06, when `5e0a8da2` landed the trio scoped by `0961b990`'s ruling; it too is
+recorded MET above. #481 stays open for the remaining one (`RL.10`).
 
 Reading source rather than the plan moved three rows off what the plan says about them.
-`GH475.OBS.1` is recorded UNTESTED, not absent: the plan's "Rows without a case" table still
-gives "there is no suppression counter" as the reason, and it was built at
-`src/gateway/meta_mcp/invoke.rs:1902`. `GH475.OBS.2` was UNTESTED for the same reason ("no debug
+`GH475.OBS.1` was recorded UNTESTED, not absent: the plan's "Rows without a case" table gave
+"there is no suppression counter" as the reason, and it was built at
+`src/gateway/meta_mcp/invoke.rs:1902` before any case exercised it; it is now MET, fixed `5e0a8da2`
+on 2026-09-06. `GH475.OBS.2` was UNTESTED for the same reason ("no debug
 event is emitted"; same line) and is now MET, fixed `a8b1158f` on 2026-09-06. `GH475.CFG.5`'s
 free-failure argument names two setters as callerless at `src/gateway/meta_mcp/mod.rs:961` and
 `:967`; the setters are at `:972` and `:977` and both are called from

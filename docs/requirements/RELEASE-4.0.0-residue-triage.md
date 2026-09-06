@@ -9,10 +9,10 @@ than transcribed from the rollup, and sorted by what each one is waiting on.
 ## How the population was derived
 
 `python3 scripts/release/count-release-criteria.py --check`, verbatim (re-run 2026-09-06,
-after `GH475.RL.9` landed the same day):
+after `GH475.OBS.1` landed the same day):
 
 ```
-Coverage: 146 criteria, 182 rows, 150 met or non-blocking, 32 blocking.
+Coverage: 146 criteria, 182 rows, 151 met or non-blocking, 31 blocking.
 ```
 
 The line this document carried earlier the same day — `146 criteria, 182 rows, 147 met or
@@ -38,6 +38,10 @@ row, bringing the headline to `150`/`32`. The line before that — `146 criteria
 or non-blocking, 44 blocking` — was a transcript of the run made when the document was written,
 not a broken gate: the check passes today, and the ledger has grown sub-rows and closed criteria
 since. A pasted count is a measurement with a date on it, so this one now carries its date.
+`GH475.OBS.1` closed a fourth row the same day (`5e0a8da2`, the trio scoped by the `0961b990`
+ruling), which is what moves the headline from `150`/`32` to `151`/`31` above — cluster H's own
+`rows` cell drops from `2` to `1` (`RL.10` alone), not the residue count below, since `OBS.1` was
+never one of the ten residue rows this section triages.
 
 Every row in `docs/requirements/RELEASE-4.0.0-criteria-status.md` whose blocking cell
 reads `yes` was enumerated, then the seven clusters named in
