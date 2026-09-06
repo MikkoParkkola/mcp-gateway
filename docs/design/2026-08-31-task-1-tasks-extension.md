@@ -877,12 +877,20 @@ run `grok-20260906T063048Z-57193`; kimi, run `synthetic-20260906T063051Z-57626`.
 exited 0. §PA makes the verdict that row and that exit status — this sentence is a pointer to them,
 never the verdict itself.
 
-What is still owed is narrower than it was, and naming it is the point. Three repairs were applied
-*after* those SHIPs and are therefore unreviewed: the conditional-delete requirement moved onto the
-store primitive in piece 2, this file's own boundary paragraph, and the plan's `.17` rewording plus
-the AC file's corrected carve-out. Two of the three are the reviewers' own confirmation findings
-applied verbatim, which is why no fourth round was spent on them; that is a judgement, recorded so
-it can be disagreed with, not a claim that they were reviewed. **No verdict trailer is stamped
+What is still owed is narrower than it was, and naming it is the point. **Four** commits were
+applied *after* those SHIPs and are therefore unreviewed, and they do not share one provenance:
+
+| commit | what | who asked |
+|---|---|---|
+| `ad49fc1b` | conditional delete moved onto piece 2's store primitive | kimi's HIGH finding, **relocated on the team-lead's instruction** — the finding is a vendor's, the placement is not |
+| `a66a65ff` | the AC file's stale scope carve-out | grok, LOW, applied verbatim |
+| `2932de0b` | `.17` rewritten in `.14`'s polling terms; the plan's own review-boundary paragraph | grok SMALL for `.17`; the paragraph is a §P4a re-read of my own |
+| `3f2615d6` | this paragraph | a §P4a re-read of my own |
+
+Two are a reviewer's confirmation finding applied verbatim, which is why no fourth round was spent
+on them. The other two are documents corrected because this change made them untrue, which §P4a
+requires and no reviewer asked for. That distribution is a judgement, recorded so it can be
+disagreed with, not a claim that any of the four were reviewed. **No verdict trailer is stamped
 anywhere in this file**: a trailer would read as covering the file, and what was reviewed is the
 amendment inside it.
 
