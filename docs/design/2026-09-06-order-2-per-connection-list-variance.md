@@ -175,15 +175,26 @@ and the operator ratified it on 2026-08-31 (cluster-b §4.1, recorded in §5), s
 there is nothing left to decide here — (a) is dead rather than merely expensive.
 
 **(c) Extend the `session_key` discipline to the two raw-id stores — RECOMMENDED.**
-Four call sites, two per store, not one:
+Two writes and two reads — but only **after** a duplication is removed, and that
+removal is part of (c) rather than a tidy-up beside it:
 
 | store | write | read |
 |---|---|---|
-| `session_promoted` (§2, feature-gated) | `invoke.rs:1826` | `promoted_tools_for_session`, `mod.rs:1021-1030` |
-| `session_state` (§2b, **default build**) | `mod.rs:1689` | `search.rs:163` |
+| `session_promoted` (§2, feature-gated) | `invoke.rs:1826` | `promoted_tools_for_session`, `mod.rs:1021-1030` — the only reader of the map; `mod.rs:1266`, `mod.rs:1330` and `spec_preview.rs:112` all go through it |
+| `session_state` (§2b, **default build**) | `mod.rs:1689` | `current_search_state`, `search.rs:161-165` — **plus two inlined copies of its body**, `search.rs:581-584` in `list_tools_single_server` and `search.rs:647-650` in `list_tools`, which call `self.session_state.get_state(sid)` directly |
 
-Each is routed through `session_key`, so a sessionless caller neither writes to
-nor reads from either store. A modern connection then sees the unpromoted list
+The promotion store already has one owner per direction. The FSM store does not:
+the same `map_or_else(DEFAULT_STATE, get_state)` expression is written out three
+times, and `session_key` applied only to `current_search_state` would leave
+`gateway_list_tools` reading the shared entry on both of its paths while
+`gateway_search_tools` and code-mode search were fixed — a guard that holds on
+some surfaces and not others, which is the defect this note is about, one level
+down. So (c) folds `search.rs:581-584` and `search.rs:647-650` into
+`current_search_state` first, and then filters inside it. Three sites become one,
+and the finding stops being restatable rather than being patched three times.
+
+Each store is then routed through `session_key` at one read and one write, so a
+sessionless caller neither writes to nor reads from either. A modern connection then sees the unpromoted list
 and the default workflow state, always, and an invoke has no effect on either.
 
 **The cost, stated rather than implied.** On the `session_state` half this is not
@@ -307,6 +318,40 @@ that cannot fail proves nothing.
 | 2b | spec-preview promotion | **B-07** covers the cross-connection half; the same-connection half needs the sequence `tools/list` → successful `gateway_invoke` → `tools/list`, with **both** lists asserted against the same pinned literal and the invoke asserted to have succeeded | integration | Either list differs from the literal, or the invoke did not succeed. Asserting the two observed lists against each other would pass both when the invoke silently failed (nothing was promoted, so nothing changed) and when a regression moved both lists in step; the pinned literal and the invoke assertion are what remove those two green-while-broken paths. This is the direct statement of 2b and fails against §2 today. |
 | 2a | FSM workflow state (§2b) | **new — S-01**: connection A calls `gateway_set_state` to a non-default state; connection B, opened independently, lists tools through the discovery surface and is compared against the pinned default-state literal | integration | B's set differs from the literal — which is what happens today, because A wrote under the key `""` and B reads the same entry. Fails in the **default build**, no feature flag needed. It cannot pass by construction: the fixture must drive the real `gateway_set_state` meta-tool, since the defect is the argument at `mod.rs:1689`, and a fixture calling `SessionStateStore::set_state` directly bypasses the line under test. |
 | 2b | FSM workflow state (§2b) | **new — S-02**: on one modern connection, discovery-surface list → `gateway_set_state` → discovery-surface list, both compared against the same pinned literal | integration | Either list differs from the literal. Note this case's expected behaviour changes under (c): today the second list differs; after (c) the `gateway_set_state` call is *refused*, and the case must assert the refusal **and** the unchanged lists, exactly as B-02 does for `gateway_set_profile` — asserting only the refusal would pass while the lists diverged. |
+
+**Does every criterion have a case, or a stated reason it has none?** The
+criteria are two, `MIK-7272.ORDER.2a` and `.2b`, and since Q3 reads them as *what
+tool set a connection is shown*, each has to be answered on both surfaces that
+show one: `tools/list` and the discovery surface. That is six cells rather than
+three legs, and the legs do not each reach both surfaces — which is why some
+cells are empty on purpose:
+
+| leg | reaches `tools/list` | reaches the discovery surface | cases |
+|---|---|---|---|
+| routing profile | yes — `mod.rs:1263`, `spec_preview.rs:47` | yes — `search.rs:376,629,728`, `surfaced.rs:107` | B-01 (2a), B-02 (2b), on `tools/list` |
+| spec-preview promotion | yes — `mod.rs:1330`, `spec_preview.rs:112` | **no reader**: `promoted_tools_for_session` is not called from `search.rs` or `surfaced.rs` at all | B-07, B-06 (2a), the 2b sequence |
+| FSM workflow state | **no reader**: nothing on the `tools/list` path reads it | yes, and only here — four entry points: `code_mode_search` (`search.rs:378`), `search_tools` (`:730`), and `list_tools` / `list_tools_single_server`, which today read the store directly (`:647-650`, `:581-584`) | S-01 (2a), S-02 (2b) |
+
+Two of the empty cells need no case, because there is no behaviour in them to
+assert: promotion has no discovery-surface reader, and the FSM state has no
+`tools/list` reader. The third is a judgment and is recorded as one — the
+profile leg **on the discovery surface** has no case of its own. The reason is
+that the guard is inside `active_profile` (`mod.rs:1062-1099`), one owner for all
+eight of its call sites, so a discovery duplicate of B-01 would drive the same
+line B-01 already drives and could not fail independently of it. That reason is
+conditional on where (c) puts its filter: if the implementation guards at the
+call sites rather than inside the accessor, the cell stops being empty and the
+two cases are owed.
+
+The same condition binds S-01 and S-02, and more sharply, because the FSM store
+is **not** single-owner today. Each drives one discovery entry point, and that is
+sufficient only because (c) folds `list_tools` and `list_tools_single_server`
+back into `current_search_state` before guarding it. If that fold is skipped and
+`session_key` is applied to the accessor alone, S-01 and S-02 go green while
+`gateway_list_tools` still reads the shared entry — a case passing over a live
+defect, which is precisely what §P2's second question exists to prevent. Written
+as a rule for whoever implements it: **the fold is load-bearing for the tests,
+not cosmetic.**
 
 Three additions to the existing plan, then: the 2b promotion sequence, S-01 and
 S-02. Two properties the plan should keep visible. Every case pins a **literal**
