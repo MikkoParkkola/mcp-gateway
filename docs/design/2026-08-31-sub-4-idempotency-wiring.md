@@ -259,7 +259,7 @@ not before.
   PREREQUISITE. Wiring SUB.4 on a key that omits those fields makes continuation collisions live
   rather than dormant.
 
-## Two decisions, plus one the review created
+## Two decisions, plus two the review created
 
 **Axis 1 — activation. DECIDED: mandatory, no kill switch.** Off by default cannot satisfy a
 criterion that says a reissue MUST be protected, so it is rejected on the requirement, not on
@@ -298,6 +298,13 @@ client has no headers and would be left unprotected. Rejected: keeping automatic
 fallback, because it is defect P2 — deriving a key for a client that never asked for one silently
 collapses deliberate repeats for 24 hours. Protection applies when a key is present and never
 otherwise.
+
+**Axis 4 — an unresolvable principal under a client key. DECIDED: refuse the call.** Created by the
+rev-5 review the same way Axis 3 was, and stated in full where the risk that raises it lives (R5,
+"Risks that fire on activation") rather than restated here. Named in this section because a reader
+auditing what this design decided reads THIS list, and a decision recorded only next to its risk is
+one nobody counts. That was R5's original defect and it should not be reintroduced by filing the
+answer somewhere the question is not asked.
 
 ## Open questions — each scheduled, none assumed
 
@@ -340,7 +347,8 @@ The assertion is a mutation counter on the tool, never the response body: two id
 are also what executing twice produces.
 
 **Two constraints and one case, transferred 2026-09-06 from the MRTR.8b/10a design when Change B was
-withdrawn.** That change's plan had written them for a wiring that no longer exists; they are
+withdrawn.** The table below carries a second row that is NOT transferred — R6's falsifier is this
+design's own, added when R6 was written into it. That change's plan had written them for a wiring that no longer exists; they are
 constraints on *this* plan because this is the change that activates the cache.
 
 - **The activation test constructs through the production builder, not a hand-assembled server.**
@@ -349,7 +357,7 @@ constraints on *this* plan because this is the change that activates the cache.
   failure mode (`src/gateway/meta_mcp/mod.rs:657`, `#[allow(dead_code)]`, field initialised `None`
   at `:437`) that a test could have caught and did not.
 - **A negative case for the absent section is transferred NOWHERE, deliberately.** There is no
-  optional `idempotency.enabled` key here — activation is mandatory ("Two decisions, plus one the review created", Axis 1) — so a row
+  optional `idempotency.enabled` key here — activation is mandatory ("Two decisions, plus two the review created", Axis 1) — so a row
   asserting behaviour when the section is absent could only be written by reintroducing the kill
   switch this design refused. Recorded so its absence reads as a decision rather than a gap.
 
