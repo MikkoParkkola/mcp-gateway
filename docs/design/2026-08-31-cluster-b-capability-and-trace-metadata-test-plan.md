@@ -112,7 +112,7 @@ Every row below states its fixture direction explicitly, because the propagation
 fixture trap: a case that seeds the **outbound** `_meta` and then asserts the value survives has
 verified serde, not the hop. In every case **in this section's table** the trace values are placed
 **only** on the inbound request body. The *observation* point is not uniform and the earlier
-version of this sentence said it was: T1-T9 and T14 assert on the **outbound** params object
+version of this sentence said it was: T1-T9 assert on the **outbound** params object
 `dispatch_to_backend` produces; **T0 asserts on the production extractor's recovered values**,
 which is the read side and the whole reason the .a/.b split exists; and **T10 asserts on the
 cache key and the resolved backend and tool**, because non-interpretation is observable there and
@@ -148,7 +148,7 @@ reference it never pinned, so the tree drifted out from under grades that read a
 
 Hence the pin, which this plan should have carried from the first draft: **every red/green grade
 below is asserted against `b8cfc7e4`, and every check in §12 was run against that
-tree on 2026-09-06.** A later reader re-derives, and does not assume. The corrections above are
+tree on 2026-09-06 — evidenced, not asserted, by §12 check 7.** A later reader re-derives, and does not assume. The corrections above are
 recorded in the open rather than quietly overwritten, because what exposed them was running the
 checks in §12 — checks a reviewer demanded and this plan had until then only asserted.
 
@@ -159,7 +159,7 @@ checks in §12 — checks a reviewer demanded and this plan had until then only 
 | OTEL.1.b | **T2 (the merge case)** same inbound, **with** a prompt-cache key. Assert the outbound `_meta` contains the three trace keys **and** the cache key, by exact key set (A2) — not by "contains traceparent". A merge that overwrites `_meta` wholesale passes a contains-check and fails this. | unit | propagation, regression | Yes. |
 | OTEL.1.c | **T3 (not-minted)** inbound `_meta` with **no** trace keys; assert the outbound `_meta` has **no** `traceparent`, `tracestate` or `baggage` key. Asserted as key-absence, not as "value is empty" — a minted root is a non-empty value and would be caught; an empty-string value would not be, so the absence form is the one that discriminates. | unit | negative | Partially. Today no `_meta` is written on the no-cache-key arm, so T3 passes vacuously against HEAD. **See §6.2** — this case is honest only when run beside T1, and the plan records that dependency rather than claiming an independent red. |
 | OTEL.1.c | **T4 (rejected ⇒ dropped, not minted)** inbound `traceparent` malformed in exactly one way (A9: `"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7"` — three parts, everything else valid); assert no `traceparent` on the outbound, **and** assert the request still succeeds. Distinguishes drop from both mint and reject. | unit | negative | **Partially — same vacuity as T3.** HEAD writes no `traceparent` on this arm, so both halves are already true. Evidence only beside a green T1. §6.2 governs. |
-| OTEL.1.d | **T5 (baggage independence)** inbound carries a valid `baggage` and **no** `traceparent` at all; assert the outbound `_meta` carries the `baggage` literal. This is the case option 3.4.E would fail. | unit | negative-space, discrimination | Yes — `baggage` appears nowhere in `src` (`rg -i baggage src` = 0). |
+| OTEL.1.d | **T5 (baggage independence)** inbound carries a valid `baggage` and **no** `traceparent` at all; assert the outbound `_meta` carries the `baggage` literal. This is the case option 3.4.E would fail. | unit | negative-space, discrimination | Yes — re-derived (§12, check 7). Not because `baggage` is absent (check 4 refuted that): outbound `_meta` is written **only** when a cache key is present (`invoke.rs:2545`) and the inbound read is at the arguments level (`invoke.rs:1844`), so the no-`traceparent` arm produces no outbound `baggage` today. |
 | OTEL.1.d | **T6** inbound carries a **malformed** `traceparent` and a valid `baggage`; assert `baggage` survives and `traceparent` does not. Separates "baggage independent of *absent* traceparent" (T5) from "independent of *rejected* traceparent", which is a different code path. | unit | negative | Yes. |
 | OTEL.1.c | **T5b / T6b (tracestate is *not* independent)** the inverse pair, and the design makes it load-bearing: inbound carries a valid `tracestate` with **no** `traceparent` (T5b), then with a **malformed** `traceparent` (T6b). Assert `tracestate` is **absent** outbound in both, and the request still succeeds. `tracestate` is meaningless without the parent it annotates, so relaying it orphaned would send vendor trace state to a backend with nothing to correlate it to. Without these rows the plan asserts independence for `baggage` and says nothing about the field that must *not* be independent. Filed under **.c, not .d** — .c is the never-minted/nothing-survives-a-rejected-context clause, and these rows are that clause read on `tracestate`; .d is specifically `baggage`'s independence, which these rows do not exercise. | unit | negative, discrimination | **Partially — same vacuity as T3/T4.** HEAD writes no `_meta` on this arm, so "no outbound `tracestate`, request succeeds" is already true. Not an independent red; evidence only in a suite where T1 is green. §6.2 governs. |
 | OTEL.1.f | **T7 (the grammar rows)** one row per predicate §3.4b names, each breaking exactly one thing (A9): uppercase hex ⇒ rejected; version `ff` ⇒ rejected; all-zero `parent-id` ⇒ rejected; a five-field `traceparent` with a valid first four ⇒ **accepted**, and the outbound carries the **whole five-field input** as a literal. Reading the first four is a *parse* rule (design §3.4b); the emit rule is byte-for-byte as received (design L238, L464). Asserting a four-field outbound would fail a correct hop and, if "fixed", would silently truncate valid future context. Each row asserts both sides — the input refused and a neighbouring input permitted (A1). | unit | parameterised, boundary | Yes, all four. Verified against `TraceContext::from_meta` (`trace.rs:32`): it accepts uppercase hex (`is_ascii_hexdigit` is case-insensitive), accepts version `ff`, checks the all-zero rule on `trace_id` only and not on the span id, and rejects any `traceparent` with other than exactly four parts. Each of the four rows asserts the opposite of what HEAD does. |
@@ -547,19 +547,57 @@ plan review exists to catch and which no later code review would have recovered.
 Both legs reviewed the plan as it stood **before** the §12 checks were run, so their findings are
 independent of the baggage correction and none was closed by it. Two were raised by both vendors.
 
+**Who actually reviewed — corrected.** The `raised by` column below first named `gpt` and
+`claude`. That was false, and the correction is the same defect class as §12's: a claim written
+from what the author believed had run rather than from the record. The two legs were
+`grok-review` (`grok-default`) and `kimi-review` (`synthetic:hf:moonshotai/Kimi-K3`) — ledger rows
+of 2026-09-06 08:20:14Z and 08:13:09Z, run files `grok-20260906T081029Z-66301.md` and
+`synthetic-20260906T081025Z-65532.md`, both `process_status: ok`, both SHIP-WITH-FIXES. Neither
+named vendor could have raised anything here: `gpt-review` has returned `process_status: error,
+exit 1` on every invocation since 05:41:45Z that day (usage limit), and the only `claude-review`
+row against this repo that day is the confirmation pass recorded in §11.2. Both launchers labelled
+their scope string `round 1`; the round numbering in this document is the plan's own and is
+unchanged.
+
 | # | finding | raised by | disposal |
 |---|---|---|---|
-| 16 | §8 step 3 and §11 #15 both cite a `build_outbound_meta` seam "§5.1 requires", and §5.1 contained two constraints, neither of them that. #15 recorded it as fixed and it was not. | gpt (MEDIUM/CERTAIN), claude (MEDIUM/CERTAIN) | **Fixed here.** §5.1 carries it as constraint 3. The two citations are now true; before this they pointed at nothing, and T1/T2 would have gone red on harness ERROR — which §8 itself says buys the red suite nothing. |
-| 17 | T11-T14 are told to observe at the invoke funnel and forbidden to name `extract_tools_call_params` or read the outbound object, and §5.1 named no funnel probe — so the rows are unwritable without breaking one of the plan's own rules. | claude (HIGH) | **Fixed here** as §5.1 constraint 4, stated as an observability requirement rather than a chosen seam. Same defect class as #16, one level down: the plan specified an assertion and not the surface it asserts against. |
-| 18 | T15 re-points `trace_correlation_tests.rs:104-130` at `params._meta` while leaving it on `meta.invoke_tool`, which takes the meta-tool argument object and never sees a `CallToolRequestParams` — the case would ERROR on a missing `server`/`tool`, not fail. | claude (HIGH) | **Fixed here**, and the finding was sharper than stated. Verified at source: the test seeds `_meta` at the top of the gateway-invoke argument object — a sibling of `arguments`, not inside it — which is `params.arguments._meta` once a real `tools/call` arrives, and exactly what `invoke.rs:1845` reads. The row now moves the call site to the production `tools/call` entry first, then re-points the carrier. |
-| 19 | §5's preamble claims every case in its table asserts on the outbound params object. False of T0 (asserts the extractor) and T10 (asserts the cache key and resolved backend). | gpt (MEDIUM/CERTAIN) | **Fixed here.** The preamble now fixes fixture direction for the whole table and states that observation point is per-row, naming T0 and T10 as the two that observe elsewhere. Following the old sentence would have made T0 a duplicate of T1 and destroyed the .a/.b split round 1 was spent creating. |
-| 20 | §5.2's preamble says all five rows observe at the invoke funnel; T15 keeps assertions that observe the transparency log, downstream of it. | gpt (LOW/POSSIBLE) | **Fixed here** — four of five, with T15 excepted by name. Confirmed at source while checking #18. |
-| 21 | §7.1 says "Two claims ... have no case" and lists three bullets, the third of which does have a case (T14). | gpt (LOW/CERTAIN), claude (LOW/CERTAIN) | **Fixed here.** Two are listed as having no case; the third is listed separately as having exactly one. The count was the whole point of the device, and a reader who miscounts it re-raises a closed row. |
+| 16 | §8 step 3 and §11 #15 both cite a `build_outbound_meta` seam "§5.1 requires", and §5.1 contained two constraints, neither of them that. #15 recorded it as fixed and it was not. | kimi (MEDIUM/CERTAIN), grok (MEDIUM/CERTAIN) | **Fixed here.** §5.1 carries it as constraint 3. The two citations are now true; before this they pointed at nothing, and T1/T2 would have gone red on harness ERROR — which §8 itself says buys the red suite nothing. |
+| 17 | T11-T14 are told to observe at the invoke funnel and forbidden to name `extract_tools_call_params` or read the outbound object, and §5.1 named no funnel probe — so the rows are unwritable without breaking one of the plan's own rules. | grok (HIGH/LIKELY) | **Fixed here** as §5.1 constraint 4, stated as an observability requirement rather than a chosen seam. Same defect class as #16, one level down: the plan specified an assertion and not the surface it asserts against. |
+| 18 | T15 re-points `trace_correlation_tests.rs:104-130` at `params._meta` while leaving it on `meta.invoke_tool`, which takes the meta-tool argument object and never sees a `CallToolRequestParams` — the case would ERROR on a missing `server`/`tool`, not fail. | grok (HIGH/LIKELY) | **Fixed here**, and the finding was sharper than stated. Verified at source: the test seeds `_meta` at the top of the gateway-invoke argument object — a sibling of `arguments`, not inside it — which is `params.arguments._meta` once a real `tools/call` arrives, and exactly what `invoke.rs:1845` reads. The row now moves the call site to the production `tools/call` entry first, then re-points the carrier. |
+| 19 | §5's preamble claims every case in its table asserts on the outbound params object. False of T0 (asserts the extractor) and T10 (asserts the cache key and resolved backend). | kimi (MEDIUM/CERTAIN) | **Fixed here.** The preamble now fixes fixture direction for the whole table and states that observation point is per-row, naming T0 and T10 as the two that observe elsewhere. Following the old sentence would have made T0 a duplicate of T1 and destroyed the .a/.b split round 1 was spent creating. |
+| 20 | §5.2's preamble says all five rows observe at the invoke funnel; T15 keeps assertions that observe the transparency log, downstream of it. | grok (MEDIUM/CERTAIN), kimi (LOW/POSSIBLE) | **Fixed here** — four of five, with T15 excepted by name. Confirmed at source while checking #18. |
+| 21 | §7.1 says "Two claims ... have no case" and lists three bullets, the third of which does have a case (T14). | kimi (LOW/CERTAIN), grok (improvement) | **Fixed here.** Two are listed as having no case; the third is listed separately as having exactly one. The count was the whole point of the device, and a reader who miscounts it re-raises a closed row. |
 
 Two round-2 improvements were **already closed** by the pin repair that preceded this disposal:
 pin the SHA every red-on-HEAD grade is asserted against (§5), and retarget T11-T14's `baggage`
 exclusion because the field has existed since `baa318b2` (§5.2, and the elimination recorded
 there). Both were raised against the pre-repair text and both are moot against this one.
+
+### 11.2 Confirmation pass — round 2's closure re-check
+
+Two legs on the repaired plan and design. Verdicts read from the ledger row and the process exit
+status only, never scraped from the body text (§PA).
+
+| leg | ledger row | verdict |
+|---|---|---|
+| `gpt-review` (codex-default) | 08:28:17Z — `process_status: error`, `exit_code: 1`, verdict field empty, no run file written | **ERROR** — usage limit. Not a refusal, not a SHIP, and not evidence of closure. |
+| `claude-review` (claude-opus-5) | 08:32:37Z — `process_status: ok`, `exit_code: 0` | **SHIP-WITH-FIXES** |
+
+The surviving leg confirmed all six round-2 findings closed **by changed specification rather
+than by words**, and raised three new ones against the repair itself. Every one is a claim the
+repair made about its own closure — the same shape as the defect §12 exposed, one level up.
+
+| finding | disposal |
+|---|---|
+| §5's repaired preamble lists T14 among the rows asserting on the outbound params object, while §5.2 puts T14 at the funnel and §5's own table contains no T14 row. | **Eliminated.** "and T14" struck. T0 and T10 remain the section's two named exceptions, and the sentence can no longer be read against a row that is not there. |
+| T5's red-on-HEAD cell still cited the premise check 4 refuted — "`baggage` appears nowhere in `src`". | **Eliminated.** The cell carries the surviving cause, verified at source: outbound `_meta` is written only when a cache key is present (`invoke.rs:2545`), and the inbound read is at the arguments level (`invoke.rs:1844`). The grade stands; its stated reason no longer contradicts §12. |
+| §5's pin was asserted, not evidenced, and check 6 reasoned against unpinned `HEAD` inside the section whose purpose is to ban unpinned references. | **Eliminated.** Check 6 now runs against `b8cfc7e4`; check 7 evidences the pin itself — ancestor of HEAD, zero `src/` drift, and the five cited files unmodified in the shared checkout. |
+
+Three improvements are recorded as observations rather than actioned (§P0, third disposal): name a
+checkable shape for §5.1's constraint 4 the way constraint 3 names a signature; add a
+claimed-versus-verified column to §11's disposal tables; and re-derive §6's "Four were opened
+here" against its six subsections. None blocks the red suite, and each is a plan-level tidy that
+the next verdict-bearing round can take.
 
 ## 12. Evidence — the checks, run on 2026-09-06, with their output
 
@@ -592,7 +630,10 @@ src/protocol/trace.rs:109:        let onward = TraceContext::from_meta(&inbound)
 src/protocol/trace.rs:122:        let onward = TraceContext::from_meta(&json!({ "traceparent": TRACEPARENT }))
 src/protocol/trace.rs:135:            TraceContext::from_meta(&json!({ "baggage": "userId=alice" })),
 
-### check 4 — REFUTED: `TraceContext` HAS a `baggage` field, and `invoke.rs` references it
+### check 4 — REFUTED: `TraceContext` HAS a `baggage` field, and `invoke.rs` reaches it
+via `TraceContext::from_meta` (`invoke.rs:1845`). The string `baggage` itself appears in exactly
+one file, `src/protocol/trace.rs` — an earlier heading here claimed `invoke.rs` referenced the
+field directly, which this check's own output refutes.
 (the heading this check was written under asserted the opposite; its own output is below,
 and it is what falsified the premise §5 was built on)
 $ sed -n 12,25p src/protocol/trace.rs
@@ -638,8 +679,17 @@ $ sed -n 53,88p src/protocol/trace.rs
 ### check 6 — when the baggage field landed, and that it is behind HEAD
 $ git log -1 --format='%h %ad %s' --date=short baa318b2
 baa318b2 2026-08-31 feat(trace): carry baggage across the gateway hop
-$ git merge-base --is-ancestor baa318b2 HEAD && echo "IS ANCESTOR of HEAD"
+$ git merge-base --is-ancestor baa318b2 b8cfc7e4 && echo "IS ANCESTOR of b8cfc7e4"
+IS ANCESTOR of b8cfc7e4
+
+### check 7 — the pin itself, which every other check was asserted against
+$ git merge-base --is-ancestor b8cfc7e4 HEAD && echo "IS ANCESTOR of HEAD"
 IS ANCESTOR of HEAD
+$ git diff --stat b8cfc7e4..HEAD -- src/ | wc -l
+       0
+$ git status --porcelain -- src/protocol/trace.rs src/gateway/router/helpers.rs \
+    src/gateway/router/handlers.rs src/gateway/server/mod.rs src/gateway/meta_mcp/invoke.rs | wc -l
+       0
 ```
 
 **What this changed, and why it was not carelessness.** Checks 4, 5 and 6 falsify a statement
