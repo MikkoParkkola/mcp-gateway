@@ -109,6 +109,43 @@ minutes gets a reservation that expires mid-call. Fix is a config-load validatio
 backend timeout at or above `IN_FLIGHT_TIMEOUT`, not a reservation tied to the invocation
 lifecycle — the expensive mechanism buys nothing the cheap check does not.
 
+**P8 — the idempotency key is not bound to the caller, and P9 is why fixing the derivation is not
+enough.** Both arrived 2026-09-06 from `docs/design/2026-09-06-mrtr-8b-10a-lifetime-and-idempotency-wiring.md`
+when that change withdrew its own idempotency wiring (Change B) and transferred what it had found;
+**found by Kimi K3** in that document's round-1 review and verified at source there. `identity_suffix`
+(`src/gateway/meta_mcp/invoke.rs:1128-1132`) is `caller_credential.cache_binding` alone, therefore
+EMPTY whenever identity propagation is off — which the adjacent comment at `:1133-1139` calls the
+shipped default. Two authenticated callers issuing the same tool with the same arguments and the
+same key string collide on one fingerprint (`:1164-1168`), and `AdmitOutcome::Completed` replays the
+first caller's stored response to the second (`:1178-1199`). The response cache does *not* have this
+defect: `caller_principal` (`:1140-1142`) already falls back to `VerifiedIdentity::stable_actor_id`.
+Fix: `identity_suffix` adopts the same fallback chain, twelve lines away.
+
+**P9 — the relocation in "Constraints, measured" does not subsume P8.** Moving the binding into
+`derive_key` (this document `:125-128`, the same conclusion reached independently) *relocates*
+`identity_suffix`; it does not make it non-empty. With identity propagation off — the shipped
+default — the relocated suffix is still empty and two authenticated callers still share a
+fingerprint. SUB.4 needs the fallback chain **and** the relocation; satisfying only the second
+closes the ADR-008 finding while leaving the replay. Dormant while the cache is unreachable, live
+the moment this change wires it on, which is what makes it blocking for activation rather than a
+follow-up.
+
+## Risks inherited with activation
+
+Both arrived 2026-09-06 from the MRTR.8b/10a design when Change B was withdrawn. They were risks
+*of activating the cache*; that change activates nothing, so they are this one's from the moment it
+does.
+
+- **R4 — loose key reuse starts returning 409.** A caller that today reuses one key string across
+  different `(server, tool, arguments)` gets a silent replay; once P5's binding check lands it gets
+  `Mismatch`. That is the intended behaviour and it is still a client-visible change, so it belongs
+  in this change's release note rather than being discovered in production.
+- **R5 — an unverifiable identity leaves the key unbound.** When neither `cache_binding` nor a
+  stable actor id resolves, the fingerprint carries no principal at all. The choice is this
+  change's to make and to state: refuse to protect the call, or protect it with an unbound key and
+  accept cross-caller replay. Left unstated it defaults to the second by accident.
+
+
 ## Constraints, measured
 
 - The response cache is `Option<Arc<ResponseCache>>` (`src/gateway/meta_mcp/mod.rs:185`), `None`
@@ -208,3 +245,21 @@ an invariant is what stops the defect returning row by row.
 
 The assertion is a mutation counter on the tool, never the response body: two identical bodies
 are also what executing twice produces.
+
+**Two constraints and one case, transferred 2026-09-06 from the MRTR.8b/10a design when Change B was
+withdrawn.** That change's plan had written them for a wiring that no longer exists; they are
+constraints on *this* plan because this is the change that activates the cache.
+
+- **The activation test constructs through the production builder, not a hand-assembled server.**
+  A fixture that builds the idempotency layer directly proves the layer works and says nothing
+  about whether the shipped configuration path reaches it — which is precisely the `enable_idempotency`
+  failure mode (`src/gateway/meta_mcp/mod.rs:657`, `#[allow(dead_code)]`, field initialised `None`
+  at `:437`) that a test could have caught and did not.
+- **A negative case for the absent section is transferred NOWHERE, deliberately.** There is no
+  optional `idempotency.enabled` key here — activation is mandatory (`:137-143`) — so a row
+  asserting behaviour when the section is absent could only be written by reintroducing the kill
+  switch this design refused. Recorded so its absence reads as a decision rather than a gap.
+
+| criterion | case | how it fails today |
+|---|---|---|
+| cross-principal binding (P8/P9) | two *different* authenticated callers issue the same tool, same arguments and the same key string, with identity propagation OFF; the second must execute rather than receive the first's stored response | `identity_suffix` is empty at that default, so both fingerprints collide and `AdmitOutcome::Completed` replays |
