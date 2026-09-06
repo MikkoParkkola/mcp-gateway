@@ -8,17 +8,36 @@ than transcribed from the rollup, and sorted by what each one is waiting on.
 
 ## How the population was derived
 
-`python3 scripts/release/count-release-criteria.py --check`, verbatim (re-run 2026-09-06):
+`python3 scripts/release/count-release-criteria.py --check`, verbatim (re-run 2026-09-06,
+after `GH475.RL.9` landed the same day):
 
 ```
-Coverage: 146 criteria, 182 rows, 147 met or non-blocking, 35 blocking.
+Coverage: 146 criteria, 182 rows, 150 met or non-blocking, 32 blocking.
 ```
 
-The line this document carried until 2026-09-06 — `146 criteria, 146 rows, 102 met or
-non-blocking, 44 blocking` — was a transcript of the run made when the document was written,
-not a broken gate: the check passes today, and the ledger has grown sub-rows and closed
-criteria since. A pasted count is a measurement with a date on it, so this one now carries
-its date.
+The line this document carried earlier the same day — `146 criteria, 182 rows, 147 met or
+non-blocking, 35 blocking` — was already stale when it was pasted: `GH475.OBS.2` and
+`GH475.MIG.3` had landed as MET rows in `RELEASE-4.0.0-criteria-status.md` (commits `a8b1158f`
+03:24:22 and `82d8490b` 03:12:56, both 2026-09-06) and the doc-sync commit `78bd401a` (05:11:55
+the same day) flipped their `criteria-status.md` rows without recomputing this document's own
+headline or `RELEASE-4.0.0-blocking-rollup.md` row H, which still declared cluster H at `5` rows
+against an actual `3` (`RL.9`, `RL.10`, `OBS.1`) at that point — itself a transient count, since
+this same pass also lands `GH475.RL.9` (see below), which drops row H to its current `2`
+(`RL.10`, `OBS.1`); the `3` describes the moment right after `78bd401a`, not the state this pass
+leaves behind. `GH475.MIG.2` is NOT
+part of this drift and never was: it was already MET (`version-coupled`), blocking `no`, before
+`78bd401a` — confirmed at `78bd401a^` and five commits further back — and was never a member of
+cluster H (`git show HEAD:RELEASE-4.0.0-blocking-rollup.md` names no `MIG.2`); `98bef5d1` the
+same day only tightened its test assertion to the literal `4.0.0` and did not touch its blocking
+status. An earlier draft of this paragraph named `GH475.MIG.2` as a third flip; it was not one —
+only two rows changed status that day (`OBS.2`, `MIG.3`), `147 + 2 = 149`, which is the count
+`--check` reports against a clean `HEAD` taken with this session's own edits set aside (verified
+by temporary `git stash`, restored after). `GH475.RL.9` landing the same day
+(`tests/gh475_rl9_429_only_neither_opens_circuit_nor_exhausts_budget.rs`, GH #481) closed a third
+row, bringing the headline to `150`/`32`. The line before that — `146 criteria, 146 rows, 102 met
+or non-blocking, 44 blocking` — was a transcript of the run made when the document was written,
+not a broken gate: the check passes today, and the ledger has grown sub-rows and closed criteria
+since. A pasted count is a measurement with a date on it, so this one now carries its date.
 
 Every row in `docs/requirements/RELEASE-4.0.0-criteria-status.md` whose blocking cell
 reads `yes` was enumerated, then the seven clusters named in
