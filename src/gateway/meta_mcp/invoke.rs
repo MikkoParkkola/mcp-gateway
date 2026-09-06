@@ -4526,4 +4526,93 @@ mod error_budget_tests {
             BudgetOutcome::Success
         );
     }
+
+    /// GH475.OBS.2 — the suppression debug event is emitted. Captured under a
+    /// scoped `tracing` subscriber rather than asserted from reading the
+    /// source: a debug statement that never fires (wrong log level enabled,
+    /// removed by a later refactor) reads identically to one that does until
+    /// something actually listens for it.
+    ///
+    /// PROD GAP, recorded rather than fixed (out of scope for this test-only
+    /// change; tracked at #481): the event carries `server` and `tool` —
+    /// which call was excluded — not which `BudgetOutcome` variant excluded
+    /// it. `record_error_budget` today has exactly one exclusion arm
+    /// (`IgnoredRateLimit`), so the criterion's "each exclusion is
+    /// observable" holds by there being only one to observe. A second
+    /// exclusion reason added later would emit textually identical fields
+    /// except for the hardcoded message string, and nothing in the event
+    /// itself would let a consumer tell the two apart.
+    #[test]
+    fn rate_limited_exclusion_emits_a_debug_event() {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+        use tracing::field::{Field, Visit};
+        use tracing_subscriber::Registry;
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
+        #[derive(Default)]
+        struct Fields(HashMap<String, String>);
+
+        impl Visit for Fields {
+            fn record_str(&mut self, field: &Field, value: &str) {
+                self.0.insert(field.name().to_string(), value.to_string());
+            }
+
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                self.0
+                    .insert(field.name().to_string(), format!("{value:?}"));
+            }
+        }
+
+        struct Collector(Arc<Mutex<Vec<Fields>>>);
+
+        impl<S: tracing::Subscriber> Layer<S> for Collector {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                let mut fields = Fields::default();
+                event.record(&mut fields);
+                if fields.0.get("message").map(String::as_str)
+                    == Some("Rate-limited response excluded from error budget accounting")
+                {
+                    self.0.lock().expect("collector lock").push(fields);
+                }
+            }
+        }
+
+        // `tracing` caches each callsite's interest process-wide.
+        // `rate_limited_dispatch_records_no_budget_sample` above calls
+        // `record_error_budget(.., IgnoredRateLimit)` with no subscriber
+        // installed, which caches this `debug!` callsite's interest as
+        // `never`; whichever test runs first decides the cache for the rest
+        // of the process, and every later capture on any thread is then
+        // skipped. A global subscriber that is interested keeps the cached
+        // interest live so the thread-local subscriber below decides each
+        // event instead. Same fix shape as
+        // `gateway::server::mod::tests::stdio_observation::records_for_session`,
+        // for the analogous problem at a different callsite.
+        static INTEREST: std::sync::Once = std::sync::Once::new();
+        INTEREST.call_once(|| {
+            let _ = tracing::subscriber::set_global_default(
+                Registry::default().with(tracing::level_filters::LevelFilter::DEBUG),
+            );
+        });
+
+        let events: Arc<Mutex<Vec<Fields>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let subscriber = Registry::default()
+            .with(Collector(events.clone()))
+            .with(tracing::level_filters::LevelFilter::DEBUG);
+        tracing::subscriber::with_default(subscriber, || {
+            let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
+            m.record_error_budget("srv", "tool", BudgetOutcome::IgnoredRateLimit);
+        });
+
+        let captured = events.lock().expect("collector lock");
+        assert_eq!(
+            captured.len(),
+            1,
+            "exactly one suppression debug event must fire per exclusion"
+        );
+        assert_eq!(captured[0].0.get("server").map(String::as_str), Some("srv"));
+        assert_eq!(captured[0].0.get("tool").map(String::as_str), Some("tool"));
+    }
 }
