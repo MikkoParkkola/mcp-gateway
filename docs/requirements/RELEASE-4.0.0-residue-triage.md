@@ -85,11 +85,17 @@ it. Both now carry the ledger's ten names. The ten below are the ledger's.
 | COVERED | 0 |
 | UNKNOWN | 0 |
 
-`CODE` was not in the class set this triage started with, and `NFR.SEC.6` is why it
-exists. That row read as a missing test until GPT-5.5 asked whether the fix it cites is
-reachable. It is not, on two paths, and a class set with no room for "the fix is
-incomplete" would have pushed that answer into `TEST` — wrong in the direction that
-closes rows. Adding the class was cheaper than mislabelling the row.
+`CODE` was not in the class set this triage started with. `NFR.SEC.6` is why it was
+added and no longer why it is kept: on 2026-09-06 that row was mutation-probed and the
+fix IS reachable — `creates_caller_addressed_external_state` returns the declared value
+above every inference, and `invoke.rs:927-938` refuses a non-admin caller on it. The row
+moved back to `TEST`, where one missing composition is the whole of what is outstanding.
+`CONFIRM.2` is now the only `CODE` row.
+
+The class stays anyway, and the reason is worth keeping: a class set with no room for
+"the fix is incomplete" pushes that answer into `TEST`, which is wrong in the direction
+that CLOSES rows. It was right to add and it was right to leave this row in it until
+somebody actually ran the probe.
 
 `DECISION` is now empty, and that is the same review's other correction. `CONFIRM.2` was
 held open as a question about whether an equivalent mechanism counts; the criterion names

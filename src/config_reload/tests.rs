@@ -1217,9 +1217,10 @@ async fn a_reload_publishing_the_gateway_over_open_tools_is_refused() {
     );
     // AND: it makes NO claim about what remains in force, anywhere in the
     // message — prefix included. A refusal cannot speak for the whole running
-    // process: a restart-only edit published by an EARLIER reload is still
-    // outstanding (`with_pending_restart`), so "unchanged" is a claim about
-    // state this code path does not own, whatever this reload did.
+    // process: `LiveConfig::pending_restart_fields` can already hold a
+    // restart-only edit published by an EARLIER reload, so the running process
+    // and the published config differ before this reload is even attempted.
+    // "Unchanged" is a claim about state this path never reads.
     //
     // The reason recorded here until 2026-09-06 was the MIK-7256 leak —
     // `Config::load` applying the candidate's env files to the process, read
@@ -1249,7 +1250,10 @@ async fn a_reload_publishing_the_gateway_over_open_tools_is_refused() {
     }
     // AND: it says precisely what did not happen — no backend moved, nothing
     // published. Not "nothing was applied", which would be a wider claim than
-    // the code can keep: `Config::load` has already applied any `env_files`.
+    // THIS check can keep: it asks `network_bind_refusal` and nothing else,
+    // while a restart reads the whole file. (Until 2026-09-06 the reason given
+    // here was the MIK-7256 leak — `Config::load` having already applied the
+    // candidate's `env_files`. That mechanism is gone; the assertion is not.)
     assert!(
         err.contains("No backend was started or stopped")
             && err.contains("no configuration was published"),
