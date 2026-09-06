@@ -6,7 +6,7 @@ Status: §P1 design, reviewed. No code. Test plan (§P2): `docs/design/2026-08-3
 paragraph is the proof: `src` moved after `5c7e64f4` and two of this document's statements about
 the code are now true only at that commit. `baa318b2` (2026-08-31 21:23) added a `baggage` field
 to `TraceContext` with a verbatim parse and a verbatim re-emit; `d4874a25` (21:33) called
-`TraceContext::from_meta` from `invoke.rs:1845-1847`, reading `args.get("_meta")`. Neither is an
+`TraceContext::from_meta`, called from `dispatch_to_backend` on `args.get("_meta")`. Neither is an
 ancestor of `5c7e64f4`. So 2.3's "`baggage` appears nowhere in `src`" and "nothing calls
 `TraceContext` from the request path" are **superseded as statements about HEAD** and stand as
 statements about the pin. Nothing else in this design changes, and that was checked rather than assumed: the gap is
@@ -67,7 +67,7 @@ and no length bound, and re-emits both unchanged in `to_meta()` (:71). Its modul
 the invariant: propagated, never re-minted, because a gateway that started a fresh trace would
 make its own hop the root and hide the caller. `baggage` appears nowhere in `src` at the commit.
 Nothing calls `TraceContext` from the request path, and the outbound backend call
-(`dispatch_to_backend`, `src/gateway/meta_mcp/invoke.rs:1812`+) writes exactly one `_meta` key —
+(`dispatch_to_backend`, `src/gateway/meta_mcp/invoke.rs`) writes exactly one `_meta` key —
 the prompt cache key (:1936-1938) — so no trace metadata crosses the hop today.
 
 ## 2. Measured constraints
@@ -183,7 +183,7 @@ are SYMBOL names, not line numbers: this is a shared checkout and concurrent edi
 and nothing else; both production callers destructure exactly that pair — the HTTP `tools/call`
 arm in `src/gateway/router/handlers.rs` and `dispatch_single_with_sink` in
 `src/gateway/server/mod.rs`; the one production
-`from_meta` call reads `args.get("_meta")` (`src/gateway/meta_mcp/invoke.rs:1845-1847`); the
+`from_meta` call in `dispatch_to_backend` (`src/gateway/meta_mcp/invoke.rs`) reads `args.get("_meta")`; the
 `arguments` schema is a bare `{"type": "object"}` with no `additionalProperties`
 (`src/gateway/meta_mcp_tool_defs.rs:148`); stdio passes `retry: &NO_RETRY`
 (`src/gateway/server/mod.rs:1862`) with `#[ignore]` on the watcher test naming that reason
@@ -198,7 +198,7 @@ false, so it was checked rather than asserted.
 decides on, never reaches `invoke_tool`.
 
 `TraceContext::from_meta` has exactly one production caller,
-`src/gateway/meta_mcp/invoke.rs:1845-1847`, and it reads `args.get("_meta")` — a field of
+the `from_meta` call in `dispatch_to_backend` (`src/gateway/meta_mcp/invoke.rs`), and it reads `args.get("_meta")` — a field of
 `gateway_invoke`'s *argument object*, one level below the carrier. No meta-tool input schema
 declares `_meta` (`src/gateway/meta_mcp_tool_defs.rs`) and nothing copies `params._meta` into
 `arguments`, so a client that puts trace context where the protocol puts it is never read.
@@ -240,7 +240,7 @@ Two dispositions this correction owes, decided here rather than left to the impl
 (§P3: a decision the design did not make is a design event, so it is made here and named):
 
 1. **Precedence.** Params-level `_meta` wins, and when the read lands the args-level read at
-   `invoke.rs:1845-1847` is REMOVED rather than kept as a fallback. Two sources for one value is
+   the `from_meta` call in `dispatch_to_backend` is REMOVED rather than kept as a fallback. Two sources for one value is
    the defect the repair protocol eliminates instead of patching.
 2. **The fixture.** `trace_correlation_tests.rs:104-130` nests `_meta` in the argument object and
    is realigned to params level. Green today against the shape no client sends; left as it is, it
