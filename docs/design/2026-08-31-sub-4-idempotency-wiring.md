@@ -291,7 +291,7 @@ not before.
   PREREQUISITE. Wiring SUB.4 on a key that omits those fields makes continuation collisions live
   rather than dormant.
 
-## Two decisions, plus two the review created
+## Two decisions, plus four the review created
 
 **Axis 1 — activation. DECIDED: mandatory, no kill switch.** Off by default cannot satisfy a
 criterion that says a reissue MUST be protected, so it is rejected on the requirement, not on
@@ -337,6 +337,17 @@ rev-5 review the same way Axis 3 was, and stated in full where the risk that rai
 auditing what this design decided reads THIS list, and a decision recorded only next to its risk is
 one nobody counts. That was R5's original defect and it should not be reintroduced by filing the
 answer somewhere the question is not asked.
+
+**Axis 5 — how the capacity bound is partitioned. DECIDED: per principal, not globally.** Created
+by the rev-5 review, which observed that a global fail-closed bound turns one principal's traffic
+into every other principal's denial. Stated in full in prerequisite P3 above, beside the bound it
+amends; counted here because a decision recorded only next to its risk is a decision nobody counts
+— the defect Axis 4 exists because of.
+
+**Axis 6 — what the cache stores, as distinct from what carries the key. DECIDED: the
+route-neutral result, never an envelope.** Follows from Axis 3 rather than competing with it: once
+both routes are covered, something must say what a replay hands back to a caller whose request id
+is not the one that filled the entry. Stated in the open-questions table, first row.
 
 ## Open questions — each scheduled, none assumed
 
@@ -392,7 +403,7 @@ constraints on *this* plan because this is the change that activates the cache.
   failure mode (`src/gateway/meta_mcp/mod.rs:657`, `#[allow(dead_code)]`, field initialised `None`
   at `:437`) that a test could have caught and did not.
 - **A negative case for the absent section is transferred NOWHERE, deliberately.** There is no
-  optional `idempotency.enabled` key here — activation is mandatory ("Two decisions, plus two the review created", Axis 1) — so a row
+  optional `idempotency.enabled` key here — activation is mandatory ("Two decisions, plus four the review created", Axis 1) — so a row
   asserting behaviour when the section is absent could only be written by reintroducing the kill
   switch this design refused. Recorded so its absence reads as a decision rather than a gap.
 
