@@ -44,7 +44,7 @@ claim is false as of 682a709a. A guard exists and it names ORDER.2 as its reason
 | 1 | A request declaring the modern era by header gets **no session and none is minted**: `session_id` is the empty string. | `src/gateway/router/handlers.rs:574-589` |
 | 2 | `fn session_key(session_id: Option<&str>) -> Option<&str>` filters the empty string to `None`. Its doc comment states the ORDER.2 rationale verbatim: "the empty key is shared by *every* sessionless caller, so a profile stored under it does not merely vary the tool set per connection, it varies it across connections." | `src/gateway/meta_mcp/mod.rs:1075-1090` |
 | 3 | `active_profile` routes through `session_key`, so a sessionless caller resolves to the registry **default** profile. | `mod.rs:1062-1072` |
-| 4 | `gateway_set_profile` and `gateway_get_profile` both **refuse** on a sessionless caller with `NO_SESSION_FOR_PROFILE`. | `mod.rs:1725-1728`, `mod.rs:1737-1739`; const at `mod.rs:1096-1099` |
+| 4 | `gateway_set_profile` and `gateway_get_profile` both **refuse** on a sessionless caller with `NO_SESSION_FOR_PROFILE`. | `mod.rs:1726-1727`, `mod.rs:1755-1756`; const at `mod.rs:1096` |
 | 5 | The `X-MCP-Profile` initialize-time binding is gated by the same `session_key`. | `mod.rs:1186` |
 | 6 | `resolve_surfaced_tool` filters every surfaced tool through `active_profile` first, so the whole surfaced-tool leg inherits (3). | `src/gateway/meta_mcp/surfaced.rs:101-115` |
 
@@ -180,7 +180,7 @@ removal is part of (c) rather than a tidy-up beside it:
 
 | store | write | read |
 |---|---|---|
-| `session_promoted` (§2, feature-gated) | `invoke.rs:1826` | `promoted_tools_for_session`, `mod.rs:1021-1030` — the only reader of the map; `mod.rs:1266`, `mod.rs:1330` and `spec_preview.rs:112` all go through it |
+| `session_promoted` (§2, feature-gated) | `invoke.rs:1826-1828` | `promoted_tools_for_session`, `mod.rs:1021-1030` — the only reader of the map; `mod.rs:1266`, `mod.rs:1330` and `spec_preview.rs:112` all go through it |
 | `session_state` (§2b, **default build**) | `mod.rs:1689` | `current_search_state`, `search.rs:161-165` — **plus two inlined copies of its body**, `search.rs:581-584` in `list_tools_single_server` and `search.rs:647-650` in `list_tools`, which call `self.session_state.get_state(sid)` directly |
 
 The promotion store already has one owner per direction. The FSM store does not:
@@ -208,11 +208,14 @@ moving, so it is named here rather than discovered at implementation.
 
 **(d) Disable spec-preview promotion entirely in modern mode.** Rejected as
 written: it is (c) with a coarser blade, and it adds a second modern-mode branch
-where one already exists. (An earlier draft also charged it with disabling the
-query-driven preview list at `spec_preview.rs:43-47`. That was wrong — the
-filtered path reads `active_profile` and the query, not `session_promoted`, so
-disabling promotion leaves it alone. The rejection stands on the other two
-reasons.)
+where one already exists. (Two earlier drafts got its side effect wrong in opposite
+directions. The first charged it with disabling the query-driven preview list at
+`spec_preview.rs:43-47` — overstated. The second said the filtered path does not
+read `session_promoted` at all — false: `collect_filtered_backend_tools` merges
+promoted tools at `spec_preview.rs:111-112`, which is the same reader the §7
+matrix already cites. What (d) actually costs there is that merge and nothing
+else: the query-and-profile list keeps working, and promoted tools stop joining
+it on a modern connection. The rejection stands on the other two reasons.)
 
 **(e) Keep promotion, key it by something invariant across connections** — this
 is cluster-b's (c), principal re-keying, in the promotion store's clothes.
