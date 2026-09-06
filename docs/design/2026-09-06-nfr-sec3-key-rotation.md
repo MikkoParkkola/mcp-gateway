@@ -48,11 +48,14 @@ does not close means the row is not the review you think you are reading, and th
 these two have not had theirs recomputed — stated so that nobody reads this paragraph as
 covering the whole table.
 
-Five passages POST-DATE row 3d and no reviewer has read them: the two improvements adopted
-above, the sentence in the exhaustion section naming the increment discipline,
-the age-check paragraph reverted alongside it, and the STRIDE repudiation row. GLM asked for
-both improvements, so the ASKS are attested even though the answers are not. That gap is not
-theoretical: the first draft of the increment-discipline paragraph contradicted a decision
+Text POST-DATING row 3d, which no reviewer has read — given by CATEGORY and deliberately
+not by count, because a number in the one paragraph whose job is to be the auditable record
+of what is unattested is a number a reader can falsify by recounting: the closure narrative
+above, including the repair of the LOW finding GLM itself raised; the design passages
+adopted from that row (both improvements, the sentence in the exhaustion section naming the
+increment discipline, the age-check paragraph reverted alongside it, and the STRIDE
+repudiation row); and this paragraph. GLM asked for both improvements, so the ASKS are
+attested even though the answers are not. That gap is not theoretical: the first draft of the increment-discipline paragraph contradicted a decision
 made two sections below it, and a re-read caught it rather than a review.
 
 Keyed on `material_sha256` rather than on the ledger's `head`: `head` pins the branch tip at run
