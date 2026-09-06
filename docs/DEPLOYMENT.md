@@ -265,6 +265,52 @@ mtls:
   require_client_cert: true
 ```
 
+### Strict validation and existing certificate generations
+
+Newly generated 4.0 CA certificates include certificate-signing and CRL-signing
+key usage; issued server and client certificates include an Authority Key
+Identifier matching their issuer. These extensions support strict X.509 clients,
+including Python 3.13's default TLS context. Keep certificate and hostname
+verification enabled.
+
+Check a new generation before deploying it:
+
+```bash
+openssl verify -x509_strict -purpose sslserver \
+  -verify_hostname gateway.company.com \
+  -CAfile ./tls-next/ca.crt ./tls-next/server.crt
+openssl verify -x509_strict -purpose sslclient \
+  -CAfile ./tls-next/ca.crt ./tls-next/clients/claude-code-agent.crt
+```
+
+Existing gateway-generated CAs may lack key usage, and existing leaves may lack
+issuer identifiers. A new leaf alone cannot repair a malformed CA. The gateway
+does not replace an existing certificate generation automatically.
+
+For an existing deployment, perform the following rollout during an operator
+chosen maintenance window:
+
+1. Retain the old CA, leaf certificates, private keys, configuration and trust
+   bundles. Generate the replacement CA/server/client material with the commands
+   above in a **new directory**, such as `./tls-next`, rather than in the live
+   certificate directory. Protect and store the new CA key offline after issuance.
+2. Distribute a trust bundle containing both old and new CA certificates to the
+   gateway and clients before switching leaf certificates. The gateway's
+   `mtls.ca_cert` accepts a PEM bundle. Restart it after changing its TLS paths or
+   trust bundle, and verify existing clients still authenticate.
+3. Switch server and client certificate/key paths to the new generation. Restart
+   the gateway and reconnect clients. Verify an actual authenticated MCP
+   initialize/tool-list exchange with the new client certificate, as well as
+   continued operation of supported existing clients. An old malformed chain
+   remains incompatible with strict clients even when both CAs are trusted;
+   enable those clients only after the new server chain is active.
+4. Rehearse rollback in an isolated deployment: restore the retained old
+   certificate/key/configuration paths while keeping overlapping trust, restart,
+   and verify the original client **with its old certificate and key**. This
+   restores prior compatibility; it does not make the old chain strict-valid.
+5. Remove old trust only after every consumer has migrated and the operator has
+   ended the rollback window. Retention and key disposal follow your PKI policy.
+
 ## Reverse Proxy
 
 Bind the gateway to `127.0.0.1` (default) and proxy from the public-facing server. SSE streaming requires disabled response buffering.
