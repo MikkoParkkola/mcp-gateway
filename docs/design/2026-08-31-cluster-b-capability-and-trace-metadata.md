@@ -163,22 +163,46 @@ declares `_meta` (`src/gateway/meta_mcp_tool_defs.rs`) and nothing copies `param
 `arguments`, so a client that puts trace context where the protocol puts it is never read.
 The read is not provably dead, and the claim is deliberately not made: `gateway_invoke`'s
 `arguments` is an open object — `{"type": "object"}` with no `additionalProperties: false`
-(`meta_mcp_tool_defs.rs:148`) — so a client that nests `_meta` *there* is read. That is the
+(`meta_mcp_tool_defs.rs:143-151`, the `arguments` schema object) — so a client that nests `_meta` *there* is read. That is the
 shape the code serves and the shape no spec sends. The existing test
 (`src/gateway/meta_mcp/trace_correlation_tests.rs:104-130`) passes because its fixture nests
 `_meta` inside the argument object: it exercises the shape the code reads, not the shape a client
 sends, which is why a green suite did not surface this.
 
-Two consequences for the implementation this design authorises:
+What this entails, and what it deliberately does not:
 
-- The read is a **params-level sibling read at the handler**, not an `arguments` read at the
-  funnel. That seam already exists and already carries exactly this shape:
-  `RetryFields::from_params(params.as_ref())` (`handlers.rs:990`) reads params-level siblings and
-  carries them to the invoke funnel on the caller context.
-- Wiring it at `handlers.rs:990` alone covers **one transport of two**. Stdio builds no such
-  context — `retry: &crate::protocol::mrtr::NO_RETRY` (`src/gateway/server/mod.rs:1862`), with an
-  ignored watcher test at `:3601` holding that gap open. `2026-09-03-post-session-caller-identity.md`
-  refused the same shape for its reaper ("in both serve modes"); the same refusal applies here.
+- **Entailed.** The trace fields must be read at **params level, before
+  `extract_tools_call_params` discards them**, and must reach the **invoke funnel on both
+  transports** — the funnel is where 3.4a's write consumes them, and a read the funnel never
+  sees closes nothing.
+- **Not entailed, and therefore not mandated here: _which_ seam carries them.**
+  `RetryFields::from_params` already parses `params._meta` today (`src/protocol/mrtr.rs:117-127`,
+  the idempotency key) and is the existing vehicle from handler to funnel;
+  `extract_tools_call_params` is the shared choke point *both* transports already call, so
+  widening it to return `_meta` covers HTTP and stdio in one edit. Both are candidates the test
+  plan and the implementation choose between. A closure criterion that names a seam converts an
+  implementation choice into an acceptance criterion, which §P0 declares out of scope.
+- Stdio is where the difference becomes visible: it builds no caller context at all —
+  `retry: &crate::protocol::mrtr::NO_RETRY` (`src/gateway/server/mod.rs:1862`), with an ignored
+  watcher test at `:3601` holding that gap open. `2026-09-03-post-session-caller-identity.md`
+  refused a one-mode fix for its reaper ("in both serve modes"); the same refusal applies.
+
+Three dispositions this correction owes, decided here rather than left to the implementer
+(§P3: a decision the design did not make is a design event, so it is made here and named):
+
+1. **Precedence.** Params-level `_meta` wins, and when the read lands the args-level read at
+   `invoke.rs:1845-1847` is REMOVED rather than kept as a fallback. Two sources for one value is
+   the defect the repair protocol eliminates instead of patching.
+2. **The fixture.** `trace_correlation_tests.rs:104-130` nests `_meta` in the argument object and
+   is realigned to params level. Green today against the shape no client sends; left as it is, it
+   re-conceals the gap this section documents.
+3. **The watcher test.** `src/gateway/server/mod.rs:3601` is un-ignored by the stdio half of this
+   read; the test plan carries a row for it.
+
+This supersedes the test plan's §6.6 residual
+(`docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md:270-287`), which
+allows OTEL.1.a to close on extractor evidence with the route gap merely named. It may not:
+route-level ingestion on both transports is a close condition, not a residual.
 
 This does not change what 3.3, 3.4 or 3.4a decide. It names where the read they assume must go.
 

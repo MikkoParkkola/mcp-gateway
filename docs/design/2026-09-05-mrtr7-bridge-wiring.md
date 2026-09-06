@@ -103,14 +103,35 @@ reviewer's underlying worry — a backend continuing without input a person neve
 gave — is real and unaddressed; changing either row is the **requester's** call,
 not a repair, and it is raised as an open question rather than made here.
 
-That deferral is scheduled, not merely recorded. Owner: MIK-7388, priority 2,
-already related to MIK-7212 as `blocks`. What resolves it: the three acceptance
-criteria on that ticket, each a test that fails against today's tree. When: it
-merges **before** this wiring does — that is what the `blocks` edge means here,
-because wiring is what first makes the defects reachable. If it resolves badly —
-the defects prove deeper than a bounded fix, or the ticket stalls — this change
-does not ship on its own; it waits, because a call site that activates two
-known HIGH defects is worse than the UNWIRED row it replaces.
+**The merge-before-wiring wait is DELETED.** An earlier revision made this
+change wait for MIK-7388 to land first, on the ground that wiring is what makes
+its defects reachable. Grok raised it in round 6 and it is confirmed: by the
+time that sentence was written, every defect the wait was built on had already
+been accounted for somewhere else in this document, and the wait had nothing
+left to wait for.
+
+| the defect the wait named | where it went |
+|---|---|
+| `:430`, cancellation safety in the awaited send | RE-BOUND to this change six paragraphs above. It is a correctness property of code this change WRITES, mandated by the trait it implements — not a repair of an existing defect, and the OUT list now says so |
+| `:433`, a timed-out prompt retrying the backend without an answer | DIED AT THE REQUIREMENTS. Row 320 specifies exactly that behaviour, and `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call` pins it |
+| `:454`, a reply projection that is not kind-aware | ALREADY IN THE TREE, fixed in `60a28464` and checked off as `MIK-7388.BRIDGE.5`. `project()` takes `kind` and branches on it (`input_bridge.rs:476-495`): everything but `Elicitation` returns the result whole, and the doc comment states the reason — reading an `action` member on a roots or sampling reply would drop the rest of the answer |
+
+A blocking edge whose three grounds are one re-binding, one requirement and one
+shipped function is not a schedule; it is a sentence nobody re-read after the
+document around it moved. Deleting it is the repair. What survives is the ASK,
+unchanged and still the requester's: whether row 320's "abandoned at
+`min(remaining, 30s)`, rounds unaffected" is the behaviour they want, given that
+it lets a backend continue without input a person never gave.
+
+The ticket was read too, not only the tree, because a wait is drawn against a
+ticket. MIK-7388 today carries one retired identifier, one met, and three live:
+`BRIDGE.1` was RETIRED with the withdrawn `:433` defect, `BRIDGE.5` is CHECKED
+and shipped in `60a28464` (the kind-aware projection), and `BRIDGE.2` — the
+`:430` cancellation entry — is re-bound by the ticket itself, in its own words,
+to “the change that creates the risk”, which is this one. What remains is
+`BRIDGE.3`, that the MIK-7212 acceptance suite still passes whole, which this
+change runs anyway, and `BRIDGE.4`, which IS the open question above. Not one
+of the five is a thing this change could wait for someone else to do.
 
 Consequence, stated rather than discovered later: rows :130 and :131 go green
 for the HTTP transports only. Whether that reads as met, or as met with a named
@@ -242,13 +263,13 @@ test code is written.
 | stdio serial dispatch deadlocks a bridged call (GPT, HIGH, CERTAIN) | confirmed at source. Second blocker, above. **Filed as MIK-7387** with the three failing rows as its acceptance evidence; the requester decides include/exclude for the release there |
 | reply projection is not request-kind-aware; params forwarded unvalidated (GPT) | out of this scope — defects in `input_bridge.rs` itself, not in wiring it. Filed rather than fixed here |
 | store as an injected trait (Kimi) | declined. A trait with one implementation is an abstraction nothing asked for. `BridgeObserver` earns its trait because production genuinely passes a no-op; a capability store does not |
-| two of MIK-7388's four defects contradict frozen acceptance rows (implementer, HIGH) | confirmed at source. `:433` is what row 320 specifies and `:409` is what row 308 forbids; both findings die at the requirement, and the ticket narrows to `:430` + `:454`. Whether row 320 is the behaviour the requester wants is open question 4, not a repair |
+| two of MIK-7388's four defects contradict frozen acceptance rows (implementer, HIGH) | confirmed at source. `:433` is what row 320 specifies and `:409` is what row 308 forbids; both findings die at the requirement, and the ticket narrowed to `:430` + `:454`. It has since narrowed again: `:454` was fixed in `60a28464` and checked off as `BRIDGE.5`, leaving `:430` alone. Whether row 320 is the behaviour the requester wants is open question 4, not a repair |
 | store has no eviction or ownership (both vendors, HIGH) — **re-raised on the amended design** (GPT, HIGH) | confirmed twice. The first answer, `SessionLifecycle`, has no production caller at all; declarations live in the `NotificationMultiplexer` session map instead, the only session-keyed store whose removal runs in production. Superseded answer recorded at open question 3; the owner is fixed by amendment 3 |
 | bridge retries invoke the backend outside cost accounting (GPT, HIGH, LIKELY) | confirmed at source: `invoke.rs:1246,1369,1394` each fire once around the single dispatch at :1327. In scope — this change creates the second invocation. One dispatch helper, change surface above |
 | the merge widens MRTR.9 for modern callers while the table says it does not (synthetic, MEDIUM, CERTAIN) | confirmed at source: the gate at `invoke.rs:1518` is shape-blind. Merge scoped to `Legacy` only, option C above |
 | construction-site census says five and lists seven (synthetic, LOW) | confirmed. Count was wrong, list was right; re-enumerated by role |
-| timed-out client prompt discarded, backend retried without the answer (GPT, HIGH, LIKELY) | out of this scope — a defect inside `input_bridge.rs`, not fixed by a wiring change. **Filed as MIK-7388** with the pending-map growth, blocking MIK-7212 |
-| pending-response map grows if the outer timeout cancels after registration (GPT, HIGH) | out of this scope. **Filed as MIK-7388**, which blocks MIK-7212: neither defect is reachable until this wiring gives the bridge a caller. Recorded here as being in the same file as the row above, which it is not — `input_bridge.rs` holds no pending state, and `rg 'impl .*ClientChannel for' src/` returns nothing, so the map this names belongs to an implementor the UNWIRED decision means nobody has written. Re-bound on MIK-7388 to the production `ClientChannel` impl on 2026-09-05 |
+| timed-out client prompt discarded, backend retried without the answer (GPT, HIGH, LIKELY) | out of this scope — a defect inside `input_bridge.rs`, not fixed by a wiring change. **Filed as MIK-7388** with the pending-map growth, blocking MIK-7212. Both halves of that row are now superseded: the ticket WITHDREW this criterion (`BRIDGE.1`, retired) once row 320 was read at source, and round 6 deleted the blocking edge |
+| pending-response map grows if the outer timeout cancels after registration (GPT, HIGH) | out of this scope. **Filed as MIK-7388**, which blocks MIK-7212: neither defect is reachable until this wiring gives the bridge a caller. Recorded here as being in the same file as the row above, which it is not — `input_bridge.rs` holds no pending state, and `rg 'impl .*ClientChannel for' src/` returns nothing, so the map this names belongs to an implementor the UNWIRED decision means nobody has written. Re-bound on MIK-7388 to the production `ClientChannel` impl on 2026-09-05 — which is the impl THIS change writes, so `BRIDGE.2` is satisfied here and is not something to wait for |
 | production-path HTTP test beyond trait fakes (GPT, MEDIUM) | accepted. The acceptance rows are fake-driven; one end-to-end HTTP test is the honest evidence and belongs in the test plan |
 | compact legacy-or-modern discriminator instead of full `RequestShape` (GPT, both passes) | accepted. Recorded as the field's intended shape; `RequestShape` was shorthand, not a requirement |
 
@@ -466,10 +487,19 @@ multiplexer to write to, which is amendment 1's conjunction holding by
 construction rather than by a transport check.
 
 Not amended, still out of scope: the aggregate deadline not bounding backend
-retries, prompt parameters forwarded without typed validation, and reply
-projection ignoring request kind. All three are inside `input_bridge.rs`, none
-is created by the call site, and MIK-7388 is where bridge-internal defects go.
-MIK-7388 blocking MIK-7212 is what keeps them from shipping live.
+retries, and prompt parameters forwarded without typed validation. Both are
+inside `input_bridge.rs`, neither is created by the call site, and MIK-7388 is
+where bridge-internal defects go. The third item this sentence used to list —
+reply projection ignoring request kind — left the list by being FIXED
+(`60a28464`, `MIK-7388.BRIDGE.5`), not by being scoped out.
+
+What keeps the remaining two from shipping live is the UNWIRED row, which is
+what this change replaces, so the honest statement of the risk is that this
+wiring makes them reachable and neither is a blocker: one is bounded by the
+per-call deadline the bridge already carries, the other by the firewall the
+call site puts in front of it. An earlier revision said instead that MIK-7388
+blocking MIK-7212 held them back. That edge is deleted — see the round 6
+disposal below.
 
 ## Round 4 review, disposed
 
@@ -488,7 +518,7 @@ superseded sentence is gone, not footnoted.
 | WIRE.5 checks one generic accounting record (HIGH, POSSIBLE) | accepted. The row now asserts the backend-call count and each sink — invocation metrics, error budget, cost tracker, spend — carries three |
 | WIRE.9 does not test the cache gate (MEDIUM, CERTAIN) | accepted. The row now asserts the settled result is cached and a follow-up call is served without a further invocation |
 | pseudocode for interim vs settled verdict (improvement) | accepted. Four lines under amendment 2 |
-| make MIK-7388 a merge-before-wiring prerequisite, defects in one place (improvement) | already closed by the revision under review's successor: one list, one ticket, four schedule fields, `when` = merges before this wiring |
+| make MIK-7388 a merge-before-wiring prerequisite, defects in one place (improvement) | accepted then, REVERSED in round 6. It was closed by giving the deferral four schedule fields with `when` = merges before this wiring; grok showed that edge had nothing left to hold, and it is now deleted. The half that survives is the one this finding actually wanted: bridge-internal defects live on one ticket |
 | stage both a permitted and a forbidden request in WIRE.4 (improvement) | accepted, row rewritten |
 | map each of the 21 existing rows to its test name (improvement) | accepted, scheduled: done before implementation handoff, so an omission is mechanically visible rather than inferred from a count |
 
@@ -564,10 +594,13 @@ superseded sentence is gone, not footnoted.
    coherent; only the requester can choose. Owner: the release owner, with this
    design. What resolves it: the requester answering, in one line, whether an
    abandoned prompt ends the round (today) or the call (the reviewer's reading).
-   When: before MIK-7388 is worked, since its `:433` item exists only under the
-   second reading. If it resolves toward the reviewer: row 320 and its
-   acceptance test change first, this wiring is unaffected, and `:433` returns
-   to the ticket as a requirements change rather than a bug fix.
+   When: before this change ships, since the behaviour it settles is reachable
+   the moment the bridge has a caller. MIK-7388 already carries this question as
+   `BRIDGE.4` and has RETIRED the `:433` criterion that assumed the reviewer's
+   reading, so the ticket is waiting on the answer, not the other way round. If
+   it resolves toward the reviewer: row 320 and its acceptance test change
+   first, this wiring is unaffected, and `:433` returns to the ticket as a
+   requirements change rather than a bug fix.
 
 ## What is not claimed
 
@@ -982,16 +1015,16 @@ turned out to be worse than stated.
 | open question 3 still cites `streaming.rs:578` as a stream-end removal (MEDIUM, CERTAIN) | grok | confirmed. The main passage had been corrected and the recorded answer had not. It now names the reaper |
 | the `ClientChannel` shrink wraps typed forwarders that re-serialize params and mint a second id (HIGH, CERTAIN) | grok | CONFIRMED at source and the approach changed, not patched. `send_request` is handed a bridge-minted id and raw `Value` params; `forward_sampling_with_response` mints its own uuid (`proxy.rs:212`) and re-serializes a six-field struct with no `serde(flatten)` (`messages.rs:525-543`), so the wrap is lossy by construction and WIRE.11 could never see the id it was given. The adapter now sits one layer down, on `register_pending` + `PendingSampleGuard` + `send_to_session` |
 | the accounted helper omits `enforcer.check`, and the retry overlay's shape is unstated (HIGH, LIKELY) | grok | CONFIRMED at source and repaired. `invoke.rs:1289` refuses with `-32003` before the dispatch is awaited and `src/gateway/input_bridge.rs` names no enforcer at all, so a path extracted from a COUNT OF EMISSIONS would leave every bridged round after the first unmetered. §4 now states the invariant over the whole boundary — gate included — and states what the accounted path does with `retry_params`: merge it as siblings via the existing `OutboundRetry::apply`, and never run `redeem_retry` on a backend's own echoed state |
-| the wait on MIK-7388 has nothing left to wait for (MEDIUM, CERTAIN) | grok | OPEN, unverified. It bears on sequencing, not on correctness, so it did not block the two HIGHs, which are now both closed. It is the one finding of round 6 still carrying into round 7 |
+| the wait on MIK-7388 has nothing left to wait for (MEDIUM, CERTAIN) | grok | CONFIRMED at source. `:430` is re-bound to this change in the OUT list, `:433` is what row 320 specifies, and `:454` is already kind-aware — `project()` branches on `kind` at `input_bridge.rs:476-495`. The ticket agrees at every point: `BRIDGE.1` retired, `BRIDGE.5` checked (`60a28464`), `BRIDGE.2` re-bound by the ticket to “the change that creates the risk”. The merge-before-wiring edge is deleted; the ASK it travelled with survives as `BRIDGE.4` |
 | WIRE.8 should assert elicitation params arrive whole on the production wire; record the invoke-loop as a rejected alternative | grok | the second is already in §4's shape table with its rejection reason. The first is a test-plan change and goes to the test plan, not here |
 
-One finding left open is the honest state, not an oversight: a finding is a lead
-until it is read at source, and closing one on the reviewer's word is the failure
-this document has already recorded twice. The other two — the accounted helper
-and the `ClientChannel` layer — were read at source after the table was first
-written and moved from OPEN to repaired above, which is what the open state is
-FOR. Both were confirmed, and both cost an elimination rather than a patch: a
-count of emissions that lost its gate, and an adapter one layer too high.
+All three findings that this table first recorded as OPEN were read at source
+afterwards and moved to repaired above, which is what the open state is FOR. All
+three were confirmed, and none was a patch: a count of emissions that lost its
+gate, an adapter one layer too high, and a blocking edge with nothing left to
+block. Recording them open first was not caution for its own sake — a finding is
+a lead until it is read at source, and this document has twice recorded what
+closing one on the reviewer's word costs.
 
 **Grok's verdict is recorded with a caveat about its own provenance.** The
 ledger row exists with `process_status: ok` and verdict SHIP-WITH-FIXES, but its
