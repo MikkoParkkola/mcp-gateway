@@ -125,6 +125,10 @@ Five pieces, in dependency order.
    the record at the moment it acts. Nothing derives a deadline once and keeps it, so "the reaper
    and the record disagree about the TTL" is not a sentence that can be said about this design.
    That is what makes it an elimination rather than a no-caching rule someone has to remember.
+   Said without the elimination framing, because a reviewer asked for it plainly (grok, 2026-09-06):
+   4.0.0's **observable** behaviour is that neither field ever changes, and read-from-the-record is
+   the forward-looking half — the constraint that makes a later mutable release a one-line change at
+   the single writer instead of an audit of every reader.
    `src/config_reload/` is why the rule is not theoretical — put in the tense it is true in: the
    reload path exists today and carries no task TTL (`rg 'ttl_ms|TtlMs|ttlMs' src/` finds only
    `LIST_TTL_MS`, the `tools/list` cache value at `router/handlers.rs:1411`, and the meta-MCP
