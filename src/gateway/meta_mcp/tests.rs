@@ -4656,7 +4656,9 @@ fn discovery_names(v: &Value) -> Vec<String> {
             // `gateway_search` names a tool `server:tool_name`; the other three
             // readers name it bare. Compare on the bare name so one pinned
             // literal covers all four entry points.
-            raw.rsplit_once(':').map_or(raw, |(_, name)| name).to_string()
+            raw.rsplit_once(':')
+                .map_or(raw, |(_, name)| name)
+                .to_string()
         })
         .collect();
     names.sort();
