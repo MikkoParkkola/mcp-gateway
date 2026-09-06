@@ -145,7 +145,12 @@ against code that already exists.
 do not descend from a criterion clause. Three of them — `.14`, `.15`, `.16` — pin the point this
 design picked inside a range the pinned spec leaves open (`tasks.md:308`, `tasks.md:340` — every server-side clause on expiry, retention
 and poll-interval handling is a **MAY**, checked against the pinned blob before these rows were
-written). `.17` is there for a different reason and the sentence above does not cover it: it pins
+written — the check, since asserting a sweep is not running one (kimi, 2026-09-06):
+`rg -n 'MUST' /private/tmp/ext_tasks_2026-07-28.md | rg -i 'ttl|poll|expir|delet|discard|retain|terminal|capacity'`
+returns four lines and only four — `:300` (a `CreateTaskResult` MUST NOT be returned before the
+task is durably created), `:348`, `:350` and `:404`, none of which governs whether an expired
+record is deleted or retained, how capacity is released, or how a server answers a client polling
+too fast). `.17` is there for a different reason and the sentence above does not cover it: it pins
 no spec range at all, it pins this design's own internal invariant — the record, not live
 configuration, owns the value — which the specification neither requires nor forbids. That still
 makes it ours to test rather than the ledger's to judge, by the same rule and not by the same
