@@ -18,7 +18,12 @@ reopened here.
 ## 0. Scope
 
 **FOR:** one test case per acceptance-criterion clause of `MIK-7272.TASK.1`, each with its V-model
-level, its type, and an honest statement of whether it can fail against HEAD.
+level, its type, and an honest statement of whether it can fail against HEAD — **plus** the
+design-decision rows `.14`–`.17`, which descend from no criterion clause and are named here so a
+reader does not have to decide whether they are extras that escaped the one-case-per-clause rule
+(grok, 2026-09-06). They are in scope on purpose: each pins a choice this design made that the
+pinned specification leaves open or does not speak to at all, and §4's counting note says which is
+which.
 
 **OUT:**
 - test code (that is §P2's second half, not this document)
@@ -33,7 +38,9 @@ defect in this plan, and the repair is to delete the row, not to widen the desig
 
 ## 1. Row order is deliberate
 
-The table runs `.1 .. .9`, then `.11`, then `.10`, then `.12`, `.13`. `.11` precedes `.10` because
+The table runs `.1 .. .9`, then `.11`, then `.10`, then `.12`, `.13`, and finally the
+design-decision rows `.14`–`.17` — appended, in the order they were written, never interleaved with
+the clause rows they sit beside in subject matter. `.11` precedes `.10` because
 `.10` is the split-criterion row and reads as a footnote to the authorisation pair around it. **Do
 not renumber.** The identifiers are cited from the design, the criteria status doc, and the release
 ledger; renumbering silently invalidates three documents to tidy one table.
