@@ -146,8 +146,9 @@ follow-up.
 
 R4 and R5 arrived 2026-09-06 from the MRTR.8b/10a design when Change B was withdrawn. They were
 risks *of activating the cache*; that change activates nothing, so they are this one's from the
-moment it does. R6 was found 2026-09-06 while source-verifying this document's own ADR-008 bullet,
-and is not inherited — it is live in shipped source.
+moment it does. R6 was found 2026-09-06 while source-verifying this document's own ADR-008 bullet.
+It is not inherited, but it is the same kind of risk: it fires when the cache is activated, and
+not before.
 
 - **R4 — loose key reuse starts returning 409.** A caller that today reuses one key string across
   different `(server, tool, arguments)` gets a silent replay; once P5's binding check lands it gets
@@ -155,32 +156,36 @@ and is not inherited — it is live in shipped source.
   in this change's release note rather than being discovered in production.
 - **R5 — an unverifiable identity leaves the key unbound.** When neither `cache_binding` nor a
   stable actor id resolves, the *key* carries no principal at all — the fingerprint never carries
-  one by design (`invoke.rs:1163-1167` is `derive_key(server:tool, arguments)` plus the retry
-  discriminator). The choice is this
+  one by design (the fingerprint in `invoke_tool` is `derive_key(server:tool, arguments)` plus the
+  retry discriminator). The choice is this
   change's to make and to state: refuse to protect the call, or protect it with an unbound key and
   accept cross-caller replay. Left unstated it defaults to the second by accident.
   The two options are NOT symmetric, and R6 is why: after P8's fallback chain lands, the callers
   whose `identity_suffix` is still empty are exactly this population, so "protect it with an unbound
   key" is the option that keeps R6's spoofable-suffix population alive. Decide R5 with R6 in hand.
 - **R6 — the idempotency suffix is appended raw after a client-supplied prefix, so a caller can
-  spell another caller's binding.** This is live today, independent of P8. The response key's first
+  spell another caller's binding.** Dormant, for the same reason everything else here is: with
+  `idempotency_cache` always `None`, `idempotency_key_for` returns `None` before it formats
+  anything, so no deployed build derives this key at all. Activation is what makes it reachable —
+  which is why it sits with R4 and R5 rather than in a defect report. The response key's first
   field is `{server}:{tool}:{args_hash}` — a digest the caller cannot spell — and its principal is
   HASHED into `|sub:{digest}`, for the reason `cache.rs` states: "a subject is caller-supplied text,
   and appending it raw lets one spell another's suffix." The idempotency key's first field is the
   CLIENT-SUPPLIED key, free text in prefix position, and everything after it is appended raw and
-  unlength-prefixed: `format!("{key}{projection_key_suffix}{identity_suffix}")` (`support.rs:43`).
-  `projection_key_suffix` is EMPTY except in `ProjectionMode::Experimental`
-  (`src/projection/mode.rs:115-122`), so on the shipped path the middle field is not a separator.
-  `cache_binding` is PLAINTEXT — `idp:{len}:{subject_key}:{len}:{audience}`
-  (`identity_propagation/mod.rs:291-300`) — length-prefixed INSIDE itself but not against what
+  unlength-prefixed: `idempotency_key_for` returns
+  `format!("{key}{projection_key_suffix}{identity_suffix}")`.
+  `projection_key_suffix` is EMPTY except in `ProjectionMode::Experimental`, so on the shipped path
+  the middle field is not a separator.
+  `cache_binding` is PLAINTEXT — `idp:{len}:{subject_key}:{len}:{audience}` in
+  `identity_propagation`'s `cache_binding` — length-prefixed INSIDE itself but not against what
   precedes it. So an unbound caller (`identity_suffix` empty) sending client key
-  `X|idp:<victim binding>` derives the same final key as a bound victim sending `X`.
+  `X|idp:<victim binding>` derives the same final key as a bound victim sending `X`. The spoof runs
+  one way only: a bound caller's own suffix always lands last, so it cannot impersonate anyone.
   A mixed bound/unbound population in ONE deployment is not hypothetical: on a non-`required`
   propagation backend, a caller with no verified end-user identity falls to
-  `Ok(CallerCredential::default())` — `cache_binding: None` (`invoke.rs:2292-2298`, and the local
-  `CallerCredential.cache_binding` is `Option<String>` at `invoke.rs:52`, distinct from
-  `PropagatedCredential.cache_binding: String` at `identity_propagation/mod.rs:98`) — while a
-  verified caller on the same backend gets `Some(binding)` (`invoke.rs:2400-2404`).
+  `Ok(CallerCredential::default())` — `cache_binding: None` (the local `CallerCredential`'s
+  `cache_binding` is `Option<String>`, distinct from `PropagatedCredential.cache_binding: String`)
+  — while a verified caller on the same backend gets `Some(binding)`.
   `idempotency_key_for`'s own doc comment claims the opposite of this ("They stay part of the key so
   one caller's stored result is never served to another under the same client key") and is
   therefore a stale comment to fix in the same commit as the mechanism.
