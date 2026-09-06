@@ -3,8 +3,8 @@
 
 # GH475.RL.10 — why a capability backend's 429 is counted as a healthy call
 
-Status: **design, revision 2**, awaiting dual review. Question 1 resolved by
-check (see 4.1); question 2 remains open with a stated fallback. No code written.
+Status: **revision 2, reviewed — premise falsified, no code change required**. See §6.
+Sections 1-5 are retained as the record of a wrong diagnosis, not as a plan.
 
 ## 0. The ledger's stated reason is wrong, and the correction changes the fix
 
@@ -132,3 +132,91 @@ fallback stands.
 
 RL.10.1 can fail and does fail today; RL.10.3 is the case that can only fail if
 the fix is implemented as a body scan.
+
+## 6. Revision 2 review: the defect does not exist, and option (c) is withdrawn
+
+Dual review of revision 2 returned SHIP-WITH-FIXES from the Claude Code CLI leg
+(the Codex leg produced no verdict row and is recorded `MISSING`, per §PA). Its
+first HIGH finding asked a question this design had never asked: does a wrapped
+capability 429 actually trip `is_rate_limited`? Checking it falsified the
+document.
+
+### 6.1 An error status never reaches the envelope at all
+
+Every capability executor bails on a non-success HTTP status **before** any
+`ToolsCallResult` is built:
+
+| executor | site |
+|---|---|
+| REST (`params.rs`) | `:45` `if !status.is_success() { ... return Err(Error::Protocol(format!("API returned {status}: {error_text}"))) }` |
+| JSON-RPC | `src/capability/executor/jsonrpc.rs:199` |
+| GraphQL | `src/capability/executor/graphql.rs:255` |
+| credentials | `src/capability/executor/credentials.rs:221` |
+
+`build_success_tool_result` (`src/capability/backend.rs:543-553`) serialises the
+parsed body only, and it is reached **exclusively on success**. So the premise
+in §1 — "a capability backend answering `429` produces `Ok(response)` with
+`isError` absent" — is false. It produces `Err`.
+
+### 6.2 The `Err` arm already classifies rate limits
+
+`BudgetOutcome::of` has a second arm this design quoted around
+(`invoke.rs:3003-3010`):
+
+```rust
+Err(error) => {
+    if crate::gateway::recovery::is_rate_limited(&error.to_string()) {
+        Self::IgnoredRateLimit
+    } else {
+        Self::Failure
+    }
+}
+```
+
+`is_rate_limited` (`src/gateway/recovery.rs`) matches `"too many requests"`
+case-insensitively **and** `429` as a standalone alphanumeric token. The
+executor's message — `API returned 429 Too Many Requests: …` — trips both,
+independently. The `Err` propagates unchanged: `call_capability_tool_with_identity(...)?`
+at `invoke.rs:2456` is a bare `?` inside `dispatch_to_backend`, and
+classification happens on that `Result` at `:1384`.
+
+**A capability backend's 429 is already recorded `IgnoredRateLimit` and already
+excluded from the error budget.** `GH475.RL.10` is met in mechanism.
+
+### 6.3 What is actually left
+
+A test, not a fix. The criterion has never been exercised for the capability
+kind, and the mechanism it depends on is a string predicate over an error
+message — the most fragile way this could be true. RL.10.1 can fail: wrapping
+error statuses into `Ok` results, or dropping the status from the message text,
+breaks it silently and nothing else would notice.
+
+| AC | case | level | state |
+|---|---|---|---|
+| RL.10.1 | a capability backend answering HTTP 429 records `IgnoredRateLimit` | unit at the dispatch seam | the criterion's evidence |
+| RL.10.2 | the same call increments `mcp_error_budget_suppressed_total` exactly once | unit, mirroring `GH475.OBS.1` | retained |
+| RL.10.4 | a capability 4xx that is not a rate limit records `Failure` | unit | retained; passes today via the `else` arm |
+
+RL.10.3 (payload text containing `429` on a success) is retained as a **gate
+guard**, relabelled per the review: it records why option (b) was rejected and
+can only fail against a future edit, not against this change.
+
+### 6.4 Dispositions
+
+| finding | verified | disposition |
+|---|---|---|
+| the wrapped 429 may not trip `is_rate_limited` | **confirmed, and larger than reported** — §6.1, §6.2 | the design's premise is false; options (a), (b), (c) all withdrawn |
+| Q2's fallback contradicts RL.10.4 | **confirmed** by the document's own text: marking 429 alone leaves other 4xx `Success` | moot — Q2 is withdrawn with the options |
+| RL.10.3 passes by construction | confirmed | relabelled as a gate guard, §6.3 |
+| write §0's refutation back into the rollup | accepted | `RELEASE-4.0.0-blocking-rollup.md:111` corrected |
+
+### 6.5 Assumption rank (G10), cheapest falsifier first (G11)
+
+| rank | assumption | impact | uncertainty | cheapest falsifier | state |
+|---|---|---|---|---|---|
+| 1 | an error status reaches `BudgetOutcome::of` as `Ok` | **critical** — the whole design | was low, wrongly | read one executor's non-success branch | **falsified**, §6.1 |
+| 2 | the `Err` arm's predicate matches the executor's message | high | was unasked | read `is_rate_limited` against the format string | **confirmed**, §6.2 |
+
+Both checks cost one file read each and neither was run before two revisions
+were written. Same G11 failure as `NFR.PERF.4`, found the same way — by a
+reviewer asking what the document had assumed rather than what it argued.
