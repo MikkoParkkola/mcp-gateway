@@ -191,7 +191,10 @@ not before.
   posture this design already took at the capacity bound, and it is decidable at the derivation
   site, where both the key and the identity are in hand. A caller with no resolvable identity that
   sends no key is unaffected: protection applies when a key is present and never otherwise, so
-  nothing that works today starts failing. Recorded here so the operator can overrule it in one
+  no client reaching this today starts failing. The caller who DOES start failing is the
+  unbindable one that sends a key, and that set is empty only because no client can discover the
+  field to send it (the carrier gap above) — a reason the claim holds today, not a reason it
+  holds. Stated in the narrow form, it stays true once a carrier is advertised. Recorded here so the operator can overrule it in one
   line rather than discover it in code.
 - **R6 — the idempotency suffix is appended raw after a client-supplied prefix, so a caller can
   spell another caller's binding.** Dormant, for the same reason everything else here is: with
