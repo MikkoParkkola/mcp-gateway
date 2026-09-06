@@ -20,7 +20,7 @@ constant itself, about `NFR.PERF.1`, or about the meta-tool surface.
 | # | criterion clause | the case that proves it | level | type | can it fail today, and on what |
 |---|---|---|---|---|---|
 | 1 | memory MUST NOT grow unboundedly with abandoned continuations — the bound holds | fill to `IN_FLIGHT_CAPACITY` (4 096) with live, unexpired holds, then `hold` once more; the refusal is `None` and occupancy stays at 4 096 | unit, `src/protocol/continuation.rs` tests | boundary | **No — and it is stated as already met.** `hold`'s capacity branch is built (`:696-717`). The row exists so the clause has a case, not because it is expected to go red; its value is regression, and the falsifier probe below is what earns it |
-| 2 | …and a soak with abandonment MUST show reclamation | abandon 8 192 exchanges (2x capacity, so the table wraps its own ceiling once) against a **driven clock**; advance `now` past the deadline; occupancy is 0 with no capacity pressure applied | unit, same module | lifetime / state | **Yes.** Today reclamation runs only inside the capacity branch, so below capacity an expired hold is retained indefinitely. Fails on the occupancy assertion until `guard(now)` lands |
+| 2 | …and a soak with abandonment MUST show reclamation | abandon exactly `IN_FLIGHT_CAPACITY` (4 096) exchanges against a **driven clock** and never attempt a 4 097th, so the capacity branch is never entered; advance `now` past the deadline; `len(now)` is 0 | unit, same module | lifetime / state | **Yes.** Today reclamation runs *only* inside the capacity branch, and this fixture never enters it, so every expired hold is retained. Fails on the occupancy assertion until `guard(now)` lands |
 
 ## Why no wall-clock soak
 
@@ -40,11 +40,13 @@ Every row states above what makes it fail. The risks specific to this plan:
   retrofitting falsifier probe from the process — restore the pre-`ec11dcec` body of the
   capacity branch and show the case fails on the occupancy assertion, then restore and show it
   passes. Without the probe it is not evidence.
-- **Row 2 must not stage away the condition it observes.** The fixture may not call
-  `complete` on the abandoned exchanges, and may not reach capacity before asserting; either would
-  reclaim through a path that already works and make the assertion true without the mechanism
-  under test. 8 192 is chosen so the *fill* crosses capacity while the *observation* happens after
-  the drain, and the assertion is on holds that were never completed.
+- **Row 2 must not reclaim through the path that already works.** Two ways it could: calling
+  `complete` on the abandoned exchanges, or reaching capacity before asserting. The second is the
+  subtle one — `hold` reclaims on a refused attempt, so a fill that overshoots the ceiling drains
+  the table through the existing branch and the row goes green with `guard(now)` never involved.
+  Hence exactly 4 096 and not one more. An earlier draft filled 8 192 "so the table wraps its own
+  ceiling once", which is also just wrong: attempts 4 097 onward are refused, occupancy never
+  exceeds 4 096, and nothing wraps.
 - **The admission-recovery row was deleted, not repaired.** An earlier draft carried a third row —
   after row 2's drain, a fresh `hold` at the advanced clock returns `Some` — presented as failing
   evidence of the wedge. It is not: `hold`'s capacity branch already calls `reclaim_abandoned(now)`
