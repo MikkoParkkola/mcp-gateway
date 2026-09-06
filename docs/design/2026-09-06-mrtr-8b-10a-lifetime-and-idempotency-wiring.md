@@ -270,13 +270,45 @@ Each is resolved by a recorded ANSWER or carries the four deferral fields. None 
 | U1 | Is any past-deadline exchange dispatchable today? | **resolved** — checkable — read `src/protocol/continuation.rs:495-515` and `src/gateway/meta_mcp/invoke.rs:540-620` — `keyring().open` refuses `Expired` at `:509` and is called at `invoke.rs:546`, before `route` at `:584`; the hold deadline is the same `expiry_for(now)` (`:864`) — **changed the design**: A became a lifetime/observability repair, not a dispatch repair, so its failing test asserts on `len`/`route` under a driven clock rather than on a dispatched retry. |
 | U2 | Does MRTR.10a own the idempotency-vs-confirmation ordering? | **resolved** — checkable — read `src/gateway/destructive_confirmation.rs:160-220` and `src/gateway/meta_mcp_tool_defs.rs:135-160,254-262` — the gate governs only meta-tools annotated `destructiveHint: true`, `gateway_invoke` is annotated false, backend tools are never in the set — **changed the design**: the ordering left this document's scope and stays with the destructive-confirmation slice. |
 | U3 | Does the idempotency key carry single-use semantics? | **resolved** — checkable — read `src/idempotency.rs:547-600` — `enforce` replays `CachedResult` on `Completed` and refuses only `InFlight`/`Mismatch` — **changed the design**: recorded explicitly in Problem B, because a stateless-confirmation option elsewhere was about to hang single-use on this key. |
-| U4 | Default ON or OFF for `idempotency.enabled`? | **askable — asked of the team lead, 2026-09-06 — ANSWER PENDING.** Recommendation sent: OFF, because ON ships a new 409 to existing clients inside a release-criteria fix. Blocks only the config default line and the release note; the builder method, the section and the tests are identical either way, so the rest of Change B is not blocked. |
+| U4 | Default ON or OFF for `idempotency.enabled`, **and does a default-OFF wiring satisfy MRTR.10a's acceptance**? | **deferred** — the second half was missing until review pointed out that §P4a flips `:143` to wired on the strength of an answer that may not cover the criterion's acceptance semantics. Both halves now travel in one ask. Fields below. |
+
+U4's four deferral fields, because it is deferred and a recommendation is not a schedule:
+
+| field | value |
+|---|---|
+| owner | the team lead; asked 2026-09-06, ask widened the same day to carry the acceptance half |
+| what would resolve it | the recorded answer to both halves — the default, and whether reachable-but-off meets MRTR.10a |
+| when | before the config default line is written and before `:143`'s status is edited; the builder method, the config section, the principal binding and every test are identical either way and are not waiting on it |
+| what if it resolves badly | *ON* — the release note carries R4's 409 as a behaviour change and the change needs a migration line, which is why OFF is recommended. *Reachable-but-off does not satisfy MRTR.10a* — `:143` stays UNWIRED, Change B ships as the mechanism and the criterion closes when an operator default flips, which is a scope call for the requester, not a repair |
+
+## §P4 review record
+
+| leg | vendor | verdict | evidence |
+|---|---|---|---|
+| 1 | Kimi K3 (`synthetic-review`) | SHIP-WITH-FIXES | `~/.claude/data/reviews/runs/synthetic-20260906T065936Z-43480.md`, rc=0 |
+| 2 | Grok (`grok-review`) | *in flight at the time of this revision* | recorded when the run exits |
+| — | Codex/GPT (`gpt-review`) | **MISSING** | rc=0 but no verdict and no run file: `ERROR: You've hit your usage limit … try again at Sep 12th, 2026`. Per §PA a nonzero-or-absent row is `MISSING`, never a scraped verdict |
+
+**Stated deviation.** The shared pair for a Claude-authored change is `gpt-review` + `grok-review`.
+Codex is usage-limited until 2026-09-12, so leg 1 is Kimi. This is a substitution recorded before
+ratification rather than discovered at it; `ratify` requires a SHIP from each vendor and will read
+these rows, not this paragraph.
+
+Findings incorporated this round: the caller-binding hole in the idempotency key (verified at
+source, promoted into Change B), the freshness precondition on Design A's elimination claim, the
+widened U4 ask, and the three test-plan constraints above. The `#[cfg(test)]` clock improvement was
+rejected with its reason in Alternatives. One finding died at source: nothing was found to support
+the *response*-cache half of the cross-principal claim — `caller_principal` already carries the
+verified-subject fallback (`invoke.rs:1140-1142`); only the idempotency key was unbound.
 
 ## §P4a documentation delta
 
 - `docs/requirements/RELEASE-4.0.0-criteria-status.md:140` — MRTR.8b PARTIAL, and its note asserts
   a dispatch defect U1 disproved. Both the status and the note change with Change A.
-- `docs/requirements/RELEASE-4.0.0-criteria-status.md:143` — MRTR.10a UNWIRED, changes with B.
+- `docs/requirements/RELEASE-4.0.0-criteria-status.md:143` — MRTR.10a UNWIRED. Changes with B
+  **only if** U4's second half comes back saying reachable-but-off satisfies the criterion. Until
+  that answer is recorded the row is not edited; writing it first would be the certification
+  flipping on a pending answer, which is the finding that widened U4.
 - Operator config reference — the new `idempotency:` section.
 - Release notes — R4's behaviour change, in whichever direction U4 lands.
 - `docs/design/2026-08-30-shared-continuation-state.md:116` is cited by `route`'s doc comment and
@@ -284,4 +316,23 @@ Each is resolved by a recorded ANSWER or carries the four deferral fields. None 
 
 ## Test plan
 
-Follows as a separate document, one row per clause, before any test code is written.
+Follows as a separate document, one row per clause, before any test code is written. Three
+constraints on it are settled here rather than left to the plan, because each one is a way the
+plan could pass while proving nothing:
+
+- **Change B's acceptance row builds `MetaMcp` through the production builder**
+  (`src/gateway/server/mod.rs:539-580`) with an idempotency-enabled config fixture. A test that
+  constructs the cache itself is exactly what `tests.rs:3515` already does, and it is why the
+  criterion reads as met while no deployed retry reaches the key. A fixture that reproduces the
+  defect cannot be the proof it is fixed.
+- **A negative case with the section absent**, asserting the default the way the code computes it.
+  The assertion's *value* waits on U4; the row does not — it is written now and marked blocked on
+  the recorded answer, rather than written later against a guessed default.
+- **A cross-principal case for the key binding**: two callers, distinct verified subjects,
+  identity propagation off, same client-chosen key, same tool, same arguments. Today's code serves
+  the second caller the first's stored response; after the binding it admits the second call. The
+  old behaviour is what makes the case able to fail, so the falsifier probe is available without
+  reconstructing anything.
+
+Change A's rows assert on `len` and `route` under a driven clock, per U1 — not on a dispatched
+retry, which U1 showed cannot happen.
