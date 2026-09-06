@@ -78,7 +78,7 @@ it. Both now carry the ledger's ten names. The ten below are the ledger's.
 | class | rows |
 |---|---|
 | DESIGN | 5 — `HEADER.9a`, `HEADER.9b`, `CONTROL.3a`, `CONTROL.4`, `NFR.PERF.4` |
-| TEST | 3 — `IDENT.1a`, `SCHEMA.1c`, `NFR.SEC.1` |
+| TEST | 2 — `SCHEMA.1c`, `NFR.SEC.1` (`IDENT.1a` left this bucket 2026-09-06: tested, met, no longer blocking) |
 | CODE | 2 — `NFR.SEC.6`, `CONFIRM.2` |
 | DECISION | 0 |
 | MEASUREMENT | 0 |
