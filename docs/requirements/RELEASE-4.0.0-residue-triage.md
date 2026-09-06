@@ -12,7 +12,7 @@ than transcribed from the rollup, and sorted by what each one is waiting on.
 after `GH475.OBS.1` landed the same day):
 
 ```
-Coverage: 146 criteria, 182 rows, 151 met or non-blocking, 31 blocking.
+Coverage: 146 criteria, 182 rows, 154 met or non-blocking, 28 blocking.
 ```
 
 The line this document carried earlier the same day — `146 criteria, 182 rows, 147 met or
