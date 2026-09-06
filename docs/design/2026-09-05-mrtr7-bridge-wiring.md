@@ -882,3 +882,33 @@ quotes one, it is quoting its own moment. That suite
 exercises the bridge through `FakeClient`; it is what makes the module live, and
 it is not evidence of a production path. That distinction is the whole of
 MRTR.7a.
+
+## Round 6, disposed — 2026-09-06
+
+Two reviewers, two shapes. The closure re-check went back to the finder that
+raised round 5's findings; grok reviewed the whole document fresh. Every finding
+below was read at source before it was touched, and two of them died there or
+turned out to be worse than stated.
+
+| finding | vendor | disposal |
+|---|---|---|
+| the round-5 repair invented a per-connection generation and asserted "readable only by the connection that made it" (HIGH) | closure finder | confirmed, and eliminated rather than patched. `handlers.rs:290-300` reattaches an SSE stream to an existing session with no re-`initialize`, so the generation either fail-closes legitimate reattached traffic on the one transport this design ships to, or is per-session under a longer name. The mechanism is deleted; the rule is stated once — a declaration is session-scoped |
+| the removal count is stated in two vocabularies, "exactly two places" against "the sole production removal" (LOW) | closure finder | confirmed. One wording in both passages: removed from the map once on `DELETE`, replaced in place once on `initialize` |
+| the deferred owner cell names no accountable party; §4 over-grades a count the same round marked I | closure finder | both taken. The team lead is accountable until the session-store work package has a name in it; the heading says "read at source (I)" |
+| "nothing reaps a session that is never DELETEd" is false — `spawn_reaper_on` runs in production (MEDIUM, CERTAIN) | grok | confirmed and larger than stated. The reaper walks the same map (`streaming.rs:75`) that holds `ClientSession`, and it removes by `retain`, which is why the write-side grep could not see it. The four-field deferred table is DELETED and the unknown recorded as resolved |
+| open question 3 still cites `streaming.rs:578` as a stream-end removal (MEDIUM, CERTAIN) | grok | confirmed. The main passage had been corrected and the recorded answer had not. It now names the reaper |
+| the `ClientChannel` shrink wraps typed forwarders that re-serialize params and mint a second id (HIGH, CERTAIN) | grok | OPEN, unverified. Named here rather than disposed: it is a change-the-approach finding against round 5's own repair, and it has not been read at source. It carries into round 7 as the first thing checked |
+| the accounted helper omits `enforcer.check`, and the retry overlay's shape is unstated (HIGH, LIKELY) | grok | OPEN, unverified, same handling. If it holds, §4's invariant is under-specified rather than wrong |
+| the wait on MIK-7388 has nothing left to wait for (MEDIUM, CERTAIN) | grok | OPEN, unverified. It bears on sequencing, not on correctness, so it does not block the two HIGHs above |
+| WIRE.8 should assert elicitation params arrive whole on the production wire; record the invoke-loop as a rejected alternative | grok | the second is already in §4's shape table with its rejection reason. The first is a test-plan change and goes to the test plan, not here |
+
+Three findings left open is the honest state, not an oversight: a finding is a
+lead until it is read at source, and closing one on the reviewer's word is the
+failure this document has already recorded twice.
+
+**Grok's verdict is recorded with a caveat about its own provenance.** The
+ledger row exists with `process_status: ok` and verdict SHIP-WITH-FIXES, but its
+`material_sha256` attests to a 134-byte stub, not to the 55KB material — the
+wrapper passed the path and the reviewer read the document off disk itself. The
+findings are real and cite real line numbers. The chain from verdict to material
+is not, and the next round submits the material on stdin.
