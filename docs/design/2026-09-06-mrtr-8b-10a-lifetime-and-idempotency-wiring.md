@@ -19,7 +19,8 @@ explicitly rejected. Removal, not repair — see *Design B, withdrawn* below. Wh
 transferred prerequisite, and this document's remaining FOR is Change A alone.
 
 OUT (both):
-- NFR.PERF.3 soak. It depends on A and B landing; it is its own slice.
+- NFR.PERF.3 soak. It depends on Change A landing and on SUB.4 activating the cache; it is its
+  own slice.
 - The confirmation gate's ordering against the idempotency cache. Settled at source this session:
   the gate governs only meta-tools annotated `destructiveHint: true`
   (`src/gateway/destructive_confirmation.rs:160-220`), `gateway_invoke` is annotated
@@ -28,9 +29,9 @@ OUT (both):
   today. Owned by the destructive-confirmation slice, not by this one.
 - `enable_message_signing`, which has the same no-production-caller shape as
   `enable_idempotency` (`src/gateway/meta_mcp/authz_tests.rs` is its only caller). Recorded as an
-  observation, not filed: it belongs with whoever owns message signing, and round 1's lesson
-  applies to it first — search `docs/design/` for a slice that already owns it before designing
-  one.
+  observation — the third disposal in §P0's table, chosen because it is worth remembering and
+  nobody must act. It belongs with whoever owns message signing, and round 1's lesson applies to it
+  first: search `docs/design/` for a slice that already owns it before designing one.
 - Any change to `ConsumedLedger`, envelope minting, or replica affinity.
 
 ## Problem A — what MRTR.8b actually still fails
@@ -327,7 +328,9 @@ these rows, not this paragraph.
 **Round 1, Kimi.** Incorporated: the caller-binding hole in the idempotency key (verified at
 source), the freshness precondition on Design A's elimination claim, the widened U4 ask, the real
 `IN_FLIGHT_CAPACITY` value, and three test-plan constraints. The `#[cfg(test)]` clock improvement
-was rejected with its reason in Alternatives. One finding **died at source**: nothing supports the
+was rejected with its reason in Alternatives. The startup-log-when-disabled improvement is
+**moot, not dropped**: it applied to Change B's config section, which no longer exists — if SUB.4
+wants that signal it is SUB.4's to want. One finding **died at source**: nothing supports the
 *response*-cache half of the cross-principal claim — `caller_principal` already carries the
 verified-subject fallback (`invoke.rs:1140-1142`); only the idempotency key was unbound. No round
 spent on it.
@@ -357,6 +360,9 @@ that reclaim-on-every-read makes an unguarded capacity walk *more* frequent, not
   cache, and that is SUB.4.
 - `docs/design/2026-08-30-shared-continuation-state.md:116` is cited by `route`'s doc comment and
   stays true: nothing here touches the no-affinity bargain.
+- This document's own filename still names MRTR.10a and idempotency wiring. **Kept deliberately**:
+  `2026-09-01-nfr-perf3-reclamation.md:375` cites it by path, and renaming a file to tidy a title
+  breaks a live citation to save nothing. The title line carries the withdrawal instead.
 
 ## Test plan
 
@@ -378,3 +384,19 @@ construction, an absent-section negative, a cross-principal binding case) are **
 are transferred**: the first two are SUB.4's activation tests, and the third travels with the
 caller-binding prerequisite above. A test plan for a withdrawn change would be the duplicate this
 withdrawal exists to avoid.
+
+### The transfer is a request, not a note (BLOCKING for this document's closure)
+
+Four items leave this document for SUB.4: the caller-binding prerequisite on the idempotency key,
+R4 and R5, and the three constraints above. **Recorded only here, they are inert** — SUB.4's author
+has no reason to re-read a design that withdrew its own change. So this withdrawal is handed to the
+team lead as an explicit transfer request naming the four, and is not closed until SUB.4 carries
+them or the lead reassigns them.
+
+Transfer target liveness, checked rather than assumed: SUB.4 is `proposed, revision 4, no code`,
+but it is not stalled — it is a named blocker in cluster C of
+`docs/requirements/RELEASE-4.0.0-blocking-rollup.md:26` and holds a position in step 8 of
+`docs/requirements/RELEASE-4.0.0-execution-plan.md:206`. A criterion moved to an unowned document
+would be a narrowing of scope needing the requester's recorded agreement; a criterion moved to a
+release blocker with a plan position is a re-assignment. That distinction is why the check was
+run.
