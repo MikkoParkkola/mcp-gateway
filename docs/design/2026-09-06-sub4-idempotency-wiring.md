@@ -12,9 +12,24 @@ new request id actually reach an idempotency guard, so `MIK-7272.SUB.4` moves
 from UNWIRED to MET.
 
 OUT: the tasks extension (`MIK-7272.TASK.1`, ABSENT — the criterion's other
-branch, separately scoped); the key's composition and its fingerprint binding
-(settled by ADR-008 INV-3 and MRTR.10, unchanged here); the response cache;
-distributed idempotency across gateway processes; any new metric name.
+branch, separately scoped); the **fingerprint** binding (settled by MRTR.10,
+unchanged here); the response cache; distributed idempotency across gateway
+processes; any new metric name.
+
+**Scope-move receipt (§P0).** The first freeze put the key's COMPOSITION out of
+scope alongside the fingerprint, "settled by ADR-008 INV-3, unchanged here".
+Two review findings moved it, and the OUT clause above is corrected rather than
+quietly contradicted: the principal rung (round 2, finding 1) and the route
+discriminator (round 2, finding 2) both change what goes into the key. Why the
+surface moved: the criterion cannot be met without touching composition. INV-3
+requires that one caller's stored result is never served to another; the shipped
+default gave every API-key caller the same empty principal, so honouring INV-3
+under this change's own default is a composition change, and calling the
+composition settled would have meant shipping a guard that violates the
+invariant it cites. The route discriminator is the same shape of move: turning
+the guard on for a second route creates a collision that did not exist while the
+guard reached one route. The fingerprint binding is genuinely untouched and
+stays OUT.
 
 ## Problem
 
@@ -226,6 +241,14 @@ MET when all four behavioural tests pass:
    hoist could be reverted with every other test still green. A hand-rolled
    second derivation that drops the projection suffix or the principal makes
    the keys differ in more than the discriminator, and the test fails.
+
+   Stated limit: this catches a derivation that DIVERGES between the two call
+   sites, not one that is consistently wrong at both. That is the defect the
+   hoist exists to prevent, and a consistently-wrong derivation is caught by
+   criteria 1, 2 and 4b instead — each asserts a behaviour the key must produce,
+   not a shape it must have. The route discriminator itself comes from the same
+   parser the meta route already uses (`src/protocol/mrtr.rs:117`) rather than a
+   literal written at each site, so route naming stays single-owner too.
 
    The routes must NOT share one entry, and criterion 3 previously required
    that they do. `GuardOutcome::CachedResult(Value)` (`src/idempotency.rs:551`)
