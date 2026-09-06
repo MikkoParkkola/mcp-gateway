@@ -157,9 +157,13 @@ Five pieces, in dependency order.
    polling faster than the published `pollIntervalMs` — `tasks.md:308` makes that a server **MAY**,
    and the gateway publishes the value without policing the client's rate. And at expiry a record
    is **deleted** rather than marked `failed` and retained: `tasks.md:340` permits either, deletion
-   is what releases the capacity the caps count, and it keeps AC `.11`'s byte-identical not-found
-   intact — an expired-but-retained record would have needed a second refusal shape, for a task
-   that exists and is gone.
+   is what releases the capacity the caps count, and not-found is the whole of what the owner then
+   observes. The earlier draft justified this by AC `.11`'s byte-identical not-found; that
+   justification was wrong and is cut (grok, 2026-09-06). `.11` is a cross-principal invariant and
+   the principal check fires first, so a stranger is answered not-found whether the expired record
+   was deleted or retained as `failed` — `.11` holds either way and cannot decide this. What
+   decides it is the pair above: a retained record still occupies a slot the §11.2 caps count, and
+   it makes the owner's view of expiry a status transition rather than a disappearance.
 
    *On the line numbers.* Citations into `tasks.md` and `schema.ts` are stable because §1 pins the
    blob (`5d6a202eacbaab3444f9d0727ce6587598e7e077`, re-fetched and re-hashed 2026-09-06, 34,148
