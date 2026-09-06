@@ -21,16 +21,21 @@ Both wrappers compute `sha256(scope-arguments + NUL + staged-file)` — `digest(
 byte-identical in behaviour. Two consequences, each verified against the ledger rows rather than
 reasoned:
 
-- **Round 1's matching digest attests nothing about the material.** Both rows record
-  `material_bytes` = 205, which is the scope string alone: the payload went in on STDIN, and
-  stdin is outside what the digest covers. Identical digests there mean identical ARGV.
+- **Round 1's matching digest attests nothing about the material, and the material may never
+  have reached the reviewers.** Both rows record `material_bytes` = 205 — the scope string
+  alone, with no staged file behind it. The payload was handed over as a PATH inside the scope
+  argument (`--scope … /private/tmp/…/kimi-design.txt`) with nothing on stdin, so the wrapper
+  staged nothing and the digest covers 205 bytes of argument text. Piped material would have
+  been staged and covered; a path in an argument is not. Identical digests there mean identical
+  ARGV, and each reviewer saw the design only if it could open that path for itself — which the
+  isolated leg cannot.
 - **Round 2's differing digests do not mean differing material.** The rows are 15824 and 15822
   bytes against scope strings that differ by one character — `§P1 gate` versus `P1 gate`, and
   `§` is two bytes in UTF-8. The material was the same file; the scope was retyped. Reconciled,
   not open.
 
-So the round-2 legs did review the same bytes, and the round-1 pair is unattested by anything
-except my own invocation. Recorded because the fix is mechanical and belongs to the wrappers,
+So the round-2 legs did review the same bytes, and round 1 is weaker than a DO-NOT-SHIP and a
+SHIP-WITH-FIXES on one design make it look: its verdicts may rest on a scope line and a path. Recorded because the fix is mechanical and belongs to the wrappers,
 not here: a digest whose name says `material` and whose input can omit the material is a claim
 the review process makes and cannot support.
 
