@@ -281,8 +281,7 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
     assert!(
         readme.contains(&format!(
             "{} tools minimum, {} in the README benchmark scenario",
-            claims.meta_tools.minimum,
-            claims.meta_tools.readme_benchmark
+            claims.meta_tools.minimum, claims.meta_tools.readme_benchmark
         )),
         "README should advertise the canonical Meta-MCP tool-count range"
     );
@@ -378,8 +377,7 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     assert!(
         benchmarks.contains(&format!(
             "{} minimum / {} README benchmark",
-            claims.meta_tools.minimum,
-            claims.meta_tools.readme_benchmark
+            claims.meta_tools.minimum, claims.meta_tools.readme_benchmark
         )),
         "benchmark docs should describe the canonical Meta-MCP tool-count matrix"
     );
