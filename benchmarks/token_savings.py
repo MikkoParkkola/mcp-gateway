@@ -15,9 +15,10 @@ Meta-MCP approach: The discovery quartet stays fixed
 (`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`,
 `gateway_invoke`). The canonical README benchmark adds stats, cost reporting,
 playbooks, profiles, kill/revive, disabled-capability visibility, workflow
-state control, config reload, and capability reload for a 16-tool surface.
-Surfacing webhook status raises that operational surface to 17 (the minimum
-stripped surface is 14).
+state control, config reload, capability reload, and webhook status for a
+17-tool surface. Webhook status is served wherever a webhook registry is
+attached, which the README's HTTP deployment has and stdio never does, so a
+stdio deployment sees 16 and the minimum stripped surface is 14.
 
 Usage:
     python3 benchmarks/token_savings.py

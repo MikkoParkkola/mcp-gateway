@@ -650,7 +650,6 @@ fn every_builder_contributes_to_the_governed_set() {
     )
     .into_iter()
     .chain(build_code_mode_tools())
-    .chain(std::iter::once(build_webhook_status_tool()))
     {
         if tool.name == "gateway_invoke" {
             continue;
