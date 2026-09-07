@@ -136,12 +136,23 @@ pub(crate) fn extract_u64_or(args: &Value, key: &str, default: u64) -> u64 {
 /// Extensions carried in the `initialize` result
 /// (`io.modelcontextprotocol/extensions`).
 ///
-/// Empty, and staying empty: the only clients that reach `initialize` are
-/// 2025-era, because the 2026-07-28 lifecycle scopes the handshake to
-/// "2025-11-25 and earlier". An extension advertised here is one no client
-/// that can read it is able to use, bought by changing a result those clients
-/// already depend on byte-for-byte. TASK.1 therefore advertises through
-/// `server/discover` — see [`discovery_extensions`] — not here.
+/// Empty TODAY, and that emptiness is `MIK-7272.TASK.1.10b`'s remaining gap,
+/// not a settled design. The discovery-only position this comment used to
+/// state was WITHDRAWN on 2026-09-07 by the release standing ruling
+/// (`docs/requirements/RELEASE-4.0.0-blocking-rollup.md`): a criterion is
+/// built, not narrowed.
+///
+/// What the ruling does NOT decide, and what the next editor must not assume:
+/// the era key. `negotiated_version` cannot carry it — [`negotiate_version`]
+/// (`crate::protocol::negotiate_version`) only ever returns a member of
+/// `SUPPORTED_VERSIONS`, which excludes `2026-07-28` by assertion, because the
+/// 2026 lifecycle scopes the handshake to "2025-11-25 and earlier". A
+/// conditional keyed on it has an unreachable 2026 arm. The client's DECLARED
+/// era in `_meta` (`crate::protocol::meta::classify_request`) is the key that
+/// exists. Byte-identity for a client that declares nothing is what
+/// `DISCOVER.3` pins, and it survives either way.
+///
+/// Discovery is already served, separately: see [`discovery_extensions`].
 pub(crate) fn implemented_extensions() -> std::collections::HashMap<String, Value> {
     std::collections::HashMap::new()
 }

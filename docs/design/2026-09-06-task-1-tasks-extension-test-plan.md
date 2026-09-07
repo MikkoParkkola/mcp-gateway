@@ -196,7 +196,7 @@ SUB.2 admits a subscription. Marking it MET earlier is not optimism, it is a fal
 
 ## 6. Fixture hazards specific to TASK.1
 
-Three, all of them the kind that make a case pass while the thing it names is broken.
+Four, all of them the kind that make a case pass while the thing it names is broken.
 
 **The `.8a`/`.8e` opposite-fixture split.** `.8a` requires `config.cache.enabled = false`, because
 the response cache is written after the backend result and before the client stream — leave it on
@@ -218,6 +218,32 @@ absence assertion ever written. Every one of those rows carries a positive contr
 test, and per A3 the negative half asserts the **observed** set rather than the absence of named
 members — "the methods that arrived were exactly {`notifications/tasks`}" fails loudly when a
 fourth notification type appears; "no `notifications/progress`" does not.
+
+**The `.10b` era key is not the negotiated version** (recorded 2026-09-07, after the standing
+ruling reversed `.10b` from a narrowing to a build). The ruling's shape — a conditional at
+`build_initialize_result` (`src/gateway/meta_mcp_helpers.rs:190`) keyed on its existing
+`negotiated_version` parameter — cannot fire. `negotiate_version` (`src/protocol/mod.rs:54`)
+returns the client string only when `SUPPORTED_VERSIONS` (`:49`) contains it, else
+`PROTOCOL_VERSION` (`:27`) — and that list is `2025-11-25`, `2025-06-18`, `2025-03-26`,
+`2024-11-05`. `2026-07-28` is absent BY ASSERTION: `handshake_and_modern_path_keep_separate_version_lists`
+(`src/protocol/mod.rs:79`) goes red if it is added, because the 2026 lifecycle scopes `initialize`
+to "2025-11-25 and earlier". So `negotiated_version` is always a 2025-or-earlier string, the 2026
+arm of such a conditional is unreachable, and a `.10b` case pinned to it can never go green — the
+§P2 Q2 defect, in the one row this plan calls red-today.
+
+The reachable key already exists and is used elsewhere: the client's DECLARED era in `_meta`,
+via `classify_request` (`src/protocol/meta.rs:118`) or `declares_modern_era`, over the same
+`params` `handle_initialize` already reads at `src/gateway/meta_mcp/mod.rs:1194`. Two consequences
+for the cases, both fixture hazards rather than criteria changes:
+
+- `tests/mik_7272_task_1_acs.rs:244` does not merely become era-scoped. It sends
+  `"protocolVersion": "2026-07-28"` AND the 2026 `_meta` marker while asserting the extension is
+  ABSENT, so against a declared-era seam it asserts the opposite of the ruling and goes red. It is
+  re-pointed at a client carrying NEITHER — that client is the one `DISCOVER.3` byte-identity is
+  for — and the 2026-declaring case becomes the positive half. Kept, not deleted, in both halves.
+- a `.10b` case that drives `initialize` with a 2026 `protocolVersion` field and no `_meta` marker
+  proves nothing either way, because that field never reaches the seam. Read the marker or read
+  nothing.
 
 ## 7. Assertion-rule sweep
 
