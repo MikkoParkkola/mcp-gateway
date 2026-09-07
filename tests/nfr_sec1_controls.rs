@@ -44,6 +44,10 @@ struct Fixture {
     meta_mcp_enabled: bool,
     agent_identity: mcp_gateway::config::AgentIdentityConfig,
     sanitize_input: bool,
+    /// The gate control 15 names. `None` is the shipped router-test state and
+    /// the falsifier for the block below.
+    #[cfg(feature = "firewall")]
+    firewall: Option<Arc<mcp_gateway::security::firewall::Firewall>>,
 }
 
 impl Default for Fixture {
@@ -59,6 +63,8 @@ impl Default for Fixture {
             // The fixture default is off so the other rows reach their own
             // gate rather than being refused by this one.
             sanitize_input: false,
+            #[cfg(feature = "firewall")]
+            firewall: None,
         }
     }
 }
@@ -95,7 +101,7 @@ fn state(f: Fixture) -> Arc<AppState> {
         capability_dirs: Vec::new(),
         config_path: None,
         #[cfg(feature = "firewall")]
-        firewall: None,
+        firewall: f.firewall,
         agent_identity_config: f.agent_identity,
         control_plane_store: None,
         live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(config.clone())),
@@ -526,8 +532,22 @@ async fn control_5_a_modern_caller_whose_circuit_is_open_is_refused() {
     let (peer, body) = post(&app, modern("tools/list", json!({})), &other).await;
     assert_eq!(peer, StatusCode::OK, "body: {body}");
 
+    // The trip, driven rather than staged. `record_client_failure` sits below
+    // the method-dispatch match in `handle_jsonrpc_request`, so the `_` arm's
+    // -32601 reaches it while anything refused earlier — auth, the parser, the
+    // rate limiter — does not. Each call asserts its own -32601: a build where
+    // the trip silently stops erroring fails here, at the staging step, instead
+    // of passing the claim below for the wrong reason.
+    //
+    // The client's `rate_limit` is 0 on purpose. Zero disarms row 4's limiter
+    // twice over (no bucket is pre-created, and the check returns *allowed*
+    // before consulting one) while leaving this breaker armed, because the
+    // breaker's per-client entry is created lazily off the circuit-breaker
+    // config alone and never reads `rate_limit`.
     for _ in 0..2 {
-        app.auth_config.record_client_failure("client");
+        let (staged, body) = post(&app, modern("no/such/method", json!({})), &tripped).await;
+        assert_eq!(body["error"]["code"], json!(-32601), "body: {body}");
+        assert_ne!(staged, StatusCode::SERVICE_UNAVAILABLE, "body: {body}");
     }
 
     let (status, body) = post(&app, modern("tools/list", json!({})), &tripped).await;
@@ -550,4 +570,43 @@ async fn control_5_a_modern_caller_whose_circuit_is_open_is_refused() {
     // is the assertion that separates the control from a gateway-wide fuse.
     let (unaffected, body) = post(&app, modern("tools/list", json!({})), &other).await;
     assert_eq!(unaffected, StatusCode::OK, "body: {body}");
+}
+
+// ============================================================================
+// NFR.SEC.1 control 15 — the security firewall's request gate
+// The existing firewall tests all call `check_request` directly, so a build
+// that stops consulting the firewall on the `tools/call` path passes every one
+// of them. This drives the route instead, and asserts the pair the route emits.
+// ============================================================================
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn control_15_a_modern_tools_call_the_firewall_blocks_is_refused() {
+    use mcp_gateway::security::firewall::{Firewall, FirewallConfig};
+
+    let blocked = || {
+        modern(
+            "tools/call",
+            json!({ "name": "echo", "arguments": { "cmd": "ls; rm -rf /" } }),
+        )
+    };
+
+    let app = state(Fixture {
+        firewall: Some(Arc::new(Firewall::from_config(
+            FirewallConfig::default(),
+            None,
+        ))),
+        ..Default::default()
+    });
+    let (status, body) = post(&app, blocked(), &[]).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+    // -32600 is the non-anomaly block; -32002 is the anomaly one. Asserting the
+    // code and not only the status is what separates this refusal from every
+    // other 400 the route can emit.
+    assert_eq!(body["error"]["code"], json!(-32600), "body: {body}");
+
+    // Falsifier: the same frame against the state seven router fixtures already
+    // build. Whatever answers it, it is not this gate.
+    let off = state(Fixture::default());
+    let (_, body) = post(&off, blocked(), &[]).await;
+    assert_ne!(body["error"]["code"], json!(-32600), "body: {body}");
 }
