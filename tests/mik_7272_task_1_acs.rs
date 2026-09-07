@@ -336,12 +336,21 @@ mod http {
         state_from(two_principal_auth())
     }
 
-    /// The shipped shape in which an unauthenticated caller REACHES `/mcp`:
+    /// The shape in which an unauthenticated caller REACHES `/mcp`:
     /// authentication is on, and `/mcp` is listed public so ordinary tools stay
-    /// open (`src/gateway/server/support.rs` writes exactly this for the local,
-    /// compose and published-probe presets). Without the public listing the
-    /// middleware answers 401 and no task code runs, so a case built on
-    /// `state()` cannot observe what an unattributed caller can do.
+    /// open. Without the public listing the middleware answers 401 and no task
+    /// code runs, so a case built on `state()` cannot observe what an
+    /// unattributed caller can do.
+    ///
+    /// No shipped configuration writes it: `gateway.example.yaml`, the helm
+    /// configmap and the k8s configmap all list `/health` alone. What keeps the
+    /// scenario startable — and the guard below off the dead-code pile — is
+    /// `network_bind_refusal`, which returns `None` for a loopback bind with no
+    /// declared `server.public_url` (`src/gateway/server/support.rs:554`), the
+    /// shape `Config::default()` gives this fixture. The same answer for a
+    /// loopback install that lists `/mcp` public is pinned at
+    /// `src/gateway/server/support.rs:979-986`. Only a NON-loopback
+    /// `public_url` turns this shape into a refusal.
     pub(super) fn public_mcp_auth() -> AuthConfig {
         let mut auth = two_principal_auth();
         auth.public_paths = vec!["/mcp".to_string()];
