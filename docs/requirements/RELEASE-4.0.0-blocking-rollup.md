@@ -35,6 +35,25 @@ blocked as easily as gone. What would settle it is the owner answering, or a com
 any of those paths. What must not happen either way is another session adopting those files — they
 are peer-held, and the standing rule on that is unchanged.
 
+## `MIK-7214.HEADER.9`'s SSE GET path has lost its stated blocker
+
+The ledger's `HEADER.9a` row defers the SSE GET header site with a reason: "Close is deliberately
+unshaped — `MIK-7215.STATELESS.3a` requires the minted session there"
+(`RELEASE-4.0.0-criteria-status.md:113`). That row is now **MET**: "no `Mcp-Session-Id` on the
+modern path … test asserts `Mcp-Session-Id` **absent** on a modern response, via the real router"
+(`:181`). So whoever picks `HEADER.9` up should not inherit the deferral — the thing it waited on
+has landed.
+
+Worth reading the two sentences side by side before building, because they do not obviously agree.
+`STATELESS.3a` asserts a session id is **absent** on the modern path; the `HEADER.9a` note says
+that row "requires the minted session there". One of the two is describing something the other is
+not, and the note is the likelier suspect, being a parenthetical about a site nobody has shaped.
+Either reading discharges the deferral — a met blocker blocks nothing — but the SSE GET work should
+start by settling which session, if any, that site is supposed to carry.
+
+Marked `I`. This is read from two ledger cells; the SSE GET site itself
+(`src/transport/http/mod.rs`, GET header path) has not been opened here, and it is peer-held.
+
 ## Standing ruling — narrowing a criterion is not available on this release
 
 Several rows below present the same shape of choice: build the mechanism the criterion names, or
