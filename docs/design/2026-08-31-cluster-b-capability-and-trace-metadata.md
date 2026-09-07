@@ -421,21 +421,28 @@ route (§1).
 
 #### 3.4b The existing `traceparent` parse is structural, not W3C-compliant
 
-Verified against `trace.rs:38-51` at the commit. The parser splits on `-`, requires exactly four
-parts, checks each part's length and `is_ascii_hexdigit()`, and rejects an all-zero `trace_id`.
-Four consequences, each read from the code:
+This section was written against `TraceContext::from_meta` as it stood at `b8cfc7e4`, where the
+parser split on `-`, required exactly four parts, checked each part's length and
+`is_ascii_hexdigit()`, and zero-checked only the `trace_id`. **Four of its five predicates have
+since landed** — `a694dce5` (*feat(trace): validate W3C trace metadata and build the outbound
+`_meta` hop*) rewrote `parse` to reject uppercase hex, reject version `ff`, reject an all-zero
+`trace_id` **or** `span_id`, and split without demanding an exact field count. The table below is
+kept as the **finding's original evidence**, pinned to the commit it was read at, and the right-hand
+column now says what each predicate does at `a694dce5`:
 
-| input | W3C says | this parser does |
-|---|---|---|
-| uppercase hex | invalid — lowercase only | accepts (`is_ascii_hexdigit` matches both cases) |
-| version `ff` | invalid — reserved | accepts (only length and hex are checked) |
-| all-zero `parent-id` (span id) | invalid | accepts (only `trace_id` is zero-checked, :49-51) |
-| future version with more than four fields | valid — read the first four, ignore the rest | rejects (`if parts.len() != 4`) |
+| input | W3C says | at `b8cfc7e4` | at `a694dce5` |
+|---|---|---|---|
+| uppercase hex | invalid — lowercase only | accepts (`is_ascii_hexdigit` matches both cases) | rejects |
+| version `ff` | invalid — reserved | accepts (only length and hex are checked) | rejects |
+| all-zero `parent-id` (span id) | invalid | accepts (only `trace_id` is zero-checked) | rejects |
+| future version with more than four fields | valid — read the first four, ignore the rest | rejects (`if parts.len() != 4`) | accepts |
+| **five fields at version `00`** | **invalid — `00` is exactly four fields** | rejects, accidentally | **accepts — the one predicate still open** |
 
-So it forwards two classes of invalid context and drops a class of valid future context. This is
-not a defect OTEL.1 introduces, but OTEL.1's drop-not-repair rule depends on the check being
-right: a parser that accepts garbage propagates garbage, and one that rejects valid input
-silently deletes real traces. It is therefore mine, not separable.
+The last row is the residue, and it is the cost of the fourth: relaxing the exact-count rule to
+admit future versions admitted a malformed `00` header with it. Nothing else in this disposal is
+outstanding. The reason the check belongs to OTEL.1 is unchanged — the drop-not-repair rule depends
+on rejecting the right input, so a parser that accepts garbage propagates garbage and one that
+rejects valid input silently deletes real traces.
 
 Disposal: fixed inside this change, not deferred. Lowercase-only; reject `ff`; reject an all-zero
 `parent-id`; and split the field-count rule **by version**, because W3C makes it version-dependent:
