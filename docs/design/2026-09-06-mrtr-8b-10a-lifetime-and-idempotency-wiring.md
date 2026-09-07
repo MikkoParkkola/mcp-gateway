@@ -109,7 +109,7 @@ one. `SpentLedger::consume` (`src/idempotency.rs:600-611`) already pays exactly 
 exactly this reason — same shape, deliberately.
 
 **The guarantee is relative to the supplied `now`, and that is the whole contract.** After this
-change the table holds no record whose deadline is at or before the `now` most recently passed in.
+change the table holds no record whose deadline is strictly before the `now` most recently passed in.
 It does *not* hold that the table is free of records expired against the wall clock at the instant
 a caller reads the result: `invoke.rs` captures `now` once at `:546` and reuses it at `:584` and
 `:613`, so an exchange expiring inside that window survives the reclaim and still routes. That is
