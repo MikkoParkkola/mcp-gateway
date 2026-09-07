@@ -333,9 +333,25 @@ mod http {
     }
 
     pub(super) fn state() -> Arc<AppState> {
+        state_from(two_principal_auth())
+    }
+
+    /// The shipped shape in which an unauthenticated caller REACHES `/mcp`:
+    /// authentication is on, and `/mcp` is listed public so ordinary tools stay
+    /// open (`src/gateway/server/support.rs` writes exactly this for the local,
+    /// compose and published-probe presets). Without the public listing the
+    /// middleware answers 401 and no task code runs, so a case built on
+    /// `state()` cannot observe what an unattributed caller can do.
+    pub(super) fn state_public_mcp() -> Arc<AppState> {
+        let mut auth = two_principal_auth();
+        auth.public_paths = vec!["/mcp".to_string()];
+        state_from(auth)
+    }
+
+    pub(super) fn state_from(auth: AuthConfig) -> Arc<AppState> {
         let mut config = Config::default();
         config.server.modern_protocol = true;
-        config.auth = two_principal_auth();
+        config.auth = auth;
         let backends = Arc::new(BackendRegistry::new());
         let multiplexer = Arc::new(NotificationMultiplexer::new(
             Arc::clone(&backends),
@@ -410,14 +426,33 @@ mod http {
         principal: &str,
         body: Value,
     ) -> (StatusCode, Value) {
+        post_as(state, Some(principal), body).await
+    }
+
+    /// A request carrying NO credential. Only reaches the handlers when `/mcp`
+    /// is public — see [`state_public_mcp`].
+    pub(super) async fn post_unattributed(
+        state: Arc<AppState>,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        post_as(state, None, body).await
+    }
+
+    pub(super) async fn post_as(
+        state: Arc<AppState>,
+        principal: Option<&str>,
+        body: Value,
+    ) -> (StatusCode, Value) {
         let method = body["method"].as_str().unwrap_or_default().to_string();
         let mut builder = Request::builder()
             .method("POST")
             .uri("/mcp")
             .header("content-type", "application/json")
-            .header("authorization", format!("Bearer {principal}"))
             .header("mcp-protocol-version", "2026-07-28")
             .header("mcp-method", &method);
+        if let Some(principal) = principal {
+            builder = builder.header("authorization", format!("Bearer {principal}"));
+        }
         if let Some(field) = mcp_name_body_field(&method)
             && let Some(name) = body
                 .pointer(&format!("/params/{field}"))
@@ -688,7 +723,7 @@ mod dispatch {
 mod ownership {
     use serde_json::{Value, json};
 
-    use super::http::{modern, post_against, state};
+    use super::http::{modern, post_against, post_unattributed, state, state_public_mcp};
 
     const FABRICATED_ID: &str = "task-11111111-1111-4111-8111-111111111111";
     /// Stands in for A's task id while no dispatcher hands one out, so the
@@ -864,6 +899,114 @@ mod ownership {
         assert!(
             listened.get("error").is_none(),
             "a `subscriptions/listen` carrying `taskIds` is admitted for the owner: {listened}"
+        );
+    }
+
+    // =======================================================================
+    // MIK-7272.TASK.1.14 — a caller that presented no credential owns no task,
+    // and is told so in the same words as an id that never existed.
+    // =======================================================================
+
+    /// `session_owner_key` returns the empty string for a caller with no
+    /// credential, and `TaskStore` compares principals by plain equality — so
+    /// every unattributed caller answers to the same owner key and they own
+    /// each other's tasks. The gateway states the opposite rule in that
+    /// function's own doc comment ("Empty ... is not an identity, and the
+    /// controls that key on this refuse rather than pool every anonymous caller
+    /// into one bucket"), and the firewall arm honours it. Only the task arms
+    /// pool.
+    ///
+    /// The credentialled half of this case is the vacuity guard: it proves the
+    /// fixture can tell a retrieved task from a not-found answer, so the
+    /// byte-identity assertion below is a real comparison and not two refusals
+    /// agreeing for an unrelated reason.
+    #[tokio::test]
+    async fn ac_task_1_14_an_unattributed_caller_owns_no_task() {
+        let state = state_public_mcp();
+
+        let (_, created) = post_against(state.clone(), "key-a", task_call(30)).await;
+        let owned_id = created
+            .pointer("/result/taskId")
+            .and_then(Value::as_str)
+            .unwrap_or(UNDISPATCHED_ID)
+            .to_string();
+        let (_, owner_view) = post_against(
+            state.clone(),
+            "key-a",
+            modern(31, "tasks/get", json!({ "taskId": owned_id.clone() }), true),
+        )
+        .await;
+        let (_, owner_absent) = post_against(
+            state.clone(),
+            "key-a",
+            modern(32, "tasks/get", json!({ "taskId": FABRICATED_ID }), true),
+        )
+        .await;
+        assert_ne!(
+            shape(owner_view),
+            shape(owner_absent),
+            "a credentialled owner must see its own task differently from one \
+             that never existed — without this the comparison below is vacuous"
+        );
+
+        let (_, unattributed_created) = post_unattributed(state.clone(), task_call(33)).await;
+        let pooled_id = unattributed_created
+            .pointer("/result/taskId")
+            .and_then(Value::as_str)
+            .unwrap_or(UNDISPATCHED_ID)
+            .to_string();
+        let (_, second_caller) = post_unattributed(
+            state.clone(),
+            modern(34, "tasks/get", json!({ "taskId": pooled_id }), true),
+        )
+        .await;
+        let (_, never_existed) = post_unattributed(
+            state,
+            modern(35, "tasks/get", json!({ "taskId": FABRICATED_ID }), true),
+        )
+        .await;
+
+        assert_eq!(
+            shape(second_caller),
+            shape(never_existed),
+            "a task another unattributed caller dispatched is indistinguishable \
+             from an id that never existed: an empty principal is not an identity"
+        );
+    }
+
+    // =======================================================================
+    // MIK-7272.TASK.1.15 — the same refusal on the subscription path stays
+    // SILENT: an empty filter, never an error that announces the difference.
+    // =======================================================================
+
+    /// The stream is the one arm that must not refuse. `subscriptions/listen`
+    /// naming a task nobody may see returns a quiet stream, exactly as it does
+    /// for a task owned by another principal — an error here would tell the
+    /// caller that the id resolves to something.
+    #[tokio::test]
+    async fn ac_task_1_15_unattributed_subscription_is_quiet_not_refused() {
+        let state = state_public_mcp();
+        let (_, created) = post_against(state.clone(), "key-a", task_call(36)).await;
+        let owned_id = created
+            .pointer("/result/taskId")
+            .and_then(Value::as_str)
+            .unwrap_or(UNDISPATCHED_ID)
+            .to_string();
+
+        let (_, listened) = post_unattributed(
+            state,
+            modern(
+                37,
+                "subscriptions/listen",
+                json!({ "taskIds": [owned_id] }),
+                true,
+            ),
+        )
+        .await;
+
+        assert!(
+            listened.get("error").is_none(),
+            "an unattributed subscription is narrowed in silence, never refused: {listened}"
         );
     }
 }

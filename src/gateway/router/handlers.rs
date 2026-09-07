@@ -971,6 +971,33 @@ pub(super) async fn meta_mcp_handler(
 
     let owner = session_owner_key(client.as_ref());
 
+    // An empty owner key is not an identity — `session_owner_key` says so in
+    // its own doc comment, and the firewall arm refuses on it. Only the task
+    // arms pooled: on a gateway that HAS identities, every caller that
+    // presented no credential answered to that one key and therefore owned
+    // every other unattributed caller's tasks. `/mcp` is listed public in the
+    // shipped local, compose and published-probe presets so ordinary tools stay
+    // open, which is precisely the deployment where credentialled and
+    // unattributed callers meet.
+    //
+    // Auth DISABLED is the other case and it is not a defect: there are no
+    // identities to keep apart, and `anonymous_client` documents one shared
+    // caller as the operator's own choice. Refusing there would take tasks away
+    // from every single-user gateway to protect a boundary nobody drew.
+    let unattributed = owner.is_empty() && state.auth_config.enabled;
+
+    // The refusal names nothing. An unattributed caller must not be able to
+    // tell "no task here is yours" from "that task does not exist", which is
+    // the same disclosure `missing_task_error` exists to prevent — so it is the
+    // same answer, and `subscriptions/listen` is excluded because on that path
+    // silence IS the refusal (see below).
+    if unattributed
+        && method != "subscriptions/listen"
+        && reaches_tasks_extension(method.as_str(), params.as_ref())
+    {
+        return build_response(missing_task_error(id), &session_id, StatusCode::OK);
+    }
+
     // A `subscriptions/listen` naming tasks and nothing else HAS said what it
     // wants, so the empty notification filter is synthesised rather than
     // refused. Ownership narrows the stream in silence: a task another
@@ -980,10 +1007,11 @@ pub(super) async fn meta_mcp_handler(
     if method == "subscriptions/listen" {
         let ids = listened_task_ids(params.as_ref());
         if !ids.is_empty() {
-            let owned = state.tasks.owns_all(&owner, ids.iter().map(String::as_str));
+            let caller_holds_ids =
+                !unattributed && state.tasks.owns_all(&owner, ids.iter().map(String::as_str));
             if let Some(map) = params.as_mut().and_then(Value::as_object_mut) {
                 map.entry("notifications").or_insert_with(|| json!({}));
-                if !owned {
+                if !caller_holds_ids {
                     map.insert("taskIds".into(), json!([]));
                 }
             }
@@ -1116,7 +1144,7 @@ pub(super) async fn meta_mcp_handler(
             // refusal, because the client has no way to tell it apart from one
             // that will resolve a moment later.
             if params.as_ref().is_some_and(|p| p.get("task").is_some()) {
-                let task_id = state.tasks.create(&owner, &tool_name);
+                let task_id = state.tasks.create(&owner, tool_name);
                 let view = state
                     .tasks
                     .get(&owner, &task_id)
