@@ -172,6 +172,30 @@ yes: the router's own tests already set that field, they just set it to `None`.
 
 No deferred unknowns.
 
+## Design event — one test harness, not two (§P3)
+
+The design specified two suites and did not say where their fixture lives. The
+COMPAT.1 cases need the same `AppState` the SEC.1 cases build: a 45-line literal
+naming twenty-odd fields, the request helpers around it, and the `_meta`
+injection that makes a frame modern. Two ways to have it, and the choice was
+made during implementation, so it is named here rather than left in a diff.
+
+| option | why not / why |
+|---|---|
+| copy the fixture into the second suite | rejected. Two literals of that shape, and the next field `AppState` gains lands in one of them. The DRY mandate does not have a "the other file was already written" exception, and this is exactly the duplication it names. |
+| extract `tests/common/mod.rs`, both suites `use common::*;` | taken. The harness moved as text — items and imports gained `pub`, nothing was rewritten — so the SEC.1 assertions are the same assertions, which is the only reason a move is defensible while cargo cannot verify it. |
+
+What the extraction costs, stated rather than discovered later: Cargo compiles
+`tests/common/mod.rs` once per test binary, so an item only one suite uses is
+genuinely dead code in the other binary. `#![allow(dead_code)]` at the top of
+the module is that fact, not a suppression of something worth fixing — and it is
+the reason the allow sits on the shared module and nowhere else.
+
+It fires no §P0 trigger: no behaviour outside FOR, nothing in OUT, no acceptance
+criterion moved, no observable contract touched. It is named because the rule is
+that a decision the design did not make gets named, not because it needed a
+verdict.
+
 ## Not a design decision this document may take
 
 Reclassifying an inventory row is the operator's call. This document does not
