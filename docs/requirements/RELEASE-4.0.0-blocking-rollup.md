@@ -25,6 +25,16 @@ roughly the rows that are being worked hardest. Before treating an unmoved count
 check the dirty set and the last commit touching each blocking id — a stuckness call made on the
 count alone would fire on exactly the wrong rows.
 
+That check has now been run, and the answer is the uncomfortable one. Every file in the dirty set
+has an mtime at least four and a half hours old, and two are from the previous day; the set itself
+has not changed membership across that window. So the uncommitted work covering
+`MIK-7214.HEADER.9`, `MIK-7212.MRTR.7`, `MIK-6865.SCHEMA.1c` and the cluster B trace-metadata plan
+is **parked, not in flight**, and the flat count is reporting the situation correctly after all.
+Marked `I`: file mtimes say nothing moved, they do not say why, and a session can be alive and
+blocked as easily as gone. What would settle it is the owner answering, or a commit appearing on
+any of those paths. What must not happen either way is another session adopting those files — they
+are peer-held, and the standing rule on that is unchanged.
+
 ## Standing ruling — narrowing a criterion is not available on this release
 
 Several rows below present the same shape of choice: build the mechanism the criterion names, or
