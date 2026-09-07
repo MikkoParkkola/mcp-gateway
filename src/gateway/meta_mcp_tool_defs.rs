@@ -534,14 +534,17 @@ pub(crate) fn build_cost_report_tool() -> Tool {
     }
 }
 
-/// Construct the full meta-tool list, optionally including stats, webhooks, playbooks, and reload.
+/// Construct the full meta-tool list, optionally including stats, cost reporting, and reload.
 ///
 /// `tool_count` and `server_count` are threaded into [`build_base_tools`] so descriptions
 /// reflect live registry state rather than static placeholder text.
-#[allow(clippy::fn_params_excessive_bools)] // 4 feature flags; enum would be over-engineered
+///
+/// Webhook status is deliberately absent: it stays callable by name, but a tool
+/// enumerated to a model costs context in every request, and `NFR.PERF.4` caps
+/// that surface at 16. See [`governed_meta_tool_names`], which keeps the name
+/// governed even though nothing lists it.
 pub(crate) fn build_meta_tools(
     stats_enabled: bool,
-    webhooks_enabled: bool,
     reload_enabled: bool,
     cost_report_enabled: bool,
     tool_count: usize,
@@ -553,9 +556,6 @@ pub(crate) fn build_meta_tools(
     }
     if cost_report_enabled {
         tools.push(build_cost_report_tool());
-    }
-    if webhooks_enabled {
-        tools.push(build_webhook_status_tool());
     }
     tools.push(build_playbook_tool());
     tools.push(build_kill_server_tool());
@@ -744,13 +744,17 @@ fn governed_meta_tool_names() -> &'static std::collections::HashSet<String> {
     static NAMES: std::sync::OnceLock<std::collections::HashSet<String>> =
         std::sync::OnceLock::new();
     NAMES.get_or_init(|| {
-        // Every built-in the dispatcher recognises, from *both* builders. Code
-        // Mode's `gateway_execute` reaches every backend tool, so leaving it
-        // outside the governed set left an operator allow-list with an escape
-        // hatch: the tool stayed callable whatever the operator named.
-        build_meta_tools(true, true, true, true, 0, 0)
+        // Every built-in the dispatcher recognises, from *both* builders, plus
+        // the unenumerated ones. Code Mode's `gateway_execute` reaches every
+        // backend tool, and `gateway_webhook_status` is dispatchable by name
+        // without appearing in any list; either one left outside this set gives
+        // an operator allow-list an escape hatch, because `is_exposed` admits
+        // anything ungoverned. Membership follows what is *callable*, never
+        // what is listed.
+        build_meta_tools(true, true, true, 0, 0)
             .into_iter()
             .chain(build_code_mode_tools())
+            .chain(std::iter::once(build_webhook_status_tool()))
             .map(|t| t.name)
             .collect()
     })
@@ -840,10 +844,8 @@ impl MetaToolExposure {
 ///
 /// The filter is the whole difference: the listed set is the predicate's
 /// output, so `tools/list` and `tools/call` cannot disagree about a tool.
-#[allow(clippy::fn_params_excessive_bools)]
 pub(crate) fn build_meta_tools_filtered(
     stats_enabled: bool,
-    webhooks_enabled: bool,
     reload_enabled: bool,
     cost_report_enabled: bool,
     tool_count: usize,
@@ -852,7 +854,6 @@ pub(crate) fn build_meta_tools_filtered(
 ) -> Vec<Tool> {
     exposure.filter(build_meta_tools(
         stats_enabled,
-        webhooks_enabled,
         reload_enabled,
         cost_report_enabled,
         tool_count,

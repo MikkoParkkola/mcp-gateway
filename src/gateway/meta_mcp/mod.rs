@@ -1319,7 +1319,6 @@ impl MetaMcp {
             let (tool_count, server_count) = self.backend_counts();
             build_meta_tools_filtered(
                 self.stats.is_some(),
-                self.get_webhook_registry().is_some(),
                 self.get_reload_context().is_some(),
                 true, // cost_report always enabled (tracker is always present)
                 tool_count,

@@ -9,11 +9,11 @@ use serde_json::json;
 
 #[test]
 fn build_meta_tools_base_count_without_optional_features() {
-    // GIVEN: no stats, webhooks, reload, or cost_report; 42 tools, 3 servers
+    // GIVEN: no stats, reload, or cost_report; 42 tools, 3 servers
     // WHEN: building meta tools
     // THEN: 4 base + 1 playbook + 2 kill/revive + 2 set/get profile + 1 disabled-caps
     //       + 1 list-profiles + 1 set-state + 1 reload-capabilities = 13
-    let tools = build_meta_tools(false, false, false, false, 42, 3);
+    let tools = build_meta_tools(false, false, false, 42, 3);
     assert_eq!(tools.len(), 13);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_list_servers"));
@@ -30,39 +30,53 @@ fn build_meta_tools_base_count_without_optional_features() {
 
 #[test]
 fn build_meta_tools_with_stats_adds_stats_tool() {
-    let tools = build_meta_tools(true, false, false, false, 0, 0);
+    let tools = build_meta_tools(true, false, false, 0, 0);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_get_stats"));
 }
 
+/// `NFR.PERF.4` — no feature combination enumerates webhook status.
+///
+/// It replaces the flag test this once was. The tool is still dispatchable by
+/// name; what changed is that a model is never shown it, which is what the
+/// band counts. Its allow-list governance is pinned separately, below.
 #[test]
-fn build_meta_tools_with_webhooks_adds_webhook_tool() {
-    let tools = build_meta_tools(false, true, false, false, 0, 0);
-    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"gateway_webhook_status"));
+fn build_meta_tools_never_enumerates_webhook_status() {
+    for stats in [false, true] {
+        for reload in [false, true] {
+            for cost_report in [false, true] {
+                let tools = build_meta_tools(stats, reload, cost_report, 0, 0);
+                assert!(
+                    !tools.iter().any(|t| t.name == "gateway_webhook_status"),
+                    "webhook status must stay off the enumerated surface: \
+                     stats={stats} reload={reload} cost_report={cost_report}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
 fn build_meta_tools_with_reload_adds_reload_tool() {
-    let tools = build_meta_tools(false, false, true, false, 0, 0);
+    let tools = build_meta_tools(false, true, false, 0, 0);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_reload_config"));
 }
 
 #[test]
 fn build_meta_tools_with_cost_report_adds_cost_report_tool() {
-    let tools = build_meta_tools(false, false, false, true, 0, 0);
+    let tools = build_meta_tools(false, false, true, 0, 0);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_cost_report"));
 }
 
 #[test]
-fn build_meta_tools_all_enabled_has_17_tools() {
-    // 4 base + 1 stats + 1 cost_report + 1 webhooks + 1 playbook + 2 kill/revive
+fn build_meta_tools_all_enabled_has_16_tools() {
+    // 4 base + 1 stats + 1 cost_report + 1 playbook + 2 kill/revive
     // + 2 set/get profile + 1 disabled-caps + 1 list-profiles + 1 reload-config
-    // + 1 set-state + 1 reload-capabilities = 17
-    let tools = build_meta_tools(true, true, true, true, 0, 0);
-    assert_eq!(tools.len(), 17);
+    // + 1 set-state + 1 reload-capabilities = 16
+    let tools = build_meta_tools(true, true, true, 0, 0);
+    assert_eq!(tools.len(), 16);
 }
 
 #[test]
@@ -137,7 +151,7 @@ fn base_tool_read_only_hints_match_spec() {
 
 #[test]
 fn all_gateway_meta_tools_have_complete_annotations_with_titles() {
-    let mut tools = build_meta_tools(true, true, true, true, 42, 3);
+    let mut tools = build_meta_tools(true, true, true, 42, 3);
     tools.extend(build_code_mode_tools());
 
     for tool in tools {
@@ -384,8 +398,8 @@ fn all_code_mode_tools_have_descriptions() {
 #[test]
 fn empty_allow_list_exposes_the_whole_roster() {
     let exposure = MetaToolExposure::from_names(&[]);
-    let all = build_meta_tools(true, true, true, true, 42, 3);
-    let filtered = build_meta_tools_filtered(true, true, true, true, 42, 3, &exposure);
+    let all = build_meta_tools(true, true, true, 42, 3);
+    let filtered = build_meta_tools_filtered(true, true, true, 42, 3, &exposure);
     assert_eq!(
         filtered.len(),
         all.len(),
@@ -400,7 +414,7 @@ fn allow_list_yields_only_the_named_tools() {
         "gateway_invoke".to_string(),
         "gateway_list_servers".to_string(),
     ]);
-    let filtered = build_meta_tools_filtered(true, true, true, true, 42, 3, &exposure);
+    let filtered = build_meta_tools_filtered(true, true, true, 42, 3, &exposure);
     let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
     assert_eq!(
         names,
@@ -454,7 +468,7 @@ fn unrecognised_configured_name_is_dropped_not_fatal() {
 /// and its existing output, so the call site in `meta_mcp/mod.rs` still compiles.
 #[test]
 fn unfiltered_builder_is_unchanged_by_the_exposure_work() {
-    let tools = build_meta_tools(false, false, false, false, 42, 3);
+    let tools = build_meta_tools(false, false, false, 42, 3);
     assert_eq!(tools.len(), 13);
 }
 
@@ -471,6 +485,22 @@ fn config_default_exposes_every_meta_tool() {
     assert!(exposure.is_exposed("gateway_kill_server"));
 }
 
+/// `NFR.PERF.4.6` — the one meta-tool that is dispatchable without being
+/// listed must still be governed.
+///
+/// Named literally rather than derived from a builder: the point of the
+/// assertion is that dropping `gateway_webhook_status` from the enumerated
+/// surface did not drop it from the allow-list, and a test that asks a builder
+/// for the name would move with the same edit that breaks it.
+#[test]
+fn unenumerated_webhook_status_is_still_governed_by_an_allow_list() {
+    let exposure = MetaToolExposure::from_names(&["gateway_invoke".to_string()]);
+    assert!(
+        !exposure.is_exposed("gateway_webhook_status"),
+        "webhook status is callable by name; an allow-list that omits it must refuse it"
+    );
+}
+
 /// Every built-in the gateway can dispatch must be governed by the exposure
 /// predicate. A builder added later and left out of `governed_meta_tool_names`
 /// produces a tool that no allow-list can restrict, which is how
@@ -478,9 +508,10 @@ fn config_default_exposes_every_meta_tool() {
 #[test]
 fn every_builder_contributes_to_the_governed_set() {
     let exposure = MetaToolExposure::from_names(&["gateway_invoke".to_string()]);
-    for tool in build_meta_tools(true, true, true, true, 0, 0)
+    for tool in build_meta_tools(true, true, true, 0, 0)
         .into_iter()
         .chain(build_code_mode_tools())
+        .chain(std::iter::once(build_webhook_status_tool()))
     {
         if tool.name == "gateway_invoke" {
             continue;
