@@ -62,10 +62,9 @@ not silently fixed, because two of them changed what a case must do.
 | EXT.1.a | **E1** call `build_server_capabilities` — the **injectable seam** — with a **non-empty** map, serialise to `serde_json::Value`, and assert the key set contains `extensions` and that the value is a JSON **object** (not null, not a string). The source must be non-empty: the field is `skip_serializing_if = "HashMap::is_empty"`, so an empty source emits no key and a presence assertion would fail against correct code. **The entry points cannot be injected and this row does not pretend otherwise:** `build_initialize_result(negotiated_version, instructions)` and `discover_document` take no extension argument — they call `implemented_extensions()` themselves, and it returns an empty map — so a non-empty source cannot be handed to either. Their reach is recorded as **construction evidence** (each calls the shared builder, one grep) rather than asserted through an input that does not exist; it becomes observable through the entry points on the day a real implemented extension makes the source non-empty. An earlier revision of this row demanded injection into both entry points, which is not implementable as written. | unit | contract / serialisation | **No — green at 10a61c21.** `ServerCapabilities.extensions` exists (`types.rs:256`), `build_server_capabilities` is fed from `implemented_extensions()` (`meta_mcp_helpers.rs:147,158,190`), and `discover_document` (`meta_mcp/mod.rs::discover_document`) reuses those capabilities verbatim. **Retrofit — falsifier probe required (§3.1).** |
 | EXT.1.b | **E2** with the gateway's implemented-extension source empty, assert the serialised `capabilities` object does **not** contain an `extensions` key at all, and that a 2025-era client's initialize result is byte-identical to the pre-field result. The field carries `#[serde(default, skip_serializing_if = "HashMap::is_empty")]` (`types.rs:255`) deliberately: MIK-7217 AC discover-3 requires a byte-identical initialize result for an already-supported protocol version, so an always-present key is a breaking handshake change however empty it is. **An earlier revision of this row demanded the opposite — key present, value exactly `{}`, no `skip_serializing_if`. Written that way the case asserts a regression.** | unit | contract / serialisation | **No — green at 10a61c21**, and green for a second reason: absence is also what an unwired field emits. **See §4.1 — on its own this case cannot distinguish a wired populate from a defaulted field. Retrofit — falsifier probe required.** |
 | EXT.1.b | **E3 (the discriminator)** call the builder with an implemented-extension source containing one synthetic identifier `example.test/probe`, and assert the wire carries `{"example.test/probe": {}}` — key identity asserted as a literal (A4, A8). Then the empty-source case E2 is meaningful, because the same code path demonstrably varies with its input. | unit | contract, A7 constant-perturbation | **No — green at 10a61c21.** `build_server_capabilities` already takes the map as an **argument** (`meta_mcp_helpers.rs:158`), which is exactly what §5.1 demands, so the perturbation is writable as specified. The source must be a **map of identifier strings**, not an `ExtensionSet`: `ExtensionSet` can only hold `Extension` variants, so a probe identifier is unrepresentable in it and the perturbation collapses. Substituting `Extension::Tasks` here is forbidden — it makes the case pass against an implementation that simply wired `gateway_declares()`, which is the wiring §0 puts out of scope. **Retrofit — falsifier probe required, and it is the one probe that carries the section: mutate the builder to ignore its argument and E3 must fail on the literal-identity assertion.** |
-| EXT.1.c | **E4** drive a **production entry point** — a `tools/call` request through the router, not a direct call to `from_capabilities()` — whose params-level `_meta["io.modelcontextprotocol/clientCapabilities"]` is `{"extensions": {"io.modelcontextprotocol/tasks": {}}}`; assert at the invoke funnel that the recovered extension set contains `Extension::Tasks`. The identifier must be a **recognised** one: `from_capabilities()` filters through `Extension::from_id` (`extensions.rs:71-90`), so a synthetic identifier is discarded **by a correct implementation** and a case asserting its recovery could never go green. Assert against the literal identifier, never against `from_capabilities()`'s own output on the same input (A8). **The entry point is the whole point of this row: a unit case calling `from_capabilities()` directly stays green while the function has zero production callers, which is exactly the state HEAD is in.** | integration | parsing, production-path | Yes — `from_capabilities()`/`negotiate()` have zero callers outside `extensions.rs` (V 2026-09-07, `rg -n 'from_capabilities\|negotiate\(' src/`). |
-| EXT.1.c | **E5 (the anti-`declared_capabilities` case)** same production entry point, same identifier, **non-object settings**: `{"extensions": {"io.modelcontextprotocol/tasks": 3}}`. Assert the set recovered **at the invoke funnel** is empty. A correct implementation drops it on the `settings.is_object()` filter (`extensions.rs:78`); an implementation that reached the same answer through `declared_capabilities` keeps it, because that path discards values and filters only nulls (`meta.rs:186-190`) — `3` is not null. Paired with E4, which must stay non-empty. This is the pair that distinguishes the two implementations; E4 alone does not, and the value must be non-null or both paths drop it and the discriminator collapses. | integration | negative / discrimination | Yes. |
+| EXT.1.c | **E4** drive a **production entry point** — a `tools/call` request through the router, not a direct call to `from_capabilities()` — whose params-level `_meta["io.modelcontextprotocol/clientCapabilities"]` is `{"extensions": {"io.modelcontextprotocol/tasks": {}}}`; assert at the invoke funnel that the recovered extension set contains `Extension::Tasks`. The identifier must be a **recognised** one: `from_capabilities()` filters through `Extension::from_id` (`extensions.rs:71-90`), so a synthetic identifier is discarded **by a correct implementation** and a case asserting its recovery could never go green. Assert against the literal identifier, never against `from_capabilities()`'s own output on the same input (A8). **The entry point is the whole point of this row: a unit case calling `from_capabilities()` directly stays green while the function has zero production callers, which is exactly the state HEAD is in.** **Fixture prerequisite: §3.2 — without it this row dies at the shape gate and never reaches the read.** | integration | parsing, production-path | Yes — `from_capabilities()`/`negotiate()` have zero callers outside `extensions.rs` (V 2026-09-07, `rg -n 'from_capabilities\|negotiate\(' src/`). |
+| EXT.1.c | **E5 (the anti-`declared_capabilities` case)** same production entry point, same identifier, **non-object settings**: `{"extensions": {"io.modelcontextprotocol/tasks": 3}}`. Assert the set recovered **at the invoke funnel** is empty. A correct implementation drops it on the `settings.is_object()` filter (`extensions.rs:78`); an implementation that reached the same answer through `declared_capabilities` keeps it, because that path discards values and filters only nulls (`meta.rs:186-190`) — `3` is not null. Paired with E4, which must stay non-empty. This is the pair that distinguishes the two implementations; E4 alone does not, and the value must be non-null or both paths drop it and the discriminator collapses. **Fixture prerequisite: §3.2.** | integration | negative / discrimination | Yes. |
 | EXT.1.d | ~~**E6** behavioural revert~~ — **withdrawn at review.** With no extension-gated behaviour shipped, "reverted to core" and "never consulted the client" are output-identical: ordinary `tools/call` already succeeds. The case was marked red on HEAD and is not. **No case. See §6.5.** | — | — | **No.** |
-| EXT.1.d | **E7** the refusal-shape negative: same request, assert the response is **not** a JSON-RPC error and no error code is emitted. Paired with E6 because "revert" and "reject" are the two spec-permitted answers and the design chose revert; a case asserting only success would also pass a build that never consulted the client at all. E7's value is bounded — see §4.2. | integration | negative | No, on its own. Recorded as such rather than counted. |
 
 ### 3.1 E1/E2/E3 are retrofits, and a retrofit owes a falsifier probe
 
@@ -95,6 +94,34 @@ by RE-RUNNING the case, never by `git status` — mutation and repair are both m
 E3 is the probe that carries the section. E1 and E2 both survive a builder that ignores its argument — E1 because a hardcoded non-empty map still emits the key, E2 because absence is also what an unwired field emits (§4.1). Only E3 pins identity: mutate `build_server_capabilities` to ignore the map it is handed, and E3 must fail on the literal `example.test/probe` assertion. A probe run on E1 or E2 alone is evidence of nothing.
 
 Needing this section at all means §P2 was skipped for EXT.1.a-b. It is a recovery mechanism, recorded as one.
+
+### 3.2 E4 and E5 need a protocol version in the same `_meta`, or they never reach the read
+
+A route-level fixture that puts `_meta["io.modelcontextprotocol/clientCapabilities"]` on a
+`tools/call` and nothing else **is refused before dispatch**, and the refusal has nothing to do
+with extensions. `classify_request` (`meta.rs:137-186`) treats the presence of *any* 2026 key —
+`clientCapabilities` included — as a declaration of the modern era, then requires the pair:
+`protocolVersion` missing makes the request `Malformed { missing: [protocolVersion] }`, which
+`handlers.rs:790-797` answers with `-32602 missing required request metadata` and HTTP 400. The
+extension read never runs. A case that dies there is not red on the criterion it names; it is red
+on its own fixture, and it would stay red after the implementation was correct — the A5 failure in
+its inverted form.
+
+So both rows carry a fixture contract, and it is three things, each read from the code:
+
+| the fixture must carry | why | source |
+|---|---|---|
+| `_meta["io.modelcontextprotocol/protocolVersion"]`, a **string**, in `MODERN_VERSIONS` | absent → `Malformed`; present but not a string → `Malformed`; present, a string, unserved → `unsupported_version_error`, still before dispatch | `meta.rs:158-176`, `handlers.rs:813-824` |
+| on the HTTP route, the mirrored headers `MCP-Protocol-Version` (equal to the body value), `Mcp-Method` (`tools/call`) and `Mcp-Name` (the tool name) | `HeaderCheck::validate` returns a mismatch on an **absent** header, not only a disagreeing one (`headers.rs:177-183`), and the handler answers `-32020` and 400 | `handlers.rs:865-893` |
+| `clientCapabilities` as a JSON **object** | a null, number or array is `Malformed { missing: [clientCapabilities] }` even though the key is present | `meta.rs:178-182` |
+
+E5's non-object settings value (`{"extensions": {"io.modelcontextprotocol/tasks": 3}}`) is
+untouched by the third line and must stay: the *capabilities object* is an object; the *extension's
+settings* are the number, and that is the discrimination E5 exists to make.
+
+The obligation this places on the plan is one line long and worth stating as a rule rather than as
+two fixture notes: **a route-level case declares the era it is testing in.** A case reaching a
+2026 code path through a request the 2026 shape gate refuses has measured the gate, not the path.
 
 ## 4. Where a case cannot distinguish two implementations — said plainly
 
@@ -132,19 +159,6 @@ because no extension is implemented today. Nothing in this suite would catch a f
 implements an extension and forgets to register it — the key would still be absent and every case
 would stay green. That guard belongs to TASK.1, which adds the first entry, and this plan records
 it as inherited rather than claiming coverage it does not have.
-
-### 4.2 E7 is a weak case and is labelled one
-
-E7 asserts an absence (no error). An implementation that never reads client capabilities and
-always runs core behaviour satisfies it. It was drafted as the paired half of E6, and **E6 has
-since been withdrawn** (§6.5), so E7 now stands alone and its weakness is worse, not better: on
-its own it says only "not a refusal", and it cannot say "reverted", because there is nothing to
-revert from. It is kept because the revert-versus-reject choice is a real one the design made and
-the spec permits both — but it is recorded as non-discriminating so a later reader does not
-mistake it for evidence of negotiation. Nothing else in this suite discriminates EXT.1.d: E5 is
-EXT.1.c's case (the set is recovered from the raw object) and must not be counted here as well,
-which is exactly what §6.5 refuses. The behavioural half has **no case at all** until TASK.1 gates
-something on an extension.
 
 ## 5. OTEL.1 — the coverage map
 
@@ -377,8 +391,16 @@ behaviour" and "never consulted an extension at all" produce byte-identical outp
 assertion can separate them. A case that cannot fail the wrong implementation is A5, and the
 earlier "red on HEAD" label on E6 is **retracted**, not softened.
 
-E7 stays, labelled weak as it already was: it separates revert from *reject*, which is a real
-distinction the honour clause makes, but it does so on the reject side only.
+**E7 is deleted with it, and this is the second elimination, not a note.** E7 asserted an absence
+— that the response is not a JSON-RPC error — and an implementation that never reads client
+capabilities at all satisfies it, because an ordinary `tools/call` already succeeds. It was drafted
+as E6's paired half; with E6 withdrawn it says only "not a refusal" against a build that has
+nothing to refuse. An earlier revision kept it under a section of this plan's own headed *E7 is a
+weak case and is labelled one*, which conceded in its own text that E7 cannot evidence EXT.1.d and then counted it
+in the plan anyway. A row that cannot fail the wrong implementation is A5 whether or not it is
+labelled; labelling it only tells the reader the plan knew. Both the row and that section are gone,
+and the revert-versus-reject distinction is recorded here, in prose, where it is a design fact
+rather than a case pretending to test one.
 
 **EXT.1.d must not be counted as evidenced by this plan.** It gets a case when TASK.1 ships
 behaviour actually gated on `Extension::Tasks` — at that point the undeclared-extension request has
@@ -388,7 +410,7 @@ something to be reverted from, and the same row becomes writable and red.
 - resolving action: once one behaviour is extension-gated, write E6 against it
 - trigger: the first `if extensions.contains(Extension::Tasks)` on a request path
 - if it resolves badly (TASK.1 ships no gated behaviour in this release): EXT.1.d closes on
-  construction and review, recorded as such, never on E7 alone
+  construction and review, recorded as such — this plan asserts no case for it
 
 ### 6.6 Route-level ingestion — no longer an empty cell; the cases are §5.2
 
