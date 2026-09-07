@@ -215,6 +215,41 @@ pub(crate) fn extract_tools_call_params(params: Option<&Value>) -> (&str, Value)
     (tool_name, arguments)
 }
 
+/// Carry the client's `params._meta` into a meta-tool's `arguments`.
+///
+/// A conforming client places `_meta` as a sibling of `arguments` inside
+/// `params` (`src/protocol/meta.rs`), and `extract_tools_call_params` returns
+/// `arguments` alone, so nothing downstream of the router could ever see it.
+/// The meta layer reads it off the argument object it is handed, which is why
+/// it has to travel there.
+///
+/// Conditional on purpose. `route_direct_backend_call` runs before the
+/// meta-tool match, so an unconditional merge would synthesise a `_meta` key
+/// into every direct-route backend payload — inventing a field for backends
+/// that never asked for one. Callers pass `is_meta_tool`, and the direct route
+/// stays byte-identical.
+///
+/// An `arguments._meta` the client wrote itself is left alone: the caller's own
+/// value is the more specific one, and overwriting it would silently discard it.
+pub(crate) fn merge_client_meta(
+    arguments: Value,
+    params: Option<&Value>,
+    is_meta_tool: bool,
+) -> Value {
+    if !is_meta_tool {
+        return arguments;
+    }
+    let Some(meta) = params.and_then(|p| p.get("_meta")) else {
+        return arguments;
+    };
+    let mut arguments = arguments;
+    let Some(map) = arguments.as_object_mut() else {
+        return arguments;
+    };
+    map.entry("_meta").or_insert_with(|| meta.clone());
+    arguments
+}
+
 /// Parse JSON-RPC request or notification.
 ///
 /// Returns `(Option<RequestId>, method, params)` where `id` is `None` for

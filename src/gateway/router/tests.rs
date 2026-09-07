@@ -3,7 +3,7 @@
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
     build_http_error_response, build_json_response, extract_request_id, extract_tools_call_params,
-    is_notification_method, parse_elicitation_params, parse_request,
+    is_notification_method, merge_client_meta, parse_elicitation_params, parse_request,
 };
 use super::{AppState, create_router, create_router_with};
 use crate::backend::{Backend, BackendRegistry};
@@ -674,6 +674,66 @@ fn extract_tools_call_params_empty_object() {
     let (name, args) = extract_tools_call_params(Some(&params));
     assert_eq!(name, "");
     assert_eq!(args, json!({}));
+}
+
+// =====================================================================
+// merge_client_meta (MIK-7215.CONTROL.3b)
+// =====================================================================
+
+#[test]
+fn ac_control_3b_meta_tool_receives_the_clients_params_meta() {
+    let params = json!({
+        "name": "gateway_invoke",
+        "arguments": {"server": "s", "tool": "t"},
+        "_meta": {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    });
+    let (_, args) = extract_tools_call_params(Some(&params));
+    let merged = merge_client_meta(args, Some(&params), true);
+    assert_eq!(
+        merged["_meta"]["traceparent"],
+        json!("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+        "the meta layer reads `_meta` off the argument object, so a conforming \
+         client's `params._meta` has to reach it or the trace id can never be the key"
+    );
+}
+
+#[test]
+fn ac_control_3b_direct_route_payload_is_byte_identical() {
+    let params = json!({
+        "name": "backend__tool",
+        "arguments": {"q": 1},
+        "_meta": {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    });
+    let (_, args) = extract_tools_call_params(Some(&params));
+    let merged = merge_client_meta(args, Some(&params), false);
+    assert_eq!(
+        merged,
+        json!({"q": 1}),
+        "the direct route reaches a backend that never asked for `_meta`; \
+         synthesising one there invents a field the client did not send it"
+    );
+}
+
+#[test]
+fn ac_control_3b_an_argument_meta_the_client_wrote_is_not_overwritten() {
+    let params = json!({
+        "name": "gateway_invoke",
+        "arguments": {"_meta": {"traceparent": "inner"}},
+        "_meta": {"traceparent": "outer"}
+    });
+    let (_, args) = extract_tools_call_params(Some(&params));
+    let merged = merge_client_meta(args, Some(&params), true);
+    assert_eq!(merged["_meta"]["traceparent"], json!("inner"));
+}
+
+#[test]
+fn ac_control_3b_absent_params_meta_changes_nothing() {
+    let params = json!({"name": "gateway_invoke", "arguments": {"q": 1}});
+    let (_, args) = extract_tools_call_params(Some(&params));
+    assert_eq!(
+        merge_client_meta(args, Some(&params), true),
+        json!({"q": 1})
+    );
 }
 
 // =====================================================================

@@ -1750,7 +1750,7 @@ impl Gateway {
             &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
         >,
     ) -> Option<serde_json::Value> {
-        use super::router::helpers::{extract_tools_call_params, parse_request};
+        use super::router::helpers::{extract_tools_call_params, merge_client_meta, parse_request};
         use crate::protocol::JsonRpcResponse;
 
         let (id, method, params) = match parse_request(request) {
@@ -1829,6 +1829,12 @@ impl Gateway {
             }
             "tools/call" => {
                 let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
+                // See the HTTP path: meta-tool only, direct route untouched.
+                let arguments = merge_client_meta(
+                    arguments,
+                    params.as_ref(),
+                    meta_mcp.exposes_meta_tool(tool_name),
+                );
                 let tool_name = tool_name.to_string();
 
                 // The tool policy is applied at the dispatch chokepoint via the

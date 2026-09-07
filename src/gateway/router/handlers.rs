@@ -21,8 +21,8 @@ use super::authorization::{
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
     build_error_response_with_data, build_http_error_response, build_http_response,
-    build_json_response, build_response, extract_tools_call_params, parse_elicitation_params,
-    parse_request, parse_sampling_params,
+    build_json_response, build_response, extract_tools_call_params, merge_client_meta,
+    parse_elicitation_params, parse_request, parse_sampling_params,
 };
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
@@ -1161,6 +1161,15 @@ pub(super) async fn meta_mcp_handler(
         }
         "tools/call" => {
             let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
+            // A conforming client's `_meta` is a sibling of `arguments`, and
+            // the meta layer reads it off the argument object it is handed.
+            // Meta-tool path only -- the direct backend route runs before the
+            // meta-tool match and must stay byte-identical.
+            let arguments = merge_client_meta(
+                arguments,
+                params.as_ref(),
+                state.meta_mcp.exposes_meta_tool(tool_name),
+            );
 
             // A task-augmented call is answered with a handle, not a result.
             // The record is created before anything is dispatched: a handle the
