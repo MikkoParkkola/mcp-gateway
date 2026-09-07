@@ -278,7 +278,7 @@ scheduled independently of that cluster; the five that stand alone are the excep
 | OBS.1, OBS.2 | the stdio dispatch path, above |
 | COMPAT.1 | with MIK-7272 — the ABSENT clause is the modern revision being served at all, which the `server.modern_protocol` default gates and the revision surface (MIK-7272, rollup cluster C) unblocks, not a separate task |
 | PERF.1, PERF.2 | wave 0, measured 2026-09-03 on `spark`. PERF.2 is MET; PERF.1 stays open as PARTIAL — the harness yields no P50 or P99, and only an end-to-end comparison against a 3.5.0 binary does |
-| PERF.4 | wave 1 — the operator's ruling left the ceiling standing and the counting mechanism undecided |
+| PERF.4 | closed 2026-09-08. The ruling settled the mechanism: the tool is enumerated when the webhook registry is attached, and the band is 14-17 |
 | SEC.1 | wave 3 — twelve of fifteen controls carry a refusal test; two remain, and one is blocked on files another session owns |
 | SEC.6 | wave 3 — one test on the MIK-7262 early return, plus a ruling on whether an unlabelled fix counts as closed |
 | COMPAT.4 | last — the dual-role matrix grades every other row, so it is written once the rows it grades are settled |
@@ -317,9 +317,7 @@ rather than last.
 
 **Wave 1 — designs only, no code, all parallel.** The revision surface (MIK-7272, rollup
 cluster C), the design half of era detection (MIK-7217, rollup cluster B, including the
-`NFR.OBS.3` observability question no design doc covered), NFR.PERF.4's counting decision —
-which the operator's ruling converted from a question about the ceiling into a question about
-the mechanism — and every rollup-residue row the triage in
+`NFR.OBS.3` observability question no design doc covered), and every rollup-residue row the triage in
 `RELEASE-4.0.0-residue-triage.md` classifies as needing a design rather than a test or a
 measurement.
 Each is a §P1 note reviewed by two vendors before an edit. This is the wave that decides
@@ -340,8 +338,7 @@ than a missing assertion.
 Two implementations belong to this wave that Wave 1 only designs. Era detection (MIK-7217,
 rollup cluster B) has five blocking rows and no code: its design covers `DISCOVER.4` alone, so
 the wave carries the probe, the cache and the re-probe half of `DISCOVER.5`, and `NFR.OBS.3`'s
-observability follows the mechanism it observes. NFR.PERF.4's counting change lands here too,
-behind its reviewed design and never before it. `HEADER.9` is sequenced after era detection
+observability follows the mechanism it observes. `HEADER.9` is sequenced after era detection
 because it consumes the era the detection produces.
 
 **Wave 4 — the long pole is now MIK-7272, not MRTR.** The continuation envelope is wired,
@@ -408,10 +405,9 @@ Eight decisions are the requester's, not the team lead's, and are recorded here 
 design that raised each one so they survive a session boundary. Each names what changes either way,
 so an answer costs a sentence.
 
-Six of them leave work that does not turn on them free to proceed. Items 7 and 8 do not: both block
-`NFR.PERF.4` outright, because a design built while question 7 is open would be built against an
-acceptance criterion its own frozen scope may foreclose. That is why they carry no fallback that
-starts code.
+Six of them leave work that does not turn on them free to proceed. Items 7 and 8 blocked
+`NFR.PERF.4` outright and were both answered on 2026-09-08; the criterion is met and the two rows
+stay in the table for the same reason items 1 and 5 do — their answers are what the design records.
 
 Scheduled per §P1 rather than described: every one of them is *deferred*, the owner is the
 operator in all cases, and the resolving action is the question being asked — none is settled by
@@ -423,8 +419,8 @@ running anything, which is why none has a command against it.
 | 5. whether v4.0.0 lands as one merge or a sequence of them | **answered 2026-09-03: a sequence of per-cluster PRs.** Cluster A first, then each later cluster on its own PR; cluster F's default flip lands after both A and C | resolved | — |
 | 4. what the direct `POST /mcp/{name}` route needs | operator says whether it gets its own instrumentation, and whether CACHE.1-4 are HTTP-only | before response-cache keying (MIK-7213) starts code in Wave 3 | scope CACHE.1-4 to the traced route only and leave the direct route uninstrumented, which is today's behaviour and reversible |
 | 6. whether `GH475.RL.10`'s property leg breaks `capability::Error` in 4.0.0 | operator picks: ship with the residual risk recorded, add the typed variant now, or drop the criterion from 4.0.0 | asked 2026-09-06 and unanswered; must be settled before cluster H can be called closed | ship 4.0.0 with the behaviour met and the property recorded as residual risk, and re-file the typed signal against 4.1.0 — the reversible option, and the only one that does not change a public error type inside the release that already carries the upgrade path |
-| 7. which served surfaces the `NFR.PERF.4` band governs | operator says whether the 14..=16 band is a claim about the unfiltered traditional surface only, or about every served list including Code Mode, `exposed_meta_tools` filtering and session-promoted tools | asked 2026-09-06 and unanswered; blocks implementation, because the frozen scope excludes the filtering machinery | if it governs every served list the criterion is unsatisfiable inside the frozen scope — Code Mode serves 2 tools (`src/gateway/meta_mcp/mod.rs:1265`) and no rearrangement of the surface reaches 14 — so §P0 reopens rather than the design being patched |
-| 8. where webhook status becomes observable once `gateway_webhook_status` stops being enumerated | operator picks: fold it into `gateway_get_stats`, give it a CLI subcommand, or remove it with no replacement | asked 2026-09-06 and unanswered; blocks implementation | "no replacement" makes this a breaking capability removal under DoR C5 needing recorded approval — removal is established as non-breaking *as a name* (no published client calls it) but not *as a capability*, and running those two claims together is the error revision 3 corrected |
+| 7. which served surfaces the `NFR.PERF.4` band governs | operator says whether the 14..=16 band is a claim about the unfiltered traditional surface only, or about every served list including Code Mode, `exposed_meta_tools` filtering and session-promoted tools | **answered 2026-09-08: the band governs the unfiltered traditional surface.** Code Mode and `exposed_meta_tools` filtering are outside it | resolved — `tests/nfr_perf_4_meta_tool_band.rs` asserts the band on that surface |
+| 8. where webhook status stays observable, given the tool was deleted to make the band true | operator picks: fold it into `gateway_get_stats`, give it a CLI subcommand, or remove it with no replacement | **answered 2026-09-08: neither — the tool stays enumerated,** gated on the webhook registry being attached, and the band moves to 14-17 | resolved — no capability is removed, so DoR C5 does not fire. See `docs/design/2026-09-08-perf4-webhook-status-restoration.md` |
 
 The two resolved items below stay in the section because their *scheduling* consequences are
 still live; they are not open questions.
