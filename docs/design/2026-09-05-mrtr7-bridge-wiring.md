@@ -161,7 +161,7 @@ person's refusal from a transport fault, which is what `NFR.OBS.4` needs.
 `RequestShape::declared_capabilities()` (`src/protocol/meta.rs:406-408`), which
 reads the **per-request** `_meta` of a `Modern` request. `RequestShape::Legacy`
 yields `Declared::NONE` (asserted at `src/protocol/meta.rs:549`). The only
-production write is `src/gateway/router/handlers.rs:705,1164`; the other three
+production write is the `MetaMcpCallerContext` construction in `router/handlers.rs`; the others
 construction sites pass `Declared::NONE` outright.
 
 Two consequences, both fatal to the feature as specified:
@@ -201,7 +201,7 @@ only for `Legacy`.** A modern caller that declared capabilities must get a
 continuation, not a bridge, and `Declared` alone cannot tell the two apart.
 
 **The merge is conditional on shape, and that is load-bearing.** The MRTR.9
-gate is shape-blind — `invoke.rs:1518` reads `caller.input_capabilities` with
+gate is shape-blind — `interim.undeclared(caller.input_capabilities)` reads it with
 no modern/legacy branch — so an unconditional merge would silently widen the
 gate for modern callers too: one that declared `elicitation` at `initialize`
 and sent no per-request `_meta` is refused today and would be minted a
@@ -266,7 +266,7 @@ test code is written.
 | two of MIK-7388's four defects contradict frozen acceptance rows (implementer, HIGH) | confirmed at source. `:433` is what row 320 specifies and `:409` is what row 308 forbids; both findings die at the requirement, and the ticket narrowed to `:430` + `:454`. It has since narrowed again: `:454` was fixed in `60a28464` and checked off as `BRIDGE.5`, leaving `:430` alone. Whether row 320 is the behaviour the requester wants is open question 4, not a repair |
 | store has no eviction or ownership (both vendors, HIGH) — **re-raised on the amended design** (GPT, HIGH) | confirmed twice. The first answer, `SessionLifecycle`, has no production caller at all; declarations live in the `NotificationMultiplexer` session map instead, the only session-keyed store whose removal runs in production. Superseded answer recorded at open question 3; the owner is fixed by amendment 3 |
 | bridge retries invoke the backend outside cost accounting (GPT, HIGH, LIKELY) | confirmed at source: `invoke.rs:1246,1369,1394` each fire once around the single dispatch at :1327. In scope — this change creates the second invocation. One dispatch helper, change surface above |
-| the merge widens MRTR.9 for modern callers while the table says it does not (synthetic, MEDIUM, CERTAIN) | confirmed at source: the gate at `invoke.rs:1518` is shape-blind. Merge scoped to `Legacy` only, option C above |
+| the merge widens MRTR.9 for modern callers while the table says it does not (synthetic, MEDIUM, CERTAIN) | confirmed at source: the gate `interim.undeclared(caller.input_capabilities)` is shape-blind. Merge scoped to `Legacy` only, option C above |
 | construction-site census says five and lists seven (synthetic, LOW) | confirmed. Count was wrong, list was right; re-enumerated by role |
 | timed-out client prompt discarded, backend retried without the answer (GPT, HIGH, LIKELY) | out of this scope — a defect inside `input_bridge.rs`, not fixed by a wiring change. **Filed as MIK-7388** with the pending-map growth, blocking MIK-7212. Both halves of that row are now superseded: the ticket WITHDREW this criterion (`BRIDGE.1`, retired) once row 320 was read at source, and round 6 deleted the blocking edge |
 | pending-response map grows if the outer timeout cancels after registration (GPT, HIGH) | out of this scope. **Filed as MIK-7388**, which blocks MIK-7212: neither defect is reachable until this wiring gives the bridge a caller. Recorded here as being in the same file as the row above, which it is not — `input_bridge.rs` holds no pending state, and `rg 'impl .*ClientChannel for' src/` returns nothing, so the map this names belongs to an implementor the UNWIRED decision means nobody has written. Re-bound on MIK-7388 to the production `ClientChannel` impl on 2026-09-05 — which is the impl THIS change writes, so `BRIDGE.2` is satisfied here and is not something to wait for |
@@ -275,15 +275,15 @@ test code is written.
 
 ### One capability value, two consumers
 
-The gate at `invoke.rs:1514` reads `caller.input_capabilities`. So does the
+The gate `interim.undeclared(caller.input_capabilities)` reads it. So does the
 bridge. Feeding that one field from the merged value — session store
 authoritative, per-request slice narrowing — makes the gate consult the merged
 set by construction, with no second consumer to keep in step. Stating it is the
 fix; changing the gate would be the defect.
 
 The merge happens where `CallerContext` is built, not where it is read:
-`src/gateway/router/handlers.rs:705,1164` (HTTP, `session_id` in scope at :707)
-and `src/gateway/server/mod.rs:1827` (stdio, `session_id` in scope from :1722,
+the `MetaMcpCallerContext` construction in `router/handlers.rs` (HTTP, `session_id` in scope)
+and the two in `server/mod.rs` (stdio, `session_id` in scope from :1722,
 constant `"stdio-session"` at :1579 — a key nothing ever writes under, so the
 stdio read returns nothing and the caller is refused).
 
@@ -327,7 +327,7 @@ change reads off the gateway it is being wired into.
 
 Wiring one call is the smallest part of this.
 
-- `Declared::parse` (`src/protocol/meta.rs:367`) already takes a plain
+- `Declared::parse` already takes a plain
   capabilities map of exactly the `initialize` shape, and already reads the 2026
   elicitation modes from it — an empty `elicitation` object declares form mode.
   It is **private**. Rather than widening the parser itself, expose a named
@@ -341,17 +341,33 @@ Wiring one call is the smallest part of this.
   transport; that rationale died when stdio left the bridgeable set, and a
   stored-but-unread declaration is a claim about permission that nothing
   checks.
-- a write at the HTTP `initialize` call site (`router/handlers.rs:926`), and a
-  read at each `CallerContext` construction site. Seven, enumerated from source and split by role: two
-  production writes carrying a real declaration (`handlers.rs:705,1164`), and
-  five passing `Declared::NONE` today (`invoke.rs:3816,3846,3881` — tests —
-  and `server/mod.rs:1827,2619` — stdio). An earlier revision of this document
-  said "five" while listing seven; the count was wrong, the list was right.
-  The read is the *same* read at all seven, which is what makes it safe to add
-  at the stdio sites: the store is written only at the HTTP `initialize` call
-  site, so a stdio read finds no declaration and the conjunction in amendment 1
-  refuses. Nothing at `server/mod.rs:1827,2619` needs a transport check, and
-  the deadlock the descope exists to prevent stays unreachable.
+- a write at the HTTP `initialize` dispatch arm in `router/handlers.rs` (the
+  `"initialize" => state.meta_mcp.handle_initialize(` match arm), and a read at
+  each `MetaMcpCallerContext` construction site.
+
+  **The count is a budget, and the one this document carried was wrong.** It
+  said seven and listed seven. Enumerated from source with
+  `rg -n 'MetaMcpCallerContext\s*\{' src/`, the production sites are **three** —
+  one in `router/handlers.rs` (the only one carrying a real declaration, fed by
+  `RequestShape::declared_capabilities()`) and two in `server/mod.rs` (stdio,
+  both passing `Declared::NONE`). The remainder are test-module sites: three in
+  `meta_mcp/invoke.rs` past its `#[cfg(test)]`, and the rest across
+  `router/tests.rs`, `meta_mcp/tests.rs`, `meta_mcp/trace_correlation_tests.rs`,
+  `server/mod.rs`'s test module and `authz_tests.rs`. The two the old list named
+  in `handlers.rs` besides the real one construct nothing.
+
+  This matters because a new field on the struct touches every literal, test
+  sites included: `rg -n 'input_capabilities:' src/` returned **twenty** at `5b0bdb82`, not seven.
+  Sizing the change from "seven sites" underestimates it threefold.
+  **Re-enumerate with those two greps at implementation HEAD** — the split that
+  matters is production versus test, and both greps give it directly.
+
+  The read is the *same* read at every production site, which is what makes it
+  safe to add at the stdio ones: the store is written only at the HTTP
+  `initialize` call site, so a stdio read finds no declaration and the
+  conjunction in amendment 1 refuses. Neither `server/mod.rs` site needs a
+  transport check, and the deadlock the descope exists to prevent stays
+  unreachable.
 - `shape` threaded to each of those sites, and production implementations of
   the bridge's three traits, which today exist only as test fakes.
 - **one dispatch path, not two.** The budget gate and the accounting emissions
@@ -529,11 +545,11 @@ superseded sentence is gone, not footnoted.
    dispatch sites — RESOLVED: both reach one shared handler,
    `MetaMcp::handle_initialize` (`src/gateway/meta_mcp/mod.rs:1151`), from
    `src/gateway/server/mod.rs:1788` (stdio serve loop) and
-   `src/gateway/router/handlers.rs:926` (HTTP router). It already receives both
+   `router/handlers.rs`'s `"initialize"` dispatch arm (HTTP router). It already receives both
    values a per-session store needs: the `initialize` `params`, which carry the
    client's `capabilities` object, and a `session_id` that both call sites pass
    as `Some(..)`, never `None`. That answer is superseded by amendment 3: the store
-   is written at the HTTP call site (`router/handlers.rs:926`) only. One write
+   is written at the HTTP call site (the `"initialize"` dispatch arm in `router/handlers.rs`) only. One write
    site covering every bridgeable transport was the right shape while stdio was
    bridgeable; it left that set, and a declaration nothing reads is a claim
    about permission nobody checks.
@@ -624,7 +640,7 @@ was taken on the reviewer's word.
 
 | finding | disposal |
 |---|---|
-| the write site is still named twice, HTTP-only in one place and `MetaMcp::handle_initialize` in another (HIGH, CERTAIN) | confirmed. The round-4 repair fixed the stdio paragraph and left two passages carrying the old instruction — the change-surface bullet and the answer recorded against the first scheduled question. Both now name `router/handlers.rs:926`, and the recorded answer says which amendment superseded it rather than being quietly rewritten |
+| the write site is still named twice, HTTP-only in one place and `MetaMcp::handle_initialize` in another (HIGH, CERTAIN) | confirmed. The round-4 repair fixed the stdio paragraph and left two passages carrying the old instruction — the change-surface bullet and the answer recorded against the first scheduled question. Both now name the `"initialize"` dispatch arm in `router/handlers.rs`, and the recorded answer says which amendment superseded it rather than being quietly rewritten |
 | the store's owner is not concrete, and the cited stream-end removal does not exist (HIGH, LIKELY) | confirmed, and the citation was worse than the finding said. `streaming.rs:578` is a line inside a test; the only production removal is `handlers.rs:354` on DELETE (I: `rg -n 'remove_session' src/` returns those two and nothing else — one grep is one source, however carefully it was run). Eliminated rather than patched: the declaration becomes a field on `ClientSession`, which the map already holds as its value type, so it cannot drift from or outlive the session and no second keyed map needs removal wiring. The follow-on claim that no reaper exists was itself false, and round 6 killed it: `spawn_reaper_on` runs in production over the same map, so the unknown is RESOLVED rather than deferred |
 | `WIRE.9`'s follow-up call is answered by the settled idempotency entry, so the cache gate never runs (MEDIUM, CERTAIN) | confirmed by reading the row: it reused the key it had just asserted settled, which is exactly the shape `test-plan-honesty` calls a case that cannot fail. The follow-up now carries a different idempotency key and the same response-cache key, and settlement is asserted separately |
 
