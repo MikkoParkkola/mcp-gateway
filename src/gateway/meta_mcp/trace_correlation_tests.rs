@@ -148,19 +148,38 @@ async fn ac_control_3_no_trace_id_falls_back_to_the_session_id() {
 }
 
 #[tokio::test]
-async fn ac_control_3_neither_trace_id_nor_session_id_logs_unknown() {
-    // The pre-existing sentinel for the fully-anonymous case is preserved —
-    // this control narrows when "unknown" fires, it does not remove it.
+async fn ac_control_3a_minted_trace_id_is_the_key_when_nothing_else_is() {
+    // MIK-7215.CONTROL.3a: the correlation key must survive the removal of
+    // sessions. A caller carrying neither `_meta` nor a session id is the
+    // ordinary case after MCP 2026-07-28, and it is exactly the case the
+    // placeholder erases: every such invocation correlates as one string, so
+    // the log cannot tell one caller's call from another's.
+    //
+    // The invoke path already mints a trace id for its own tracing scope, so a
+    // real key is in hand at the moment the placeholder used to fire.
     let (meta, log_path) = meta_with_transparency_log();
     let args = json!({ "server": "srv", "tool": "read", "arguments": {} });
 
-    meta.invoke_tool(&args, None, &ctx())
+    let result = meta
+        .invoke_tool(&args, None, &ctx())
         .await
         .expect("invoke ok");
 
+    // The same minted id is stamped into the response by `augment_with_trace`,
+    // which is what lets an operator join a response to its log entry at all.
+    let minted = result
+        .get("trace_id")
+        .and_then(|v| v.as_str())
+        .expect("the invoke path stamps its minted trace id into the response")
+        .to_string();
+
     let raw = std::fs::read_to_string(&log_path).expect("read log");
     assert!(
-        raw.contains("\"session_id\":\"unknown\""),
-        "with neither a trace id nor a session id, the sentinel must still fire: {raw}"
+        raw.contains(&minted),
+        "with neither a trace id nor a session id, the minted trace id must be the correlation key: minted={minted} log={raw}"
+    );
+    assert!(
+        raw.contains("\"correlation_source\":\"trace_id\""),
+        "the log must name which rung supplied the key: {raw}"
     );
 }

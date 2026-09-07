@@ -1785,19 +1785,41 @@ impl MetaMcp {
             let response_hash =
                 format!("sha256:{}", sha256_hex(canonical_json(&result).as_bytes()));
             let caller = api_key_name.unwrap_or("anonymous");
-            // MIK-7215.CONTROL.3: the log's correlation key must survive the
-            // removal of sessions. The W3C trace id carried in `_meta` spans
-            // the whole call rather than one connection, so it is used where
-            // present; `session_id` remains the fallback for a legacy caller
-            // that never sent one.
+            // MIK-7215.CONTROL.3/.3a: the log's correlation key must survive
+            // the removal of sessions. The W3C trace id carried in `_meta`
+            // spans the whole call rather than one connection, so it is used
+            // where present; `session_id` remains the fallback for a legacy
+            // caller that never sent one; and the id this invocation minted
+            // for its own tracing scope keys the case where neither exists —
+            // the ordinary case after MCP 2026-07-28, and the one a shared
+            // placeholder made uncorrelatable. The chain is total, so the
+            // placeholder is now unreachable.
             let otel_trace_id = args
                 .get("_meta")
                 .and_then(crate::protocol::trace::TraceContext::from_meta)
                 .and_then(|tc| tc.trace_id().map(str::to_string));
-            let sid = otel_trace_id.as_deref().or(session_id).unwrap_or("unknown");
-            if let Err(e) =
-                tl.log_invocation(sid, caller, server, tool, &request_hash, &response_hash)
-            {
+            let key = match (otel_trace_id.as_deref(), session_id) {
+                (Some(otel), _) => crate::security::transparency_log::CorrelationKey {
+                    id: otel,
+                    source: crate::security::transparency_log::CorrelationSource::OtelTraceId,
+                },
+                (None, Some(session)) => crate::security::transparency_log::CorrelationKey {
+                    id: session,
+                    source: crate::security::transparency_log::CorrelationSource::SessionId,
+                },
+                (None, None) => crate::security::transparency_log::CorrelationKey {
+                    id: trace_id,
+                    source: crate::security::transparency_log::CorrelationSource::TraceId,
+                },
+            };
+            if let Err(e) = tl.log_invocation_correlated(
+                key,
+                caller,
+                server,
+                tool,
+                &request_hash,
+                &response_hash,
+            ) {
                 warn!(
                     server,
                     tool,
