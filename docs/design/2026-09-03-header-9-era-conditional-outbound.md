@@ -15,7 +15,19 @@ against it until it is reviewed.
 sends to a peer it has classified `Modern` carries the modern shape; a request to any
 other peer carries exactly what it carries today. **Every outbound HTTP exchange with a
 modern peer is in scope, not only the JSON-RPC bodies** — the SSE reconnect included, which
-is a `GET` the gateway issues to a peer it has already classified.
+is a `GET` the gateway issues to a peer it has already classified. Two exchanges are in
+scope and deliberately shaped **legacy**, decided rather than overlooked:
+
+- **`Close`** tears down a session the *legacy* handshake minted, so it must still carry the
+  identifier that names it.
+- **the handshake itself** — the `initialize` POST and the `initialized` notification. A
+  modern-shaped `initialize` is a handshake a legacy peer cannot answer, and it is the
+  request whose answer decides the era in the first place.
+
+That second exception is what makes the SSE cell look contradictory and is not: the same
+`initialize()` call may issue a legacy-pinned POST and a modern-shaped `GET`, because the
+`GET` on a *reconnect* is made to a peer resolved by an *earlier* handshake. The POST is
+pinned by what it is; the `GET` is shaped by what is already known.
 
 **OUT**:
 
@@ -36,12 +48,26 @@ costs. The change: the test plan's `Modern`, `Sse` protocol-version cell moves f
 (inherit whatever the builder emits) to `M` (carry the modern value), and the FOR sentence
 widens from "a request" to every outbound exchange with a modern peer.
 
-The evidence is a reachability chain, not a reading of the criteria. The era cache is
-attached to the transport in `src/backend/lifecycle.rs:380`, before the first `initialize()`.
-`initialize()` is re-entered when the session expires (`src/transport/http/mod.rs:1295`).
-`establish_sse_connection` then calls `build_mcp_headers(HeaderMode::Sse, None)`, and that
-arm reaches neither finalisation site. So a peer already classified `Modern` is sent a
-**legacy** `MCP-Protocol-Version` on every reconnect, today, on the production path.
+The evidence is a reachability chain, not a reading of the criteria. Four steps, each named
+by its symbol rather than its line, because a line number stops being evidence the moment
+anything above it moves:
+
+1. `Backend::ensure_entry_started` attaches the era cache to the transport (`attach_era`)
+   *before* the first `initialize()` — deliberately, so the handshake itself stays legacy.
+2. The same start path then **awaits** `Backend::resolve_era`, and the revive path awaits it
+   again (`src/backend/lifecycle.rs`, both call sites). Attaching the cache only creates the
+   cell; this is the step that fills it. Without it the chain proves nothing, because
+   `outbound_era` reads `cached_now()` and an unresolved cache reads `None` — which means
+   legacy. That step was missing from the first version of this receipt.
+3. A caller therefore reaches an already-resolved backend. When its session expires,
+   `HttpTransport::initialize` is re-entered.
+4. `establish_sse_connection` calls `build_mcp_headers(HeaderMode::Sse, None)`, and that arm
+   reaches neither finalisation site.
+
+So a peer resolved `Modern` is sent a **legacy** `MCP-Protocol-Version` on every reconnect,
+today, on the production path. The claim is scoped to exactly that: a reconnect while the
+cached verdict is `Modern`. The *first* connection is legacy-shaped by construction and is
+correct — a peer's era cannot be known before it answers.
 
 That is why the cell could not stay `=`. The original justification — the `Sse` arm "never
 reaches either finalisation site" — is a true statement about the code and a false reason to
@@ -50,8 +76,12 @@ criterion does not cover. A cell excluded on the grounds that the bug exists wou
 shipped the bug with a test plan agreeing it was intended.
 
 Two things this receipt deliberately does **not** claim. The `Sse` session-header cell stays
-`·` on every era: `establish_sse_connection` passes `None` and no criterion asks for a
-session header there — that cell was examined and produced no decision. And the encoder
+`·` on every era — the *value* is unchanged, but on `Modern` its reason is no longer "nothing
+adds one". `establish_sse_connection` passes `None`, so nothing is minted; a statically
+configured `MCP-Session-Id` is merged in before the session block and the `HeaderMode::Sse`
+arm removes nothing. Once the SSE reconnect is on the modern path, `MIK-7215.STATELESS.3a`
+reaches it, and the cell holds only if the header is **removed** there as it is on
+`Modern`/`Request` and `Modern`/`Notify`. Same cell, load-bearing for a different reason. And the encoder
 `encode_header_value` landing in `src/protocol/headers.rs` ahead of the outbound rows that
 consume it is **sequencing, not a scope move**: it was already inside FOR as the mechanism
 that lets a legal non-ASCII tool name reach a header field at all, and writing it beside its
@@ -156,8 +186,20 @@ path's would have left notifications unprotected:
   `:607-616` would win and `Modern`/`Notify` could not hold its version or method cell.
   Notify gets its own finalisation, on the headers the builder returned, before the post.
 
-That is also why `Close` and `Sse`, which call the builder directly and pass no modern value,
-keep today's shape for these headers.
+`Close` calls the builder directly and passes no modern value, and keeps today's shape for
+these headers — see the Scope section for why that is a decision rather than an omission.
+
+**`Sse` is the third finalisation site, and it is smaller than the other two.** It calls the
+builder directly too, which is exactly the defect: a reconnect to a resolved-`Modern` peer
+inherits the handshake's legacy `MCP-Protocol-Version`. `establish_sse_connection` therefore
+reads the cached era once and, when it is `Modern`, re-asserts the modern protocol version
+and removes `MCP-Session-Id`, **after** the builder's static-header merge — the same ordering
+the `Request` path needs, and for the same reason: a re-assertion sited before the merge is
+overwritten by an operator's pinned value. Two headers, not four. `Mcp-Method` and `Mcp-Name`
+mirror JSON-RPC body fields and an SSE `GET` has no body to mirror; emitting them there would
+invent a value the check on the other side is meant to compare against. An unresolved era
+reads `None` and the reconnect stays legacy-shaped, which is the same non-blocking read the
+other two sites make.
 
 `MCP-Session-Id` was exempted in an earlier revision — "an operator who pins one gets one,
 because nothing in the body contradicts it". **That was wrong against the requirement.**

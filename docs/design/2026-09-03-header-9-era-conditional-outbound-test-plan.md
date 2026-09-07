@@ -41,12 +41,17 @@ regression cell, and a row collapsed in the table but run once in code would be
 the only thing that misses it. `Sse` is not collapsed with them because it
 carries no session header on any era.
 
-Two cells carry a decision, not an inheritance. A third was considered and
-produced none: **`Sse`'s session cell is `·` on every era**, because
-`build_mcp_headers` matches `HeaderMode::Sse => {}` (`mod.rs:600`) and
-`establish_sse_connection` passes `None` (`mod.rs:667-670`) — the header is not
-emitted today and this design does not add it. Recorded so the question is not
-re-opened as if it were open.
+Three cells carry a decision, not an inheritance. **`Sse`'s session cell is `·`
+on every era** — same value on all four rows, but on `Modern` it stopped being
+an inheritance. Nothing *mints* one there: `build_mcp_headers` matches
+`HeaderMode::Sse => {}` and `establish_sse_connection` passes `None`. An
+operator-configured `MCP-Session-Id` is a different matter — it is merged in
+before that arm runs and the arm removes nothing, so on the pre-widening plan
+the cell held only because the SSE `GET` was off the modern path. It is on it
+now, `MIK-7215.STATELESS.3a` reaches it, and the cell is proved by **removal**.
+The case is therefore a backend that both holds a minted session and carries a
+statically configured `MCP-Session-Id`: an implementation that only skips the
+mint passes an empty-session fixture and fails this one.
 
 - **`Modern`/`Request`+`Notify` session cell is `·`, and `Close` is `S`.** `MIK-7215.STATELESS.3a`
   is a prohibition — the gateway MUST NOT emit `Mcp-Session-Id` on the modern path
@@ -55,6 +60,15 @@ re-opened as if it were open.
   dual-era backend mints a session during the legacy handshake that runs *before* the era
   resolves. Both are real and both must be tested against the same backend state — a fixture
   where the session map is empty proves neither.
+- **The `Modern`/`Sse` cell is proved by a reconnect, not by a primed first connect.** The
+  matrix rows prime the era cache as a fixture input, and a primed *first* `initialize()`
+  goes green against a production path that only ever reaches `Modern` on the expiry
+  re-entry inside `request()`. So one captured-wire case drives the sequence itself: the
+  first SSE `GET` is legacy-shaped, the discovery probe resolves `Modern`, the session
+  expires and re-enters initialisation, and the **second** `GET` carries the modern
+  protocol version and no session header. It can fail on today's tree — the second `GET` is
+  legacy — and it is the only case here whose failure means the reconnect is broken in
+  production rather than that a value is wrong.
 - **`Close` inherits the protocol-version cell (`=`, not `M`); `Modern`/`Sse` does not.**
   `Close` calls `build_mcp_headers` directly and passes no modern value, so its cell is what
   the builder already emits, on every era. `Sse` reaches the builder the same way — and that
