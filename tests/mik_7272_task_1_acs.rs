@@ -224,6 +224,7 @@ mod capabilities {
     use mcp_gateway::backend::BackendRegistry;
     use mcp_gateway::gateway::test_helpers::MetaMcp;
     use mcp_gateway::protocol::RequestId;
+    use mcp_gateway::protocol::extensions::ExtensionSet;
     use serde_json::{Value, json};
 
     const TASKS: &str = "io.modelcontextprotocol/tasks";
@@ -279,6 +280,19 @@ mod capabilities {
             Some(&json!({})),
             "`server/discover` is the 2026 surface, and the only place a peer \
              that can use this extension looks for it: {document}"
+        );
+
+        // The unit test in `src/protocol/extensions.rs` pins `to_extensions`
+        // against the parser that reads it back. This pins the SERVED document
+        // against `to_extensions`. Neither edge implies the other: the document
+        // could hand-roll the same key today and drift the moment the
+        // declaration gains a second extension, with both existing cases green.
+        // Equality, not containment -- a superset is exactly the drift.
+        assert_eq!(
+            document.pointer("/capabilities/extensions"),
+            Some(&serde_json::to_value(ExtensionSet::gateway_declares().to_extensions()).unwrap()),
+            "the served `extensions` object IS what the declaration produces, \
+             not merely an object containing the tasks key: {document}"
         );
     }
 }
