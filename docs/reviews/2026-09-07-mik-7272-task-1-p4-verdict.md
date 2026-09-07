@@ -1,4 +1,4 @@
-# §P4 COMBINED VERDICT — MIK-7272 TASK.1 (both code legs returned)
+# §P4 COMBINED VERDICT — MIK-7272 TASK.1 (all three legs returned)
 
 ## Verdicts — authority stated, not scraped
 
@@ -16,7 +16,8 @@ Barred / excluded:
 - `gpt-review` (41,605 B) — body with no valid verdict. `MISSING` under §PA. 41K of prose is
   not a third leg.
 
-Third leg (FUNCTIONAL, per DoD FUNCTIONAL PASS) has NOT run. Change is not done.
+Third leg (FUNCTIONAL, per DoD FUNCTIONAL PASS) HAS run — four of four criteria PASS,
+recorded in full below. All three legs have returned.
 
 ## THE BLOCKER
 
@@ -98,6 +99,41 @@ Synthetic:
 
 Confirmation passes go back to each finding's own vendor: grok for 1-2, synthetic for 1
 and the 2 disposal.
+
+## Third leg — FUNCTIONAL, driven, four of four PASS
+
+Driver: an isolated agent, handed the criteria and how to launch, nothing else (no diff,
+no design). Not the author. One round, per the DoD functional-pass rule.
+
+Revision driven: binary built 07:35:35 from a tree carrying `2c522f53` (the guard) and
+`d5861bf2` (the counter). Worktree HEAD moved `58313791` → `d6a2d88e` under the driver
+while it worked — this is a SHARED checkout and another session was committing. The
+driver checked what moved: docs, `meta_mcp/invoke.rs`, `prompt_cache.rs`,
+`transport/http/mod.rs`, `protocol/trace.rs` — none of the three files these criteria
+depend on (`gateway/router/handlers.rs`, `protocol/task_store.rs`,
+`protocol/subscriptions.rs`). Valid basis; recorded because it is not a clean checkout.
+
+Mechanism: two live `target/debug/mcp-gateway serve` instances driven over HTTP as a
+client drives them — auth on, two API-key principals, port 39777; auth off, port 39779.
+Both killed and their configs and logs removed afterwards.
+
+| criterion | verdict | what was driven, and what came back |
+|---|---|---|
+| `.11a` | **PASS** | principal-b asks for a task owned by principal-a, and for an id that never existed. Both: `{"error":{"code":-32602,"message":"no such task"}}`, byte-identical under `cmp`. No "not yours" leak. |
+| `.18` | **PASS** | no credential at all: dispatch (`tools/call` with `task:{}`), `tasks/get` on someone else's real id, `tasks/get` on a never-existed id — same id-free refusal for all three. Dispatch is refused before a record is created (`handlers.rs:994-1010`), so "invisible to the next unattributed caller" holds because there is nothing to be visible. |
+| `.19` | **PASS** | unattributed `subscriptions/listen` naming a real-but-not-mine id, a never-existed id, and no id at all: one identical ack in every case, and the ack never echoes `taskIds`. Narrowed in silence, not refused — the `.18` contrast. |
+| `.20` | **PASS** | auth off: the credential-less caller is admitted with a REAL handle (`taskId: task-73bf958c-…`), and that id then answers `tasks/get` with the full view while a never-existed id on the same server returns `no such task`. This is the assertion the unit test cannot yet make — `.8a` has not landed — made against the running gateway instead. |
+
+Two observations from the driver, neither a defect:
+
+- `.11a` and `.18` share one refusal path (`missing_task_error`, `handlers.rs:243`). One
+  fix covers both criteria; they are not independent surfaces.
+- `.19` is structural, not a special case: the ack schema has no `taskIds` field, so there
+  is nothing to withhold.
+
+Named as not drivable: notification DELIVERY over a `.19` stream once a subscribed task
+changes state — it needs a slow task and a long-lived reader. The ack layer was driven;
+the delivery layer was not, and this line is the record of that rather than a silent gap.
 
 ## Test state
 
