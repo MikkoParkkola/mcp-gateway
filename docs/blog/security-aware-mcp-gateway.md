@@ -80,7 +80,7 @@ mcp-gateway sits between the agent and the backends:
   server    server    server
 ```
 
-The agent only ever sees the compact Meta-MCP surface (14 tools minimum, 16 in the README benchmark, 17 with webhook status). Backend tool definitions are fetched on demand through `gateway_search_tools` / `gateway_list_tools`, they flow through the validator first, and `gateway_invoke` is the only way to actually call one.
+The agent only ever sees the compact Meta-MCP surface (14 tools minimum, 16 in the README benchmark). Backend tool definitions are fetched on demand through `gateway_search_tools` / `gateway_list_tools`, they flow through the validator first, and `gateway_invoke` is the only way to actually call one.
 
 The immediate wins:
 
