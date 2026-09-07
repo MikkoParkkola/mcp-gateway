@@ -3,6 +3,12 @@
 
 # Cluster C (MIK-7272 revision surface) — what is actually missing
 
+> 2026-09-08 evidence update: the historical absence test cited below was replaced by
+> `ac_task_1_tasks_get_answers_an_unknown_id_with_no_such_task` in `cb005b74`.
+> The valid request reaches the implemented lookup and returns an error for an unknown task;
+> all 30 subscription cases pass. This does not prove background dispatch, settlement or
+> full TASK.1 acceptance. Historical run descriptions below retain their original context.
+
 Owner: `surface-c`. Written 2026-09-01, at `cd699bb2`. Adds no verdicts: every status below
 is quoted from `RELEASE-4.0.0-criteria-status.md`, which stays the source of truth.
 

@@ -1,5 +1,11 @@
 # 4.0.0 readiness board
 
+> 2026-09-08 evidence update: the historical absence test cited below was replaced by
+> `ac_task_1_tasks_get_answers_an_unknown_id_with_no_such_task` in `cb005b74`.
+> The valid request reaches the implemented lookup and returns an error for an unknown task;
+> all 30 subscription cases pass. This does not prove background dispatch, settlement or
+> full TASK.1 acceptance. Historical run descriptions below retain their original context.
+
 One row per cluster, one question per column: **what has to happen next, and who
 does it.** The cluster definitions, criterion lists and the reasons each row is
 open live in `RELEASE-4.0.0-blocking-rollup.md`; the ordered work queue lives in
