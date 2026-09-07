@@ -205,8 +205,17 @@ fn ac_task_1_8_a_task_creation_result_is_never_a_final_answer() {
 
 // ===========================================================================
 // MIK-7272.TASK.1.10 — the served capabilities advertise
-// `extensions["io.modelcontextprotocol/tasks"] = {}`, on both `initialize` and
-// `server/discover`.
+// `extensions["io.modelcontextprotocol/tasks"] = {}` on `server/discover`.
+//
+// NARROWED to discovery, team-lead ruling 2026-09-07, provisional pending the
+// operator. The criterion as written also asked for `initialize`, and that half
+// is unreachable by construction rather than descoped: `SUPPORTED_VERSIONS`
+// (`src/protocol/mod.rs`) deliberately omits `2026-07-28` because the 2026
+// lifecycle removed the handshake, so the only clients that reach `initialize`
+// are 2025-era ones this extension is not for. Paying for it means changing an
+// `initialize` result that MIK-7272.DISCOVER.3 pins byte-for-byte, to advertise
+// something no client that can read it may use. The argument is recorded here so
+// the ruling can be overruled without archaeology.
 // ===========================================================================
 
 mod capabilities {
@@ -223,12 +232,16 @@ mod capabilities {
         MetaMcp::new(Arc::new(BackendRegistry::new()))
     }
 
-    /// Driven through the two PUBLIC surfaces a client actually reads, not
-    /// through `implemented_extensions()`. What a helper returns is not what the
-    /// gateway serves; only the served document settles the criterion, and the
-    /// honouring half is the part §11 left to TASK.1.
+    /// The other side of the narrowing: `initialize` must stay silent.
+    ///
+    /// Not an absent test — an asserted boundary. A later change that
+    /// "completes" `.10` by adding the identifier to the handshake result would
+    /// break `DISCOVER.3`'s byte-identity for every 2025 client in order to
+    /// serve an extension none of them can use, and this case is what tells the
+    /// author that before the goldens do. It fails if the advertisement leaks
+    /// into the handshake, which is exactly the edit the ruling forbids.
     #[test]
-    fn ac_task_1_10_initialize_advertises_the_tasks_extension() {
+    fn ac_task_1_10_initialize_does_not_advertise_the_tasks_extension() {
         let params = json!({
             "protocolVersion": "2026-07-28",
             "clientInfo": { "name": "ExampleClient", "version": "1.0.0" },
@@ -248,9 +261,9 @@ mod capabilities {
                 "/capabilities/extensions/{}",
                 TASKS.replace('/', "~1")
             )),
-            Some(&json!({})),
-            "the served capabilities must carry the identifier with an empty \
-             object meaning support: {result}"
+            None,
+            "the handshake serves 2025 clients, whose result is pinned by \
+             DISCOVER.3; a 2026 extension must not appear in it: {result}"
         );
     }
 
@@ -264,8 +277,8 @@ mod capabilities {
                 TASKS.replace('/', "~1")
             )),
             Some(&json!({})),
-            "`server/discover` and `initialize` must agree: a client that reads \
-             one and not the other must not see a different gateway: {document}"
+            "`server/discover` is the 2026 surface, and the only place a peer \
+             that can use this extension looks for it: {document}"
         );
     }
 }

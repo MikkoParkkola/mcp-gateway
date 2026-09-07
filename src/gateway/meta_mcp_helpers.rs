@@ -133,19 +133,29 @@ pub(crate) fn extract_u64_or(args: &Value, key: &str, default: u64) -> u64 {
     args.get(key).and_then(Value::as_u64).unwrap_or(default)
 }
 
-/// Extensions this gateway implements and honours today
+/// Extensions carried in the `initialize` result
 /// (`io.modelcontextprotocol/extensions`).
 ///
-/// Empty: no extension is wired end-to-end yet. Populated from
-/// implemented-and-enabled handlers only, never from a static list of known
-/// identifiers — see
-/// `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata.md` §3.1a.
-/// TASK.1 adds the first entry (`io.modelcontextprotocol/tasks`) in the same
-/// change that makes task-augmented requests behave differently from an
-/// ordinary `tools/call`; adding the identifier here without that behaviour
-/// would advertise a mechanism the gateway does not honour.
+/// Empty, and staying empty: the only clients that reach `initialize` are
+/// 2025-era, because the 2026-07-28 lifecycle scopes the handshake to
+/// "2025-11-25 and earlier". An extension advertised here is one no client
+/// that can read it is able to use, bought by changing a result those clients
+/// already depend on byte-for-byte. TASK.1 therefore advertises through
+/// `server/discover` — see [`discovery_extensions`] — not here.
 pub(crate) fn implemented_extensions() -> std::collections::HashMap<String, Value> {
     std::collections::HashMap::new()
+}
+
+/// Extensions advertised by `server/discover`, the 2026-07-28 surface.
+///
+/// Read from [`ExtensionSet::gateway_declares`] rather than assembled from
+/// literals, so what discovery advertises and what negotiation accepts are the
+/// same list by construction — see
+/// `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata.md` §3.1a
+/// for why the source is the implemented set and never a catalogue of known
+/// identifiers.
+pub(crate) fn discovery_extensions() -> std::collections::HashMap<String, Value> {
+    crate::protocol::extensions::ExtensionSet::gateway_declares().to_extensions()
 }
 
 /// Build `ServerCapabilities` from an explicit extension source.

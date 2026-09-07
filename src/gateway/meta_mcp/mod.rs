@@ -1161,10 +1161,22 @@ impl MetaMcp {
             }
         }
 
+        // Capabilities are rebuilt here rather than taken from `handshake`,
+        // and that is the one thing discovery does NOT share with the
+        // handshake. The extension set is era-specific: `initialize` answers
+        // 2025 clients, which cannot use a 2026 extension and whose result is
+        // pinned byte-for-byte by an existing criterion, while this document is
+        // the 2026 surface and is where a peer looks for what the gateway
+        // speaks. Identity and the version list still come from one source, so
+        // the drift this guards against stays guarded.
+        let capabilities = crate::gateway::meta_mcp_helpers::build_server_capabilities(
+            crate::gateway::meta_mcp_helpers::discovery_extensions(),
+        );
+
         serde_json::json!({
             "resultType": "complete",
             "supportedVersions": versions,
-            "capabilities": handshake.capabilities,
+            "capabilities": capabilities,
             "_meta": {
                 "io.modelcontextprotocol/serverInfo": handshake.server_info,
             },

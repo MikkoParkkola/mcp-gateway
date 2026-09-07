@@ -48,19 +48,25 @@ pub struct ExtensionSet {
 }
 
 impl ExtensionSet {
-    /// What this gateway would declare once the tasks extension is implemented.
+    /// What this gateway declares: the single source of that answer.
     ///
-    /// Nothing calls this in 4.0.0, so `io.modelcontextprotocol/tasks` is never
-    /// advertised and no client can negotiate it. That is deliberate: the task model
-    /// in `super::tasks` is short of the extension specification by two statuses, two
-    /// required fields and the shape of the failure payload, and advertising the
-    /// identifier before that is fixed would break a client that trusted it. Wire this
-    /// up as part of MIK-7311, not before.
+    /// Reached from `server/discover` through [`Self::to_extensions`], so the
+    /// advertised identifier and the negotiated one cannot drift — an earlier
+    /// revision of this comment said nothing called it, which stopped being
+    /// true the moment discovery advertised the extension.
     ///
-    /// It is therefore uncalled *and* untested on purpose — a guard holding the
-    /// identifier's shape until the behaviour behind it exists, not dead code
-    /// left behind. The test that once called it went to MIK-7311 with the rest
-    /// of the tasks extension.
+    /// The `initialize` result deliberately does NOT carry it. The 2026-07-28
+    /// lifecycle scopes the handshake to "2025-11-25 and earlier", so the only
+    /// clients that reach `initialize` are the ones this extension is not for,
+    /// and adding a key to their result changes a wire answer they already
+    /// depend on to advertise something they can never use.
+    ///
+    /// The task model in `super::tasks` is knowingly short of the extension
+    /// specification for 4.0.0 — `input_required` is out of scope by design,
+    /// and the timestamp fields with it. Advertising while the model is short
+    /// is the intended 4.0.0 state, not an oversight: discovery states which
+    /// extension the gateway speaks, and MIK-7311 completes the model behind
+    /// it.
     #[must_use]
     pub fn gateway_declares() -> Self {
         Self {
@@ -90,6 +96,20 @@ impl ExtensionSet {
             })
             .unwrap_or_default();
         Self { supported }
+    }
+
+    /// The `extensions` field a party carrying this set advertises.
+    ///
+    /// Each identifier maps to an empty settings object, which is the
+    /// specification's "supported, no settings" — and the shape
+    /// [`Self::from_capabilities`] requires on the way back in, so a value this
+    /// produces survives a round trip through a peer.
+    #[must_use]
+    pub fn to_extensions(&self) -> std::collections::HashMap<String, Value> {
+        self.supported
+            .iter()
+            .map(|extension| (extension.id().to_string(), serde_json::json!({})))
+            .collect()
     }
 
     /// Whether this set contains an extension.
