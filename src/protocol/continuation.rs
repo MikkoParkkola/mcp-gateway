@@ -904,3 +904,154 @@ impl Default for ContinuationState {
         Self::new()
     }
 }
+
+// PARKED: MRTR.8b Change A, plan docs/design/2026-09-06-mrtr-8b-lifetime-test-plan.md.
+// `cfg(any())` is always false, so this compiles nowhere; restore `cfg(test)` when
+// `InFlight::guard(now)` lands. Lines below are the author's, unmodified.
+#[cfg(any())]
+mod in_flight_lifetime {
+    //! MRTR.8b Change A — the `InFlight` table's bounded lifetime.
+    //!
+    //! Plan: `docs/design/2026-09-06-mrtr-8b-lifetime-test-plan.md`. Row numbers
+    //! below are that plan's. Every `now` is supplied by the test and anchored to
+    //! one synthetic epoch, never `SystemTime::now()`: a `guard` that read the
+    //! clock itself would answer identically to a correct one under a real-clock
+    //! fixture, and row .07 could then not fail for its stated reason.
+
+    use super::{IN_FLIGHT_CAPACITY, InFlight, Routing};
+
+    /// The synthetic epoch. Every deadline and every supplied `now` is relative
+    /// to this, so a `guard` reading the wall clock is ~1.7 billion seconds past
+    /// every deadline in this module and reclaims everything.
+    const T: u64 = 1_000;
+
+    /// One replica holding one exchange whose deadline is exactly `T`.
+    async fn held_until_t(capacity: usize) -> (InFlight, String) {
+        let table = InFlight::new("gw-1", capacity);
+        let key = table
+            .hold("backend", T, T)
+            .await
+            .expect("an empty table admits");
+        (table, key)
+    }
+
+    // --- C1: no reader observes a record whose deadline is behind its `now`. ---
+
+    #[tokio::test]
+    async fn row_01_len_does_not_count_an_expired_entry() {
+        let (table, _key) = held_until_t(4).await;
+        assert_eq!(table.len(T + 1).await, 0);
+    }
+
+    #[tokio::test]
+    async fn row_02_route_does_not_answer_here_for_an_expired_entry() {
+        let (table, key) = held_until_t(4).await;
+        assert_eq!(table.route(&key, T + 1).await, Routing::Gone);
+    }
+
+    #[tokio::test]
+    async fn row_03_complete_does_not_report_completing_an_expired_entry() {
+        let (table, key) = held_until_t(4).await;
+        assert!(!table.complete(&key, T + 1).await);
+    }
+
+    #[tokio::test]
+    async fn row_04_a_live_entry_survives_every_reader() {
+        // Negative control: the reclaim must not eat live records. A count of 1
+        // could be the wrong record, so all three readers name the same key.
+        let (table, key) = held_until_t(4).await;
+        assert_eq!(table.len(T - 1).await, 1);
+        assert_eq!(table.route(&key, T - 1).await, Routing::Here);
+        assert!(table.complete(&key, T - 1).await);
+    }
+
+    #[tokio::test]
+    async fn row_04a_an_entry_is_live_at_its_own_deadline() {
+        // The boundary, and the only `now` at which `<` and `<=` differ: .01 and
+        // .04 pass under either. `Keyring::open` accepts at equality, so a table
+        // reclaiming here would drop a record the envelope still opens.
+        let (table, key) = held_until_t(4).await;
+        assert_eq!(table.len(T).await, 1);
+        assert_eq!(table.route(&key, T).await, Routing::Here);
+        assert!(table.complete(&key, T).await);
+    }
+
+    #[tokio::test]
+    async fn row_07_a_now_that_never_moves_never_expires_an_entry() {
+        // The contract's limit, stated: reclamation is driven by the supplied
+        // `now`, so repeated reads at the same `now` are idempotent.
+        let (table, key) = held_until_t(4).await;
+        assert_eq!(table.route(&key, T - 1).await, Routing::Here);
+        assert_eq!(table.route(&key, T - 1).await, Routing::Here);
+    }
+
+    // --- C2: an abandoned hold leaves without anyone scheduling a reclaimer. ---
+
+    #[tokio::test]
+    async fn row_05_the_first_call_through_any_reader_reclaims() {
+        // Nothing completes the exchange and no reaper exists. Each reader gets
+        // its own fresh fixture, so C2 is not as strong as whichever single
+        // method an implementer happened to wire.
+
+        // `len`
+        let (table, _key) = held_until_t(4).await;
+        assert_eq!(table.len(T + 1).await, 0, "len");
+
+        // `route`
+        let (table, key) = held_until_t(4).await;
+        assert_eq!(table.route(&key, T + 1).await, Routing::Gone, "route");
+
+        // `complete`
+        let (table, key) = held_until_t(4).await;
+        assert!(!table.complete(&key, T + 1).await, "complete");
+
+        // `hold` — observed through its own admission at a capacity of one: the
+        // slot can only be free if that same call reclaimed the expired entry.
+        let (table, _key) = held_until_t(1).await;
+        assert!(table.hold("backend", T + 2, T + 1).await.is_some(), "hold");
+    }
+
+    #[tokio::test]
+    async fn row_06_an_expired_entry_stays_resident_until_the_first_reader() {
+        // R2a's bargain, stated as a test: reclamation is lazy, so the record is
+        // still in the map after its deadline passes and before anyone asks.
+        // Inspected directly rather than through a public reader, because every
+        // public reader is the event whose absence is the assertion.
+        let (table, _key) = held_until_t(4).await;
+        assert_eq!(
+            table.held.lock().await.len(),
+            1,
+            "resident before any reader"
+        );
+        assert_eq!(table.len(T + 1).await, 0, "gone at the first reader");
+    }
+
+    #[tokio::test]
+    async fn row_08_hold_at_capacity_admits_when_the_occupants_are_expired() {
+        // Transferred from NFR.PERF.3. Today the reclaim lives inside the
+        // capacity branch; after the change `hold` keeps only its refusal, so
+        // the reclaim must have happened in `guard` before the check reads `len`.
+        let table = InFlight::new("gw-1", 4);
+        for _ in 0..4 {
+            assert!(table.hold("backend", T, T).await.is_some());
+        }
+        assert!(table.hold("backend", T + 2, T + 1).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn row_08_capacity_is_the_documented_bound() {
+        // The design's cost number, pinned. A test cannot see a walk length.
+        assert_eq!(IN_FLIGHT_CAPACITY, 4_096);
+    }
+
+    #[tokio::test]
+    async fn row_09_hold_at_capacity_still_refuses_when_the_occupants_are_live() {
+        // The pair to .08: without it, .08 passes trivially if the capacity
+        // refusal is deleted rather than re-ordered.
+        let table = InFlight::new("gw-1", 4);
+        for _ in 0..4 {
+            assert!(table.hold("backend", T, T).await.is_some());
+        }
+        assert!(table.hold("backend", T, T).await.is_none());
+    }
+}
