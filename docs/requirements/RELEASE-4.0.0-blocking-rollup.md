@@ -804,10 +804,11 @@ respecting it.
 It sorts rows by the files their **evidence** cites. That is not the same as the files
 a **fix** must touch, and the gap is not academic: `MIK-7272.OTEL.1` classifies as clear
 — its evidence names `invoke.rs`, `trace.rs`, `mcp_provider.rs`, none of them held — yet
-wiring it requires carrying the inbound `_meta` down to `dispatch_to_backend`, and the
-only structure travelling that path is `MetaMcpCallerContext`, defined at
-`src/gateway/meta_mcp/mod.rs:113`. Held. The row is blocked; the classification says
-otherwise.
+wiring it looked as though it required carrying the inbound `_meta` down to
+`dispatch_to_backend` on `MetaMcpCallerContext` (`src/gateway/meta_mcp/mod.rs:113`, held).
+FALSIFIED 2026-09-07 (`b130960b`): the value went down as an explicit parameter on the two
+functions already on that path, touching no held file. The example still stands as a warning
+that evidence files are not fix files — it no longer stands as an example of a blocked row.
 
 Read the classification as a **first pass that narrows twenty-eight to fifteen**, then
 confirm the fix's own file set before scheduling one. The six rows it marks held are
