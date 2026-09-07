@@ -891,3 +891,18 @@ Land Design A as specified: 300s via the existing per-user idle constant at
 `server/mod.rs:2136` — the board's `:1988` citation is stale — no new config
 field, and both firewall construction sites wired. Wiring one serve path would
 leave half the surface leaking, which is the whole reason the criterion exists.
+
+### GH475.RL.10 — proceeding on the non-breaking shape, operator unblocked
+
+Rate-limit detection matches the text of an error message; three sites build
+that message and one has a test pinning the wording, so an edit at either of the
+other two silently stops a 429 being recognised and the caller reads throttled as
+absent. The escalation asked whether to replace the string contract with a typed
+value, which would break any consumer matching the text.
+
+Asked of the operator 2026-09-07, no answer inside the window. Proceeding on the
+one option that needs no ruling: add a typed discriminant that code checks, and
+emit the byte-identical message on the wire. Nothing external breaks, so the
+question the escalation raised does not arise; the frozen message needs a comment
+saying why it is frozen, or someone tidies it away and reopens the defect. If the
+operator later prefers the clean break, that is a further change, not a rework.
