@@ -5,7 +5,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    branches: [main, codex/v4-release-delivery]
+    branches: [main, codex/v4-release-delivery, fix/mrtr2-continuation-handle]
 
 permissions:
   contents: read
