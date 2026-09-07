@@ -718,7 +718,7 @@ impl InFlight {
     /// findings stateable about `len`, and about the next reader someone adds.
     ///
     /// **The guarantee is relative to the supplied `now`, and that is the whole
-    /// contract.** The table holds no record whose deadline is at or before the
+    /// contract.** The table holds no record whose deadline is strictly before the
     /// `now` most recently passed in. It does *not* hold that the table is free
     /// of records expired against the wall clock at the instant a caller reads
     /// the result: `invoke.rs` captures `now` once and reuses it for both the
