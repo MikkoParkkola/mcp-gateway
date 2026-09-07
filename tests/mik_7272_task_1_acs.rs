@@ -903,7 +903,7 @@ mod ownership {
     }
 
     // =======================================================================
-    // MIK-7272.TASK.1.14 — a caller that presented no credential owns no task,
+    // MIK-7272.TASK.1.18 — a caller that presented no credential owns no task,
     // and is told so in the same words as an id that never existed.
     // =======================================================================
 
@@ -921,7 +921,7 @@ mod ownership {
     /// byte-identity assertion below is a real comparison and not two refusals
     /// agreeing for an unrelated reason.
     #[tokio::test]
-    async fn ac_task_1_14_an_unattributed_caller_owns_no_task() {
+    async fn ac_task_1_18_an_unattributed_caller_owns_no_task() {
         let state = state_public_mcp();
 
         let (_, created) = post_against(state.clone(), "key-a", task_call(30)).await;
@@ -985,7 +985,7 @@ mod ownership {
     }
 
     // =======================================================================
-    // MIK-7272.TASK.1.15 — the subscription path is EXCLUDED from the refusal:
+    // MIK-7272.TASK.1.19 — the subscription path is EXCLUDED from the refusal:
     // an unattributed listen is answered, never told that the id resolves.
     // =======================================================================
 
@@ -1007,7 +1007,7 @@ mod ownership {
     /// `NotificationKind` — that is `MIK-7272.TASK.1.12`'s work, not this
     /// case's.
     #[tokio::test]
-    async fn ac_task_1_15_unattributed_subscription_is_quiet_not_refused() {
+    async fn ac_task_1_19_unattributed_subscription_is_quiet_not_refused() {
         let state = state_public_mcp();
         let (_, created) = post_against(state.clone(), "key-a", task_call(36)).await;
         let owned_id = created

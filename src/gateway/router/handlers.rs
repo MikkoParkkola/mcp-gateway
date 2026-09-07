@@ -995,6 +995,18 @@ pub(super) async fn meta_mcp_handler(
         && method != "subscriptions/listen"
         && reaches_tasks_extension(method.as_str(), params.as_ref())
     {
+        // The early return skips the tail that counts every other JSON-RPC
+        // answer, so the refusal is counted here or it is invisible: an
+        // operator watching this counter would see the task probes of a
+        // credential-less caller as no traffic at all. `record_client_failure`
+        // is deliberately NOT called — the caller has no identity to hold a
+        // breaker against, which is the whole reason it is being refused.
+        telemetry_metrics::counter!(
+            "mcp_jsonrpc_requests_total",
+            "method" => method.clone(),
+            "status" => "error"
+        )
+        .increment(1);
         return build_response(missing_task_error(id), &session_id, StatusCode::OK);
     }
 
