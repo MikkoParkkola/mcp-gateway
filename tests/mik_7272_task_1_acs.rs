@@ -225,7 +225,7 @@ mod capabilities {
     use mcp_gateway::gateway::test_helpers::MetaMcp;
     use mcp_gateway::protocol::RequestId;
     use mcp_gateway::protocol::extensions::ExtensionSet;
-    use mcp_gateway::protocol::meta::Era;
+    use mcp_gateway::protocol::meta::{Era, classify_and_observe};
     use serde_json::{Value, json};
 
     const TASKS: &str = "io.modelcontextprotocol/tasks";
@@ -242,8 +242,12 @@ mod capabilities {
     /// asserts now is the built mechanism.
     ///
     /// The declaration is in `_meta`, which is what `classify_request` reads,
-    /// and the era is threaded from the dispatcher — so the value passed here
-    /// is the value the router would derive from these same params.
+    /// and the era is threaded from the dispatcher. That last clause is a claim
+    /// about a seam this test would otherwise stub past, so it is asserted
+    /// rather than described: the era handed to `handle_initialize` is the era
+    /// `classify_and_observe` derives from these exact params. Without it both
+    /// era arms stay green while the dispatcher reclassifies underneath them,
+    /// and `initialize` silently serves the wrong era.
     #[test]
     fn ac_task_1_10_initialize_advertises_the_tasks_extension_to_a_2026_peer() {
         let params = json!({
@@ -257,6 +261,13 @@ mod capabilities {
                 }
             }
         });
+        assert_eq!(
+            classify_and_observe("initialize", Some(&params), None, None).era(),
+            Era::Modern,
+            "the dispatcher must derive Modern from the very params this test \
+             hands to `handle_initialize`"
+        );
+
         let response =
             meta().handle_initialize(RequestId::Number(1), Some(&params), None, None, Era::Modern);
         let result = response.result.unwrap_or(Value::Null);
@@ -288,6 +299,13 @@ mod capabilities {
             "clientInfo": { "name": "ExampleClient", "version": "1.0.0" },
             "capabilities": {}
         });
+        assert_eq!(
+            classify_and_observe("initialize", Some(&params), None, None).era(),
+            Era::Legacy,
+            "the dispatcher must derive Legacy from the very params this test \
+             hands to `handle_initialize`"
+        );
+
         let response =
             meta().handle_initialize(RequestId::Number(1), Some(&params), None, None, Era::Legacy);
         let result = response.result.unwrap_or(Value::Null);
