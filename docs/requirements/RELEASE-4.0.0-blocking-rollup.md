@@ -831,3 +831,63 @@ clean. A gate nobody owns is a gate nobody runs.
 Evidence: reported by a builder against the base tree (I, one source — not
 re-measured by the coordinator). Whoever picks this up re-measures first; a
 clippy count quoted from a report is not a clippy count.
+
+## Standing rulings issued 2026-09-07, after the fleet stopped
+
+Every builder session hit the weekly limit within four minutes of each other.
+Four rulings were outstanding in mailboxes at that moment. A mailbox reaches one
+agent and dies with the session, and those sessions are dead, so the rulings are
+recorded here instead. Whoever resumes a row below acts on this text without
+asking again.
+
+### MIK-7272.TASK.1.10b — the shape as built is APPROVED
+
+The builder diverged from the instruction and flagged it rather than swapping it
+silently. The divergence is upheld on both halves:
+
+- The era is **threaded** from the dispatcher's single `classify_and_observe`
+  (`router/handlers.rs:785`) rather than re-derived inside `handle_initialize`.
+  The instruction asked for a second classification, and a second classification
+  is two predicates answering one question, free to drift — the defect already
+  sitting at `src/protocol/meta.rs:110-117`. The builder was right and the
+  instruction was wrong.
+- `implemented_extensions()` is **deleted**, not populated. Populating it would
+  have closed the held rename finding by renaming; deleting it closes it by
+  construction, leaving the finding with nothing to restate.
+
+The review launches on this shape, unmodified. No rebuild.
+
+### MIK-7215.CONTROL.3a — the minted correlation id as the LAST rung is APPROVED
+
+Ordering is otel-traceparent, then session id, then the minted id — not the
+literal minted-first the instruction implied. Putting the minted id first fails
+two already-pinned tests that no one authorised changing, and the criterion's
+clause is about the case the old placeholder string used to cover, which is the
+last rung rather than the first. Row is MET.
+
+### MIK-7215.CONTROL.3b — merge the metadata field on the meta-tool path ONLY
+
+`extract_tools_call_params` drops the client metadata field, and the fix must
+not be an unconditional merge: `route_direct_backend_call` runs before the
+meta-tool match, so an unconditional merge synthesises that field into every
+direct-route backend payload, inventing it for backends that never asked. Five
+tests pin the current return shape; that they exist is evidence the shape is
+relied upon. Merge conditionally, on the meta-tool path, and leave the direct
+route byte-identical. The peer-owned call site is NOT authorised — if the
+conditional merge cannot be built without it, report rather than reach in.
+
+### MIK-7215.CONTROL.4 — YES, start-only refresh satisfies it. Land Design A.
+
+The objection was that refreshing only at invocation start could reap an
+invocation still executing past the deadline. Against the state actually
+reclaimed, that cost is one identity's previous-tool entry, and the anomaly
+detector already accepts exactly that loss for its own eviction, in its own
+words: the caller's next call scores as a first call. Early reaping costs one
+neutral-scored call. That is scoring fidelity, not a leak and not a correctness
+break, so it does not justify a response-side signature change reaching through
+three peer-owned files.
+
+Land Design A as specified: 300s via the existing per-user idle constant at
+`server/mod.rs:2136` — the board's `:1988` citation is stale — no new config
+field, and both firewall construction sites wired. Wiring one serve path would
+leave half the surface leaking, which is the whole reason the criterion exists.
