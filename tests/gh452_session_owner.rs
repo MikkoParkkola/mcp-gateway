@@ -60,6 +60,7 @@ fn state(auth_enabled: bool, public_mcp: bool, names: [&str; 2]) -> Arc<AppState
     ));
     Arc::new(AppState {
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
+        tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
         env: None,
         meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
         backends,
