@@ -39,7 +39,7 @@ This is why `src/gateway/meta_mcp/prompt_cache.rs` exists even though the projec
 
 ## Meta-Tools
 
-The gateway advertises 14 to 16 meta-tools to connecting clients. The base set of 4 is always present; `gateway_cost_report` is always built at runtime; the rest are conditional on configuration. When `code_mode.enabled` is set, this whole set is replaced by two tools, `gateway_search` and `gateway_execute`.
+The gateway advertises 14 to 16 meta-tools to connecting clients. Fourteen are unconditional — `gateway_cost_report` among them, because the served path builds it whatever the configuration says. `gateway_get_stats` and `gateway_reload_config` are the only conditional additions, and they are where the ceiling of 16 comes from. The table below is the derivation: count the `yes` rows for the floor. When `code_mode.enabled` is set, this whole set is replaced by two tools, `gateway_search` and `gateway_execute`.
 
 | Tool | Always | Purpose |
 |------|--------|---------|
