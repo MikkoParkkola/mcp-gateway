@@ -520,14 +520,22 @@ fn build_meta_tools_returns_base_plus_playbook_and_kill_tools_without_stats_or_w
     assert!(!names.contains(&"gateway_reload_config"));
 }
 
+/// The stats-enabled surface, which `NFR.PERF.4` keeps webhook status off.
+///
+/// This once expected an enumerated `gateway_webhook_status` and a count of
+/// 15. The tool is still dispatchable by name; the band counts what a model is
+/// SHOWN, so it left the enumeration and took the fifteenth slot with it.
 #[test]
-fn build_meta_tools_returns_all_tools_with_stats_and_webhooks() {
+fn build_meta_tools_with_stats_enumerates_everything_but_webhook_status() {
     let tools = build_meta_tools(true, false, false, 0, 0);
-    // 4 base + 1 stats + 1 webhooks + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 set-state + 1 reload-capabilities = 15
-    assert_eq!(tools.len(), 15);
+    // 4 base + 1 stats + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 set-state + 1 reload-capabilities = 14
+    assert_eq!(tools.len(), 14);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains(&"gateway_get_stats"));
-    assert!(names.contains(&"gateway_webhook_status"));
+    assert!(
+        !names.contains(&"gateway_webhook_status"),
+        "webhook status must stay off the enumerated surface (NFR.PERF.4)"
+    );
     assert!(names.contains(&"gateway_run_playbook"));
     assert!(names.contains(&"gateway_kill_server"));
     assert!(names.contains(&"gateway_revive_server"));

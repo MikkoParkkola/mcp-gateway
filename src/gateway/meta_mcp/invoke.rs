@@ -392,12 +392,17 @@ async fn mint_continuation(
         .await
     else {
         warn!(server, tool, "No slot to hold this exchange open; refusing");
+        record_continuation_mint("no_slot");
         return None;
     };
     match continuation.keyring().mint(&payload) {
-        Ok(envelope) => Some(envelope),
+        Ok(envelope) => {
+            record_continuation_mint("ok");
+            Some(envelope)
+        }
         Err(error) => {
             warn!(server, tool, %error, "Continuation mint refused");
+            record_continuation_mint(continuation_error_reason(&error));
             None
         }
     }
@@ -480,6 +485,58 @@ fn rejected_continuation(reason: &crate::protocol::continuation::ContinuationErr
     }
 }
 
+/// Stable, low-cardinality tag for a [`ContinuationError`], for metrics and
+/// structured logs — never the client, which gets `client_message()`.
+/// `UnknownVersion`/`UnknownKey` drop their payload here: a build supports a
+/// handful of wire versions and a keyring holds a handful of live keys, but a
+/// metric label is not where that bound should be re-proven, so the tag names
+/// the cause, not the value.
+fn continuation_error_reason(
+    reason: &crate::protocol::continuation::ContinuationError,
+) -> &'static str {
+    use crate::protocol::continuation::ContinuationError;
+    match reason {
+        ContinuationError::Malformed => "malformed",
+        ContinuationError::UnknownVersion(_) => "unknown_version",
+        ContinuationError::UnknownKey(_) => "unknown_key",
+        ContinuationError::NotAuthentic => "not_authentic",
+        ContinuationError::Expired => "expired",
+        ContinuationError::MintBudgetExhausted => "mint_budget_exhausted",
+        ContinuationError::TooLarge => "too_large",
+        ContinuationError::LifetimeExceeded => "lifetime_exceeded",
+    }
+}
+
+/// Count one continuation mint outcome (NFR.OBS.4). `reason` is `"ok"` for a
+/// successful mint, [`continuation_error_reason`] for a keyring refusal, or a
+/// call-site tag for a refusal with no `ContinuationError` of its own (a full
+/// in-flight table refuses before the keyring is ever asked).
+fn record_continuation_mint(reason: &'static str) {
+    telemetry_metrics::counter!("continuation_mint_total", "reason" => reason).increment(1);
+}
+
+/// Count one continuation rejection (NFR.OBS.4), and fold it into the expiry
+/// signal when the cause is a deadline that has already passed. `reason` is
+/// the real [`ContinuationError`] tag where one was returned, or a call-site
+/// tag for a cause this module synthesizes rather than forwards: MRTR.2 and
+/// MRTR.6 deliberately collapse several causes into one client message so a
+/// caller cannot map the keyring or the in-flight table one probe at a time —
+/// the metric keeps them apart for the operator that collapse was never meant
+/// to blind.
+fn record_continuation_rejection(reason: &'static str) {
+    telemetry_metrics::counter!("continuation_rejection_total", "reason" => reason).increment(1);
+    if reason == "expired" {
+        // A client presenting a stale envelope. Distinct from the in-flight
+        // table's own silent eviction of an exchange nobody came back for
+        // (`reclaim_abandoned`, instrumented separately in `continuation.rs`
+        // under NFR.OBS.4): one caller came back too late, the other never
+        // came back at all. Same top-level "expiry" fact, two operational
+        // causes — kept apart by `reason`, not by a second counter.
+        telemetry_metrics::counter!("continuation_expiry_total", "reason" => "deadline_passed")
+            .increment(1);
+    }
+}
+
 /// Which backend holds the exchange a retry continues (MRTR.6).
 ///
 /// `None` when the call carries no continuation at all — an ordinary call,
@@ -507,6 +564,7 @@ pub(super) fn retry_origin_backend(
             .map(|payload| payload.backend_id)
             .map_err(|error| {
                 warn!(%error, "Continuation refused before routing");
+                record_continuation_rejection(continuation_error_reason(&error));
                 rejected_continuation(&error)
             }),
     )
@@ -546,6 +604,7 @@ async fn redeem_retry(
     let now = crate::protocol::continuation::now_unix_secs();
     let payload = continuation.keyring().open(token, now).map_err(|error| {
         warn!(server, tool, %error, "Continuation refused");
+        record_continuation_rejection(continuation_error_reason(&error));
         rejected_continuation(&error)
     })?;
 
@@ -559,6 +618,7 @@ async fn redeem_retry(
             server,
             tool, "Retry from a caller no continuation can be bound to"
         );
+        record_continuation_rejection("unidentifiable_caller");
         return Err(rejected_continuation(&ContinuationError::NotAuthentic));
     };
     payload
@@ -568,6 +628,7 @@ async fn redeem_retry(
         )
         .map_err(|error| {
             warn!(server, tool, %error, "Continuation not redeemable by this caller");
+            record_continuation_rejection(continuation_error_reason(&error));
             rejected_continuation(&error)
         })?;
 
@@ -588,6 +649,7 @@ async fn redeem_retry(
             server,
             tool, "Retry for an exchange this replica no longer holds"
         );
+        record_continuation_rejection("hold_gone");
         return Err(rejected_continuation(&ContinuationError::NotAuthentic));
     }
 
@@ -603,6 +665,7 @@ async fn redeem_retry(
             server,
             tool, "Continuation already spent or ledger at capacity"
         );
+        record_continuation_rejection("ledger_spent_or_full");
         return Err(rejected_continuation(&ContinuationError::NotAuthentic));
     }
 
@@ -614,6 +677,7 @@ async fn redeem_retry(
         .in_flight()
         .complete(&payload.hold_key, now)
         .await;
+    telemetry_metrics::counter!("continuation_redeem_total", "reason" => "ok").increment(1);
 
     Ok(OutboundRetry {
         request_state: payload.backend_request_state,
@@ -3036,6 +3100,13 @@ fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
         // rate limit or transient 5xx is not mislabelled as a param error.
         Error::Protocol(msg) => (classify_from_detail(Some(msg)), msg.clone()),
         Error::JsonRpc { message, .. } => (ErrorCategory::BackendError, message.clone()),
+        // A capability 429 arrives as a typed `Http` error and no longer says
+        // "429" in its message, so the prose classifier above cannot see it.
+        // Without this arm the hint silently degrades to `BackendError` and the
+        // client is told to retry immediately (GH475.RL.10).
+        Error::Http(e) if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => {
+            (ErrorCategory::RateLimited, error.to_string())
+        }
         _ => (ErrorCategory::BackendError, error.to_string()),
     }
 }
@@ -3154,6 +3225,40 @@ fn classify_from_detail(detail: Option<&str>) -> ErrorCategory {
 mod error_classification_tests {
     use super::classify_from_detail;
     use crate::gateway::recovery::{ErrorCategory, RecoveryContext, recovery_for};
+
+    /// A typed 429 never reaches the prose classifier at all.
+    ///
+    /// `classify_dispatch_error` dispatches on the error VARIANT and only sends
+    /// `Protocol` through `classify_from_detail`. GH475.RL.10 made a capability
+    /// 429 an `Error::Http`, and although its `Display` still happens to say
+    /// "429" nothing reads that text -- it fell through to `BackendError`, and
+    /// the client was told to retry at once instead of backing off. The
+    /// listener answers one request and is the only way to obtain a real
+    /// `reqwest::Error` carrying a status.
+    #[tokio::test]
+    async fn a_typed_429_is_still_rate_limited() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut scratch = [0u8; 1024];
+            let _ = socket.read(&mut scratch).await;
+            let _ = socket
+                .write_all(b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\n\r\n")
+                .await;
+        });
+
+        let response = reqwest::get(format!("http://{addr}/")).await.unwrap();
+        let error = crate::Error::Http(response.error_for_status().unwrap_err().without_url());
+        let (category, _) = super::classify_dispatch_error(&error);
+        assert_eq!(
+            category,
+            ErrorCategory::RateLimited,
+            "a typed 429 must keep the backoff hint the prose one earned"
+        );
+    }
 
     #[test]
     fn rate_limit_429_classified_as_rate_limited() {
