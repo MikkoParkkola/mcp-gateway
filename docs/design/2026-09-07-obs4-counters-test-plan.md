@@ -40,9 +40,9 @@ written as the sole test in their own file under `tests/`, because every file th
 into its own separate binary, so the recorder those two read has performed only their own action.
 `tests/metrics_export_test.rs` is the precedent in this repo — one test, one process, reading
 `mcp_gateway::metrics::render()` around a single action — and `metrics`, `protocol::continuation`
-and `ContinuationState::begin_exchange` are all `pub`, so the production path `OBS.4.10` demands is
-reachable from there (`src/lib.rs:60`, `src/lib.rs:65`, `src/protocol/mod.rs:7`,
-`src/protocol/continuation.rs:854`). Non-movement asserted anywhere else in this plan is a defect,
+are `pub`, so the production paths `OBS.4.10` demands are reachable from there (`src/lib.rs:60`,
+`src/lib.rs:65`, `src/protocol/mod.rs:7`). `OBS.4.5` is an expiry-at-redeem case, so its file
+drives the redeem entry point named in `OBS.4.10`, not `begin_exchange`. Non-movement asserted anywhere else in this plan is a defect,
 not a choice.
 
 ## The cases
@@ -61,7 +61,7 @@ not a choice.
 | OBS.4.7 | **the reason set is the refusal set, not one type's variants** | one refusal that has no `ContinuationError` — a mint refused for want of a principal fingerprint — asserting `rejected_total{reason="no_principal_fingerprint",phase="mint"}` | unit | functional | an implementation that derives the enum from `ContinuationError` compiles, passes 4.6, and fails only here. This is the case the design's own §"the reason set is the refusal set" exists to force |
 | OBS.4.8 | the label **keys** are the compatibility surface | for each of the four counters, assert the key set on its emitted series is exactly the documented one (values not asserted) | unit | contract | a key added, renamed or dropped — the change the design says breaks consumers |
 | OBS.4.9 | cardinality is bounded by construction | assert the arity of the reason and phase enums and their product against the documented ceiling of 30 series | unit | boundary | a label whose values are not a closed enum, which is the D-threat the design mitigates |
-| OBS.4.10 | the counters fire from the production path | the mint/redeem cases drive the same entry point production uses (`ContinuationState::begin_exchange`, reached from `src/gateway/meta_mcp/invoke.rs:385`), never a test-only constructor | unit | wiring | counters wired to a path only tests reach — passes every row above and satisfies nothing |
+| OBS.4.10 | the counters fire from the production path | the mint and redeem cases each drive the entry point production actually uses, never a test-only constructor. They are two different entry points and the row names both: mint is `ContinuationState::begin_exchange` (`src/gateway/meta_mcp/invoke.rs:385`); redeem is `redeem_retry` (`src/gateway/meta_mcp/invoke.rs:587`, which opens the envelope via `redeemable_by` at `:625` and is reached from `invoke_tool` at `:1391`) — `begin_exchange` is not on the redeem path at all | unit | wiring | counters wired to a path only tests reach — passes every row above and satisfies nothing |
 
 ## Criteria with no case, and why — the empty cells
 
