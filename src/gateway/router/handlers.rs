@@ -449,22 +449,37 @@ pub(super) async fn mcp_sse_handler(
 /// Per MCP spec 2025-03-26, clients SHOULD send DELETE to terminate session.
 pub(super) async fn mcp_delete_handler(
     State(state): State<Arc<AppState>>,
+    client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    let client = client.map(|axum::Extension(c)| c);
+    // Public paths may reach this handler without a validated identity even
+    // when authentication is enabled. Their shared anonymous owner is not a
+    // credential, so refuse before inspecting any session identifier.
+    if state.auth_config.enabled
+        && !client
+            .as_ref()
+            .is_some_and(|c| c.authenticated && !c.principal.is_empty())
+    {
+        return crate::gateway::middleware::bearer_unauthorized_response(
+            "Session termination requires an authenticated credential.",
+        );
+    }
     let session_id = headers.get("mcp-session-id").and_then(|v| v.to_str().ok());
+    let owner = session_owner(client.as_ref());
 
     match session_id {
-        Some(id) if state.multiplexer.has_session(id) => {
-            state.multiplexer.remove_session(id);
+        Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
             info!(session_id = %id, "Session terminated by client");
             StatusCode::NO_CONTENT
         }
         Some(id) => {
-            debug!(session_id = %id, "Session not found for DELETE");
+            debug!(session_id = %id, "No owned session for DELETE");
             StatusCode::NOT_FOUND
         }
         None => StatusCode::BAD_REQUEST,
     }
+    .into_response()
 }
 
 /// Deprecated SSE endpoint handler - surfaces a clear error instead of silent 404
