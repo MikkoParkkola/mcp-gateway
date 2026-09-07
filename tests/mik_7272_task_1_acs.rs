@@ -955,6 +955,16 @@ mod ownership {
             .and_then(Value::as_str)
             .unwrap_or(UNDISPATCHED_ID)
             .to_string();
+        assert_eq!(
+            unattributed_created
+                .pointer("/error/message")
+                .and_then(Value::as_str),
+            Some("no such task"),
+            "the unattributed dispatch must be refused BY THE ROUTER, in the \
+             id-free wording of `missing_task_error` — a middleware refusal \
+             short of the router would answer 401 to everything below and make \
+             the comparison vacuous: {unattributed_created}"
+        );
         let (_, second_caller) = post_unattributed(
             state.clone(),
             modern(34, "tasks/get", json!({ "taskId": pooled_id }), true),
@@ -975,14 +985,27 @@ mod ownership {
     }
 
     // =======================================================================
-    // MIK-7272.TASK.1.15 — the same refusal on the subscription path stays
-    // SILENT: an empty filter, never an error that announces the difference.
+    // MIK-7272.TASK.1.15 — the subscription path is EXCLUDED from the refusal:
+    // an unattributed listen is answered, never told that the id resolves.
     // =======================================================================
 
     /// The stream is the one arm that must not refuse. `subscriptions/listen`
     /// naming a task nobody may see returns a quiet stream, exactly as it does
     /// for a task owned by another principal — an error here would tell the
     /// caller that the id resolves to something.
+    ///
+    /// FORWARD GUARD, and stated as one: this case is green with the
+    /// `2c522f53` production hunk reverted, because before that commit no arm
+    /// refused at all. It cannot catch a regression of the fix; it fires when
+    /// someone LATER widens the refusal over `subscriptions/listen` — the one
+    /// change that would turn silence into disclosure. The other half of the
+    /// criterion, that the caller is silently narrowed to no ids, has NO
+    /// observable surface to assert against: `ListenRequest::from_params`
+    /// (`src/protocol/subscriptions.rs:100`) reads only `params.notifications`
+    /// and never `taskIds`, so the narrowing at `handlers.rs:1015` reaches no
+    /// consumer. Assertable once task notifications become a
+    /// `NotificationKind` — that is `MIK-7272.TASK.1.12`'s work, not this
+    /// case's.
     #[tokio::test]
     async fn ac_task_1_15_unattributed_subscription_is_quiet_not_refused() {
         let state = state_public_mcp();
