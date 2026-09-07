@@ -263,8 +263,16 @@ and would pass or fail on which other test ran first.
 reads `render()` before the action, acts, reads after, and asserts `after >= before + N`.
 
 A counter only ever goes up, so a concurrent increment from another test can push the value higher
-and **cannot** make this assertion red; an increment that never fired makes it red on every
-schedule. That asymmetry is the whole reason the delta is stated as `>=` and not `==`.
+and **cannot** make this assertion red. That one-sidedness is why the delta is stated as `>=` and
+not `==`.
+
+**It is one-sided in the other direction too, and that half is a trap.** The same concurrent
+increment SATISFIES `after >= before + N` while the action under test incremented nothing — a
+missing increment, masked, on the assertion written to catch it. `>=` is honest only when nothing
+else in the process writes that series, which is a claim about the TEST BINARY, not about the
+assertion. The `NFR.OBS.4` test plan discharges it the only way that scales: a case asserting
+movement or non-movement is the sole test in its own file, so its process performed only its own
+action.
 
 **Named limit:** it cannot detect over-counting — a double increment passes. A counter whose
 exactness matters more than its occurrence needs a surface that is not process-global, and this
