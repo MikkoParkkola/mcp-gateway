@@ -118,7 +118,7 @@ use super::super::meta_mcp_helpers::{
 use super::super::recovery::{ErrorCategory, RecoveryContext, attach_recovery, recovery_for};
 use super::super::trace;
 use super::MetaMcp;
-use super::prompt_cache::{CacheKeyDeriver, extract_cached_tokens, inject_cache_key};
+use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_tokens};
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
     idempotency_key_for, response_cache_key_for, strip_backend_provenance,
@@ -1349,6 +1349,7 @@ impl MetaMcp {
                 arguments.clone(),
                 &outbound_retry,
                 prompt_cache_key.as_deref(),
+                args.get("_meta"),
                 want_full,
                 session_id,
                 caller_identity,
@@ -2400,6 +2401,7 @@ impl MetaMcp {
         arguments: Value,
         outbound_retry: &OutboundRetry,
         prompt_cache_key: Option<&str>,
+        inbound_meta: Option<&Value>,
         want_full: bool,
         session_id: Option<&str>,
         caller_identity: Option<&GrantSubject>,
@@ -2416,6 +2418,7 @@ impl MetaMcp {
                 arguments,
                 outbound_retry,
                 prompt_cache_key,
+                inbound_meta,
                 want_full,
                 session_id,
                 caller_identity,
@@ -2497,6 +2500,9 @@ impl MetaMcp {
         // Empty for a fresh call, which is every call that is not a retry.
         outbound_retry: &OutboundRetry,
         prompt_cache_key: Option<&str>,
+        // The caller's own `_meta`, read but never relayed wholesale: only the
+        // propagable trace context survives the hop (see `build_outbound_meta`).
+        inbound_meta: Option<&Value>,
         want_full: bool,
         session_id: Option<&str>,
         // Identity that reaches the capability executor. The grant that admits
@@ -2616,12 +2622,15 @@ impl MetaMcp {
         let cached_names = backend.get_cached_tool_names();
         let tool_is_cached = cached_names.iter().any(|n| n == tool);
 
-        // Build request params, injecting cache key into _meta when present.
-        let base_params = json!({ "name": tool, "arguments": arguments });
-        let mut params = match prompt_cache_key {
-            Some(key) => inject_cache_key(Some(base_params), key),
-            None => base_params,
-        };
+        // Build request params. `_meta` is one object, so one writer owns it:
+        // the caller's propagable trace context and this hop's cache key are
+        // merged, or the field is absent entirely (design §3.4a).
+        let mut params = json!({ "name": tool, "arguments": arguments });
+        if let Some(meta) = build_outbound_meta(inbound_meta, prompt_cache_key)
+            && let Value::Object(map) = &mut params
+        {
+            map.insert("_meta".to_string(), meta);
+        }
         outbound_retry.apply(&mut params);
 
         // End-user identity propagation (MIK-6704 / ADR-007) and per-identity

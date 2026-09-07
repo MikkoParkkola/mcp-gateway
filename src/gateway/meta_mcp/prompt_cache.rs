@@ -209,44 +209,13 @@ pub fn tool_schema_fingerprint(tools: &[Value]) -> String {
 // Request metadata injection
 // ============================================================================
 
-/// Inject `prompt_cache_key` into the `_meta` field of a JSON-RPC request params object.
-///
-/// The `_meta` field is the MCP-standard extension point for request metadata.
-/// When the downstream backend is OpenAI-compatible it can read this field and
-/// forward the key appropriately.
-///
-/// If `params` is `None` a new object `{"_meta": {"prompt_cache_key": key}}` is returned.
-/// If `params` already contains `_meta`, the key is merged in without overwriting other fields.
-#[must_use]
-pub fn inject_cache_key(params: Option<Value>, key: &str) -> Value {
-    match params {
-        None => serde_json::json!({
-            "_meta": { "prompt_cache_key": key }
-        }),
-        Some(mut p) => {
-            if let Value::Object(map) = &mut p {
-                let meta = map
-                    .entry("_meta")
-                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
-                if let Value::Object(meta_map) = meta {
-                    meta_map.insert(
-                        "prompt_cache_key".to_string(),
-                        Value::String(key.to_string()),
-                    );
-                }
-            }
-            p
-        }
-    }
-}
-
 /// Build the outbound `_meta` for a backend `tools/call`, from what the caller
 /// sent and the prompt-cache key this hop derived.
 ///
 /// One function rather than two, because `_meta` is one object: a trace writer
 /// and a cache-key writer that each own the key would each have to know about
-/// the other's field. Lives beside [`inject_cache_key`] because that is the
-/// only other thing in this tree that writes this object (design §3.4a).
+/// the other's field. This is the sole writer of the outbound object — the
+/// separate cache-key injector it replaced was the second (design §3.4a).
 ///
 /// `None` when there is nothing to send — the caller carried no propagable
 /// trace context and this hop has no cache key. Absent, never empty: a backend
@@ -273,7 +242,7 @@ pub fn build_outbound_meta(inbound_meta: Option<&Value>, cache_key: Option<&str>
         );
     }
 
-    (!meta.is_empty()).then(|| Value::Object(meta))
+    (!meta.is_empty()).then_some(Value::Object(meta))
 }
 
 /// Extract `prompt_cache_key` from response usage data (OpenAI-compatible format).
@@ -504,40 +473,6 @@ mod tests {
         assert_eq!(f.len(), 64); // SHA-256 → 64 hex chars
     }
 
-    // ── inject_cache_key ─────────────────────────────────────────────
-
-    #[test]
-    fn inject_cache_key_creates_meta_when_params_none() {
-        let result = inject_cache_key(None, "my-key");
-        assert_eq!(result["_meta"]["prompt_cache_key"], "my-key");
-    }
-
-    #[test]
-    fn inject_cache_key_adds_to_existing_params() {
-        let params = json!({"name": "my_tool", "arguments": {}});
-        let result = inject_cache_key(Some(params), "my-key");
-        assert_eq!(result["name"], "my_tool");
-        assert_eq!(result["_meta"]["prompt_cache_key"], "my-key");
-    }
-
-    #[test]
-    fn inject_cache_key_merges_with_existing_meta() {
-        let params = json!({
-            "_meta": {"existing_field": "value"},
-            "arguments": {}
-        });
-        let result = inject_cache_key(Some(params), "new-key");
-        // Both fields should be present
-        assert_eq!(result["_meta"]["prompt_cache_key"], "new-key");
-        assert_eq!(result["_meta"]["existing_field"], "value");
-    }
-
-    #[test]
-    fn inject_cache_key_overwrites_existing_prompt_cache_key() {
-        let params = json!({"_meta": {"prompt_cache_key": "old-key"}});
-        let result = inject_cache_key(Some(params), "new-key");
-        assert_eq!(result["_meta"]["prompt_cache_key"], "new-key");
-    }
 
     // ── build_outbound_meta: the hop (OTEL.1.b/.c/.d) ─────────────────
     //
@@ -601,7 +536,10 @@ mod tests {
     fn t3_no_trace_arrives_so_none_is_minted() {
         // Asserted as absence of the whole object, not as an empty value: a
         // minted root would be a non-empty value and is what this refuses.
-        assert_eq!(build_outbound_meta(Some(&json!({ "other": 1 })), None), None);
+        assert_eq!(
+            build_outbound_meta(Some(&json!({ "other": 1 })), None),
+            None
+        );
     }
 
     #[test]
