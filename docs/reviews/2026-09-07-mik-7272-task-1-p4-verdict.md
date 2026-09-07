@@ -4,12 +4,18 @@
 
 | leg | vendor | verdict | authority |
 |---|---|---|---|
-| 1 | grok-review | **SHIP** | rc=0 + wrapper trailer `grok-review: verdict SHIP` + run file `~/.claude/data/reviews/runs/grok-20260907T040205Z-5615.md` |
-| 2 | synthetic-review | **SHIP-WITH-FIXES** | rc=0 + wrapper trailer `synthetic-review: verdict SHIP-WITH-FIXES` + run file `~/.claude/data/reviews/runs/synthetic-20260907T040210Z-6148.md` |
+| 1 | grok-review | **SHIP** | wrapper trailer `grok-review: verdict SHIP` + run file `~/.claude/data/reviews/runs/grok-20260907T040205Z-5615.md` |
+| 2 | synthetic-review | **SHIP-WITH-FIXES** | wrapper trailer `synthetic-review: verdict SHIP-WITH-FIXES` + run file `~/.claude/data/reviews/runs/synthetic-20260907T040210Z-6148.md` |
 
-NOT a ledger row. `~/.claude/data/reviews/paired-ledger.jsonl` (600 B) holds only
-`airlok-mac` rows and has nothing for either run. §PA authority here = process exit
-status + the wrapper's own emitted trailer + the run file. Process-emitted, not body-scraped.
+NOT a ledger row, and the shortfall is named rather than dressed up. §PA wants a ledger
+row plus a process exit status; neither exists for any of the four runs on this page.
+`~/.claude/data/reviews/paired-ledger.jsonl` holds only `airlok-mac` rows -- these
+wrappers write no row at all -- and this session never captured the wrappers' exit codes.
+What IS observed: each wrapper emitted its own verdict trailer, and each wrote a run file
+under `~/.claude/data/reviews/runs/`. That is trailer-plus-artifact authority, which is
+WEAKER than the standard §PA sets, and it is recorded as weaker instead of asserted as
+equivalent. A verdict doc that scraped its own authority would be the exact failure §PA
+was written for.
 
 Barred / excluded:
 - `claude-review` (1802 B) — Claude reviewing Claude. Barred leg, unread, does not count.
@@ -145,8 +151,8 @@ the payload on stdin. That is the only reason two runs exist per vendor.
 
 | leg | vendor | verdict | authority |
 |---|---|---|---|
-| confirm 1 | grok-review | **SHIP** | rc=0 + trailer `grok-review: verdict SHIP` + `~/.claude/data/reviews/runs/grok-20260907T044146Z-14807.md` |
-| confirm 2 | synthetic-review | **SHIP-WITH-FIXES** | rc=0 + trailer `synthetic-review: verdict SHIP-WITH-FIXES` + `~/.claude/data/reviews/runs/synthetic-20260907T044146Z-14808.md` |
+| confirm 1 | grok-review | **SHIP** | trailer `grok-review: verdict SHIP` + `~/.claude/data/reviews/runs/grok-20260907T044146Z-14807.md` |
+| confirm 2 | synthetic-review | **SHIP-WITH-FIXES** | trailer `synthetic-review: verdict SHIP-WITH-FIXES` + `~/.claude/data/reviews/runs/synthetic-20260907T044146Z-14808.md` |
 
 Grok: improvements 1 and 2 **CLOSED** — "a miss or JSON-RPC error can no longer pass",
 "the arms differ only in `auth.enabled`" — and holding the rename until the `.10` ruling
@@ -163,8 +169,12 @@ disposed in this round rather than batched:
 | 2 | nothing asserts the shipped configs keep `/mcp` out of `public_paths` — the guard's live-ness premise is unpinned in the inverse direction | **APPLIED** `1891fd86`. Exact-string assertions over the k8s configmap, the Helm template and `gateway.example.yaml`. Falsifier: `- /mcp` in the example turns it red (13/1); restored 14/0. |
 | 3 | the round trip pins `to_extensions` against the parser, but nothing pins the SERVED document against `to_extensions` | **APPLIED** `5cab1d62`. Equality, not containment — a superset is exactly the drift. Falsifier: a second key at the serving site turns the new assertion red while the old containment assertion stays green (18/1); restored 19/0. |
 
-No confirmation-round finding reopened a code leg. The change stands where it stood: one
-blocker, and it is the operator's line.
+No confirmation-round finding reopened a code leg, and no code leg is re-opened by the
+three repairs above. They are NOT closed, though: synthetic raised all three and all three
+landed after its verdict returned, so each awaits closure re-check by its own finder
+(repair protocol step 6). Nothing ships in the meantime regardless -- F1 blocks -- and each
+repair carries its own falsifier probe, which is the disproof artifact step 4 asks for.
+The change stands where it stood: one blocker, and it is the operator's line.
 
 ## Test state
 
