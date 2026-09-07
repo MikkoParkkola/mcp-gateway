@@ -14,6 +14,7 @@ use serde_json::Value;
 use std::time::Duration;
 
 use super::CapabilityExecutor;
+use super::params::status_error;
 use super::rest::{ExecutionContext, ProtocolExecutor};
 use crate::capability::definition::ProtocolConfig;
 use crate::capability::validate_personal_capability_identity;
@@ -197,15 +198,7 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
 
         let status = response.status();
         if !status.is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(Error::Protocol(format!(
-                "JSON-RPC endpoint returned {}: {}",
-                status,
-                error_text.chars().take(500).collect::<String>()
-            )));
+            return Err(status_error(response, "JSON-RPC endpoint").await);
         }
 
         let response_body: Value = response

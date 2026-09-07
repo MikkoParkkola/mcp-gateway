@@ -29,6 +29,38 @@ fn graphql_error_message(body: &Value) -> Option<String> {
     }
 }
 
+/// Turn a non-success capability response into the error the caller sees.
+///
+/// A `429` becomes `Error::Http`, carrying the status as a type instead of as
+/// prose a caller would have to parse (GH475.RL.10). Every other status keeps
+/// the `Error::Protocol` message it has always had: the gate is `status == 429`
+/// alone, not `error_for_status_ref()`'s `Err`, which would type 504 the same
+/// way and change how the dispatch classifier reads a timeout.
+///
+/// A `reqwest::Error` renders its URL, and on this path the URL carries the
+/// credential, so the typed error is stripped with `without_url()`. The body
+/// cannot ride along either -- it goes to the log, where an operator reads it.
+pub(super) async fn status_error(response: Response, endpoint: &str) -> Error {
+    let status = response.status();
+    let typed = response
+        .error_for_status_ref()
+        .err()
+        .map(reqwest::Error::without_url);
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "Unknown error".to_string());
+    let body = body.chars().take(500).collect::<String>();
+
+    match typed {
+        Some(e) if status == reqwest::StatusCode::TOO_MANY_REQUESTS => {
+            tracing::warn!(%status, %endpoint, body = %body, "capability endpoint throttled");
+            Error::Http(e)
+        }
+        _ => Error::Protocol(format!("{endpoint} returned {status}: {body}")),
+    }
+}
+
 impl CapabilityExecutor {
     /// Handle an API response.
     ///
@@ -43,16 +75,7 @@ impl CapabilityExecutor {
         let status = response.status();
 
         if !status.is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(Error::Protocol(format!(
-                "API returned {}: {}",
-                status,
-                // Truncate error to avoid leaking sensitive data
-                error_text.chars().take(500).collect::<String>()
-            )));
+            return Err(status_error(response, "API").await);
         }
 
         let response_format = config.response_format.to_ascii_lowercase();

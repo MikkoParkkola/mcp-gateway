@@ -1268,3 +1268,190 @@ async fn a_real_graphql_429_is_excluded_by_the_shared_rate_limit_predicate() {
 
     assert_only_the_500_trips_the_breaker(&errors);
 }
+
+/// RL.10 — the rate-limit outcome is TYPED, and every other status is not.
+///
+/// The three sibling tests above prove a 429 is *recognised*; they do it by
+/// reading a formatted string, so the property they pin is "the status text
+/// survives formatting", not "a rate limit has a type". This one pins the
+/// type: `Error::Http` carrying `StatusCode::TOO_MANY_REQUESTS`, which
+/// `BudgetOutcome::of` can match without reading a byte of prose.
+///
+/// THE CONTROL IS THE OTHER HALF OF THE TEST: 500 must still arrive as
+/// `Error::Protocol` with its status and its body fragment intact. The gate is
+/// `status == 429` alone — not `error_for_status_ref()`'s `Err`, which would
+/// flatten 504 into a typed error and change how the dispatch classifier reads
+/// it.
+///
+/// URL CANARY: the REST leg is driven through a query string carrying
+/// `api_key=CANARY`. A `reqwest::Error` prints its URL by default, so the typed
+/// error is stripped with `without_url()` before it is wrapped; the assertions
+/// below fail if either the credential, the host or the path reaches `Display`.
+///
+/// STILL NOT PINNED here: that the relocated body reaches the `warn!` record —
+/// only that it leaves the error. Capturing a tracing event needs a subscriber
+/// this module does not install.
+/// A typed 429 must still reach the caller as a backend fault (GH475.RL.10).
+///
+/// `to_rpc_code` reported `Error::Protocol` as `-32600` and every other variant
+/// as `-32603`. Making a 429 typed moved it from the first bucket to the
+/// second, which tells a JSON-RPC client the *gateway* failed. The guarded arm
+/// puts it in `-32000` beside the other backend-side refusals; the 500 control
+/// proves the move is scoped to 429 and did not drag the untyped path with it.
+#[tokio::test]
+async fn a_typed_429_reports_a_backend_fault_rpc_code() {
+    let (executor, base) = loopback_status_backend().await;
+    let rest_config = RestConfig::default();
+
+    let mut codes = Vec::new();
+    for route in ["/throttled", "/broken"] {
+        let response = executor
+            .client
+            .post(format!("{base}{route}"))
+            .send()
+            .await
+            .unwrap();
+        codes.push(
+            executor
+                .handle_response(response, &rest_config)
+                .await
+                .unwrap_err()
+                .to_rpc_code(),
+        );
+    }
+
+    assert_eq!(
+        codes[0], -32000,
+        "a throttled backend is a backend fault, not a gateway one"
+    );
+    assert_eq!(
+        codes[1], -32600,
+        "the untyped 500 must keep the code it always had"
+    );
+}
+
+#[tokio::test]
+async fn a_capability_429_is_a_typed_http_error_at_every_protocol_site() {
+    use crate::capability::{ExecutionContext, GraphqlConfig, JsonRpcConfig, ProtocolConfig};
+    use rest::ProtocolExecutor;
+
+    fn assert_typed_429(error: &Error, site: &str) {
+        match error {
+            Error::Http(inner) => assert_eq!(
+                inner.status(),
+                Some(reqwest::StatusCode::TOO_MANY_REQUESTS),
+                "{site}: the typed error must carry the throttling status"
+            ),
+            other => panic!("{site}: a 429 must be a typed Http error, got: {other}"),
+        }
+    }
+
+    fn assert_untyped_500(error: &Error, site: &str) {
+        match error {
+            Error::Protocol(text) => {
+                assert!(
+                    text.contains("500"),
+                    "{site}: the control must keep its status in the message: {text}"
+                );
+                assert!(
+                    text.contains("slow down"),
+                    "{site}: the control must keep its body fragment: {text}"
+                );
+            }
+            other => panic!("{site}: only 429 is typed; 500 must stay Protocol, got: {other}"),
+        }
+    }
+
+    let (executor, base) = loopback_status_backend().await;
+    let capability = unauthenticated_capability();
+
+    // REST — driven at `handle_response`, the production formatter, with a
+    // credential in the query string as the leak canary.
+    let rest_config = RestConfig::default();
+    let mut rest = Vec::new();
+    for route in ["/throttled", "/broken"] {
+        let response = executor
+            .client
+            .post(format!("{base}{route}?api_key=CANARY"))
+            .send()
+            .await
+            .unwrap();
+        rest.push(
+            executor
+                .handle_response(response, &rest_config)
+                .await
+                .unwrap_err(),
+        );
+    }
+    assert_typed_429(&rest[0], "REST");
+    assert_untyped_500(&rest[1], "REST");
+
+    let leaked = rest[0].to_string();
+    for secret in ["CANARY", "api_key", "localhost", "/throttled", "slow down"] {
+        assert!(
+            !leaked.contains(secret),
+            "the typed error leaked {secret:?}: {leaked}"
+        );
+    }
+    match &rest[0] {
+        Error::Http(inner) => assert!(
+            inner.url().is_none(),
+            "the URL must be stripped from the error, not merely absent from its Display"
+        ),
+        other => panic!("expected a typed Http error, got: {other}"),
+    }
+
+    // JSON-RPC and GraphQL — driven through `execute`, as their sibling
+    // detection tests are.
+    let mut jsonrpc = Vec::new();
+    let mut graphql = Vec::new();
+    for route in ["/throttled", "/broken"] {
+        let ctx = ExecutionContext {
+            capability: &capability,
+            timeout_secs: 5,
+            context: CapabilityExecutionContext::default(),
+        };
+        jsonrpc.push(
+            jsonrpc::JsonRpcExecutor {
+                executor: &executor,
+            }
+            .execute(
+                &ProtocolConfig::Jsonrpc(JsonRpcConfig {
+                    endpoint: format!("{base}{route}"),
+                    method: "eth_blockNumber".to_string(),
+                    ..Default::default()
+                }),
+                serde_json::json!({}),
+                &ctx,
+            )
+            .await
+            .unwrap_err(),
+        );
+
+        let ctx = ExecutionContext {
+            capability: &capability,
+            timeout_secs: 5,
+            context: CapabilityExecutionContext::default(),
+        };
+        graphql.push(
+            graphql::GraphqlExecutor {
+                executor: &executor,
+            }
+            .execute(
+                &ProtocolConfig::Graphql(GraphqlConfig {
+                    endpoint: format!("{base}{route}"),
+                    query: Some("query { viewer { login } }".to_string()),
+                    ..Default::default()
+                }),
+                serde_json::json!({}),
+                &ctx,
+            )
+            .await
+            .unwrap_err(),
+        );
+    }
+    assert_typed_429(&jsonrpc[0], "JSON-RPC");
+    assert_untyped_500(&jsonrpc[1], "JSON-RPC");
+    assert_typed_429(&graphql[0], "GraphQL");
+    assert_untyped_500(&graphql[1], "GraphQL");
+}

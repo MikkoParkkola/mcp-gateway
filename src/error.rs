@@ -204,6 +204,11 @@ impl Error {
             // failure, not a gateway fault. Omitting it reported a missing
             // backend command as an internal error.
             | Self::TransportPermanent(_) => -32000,
+            // A 429 is the same class: the backend refused, the gateway is
+            // healthy. Only 429 is lifted -- every other `Http` status keeps
+            // the internal-error code it has always reported, so the arm is
+            // guarded rather than moved wholesale.
+            Self::Http(e) if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => -32000,
             _ => -32603, // Internal error
         }
     }
