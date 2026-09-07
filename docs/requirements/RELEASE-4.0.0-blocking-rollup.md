@@ -813,3 +813,21 @@ Read the classification as a **first pass that narrows twenty-eight to fifteen**
 confirm the fix's own file set before scheduling one. The six rows it marks held are
 reliable — a cited held file is a real block. The fifteen it marks clear are candidates,
 not clearances.
+
+## Base-tree CI gap — not owned by any criterion (recorded 2026-09-07)
+
+`cargo clippy` reports 5 errors on the base tree, reproducing unchanged without
+any release change applied. Per RED-SIGNAL TRIAGE these belong to no builder on
+this board: 0BUG stop-the-line covers what a change broke, never what it stood
+next to. They are recorded here rather than filed as a ticket (§P0: filing is the
+most expensive disposal) because they are not a decision anybody needs to make —
+they are work with an obvious shape.
+
+They still block the release. `--deny warnings` is on the CI job, so the release
+cannot go green while they stand, and no criterion row will ever catch that: every
+row asserts a behaviour of the gateway, and none asserts that the tree compiles
+clean. A gate nobody owns is a gate nobody runs.
+
+Evidence: reported by a builder against the base tree (I, one source — not
+re-measured by the coordinator). Whoever picks this up re-measures first; a
+clippy count quoted from a report is not a clippy count.
