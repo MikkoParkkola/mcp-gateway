@@ -33,6 +33,18 @@ Absolute-value assertions are banned in this plan, in every row, including the o
 of 1 looks safe. The recorder is process-global and these counters have no per-test label to
 isolate on.
 
+Two rows must nonetheless assert that a counter did **not** move, which is an equality assertion
+wearing a different word and would flake red the moment any other test in the same process touched
+that series. They are isolated by PROCESS instead of by label: `OBS.4.3` and `OBS.4.5` are each
+written as the sole test in their own file under `tests/`, because every file there is compiled
+into its own separate binary, so the recorder those two read has performed only their own action.
+`tests/metrics_export_test.rs` is the precedent in this repo — one test, one process, reading
+`mcp_gateway::metrics::render()` around a single action — and `metrics`, `protocol::continuation`
+and `ContinuationState::begin_exchange` are all `pub`, so the production path `OBS.4.10` demands is
+reachable from there (`src/lib.rs:60`, `src/lib.rs:65`, `src/protocol/mod.rs:7`,
+`src/protocol/continuation.rs:854`). Non-movement asserted anywhere else in this plan is a defect,
+not a choice.
+
 ## The cases
 
 `ID` decomposes one release criterion for tracking inside this plan; the criterion is the row
@@ -42,9 +54,9 @@ isolate on.
 |---|---|---|---|---|---|
 | OBS.4.1 | mint is counted | one successful mint through the production mint path; assert `mcp_continuation_mint_total` rose by ≥1 | unit (in `src/protocol/`) | functional | counter absent, or minting does not increment it |
 | OBS.4.2 | redeem is counted | one envelope minted then successfully redeemed; assert `mcp_continuation_redeem_total` rose by ≥1 | unit | functional | as above, on the redeem path |
-| OBS.4.3 | **redeem counts acceptances, not attempts** | one envelope refused at redeem (`not_authentic`); assert `redeem_total` did **not** rise and `rejected_total{reason="not_authentic",phase="redeem"}` did | unit | negative | an implementation that increments on attempt passes 4.2 and fails only here |
+| OBS.4.3 | **redeem counts acceptances, not attempts** | one envelope refused at redeem (`not_authentic`); assert `redeem_total` did **not** rise and `rejected_total{reason="not_authentic",phase="redeem"}` did | integration, sole test in its own file | negative | an implementation that increments on attempt passes 4.2 and fails only here |
 | OBS.4.4 | expiry is counted, with who noticed | an envelope presented after its deadline; assert `expired_total{detected="presented",phase="redeem"}` rose | unit | boundary | expiry counted on the wrong counter, or `detected` not carried |
-| OBS.4.5 | **an expiry is never also a rejection** | same action as 4.4; assert `rejected_total` did not rise on any `reason` | unit | negative | the mapping books `ContinuationError::Expired` as a reason, which the design forbids by name |
+| OBS.4.5 | **an expiry is never also a rejection** | same action as 4.4; assert `rejected_total` did not rise on any `reason` | integration, sole test in its own file | negative | the mapping books `ContinuationError::Expired` as a reason, which the design forbids by name |
 | OBS.4.6 | every `ContinuationError` variant maps to its documented reason | table-driven over the six mapped variants, one refusal each, asserting the exact `reason` value | unit | functional, table-driven | a variant mapped to the wrong label, or to none |
 | OBS.4.7 | **the reason set is the refusal set, not one type's variants** | one refusal that has no `ContinuationError` — a mint refused for want of a principal fingerprint — asserting `rejected_total{reason="no_principal_fingerprint",phase="mint"}` | unit | functional | an implementation that derives the enum from `ContinuationError` compiles, passes 4.6, and fails only here. This is the case the design's own §"the reason set is the refusal set" exists to force |
 | OBS.4.8 | the label **keys** are the compatibility surface | for each of the four counters, assert the key set on its emitted series is exactly the documented one (values not asserted) | unit | contract | a key added, renamed or dropped — the change the design says breaks consumers |
