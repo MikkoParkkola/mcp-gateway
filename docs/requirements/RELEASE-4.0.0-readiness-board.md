@@ -864,13 +864,13 @@ two, and it omits `MRTR.8b` entirely.
 | row | what it actually needs |
 |---|---|
 | `MRTR.7a`, `.7b` | mechanism — the legacy-client bridge, no production call site |
-| `MRTR.8b` | mechanism — the count bound is enforced, the **lifetime** bound is not |
+| `MRTR.8b` | ~~mechanism~~ — **landed 2026-09-07 (`c3270021`)**: reclamation runs inside `InFlight::guard` on every reader, against a supplied `now` |
 | `NFR.SEC.3` | mechanism — key rotation and a verification-key retention window do not exist |
 | `NFR.OBS.4` | mechanism — no mint/redeem/expiry/rejection counters exist |
 | `NFR.SEC.2`, `.4` | evidence — the path is wired; eight named fixtures are absent |
 | `NFR.PERF.3` | evidence — a soak showing reclamation, over a path that reclaims |
 
-Four mechanisms, not one. Sequencing A as a single owner's work underestimates it by the
+Four mechanisms, not one — three after `c3270021` closed `MRTR.8b`'s. Sequencing A as a single owner's work underestimates it by the
 three rows the rollup sentence does not mention.
 
 ### The compatibility flip is not one line
