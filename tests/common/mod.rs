@@ -41,6 +41,9 @@ pub struct Fixture {
     pub meta_mcp_enabled: bool,
     pub agent_identity: mcp_gateway::config::AgentIdentityConfig,
     pub sanitize_input: bool,
+    /// The stateless path's master switch. `true` is the shipped default
+    /// (`src/config/mod.rs:1236`); `false` is COMPAT.1 C1's falsifier.
+    pub modern_protocol: bool,
     /// The gate control 15 names. `None` is the shipped router-test state and
     /// the falsifier for the block below.
     #[cfg(feature = "firewall")]
@@ -60,6 +63,7 @@ impl Default for Fixture {
             // The fixture default is off so the other rows reach their own
             // gate rather than being refused by this one.
             sanitize_input: false,
+            modern_protocol: true,
             #[cfg(feature = "firewall")]
             firewall: None,
         }
@@ -68,7 +72,7 @@ impl Default for Fixture {
 
 pub fn state(f: Fixture) -> Arc<AppState> {
     let mut config = Config::default();
-    config.server.modern_protocol = true;
+    config.server.modern_protocol = f.modern_protocol;
     config.auth = f.auth;
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
