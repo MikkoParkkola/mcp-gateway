@@ -64,10 +64,9 @@ diagnostic. `gateway_webhook_status` is enumerated where its registry is attache
 requirement is 14-17, and the served surface is pinned inside that band by
 `tests/nfr_perf_4_meta_tool_band.rs` (`docs/design/2026-09-08-perf4-webhook-status-restoration.md`).
 
-NFR.PERF.4 stays blocking and stays ABSENT. What the ruling changed is its kind: it is no
-longer an open operator call, so it left the compatibility cluster of the blocking rollup, and *how* the
-seventeenth stops counting is an unmade engineering decision — a §P1 design event like the
-rest of wave 1, not an edit.
+NFR.PERF.4 is MET and no longer blocking. The band the ruling settled is the band the served
+surface is now pinned to, so nothing remains to decide: the paragraph above this one records the
+current position, and the two sentences before it record the position it replaced.
 
 ### The MRTR implemented-but-unwired split, deferred here, has landed
 
