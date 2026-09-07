@@ -20,7 +20,7 @@ constant itself, about `NFR.PERF.1`, or about the meta-tool surface.
 
 | # | criterion clause | the case that proves it | level | type | can it fail today, and on what |
 |---|---|---|---|---|---|
-| 1 | memory MUST NOT grow unboundedly with abandoned continuations — the bound holds | **no new case: `ac_mrtr_8_the_table_is_bounded`, `tests/mik_7212_acs.rs:491`, already is it** — fill to the injected capacity with live, unexpired holds, then `hold` once more and get `None` | unit, existing | boundary | **No — already met, and already covered.** `hold`'s capacity branch is built (`:696-717`) and a committed case asserts the refusal. This row's whole content is the citation plus the falsifier probe below, which is what turns an existing green test into evidence for *this* clause |
+| 1 | memory MUST NOT grow unboundedly with abandoned continuations — the bound holds | **no new case: `ac_mrtr_8_the_table_is_bounded`, `tests/mik_7212_acs.rs:491`, already is it** — fill to the injected capacity with live, unexpired holds, then `hold` once more and get `None` | unit, existing | boundary | **No — already met, and already covered.** `hold`'s capacity branch is built (`:696-717`) and a committed case asserts the refusal. This row's whole content is the citation plus the falsifier probe below, which is what turns an existing green test into evidence for *this* clause. **Probe run 2026-09-07: red at `tests/mik_7212_acs.rs:500`, the clause's own assertion; restored and green again. This clause now has its evidence.** |
 | 2 | …and a soak with abandonment MUST show reclamation | abandon exactly the table's capacity of exchanges against a **driven clock** and never attempt one more, so the capacity branch is never entered; advance `now` past the deadline; `len(now)` is 0 | unit, own target | lifetime / state | **Yes — but not today, and not on the assertion.** `InFlight::len` is `len(&self)` today (`continuation.rs:756`): no clock. `len(now)` therefore does not *compile* until Design A lands, and a compile error is not evidence about reclamation. The assertion-level red is earned by a falsifier probe run *after* `guard(now)` lands: delete the reclaim call from `guard`, and the row goes red on the occupancy assertion — every entry retained past its deadline, because reclamation otherwise runs only inside the capacity branch and this fixture never enters it. Restore, re-run, and the pass is what proves the restore |
 
 ## Why no wall-clock soak
@@ -152,11 +152,20 @@ last repair commit.
 
 ### Residual
 
-Neither row's falsifier probe has been run, and neither can be: both are specified against
-`InFlight::guard(now)`, which lands with MRTR.8b. The probes are the only thing making either row
-evidence rather than a green test, so **this plan is not discharged until they run** — owner: this
-slice, trigger: the first commit after MRTR.8b lands. If a probe fails to go red, the row it
-belongs to is not a case and the clause it claims to cover is uncovered.
+**Row 1's falsifier probe has been run, on 2026-09-07, and it went red on the right assertion.**
+This paragraph previously said neither probe could run before `InFlight::guard(now)` lands, and for
+row 1 that was wrong: row 1's probe is specified against the capacity refusal in `hold`, which is
+built today, and only row 2's is specified against `guard(now)`. The two rows were read as one
+dependency. Deleting the two lines that return `None` at capacity turned
+`ac_mrtr_8_the_table_is_bounded` red at `tests/mik_7212_acs.rs:500` — the `is_none()` at capacity,
+the clause's own assertion, not a compile error and not a neighbouring case. Restoring the refusal
+and re-running the test returned it to green, which is the restore check. Baseline green, defected
+red, restored green: `1 passed` / `1 failed` / `1 passed`.
+
+Row 2's probe has not run and still cannot: it is specified against `guard(now)`, which lands with
+MRTR.8b. The probe is the only thing making that row evidence rather than a green test, so **this
+plan is not discharged until it runs** — owner: this slice, trigger: the first commit after MRTR.8b
+lands. If it fails to go red, row 2 is not a case and the clause it claims to cover is uncovered.
 
 Row 2's case is **written and deliberately out of tree** until `guard(now)` lands. MRTR.8b has no
 code committed at all — design and plan documents only — so the dependency is unstarted rather than
@@ -171,7 +180,7 @@ the corrections above into `e174b8bd`, and the file was removed again in the com
 paragraph. Recorded because a reader tracing the file's history will otherwise read that add as a
 decision this plan made.
 
-Three things fall at one trigger — the first commit after MRTR.8b lands. Both falsifier probes, and
+Two things fall at one trigger — the first commit after MRTR.8b lands. Row 2's falsifier probe, and
 moving the case back into `tests/` with a check that its compile failure is `len`'s arity **and
 nothing else**. That last check is unrun today: the disk guard (MIK-4777) halts the toolchain below
 5 GB free and the recovery freeze forbids clearing it. A red caused by a stray typo or a wrong
