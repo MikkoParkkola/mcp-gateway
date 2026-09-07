@@ -96,9 +96,9 @@ is no longer the document. Reviewer state, 2026-09-02:
 | vendor | state | why |
 |---|---|---|
 | Codex / GPT | **works, then a separate outage** | the `--ephemeral` trust defect is fixed in `~/.claude/bin/gpt-review` with `--skip-git-repo-check`. A distinct failure appeared 2026-09-03: `404` at both `wss://` and `https://chatgpt.com/backend-api/codex/responses` across five reconnects each, on two attempts twelve minutes apart. Vendor-side, not the wrapper — and the wrapper still exits 0 with the error in its body, which is exactly why §PA reads the ledger row and never the text |
-| Grok | ERROR | xAI balance exhausted (HTTP 402) |
+| Grok | **works, as of 2026-09-07** | the entry above was stale, and a stale `ERROR` is expensive: with Codex out it read as one working leg, which is not enough to review anything. Two runs on 2026-09-07 exited 0 and wrote parseable `VERDICT:` lines — `runs/grok-20260907T024623Z-38384.md` (SHIP, the change) and `runs/grok-20260907T025632Z-67408.md` (SHIP, the closure re-check). The 402 was real when recorded; the balance is not exhausted now. Re-check before trusting this row: a vendor row is a reading, not a fact |
 | GLM-5.3 | ERROR | `finish_reason='length'` on three consecutive attempts — the Flash distillation cannot hold a 26 KB payload |
-| Kimi K3 | **works** | the entry above was stale. Two runs on 2026-09-03 returned parseable `VERDICT:` lines and wrote `process_status: ok` rows. Kimi is the second leg for Claude-authored work, since `grok-review` is unpaid and `claude-review` would be the author reviewing the author |
+| Kimi K3 | **works** | the entry above was stale. Two runs on 2026-09-03 returned parseable `VERDICT:` lines and wrote `process_status: ok` rows. Kimi is the second leg for Claude-authored work, since `claude-review` would be the author reviewing the author. With Grok paid again (row above), Claude-authored work has two legs to choose from and Kimi is no longer the only one |
 
 Every vendor failed for its own reason on that day, and the wrapper defect
 made the primary reviewer look like a fourth outage. Two of those four entries have
