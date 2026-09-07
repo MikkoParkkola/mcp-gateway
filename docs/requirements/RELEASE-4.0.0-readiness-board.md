@@ -1046,6 +1046,19 @@ withdrawn here so the correction outlives the message that carried it.
 returns an error row — not a free swap. Every substitution is recorded in the PR body with its
 reason, so the pair is auditable after the fact rather than inferred from which files exist.
 
+**A synthetic leg cannot read this repository, and its own preamble says otherwise.**
+`~/.claude/bin/synthetic-review:214` is a single `urllib.request.urlopen` POST to
+`chat/completions` — no tool loop, no filesystem (V, read at source 2026-09-07). Its preamble at
+line 24 nonetheless tells the reviewer "You may still read it read-only by absolute path", a
+sentence generated from the shared `~/.claude/bin/lib/review-preamble.txt` where it is true for
+`gpt-review` and `grok-review` and false for this one. Two consequences bind every substitution:
+the applicable DoR/DoD criteria and every file the finding turns on must travel IN the payload,
+because §P4's handoff rule is not satisfied by a reviewer that was told it could look; and a
+synthetic finding citing a file it was not given is `A`, not evidence — verify at source before
+it earns a round. Measured cost of missing this: `MIK-7272.TASK.1.20`'s criterion was in neither
+the payload nor the synthetic leg's reach, so that AC received no canonical-criterion check from
+either leg while both legs returned a verdict.
+
 Verdicts come from the LEDGER ROW, never from scraping the run file (§PA). A wrapper's exit status
 and its ledger row have disagreed in both directions today: `gpt` exits 1 with an error row, and one
 `kimi` row at 06:31:50Z carries `exit_code=0` with `process_status=error`. Neither ledger records
