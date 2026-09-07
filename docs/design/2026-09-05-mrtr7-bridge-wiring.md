@@ -812,6 +812,12 @@ receiver's outcome to `DeliveryError` (the bridge's `Timeout` and
 bool` — fire-and-forget. No `register_pending`, no receiver, no timeout, not
 `async`. There is no roots counterpart to the two `*_with_response` forwarders.
 
+> **Resolved.** `forward_roots_list_with_response` is that counterpart, and the
+> fire-and-forget `forward_roots_list` no longer exists — it was deleted rather
+> than repaired, because it had no callers and minting an `id` on a forward that
+> registers nothing would have shipped a frame that only LOOKS answerable. The
+> paragraph below is the design-time reading, kept for the record.
+
 The design does not mention this, because it treated the whole channel as
 unbuilt. While this section still wrapped the typed forwarders, the missing
 third forwarder read as the concrete piece of new code the wiring needs.
@@ -1064,6 +1070,12 @@ if it resolves badly, per the four-field form for a deferred unknown.
 the reply, so a `roots-` prefixed response can never be matched, and nothing
 downstream of a roots forward can ever complete. One third of the bridge's
 declared surface is undeliverable as the code stands.
+
+> **Resolved — roots stays in scope, the id-bearing variant was funded.**
+> `forward_roots_list_with_response` mints the id, registers the pending entry
+> and rides the `message` envelope; MIK-7212.ROOTS.1-.5 assert it. The
+> fire-and-forget forward was deleted, so the defect described here is no longer
+> statable rather than merely fixed.
 
 - **owner:** requester (this is what the bridge is FOR, not how it works)
 - **resolves by:** a decision — descope `roots/list` from MRTR.7, or fund an
