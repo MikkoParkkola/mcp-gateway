@@ -945,7 +945,16 @@ Review status is also thinner than `gap-plan.md:654` reads — one vendor, `SHIP
 head the design has since moved past by six commits. Under §12 that is not a passed dual
 gate on the current head.
 
-## MRTR.8b — reclamation is capacity-triggered, not time-triggered
+## RESOLVED — MRTR.8b: reclamation runs on every reader, against a supplied `now`
+
+**Corrected 2026-09-07 (`c3270021`).** `InFlight::guard(now)` takes the lock and reclaims
+before any reader sees the map, and `hold`, `route`, `complete` and `len` all go through it,
+so "a table below capacity never reclaims" is no longer stateable about this type. `reap` is
+deleted rather than wired — a reclaimer someone must remember to call was the defect. Dual
+§P4 code legs returned SHIP / SHIP-WITH-FIXES with the one fix taken; verdicts and run files
+are in the `MIK-7212.MRTR.8b` row of `RELEASE-4.0.0-criteria-status.md`. `NFR.PERF.3` stays
+ABSENT on its second clause, the soak, which this change does not create. The text below is
+kept as the record of the defect, not as a live gap.
 
 The PARTIAL on row 133 has a specific cause. `reclaim_abandoned` is called from exactly
 one place: inside the `held.len() >= self.capacity` branch of `InFlight::hold`
