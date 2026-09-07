@@ -202,4 +202,33 @@ mod tests {
         }));
         assert!(gateway.negotiate(&client).is_empty());
     }
+
+    #[test]
+    fn what_this_gateway_advertises_parses_back_to_what_it_declared() {
+        // `to_extensions` documents itself as producing the shape
+        // `from_capabilities` requires on the way back in. That was a CLAIM in
+        // a doc comment: the discover test pins the served shape and the
+        // negotiation tests pin the parser, but nothing joined them, so the
+        // advertised settings value and the value the parser accepts could
+        // drift apart without a single case going red.
+        //
+        // The join is the assertion. It fails if either side moves alone --
+        // give the settings a non-object value and the parser drops the key;
+        // tighten the parser past an empty object and the gateway stops being
+        // able to read its own advertisement.
+        let declared = ExtensionSet::gateway_declares();
+        let map = declared.to_extensions();
+        assert!(
+            !map.is_empty(),
+            "an empty declaration would satisfy the round trip vacuously"
+        );
+        let advertised = json!({ "extensions": map });
+
+        assert_eq!(
+            ExtensionSet::from_capabilities(&advertised),
+            declared,
+            "a peer that echoes this gateway's own advertisement back at it \
+             must negotiate the set the gateway declared: {advertised}"
+        );
+    }
 }
