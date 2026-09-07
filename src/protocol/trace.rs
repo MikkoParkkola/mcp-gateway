@@ -235,7 +235,10 @@ mod tests {
     fn all_zero_parent_id_is_rejected_and_a_nonzero_one_accepted() {
         // The span id has the same invalid-value rule as the trace id.
         let zero = "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01";
-        assert!(parent_of(zero).is_none(), "all-zero parent-id must be refused");
+        assert!(
+            parent_of(zero).is_none(),
+            "all-zero parent-id must be refused"
+        );
         assert!(parent_of(TRACEPARENT).is_some());
     }
 
@@ -262,7 +265,11 @@ mod tests {
         .expect("the traceparent is valid")
         .to_meta();
         assert!(onward.get("tracestate").is_none(), "got {onward}");
-        assert_eq!(onward["traceparent"], json!(TRACEPARENT), "the parent survives");
+        assert_eq!(
+            onward["traceparent"],
+            json!(TRACEPARENT),
+            "the parent survives"
+        );
     }
 
     #[test]
@@ -274,7 +281,11 @@ mod tests {
         .expect("the traceparent is valid")
         .to_meta();
         assert!(onward.get("baggage").is_none(), "got {onward}");
-        assert_eq!(onward["traceparent"], json!(TRACEPARENT), "the parent survives");
+        assert_eq!(
+            onward["traceparent"],
+            json!(TRACEPARENT),
+            "the parent survives"
+        );
     }
 
     // ── T5/T6: baggage is its own W3C specification and does not depend on a
@@ -298,7 +309,10 @@ mod tests {
         .expect("baggage propagates even when the parent is refused")
         .to_meta();
         assert_eq!(onward["baggage"], json!("userId=alice"));
-        assert!(onward.get("traceparent").is_none(), "a refused parent is dropped");
+        assert!(
+            onward.get("traceparent").is_none(),
+            "a refused parent is dropped"
+        );
     }
 
     #[test]

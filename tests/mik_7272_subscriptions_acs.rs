@@ -578,19 +578,56 @@ mod http {
     }
 
     #[tokio::test]
-    async fn ac_task_1_tasks_get_reports_that_it_is_not_implemented() {
-        // It answered every handle with a `not_found` **success**. That status
-        // is not in the protocol's task model, and as a success it told a client
-        // its handle had been looked up and missed — a lookup that never
-        // happened, against a store that does not exist.
+    async fn ac_task_1_tasks_get_answers_an_unknown_id_with_no_such_task() {
+        // `tasks/get` is dispatched against the store (`router::handlers`), so a
+        // fully valid modern request must reach the LOOKUP and be told the id is
+        // absent — not turned away by a guard on the way in. Every precondition
+        // the route imposes is therefore supplied here, and each one it is
+        // missing would answer with a different refusal that this case would
+        // read as the lookup's:
         //
-        // The specification page for the tasks extension returns 404 at the path
-        // its own index links, so there is no shape to build against. Answering
-        // method-not-found is the true statement, and a client discovers that on
-        // its first call rather than after polling a fiction.
-        let (status, body) = post_modern("tasks/get", json!({ "taskId": "task-unknown" })).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
-        assert_eq!(body["error"]["code"], -32601, "{body}");
+        //   * the mirrored `Mcp-Name`. `tasks/get` mirrors `params.taskId`
+        //     (`protocol::headers::mcp_name_body_field`), so omitting the header
+        //     is a header/body mismatch refused with -32020 before routing.
+        //     Supplied here rather than in `modern_call`, which would change the
+        //     header profile of every modern case in this file.
+        //   * the tasks extension, DECLARED ON THIS REQUEST. A request reaching
+        //     the extension without it is refused -32021 with a
+        //     `requiredCapabilities` payload. `modern_call` sends an empty
+        //     `clientCapabilities` on purpose — the negative cases depend on it —
+        //     so the declaration is added to this request's envelope only.
+        //
+        // A declared extension is this fixture's INPUT, not a way around a gate:
+        // it is what a client that can hold a task handle actually sends.
+        let (mut request, mut headers) =
+            modern_call("tasks/get", json!({ "taskId": "task-unknown" }));
+        request["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"]["extensions"] =
+            json!({ "io.modelcontextprotocol/tasks": {} });
+        headers.push(("mcp-name", "task-unknown".to_string()));
+        let borrowed: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let (status, body) = post(true, request, &borrowed).await;
+
+        // The answer the store gives for an id it does not hold: `-32602`, and
+        // the id-free wording that keeps "not yours" indistinguishable from
+        // "never existed". 200 is not an oversight — the modern path promotes
+        // only `-32601` to 404, and this method is not missing, this task is.
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["error"]["code"], -32602, "{body}");
+        assert_eq!(body["error"]["message"], "no such task", "{body}");
+        // The defect this row was written against: an absent handle was once
+        // answered with a `not_found` **success**, a status the protocol's task
+        // model does not have. An error here, never a result.
+        assert!(
+            body.get("result").is_none(),
+            "an absent handle is an error, not a success carrying a status: {body}"
+        );
+        // WHICH refusal this is cannot be told apart from the status and body
+        // read above: the router answers an unattributed caller with the same
+        // `missing_task_error` before dispatch. It is the dispatched one
+        // here because `AuthConfig::default().enabled` is false in `state`, so
+        // the empty owner key is not an unattributed caller. The identity rows
+        // that DO separate the two live in `mik_7272_task_1_acs.rs`, which
+        // configures principals; nothing is asserted about ownership here.
     }
 
     #[tokio::test]

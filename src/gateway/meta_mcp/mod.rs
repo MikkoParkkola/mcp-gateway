@@ -1107,6 +1107,10 @@ const NO_SESSION_FOR_PROFILE: &str = "Routing profiles are per-session, and this
 /// The same refusal for the FSM workflow state, and for the same reason: the
 /// state is stored per session, and a connection with no session would be
 /// storing it under a key every other sessionless connection also reads.
+///
+/// It also closes the recovery route: a sessionless caller cannot reach that
+/// shared state by supplying a header its protocol revision no longer uses,
+/// because `session_key` maps the empty header to the same `None`.
 const NO_SESSION_FOR_STATE: &str = "The workflow state is per-session, and this connection has no session. \
      MCP 2026-07-28 removed protocol-level sessions; capability visibility is \
      decided by the authorization presented on each request.";
