@@ -673,7 +673,20 @@ pub struct InFlight {
 /// A free function rather than a method because [`InFlight::guard`] calls it
 /// while already holding the lock.
 fn reclaim_abandoned(held: &mut std::collections::HashMap<String, (String, u64)>, now: u64) {
+    let before = held.len();
     held.retain(|_, (_, deadline)| now <= *deadline);
+    let evicted = before - held.len();
+    if evicted > 0 {
+        // The only trace this event leaves. A client refused for presenting a
+        // stale envelope is counted at its own call site with
+        // `reason="deadline_passed"`; a client that simply stops calling makes
+        // no call to be counted in, so without this an operator cannot see it
+        // at all (NFR.OBS.4). Counted here rather than at the caller because
+        // this is where the eviction is decided, and the emission is pinned
+        // end-to-end by `tests/continuation_expiry_metric_test.rs`.
+        telemetry_metrics::counter!("continuation_expiry_total", "reason" => "hold_evicted")
+            .increment(evicted as u64);
+    }
 }
 
 impl InFlight {
