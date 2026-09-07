@@ -155,6 +155,12 @@ pub(super) const TASKS_EXTENSION: &str = "io.modelcontextprotocol/tasks";
 /// Deliberately not a method-family test: `subscriptions/listen` is not a
 /// `tasks/*` method and reaches the extension the moment it names a task, so a
 /// gate keyed on the prefix refuses the wrong set.
+///
+/// NOTHING TIES THIS LIST TO THE DISPATCHER. A method added below without an arm
+/// here reaches the task store unguarded, and no test goes red: the arms and the
+/// dispatcher agree today only because a person kept them in step. The residual
+/// is recorded here rather than in a review document because here is where the
+/// next method gets added -- ADD THE ARM IN THE SAME EDIT.
 fn reaches_tasks_extension(method: &str, params: Option<&Value>) -> bool {
     match method {
         "tools/call" => params.is_some_and(|p| p.get("task").is_some()),
