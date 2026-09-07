@@ -78,23 +78,26 @@ Also not in the payload's AC list: `.20` itself (six ACs transmitted: `.10a`, `.
 `.11a`, `.12`, `.18`, `.19`). Grok reviewed the `.20` test from the diff without its
 criterion text — which is why its three improvements land on `.20`'s assertion strength.
 
-## Improvements — batched, not yet applied
+## Improvements — disposition, one line each
 
 Grok (all SMALL, all real):
-1. `.20` asserts only that the message is not "no such task" — a different refusal
-   (method-not-found, capability miss, tool error) satisfies the admission half.
-   `tests/mik_7272_task_1_acs.rs:1072`. This is a §P2 Q2 defect: a case that passes while
-   broken.
-2. `.20` varies more than `auth.enabled` — `state_public_mcp()` also changes `public_paths`
-   and `api_keys`. A guard keyed on key-count would keep passing the pair. `:1061`.
-3. `implemented_extensions()` now returns empty while the gateway DOES implement tasks —
-   rename to a handshake-specific name so the next editor does not "complete" it.
-   `src/gateway/meta_mcp_helpers.rs:145`.
 
-Synthetic: three SMALL (round-trip test, preset pinning) — same batch.
+| # | what | disposition |
+|---|---|---|
+| 1 | `.20` asserted only that the message is not "no such task" — a §P2 Q2 defect, a case that passes while broken | **APPLIED** `98c0a975`. Asserts positively now (no `error`, a `result`). It still cannot assert a task HANDLE: `tools/call` writes no `result/taskId` until the store lands (`.8a`), and a case pinned to a field nothing writes can never go green — recorded in the test's own comment. |
+| 2 | `.20` varied more than `auth.enabled` — the disabled arm came from `AuthConfig::default()`, which also drops both API keys and the public `/mcp` listing | **APPLIED** `98c0a975`. Both arms come from `public_mcp_auth()` and differ in `enabled` alone. |
+| 3 | rename `implemented_extensions()` — it returns empty while the gateway does implement tasks | **HELD** on the operator's `.10` ruling. Ratify the narrowing and the rename is right; refuse it and the function gets a body instead of a name. |
 
-None applied. One repair round after the operator's line, one commit per finding,
-confirmation pass back to the finding's own vendor.
+Synthetic:
+
+| # | what | disposition |
+|---|---|---|
+| 1 | round-trip test: `to_extensions()` fed back through `from_capabilities()` | **APPLIED** `2bdba41e`. The doc comment's round-trip claim is an assertion now, with a non-empty guard so it cannot pass vacuously. |
+| 2 | pin the guard's live-ness premise against "the shipped local/compose/published-probe presets" | **DIED AT SOURCE.** No such presets exist: those are three cases inside one `support.rs` test function, the published-probe case lists `/health` only, and the compose case is the configuration `network_bind_refusal` REFUSES to start. No shipped configuration lists `/mcp` public anywhere (`gateway.example.yaml`, the helm configmap, the k8s configmap — `/health` only), and `support.rs` has no preset builder. The premise came from a FALSE COMMENT in the fixture, which claimed `support.rs` "writes exactly this" for those presets. Value discharged by repairing the citation (`53dea5fa`): the fixture now cites what actually admits it — the loopback-with-no-`public_url` early return at `support.rs:554`, and the local-install assertion at `support.rs:979-986`. No new test was added: `support.rs:982` already asserts exactly that, and a second copy in the ACs file is the duplication §P3a exists to catch. A claim that dies at source closes the finding; no round spent. |
+| 3 | align `implemented_extensions()` once the operator disposes of `.10a` | **HELD** — same operator line as grok 3, and the improvement says so itself. |
+
+Confirmation passes go back to each finding's own vendor: grok for 1-2, synthetic for 1
+and the 2 disposal.
 
 ## Test state
 
