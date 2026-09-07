@@ -505,6 +505,20 @@ against whatever the dispatcher turns out to do.
 2026-09-06, recorded in §11.6). They are separate criteria on purpose: folding a distinct
 authorisation surface into `.11` is what produced RL.5's "MET (narrowed)".
 
+**What `.11` and `.12` are MET *as tested*, after the unattributed-caller guard (2026-09-07).**
+The guard refuses every task method reaching the tasks extension when the caller presented no
+credential *and* the operator declared distinct principals. That closes one half of `.12` — the
+pooled empty owner key, where every credential-less caller owned every other credential-less
+caller's tasks — and it is covered by the test plan's `.18`, `.19` and `.20` rows. It closes
+**none** of `.11`: the between-principals check still waits on the dispatcher, and the `.11` case
+is green today only because both calls receive the same method-level refusal, which is the reason
+its own doc comment gives. Reading either criterion as MET because these rows pass would repeat
+exactly the RL.5 mistake named above, one level down: a criterion marked met by the surface that
+happened to be built first.
+
+`.12`'s remaining half is the authorisation decision on a task whose owner *is* known. It cannot
+be written honestly until `tasks/get` answers a real id, and it is not in this change's scope.
+
 **Open question, owned elsewhere:** whether `.2` asserts a status shape 4.0.0 does not ship —
 `input_required` is out of scope per §11.2, and the plan's `.2d` row is red for a reason no
 implementation of the agreed scope can clear. The question, its two readings and a
