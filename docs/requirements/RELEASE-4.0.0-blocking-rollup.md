@@ -17,6 +17,14 @@ This document exists so the shape of the remaining work survives outside one ses
 context. It adds no verdicts: every row below is quoted from the ledger, and the ledger
 stays the source of truth for status.
 
+A flat count is not evidence of a stall. The tally held at 28 across eighteen commits in under two
+hours, and the reason is that the work is uncommitted rather than absent: `git status --porcelain`
+showed live edits for `MIK-7214.HEADER.9`, `MIK-7212.MRTR.7` and `MIK-6865.SCHEMA.1c` while none of
+the three had moved a ledger row. Reading the tally cold therefore under-reports progress on
+roughly the rows that are being worked hardest. Before treating an unmoved count as stuckness,
+check the dirty set and the last commit touching each blocking id — a stuckness call made on the
+count alone would fire on exactly the wrong rows.
+
 ## Standing ruling — narrowing a criterion is not available on this release
 
 Several rows below present the same shape of choice: build the mechanism the criterion names, or
@@ -64,14 +72,28 @@ matched the architecture. Cluster C (line 109) already names "extension set writ
 one of its five half-wirings — that emptiness is the gap the cluster exists to close, not a design
 to preserve.
 
-What the build is: the single `build_server_capabilities(implemented_extensions())` seam serves
-both surfaces and is version-blind (`docs/design/2026-08-31-task-1-tasks-extension.md:236-243`).
-Making it version-conditional gives 2026 clients the identifier in `initialize` and leaves the 2025
-result byte-identical, which is what `DISCOVER.3` pins. The objection recorded beside the
-initialize-silent test — that completing `.10` breaks byte-identity for every 2025 client — holds
-for an unconditional insert and not for a conditional one. Cost, named rather than discovered
-later: `DISCOVER.3` gains a 2026 golden case, and the initialize-silent test becomes era-scoped
-rather than deleted, because for a 2025 client it is still the correct assertion.
+What the build is, read at source rather than from the design document. The two surfaces are no
+longer one seam: `server/discover` builds its own capabilities from
+`discovery_extensions()`, which reads `ExtensionSet::gateway_declares()`
+(`src/gateway/meta_mcp/mod.rs:1172`, `src/gateway/meta_mcp_helpers.rs:156`), and a comment at the
+call site records why it diverged. So **the discovery half of `.10` is already served**; the
+remaining gap is `initialize` alone, where `build_server_capabilities(implemented_extensions())`
+still takes the empty map (`src/gateway/meta_mcp_helpers.rs:145`, `:190`). Anyone reading
+`docs/design/2026-08-31-task-1-tasks-extension.md:236-243` gets the superseded one-seam picture;
+that split was a §P3 design event recorded in a code comment and never in the design.
+
+The conditional is one line and needs no version threading: `build_initialize_result` already takes
+`negotiated_version` as its first parameter, two lines above the call
+(`src/gateway/meta_mcp_helpers.rs:188-192`). A 2026 client gets the identifier; a 2025 client keeps
+the empty map and a byte-identical result, which is what `DISCOVER.3` pins. The objection recorded
+beside the initialize-silent test — that completing `.10` breaks byte-identity for every 2025
+client — holds for an unconditional insert and not for a conditional one. Cost, named rather than
+discovered later: `DISCOVER.3` gains a 2026 golden case, and the initialize-silent test becomes
+era-scoped rather than deleted, because for a 2025 client it is still the correct assertion.
+
+The infeasibility clause of the ruling above applies to whatever the build turns up next. It does
+not apply to the seam itself: that was read at source and is reachable, so a hard edge found later
+is a finding to report, never a route back to the narrowing.
 
 Basis is `I`: this applies the standing ruling and the twice-stated full-scope instruction to one
 row. No fresh operator answer exists, and none is recorded here.
