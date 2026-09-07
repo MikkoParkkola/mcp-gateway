@@ -57,7 +57,7 @@ use super::meta_mcp_helpers::{
     build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
     wrap_tool_success,
 };
-use super::meta_mcp_tool_defs::{MetaToolExposure, build_meta_tools_filtered};
+use super::meta_mcp_tool_defs::{MetaToolExposure, MetaToolGates, build_meta_tools_filtered};
 use super::webhooks::WebhookRegistry;
 
 mod invoke;
@@ -1328,9 +1328,16 @@ impl MetaMcp {
         } else {
             let (tool_count, server_count) = self.backend_counts();
             build_meta_tools_filtered(
-                self.stats.is_some(),
-                self.get_reload_context().is_some(),
-                true, // cost_report always enabled (tracker is always present)
+                MetaToolGates {
+                    stats: self.stats.is_some(),
+                    reload: self.get_reload_context().is_some(),
+                    // The tracker is always present, so this gate is always on.
+                    cost_report: true,
+                    // Attachment, not configuration: the registry is set after
+                    // construction and never over stdio, so this is read here
+                    // rather than passed in.
+                    webhook_status: self.get_webhook_registry().is_some(),
+                },
                 tool_count,
                 server_count,
                 &self.meta_tool_exposure,

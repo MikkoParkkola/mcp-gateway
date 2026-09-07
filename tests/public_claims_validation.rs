@@ -4,9 +4,9 @@ use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
 use mcp_gateway::{
     backend::BackendRegistry,
-    config::{Config, FailsafeConfig},
+    config::{Config, FailsafeConfig, WebhookConfig},
     config_reload::{LiveConfig, ReloadContext},
-    gateway::test_helpers::MetaMcp,
+    gateway::{WebhookRegistry, test_helpers::MetaMcp},
     honest_task_tokens::{
         DIRECT_TOKENS_PER_TOOL, META_TOKENS_PER_TOOL, README_META_TOOLS,
         representative_discovery_response_tokens,
@@ -91,6 +91,13 @@ fn operational_meta_mcp() -> MetaMcp {
         Duration::from_secs(60),
     );
     meta_mcp.set_reload_context(make_reload_context(Arc::clone(&backends)));
+    // The benchmark scenario is the shipped default, and `webhooks.enabled`
+    // defaults to true, so the surface a real HTTP deployment serves includes
+    // `gateway_webhook_status`. Omitting the registry here would quote a
+    // token saving no default install actually gets.
+    meta_mcp.set_webhook_registry(Arc::new(parking_lot::RwLock::new(WebhookRegistry::new(
+        WebhookConfig::default(),
+    ))));
     meta_mcp
 }
 
@@ -281,8 +288,7 @@ fn readme_quantitative_claims_match_canonical_benchmark_data() {
     assert!(
         readme.contains(&format!(
             "{} tools minimum, {} in the README benchmark scenario",
-            claims.meta_tools.minimum,
-            claims.meta_tools.readme_benchmark
+            claims.meta_tools.minimum, claims.meta_tools.readme_benchmark
         )),
         "README should advertise the canonical Meta-MCP tool-count range"
     );
@@ -378,8 +384,7 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     assert!(
         benchmarks.contains(&format!(
             "{} minimum / {} README benchmark",
-            claims.meta_tools.minimum,
-            claims.meta_tools.readme_benchmark
+            claims.meta_tools.minimum, claims.meta_tools.readme_benchmark
         )),
         "benchmark docs should describe the canonical Meta-MCP tool-count matrix"
     );
