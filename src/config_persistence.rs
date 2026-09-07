@@ -8,11 +8,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::Config;
 
-/// Load config from `path`, returning `Config::default()` when the file is absent
-/// or cannot be parsed.
+/// Load config tolerantly, returning defaults when the file is absent or unloadable.
 ///
-/// Literal, per [`Config::load_literal`]: every caller here is on a
-/// read-modify-write path, and a resolved secret would be written back out.
+/// New read-modify-write callers must use [`load_existing_or_default`] so a load
+/// failure cannot replace an operator's config with defaults. The reviewed
+/// production callers remaining here are CLI list/get, and legacy remove/update
+/// whose missing-backend guards reject the empty default before any write.
+/// See `docs/design/issue-462-config-preservation.md` for the caller inventory.
+/// Literal loading, per [`Config::load_literal`], preserves secret references.
 #[must_use]
 pub fn load_config_or_default(path: &Path) -> Config {
     if path.exists() {
@@ -31,12 +34,16 @@ pub fn load_config_or_default(path: &Path) -> Config {
 ///
 /// # Errors
 ///
-/// Returns an error when the file exists but cannot be parsed.
+/// Returns an error when an existing entry cannot be loaded or its metadata
+/// cannot be inspected. A dangling symlink is an existing entry, not absence.
 pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
-    if path.exists() {
-        Config::load_literal(Some(path))
-    } else {
-        Ok(Config::default())
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Config::load_literal(Some(path)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
+        Err(error) => Err(crate::Error::Config(format!(
+            "Cannot inspect config file {}: {error}",
+            path.display()
+        ))),
     }
 }
 
