@@ -1,6 +1,6 @@
 # Cluster B — extension declaration and trace metadata (MIK-7272 EXT.1, OTEL.1)
 
-Status: §P1 design, reviewed. No code. Test plan (§P2): `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`.
+Status: §P1 design, reviewed. Written before any code; part of it has since landed at `a694dce5` and the sections that grade the tree say so and name their pin. Test plan (§P2): `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md`.
 
 **Tree drift since the pin, re-checked 2026-09-06.** The pin below is doing its job and this
 paragraph is the proof: `src` moved after `5c7e64f4` and two of this document's statements about
@@ -60,15 +60,22 @@ The blocking gap is one field. `ServerCapabilities` (`src/protocol/types.rs:232`
 `extensions` field**. Nothing in the type system can serialise a declaration, so EXT.1 cannot be
 closed by calling `gateway_declares()` from anywhere; the wire struct has nowhere to put it.
 
-**OTEL.1 today.** `src/protocol/trace.rs` (80 lines) reads `traceparent` from an inbound `_meta`
-(:32), checking the four hex parts against a predicate that is looser than the W3C grammar in
-three places and stricter in one (3.4b), copies `tracestate` verbatim with no validation
-and no length bound, and re-emits both unchanged in `to_meta()` (:71). Its module comment states
-the invariant: propagated, never re-minted, because a gateway that started a fresh trace would
-make its own hop the root and hide the caller. `baggage` appears nowhere in `src` at the commit.
-Nothing calls `TraceContext` from the request path, and the outbound backend call
-(`dispatch_to_backend`, `src/gateway/meta_mcp/invoke.rs`) writes exactly one `_meta` key —
-the prompt cache key (:1936-1938) — so no trace metadata crosses the hop today.
+**OTEL.1 as this design found it, and where it stands at `a694dce5`.** The problem statement was
+written against `b8cfc7e4`, where `src/protocol/trace.rs` was 80 lines: it read `traceparent` from
+an inbound `_meta` against a predicate looser than the W3C grammar in three places and stricter in
+one (3.4b), copied `tracestate` verbatim with no validation and no length bound, re-emitted both
+unchanged from `to_meta()`, and had no `baggage` anywhere in `src`. Its module comment stated the
+invariant that still governs: propagated, never re-minted, because a gateway that started a fresh
+trace would make its own hop the root and hide the caller.
+
+`a694dce5` closed most of the parse half — `parse` now enforces four of the five predicates 3.4b
+names, `baggage` is a field, `is_printable_ascii` filters control characters out of `tracestate`
+and `baggage`, and `build_outbound_meta` merges the trace keys with the prompt-cache key. **What
+remains red is the wiring, and it is the whole of what OTEL.1 still owes**: `build_outbound_meta`
+has zero production callers, `dispatch_to_backend` still writes the cache key alone through
+`inject_cache_key`, and `extract_tools_call_params` returns `(tool_name, arguments)` so no
+params-level `_meta` ever reaches the parser. Two seams, one at each end of the hop. The
+per-criterion grades live in the test plan's §5 table, pinned there.
 
 ## 2. Measured constraints
 
