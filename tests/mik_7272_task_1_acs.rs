@@ -723,7 +723,11 @@ mod dispatch {
 mod ownership {
     use serde_json::{Value, json};
 
-    use super::http::{modern, post_against, post_unattributed, state, state_public_mcp};
+    use mcp_gateway::config::AuthConfig;
+
+    use super::http::{
+        modern, post_against, post_unattributed, state, state_from, state_public_mcp,
+    };
 
     const FABRICATED_ID: &str = "task-11111111-1111-4111-8111-111111111111";
     /// Stands in for A's task id while no dispatcher hands one out, so the
@@ -1030,6 +1034,47 @@ mod ownership {
         assert!(
             listened.get("error").is_none(),
             "an unattributed subscription is narrowed in silence, never refused: {listened}"
+        );
+    }
+
+    // =======================================================================
+    // MIK-7272.TASK.1.20 — with authentication DISABLED the pool is the
+    // operator's own configuration, and the refusal deliberately does not fire.
+    // =======================================================================
+
+    /// `.18` refuses the credential-less caller because, where the operator
+    /// declared distinct principals, the empty owner key pooled callers who
+    /// were supposed to be kept apart. The predicate therefore reads
+    /// `owner.is_empty() && auth_config.enabled` — it does not ask "did this
+    /// request carry a credential", it asks "did the operator draw a boundary
+    /// here at all". With authentication off there is none to enforce:
+    /// `anonymous_client` makes one shared caller the operator's stated choice,
+    /// and an unconditional refusal would take tasks away from every
+    /// single-user gateway to protect a line nobody drew.
+    ///
+    /// Both halves are ONE assertion and neither works alone: the same
+    /// unattributed dispatch, refused under `state_public_mcp()` and admitted
+    /// under `AuthConfig::default()`. The admission half on its own passes just
+    /// as well against a guard someone deleted outright, and the refusal half
+    /// is already `.18` — only the pair can fail for the right reason.
+    #[tokio::test]
+    async fn ac_task_1_20_auth_disabled_admits_the_unattributed_caller() {
+        let (_, refused) = post_unattributed(state_public_mcp(), task_call(40)).await;
+        assert_eq!(
+            refused.pointer("/error/message").and_then(Value::as_str),
+            Some("no such task"),
+            "control: with auth ENABLED the same call must still be refused, or \
+             the contrast below says nothing about the predicate: {refused}"
+        );
+
+        let (_, admitted) =
+            post_unattributed(state_from(AuthConfig::default()), task_call(41)).await;
+        assert_ne!(
+            admitted.pointer("/error/message").and_then(Value::as_str),
+            Some("no such task"),
+            "with auth DISABLED there are no principals to keep apart, so the \
+             credential-less caller reaches the dispatcher like every other \
+             caller on that gateway: {admitted}"
         );
     }
 }
