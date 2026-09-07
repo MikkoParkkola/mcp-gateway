@@ -48,6 +48,34 @@ the whole worktree rather than its own paths, and this file was open. Recorded r
 history is shared with several live sessions, so a rebase costs far more than a wrong subject line.
 The commit to search for is this one, not that one.
 
+## Standing ruling applied — `MIK-7272.TASK.1.10b` is a build, not a narrowing
+
+The first row to reach the fork after the ruling above. The criterion reads "the **served**
+`initialize` **and** `server/discover` capabilities carry the identifier"
+(`docs/design/2026-09-06-task-1-tasks-extension-test-plan.md:127`); the implementation narrowed it
+to discovery-only and pinned the other half shut, asserting `initialize` stays silent
+(`tests/mik_7272_task_1_acs.rs:244`). That is build-or-rewrite, and the ruling settles it: **build.**
+It was put to the operator once and went unanswered, which the ruling answers rather than a second
+attempt.
+
+The narrowing's premise does not survive this document. It rested on `implemented_extensions()`
+returning an empty map, so that no extension had ever appeared in a handshake and discovery-only
+matched the architecture. Cluster C (line 109) already names "extension set write-side absent" as
+one of its five half-wirings — that emptiness is the gap the cluster exists to close, not a design
+to preserve.
+
+What the build is: the single `build_server_capabilities(implemented_extensions())` seam serves
+both surfaces and is version-blind (`docs/design/2026-08-31-task-1-tasks-extension.md:236-243`).
+Making it version-conditional gives 2026 clients the identifier in `initialize` and leaves the 2025
+result byte-identical, which is what `DISCOVER.3` pins. The objection recorded beside the
+initialize-silent test — that completing `.10` breaks byte-identity for every 2025 client — holds
+for an unconditional insert and not for a conditional one. Cost, named rather than discovered
+later: `DISCOVER.3` gains a 2026 golden case, and the initialize-silent test becomes era-scoped
+rather than deleted, because for a 2025 client it is still the correct assertion.
+
+Basis is `I`: this applies the standing ruling and the twice-stated full-scope instruction to one
+row. No fresh operator answer exists, and none is recorded here.
+
 ## Standing ruling — stage paths, never the worktree
 
 Two slice owners escalated the same thing rather than repairing it, correctly: it is a ruling,
