@@ -622,6 +622,7 @@ status only, never scraped from the body text (§PA).
 |---|---|---|
 | `gpt-review` (codex-default) | 08:28:17Z — `process_status: error`, `exit_code: 1`, verdict field empty, no run file written | **ERROR** — usage limit. Not a refusal, not a SHIP, and not evidence of closure. |
 | `claude-review` (claude-opus-5) | 08:32:37Z — `process_status: ok`, `exit_code: 0` | **SHIP-WITH-FIXES** |
+| functional leg (D6:E2E) | — | **N/A — this change has no running surface.** Both documents under review are prose; the criteria they grade are not yet implemented, so there is nothing built from this revision to drive. |
 
 **The re-check went to the wrong pair, and that is a finding about this pass, not about the
 repairs.** Repair-protocol step 6 returns a closure re-check to the vendor that *raised* the
