@@ -299,8 +299,10 @@ signal that the mechanism was wrong, not that the citation needed tightening.
 
 Only the parse side of `ExtensionSet` exists (`extensions.rs:71-90`), so the emit shape is pinned
 here rather than invented by the builder: a JSON object keyed by extension identifier, each value
-an object. With Tasks honoured that is `{"io.modelcontextprotocol/tasks": {}}`; today the map is
-empty, and an empty map emits no key at all (4.1).
+an object. With Tasks honoured that is `{"io.modelcontextprotocol/tasks": {}}` — the empty braces there are
+the extension's own settings *value*, which the spec permits; they are not an empty `extensions`
+map, and this document nowhere proposes emitting one. Today the map itself is empty, and an empty
+map emits no key at all (4.1).
 
 The states this criterion has to keep apart, and what each selects:
 
