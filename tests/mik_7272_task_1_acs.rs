@@ -225,6 +225,7 @@ mod capabilities {
     use mcp_gateway::gateway::test_helpers::MetaMcp;
     use mcp_gateway::protocol::RequestId;
     use mcp_gateway::protocol::extensions::ExtensionSet;
+    use mcp_gateway::protocol::meta::Era;
     use serde_json::{Value, json};
 
     const TASKS: &str = "io.modelcontextprotocol/tasks";
@@ -233,16 +234,18 @@ mod capabilities {
         MetaMcp::new(Arc::new(BackendRegistry::new()))
     }
 
-    /// The other side of the narrowing: `initialize` must stay silent.
+    /// `initialize` serves the extension to a peer that declared the 2026 era.
     ///
-    /// Not an absent test — an asserted boundary. A later change that
-    /// "completes" `.10` by adding the identifier to the handshake result would
-    /// break `DISCOVER.3`'s byte-identity for every 2025 client in order to
-    /// serve an extension none of them can use, and this case is what tells the
-    /// author that before the goldens do. It fails if the advertisement leaks
-    /// into the handshake, which is exactly the edit the ruling forbids.
+    /// Inverted on 2026-09-07. It previously asserted that `initialize` stays
+    /// silent, which was the narrowing the release standing ruling refused:
+    /// the criterion is built, not scoped down to `server/discover`. What it
+    /// asserts now is the built mechanism.
+    ///
+    /// The declaration is in `_meta`, which is what `classify_request` reads,
+    /// and the era is threaded from the dispatcher — so the value passed here
+    /// is the value the router would derive from these same params.
     #[test]
-    fn ac_task_1_10_initialize_does_not_advertise_the_tasks_extension() {
+    fn ac_task_1_10_initialize_advertises_the_tasks_extension_to_a_2026_peer() {
         let params = json!({
             "protocolVersion": "2026-07-28",
             "clientInfo": { "name": "ExampleClient", "version": "1.0.0" },
@@ -254,7 +257,8 @@ mod capabilities {
                 }
             }
         });
-        let response = meta().handle_initialize(RequestId::Number(1), Some(&params), None, None);
+        let response =
+            meta().handle_initialize(RequestId::Number(1), Some(&params), None, None, Era::Modern);
         let result = response.result.unwrap_or(Value::Null);
 
         assert_eq!(
@@ -262,9 +266,37 @@ mod capabilities {
                 "/capabilities/extensions/{}",
                 TASKS.replace('/', "~1")
             )),
+            Some(&json!({})),
+            "a peer that declared 2026 reaches `tasks/*` and must be told the \
+             extension is served: {result}"
+        );
+    }
+
+    /// The other half of the conditional, and the one that keeps `DISCOVER.3`.
+    ///
+    /// A peer that declares no era is refused `tasks/get`, `tasks/update` and
+    /// `tasks/cancel` with -32601 by `ADDED_IN_2026_07_28`. Advertising the
+    /// extension to it would claim a capability the gateway actively refuses
+    /// that audience — a protocol-correctness objection, not a scope
+    /// preference. The absence is asserted as an absent KEY, not an empty
+    /// object: an always-present `"extensions": {}` is itself the handshake
+    /// change `DISCOVER.3` pins against.
+    #[test]
+    fn ac_task_1_10_initialize_stays_silent_for_a_peer_that_declared_no_era() {
+        let params = json!({
+            "protocolVersion": "2025-11-25",
+            "clientInfo": { "name": "ExampleClient", "version": "1.0.0" },
+            "capabilities": {}
+        });
+        let response =
+            meta().handle_initialize(RequestId::Number(1), Some(&params), None, None, Era::Legacy);
+        let result = response.result.unwrap_or(Value::Null);
+
+        assert_eq!(
+            result.pointer("/capabilities/extensions"),
             None,
-            "the handshake serves 2025 clients, whose result is pinned by \
-             DISCOVER.3; a 2026 extension must not appear in it: {result}"
+            "a 2025 peer's handshake is pinned byte-for-byte by DISCOVER.3 and \
+             must carry no extensions key at all: {result}"
         );
     }
 

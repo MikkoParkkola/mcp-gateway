@@ -1180,7 +1180,13 @@ fn initialize_with_profile_in_params_binds_session() {
     let id = RequestId::Number(1);
     let params = json!({"protocolVersion": "2024-11-05", "profile": "coding"});
     // WHEN: initializing with session_id and profile param
-    mm.handle_initialize(id, Some(&params), Some("session-42"), None);
+    mm.handle_initialize(
+        id,
+        Some(&params),
+        Some("session-42"),
+        None,
+        crate::protocol::meta::Era::Legacy,
+    );
     // THEN: session is bound to "coding"
     let active = mm
         .session_profiles
@@ -1195,7 +1201,13 @@ fn initialize_with_header_profile_takes_precedence_over_params() {
     let id = RequestId::Number(2);
     let params = json!({"protocolVersion": "2024-11-05", "profile": "research"});
     // WHEN: header says "coding", params say "research"
-    mm.handle_initialize(id, Some(&params), Some("session-99"), Some("coding"));
+    mm.handle_initialize(
+        id,
+        Some(&params),
+        Some("session-99"),
+        Some("coding"),
+        crate::protocol::meta::Era::Legacy,
+    );
     // THEN: header wins — session bound to "coding"
     let active = mm
         .session_profiles
@@ -1210,7 +1222,13 @@ fn initialize_with_unknown_profile_does_not_bind_session() {
     let id = RequestId::Number(3);
     let params = json!({"protocolVersion": "2024-11-05", "profile": "nonexistent"});
     // WHEN: initializing with unknown profile
-    mm.handle_initialize(id, Some(&params), Some("session-77"), None);
+    mm.handle_initialize(
+        id,
+        Some(&params),
+        Some("session-77"),
+        None,
+        crate::protocol::meta::Era::Legacy,
+    );
     // THEN: session is NOT bound (default remains "research")
     let active = mm
         .session_profiles
@@ -1227,7 +1245,13 @@ fn initialize_without_profile_does_not_change_session() {
     let id = RequestId::Number(4);
     let params = json!({"protocolVersion": "2024-11-05"});
     // WHEN: initializing without profile hint
-    mm.handle_initialize(id, Some(&params), Some("session-5"), None);
+    mm.handle_initialize(
+        id,
+        Some(&params),
+        Some("session-5"),
+        None,
+        crate::protocol::meta::Era::Legacy,
+    );
     // THEN: existing binding is preserved
     let active = mm
         .session_profiles
@@ -1242,7 +1266,13 @@ fn initialize_without_session_id_succeeds_without_panic() {
     let id = RequestId::Number(5);
     let params = json!({"protocolVersion": "2024-11-05", "profile": "coding"});
     // WHEN / THEN: no panic; profile is simply not bound
-    let resp = mm.handle_initialize(id, Some(&params), None, None);
+    let resp = mm.handle_initialize(
+        id,
+        Some(&params),
+        None,
+        None,
+        crate::protocol::meta::Era::Legacy,
+    );
     // Response should be a success (not an error)
     let v = serde_json::to_value(resp).unwrap();
     assert!(v.get("error").is_none(), "Expected success response");
@@ -2628,7 +2658,13 @@ fn ac_order_2_initialize_binds_no_profile_without_a_session() {
         let mm = make_meta_mcp_with_profiles();
 
         // WHEN: the handshake runs
-        let _ = mm.handle_initialize(RequestId::Number(1), params.as_ref(), Some(""), header);
+        let _ = mm.handle_initialize(
+            RequestId::Number(1),
+            params.as_ref(),
+            Some(""),
+            header,
+            crate::protocol::meta::Era::Modern,
+        );
 
         // THEN: no profile was bound to the shared key
         assert_eq!(
@@ -5086,8 +5122,20 @@ async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
     // narrows strictly — A's set is a proper subset of B's.
     let legacy_a = Some("legacy-a");
     let legacy_b = Some("legacy-b");
-    meta.handle_initialize(RequestId::Number(1), None, legacy_a, Some(NARROW_PROFILE));
-    meta.handle_initialize(RequestId::Number(2), None, legacy_b, None);
+    meta.handle_initialize(
+        RequestId::Number(1),
+        None,
+        legacy_a,
+        Some(NARROW_PROFILE),
+        crate::protocol::meta::Era::Legacy,
+    );
+    meta.handle_initialize(
+        RequestId::Number(2),
+        None,
+        legacy_b,
+        None,
+        crate::protocol::meta::Era::Legacy,
+    );
     let legacy_a_tools =
         tools_list_set(&meta.handle_tools_list_for_session(RequestId::Number(3), legacy_a));
     let legacy_b_tools =
@@ -5104,8 +5152,15 @@ async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
         None,
         MODERN_SESSIONLESS,
         Some(NARROW_PROFILE),
+        crate::protocol::meta::Era::Modern,
     );
-    meta.handle_initialize(RequestId::Number(6), None, MODERN_SESSIONLESS, None);
+    meta.handle_initialize(
+        RequestId::Number(6),
+        None,
+        MODERN_SESSIONLESS,
+        None,
+        crate::protocol::meta::Era::Modern,
+    );
 
     let a = tools_list_set(
         &meta.handle_tools_list_for_session(RequestId::Number(7), MODERN_SESSIONLESS),
@@ -5197,8 +5252,20 @@ async fn b06_a_two_modern_connections_get_the_same_filtered_tool_list() {
 
     let legacy_a = Some("legacy-a");
     let legacy_b = Some("legacy-b");
-    meta.handle_initialize(RequestId::Number(1), None, legacy_a, Some(NARROW_PROFILE));
-    meta.handle_initialize(RequestId::Number(2), None, legacy_b, None);
+    meta.handle_initialize(
+        RequestId::Number(1),
+        None,
+        legacy_a,
+        Some(NARROW_PROFILE),
+        crate::protocol::meta::Era::Legacy,
+    );
+    meta.handle_initialize(
+        RequestId::Number(2),
+        None,
+        legacy_b,
+        None,
+        crate::protocol::meta::Era::Legacy,
+    );
     let legacy_a_tools = tools_list_set(&meta.handle_tools_list_filtered(
         RequestId::Number(3),
         MATCH_ALL_QUERY,
@@ -5221,8 +5288,15 @@ async fn b06_a_two_modern_connections_get_the_same_filtered_tool_list() {
         None,
         MODERN_SESSIONLESS,
         Some(NARROW_PROFILE),
+        crate::protocol::meta::Era::Modern,
     );
-    meta.handle_initialize(RequestId::Number(6), None, MODERN_SESSIONLESS, None);
+    meta.handle_initialize(
+        RequestId::Number(6),
+        None,
+        MODERN_SESSIONLESS,
+        None,
+        crate::protocol::meta::Era::Modern,
+    );
 
     let a = tools_list_set(&meta.handle_tools_list_filtered(
         RequestId::Number(7),

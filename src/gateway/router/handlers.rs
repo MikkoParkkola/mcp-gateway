@@ -802,7 +802,12 @@ pub(super) async fn meta_mcp_handler(
             StatusCode::BAD_REQUEST,
         );
     }
-    let is_modern = matches!(shape, crate::protocol::meta::RequestShape::Modern(_));
+    // One derivation, two consumers. `era` is what `initialize` advertises
+    // against and `is_modern` is what the method gate refuses on; deriving the
+    // second from the first is what keeps them from becoming two predicates
+    // that can disagree (`protocol::meta::classify_request`).
+    let era = shape.era();
+    let is_modern = era == crate::protocol::meta::Era::Modern;
 
     // Derived alongside `is_modern` so every shape-derived fact is read once,
     // here, rather than re-classified where the caller context is built. This
@@ -1115,6 +1120,7 @@ pub(super) async fn meta_mcp_handler(
             params.as_ref(),
             Some(session_id.as_str()),
             header_profile.as_deref(),
+            era,
         ),
         "tools/list" => {
             // NFR.OBS.2. The inputs that decide this surface, and the

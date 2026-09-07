@@ -94,6 +94,38 @@ pub enum RequestShape {
     },
 }
 
+/// The era a request declared, for the handful of places that need the era and
+/// nothing else about the shape.
+///
+/// A named two-variant type rather than a `bool` parameter: `handle_initialize`
+/// takes one, and `handle_initialize(id, params, session, profile, true)` says
+/// nothing at the call site about what is true. Derived from [`RequestShape`]
+/// and never computed independently — that is the whole point of it existing,
+/// because a second era predicate is the defect [`classify_request`] records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Era {
+    /// Declared the stateless 2026 era, in `_meta` or the mirrored header.
+    Modern,
+    /// Declared nothing. A 2025 client.
+    Legacy,
+}
+
+impl RequestShape {
+    /// The era this shape declared.
+    ///
+    /// [`RequestShape::Malformed`] maps to [`Era::Legacy`] rather than panicking
+    /// or growing a third variant: a malformed request is refused before any
+    /// dispatcher asks this question, and if one ever is not, withholding a
+    /// modern advertisement is the safe answer.
+    #[must_use]
+    pub fn era(&self) -> Era {
+        match self {
+            Self::Modern(_) => Era::Modern,
+            Self::Legacy | Self::Malformed { .. } => Era::Legacy,
+        }
+    }
+}
+
 /// Decide what a request declared itself to be.
 ///
 /// Reads the body **and** the `MCP-Protocol-Version` header, because a request

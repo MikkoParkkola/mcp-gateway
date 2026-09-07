@@ -134,7 +134,13 @@ async fn test_stdio_initialize_produces_valid_response() {
         "clientInfo": {"name": "test", "version": "1.0"}
     });
 
-    let response = meta_mcp.handle_initialize(id, Some(&params), Some("stdio-test"), None);
+    let response = meta_mcp.handle_initialize(
+        id,
+        Some(&params),
+        Some("stdio-test"),
+        None,
+        mcp_gateway::protocol::meta::Era::Legacy,
+    );
 
     // Response should be a success with a result (not an error)
     let serialized = serde_json::to_value(&response).expect("serialize response");
@@ -318,7 +324,13 @@ async fn test_stdio_unknown_method_contract_is_method_not_found() {
         "capabilities": {},
         "clientInfo": {"name": "test", "version": "0"}
     });
-    let response = meta_mcp.handle_initialize(id, Some(&params), Some("test"), None);
+    let response = meta_mcp.handle_initialize(
+        id,
+        Some(&params),
+        Some("test"),
+        None,
+        mcp_gateway::protocol::meta::Era::Legacy,
+    );
     let serialized = serde_json::to_value(&response).unwrap();
 
     // THEN: known method succeeds (confirms routing table is active)

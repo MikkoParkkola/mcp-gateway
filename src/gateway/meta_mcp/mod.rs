@@ -1130,9 +1130,14 @@ impl MetaMcp {
     /// story from the handshake and another from discovery.
     #[must_use]
     pub fn discover_document(&self, modern_enabled: bool) -> serde_json::Value {
+        // Modern, because this document IS the 2026 surface. Only identity and
+        // the version list are taken from it -- capabilities are rebuilt below
+        // -- so the era passed here is a statement of what surface this is,
+        // not a second source for the extension list.
         let handshake = crate::gateway::meta_mcp_helpers::build_initialize_result(
             crate::protocol::PROTOCOL_VERSION,
             "",
+            crate::protocol::meta::Era::Modern,
         );
 
         // Field names and placement are the specification's, transcribed from
@@ -1190,6 +1195,7 @@ impl MetaMcp {
         params: Option<&Value>,
         session_id: Option<&str>,
         header_profile: Option<&str>,
+        era: crate::protocol::meta::Era,
     ) -> JsonRpcResponse {
         let client_version = extract_client_version(params);
         let negotiated_version = negotiate_version(client_version);
@@ -1227,7 +1233,11 @@ impl MetaMcp {
         }
 
         let instructions = self.build_instructions();
-        let result = build_initialize_result(negotiated_version, &instructions);
+        // `era` is threaded from the dispatcher rather than re-derived from
+        // `params` here: the dispatcher reads the mirrored header as well as
+        // `_meta`, and a second derivation is the two-predicate defect
+        // `protocol::meta::classify_request` records.
+        let result = build_initialize_result(negotiated_version, &instructions, era);
         JsonRpcResponse::success_serialized(id, result)
     }
 

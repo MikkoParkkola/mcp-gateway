@@ -122,20 +122,32 @@ const TEST_INSTRUCTIONS: &str = "test instructions";
 
 #[test]
 fn build_initialize_result_has_correct_version() {
-    let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2025-11-25",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     assert_eq!(result.protocol_version, "2025-11-25");
 }
 
 #[test]
 fn build_initialize_result_has_tools_capability() {
-    let result = build_initialize_result("2024-11-05", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2024-11-05",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     assert!(result.capabilities.tools.is_some());
     assert!(result.capabilities.tools.unwrap().list_changed);
 }
 
 #[test]
 fn build_initialize_result_has_resources_capability() {
-    let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2025-11-25",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     let resources = result.capabilities.resources.unwrap();
     assert!(resources.subscribe);
     assert!(resources.list_changed);
@@ -143,20 +155,32 @@ fn build_initialize_result_has_resources_capability() {
 
 #[test]
 fn build_initialize_result_has_prompts_capability() {
-    let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2025-11-25",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     let prompts = result.capabilities.prompts.unwrap();
     assert!(prompts.list_changed);
 }
 
 #[test]
 fn build_initialize_result_has_logging_capability() {
-    let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2025-11-25",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     assert!(result.capabilities.logging.is_some());
 }
 
 #[test]
 fn build_initialize_result_advertises_four_capabilities() {
-    let result = build_initialize_result("2025-11-25", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2025-11-25",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     assert!(result.capabilities.tools.is_some(), "missing tools");
     assert!(result.capabilities.resources.is_some(), "missing resources");
     assert!(result.capabilities.prompts.is_some(), "missing prompts");
@@ -165,7 +189,11 @@ fn build_initialize_result_advertises_four_capabilities() {
 
 #[test]
 fn build_initialize_result_has_server_info() {
-    let result = build_initialize_result("2024-11-05", TEST_INSTRUCTIONS);
+    let result = build_initialize_result(
+        "2024-11-05",
+        TEST_INSTRUCTIONS,
+        crate::protocol::meta::Era::Legacy,
+    );
     assert_eq!(result.server_info.name, "mcp-gateway");
     assert!(result.server_info.title.is_some());
     assert!(result.server_info.description.is_some());
@@ -174,7 +202,11 @@ fn build_initialize_result_has_server_info() {
 #[test]
 fn build_initialize_result_passes_instructions_through() {
     let instructions = "custom routing guide";
-    let result = build_initialize_result("2024-11-05", instructions);
+    let result = build_initialize_result(
+        "2024-11-05",
+        instructions,
+        crate::protocol::meta::Era::Legacy,
+    );
     assert_eq!(result.instructions.as_deref(), Some(instructions));
 }
 
@@ -816,7 +848,10 @@ fn empty_extensions_are_omitted_so_discovery_stays_additive() {
     // `"extensions": {}` breaks that: a key that appears for every client is a
     // handshake change, not an additive one. Serializing it unconditionally is
     // what turned that AC red, so this pins the omission rather than the default.
-    let wire = serde_json::to_value(build_server_capabilities(implemented_extensions())).unwrap();
+    let wire = serde_json::to_value(build_server_capabilities(initialize_extensions(
+        crate::protocol::meta::Era::Legacy,
+    )))
+    .unwrap();
 
     assert!(
         wire.get("extensions").is_none(),

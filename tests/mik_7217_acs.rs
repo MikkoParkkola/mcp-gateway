@@ -224,7 +224,15 @@ fn ac_discover_3_initialize_result_is_unchanged() {
         });
 
         // WHEN: it sends `initialize` exactly as it did against 3.5.0
-        let response = m.handle_initialize(RequestId::Number(1), Some(&params), None, None);
+        // Legacy: these params carry no `_meta`, which is exactly the peer whose
+        // handshake this criterion pins byte-for-byte.
+        let response = m.handle_initialize(
+            RequestId::Number(1),
+            Some(&params),
+            None,
+            None,
+            mcp_gateway::protocol::meta::Era::Legacy,
+        );
         let result = response
             .result
             .expect("initialize must return a result, as it did in 3.5.0");

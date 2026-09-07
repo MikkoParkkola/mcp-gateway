@@ -133,28 +133,41 @@ pub(crate) fn extract_u64_or(args: &Value, key: &str, default: u64) -> u64 {
     args.get(key).and_then(Value::as_u64).unwrap_or(default)
 }
 
-/// Extensions carried in the `initialize` result
-/// (`io.modelcontextprotocol/extensions`).
+/// Extensions advertised by `initialize`, to a peer that declared `era`.
 ///
-/// Empty TODAY, and that emptiness is `MIK-7272.TASK.1.10b`'s remaining gap,
-/// not a settled design. The discovery-only position this comment used to
-/// state was WITHDRAWN on 2026-09-07 by the release standing ruling
-/// (`docs/requirements/RELEASE-4.0.0-blocking-rollup.md`): a criterion is
-/// built, not narrowed.
+/// **This conditional is a design event** (`development-process.md` §P3): the
+/// release ruling of 2026-09-07 said BUILD the mechanism for
+/// `MIK-7272.TASK.1.10b`, and said nothing about serving it conditionally. The
+/// era key is a decision made during implementation, it changes what
+/// `MIK-7272.TASK.1.10` asserts, and it touches an observable contract, so it
+/// is named here rather than shipped quietly.
 ///
-/// What the ruling does NOT decide, and what the next editor must not assume:
-/// the era key. `negotiated_version` cannot carry it — [`negotiate_version`]
-/// (`crate::protocol::negotiate_version`) only ever returns a member of
-/// `SUPPORTED_VERSIONS`, which excludes `2026-07-28` by assertion, because the
-/// 2026 lifecycle scopes the handshake to "2025-11-25 and earlier". A
-/// conditional keyed on it has an unreachable 2026 arm. The client's DECLARED
-/// era in `_meta` (`crate::protocol::meta::classify_request`) is the key that
-/// exists. Byte-identity for a client that declares nothing is what
-/// `DISCOVER.3` pins, and it survives either way.
+/// It is **not** the narrowing the ruling refused. The narrowing said the
+/// extension belongs to `server/discover` and `initialize` never serves it —
+/// leaving a criterion unbuilt. This serves it from `initialize`, populated,
+/// to every peer that can reach the methods it advertises. The 2025 arm stays
+/// empty for a protocol-correctness reason, which the ruling's own escape
+/// hatch names as outranking a scope preference: a peer that declares no era
+/// is refused `tasks/get`, `tasks/update` and `tasks/cancel` with -32601 by
+/// `ADDED_IN_2026_07_28` (`src/gateway/router/handlers.rs`), so advertising
+/// the extension to it would claim a capability the gateway actively refuses
+/// that audience. The arm is reachable, not decorative: `initialize` is absent
+/// from `REMOVED_IN_2026_07_28`, so a peer declaring 2026 reaches this handler
+/// and takes the populated arm.
 ///
-/// Discovery is already served, separately: see [`discovery_extensions`].
-pub(crate) fn implemented_extensions() -> std::collections::HashMap<String, Value> {
-    std::collections::HashMap::new()
+/// Source is [`discovery_extensions`], so the handshake and `server/discover`
+/// advertise the same list by construction rather than by agreement.
+pub(crate) fn initialize_extensions(
+    era: crate::protocol::meta::Era,
+) -> std::collections::HashMap<String, Value> {
+    match era {
+        crate::protocol::meta::Era::Modern => discovery_extensions(),
+        // Byte-identity for a peer that declares nothing is what `DISCOVER.3`
+        // pins, and an always-present `"extensions": {}` would break it: a key
+        // that appears for every client is a handshake change, not an additive
+        // one.
+        crate::protocol::meta::Era::Legacy => std::collections::HashMap::new(),
+    }
 }
 
 /// Extensions advertised by `server/discover`, the 2026-07-28 surface.
@@ -205,10 +218,11 @@ pub(crate) fn build_server_capabilities(
 pub(crate) fn build_initialize_result(
     negotiated_version: &str,
     instructions: &str,
+    era: crate::protocol::meta::Era,
 ) -> InitializeResult {
     InitializeResult {
         protocol_version: negotiated_version.to_string(),
-        capabilities: build_server_capabilities(implemented_extensions()),
+        capabilities: build_server_capabilities(initialize_extensions(era)),
         server_info: Info {
             name: "mcp-gateway".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),

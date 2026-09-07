@@ -1763,10 +1763,11 @@ impl Gateway {
         // carries no headers, so the transport declares no revision and a
         // modern request can only have sourced its own from `_meta`.
         //
-        // The shape is not consumed yet: stdio's method dispatch predates the
-        // revision split and this change does not move it. Recording is what
-        // was missing, and recording is what this adds.
-        crate::protocol::meta::classify_and_observe(
+        // Bound rather than discarded: `initialize` advertises its extension
+        // set against the declared era, and stdio must answer that question the
+        // same way HTTP does. The rest of stdio's method dispatch still
+        // predates the revision split and this change does not move it.
+        let shape = crate::protocol::meta::classify_and_observe(
             &method,
             params.as_ref(),
             None,
@@ -1820,7 +1821,9 @@ impl Gateway {
                     meta_mcp.discover_document(false),
                 )
             }
-            "initialize" => meta_mcp.handle_initialize(id, params.as_ref(), Some(session_id), None),
+            "initialize" => {
+                meta_mcp.handle_initialize(id, params.as_ref(), Some(session_id), None, shape.era())
+            }
             "tools/list" => {
                 meta_mcp.handle_tools_list_with_params(id, params.as_ref(), Some(session_id))
             }
