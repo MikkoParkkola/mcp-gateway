@@ -516,7 +516,14 @@ while these files were staged, so all three diffs were swept into `38db0dff`
 ("docs(otel.1): eliminate the second copy of the source correction") and one rollup hunk into
 `498fc415`. The content is intact and on the branch; only the attribution is wrong, and history is
 not being rewritten to fix it while another session is committing to the same branch. Later commits
-here use `git commit -- <path>`, which ignores the index.
+here use `git commit -o <path>`, which ignores the index but still commits the
+*working-tree* version of that path, so the same failure recurred in the other direction on
+`134afbf4`: a peer's uncommitted `MIK-7215.CONTROL.3a` row (`PARTIAL` -> `MET`) in
+`RELEASE-4.0.0-criteria-status.md` rode along under this session's message. Same disposition —
+content intact, attribution wrong, no history rewrite while another session commits here. There is
+no path-scoped commit that excludes a concurrent edit to the same path; on a shared file the only
+defence is to check `git diff --numstat <path>` immediately before committing and report what it
+shows.
 
 **One defect in the test plan, found in the same pass**, before either vendor saw the plan: C1 was
 written as "deadline at or before the supplied `now`" while `reclaim_abandoned` retains on
