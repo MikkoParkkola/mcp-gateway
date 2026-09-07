@@ -234,8 +234,10 @@ stays green — B-06 exercises `:46` only.
   reads `promoted_tools_for_session(session_id)` and the loop at `:1331-1332`
   merges the result. (The pre-repair text cited `mod.rs:1156` for this; at this
   revision that line is a `_meta` `serverInfo` literal and the citation had
-  drifted.) And — because the query is set — a fix that skips the profile at
-  `:46` while leaving the promotion merge at `spec_preview.rs:111-112` intact.
+  drifted.) Because the query is set, B-07 also exercises the promotion merge
+  at `spec_preview.rs:111-112`. Its unrestricted stale-cache fixture hides `echo`
+  only from ordinary enumeration, while allowing the real promoting invocation.
+  The routing-profile-skip falsifier is covered by B-06, not B-07.
 
 ### S-01 — POST content negotiation
 
