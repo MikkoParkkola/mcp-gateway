@@ -342,10 +342,14 @@ mod http {
     /// compose and published-probe presets). Without the public listing the
     /// middleware answers 401 and no task code runs, so a case built on
     /// `state()` cannot observe what an unattributed caller can do.
-    pub(super) fn state_public_mcp() -> Arc<AppState> {
+    pub(super) fn public_mcp_auth() -> AuthConfig {
         let mut auth = two_principal_auth();
         auth.public_paths = vec!["/mcp".to_string()];
-        state_from(auth)
+        auth
+    }
+
+    pub(super) fn state_public_mcp() -> Arc<AppState> {
+        state_from(public_mcp_auth())
     }
 
     pub(super) fn state_from(auth: AuthConfig) -> Arc<AppState> {
@@ -723,10 +727,9 @@ mod dispatch {
 mod ownership {
     use serde_json::{Value, json};
 
-    use mcp_gateway::config::AuthConfig;
-
     use super::http::{
-        modern, post_against, post_unattributed, state, state_from, state_public_mcp,
+        modern, post_against, post_unattributed, public_mcp_auth, state, state_from,
+        state_public_mcp,
     };
 
     const FABRICATED_ID: &str = "task-11111111-1111-4111-8111-111111111111";
@@ -1053,10 +1056,23 @@ mod ownership {
     /// single-user gateway to protect a line nobody drew.
     ///
     /// Both halves are ONE assertion and neither works alone: the same
-    /// unattributed dispatch, refused under `state_public_mcp()` and admitted
-    /// under `AuthConfig::default()`. The admission half on its own passes just
-    /// as well against a guard someone deleted outright, and the refusal half
-    /// is already `.18` — only the pair can fail for the right reason.
+    /// unattributed dispatch, refused and then admitted under configurations
+    /// that differ in `enabled` AND NOTHING ELSE. Both come from
+    /// `public_mcp_auth()`, because the earlier spelling admitted under
+    /// `AuthConfig::default()`, which also drops the two API keys and the
+    /// public `/mcp` listing — a guard keyed on key-count or on the public
+    /// path would have kept the pair green while `enabled` did no work.
+    /// The admission half on its own passes just as well against a guard
+    /// someone deleted outright, and the refusal half is already `.18` — only
+    /// the pair can fail for the right reason.
+    ///
+    /// The admission is asserted POSITIVELY — answered, with a result — not as
+    /// "some message other than `no such task`". A method-not-found, a
+    /// capability miss or a tool error all satisfy the negation while the
+    /// caller reaches nothing, so the negation passes on a broken gateway.
+    /// It cannot yet assert a task HANDLE: `tools/call` returns no
+    /// `result/taskId` until the store lands (`.8a`), and a case pinned to a
+    /// field nothing writes is a case that can never go green.
     #[tokio::test]
     async fn ac_task_1_20_auth_disabled_admits_the_unattributed_caller() {
         let (_, refused) = post_unattributed(state_public_mcp(), task_call(40)).await;
@@ -1067,14 +1083,14 @@ mod ownership {
              the contrast below says nothing about the predicate: {refused}"
         );
 
-        let (_, admitted) =
-            post_unattributed(state_from(AuthConfig::default()), task_call(41)).await;
-        assert_ne!(
-            admitted.pointer("/error/message").and_then(Value::as_str),
-            Some("no such task"),
+        let mut disabled = public_mcp_auth();
+        disabled.enabled = false;
+        let (_, admitted) = post_unattributed(state_from(disabled), task_call(41)).await;
+        assert!(
+            admitted.get("error").is_none() && admitted.get("result").is_some(),
             "with auth DISABLED there are no principals to keep apart, so the \
              credential-less caller reaches the dispatcher like every other \
-             caller on that gateway: {admitted}"
+             caller on that gateway and is ANSWERED: {admitted}"
         );
     }
 }
