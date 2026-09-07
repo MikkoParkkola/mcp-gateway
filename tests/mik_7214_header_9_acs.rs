@@ -219,7 +219,11 @@ enum Path {
 /// One driven call and everything the fixture peer saw while it ran.
 struct Run {
     seen: Vec<Wire>,
-    outcome: Result<(), String>,
+    /// The JSON-RPC code the failure maps to, and its text. The code is
+    /// captured here rather than re-derived later because `Error` does not
+    /// survive the borrow out of `of`, and a test that re-classified the
+    /// message by matching on its words would agree with itself.
+    outcome: Result<(), (i32, String)>,
 }
 
 impl Run {
@@ -247,7 +251,7 @@ impl Run {
         };
         Self {
             seen: recorder.lock().expect("recorder poisoned").clone(),
-            outcome: outcome.map_err(|err| err.to_string()),
+            outcome: outcome.map_err(|err| (err.to_rpc_code(), err.to_string())),
         }
     }
 
@@ -284,9 +288,20 @@ impl Run {
     /// errors after satisfies an `Err`-only assertion while having already put
     /// a malformed body on the wire.
     fn failed_before_sending(&self, method: &str) {
-        assert!(
-            self.outcome.is_err(),
-            "a body this design rejects must fail the call locally, not be sent"
+        let Err((code, error)) = &self.outcome else {
+            panic!("a body this design rejects must fail the call locally, not be sent");
+        };
+        // The CLASS of the refusal, not merely that one happened. A caller who
+        // sends `tools/call` with no usable `name` has written an invalid
+        // request; reporting that as a backend transport failure misinforms the
+        // caller and — because the same variant feeds the backend's failure
+        // accounting — lets a handful of malformed local calls count against a
+        // peer that never saw them.
+        assert_eq!(
+            *code,
+            -32600,
+            "a locally refused caller error is an invalid request, not a \
+             backend failure; got {error}"
         );
         assert!(
             !self.seen.iter().any(|wire| wire.method == method),

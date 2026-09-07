@@ -353,7 +353,10 @@ fn finalise_modern_headers(
         .and_then(Value::as_str)
         .filter(|name| !name.is_empty())
         .ok_or_else(|| {
-            Error::TransportPermanent(format!(
+            // `Protocol`, not `TransportPermanent`: nothing was transported.
+            // The caller's own body is malformed, so this maps to -32600
+            // (invalid request) and stays out of the backend's failure record.
+            Error::Protocol(format!(
                 "cannot send `{method}` to a 2026 peer: `Mcp-Name` mirrors \
                  `params.{field}`, which is missing, empty or not a string"
             ))
