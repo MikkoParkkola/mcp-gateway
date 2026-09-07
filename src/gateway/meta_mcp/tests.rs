@@ -14,6 +14,9 @@ use crate::protocol::RequestId;
 use super::*;
 use crate::gateway::trace;
 
+#[path = "order2_fsm_tests.rs"]
+mod order2_fsm;
+
 /// The permissive authorizer the helpers below hand out.
 static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
 
@@ -4936,13 +4939,13 @@ async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
 /// when the `set_state` silently did nothing and when a regression moved both
 /// lists in step.
 ///
-/// Q4 — whether `gateway_set_state` is refused outright on a sessionless
-/// modern connection — was ratified 2026-09-06: it is refused. Both halves are
-/// pinned here, the call's outcome as well as the lists, and the outcome pin
-/// is not redundant with them. Measured: with the refusal guard removed from
-/// `set_state`, every list assertion below still passes, because unchanged
-/// lists are equally what an accepted-then-silently-dropped write produces.
-/// Only the outcome pin tells the two apart.
+/// MIK-7272.ORDER2.FSM.2 — Q4, whether `gateway_set_state` is refused outright
+/// on a sessionless modern connection, was ratified 2026-09-06: it is refused.
+/// Both halves are pinned here, the call's outcome as well as the lists, and
+/// the outcome pin is not redundant with them. Measured: with the refusal guard
+/// removed from `set_state`, every list assertion below still passes, because
+/// unchanged lists are equally what an accepted-then-silently-dropped write
+/// produces. Only the outcome pin tells the two apart.
 #[tokio::test]
 async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
     let meta = meta_with_state_staged_capabilities().await;
@@ -4984,6 +4987,7 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
             allow_all_ctx(),
         )
         .await;
+    order2_fsm::assert_refusal(&meta, &set);
 
     // Q4: the write is refused, not filtered on read.
     let refusal = set
@@ -5053,10 +5057,11 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
 /// state A selected. B-09 asserts the same connection is unaffected by its own
 /// call; this asserts a bystander is unaffected by someone else's.
 ///
-/// The Q4 outcome pin — whether A's call is refused outright — is asserted on
-/// the same terms as B-09's: ratified 2026-09-06, and load-bearing rather than
-/// redundant, since B's unchanged lists are equally what a silently-dropped
-/// write would produce.
+/// MIK-7272.ORDER2.FSM.1 — the Q4 outcome pin, whether A's call is refused
+/// outright, is asserted on the same terms as B-09's: ratified 2026-09-06, and
+/// load-bearing rather than redundant, since B's unchanged lists are equally
+/// what a silently-dropped write would produce. The bystander stays in the
+/// default state after that refused mutation.
 #[tokio::test]
 async fn b08_one_connections_set_state_does_not_change_another_connections_set() {
     let meta = meta_with_state_staged_capabilities().await;
@@ -5073,6 +5078,7 @@ async fn b08_one_connections_set_state_does_not_change_another_connections_set()
             allow_all_ctx(),
         )
         .await;
+    order2_fsm::assert_refusal(&meta, &set);
 
     // Q4: A's write is refused outright, not accepted and dropped.
     let refusal = set
