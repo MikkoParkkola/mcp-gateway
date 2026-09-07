@@ -146,11 +146,12 @@ is left without a next step.
    `NFR.PERF.1` is PARTIAL: nothing regressed near either budget, and the harness produces
    neither of the two estimators the clause names, which is stated there rather than papered over.
    `NFR.PERF.4` is residue rather than cluster E, and **there is no documentation drift**:
-   `cargo test --test public_claims_validation` is 8 passed / 0 failed at `5c29494a`, and
+   `cargo test --test public_claims_validation` is 9 passed / 0 failed, and
    `canonical_meta_tool_counts_match_live_runtime` computes 14/16/17 from a live `MetaMcp`,
-   so `benchmarks/public_claims.json:4-6` and `README.md:264` both match the code. What remains
-   on that row is the 17th tool against the 14-16 ceiling, which is a surface decision, not a
-   stale number.
+   so `benchmarks/public_claims.json:4-6` and `README.md:264` both match the code.
+   **Updated 2026-09-08**: the surface decision was taken. `gateway_webhook_status` is
+   enumerated where its registry is attached, the documented band is 14-17, and the row is
+   MET — see `docs/design/2026-09-08-perf4-webhook-status-restoration.md`.
 6. **Close G's gate** now that the reviewer is reachable again. Row 1's emit is
    done — `d306c7e8`, verified at `4b522687` — so it is no longer a step-1
    obligation and cluster A's branch no longer carries a red test from G. The
@@ -411,7 +412,7 @@ than in the row. Of the criteria carrying a method, 12 are `T`, 3 `M`, 4 `I`, 1 
 |---|---|---|
 | `T` | the revision the test was observed **red**, the assertion that fired, the revision it is **green** at, and the run count behind the green | the red. `development-process.md` §P2: a test written first "fails because the implementation does not exist — that failure is free and real"; for a test retrofitted to existing code it prescribes the falsifier probe, restoring pre-fix content and showing the test "must FAIL, on the assertion you expect" |
 | `M` | the command, the revision, the numbers, and the budget or baseline compared against | a stated threshold the measurement could have missed. A number with no threshold is a reading, not evidence |
-| `I` | what was inspected, at which revision, and the property checked | a counter-example the inspection would have found. `NFR.PERF.4`'s ceiling is 14–16 tools: a count of 17 is the counter-example |
+| `I` | what was inspected, at which revision, and the property checked | a counter-example the inspection would have found. `NFR.PERF.4`'s ceiling is 14–17 tools: a count of 18 is the counter-example |
 | `D` | the document, the revision, and the claim it carries | the claim being absent or contradicted elsewhere |
 
 Two consequences the rows above depend on. **A green alone re-derives nothing** — a
@@ -533,8 +534,9 @@ take.
 (`591194c2`, `RELEASE-4.0.0-residue-triage.md`) split them DESIGN 5 / TEST 3 / CODE 2.
 `CONTROL.3a` and `CONTROL.4` are designed and reviewed (`7159cdfd`, nine findings
 repaired) and need test plans; the reaper TTL that blocked `CONTROL.4` is ruled at
-300s sharing `PER_USER_IDLE_TTL`. `NFR.PERF.4` is a surface decision — the 17th meta
-tool against the documented 14-16 ceiling — not a measurement. The three TEST rows
+300s sharing `PER_USER_IDLE_TTL`. `NFR.PERF.4` was a surface decision — the 17th meta
+tool against the then-documented 14-16 ceiling — not a measurement; it was taken on
+2026-09-08, the band is 14-17, and the row is MET. The three TEST rows
 queue behind whichever cluster owns their file. Each remaining row gets one line of
 disposition in the same pass as step 1; a row with no line is open, not silent.
 

@@ -716,7 +716,7 @@ and no new criterion — the open decisions are stated in `RELEASE-4.0.0-plan.md
 | `MIK-7213.CACHE.4b` | ABSENT | plan decision 4 | same surface question; the policy-epoch design cannot freeze scope without it |
 | `MIK-6865.SCHEMA.1c` | PARTIAL | plan decision 2 | the refuse / publish-and-flag / degrade posture decides what the composition-bound check does on a violation |
 | `GH475.RL.10` | MET | closed, not decided | the property leg needed no operator ruling: the design's revised §4 reuses `Error::Http` instead of widening the enum, so there was no breaking change to approve. Shipped 2026-09-07 |
-| `NFR.PERF.4` | ABSENT | plan decisions 7 **and** 8 | both, not either: 7 sets which served surfaces the 14..=16 band governs, 8 says where webhook status goes once it stops being enumerated |
+| `NFR.PERF.4` | ABSENT | plan decisions 7 **and** 8 | both, not either: 7 sets which served surfaces the band governs, 8 says where webhook status goes. **Settled 2026-09-08**: it stays enumerated, gated on registry attachment, and the band is `14..=17` (`docs/design/2026-09-08-perf4-webhook-status-restoration.md`) |
 
 **Five rows, four decisions, twenty-three rows waiting on nobody.** The remaining
 twenty-three are engineering the team can start today: they need a design, a reviewed test

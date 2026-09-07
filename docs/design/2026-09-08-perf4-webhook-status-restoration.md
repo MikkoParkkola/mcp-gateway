@@ -64,11 +64,17 @@ OUT: the stdio registry gap (pre-existing, separately tracked). Any change to wh
   enumerated rather than unenumerated
 - the `NFR.PERF.4` ledger row records the corrected band
 
-## Open questions
+## Questions, and how they were settled
 
-- **Does the caller of `build_meta_tools` know whether the registry is attached?** — not
-  yet checked. `src/gateway/server/mod.rs:976` attaches it after construction, so the flag
-  may have to be read at list time rather than passed at build time. This is load-bearing
-  for the shape of the change and is the one question to settle first.
-- **Does `honest_task_tokens` in the benchmark move on a 17th tool?** — not yet measured.
-  The claim file has a CI drift check that will say.
+- **Does the caller of `build_meta_tools` know whether the registry is attached?** — checked by
+  reading the served path: yes. `src/gateway/meta_mcp/mod.rs:1330` can call
+  `self.get_webhook_registry().is_some()` at list time, which is the same condition
+  `webhook_status` already tests before doing any work. Changed the shape of the fix: the flag is
+  read where the list is built, not threaded from configuration.
+- **Does `honest_task_tokens` move on a 17th tool?** — measured by running
+  `cargo test --test public_claims_validation --lib`: yes. `README_META_TOOLS`
+  (`src/honest_task_tokens.rs:20`) is 17, the modelled first-request cost moves from ~1,600 to
+  ~1,700 tokens, the modelled saving from 89.3% to 88.7%, and the modelled spend from $201 to
+  $200 per 1K requests. Changed the scope: the README benchmark scenario now attaches a webhook
+  registry, because a scenario that omits a default-on feature quotes a saving no default install
+  receives.
