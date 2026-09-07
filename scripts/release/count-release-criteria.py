@@ -232,7 +232,9 @@ CLUSTER_CELLS = 5
 
 # A criterion key as a rollup cluster names it: optionally MIK-prefixed, and
 # possibly a range (`MRTR.1-8`) standing for the rows between its endpoints.
-NAMED = re.compile(r"`((?:MIK-\d+\.|NFR\.|GH\d+\.)?[A-Z][A-Z0-9]*\.\d+[a-z]?)(?:-(\d+))?`")
+NAMED = re.compile(
+    r"`((?:MIK-\d+\.|NFR\.|GH\d+\.)?[A-Z][A-Z0-9]*\.\d+[a-z]?)(?:-(\d+))?`"
+)
 
 
 def rollup_membership(criteria, text):
@@ -292,9 +294,24 @@ def rollup_membership(criteria, text):
             ]
             rows = [full for _key, full in matched]
             if not rows:
-                problems.append(
-                    f"cluster {cluster} names {name}, which no ledger row calls blocking"
+                # A cluster emptied by closure has no other honest spelling.
+                # Naming nothing trips `names no criteria`; naming the row that
+                # closed lands here. So the first cluster to reach zero could
+                # not be written down at all, and the only way to keep this gate
+                # green was to leave a met row marked blocking -- the check
+                # arguing for the drift it exists to catch. Recognised by the
+                # name resolving to a row the ledger HAS, never by the count
+                # being zero: otherwise `| H | ... | 0 |` would accept any
+                # string and a typo would read as a closure.
+                closed = declared == 0 and any(
+                    _names(full if name[-1].isalpha() else parent, name)
+                    for parent, _flag, full in criteria
                 )
+                if not closed:
+                    problems.append(
+                        f"cluster {cluster} names {name}, "
+                        f"which no ledger row calls blocking"
+                    )
             # An unqualified name binds by suffix, so `CACHE.4` would claim rows
             # from every ticket that has a `CACHE.4` -- silently, and the counts
             # would still add up. No live name is ambiguous today; the check is
@@ -470,7 +487,9 @@ def main():
     # A requirement declaring `.1a` and `.1b` declares TWO criteria; reading
     # them as one made every split invisible to this count.
     declared = set(
-        re.findall(r"\|\s*((?:MIK-\d+|NFR|GH\d+)\.[A-Z0-9]+\.\d+[a-z]?)\s*\|", requirements)
+        re.findall(
+            r"\|\s*((?:MIK-\d+|NFR|GH\d+)\.[A-Z0-9]+\.\d+[a-z]?)\s*\|", requirements
+        )
     )
     methods, unreadable = required_methods(requirements)
     if unreadable:

@@ -146,6 +146,35 @@ def test_a_cluster_naming_a_row_the_ledger_does_not_call_blocking_is_flagged():
     ]
 
 
+def test_a_cluster_emptied_by_closure_names_its_met_criterion_and_passes():
+    """A cluster whose last blocking row closed had no spelling this accepted.
+
+    Declaring zero and naming nothing trips `names no criteria`; declaring zero
+    and naming the row that closed tripped `no ledger row calls blocking`. So
+    the first cluster to reach empty could not be written down at all, and the
+    only way to keep the gate green was to leave a met row marked blocking --
+    the gate arguing for the drift it exists to catch. A name that resolves to
+    a row the ledger HAS and does not call blocking is exactly what a closure
+    leaves behind, and it is only readable as a mistake while the cluster still
+    claims rows.
+    """
+    emptied = ROLLUP + "\n| H | rate-limit typing | `NFR.COMPAT.3` | 0 | closed |"
+    assert membership(LEDGER, emptied) == []
+
+
+def test_an_emptied_cluster_naming_a_criterion_the_ledger_lacks_is_flagged():
+    """The typo guard survives the exemption above.
+
+    A closed cluster is recognised by its name resolving to a KNOWN row, never
+    by the count being zero. Without that, `| H | ... | 0 |` would accept any
+    string at all and a mistyped criterion would read as a closure.
+    """
+    typo = ROLLUP + "\n| H | rate-limit typing | `NFR.COMPAT.9` | 0 | closed |"
+    assert membership(LEDGER, typo) == [
+        "cluster H names NFR.COMPAT.9, which no ledger row calls blocking"
+    ]
+
+
 def test_a_declared_count_the_named_criteria_do_not_reach_is_flagged():
     assert membership(LEDGER, ROLLUP.replace("`MRTR.3` | 2", "`MRTR.3` | 5")) == [
         "cluster A declares 5 rows, its criteria resolve to 2"
