@@ -539,10 +539,15 @@ pub(crate) fn build_cost_report_tool() -> Tool {
 /// `tool_count` and `server_count` are threaded into [`build_base_tools`] so descriptions
 /// reflect live registry state rather than static placeholder text.
 ///
-/// Webhook status is deliberately absent: it stays callable by name, but a tool
-/// enumerated to a model costs context in every request, and `NFR.PERF.4` caps
-/// that surface at 16. See [`governed_meta_tool_names`], which keeps the name
-/// governed even though nothing lists it.
+/// Webhook status is deliberately absent: it stays dispatchable by name, but a
+/// tool enumerated to a model costs context in every request, and `NFR.PERF.4`
+/// caps that surface at 16. See [`governed_meta_tool_names`], which keeps the
+/// name governed even though nothing lists it.
+///
+/// Dispatchable is not the same as answerable, and only the HTTP transport
+/// makes it both: `run_stdio` never calls `set_webhook_registry`, so over stdio
+/// the call reaches the handler and is refused whatever the configuration says.
+/// That gap predates this cap and is not repaired here.
 pub(crate) fn build_meta_tools(
     stats_enabled: bool,
     reload_enabled: bool,
