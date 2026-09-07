@@ -145,12 +145,7 @@ async fn compat_2025_11_25_is_published_by_discovery() {
     let state = state(Fixture::default());
 
     // WHEN: a caller asks what revisions are served
-    let (status, body) = post(
-        &state,
-        modern("server/discover", json!({})),
-        &[],
-    )
-    .await;
+    let (status, body) = post(&state, modern("server/discover", json!({})), &[]).await;
 
     // THEN: the discovery document lists 2025-11-25
     assert_eq!(status, StatusCode::OK, "discovery must be answered");

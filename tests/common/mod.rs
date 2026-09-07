@@ -118,7 +118,11 @@ pub fn state(f: Fixture) -> Arc<AppState> {
 
 /// POST to `/mcp` as a conforming modern client: body `_meta` mirrored into the
 /// standard headers, plus whatever extra headers the case needs.
-pub async fn post(state: &Arc<AppState>, body: Value, extra: &[(&str, &str)]) -> (StatusCode, Value) {
+pub async fn post(
+    state: &Arc<AppState>,
+    body: Value,
+    extra: &[(&str, &str)],
+) -> (StatusCode, Value) {
     let mut builder = Request::builder()
         .method("POST")
         .uri("/mcp")

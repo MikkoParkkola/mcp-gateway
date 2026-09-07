@@ -832,7 +832,6 @@ mod tests {
         assert_eq!(received.data["method"], "roots/list");
     }
 
-
     // ── Roots forwarding: the id-bearing repair (MIK-7212.ROOTS) ───────
     //
     // These two are RED ON PURPOSE against the shipped forward. They encode
