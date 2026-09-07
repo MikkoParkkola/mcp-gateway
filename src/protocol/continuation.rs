@@ -670,7 +670,7 @@ pub struct InFlight {
 
 /// Drop exchanges whose deadline has passed.
 ///
-/// A free function rather than a method because [`InFlight::hold`] calls it
+/// A free function rather than a method because [`InFlight::guard`] calls it
 /// while already holding the lock.
 fn reclaim_abandoned(held: &mut std::collections::HashMap<String, (String, u64)>, now: u64) {
     held.retain(|_, (_, deadline)| now <= *deadline);
@@ -694,26 +694,47 @@ impl InFlight {
     /// reachable by any client that starts elicitations and walks away, which
     /// the specification explicitly permits it to do.
     pub async fn hold(&self, backend_id: &str, expires_at: u64, now: u64) -> Option<String> {
-        let mut held = self.held.lock().await;
+        // `guard` has already reclaimed against `now`, so the count this
+        // refusal reads is of exchanges that are still live. Reclaiming in the
+        // capacity branch instead would make the bound the only thing that
+        // ever collected an abandoned slot, and every reader below would then
+        // be able to observe one.
+        let mut held = self.guard(now).await;
         if held.len() >= self.capacity {
-            // Reclaim here rather than in a separate reaper someone must
-            // remember to call. Abandonment is the common case — a client is
-            // free never to retry — so a table that only ever grew would
-            // refuse every new elicitation once enough callers walked away,
-            // which is the denial of service the bound exists to prevent.
-            // Same shape as `SpentLedger::consume`, deliberately: one place
-            // enforces the bound and one place reclaims, and they are the same
-            // place, so neither can be wired without the other.
-            reclaim_abandoned(&mut held, now);
-            if held.len() >= self.capacity {
-                return None;
-            }
+            return None;
         }
         // Named by the gateway, never by the client: two exchanges against one
         // backend must not collide, and no caller may name another's.
         let key = format!("{backend_id}:{}", uuid::Uuid::new_v4());
         held.insert(key.clone(), (self.replica.clone(), expires_at));
         Some(key)
+    }
+
+    /// Take the lock and reclaim against `now` before anything reads the map.
+    ///
+    /// Every reader below goes through here, which is what makes "an expired
+    /// hold is retained" and "an expired hold routes `Here`" unstateable about
+    /// this type. Teaching `route` alone to compare deadlines would leave both
+    /// findings stateable about `len`, and about the next reader someone adds.
+    ///
+    /// **The guarantee is relative to the supplied `now`, and that is the whole
+    /// contract.** The table holds no record whose deadline is at or before the
+    /// `now` most recently passed in. It does *not* hold that the table is free
+    /// of records expired against the wall clock at the instant a caller reads
+    /// the result: `invoke.rs` captures `now` once and reuses it for both the
+    /// route and the completion, so an exchange expiring inside that window
+    /// survives the reclaim and still routes. That is correct — a dispatch
+    /// decided against a single consistent instant is the property the call
+    /// path wants, and re-reading the clock per call would make one request
+    /// observe two different presents. Said here so that a future call site
+    /// cannot inherit the absolute reading.
+    async fn guard(
+        &self,
+        now: u64,
+    ) -> tokio::sync::MutexGuard<'_, std::collections::HashMap<String, (String, u64)>> {
+        let mut held = self.held.lock().await;
+        reclaim_abandoned(&mut held, now);
+        held
     }
 
     /// Whether this replica still holds the exchange for `key`.
@@ -734,8 +755,8 @@ impl InFlight {
     /// this table exists to prevent. The wait is bounded by the map operations
     /// the other holders are performing, all of which are O(1) or a retain over
     /// a table with a capacity.
-    pub async fn route(&self, key: &str) -> Routing {
-        let held = self.held.lock().await;
+    pub async fn route(&self, key: &str, now: u64) -> Routing {
+        let held = self.guard(now).await;
         match held.get(key) {
             Some(_) => Routing::Here,
             None => Routing::Gone,
@@ -748,18 +769,13 @@ impl InFlight {
     /// deadline passes, so a busy gateway refuses new elicitations on behalf of
     /// ones that completed long ago. Reaping is the backstop for abandonment,
     /// not the ordinary path — the ordinary path is that an exchange ends.
-    pub async fn complete(&self, key: &str) -> bool {
-        self.held.lock().await.remove(key).is_some()
+    pub async fn complete(&self, key: &str, now: u64) -> bool {
+        self.guard(now).await.remove(key).is_some()
     }
 
-    /// How many exchanges are held.
-    pub async fn len(&self) -> usize {
-        self.held.lock().await.len()
-    }
-
-    /// Whether nothing is held.
-    pub async fn is_empty(&self) -> bool {
-        self.len().await == 0
+    /// How many exchanges are held, as of `now`.
+    pub async fn len(&self, now: u64) -> usize {
+        self.guard(now).await.len()
     }
 }
 
@@ -905,10 +921,7 @@ impl Default for ContinuationState {
     }
 }
 
-// PARKED: MRTR.8b Change A, plan docs/design/2026-09-06-mrtr-8b-lifetime-test-plan.md.
-// `cfg(any())` is always false, so this compiles nowhere; restore `cfg(test)` when
-// `InFlight::guard(now)` lands. Lines below are the author's, unmodified.
-#[cfg(any())]
+#[cfg(test)]
 mod in_flight_lifetime {
     //! MRTR.8b Change A — the `InFlight` table's bounded lifetime.
     //!

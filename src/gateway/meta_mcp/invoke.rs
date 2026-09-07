@@ -581,7 +581,7 @@ async fn redeem_retry(
     //
     // Checked before the handle is spent. A retry the gateway cannot honour
     // should not also burn the client's one redemption.
-    if continuation.in_flight().route(&payload.hold_key).await
+    if continuation.in_flight().route(&payload.hold_key, now).await
         == crate::protocol::continuation::Routing::Gone
     {
         warn!(
@@ -610,7 +610,10 @@ async fn redeem_retry(
     // Releasing the slot is what keeps capacity a measure of exchanges still
     // open rather than of every exchange ever started, and it is what makes the
     // refusal above true of a handle redeemed twice.
-    continuation.in_flight().complete(&payload.hold_key).await;
+    continuation
+        .in_flight()
+        .complete(&payload.hold_key, now)
+        .await;
 
     Ok(OutboundRetry {
         request_state: payload.backend_request_state,

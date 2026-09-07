@@ -431,6 +431,23 @@ for a slice that already owns it.** `rg -l 'idempotency' docs/design/` returns S
 This design ran that search against `src/` and not against `docs/design/`, which is how it spent a
 round designing an answer the operator had already given.
 
+## §P3 design events — decisions this design did not make
+
+**`InFlight::is_empty` is deleted, not given a `now`.** The call-site enumeration above lists
+`route`, `complete` and `len` and stops there; it missed that `is_empty`
+(`src/protocol/continuation.rs:762` before this change) was implemented as `self.len().await == 0`,
+so giving `len` a `now` forced a choice the design never posed. Deleted rather than threaded:
+`rg` finds no caller anywhere in `src/` or `tests/`, which makes it unwired by DoD §2's own test,
+and a reader that exists only to be kept compiling is the sort of surface `guard` was introduced to
+stop growing. Clippy's `len_without_is_empty` does not fire in its absence — that lint applies to a
+`len(&self)` taking no further arguments, and `len(&self, now)` is outside it. Reversible in one
+paragraph if a caller ever wants it: `pub async fn is_empty(&self, now: u64) -> bool`.
+`ConsumedLedger::is_empty` is a different type and is untouched.
+
+The decision is recorded here rather than left in the commit message because §P3's trigger is
+observable-contract change, and removing a public method is one — it just happens to be a contract
+nobody had taken up.
+
 ## §P4 review record
 
 | round | leg | vendor | verdict | evidence |
