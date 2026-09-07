@@ -19,12 +19,42 @@ use std::path::Path;
 ///
 /// On unix this is a real `flock`; the lock file's fd holds the lock across
 /// whatever atomic rename/hard-link the caller performs while holding the
-/// guard. On non-unix it degrades to opening the file with no advisory lock.
+/// guard. Drop explicitly unlocks before closing so an inherited duplicate
+/// cannot extend the owner's normal guard lifetime. On non-unix the legacy
+/// blocking constructor opens the file without an advisory lock.
 pub(crate) struct ExclusiveFileLock {
     _file: File,
 }
 
 impl ExclusiveFileLock {
+    /// Acquire a lifetime custody lock without waiting for another process.
+    ///
+    /// Unlike the legacy blocking helper, unsupported platforms refuse custody.
+    #[cfg(unix)]
+    pub(crate) fn try_acquire(lock_path: &Path) -> io::Result<Self> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let mut opts = OpenOptions::new();
+        opts.create(true).write(true).read(true);
+        set_owner_only(&mut opts);
+        opts.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+        let file = opts.open(lock_path)?;
+        if !file.metadata()?.is_file() {
+            return Err(io::Error::other("custody lock is not a regular file"));
+        }
+        rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+            .map_err(|error| io::Error::from_raw_os_error(error.raw_os_error()))?;
+        Ok(Self { _file: file })
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn try_acquire(_lock_path: &Path) -> io::Result<Self> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "nonblocking custody lock is unavailable",
+        ))
+    }
+
     /// Block until an exclusive lock on `lock_path` is acquired, creating the
     /// sidecar file (owner-only, `0600` on unix) if it does not exist yet.
     pub(crate) fn acquire(lock_path: &Path) -> io::Result<Self> {
@@ -34,6 +64,15 @@ impl ExclusiveFileLock {
         let file = opts.open(lock_path)?;
         lock_exclusive(&file)?;
         Ok(Self { _file: file })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ExclusiveFileLock {
+    fn drop(&mut self) {
+        // File close alone leaves a fork/dup reference holding the same lock.
+        // Drop cannot return an unlock error; File still closes without panic.
+        let _ = rustix::fs::flock(&self._file, rustix::fs::FlockOperation::Unlock);
     }
 }
 
@@ -68,6 +107,135 @@ fn lock_exclusive(_file: &File) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[track_caller]
+    fn assert_owner_drop_releases_inherited_descriptor(
+        acquire: fn(&Path) -> io::Result<ExclusiveFileLock>,
+    ) {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".inherited-description.lock");
+        let owner = acquire(&path).expect("own the real kernel lock");
+        // try_clone shares the exact open-file description, as fork does.
+        // Opening the same pathname again would not establish this condition.
+        let inherited = owner._file.try_clone().expect("duplicate the owner's fd");
+        let identity = owner._file.metadata().unwrap();
+        assert_eq!(
+            ExclusiveFileLock::try_acquire(&path)
+                .err()
+                .map(|error| error.kind()),
+            Some(io::ErrorKind::WouldBlock),
+            "a live owning guard must exclude the contender"
+        );
+        // The original already owns the lock. This succeeds only because the
+        // duplicate shares that description; a second open would WouldBlock.
+        rustix::fs::flock(
+            &inherited,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .expect("duplicate must share the already locked open-file description");
+
+        drop(owner);
+        let retained = inherited.metadata().expect("duplicate remains open");
+        assert_eq!(
+            (retained.dev(), retained.ino()),
+            (identity.dev(), identity.ino())
+        );
+        let path_identity = std::fs::metadata(&path).expect("Drop must preserve the lock sidecar");
+        assert_eq!(
+            (path_identity.dev(), path_identity.ino()),
+            (identity.dev(), identity.ino()),
+            "reacquisition must use the existing sidecar inode"
+        );
+        let reacquired = ExclusiveFileLock::try_acquire(&path);
+        assert!(
+            reacquired.is_ok(),
+            "owner Drop must release while its inherited descriptor remains open: {:?}",
+            reacquired.as_ref().err()
+        );
+        let next_owner = reacquired.unwrap();
+        let still_retained = inherited
+            .metadata()
+            .expect("duplicate survives reacquisition");
+        assert_eq!(
+            (still_retained.dev(), still_retained.ino()),
+            (path_identity.dev(), path_identity.ino())
+        );
+        assert_eq!(
+            ExclusiveFileLock::try_acquire(&path)
+                .err()
+                .map(|error| error.kind()),
+            Some(io::ErrorKind::WouldBlock),
+            "the reacquired owning guard must still exclude contenders"
+        );
+        drop(next_owner);
+        let final_control = ExclusiveFileLock::try_acquire(&path);
+        assert!(
+            final_control.is_ok(),
+            "second owner release must permit reacquisition: {:?}",
+            final_control.as_ref().err()
+        );
+        // Keep the duplicate through every assertion above, including the new
+        // owner's exclusion control. It must never be dropped to force green.
+        drop(inherited);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn personal_accounts_s11_blocking_drop_releases_inherited_descriptor() {
+        assert_owner_drop_releases_inherited_descriptor(ExclusiveFileLock::acquire);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn personal_accounts_s11_nonblocking_drop_releases_inherited_descriptor() {
+        assert_owner_drop_releases_inherited_descriptor(ExclusiveFileLock::try_acquire);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn personal_accounts_try_lock_refuses_contention_without_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".personal-account-authority.lock");
+        let first = ExclusiveFileLock::acquire(&path).expect("existing blocking lock control");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
+        let contender_path = path.clone();
+        let contender = std::thread::spawn(move || {
+            ready_sender.send(()).expect("contender readiness");
+            let result = ExclusiveFileLock::try_acquire(&contender_path);
+            let _ = sender.send(result.err().map(|error| error.kind()));
+        });
+        ready_receiver.recv().expect("contender started");
+        let second = receiver.recv_timeout(std::time::Duration::from_secs(1));
+        // Release even after a timeout so a wrongly blocking implementation
+        // cannot strand the worker and hang the whole test process.
+        drop(first);
+        contender.join().expect("contender thread completed");
+        assert_eq!(
+            second,
+            Ok(Some(io::ErrorKind::WouldBlock)),
+            "contention must be reported while the first lock is held"
+        );
+        let after_release = ExclusiveFileLock::try_acquire(&path);
+        assert!(after_release.is_ok(), "released lock must be acquirable");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn personal_accounts_try_lock_creates_private_sidecar() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".personal-account-authority.lock");
+        let acquired = ExclusiveFileLock::try_acquire(&path);
+        assert!(acquired.is_ok(), "uncontended custody lock must succeed");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 
     #[test]
     fn acquire_creates_sidecar_and_releases_on_drop() {
