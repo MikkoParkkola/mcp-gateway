@@ -135,6 +135,37 @@ Named as not drivable: notification DELIVERY over a `.19` stream once a subscrib
 changes state — it needs a slow task and a long-lived reader. The ack layer was driven;
 the delivery layer was not, and this line is the record of that rather than a silent gap.
 
+## Confirmation passes — both returned, verdicts recorded
+
+The first attempt at both was a HARNESS failure, not a review: the payload was handed to
+each wrapper as a filesystem PATH rather than on stdin. Grok's leg died part-way with no
+trailer (`MISSING` under §PA — not a verdict); synthetic's returned `DO-NOT-SHIP` whose
+sole finding was "the reviewable content was never provided". Both were relaunched with
+the payload on stdin. That is the only reason two runs exist per vendor.
+
+| leg | vendor | verdict | authority |
+|---|---|---|---|
+| confirm 1 | grok-review | **SHIP** | rc=0 + trailer `grok-review: verdict SHIP` + `~/.claude/data/reviews/runs/grok-20260907T044146Z-14807.md` |
+| confirm 2 | synthetic-review | **SHIP-WITH-FIXES** | rc=0 + trailer `synthetic-review: verdict SHIP-WITH-FIXES` + `~/.claude/data/reviews/runs/synthetic-20260907T044146Z-14808.md` |
+
+Grok: improvements 1 and 2 **CLOSED** — "a miss or JSON-RPC error can no longer pass",
+"the arms differ only in `auth.enabled`" — and holding the rename until the `.10` ruling
+judged "the right call".
+
+Synthetic: every disposition checks out and both commits land as claimed. Its one FINDING
+is F1 unchanged — the `.10` narrowing still unratified — which is the blocker already
+recorded above, not a new one. It raised three further improvements, all SMALL, all
+disposed in this round rather than batched:
+
+| # | what | disposition |
+|---|---|---|
+| 1 | F2's residual lives only in a review artifact — anchor it where the next method is added | **APPLIED** `53993bf1`. The note is on `reaches_tasks_extension` itself, the file a new method opens. A note, not a mechanism: nothing mechanical ties the arms to the dispatcher, and this says so at the point of use. |
+| 2 | nothing asserts the shipped configs keep `/mcp` out of `public_paths` — the guard's live-ness premise is unpinned in the inverse direction | **APPLIED** `1891fd86`. Exact-string assertions over the k8s configmap, the Helm template and `gateway.example.yaml`. Falsifier: `- /mcp` in the example turns it red (13/1); restored 14/0. |
+| 3 | the round trip pins `to_extensions` against the parser, but nothing pins the SERVED document against `to_extensions` | **APPLIED** `5cab1d62`. Equality, not containment — a superset is exactly the drift. Falsifier: a second key at the serving site turns the new assertion red while the old containment assertion stays green (18/1); restored 19/0. |
+
+No confirmation-round finding reopened a code leg. The change stands where it stood: one
+blocker, and it is the operator's line.
+
 ## Test state
 
 `cargo test --quiet --test mik_7272_task_1_acs` → **19 passed; 0 failed**.
