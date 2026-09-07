@@ -281,7 +281,7 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 | NFR.PERF.1 | Tool-call latency through the gateway MUST NOT regress by more than 5% at P50 or 10% at P99 against 3.5.0 on the same workload. | M |
 | NFR.PERF.2 | Header-first routing MUST be justified by measurement against the current full-parse path, or MUST NOT ship. A performance change without a number is not a performance change. | M |
 | NFR.PERF.3 | Memory MUST NOT grow unboundedly with abandoned continuations; a soak with abandonment MUST show reclamation. | M |
-| NFR.PERF.4 | The Meta-MCP surface MUST remain 14–16 tools. `server/discover` is a protocol RPC, never enumerated to a model, and does not count against it. | I |
+| NFR.PERF.4 | The Meta-MCP surface **enumerated to a model** MUST remain 14–16 tools. `server/discover` is a protocol RPC, never enumerated to a model, and does not count against it. The cap governs what `tools/list` advertises, not what is dispatchable: a name absent from the listing is not thereby uncallable, and list and call are not required to agree. | T |
 
 ### 4.4 Observability and operability
 
