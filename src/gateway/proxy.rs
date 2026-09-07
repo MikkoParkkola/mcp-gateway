@@ -415,6 +415,66 @@ impl ProxyManager {
         sent
     }
 
+    /// Forward a `roots/list` request and wait for the client's own reply.
+    ///
+    /// Registers in the SAME pending map as
+    /// [`Self::forward_sampling_with_response`], so `resolve_pending`'s
+    /// session-ownership check covers a roots reply too: a second connected
+    /// client cannot answer on the prompted session's behalf, and refusing a
+    /// forged reply leaves the real one's slot intact.
+    ///
+    /// Unlike [`Self::forward_roots_list`], which fires a notification nothing
+    /// can answer, the id minted here goes on the wire and is what the client
+    /// must echo back.
+    pub async fn forward_roots_list_with_response(
+        &self,
+        session_id: &str,
+        timeout: Duration,
+    ) -> Result<Value, SamplingError> {
+        let id = format!("roots-{}", Uuid::new_v4());
+
+        let rx = self.register_pending(id.clone(), session_id);
+        // Held across the await: on an outer timeout or a task abort no arm of
+        // the match below runs, and dropping this guard is the only cleanup
+        // left. See `PendingSampleGuard`.
+        let _cleanup = PendingSampleGuard {
+            proxy: self,
+            id: &id,
+        };
+
+        let notification = TaggedNotification {
+            source: "gateway".to_string(),
+            event_type: "message".to_string(),
+            data: json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "roots/list"
+            }),
+            event_id: Some(self.multiplexer.next_event_id()),
+        };
+
+        if !self.multiplexer.send_to_session(session_id, notification) {
+            // Registered before the send; an undeliverable request has no
+            // responder, so nothing would ever remove the entry.
+            self.cancel_pending(&id);
+            return Err(SamplingError::NoSession);
+        }
+        debug!(%id, %session_id, "Sent roots/list to the originating session");
+
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(_recv_err)) => {
+                self.cancel_pending(&id);
+                Err(SamplingError::Cancelled)
+            }
+            Err(_timeout) => {
+                self.cancel_pending(&id);
+                warn!(%id, timeout = ?timeout, "roots/list request timed out");
+                Err(SamplingError::Timeout(timeout))
+            }
+        }
+    }
+
     /// Broadcast `notifications/roots/list_changed` to all backends
     /// when the client reports a roots change.
     pub fn broadcast_roots_changed(&self) {
