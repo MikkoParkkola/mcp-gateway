@@ -1041,9 +1041,8 @@ mod in_flight_lifetime {
 
     #[tokio::test]
     async fn row_08_hold_at_capacity_admits_when_the_occupants_are_expired() {
-        // Transferred from NFR.PERF.3. Today the reclaim lives inside the
-        // capacity branch; after the change `hold` keeps only its refusal, so
-        // the reclaim must have happened in `guard` before the check reads `len`.
+        // Transferred from NFR.PERF.3. `hold` keeps only its refusal, so the
+        // reclaim must have happened in `guard` before the check reads `len`.
         let table = InFlight::new("gw-1", 4);
         for _ in 0..4 {
             assert!(table.hold("backend", T, T).await.is_some());
