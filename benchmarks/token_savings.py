@@ -308,6 +308,14 @@ GATEWAY_TOOLS = [
         "gateway_reload_capabilities",
         "Re-read all YAML capability files from disk and rebuild the capability backend's tool surface. Returns the new total. Useful when an agent has just written a new capability YAML and wants it usable without restarting the gateway.",
     ),
+    # Served only where a webhook registry is attached, which an HTTP
+    # deployment with `webhooks.enabled` (default true) has and stdio never
+    # does. The README scenario is an HTTP deployment, so the seventeenth tool
+    # is part of the surface it models.
+    make_gateway_tool_definition(
+        "gateway_webhook_status",
+        "List registered webhook endpoints and their delivery statistics (received, delivered, failures, last event)",
+    ),
 ]
 
 if README_SCENARIO["gateway_tools"] != len(GATEWAY_TOOLS):

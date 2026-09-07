@@ -53,11 +53,14 @@ fn build_meta_tools_with_stats_adds_stats_tool() {
     assert!(names.contains(&"gateway_get_stats"));
 }
 
-/// `NFR.PERF.4` — no feature combination enumerates webhook status.
+/// `NFR.PERF.4` — webhook status is enumerated on its own gate and no other.
 ///
-/// It replaces the flag test this once was. The tool is still dispatchable by
-/// name; what changed is that a model is never shown it, which is what the
-/// band counts. Its allow-list governance is pinned separately, below.
+/// The gate is registry attachment, not `webhooks.enabled`: over stdio the
+/// registry is never attached and the handler refuses the call, so listing the
+/// tool there would advertise one that cannot answer. Sweeping the other three
+/// gates is what proves the enumeration is independent of them rather than
+/// riding on one that happens to move with it. Its allow-list governance is
+/// pinned separately, below.
 #[test]
 fn webhook_status_is_enumerated_exactly_when_its_registry_is_attached() {
     for stats in [false, true] {

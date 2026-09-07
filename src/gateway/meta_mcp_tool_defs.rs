@@ -540,7 +540,8 @@ pub(crate) fn build_cost_report_tool() -> Tool {
 /// nothing at a call site says which position is which, and the positions are
 /// not interchangeable. Named fields make each gate something the caller
 /// states rather than something a reader counts.
-#[allow(clippy::struct_excessive_bools)] // Independent gates; each is read from a
+#[allow(clippy::struct_excessive_bools)]
+// Independent gates; each is read from a
 // different source and none constrains another, so an enum would only rename them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct MetaToolGates {
@@ -778,26 +779,25 @@ fn governed_meta_tool_names() -> &'static std::collections::HashSet<String> {
     static NAMES: std::sync::OnceLock<std::collections::HashSet<String>> =
         std::sync::OnceLock::new();
     NAMES.get_or_init(|| {
-        // Every built-in the dispatcher recognises, from *both* builders, plus
-        // the unenumerated ones. Code Mode's `gateway_execute` reaches every
-        // backend tool, and `gateway_webhook_status` is dispatchable by name
-        // without appearing in any list; either one left outside this set gives
-        // an operator allow-list an escape hatch, because `is_exposed` admits
-        // anything ungoverned. Membership follows what is *callable*, never
-        // what is listed.
+        // Every built-in the dispatcher recognises, from *both* builders. Every
+        // gate is on because membership follows what is *callable*, never what
+        // any one deployment lists: `gateway_webhook_status` is dispatchable by
+        // name on a surface that does not enumerate it, and Code Mode's
+        // `gateway_execute` reaches every backend tool. Either one left outside
+        // this set gives an operator allow-list an escape hatch, because
+        // `is_exposed` admits anything ungoverned.
         build_meta_tools(
             MetaToolGates {
                 stats: true,
                 reload: true,
                 cost_report: true,
-                webhook_status: false,
+                webhook_status: true,
             },
             0,
             0,
         )
         .into_iter()
         .chain(build_code_mode_tools())
-        .chain(std::iter::once(build_webhook_status_tool()))
         .map(|t| t.name)
         .collect()
     })

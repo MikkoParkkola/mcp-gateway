@@ -530,11 +530,11 @@ fn build_meta_tools_returns_base_plus_playbook_and_kill_tools_without_stats_or_w
     assert!(!names.contains(&"gateway_reload_config"));
 }
 
-/// The stats-enabled surface, which `NFR.PERF.4` keeps webhook status off.
+/// The stats-enabled surface with no webhook registry attached.
 ///
-/// This once expected an enumerated `gateway_webhook_status` and a count of
-/// 15. The tool is still dispatchable by name; the band counts what a model is
-/// SHOWN, so it left the enumeration and took the fifteenth slot with it.
+/// This is the stdio shape: `run_stdio` never calls `set_webhook_registry`, so
+/// the tool is absent from the listing there however `webhooks.enabled` is set.
+/// The attached case is swept in `meta_mcp_tool_defs_tests.rs`.
 #[test]
 fn build_meta_tools_with_stats_enumerates_everything_but_webhook_status() {
     let tools = build_meta_tools(

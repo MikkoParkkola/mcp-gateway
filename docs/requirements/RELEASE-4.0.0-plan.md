@@ -58,6 +58,12 @@ stops counting. The requirement is NOT widened to 14-17, which would raise the c
 whatever shipped and reverse a locked decision. The seventeenth is `gateway_webhook_status`
 (`src/gateway/meta_mcp_tool_defs.rs:565`), pushed behind `webhooks_enabled`.
 
+**Superseded 2026-09-08.** The operator reopened that ruling and reversed it: the
+deletion made the documented number true by removing the webhook pipeline's only
+diagnostic. `gateway_webhook_status` is enumerated where its registry is attached, the
+requirement is 14-17, and the served surface is pinned inside that band by
+`tests/nfr_perf_4_meta_tool_band.rs` (`docs/design/2026-09-08-perf4-webhook-status-restoration.md`).
+
 NFR.PERF.4 stays blocking and stays ABSENT. What the ruling changed is its kind: it is no
 longer an open operator call, so it left the compatibility cluster of the blocking rollup, and *how* the
 seventeenth stops counting is an unmade engineering decision — a §P1 design event like the

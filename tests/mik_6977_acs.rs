@@ -166,8 +166,7 @@ fn mik6977_claim_3_compact_surfaces_match_the_canonical_tool_counts() {
 
     let library_docs = read("src/lib.rs");
     assert!(library_docs.contains("14 tools minimum"));
-    assert!(library_docs.contains("16 in the README benchmark scenario"));
-    assert!(library_docs.contains("16 in the README benchmark scenario"));
+    assert!(library_docs.contains("17 in the README benchmark scenario"));
     assert!(!library_docs.contains("12 tools minimum"));
 
     let benchmark_docs = read("docs/BENCHMARKS.md");
