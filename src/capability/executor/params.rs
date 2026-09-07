@@ -39,7 +39,10 @@ fn graphql_error_message(body: &Value) -> Option<String> {
 ///
 /// A `reqwest::Error` renders its URL, and on this path the URL carries the
 /// credential, so the typed error is stripped with `without_url()`. The body
-/// cannot ride along either -- it goes to the log, where an operator reads it.
+/// does not ride along either, and it is not logged: a backend is free to echo
+/// the request that provoked the throttle, credentials included, so the record
+/// carries only how much text came back. The status and the endpoint are what
+/// an operator acts on; the bytes are what would leak.
 pub(super) async fn status_error(response: Response, endpoint: &str) -> Error {
     let status = response.status();
     let typed = response
@@ -54,7 +57,12 @@ pub(super) async fn status_error(response: Response, endpoint: &str) -> Error {
 
     match typed {
         Some(e) if status == reqwest::StatusCode::TOO_MANY_REQUESTS => {
-            tracing::warn!(%status, %endpoint, body = %body, "capability endpoint throttled");
+            tracing::warn!(
+                %status,
+                %endpoint,
+                body_len = body.len(),
+                "capability endpoint throttled"
+            );
             Error::Http(e)
         }
         _ => Error::Protocol(format!("{endpoint} returned {status}: {body}")),
