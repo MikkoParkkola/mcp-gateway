@@ -3,6 +3,20 @@
 
 # Cluster C (MIK-7272 revision surface) — what is actually missing
 
+> 2026-09-08 ledger update: `ORDER.2a` and `ORDER.2b` closed **MET, non-blocking** at
+> `a1fc3c59` and left this cluster, which drops its blocking rows from 8 to 6
+> (`RELEASE-4.0.0-blocking-rollup.md`, cluster C). The FSM leg that was uncommitted at
+> `fd93bf87` is now landed: `set_state` refuses a missing or empty session before it
+> mutates (`src/gateway/meta_mcp/mod.rs:1727`, filter at `:1734`) and
+> `current_search_state` (`src/gateway/meta_mcp/search.rs:169`) resolves an absent or
+> empty session to the default for all four discovery readers. The verdict is quoted from
+> `RELEASE-4.0.0-criteria-status.md`, which remains the source of truth, and it is bounded
+> to those two rows on their ratified modern/sessionless scope: `EXT.1`, `OTEL.1`,
+> `SUB.4`, `SUB.2b`, `TASK.1` and `MRTR.10a` are untouched, and the era-wide
+> profile-removal question stays open with the operator. Everything below about `ORDER.2`
+> — including the 2026-09-01 reading that it is "a genuine session-scope defect" and the
+> §4.1/§4.3 operator answers — is the state before that merge, and is kept as history.
+>
 > 2026-09-08 evidence update: the historical absence test cited below was replaced by
 > `ac_task_1_tasks_get_answers_an_unknown_id_with_no_such_task` in `cb005b74`.
 > The valid request reaches the implemented lookup and returns an error for an unknown task;
