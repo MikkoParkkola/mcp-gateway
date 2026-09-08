@@ -1391,7 +1391,8 @@ legs read was assembled at `63de240c`; every repair commit postdates both
 verdicts and has been read by neither leg. Under the repair protocol the
 closure re-check returns to the vendor that raised each finding. The round-6
 recorded verdict reviewed the **unamended** design and does not carry to this
-amendment.
+amendment: both legs re-run against the material as it stands at submission,
+submitted on stdin.
 
 That sentence binds the PACKAGE, not just the intent: no round may carry an
 earlier round's PART A verbatim. PART A is the design and plan **as they stand
