@@ -284,3 +284,23 @@ Deferral fields, since a deferral without them is an open question with better m
 Until the trigger fires, nothing may be closed whose evidence depends on it. Note what that
 rules out: any row claiming a user-visible behaviour holds. Rows pinned by a test and a source
 anchor are unaffected, which is why the lanes proceed.
+
+## R15 — a stale comment a ticket *cites* has a consumer, and gets fixed
+
+`confirm-gate` had disposed a contradiction as an observation: `src/gateway/destructive_confirmation.rs:28` and `:38` still describe the pre-fix behaviour ("the action proceeds after a `WARN` log entry"), which is now false for the modern path that refuses at `src/gateway/meta_mcp/mod.rs:1964-1967`. It re-priced the disposal on discovering that MIK-7246 quotes that exact line in its Evidence section as the statement of the bug, and asked rather than took the edit.
+
+Ruled: **fix it in this change** — §P0's disposal table takes the first option that holds, and two doc-comment lines in the file the row is already about is smaller than the ticket describing it would be. Timing condition: the commit lands *after* the in-flight review leg returns, so that verdict stays attributable to the material the reviewer actually read.
+
+The generalisable half, which is why this is a ruling and not a mailbox reply: **a contradiction nobody references is an observation; one a ticket quotes has a consumer.** A stale line cited as evidence outlives the fix and reads to the next auditor as proof the bug is still there. Before settling on "observation", check whether anything cites the thing you are declining to fix.
+
+## R16 — the uncommitted criteria row belongs to package E
+
+Verified rather than assumed: `git diff -U0` on `docs/requirements/RELEASE-4.0.0-criteria-status.md` shows exactly one changed row, `MIK-6865.SCHEMA.1c`. That is package E's own criterion, so `ext1-otel1` carries it. Two lanes have been hunk-staging around it for an afternoon, which is the cost of an unowned dirty file in a shared tree.
+
+Caution attached to the grant: the row reads MET, and R13 amended what MET has to mean for `SCHEMA.1c`. A row that predates its own criterion's amendment may claim a mechanism the amendment reworded.
+
+## R17 — `cargo fmt` failures belong to the commit that introduced them
+
+`src/idempotency.rs:881` fails `cargo fmt --check` and reproduces with no working-tree change, tracing to `04daba2d` on the SUB.4 lane. Two other lanes correctly reported it instead of fixing it. That is the right instinct and it is now the rule: in this shared tree, a repo-wide `cargo fmt` sweeps a peer's file into your commit. Format the file you broke; report the one you did not.
+
+Same for the ten `cargo clippy --all-targets` warnings, which sit in `src/capability/executor/executor_tests.rs`, `src/gateway/meta_mcp/tests.rs` and `tests/common/mod.rs` — none in the reporting lane's files. Red signals you did not cause are a report, not a project.
