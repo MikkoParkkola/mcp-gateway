@@ -595,13 +595,18 @@ impl MetaMcp {
         self
     }
 
-    /// Whether this gateway will confirm the named meta-tool exists.
+    /// Whether the name is one of this gateway's own meta-tools *and* this
+    /// gateway will confirm it exists.
     ///
     /// The router asks before its own admin pre-check, so an unexposed admin
     /// tool is answered by the dispatcher's unrecognised-tool refusal rather
-    /// than by an admin refusal that confirms the tool is real.
+    /// than by an admin refusal that confirms the tool is real. The roster
+    /// half is what keeps a surfaced backend tool out: `is_exposed` answers
+    /// `true` for every ungoverned name by design, so on its own it cannot
+    /// tell a caller whether the name is *ours*.
     pub(crate) fn exposes_meta_tool(&self, name: &str) -> bool {
-        self.meta_tool_exposure.is_exposed(name)
+        super::meta_mcp_tool_defs::is_governed_meta_tool(name)
+            && self.meta_tool_exposure.is_exposed(name)
     }
 
     /// Override the per-backend `prompts/list` and `resources/list` fetch
