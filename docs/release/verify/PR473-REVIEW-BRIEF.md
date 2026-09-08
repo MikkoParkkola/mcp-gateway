@@ -62,3 +62,28 @@ Commit on the SHARED index, path-scoped, or you will commit a peer's work:
 Commit style: `type(scope): summary` <=72 chars imperative, blank line, then
 bullets only. No first person, no session narration — write it as if a stranger
 reads the public repo.
+
+## Correction — reviewer launch and ledger binding (2026-09-08, supersedes the text above)
+
+Two instructions above were wrong. Both were found by the `pr473-gateway` shard.
+
+**1. Foreground is impossible; use a harness-tracked background task.** The brief asks
+for the run in the task foreground AND a Bash timeout of at least 300000ms. Those
+contradict: the Bash tool caps a foreground call at 120s. The constraint the rule was
+reaching for targets `nohup`/`&`/`disown`, which detach and die with the parent turn.
+A harness-tracked background task does NOT die that way. Launch reviewers as a tracked
+background task, and take each verdict from the ledger row rather than from the task's
+own exit reporting.
+
+**2. `material_sha256` is NOT the payload hash.** `gpt-review`'s `digest_material`
+hashes `printf '%s\0' "$*"` followed by the stdin file. For a stdin review with no
+scope arguments the digest therefore covers one NUL byte plus the payload, and
+`material_bytes` is always payload bytes **+1**. Matching a ledger row to a payload by
+comparing `sha256sum payload.diff` against `material_sha256` will never match and
+reads as a missing verdict. To bind a row to a payload, recompute the digest the same
+way:
+
+    { printf '\0'; cat payload.diff; } | sha256sum
+
+and expect `material_bytes` to equal payload bytes + 1. The `head` field remains
+non-binding — the wrapper stamps it from repo HEAD at launch, not from what was read.
