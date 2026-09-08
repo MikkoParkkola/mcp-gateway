@@ -578,19 +578,52 @@ mod http {
     }
 
     #[tokio::test]
-    async fn ac_task_1_tasks_get_reports_that_it_is_not_implemented() {
-        // It answered every handle with a `not_found` **success**. That status
-        // is not in the protocol's task model, and as a success it told a client
-        // its handle had been looked up and missed — a lookup that never
-        // happened, against a store that does not exist.
+    async fn ac_task_1_tasks_get_answers_a_stranger_handle_from_the_task_model() {
+        // Inverted when TASK.1 landed. This case pinned the ABSENCE of the
+        // extension -- `tasks/get` answering method-not-found -- which was the
+        // true statement while no dispatcher existed. It is false now, and
+        // repairing it to keep the old assertion green would re-assert that the
+        // shipped dispatcher is not there.
         //
-        // The specification page for the tasks extension returns 404 at the path
-        // its own index links, so there is no shape to build against. Answering
-        // method-not-found is the true statement, and a client discovers that on
-        // its first call rather than after polling a fiction.
-        let (status, body) = post_modern("tasks/get", json!({ "taskId": "task-unknown" })).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
-        assert_eq!(body["error"]["code"], -32601, "{body}");
+        // `Mcp-Name` binds to `params.taskId` on the task methods
+        // (`src/protocol/headers.rs:67`), so a call without it is refused at the
+        // header guard before dispatch and proves nothing about the method.
+        //
+        // A handle no store holds is answered by the task model itself: -32602
+        // with the id-free wording of `missing_task_error`
+        // (`src/gateway/router/handlers.rs:249`), which is what stops a caller
+        // telling "not yours" from "never existed".
+        // The extension is declared per request (`-32021` otherwise), so the
+        // capabilities block is written out here rather than taken from
+        // `modern_call`, which declares none.
+        let body = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tasks/get",
+            "params": {
+                "taskId": "task-absent",
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {
+                        "extensions": { "io.modelcontextprotocol/tasks": {} }
+                    }
+                }
+            }
+        });
+        let (status, body) = post(
+            true,
+            body,
+            &[
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "tasks/get"),
+                ("mcp-name", "task-absent"),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["error"]["code"], -32602, "{body}");
+        assert_ne!(
+            body["error"]["code"], -32601,
+            "method-not-found would mean the dispatcher is unreachable: {body}"
+        );
     }
 
     #[tokio::test]
