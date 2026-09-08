@@ -628,3 +628,10 @@ with a comment arguing a task is only ever built for a modern request. Adding `e
 beside it creates two fields that can disagree about one fact. Either `era` subsumes
 `is_modern`, or one derives from the other. We will not collapse a field you set on a path
 we cannot compile — name which, and the checkpoint follows it.
+
+**Retraction (2026-09-08).** The message of `e1c4899e` records this decision as taken —
+"`era` subsumes `is_modern`, readers become `era == Era::Modern`". That line is superseded and
+you should not act on it. The collapse is yours to name, as this section says; our checkpoint
+adds `era` beside `is_modern` and changes neither field's semantics. Nothing in the 15 sites we
+touched reads or writes `is_modern` — the `is_modern` bindings in `router/handlers.rs` are
+function-local variables that predate this change, not the context field.
