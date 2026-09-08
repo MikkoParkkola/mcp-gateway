@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 #[cfg(feature = "spec-preview")]
@@ -418,6 +419,16 @@ pub struct MetaMcp {
     /// owner, and live grant evidence.
     pub(super) identity_grants: RwLock<LocalIdentityGrantStore>,
 
+    /// Authorization-policy generation mixed into every response-cache key.
+    ///
+    /// One counter for this handler. Bumped in [`Self::set_identity_grants`]
+    /// after the new grant store is published, while that write lock is still
+    /// held. Captured once per invoke with `Acquire` before authorization
+    /// runs; that snapshot is the only value either cache-key build may use.
+    /// A second load at the write site publishes a pre-bump body under the
+    /// post-bump epoch.
+    pub(super) policy_epoch: Arc<AtomicU64>,
+
     /// Trust caller identity headers from an authenticated edge proxy.
     ///
     /// Disabled by default because direct clients can otherwise spoof headers.
@@ -505,6 +516,7 @@ impl MetaMcp {
             attestation_validator: None,
             attestation_mode: crate::attestation::AttestationMode::Observe,
             identity_grants: RwLock::new(LocalIdentityGrantStore::new()),
+            policy_epoch: Arc::new(AtomicU64::new(0)),
             caller_identity_header_trust: CallerIdentityHeaderTrust::Disabled,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
             #[cfg(feature = "firewall")]
@@ -944,8 +956,19 @@ impl MetaMcp {
     }
 
     /// Replace the local identity grant store.
+    ///
+    /// The store is published first, under the write lock; the epoch then
+    /// advances with `Release` while that lock is still held, so a reader that
+    /// observes the new epoch cannot still see the old grants. Bump-then-write
+    /// is the 4.g race on the writer side.
     pub fn set_identity_grants(&self, grants: LocalIdentityGrantStore) {
-        *self.identity_grants.write() = grants;
+        let mut lock = self.identity_grants.write();
+        *lock = grants;
+        let prev = self.policy_epoch.fetch_add(1, Ordering::Release);
+        debug_assert!(
+            self.policy_epoch.load(Ordering::Relaxed) > prev,
+            "policy epoch must be monotonic; a reset reuses keys minted under superseded grants"
+        );
     }
 
     /// Snapshot all identity-grant rows for read-only projection (e.g. the

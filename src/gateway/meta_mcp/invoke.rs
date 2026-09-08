@@ -1077,6 +1077,11 @@ impl MetaMcp {
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
 
+        // Capture once, before any authorization input is read. A bump after
+        // this strands the insert under the epoch this call was authorized
+        // in. A second load at the write site is the 4.g race.
+        let policy_epoch = self.policy_epoch.load(Ordering::Acquire);
+
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
 
@@ -1314,12 +1319,10 @@ impl MetaMcp {
                 caller.retry,
                 crate::cache::KeyContext {
                     routing_profile: &profile.name,
-                    // No negotiated revision and no policy generation reach this
-                    // layer yet: revision is shaped downstream in the router and
-                    // no policy epoch exists to read. Accepted here so the seam
-                    // is the only place that has to change when they do.
+                    // Revision is still unplumbed. Passing `None` is the
+                    // approved seam, not a claim that CACHE.4e is closed.
                     protocol_revision: None,
-                    policy_epoch: 0,
+                    policy_epoch,
                 },
             );
             if let Some(cached) = cache.get(&cache_key) {
@@ -1838,12 +1841,10 @@ impl MetaMcp {
                 caller.retry,
                 crate::cache::KeyContext {
                     routing_profile: &profile.name,
-                    // No negotiated revision and no policy generation reach this
-                    // layer yet: revision is shaped downstream in the router and
-                    // no policy epoch exists to read. Accepted here so the seam
-                    // is the only place that has to change when they do.
+                    // Revision is still unplumbed. Passing `None` is the
+                    // approved seam, not a claim that CACHE.4e is closed.
                     protocol_revision: None,
-                    policy_epoch: 0,
+                    policy_epoch,
                 },
             );
             if cache.set(&cache_key, result.clone(), self.default_cache_ttl) {
