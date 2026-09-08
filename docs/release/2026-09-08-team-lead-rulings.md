@@ -335,3 +335,30 @@ Void condition 5 is **arm-to-arm**: "the two builds do not use the same feature 
 Ruled: **not a void.** Record the actual `rustc -vV` string with the results and correct the environment row in the same commit as the re-pin. Do not stall the run on it.
 
 The general form, since this will recur: a pinned environment value serves a stated purpose, and drift is judged against that purpose, not against the string. Read what the pin is *for* before declaring a mismatch fatal — and read the void conditions, which are the only things entitled to void a run.
+
+## R21 — `BRIDGE.4`: aggregate expiry is `Deadline`, and the reason is attribution
+
+`bridge-mrtr7` routed the question rather than answering it in its own design doc, having noticed that R8a put error shape on `ask()`'s failure path with the release owner. Correct instinct, and the escalation is granted on its merits.
+
+Ruled: **the aggregate budget expiring inside a prompt's wait fails with `BridgeError::Deadline`.** The clamp at `input_bridge.rs:481-484` keeps both causes and the tie-break the lane stated stands — `left <= per_prompt` resolves to `Deadline`, aggregate wins the tie.
+
+The primary reason is not reachability. It is that **`Delivery { key, error }` names a key, and naming a key attributes the failure to that key's owner.** A client that answered every prompt inside its own budget did not time out; the call did. Reporting that as a delivery timeout against the client's entry is a false statement about which party failed, and it is the kind of false statement that gets read later by someone deciding whether a backend is flaky.
+
+Two consequences, both confirmatory rather than load-bearing: `BridgeError::Deadline` stays reachable from `ask()` instead of being swallowed by the variant R8a did touch, and test-plan row 321 keeps its assertion **unchanged** and becomes the row that pins the distinction. A ruling that also avoids churn is a pleasant accident, not an argument — if attribution had pointed the other way, row 321 would have moved.
+
+Riders. `proxy.rs:557-558` builds `TimedOut` from a dropped channel under a comment claiming to mean what the bridge's timeout arm means by it — an arm that has never constructed one. That comment becomes true for the first time under this ruling; it rides with the repair per §P4a, as the lane already proposed. No new variant, no wire change, docs and one branch.
+
+## R22 — `WIRE.5` is ruled, twice; a residual must be stated as one sentence
+
+`bridge-mrtr7` reports `WIRE.5` as a still-unruled escalation. It is ruled at **R1** (the sampling-guard objection falls, the second fixture stands) and again at **R8** (per-round gating, exit A; the criterion is not narrowed). Both predate the escalation.
+
+If something in the lane's escalation survives R1 and R8, the lane states **that residual in one sentence** and it gets ruled. What cannot happen is a lane blocking on "unruled" against a section that answers it — the rulings file is the SSOT precisely so a second delivery is not required. This is the second time a lane has reported blocked on a question already answered in this file, which is a signal about how the file is being read, not about the lane.
+
+## R23 — package E's two non-gating improvements: one ticket, one observation, neither built for 4.0.0
+
+`ext1-otel1` closed `SCHEMA.1c` and asked what to do with kimi's two non-gating suggestions. Disposed per §P0, taking the first option that holds:
+
+- **`$anchor` plain-name fragments and `$id`-relative bases (MEDIUM) — file a ticket.** A human decides whether 4.1 closes it, which is what makes a ticket the right disposal rather than the default one. It is explicitly **not built for 4.0.0**: the limitation is disclosed in the row, it over-reports and never silently passes, and its direction is the safe one. New code on the trust path, late, to close a documented false-alarm class is a worse trade than shipping the disclosure.
+- **Hoisting `SchemaBounds::inspect` out of `from_tool` to the backend cache insert (SMALL) — record as an observation on that same ticket.** Not its own ticket: anyone working the anchor code is already inside this function and can hoist while there. Two tickets for two edits in one function is the expensive default the §P0 table exists to stop.
+
+The row stays closed. Neither of these reopens a reviewed row.
