@@ -953,3 +953,141 @@ What this does not settle: how the downgrade behaves when a client announces a r
 has never heard of, above or below its range, and whether `server/discover` advertises the full
 supported list or only the negotiated one. Both are answerable from the specification rather than
 from the operator, and neither is assumed here.
+
+---
+
+## 6. Re-verification, 2026-09-09 — all 20 blocking rows read at source
+
+Eight read-only investigators re-derived every blocking row from source rather than from the
+ledger. Nothing in this section is quoted from a criteria cell; where a cell and the source
+disagree, the source is recorded and the cell is named as stale.
+
+### 6.1 The headline number overstates the work
+
+`Coverage: 146 criteria, 183 rows, 163 met or non-blocking, 20 blocking.` Of those 20:
+
+| Verdict at source | Rows | Cost |
+|---|---|---|
+| MET already; the blocking cell is stale | `SCHEMA.1c`, `ORDER.2a`, `ORDER.2b`, `NFR.SEC.1`, `MRTR.10a` | one cell each |
+| MET in source; held open by the functional leg alone | `MRTR.8b` | a §P4 drive |
+| PARTIAL, closed by a test | `CONFIRM.1a`, `CONTROL.3b`, `NFR.PERF.3`, `NFR.SEC.1` row-5 staging | a test each |
+| PARTIAL, closed by one plumb | `CACHE.4a`, `HEADER.9a`, `HEADER.9b` | one negotiated-revision plumb, shared |
+| Genuinely unbuilt | `CACHE.4b`, `SUB.2b`, `SUB.4`, `CONFIRM.2`, `NFR.SEC.3`, `MRTR.7a`, `MRTR.7b` | the release |
+
+`NFR.COMPAT.1` is PARTIAL and imports its partiality entirely from `MRTR.7a`/`7b`; it adds no
+work of its own. Its `2026-07-28 served` clause holds: the revision is advertised at
+`src/gateway/meta_mcp/mod.rs:1092-1099` under `server.modern_protocol`, default `true` at
+`src/config/mod.rs:1236`, and `tests/nfr_compat1_revisions.rs` runs 7/7 green. Its deliberate
+absence from `SUPPORTED_VERSIONS` is pinned by an in-source guard test at `src/protocol/mod.rs:81,85`
+and is not a gap.
+
+### 6.2 The ledger's line references are systematically stale
+
+Every investigator that checked one found drift, in the same direction — cells written against an
+older tree. Corrections: `invoke.rs` 1214/1787 -> **1334/1855**; `meta_mcp/mod.rs` 890 -> **924**
+and 438 -> **465**; `meta_mcp/tests.rs` 5552/5632 -> **5591/5672**; `handlers.rs` 1330 -> **1610**;
+the `nfr-sec1-control-inventory.md` cites for rows 1/10/12/14 (2227/746/3207/630) now point at
+unrelated code. `ORDER.2a`'s cell says so itself — "measured against `fd93bf87`", an ancestor of
+the fix `934e5f53`, which is in HEAD.
+
+Consequence for anyone working these rows: **treat the ledger as an index, not as evidence.**
+Re-derive the citation before acting on a cell.
+
+One cell is wrong about scope rather than about a line: `HEADER.9a` counts outbound encoding over
+`SPEC_ENCODING_TABLE` as remaining work. That symbol has zero occurrences in `src/` — it is a test
+fixture (`tests/common/mod.rs:234`). The clause should not count against the row.
+
+### 6.3 Order of work
+
+Four streams. The ordering is by what unblocks what, not by size.
+
+**A — bookkeeping (no code).** Flip the five MET rows and re-evidence `MRTR.8b` as held by its
+functional leg rather than by missing code; correct the drifted cites in 6.2; drop the
+`SPEC_ENCODING_TABLE` clause from `HEADER.9a`; correct `MIK-7291`'s "not reached from production"
+comment at `src/gateway/session_lifecycle.rs:104`, which is false three ways over. Owner is
+whichever lane holds `RELEASE-4.0.0-criteria-status.md`; that file is contended and these are
+single-cell edits, not a rewrite.
+
+**B — the shared plumb.** `CACHE.4a`, `HEADER.9a` and `HEADER.9b` are one change: carry the
+negotiated revision (`src/gateway/server/mod.rs:1811`) into `KeyContext` at
+`invoke.rs:1334`/`:1855`, and reach `finalise_modern_headers` from the SSE GET at
+`transport/http/mod.rs:927`. Three rows, one seam.
+
+**C — the features, revocation first.** `CACHE.4b` leads because it is the only one whose failure
+mode is a security property: `policy_epoch` is in the cache key and hashed, and no writer exists,
+so a narrowed grant invalidates nothing and stale entries stay servable for their full TTL. Blast
+radius is bounded to the principal whose own grant narrowed. Then `CONFIRM.2` (design decided,
+Option I — mint a sealed continuation instead of refusing), which converts `CONFIRM.1a`'s blanket
+refusal into a real ask and lets its remaining test arms exercise naturally. Then the MRTR cluster:
+`7a`/`7b` need one production call site for `InputBridge::run` (`src/gateway/input_bridge.rs:377`,
+bridge loop green 23/23, zero prod callers today) and the per-session capability store behind it.
+`8b` and `10a` are not in this stream at all — see 6.5.
+
+**D — the two open decisions.** `SUB.2b` needs a sink and request-id correlation at the discard
+site (`transport/http/mod.rs:292-296`) plus a `progressToken` concept that does not exist anywhere
+in `src/`; the nearest tests currently assert the opposite property. `SUB.4` needs one call: does
+idempotency-key extraction live per-route or at a shared admission point? After that the two
+uncovered routes are mechanical. Its lone watcher at `server/mod.rs:3684` is `#[ignore]`d, so the
+gap has zero CI protection today.
+
+`NFR.SEC.3` sits outside the ordering on purpose. It is unbuilt and has **no present exposure**,
+because the per-process ephemeral key (`continuation.rs:863`, `Keyring::new(&[(1, key)])`) is what
+enforces `MRTR.5` cross-replica double-spend today — a stricter posture than the criterion asks
+for. The naive build, a shared config key without a shared consumed-ledger, is what would create
+the hole. Build it only as the single change `blocking-rollup:18-47` branch (b) already specifies:
+config keys, retention, replica continuity and shared ledger together, or not at all.
+
+### 6.4 One AC narrowing, resolved against the standing instruction
+
+`docs/design/2026-09-06-perf3-reclamation-test-plan.md` substitutes a driven-clock test for the
+soak `NFR.PERF.3` requires, and records the swap as settled. Two vendors passed the plan; no
+requester agreement was recorded for the narrowing, which the repair protocol reserves to the
+requester. The standing instruction for this release is "all gaps fixed with the full scope", which
+is that agreement pointed the other way: **the soak clause stands.** The driven-clock test is
+additional evidence, not a substitute. The plan's stated blocker for its row-2 case is stale in the
+row's favour — `guard(now)` landed in `c3270021` on 2026-09-07, so the probe is runnable today.
+
+### 6.5 The MRTR cluster is two pieces, not four
+
+Designed as one cluster; delivered as one blocked unit plus two independents that are already in.
+
+`MRTR.7a` and `7b` are a single unit. `InputBridge` is built and proven — `pub struct InputBridge<'a>`
+at `src/gateway/input_bridge.rs:348`, `run` at `:377`, `tests/mik_7212_mrtr7_bridge_acs.rs` 23/23 —
+and unreachable from production. Absence proof: `rg -n --hidden --no-ignore "InputBridge" src/`
+returns three hits, all inside `input_bridge.rs` itself (`:274`, `:348`, `:359`); the only
+construction anywhere is the test at `tests/mik_7212_mrtr7_bridge_acs.rs:321`. `7b`'s
+`Bridge::retry_params` (`src/protocol/mrtr.rs:477`) has exactly one non-test caller —
+`input_bridge.rs:398`, inside the `run` nothing calls — so both halves are gated behind the same
+missing call site. PR 512 does not contain it. Three prerequisites, all outside the bridge:
+a per-session capability store (`handlers.rs:837` reaches `:1415` with a per-**request** slice, so a
+legacy client declaring nothing can never trip the bridge), `BackendInvoker::invoke` returning a
+`Result` rather than a bare `Value` (`input_bridge.rs:334` — a bridged retry has no failure channel),
+and one accounted dispatch the bridge can share without double-counting (`invoke.rs:2518`, `:2559`,
+`:2584`, `:1369` are single-path today). The middle two are design events under §P3.
+
+`MRTR.8b` is MET in source. The reclamation mechanism is whole in `src/protocol/continuation.rs` —
+`reclaim_abandoned` at `:675`, reached from `guard` at `:744`, well above the `#[cfg(test)]`
+boundary at `:937`; the old `reap` is deleted. Production reach: `redeem_retry`
+(`src/gateway/meta_mcp/invoke.rs:615`) is called from `invoke_tool` at `:1433`, and no `cfg(test)`
+module precedes that line. Landed `ec11dcec` then `c3270021`; review legs recorded SHIP and
+SHIP-WITH-FIXES with the one doc fix applied. Its residue is process, not code: the §P4 functional
+leg, and the `NFR.PERF.3` soak that 6.4 above rules standing.
+
+`MRTR.10a` is MET and its cell is false on both counts. The cell reads "UNWIRED … zero production
+call sites / `#[allow(dead_code)]`"; `enable_idempotency` at `src/gateway/meta_mcp/mod.rs:690`
+carries no such attribute and is called from `src/gateway/server/mod.rs:742`, which its own comment
+names as the only production construction site of `MetaMcp`. The criterion is about what the key
+*contains*, and the retry pair reaches it on the live route: `handlers.rs:1222` -> `:1416` ->
+`invoke.rs:1270-1274`, with the response-cache key derived the same way at `support.rs:165`. On
+stdio the criterion cannot be violated rather than being unmet — `NO_RETRY` (`server/mod.rs:2213`,
+`:2716`) carries `idempotency_key: None`, `support.rs:52-58` returns `None` on `client_key?`, so no
+fingerprint is derived and no cache is consulted. A decline cannot be served an acceptance where no
+entry is ever written.
+
+The stdio and direct-`POST /mcp/{name}` gap that reads like `10a`'s belongs to `SUB.4`, stated
+in-tree at `server/mod.rs:733-740` ("SUB.4 is MET only when all three are covered"). `10a`'s
+protection arrived through `SUB.4`'s boot wiring, not through this cluster.
+
+One correction to the investigator's own citation, kept because the plan is read for its paths:
+the continuation module is `src/protocol/continuation.rs`, not `src/gateway/meta_mcp/continuation.rs`.
+Every line number in that report was right; the directory was not.
