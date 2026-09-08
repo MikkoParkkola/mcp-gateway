@@ -212,8 +212,13 @@ are different claims, which is why `InputBridge::run` takes `declared` and
 both directions -- only the input to `undeclared()` moves -- but the two
 directions are not symmetric in what that input may do, and flattening them is
 the fail-open bug the section below warns about. For `Modern` the permitted set
-must not move at all: a caller that declared at `initialize` and sent no
-per-request `_meta` is refused today and must stay refused. For `Legacy` the
+must not move at all: a well-formed modern request whose `_meta`
+`clientCapabilities` OMITS the asked capability is refused today and must stay
+refused. The example is deliberately NOT *a modern caller that sent no
+`_meta`*: a request declaring no protocol fields in body or header is
+`RequestShape::Legacy` by construction (`src/protocol/meta.rs:85-89`,
+`classify_request` `:150`), so that caller is already on the widening branch and
+cannot illustrate the branch that must not move. For `Legacy` the
 permitted set WIDENS, and that widening is the feature -- a legacy caller
 refused today is bridged tomorrow, which is what consequence 1 above says the
 bridge exists for.
@@ -240,8 +245,8 @@ continuation, not a bridge, and `Declared` alone cannot tell the two apart.
 gate is shape-blind — `interim.undeclared(caller.input_capabilities)` reads it with
 no modern/legacy branch — so an unconditional merge would silently widen the
 gate for modern callers too: one that declared `elicitation` at `initialize`
-and sent no per-request `_meta` is refused today and would be minted a
-continuation after the change. That is a fail-open move on a security gate
+and sent a well-formed `_meta` whose `clientCapabilities` omits it is refused
+today and would be minted a continuation after the change. That is a fail-open move on a security gate
 nobody asked for, and it is the same inversion option B was rejected for.
 So `input_capabilities` is the session value **only for `Legacy`**, which has
 no per-request channel at all — that absence is the whole reason the merge
