@@ -35,6 +35,10 @@ fn allow_all_ctx_named<'a>(
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
+        // Fail-closed: a helper that declared nothing is a 2025 client, the
+        // same reasoning that puts `Declared::NONE` on the line above.
+        era: crate::protocol::meta::Era::Legacy,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
     }
 }
 
@@ -55,6 +59,10 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
+        // Fail-closed: a helper that declared nothing is a 2025 client, the
+        // same reasoning that puts `Declared::NONE` on the line above.
+        era: crate::protocol::meta::Era::Legacy,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
     }
 }
 
@@ -754,6 +762,8 @@ providers:
                     input_capabilities: crate::protocol::meta::Declared::NONE,
                     retry: &crate::protocol::mrtr::NO_RETRY,
                     confirmation: ConfirmationChannel::Unavailable,
+                    era: crate::protocol::meta::Era::Legacy,
+                    channel: &crate::gateway::input_bridge::NoClientChannel,
                 }
             },
         )
@@ -3388,6 +3398,10 @@ fn allow_all_ctx_declaring(
         input_capabilities: declared,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
+        // Fail-closed: a helper that declared nothing is a 2025 client, the
+        // same reasoning that puts `Declared::NONE` on the line above.
+        era: crate::protocol::meta::Era::Legacy,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
     }
 }
 

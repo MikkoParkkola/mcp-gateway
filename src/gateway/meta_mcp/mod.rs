@@ -154,6 +154,33 @@ pub struct MetaMcpCallerContext<'a> {
     /// gateway opens it as one of its own sealed envelopes. Nothing downstream
     /// may forward this field to a backend verbatim.
     pub retry: &'a crate::protocol::mrtr::RetryFields,
+    /// Which protocol era this caller declared on **this** request.
+    ///
+    /// Carried rather than re-derived: both production sites already hold the
+    /// `RequestShape` classification that `initialize` advertises against, and
+    /// a second era predicate computed downstream is exactly the drift
+    /// [`crate::protocol::meta::classify_request`] exists to prevent.
+    ///
+    /// No `Default`, for the same reason the authorizer has none — a defaulted
+    /// era is a site that silently claims an era it never saw.
+    ///
+    /// SCAFFOLD as of this commit: the reader is the MRTR.9 gate at
+    /// `meta_mcp::invoke` (`interim.undeclared(caller.input_capabilities)`),
+    /// which must merge the session declaration for `Legacy` and read only the
+    /// request's own `_meta` for `Modern`. That merge is `MIK-7212.WIRE.1`
+    /// through `WIRE.4` and lands next; until it does, nothing on the
+    /// production path reads this field.
+    pub era: crate::protocol::meta::Era,
+    /// How this caller can be sent a request of the gateway's own — a bridged
+    /// `sampling/createMessage` or `elicitation/create`.
+    ///
+    /// Distinct from `confirmation`, which answers a narrower question and
+    /// would become a general client-request pipe if reused for this. A
+    /// transport with nowhere to send carries
+    /// [`crate::gateway::input_bridge::NoClientChannel`], so "cannot ask" is a
+    /// channel that refuses rather than an absent one every read site must
+    /// remember to check.
+    pub channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
 }
 
 // ============================================================================

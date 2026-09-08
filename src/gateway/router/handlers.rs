@@ -1399,6 +1399,14 @@ pub(super) async fn meta_mcp_handler(
                         is_admin: client.as_ref().is_some_and(|c| c.admin),
                         input_capabilities: declared_capabilities,
                         retry: &retry,
+                        // Already derived at the top of this handler from the
+                        // same classification `initialize` advertises against;
+                        // re-deriving it here is the drift `classify_request`
+                        // exists to prevent.
+                        era,
+                        // HTTP holds the multiplexer, so this caller really can
+                        // be sent a request of the gateway's own.
+                        channel: state.proxy_manager.as_ref(),
                         // Always `Elicit`, including when no session was
                         // presented. HTTP can carry an asker; whether one
                         // answered is what `policy` decides. Mapping a

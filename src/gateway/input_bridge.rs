@@ -294,6 +294,34 @@ pub trait ClientChannel: Send + Sync {
     ) -> Result<Value, DeliveryError>;
 }
 
+/// A [`ClientChannel`] for a transport that cannot reach a client at all.
+///
+/// A null object rather than an `Option<&dyn ClientChannel>` on the caller
+/// context: an `Option` puts the "is there anywhere to send this" decision at
+/// every read site, where one site forgetting it fails open. Here the answer
+/// is the channel itself, and the only thing it can do is refuse.
+///
+/// Stdio carries this. The stdio dispatcher runs with no `ProxyManager` in
+/// scope — that type is HTTP-only — so there is no session to put a request on
+/// and [`DeliveryError::NoSession`] is the literal truth, not a stand-in for
+/// one. Refusing here is also what MIK-7387 will change: until it lands, an
+/// initialized stdio caller stays refused, which `MIK-7212.WIRE.10` pins.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoClientChannel;
+
+#[async_trait::async_trait]
+impl ClientChannel for NoClientChannel {
+    async fn send_request(
+        &self,
+        _session_id: &str,
+        _id: &str,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> Result<Value, DeliveryError> {
+        Err(DeliveryError::NoSession)
+    }
+}
+
 /// The backend end: re-invoke the tool call with the answers collected so far.
 #[async_trait::async_trait]
 pub trait BackendInvoker: Send + Sync {
