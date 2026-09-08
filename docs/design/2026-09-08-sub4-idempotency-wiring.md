@@ -1,6 +1,33 @@
 # MIK-7272.SUB.4 — wiring the idempotency cache
 
-Status: accepted (team lead, 2026-09-08). Change one of two.
+Status: **HELD — subordinate to `docs/design/2026-08-31-sub-4-idempotency-wiring.md`
+(revision 5, 430 lines)**, which designs the same change and was reviewed twice
+(GPT-5.x and Grok, both SHIP-WITH-FIXES on revision 2). This document was written
+without knowledge of that one and is a narrower re-derivation of its Axis-1
+conclusion: it omits nine of its decisions, the direct `POST /mcp/{name}` route,
+every prerequisite it names (including MRTR.10a), and its own gate — revision 5
+is unreviewed and says it "rides the next dual-vendor design review, before SUB.4
+writes code."
+
+Two things must be settled before this document is either folded in or dropped
+(H2 UPDATE > CREATE), and both are asked of the team lead, not checkable here:
+
+1. **Config gate.** `docs/requirements/RELEASE-4.0.0-criteria-status.md` line 227
+   records a ruling of 2026-09-07: *"idempotency defaults ON. A protocol guarantee
+   that holds only when someone opts in is not a guarantee; the config gate exists
+   so an operator can DISABLE it, never as the default posture. The TTL takes
+   CONTROL.4's shape — a config field with a defensible default."* The Decision
+   section below says the opposite (unconditional, module constants, no config
+   surface). The 2026-09-08 acceptance recorded above was for the two-change
+   split; whether it also superseded the config gate is not established.
+2. **Which document survives**, and whether revision 5's outstanding dual review
+   gates the code.
+
+The implementation of change one is committed (`7851736d`) so it is not lost, and
+its commit message records the same two open questions. **No criteria row has
+been moved and none will be until both are answered.**
+
+Change one of two.
 
 ## Problem
 
