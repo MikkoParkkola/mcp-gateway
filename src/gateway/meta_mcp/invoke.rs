@@ -120,8 +120,9 @@ use super::super::trace;
 use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_tokens};
 use super::support::{
-    MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
-    idempotency_key_for, response_cache_key_for, retry_identity_suffix, strip_backend_provenance,
+    CallerIdentity, MetaMcpInvoker, augment_with_predictions, augment_with_provenance,
+    augment_with_trace, idempotency_key_for, response_cache_key_for, retry_identity_suffix,
+    strip_backend_provenance,
 };
 
 async fn call_capability_tool_with_identity(
@@ -1200,18 +1201,17 @@ impl MetaMcp {
         // value. Only the sub-expression is shared — the keys stay separate.
         let verified_actor =
             verified_identity.map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id);
-        // Who the response cache keys on. The binding when identity propagation
-        // is minting per-user credentials, otherwise the verified subject —
-        // which is still what the backend's answer depended on. Keying on the
+        // Who the response cache keys on. `CallerIdentity` owns the order;
+        // this site owns only what it does with the answer. Keying on the
         // binding alone let two authenticated callers share one entry whenever
         // propagation was off, which is the shipped default.
-        let caller_principal = caller_credential
-            .cache_binding
-            .clone()
-            .or_else(|| verified_actor.clone());
-        // Who the RETRY entry belongs to. The same fallback, because the same
-        // default left it empty for everyone — but deliberately a separate
-        // value from `caller_principal` above: retry de-duplication and
+        let caller_principal = CallerIdentity::select(
+            caller_credential.cache_binding.as_deref(),
+            verified_actor.as_deref(),
+        )
+        .map(|identity| identity.value().to_string());
+        // Who the RETRY entry belongs to. The same selection — deliberately a
+        // separate VALUE from `caller_principal` above: retry de-duplication and
         // response caching are different contracts with different lifetimes,
         // and collapsing them would make one contract's key change silently
         // move the other's.
