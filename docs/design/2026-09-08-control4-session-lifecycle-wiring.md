@@ -108,16 +108,56 @@ for that identity scores as a first call, exactly as it does after the `MAX_TRAC
 ceiling evicts it (`:138-149`). Rejected: a lock or an in-flight counter — new machinery to
 protect a class of handler being declared out of bounds anyway.
 
-**D6 — TTL: `IDLE_TTL` 300s, `SWEEP_INTERVAL` 60s, module constants, carried as a STATED
-ASSUMPTION.** Matches the shipped `PER_USER_IDLE_TTL`/`SWEEP_INTERVAL` (`server/mod.rs:2127-2128`).
-Streaming's loop carries its own `session_ttl` and `session_reaper_interval` from config; those are
-NOT collapsed into these — the loop's cadence stays the streaming knob, and `IDLE_TTL` governs only
-what `track` writes as a deadline. Thirty seconds would hold less abandoned state under churn; an
+**D6 — TTL: `IDLE_TTL` 300s, ONE module constant, carried as a STATED ASSUMPTION.** Matches the
+shipped `PER_USER_IDLE_TTL` (`server/mod.rs:2127`). There is deliberately no lifecycle
+`SWEEP_INTERVAL`: D1 rides the streaming reaper's existing loop, so the cadence is already owned by
+streaming's `session_reaper_interval` config knob and a second constant beside it would have no
+reader — a dead value that reads as a scheduling authority. (v2 GPT improvement, confirmed by
+construction: with D1 as the host, nothing could ever read it.) Streaming's `session_ttl` is
+likewise NOT collapsed in — `IDLE_TTL` governs only what `track` writes as a deadline. Thirty seconds would hold less abandoned state under churn; an
 hour would never lose a long human-in-the-loop elicitation. Nobody has ruled.
 
-**D7 — observability: one `info!` per sweep that reclaimed anything, carrying the count.** Matches
-streaming (`:138`, `:145-149`). Per-key `debug!` already exists (`session_lifecycle.rs:87-95`). No
-new metric until an operator asks a question the log cannot answer.
+**D7 — observability: one `info!` per sweep that reclaimed anything, carrying the count — and
+`reap` changes signature to `pub fn reap(&self, now: u64) -> usize` to supply it.** Matches streaming
+(`:138`, `:145-149`). The signature change is not cosmetic: `reap` today returns `()`
+(`session_lifecycle.rs:124`), so the only other way for the caller to log a count is to read
+`tracked_count()` before and after, and that difference is wrong whenever a live request tracks a key
+between the two reads. The count already exists inside `reap` as `expired.len()`; returning it is
+strictly smaller than the racy alternative. (v2 GPT improvement, confirmed at source.) Per-key
+`debug!` already exists (`session_lifecycle.rs:87-95`). No new metric until an operator asks a
+question the log cannot answer.
+
+### Findings carried in from the v2 review
+
+GPT-5.x returned **SHIP** with zero FINDING blocks and four distinct improvements
+(`~/.claude/data/reviews/runs/gpt-20260908T133849Z-53568.md`). Three are folded in above and here.
+One is rejected, with its reason, because a finding is a lead until it survives its own citation.
+
+**Delete the lifecycle `SWEEP_INTERVAL` (ACCEPTED).** Folded into D6 above.
+
+**Return the expired-key count from `reap` (ACCEPTED).** Folded into D7 above.
+
+**Name the integration test that proves real reclamation (ACCEPTED, and it is the §P2 entry F2 was
+already demanding).** The plan must specify one case running with the `firewall` feature compiled in,
+`security.firewall.enabled = true`, and `anomaly_detection = true`, against a key with a populated
+predecessor entry — and it must assert the entry is GONE, not that `tracked_count` fell. F2 says why:
+both write sites are gated twice, so a build with the feature off produces an empty map that is
+correct and proves nothing. This is the §P2 row, recorded here so the plan cannot be written without
+it.
+
+**Track only when `verdict.anomaly_score` is `Some` (REJECTED — two reasons, both checked).** Its
+cited site is wrong: `server/mod.rs:1210` is where the `Firewall` is *constructed*
+(`Firewall::from_config`), not a `check_request` call. The only two production call sites are
+`handlers.rs:1303` (D4's site) and `backend_handlers.rs:102` (ruled out under D4). More materially,
+the predicate is too tight. `anomaly_score` is `None` in two different situations
+(`firewall/mod.rs:398`, `and_then`): the detector is absent, and the detector is present but
+`observe` returned `Unobservable`. `on_session_end` (`firewall/mod.rs:682`) is a no-op only in the
+first. Gating on `anomaly_score.is_some()` would therefore skip the second and leak exactly the
+entry the handler exists to remove. The guard stays `!control_identity.is_empty()`.
+
+The residual GPT was reaching for is real and is already stated: when anomaly detection is off, the
+map holds keys whose handler reclaims nothing. That is a no-op, not a leak, and the accepted
+improvement above is what stops it being mistaken for a passing test.
 
 ### Findings carried in from the v1 review (both legs returned SHIP)
 
