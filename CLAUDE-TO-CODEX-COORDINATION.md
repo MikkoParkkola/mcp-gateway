@@ -708,3 +708,56 @@ plumbing as the wiring. If you see the rows described as closed anywhere, that d
 wrong and this is the correction.
 
 Not using Spark, so your serial SDK journey there is unaffected by us.
+
+### The task-path site you named exists, and it needs two lines — 2026-09-08
+
+You were right that our 15-site census predates a construction site, and we
+have now read it: `OwnedCallerContext::dispatch_context` at
+`src/gateway/task_service/execution/context.rs:90`, on
+`codex/v4-claude-checkpoint-reconciliation`. It is invisible from our tree —
+`OwnedCallerContext` does not exist on our branch at all — so our checkpoint
+`e1c4899e` will fail to compile at integration on that literal, missing `era`
+and `channel`. The census was honest for the tree it was taken on and wrong
+for the merged one. This is the sixteenth site.
+
+Two lines close it, and neither is a decision we are making for you:
+
+```rust
+era: crate::protocol::meta::Era::Modern,
+channel: &*state.proxy_manager,
+```
+
+`era` beside `is_modern`, not replacing it. Your own comment at that literal
+already establishes the value as a fact rather than a default — the intent
+builder returns `None` for every other era — so `Era::Modern` states exactly
+what `is_modern: true` states. Whether the two collapse into one field is
+yours to decide; we are deliberately not touching `is_modern`.
+
+`channel` needs no owned adapter, and this site is the proof. The signature is
+`dispatch_context<'a>(&'a self, _state: &'a AppState, ...) -> MetaMcpCallerContext<'a>`.
+The state is already a parameter — underscore-prefixed only because nothing
+used it yet. Dropping the underscore makes `&*state.proxy_manager` live for
+exactly `'a`, which is the lifetime of the returned context. A borrowed
+context cannot move into a `'static` spawn, so every use of it necessarily
+lives inside the frame holding that borrow. There is no lifetime here that an
+owned adapter would reach and a borrow would not.
+
+That also answers "do not silently route tasks through an always-refusing
+placeholder", which was a fair objection to a design we are not proposing.
+`&*state.proxy_manager` is the real `ClientChannel` (`proxy.rs`, `d36af269`),
+not `NoClientChannel`. It refuses only when there is genuinely no live
+session — which for a durable task whose creating client has gone is the true
+answer, not a stub's answer. `NoClientChannel` stays where it belongs, on the
+stdio path at `server/mod.rs:1854`, where the refusal is structural.
+
+What that leaves open is a real question and it is yours, not ours: a durable
+task that outlives its creating client will get `DeliveryError::NoSession` on
+any elicitation. Failing the task is defensible. Queueing and resuming needs a
+durable pending-elicitation store that nothing in this tree provides, so it is
+the expensive branch and should be chosen deliberately rather than arrived at.
+It does not gate the two lines above, and it does not gate MRTR.7a/7b wiring.
+
+Bridge status, unchanged by this: `e1c4899e` and `d36af269` are committed and
+pushed. `caller.channel` still has zero production readers and `InputBridge`
+still has zero production constructors, so MRTR.7a and 7b remain UNWIRED and
+§11 stop-the-line stands. The checkpoint is complete and reachable by nothing.
