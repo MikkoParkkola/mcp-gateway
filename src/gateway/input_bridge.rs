@@ -463,11 +463,19 @@ impl InputBridge<'_> {
 
     /// Put one round's prompts to the client and collect what came back.
     ///
-    /// A prompt that outlives its wait is dropped rather than failing the
-    /// call: the bound exists so one silent client cannot hold the exchange
-    /// open, and the backend is still owed the round it asked for. A client
-    /// that *answered* something unusable is the other case, and that one ends
-    /// the call, because an answer the gateway cannot read is not silence.
+    /// A prompt that outlives its wait ends the call, and WHICH bound ended the
+    /// wait is which failure it is. The wait is the shorter of `per_prompt` and
+    /// the aggregate remainder, so when the remainder is the shorter one the
+    /// budget is gone and no key owns that — [`BridgeError::Deadline`]. When
+    /// the budget is still live, the silence belongs to the prompt that was in
+    /// flight and is attributed to its key.
+    ///
+    /// The prompt is never simply skipped. Doing so retried the backend with
+    /// that key absent, which is the shape a question nobody asked also has, so
+    /// a client that stopped answering reached the backend as one that was
+    /// never consulted. A client that *answered* something unusable is a third
+    /// case and has always ended the call, because an answer the gateway cannot
+    /// read is not silence.
     async fn ask(
         &self,
         session_id: &str,
@@ -478,12 +486,23 @@ impl InputBridge<'_> {
         for prompt in prompts {
             let id = format!("{}{}", prompt.kind.prefix(), uuid::Uuid::new_v4());
             let left = self.bounds.aggregate.saturating_sub(started.elapsed());
+            let wait = self.bounds.per_prompt.min(left);
             let sent =
                 self.channel
                     .send_request(session_id, &id, prompt.kind.method(), prompt.params);
-            let Ok(reply) = tokio::time::timeout(self.bounds.per_prompt.min(left), sent).await
-            else {
-                continue;
+            let Ok(reply) = tokio::time::timeout(wait, sent).await else {
+                // `min` yields `left` exactly when `left <= per_prompt`, the tie
+                // included, which is the discriminator R8a spells: the aggregate
+                // remainder was the binding bound, so the budget is spent and
+                // there is no key to blame for it.
+                return Err(if wait == left {
+                    BridgeError::Deadline
+                } else {
+                    BridgeError::Delivery {
+                        key: prompt.key,
+                        error: DeliveryError::TimedOut,
+                    }
+                });
             };
             let answer = reply
                 .and_then(|reply| Self::project(prompt.kind, &reply))
