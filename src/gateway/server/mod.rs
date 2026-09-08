@@ -2148,6 +2148,56 @@ fn spawn_idle_reaper(
     })
 }
 
+/// The caller context every stdio `tools/call` runs under.
+///
+/// Extracted from `dispatch_single_with_sink` so the transport-specific
+/// reasoning below -- why stdio is admin, why it has no channel and no
+/// asker -- sits in one named place instead of forty lines inside a match
+/// arm. `era` is the caller's because the `initialize` arm advertises
+/// against the same `shape`.
+fn stdio_caller_context<'a>(
+    authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
+    era: crate::protocol::meta::Era,
+) -> MetaMcpCallerContext<'a> {
+    MetaMcpCallerContext {
+        authorizer,
+        // Stdio has no port and no network surface: the
+        // client SPAWNED this process, so it already holds
+        // whatever the operator holds — it could edit the
+        // config file just as easily. Withholding admin
+        // here would take the management tools away from
+        // exactly the single-user setup the origin gate
+        // exists to protect, and protect nothing.
+        //
+        // Explicit since the admin gate moved to the
+        // dispatcher: it previously lived on the HTTP path
+        // alone, so stdio was never checked and the default
+        // non-admin context went unnoticed.
+        is_admin: true,
+        // stdio carries no per-request capability
+        // declaration to read, and absent means absent.
+        input_capabilities: crate::protocol::meta::Declared::NONE,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+        // Same `shape` the `initialize` arm advertises
+        // against, two arms up.
+        era,
+        // No `ProxyManager` in this scope -- it is HTTP-only
+        // -- so there is no session to put a request on.
+        channel: &crate::gateway::input_bridge::NoClientChannel,
+        api_key_name: None,
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        // stdio speaks to one process over two pipes and
+        // has no elicitation channel: there is no operator
+        // this transport can reach, so a destructive call
+        // it cannot confirm is refused rather than asked
+        // about. Not "found no session" -- no asker can
+        // exist here at all.
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -3636,55 +3686,5 @@ mod tests {
         );
         assert_eq!(capability.min_samples, 2);
         assert_eq!(capability.cooldown, std::time::Duration::from_secs(45));
-    }
-}
-
-/// The caller context every stdio `tools/call` runs under.
-///
-/// Extracted from `dispatch_single_with_sink` so the transport-specific
-/// reasoning below -- why stdio is admin, why it has no channel and no
-/// asker -- sits in one named place instead of forty lines inside a match
-/// arm. `era` is the caller's because the `initialize` arm advertises
-/// against the same `shape`.
-fn stdio_caller_context<'a>(
-    authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
-    era: crate::protocol::meta::Era,
-) -> MetaMcpCallerContext<'a> {
-    MetaMcpCallerContext {
-        authorizer,
-        // Stdio has no port and no network surface: the
-        // client SPAWNED this process, so it already holds
-        // whatever the operator holds — it could edit the
-        // config file just as easily. Withholding admin
-        // here would take the management tools away from
-        // exactly the single-user setup the origin gate
-        // exists to protect, and protect nothing.
-        //
-        // Explicit since the admin gate moved to the
-        // dispatcher: it previously lived on the HTTP path
-        // alone, so stdio was never checked and the default
-        // non-admin context went unnoticed.
-        is_admin: true,
-        // stdio carries no per-request capability
-        // declaration to read, and absent means absent.
-        input_capabilities: crate::protocol::meta::Declared::NONE,
-        retry: &crate::protocol::mrtr::NO_RETRY,
-        // Same `shape` the `initialize` arm advertises
-        // against, two arms up.
-        era,
-        // No `ProxyManager` in this scope -- it is HTTP-only
-        // -- so there is no session to put a request on.
-        channel: &crate::gateway::input_bridge::NoClientChannel,
-        api_key_name: None,
-        agent_id: None,
-        grant_subject: None,
-        verified_identity: None,
-        // stdio speaks to one process over two pipes and
-        // has no elicitation channel: there is no operator
-        // this transport can reach, so a destructive call
-        // it cannot confirm is refused rather than asked
-        // about. Not "found no session" -- no asker can
-        // exist here at all.
-        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     }
 }
