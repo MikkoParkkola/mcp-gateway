@@ -1,12 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+use std::sync::Arc;
+
 use crate::capability::CapabilityDefinition;
 use crate::identity_grants::{CapabilityExposure, GrantSubject};
+use crate::identity_propagation::{AccountStrategyRegistry, PreparedAccountCredential};
+use crate::key_server::oidc::VerifiedIdentity;
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 
 /// Request-scoped execution metadata for a capability call.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// `PartialEq`/`Eq` are hand-written rather than derived: `VerifiedIdentity`
+/// implements neither, and deriving over it would compare `email`, `name` and
+/// `groups` — mutable display labels that must never decide whether two
+/// requests are the same principal.
+#[derive(Debug, Clone, Default)]
 pub struct CapabilityExecutionContext {
     /// Verified caller subject associated with this request, when available.
     pub caller_identity: Option<GrantSubject>,
@@ -38,6 +47,58 @@ pub struct CapabilityExecutionContext {
     /// propagation) before dispatch. Copied, never re-resolved, never
     /// re-hashed. `None` is the public/anonymous namespace.
     pub cache_binding: Option<String>,
+    /// The VERIFIED end-user identity this call is made as.
+    ///
+    /// The verification-context seam for `auth.account`: the account key is
+    /// built from a verified ISSUER and SUBJECT, and this is the only field on
+    /// this context that carries both. [`Self::caller_identity`] is a
+    /// `GrantSubject` — an authorization handle whose authority is not an OAuth
+    /// issuer — so it can never stand in for this one. `None` means the request
+    /// carries no verified identity, and a managed or external account
+    /// reference then refuses.
+    pub verified_identity: Option<Arc<VerifiedIdentity>>,
+    /// The account credential this dispatch already resolved, when the caller
+    /// resolved one before its OWN cache lookup.
+    ///
+    /// The invoke path resolves the capability's `auth.account` reference
+    /// BEFORE the outer response cache is consulted — a key built before the
+    /// account is known cannot name the account holder — and carries the answer
+    /// here so the inner capability cache and the egress headers speak about
+    /// that same credential instead of minting a second one. `None` means
+    /// nothing was resolved yet: the executor then resolves it itself, before
+    /// its own cache lookup, and never serves a cached entry for an account it
+    /// has not resolved.
+    ///
+    /// Crate-visible because a prepared credential is not something an embedder
+    /// may fabricate: the only producer is
+    /// [`crate::identity_propagation::AccountStrategyRegistry::resolve`].
+    pub(crate) account_credential: Option<Arc<PreparedAccountCredential>>,
+}
+
+impl PartialEq for CapabilityExecutionContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.caller_identity == other.caller_identity
+            && self.allow_loopback_egress == other.allow_loopback_egress
+            && self.policy_epoch == other.policy_epoch
+            && self.protocol_revision == other.protocol_revision
+            && self.routing_profile == other.routing_profile
+            && self.cache_binding == other.cache_binding
+            && verified_binding(self.verified_identity.as_deref())
+                == verified_binding(other.verified_identity.as_deref())
+            // Compared on the opaque binding only: a prepared credential's
+            // headers are live token material and are never compared, logged
+            // or ordered.
+            && self.account_binding() == other.account_binding()
+    }
+}
+
+impl Eq for CapabilityExecutionContext {}
+
+/// The only part of a verified identity two contexts are compared on: the
+/// issuer+subject pair, via the same length-prefixed derivation the account key
+/// and the governance audit use.
+fn verified_binding(identity: Option<&VerifiedIdentity>) -> Option<String> {
+    identity.map(VerifiedIdentity::stable_actor_id)
 }
 
 impl CapabilityExecutionContext {
@@ -51,13 +112,53 @@ impl CapabilityExecutionContext {
             protocol_revision: None,
             routing_profile: None,
             cache_binding: None,
+            verified_identity: None,
+            account_credential: None,
         }
+    }
+
+    /// The opaque binding of the already-resolved account credential, if this
+    /// context carries one.
+    pub(crate) fn account_binding(&self) -> Option<&str> {
+        self.account_credential
+            .as_deref()
+            .map(PreparedAccountCredential::cache_binding)
+    }
+
+    /// TEST SEAM: carry a credential resolved EARLIER, as the invoke path does.
+    ///
+    /// The gateway resolves the account once in the invoke path and hands the
+    /// prepared credential down; the executor then rechecks it instead of
+    /// re-minting. A test that needs to prove a revocation committed AFTER that
+    /// resolve is refused has to reproduce exactly that carrying step, because
+    /// re-resolving would refuse at the mint and never exercise the recheck.
+    /// `cfg(test)` only, and it grants nothing: everything the field is used for
+    /// is revalidated against the live registry before a cache lookup or egress.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_account_credential(
+        mut self,
+        credential: Arc<PreparedAccountCredential>,
+    ) -> Self {
+        self.account_credential = Some(credential);
+        self
     }
 
     /// Return this context with isolated loopback egress enabled.
     #[must_use]
     pub const fn with_isolated_loopback_egress(mut self) -> Self {
         self.allow_loopback_egress = true;
+        self
+    }
+
+    /// Return this context carrying the verified end-user identity.
+    ///
+    /// The value must come from an actual verification (the gateway's
+    /// `MetaMcpCallerContext`), never from a grant subject, an API key name or
+    /// a display name.
+    #[must_use]
+    pub fn with_verified_identity(mut self, identity: Arc<VerifiedIdentity>) -> Self {
+        self.verified_identity = Some(identity);
         self
     }
 }
@@ -130,6 +231,53 @@ pub(crate) fn validate_oauth_isolation(
             capability.name, auth.key
         ),
     ))
+}
+
+/// Refuse a capability whose `auth.account` does not resolve, or whose
+/// `auth.key` is not this descriptor's `oauth:<provider>`.
+///
+/// THE REGISTRATION BOUNDARY, and re-checked at execution for a capability that
+/// was registered dynamically. Admitting an unresolvable reference would publish
+/// a tool that can only fail — and the failure would be found by a caller at
+/// dispatch rather than by an operator at load.
+///
+/// `registry = None` is a standalone executor with no account catalogue at all.
+/// Registration is then unchanged (there is nothing to check against) and the
+/// EXECUTION path fails closed instead: it never falls through to the
+/// gateway-held `oauth:<provider>` token.
+///
+/// # Errors
+///
+/// [`Error::Config`] naming the unresolved reference or the key the
+/// descriptor's provider requires.
+pub(crate) fn validate_capability_account_binding(
+    capability: &CapabilityDefinition,
+    registry: Option<&AccountStrategyRegistry>,
+) -> Result<()> {
+    let Some(account) = capability.auth.account.as_deref() else {
+        return Ok(());
+    };
+    let Some(registry) = registry else {
+        return Ok(());
+    };
+    let Some(declared) = registry.declared(account) else {
+        return Err(Error::Config(format!(
+            "Capability '{}' references account '{account}', which is not a key in \
+             accounts.descriptors. The reference is the descriptor map key (the account's \
+             logical id) — never the provider id, an email or a display name.",
+            capability.name
+        )));
+    };
+    let expected = AccountStrategyRegistry::expected_auth_key(&declared.provider);
+    if capability.auth.key != expected {
+        return Err(Error::Config(format!(
+            "Capability '{}' references account '{account}' but declares auth.key '{}'. That \
+             descriptor's provider requires '{expected}'; a capability is never joined to an \
+             account by provider name alone.",
+            capability.name, capability.auth.key
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_personal_capability_identity(

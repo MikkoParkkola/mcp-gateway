@@ -30,7 +30,8 @@ use super::hash::compute_capability_hash;
 use super::schema_validator::validate_arguments;
 use super::{
     CapabilityDefinition, CapabilityExecutionContext, CapabilityExecutor, CapabilityLoader,
-    validate_oauth_isolation, validate_personal_capability_identity,
+    validate_capability_account_binding, validate_oauth_isolation,
+    validate_personal_capability_identity,
 };
 use crate::Result;
 use crate::protocol::{Content, Tool, ToolsCallResult};
@@ -114,6 +115,19 @@ impl IndexedCapabilities {
 // ============================================================================
 // CapabilityBackend
 // ============================================================================
+
+/// The outcome of loading one capability directory.
+///
+/// `rejected` holds one rendered refusal per capability the account admission
+/// gate turned away, so a caller that must not serve a partially admitted
+/// catalogue can fail instead of only logging.
+#[derive(Debug, Default, Clone)]
+pub struct DirectoryLoad {
+    /// Capabilities that entered the tool surface.
+    pub admitted: usize,
+    /// `"<capability>: <error>"` for each refused capability, in load order.
+    pub rejected: Vec<String>,
+}
 
 /// Backend that exposes capabilities as MCP tools
 ///
@@ -264,8 +278,28 @@ impl CapabilityBackend {
     ///
     /// Returns an error if the directory cannot be loaded.
     pub async fn load_from_directory(&self, path: &str) -> Result<usize> {
+        Ok(self.load_from_directory_reporting(path).await?.admitted)
+    }
+
+    /// Load a directory and REPORT, rather than only log, every capability the
+    /// account admission gate refused.
+    ///
+    /// `load_from_directory` keeps its log-and-drop behaviour for the hot-reload
+    /// and account-less paths. Startup uses this variant so an invalid
+    /// `auth.account` binding present in the INITIAL catalogue can be turned
+    /// into a startup failure instead of a warning behind a serving listener.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory itself cannot be loaded. A refused
+    /// capability is not an error here — it is reported in
+    /// [`DirectoryLoad::rejected`] so the caller decides.
+    pub async fn load_from_directory_reporting(&self, path: &str) -> Result<DirectoryLoad> {
         let loaded = CapabilityLoader::load_directory(path).await?;
-        let count = loaded.len();
+        let mut report = DirectoryLoad {
+            admitted: loaded.len(),
+            rejected: Vec::new(),
+        };
 
         // Register directory for future hot-reloads.
         {
@@ -275,17 +309,27 @@ impl CapabilityBackend {
             }
         }
 
-        // Upsert each capability into the indexed store.
+        // Upsert each capability into the indexed store, through the account
+        // admission gate. A refused capability is LOGGED and dropped rather
+        // than published: the operator gets a named error, and no caller gets a
+        // tool whose account reference cannot resolve.
         for cap in loaded {
-            {
-                let mut caps = self.capabilities.write();
-                caps.upsert(cap);
+            let capability = cap.name.clone();
+            if let Err(error) = self.register_capability(cap) {
+                warn!(
+                    backend = %self.name,
+                    capability = %capability,
+                    error = %error,
+                    "Capability refused: its account binding does not resolve"
+                );
+                report.admitted -= 1;
+                report.rejected.push(format!("{capability}: {error}"));
             }
             tokio::task::yield_now().await;
         }
 
-        info!(backend = %self.name, count = count, path = path, "Loaded capabilities");
-        Ok(count)
+        info!(backend = %self.name, count = report.admitted, path = path, "Loaded capabilities");
+        Ok(report)
     }
 
     /// Reload all capabilities from registered directories
@@ -319,11 +363,28 @@ impl CapabilityBackend {
             }
         }
 
+        // The same admission gate the initial load applies.
+        let mut admitted = Vec::with_capacity(all_caps.len());
+        for cap in all_caps {
+            match validate_capability_account_binding(&cap, self.executor.account_strategies()) {
+                Ok(()) => admitted.push(cap),
+                Err(error) => {
+                    total -= 1;
+                    warn!(
+                        backend = %self.name,
+                        capability = %cap.name,
+                        error = %error,
+                        "Capability refused on reload: its account binding does not resolve"
+                    );
+                }
+            }
+        }
+
         // Atomic swap: rebuild index and tool cache in one write lock, then
         // bump the shared policy epoch while that lock is still held.
         {
             let mut caps = self.capabilities.write();
-            caps.replace_all(all_caps);
+            caps.replace_all(admitted);
             self.executor.bump_policy_epoch();
         }
 
@@ -455,6 +516,22 @@ impl CapabilityBackend {
             .await?;
 
         Ok(build_success_tool_result(&capability, result))
+    }
+
+    /// Register one capability through the account-binding admission gate.
+    ///
+    /// A capability whose `auth.account` does not name a configured descriptor,
+    /// or whose `auth.key` is not `oauth:<descriptor.provider>`, never enters
+    /// the tool surface. Descriptorless capabilities are unaffected.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Config`] naming the unresolved reference, or the key the
+    /// descriptor's provider requires.
+    pub fn register_capability(&self, capability: CapabilityDefinition) -> Result<()> {
+        validate_capability_account_binding(&capability, self.executor.account_strategies())?;
+        self.capabilities.write().upsert(capability);
+        Ok(())
     }
 
     /// Check if a capability exists — O(1) via the name index.

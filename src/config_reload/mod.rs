@@ -356,6 +356,14 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigPatch {
 }
 
 #[cfg(test)]
+#[path = "account_reload_tests.rs"]
+mod account_reload_tests;
+
+#[cfg(test)]
+#[path = "account_reload_guard_tests.rs"]
+mod account_reload_guard_tests;
+
+#[cfg(test)]
 mod restart_required_tests {
     use super::LiveConfig;
     use crate::config::Config;
@@ -650,6 +658,13 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
         "cache" => cache,
         "runtime" => runtime,
         "tasks" => tasks,
+        // Fail-closed on purpose. Eager replacement of a descriptor's authority,
+        // resource, issuer or scopes is NOT implemented, so an `accounts` edit
+        // is reported as outstanding until a restart rather than claimed as
+        // applied. A field wrongly counted tells an operator to restart when
+        // they need not; the reverse tells them a change took effect when it
+        // did not.
+        "accounts" => accounts,
         #[cfg(feature = "cost-governance")]
         "cost_governance" => cost_governance,
     ]
@@ -753,6 +768,11 @@ struct MetaFields {
     #[cfg(feature = "cost-governance")]
     cost_governance: String,
     tasks: String,
+    /// The `accounts` block. Absent from this comparison, an accounts-only edit
+    /// — a descriptor's issuer, resource or scopes — produced no diff at all,
+    /// so the reload reported nothing and the running gateway kept minting
+    /// under a descriptor the file had already replaced.
+    accounts: String,
 }
 
 impl MetaFields {
@@ -781,22 +801,32 @@ impl MetaFields {
             #[cfg(feature = "cost-governance")]
             cost_governance: canonical_json(&c.cost_governance),
             tasks: canonical_json(&c.tasks),
+            accounts: canonical_json(&c.accounts),
         }
     }
 }
 
 /// Partition backends into added / removed / modified buckets.
+///
+/// Compared and carried as EFFECTIVE configurations — what a bound backend
+/// actually runs with, from `config::account_bindings::effective_backends`.
+/// `apply_patch` constructs the replacement `Backend` straight from what it is
+/// handed, so a raw config here would drop the `identity_propagation` a managed
+/// descriptor compiled to and leave the replacement dispatching with no
+/// per-user credential at all. Comparing effective configs also means an
+/// unchanged binding stays byte-identical across a reload instead of appearing
+/// modified.
 fn classify_backends(old: &Config, new: &Config, patch: &mut ConfigPatch) {
     let runtime_changed = canonical_json(&old.runtime) != canonical_json(&new.runtime);
-    let old_enabled: std::collections::HashMap<&str, &BackendConfig> = old
-        .backends
+    let old_effective = crate::config::account_bindings::effective_backends(old);
+    let new_effective = crate::config::account_bindings::effective_backends(new);
+    let old_enabled: std::collections::HashMap<&str, &BackendConfig> = old_effective
         .iter()
         .filter(|(_, c)| c.enabled)
         .map(|(k, v)| (k.as_str(), v))
         .collect();
 
-    let new_enabled: std::collections::HashMap<&str, &BackendConfig> = new
-        .backends
+    let new_enabled: std::collections::HashMap<&str, &BackendConfig> = new_effective
         .iter()
         .filter(|(_, c)| c.enabled)
         .map(|(k, v)| (k.as_str(), v))
@@ -1715,6 +1745,23 @@ impl ReloadContext {
                 "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped, \
                  and no configuration was published. {restart}",
                 refusal.reason
+            ));
+        }
+
+        // A changed account binding cannot reuse the credentials minted under
+        // the descriptor it replaces: the descriptor's authority, resource,
+        // issuer, client id and requested scopes define the account key and the
+        // descriptor revision every existing lease carries. Eager replacement
+        // of those is not implemented in this slice, so this refuses and
+        // mutates nothing rather than pretending a live replacement happened.
+        // Compared against what is RUNNING, so it stays true until a restart.
+        if let Some(reason) = crate::config::account_bindings::reload_binding_refusal(
+            self.live_config.running(),
+            &new_config,
+        ) {
+            return Err(format!(
+                "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
+                 configuration was published."
             ));
         }
 

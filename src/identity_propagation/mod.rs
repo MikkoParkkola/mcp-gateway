@@ -45,7 +45,13 @@ use serde::{Deserialize, Serialize};
 use crate::gateway::oauth::GatewayKeyPair;
 use crate::key_server::oidc::VerifiedIdentity;
 
+mod account_strategies;
 mod token_exchange;
+
+pub(crate) use account_strategies::{
+    AccountCredential, AccountStrategyRegistry, DeclaredAccount, InstalledAccount,
+    PreparedAccountCredential,
+};
 pub use token_exchange::TokenExchangeStrategy;
 
 #[cfg(test)]

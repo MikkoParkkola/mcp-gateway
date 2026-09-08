@@ -295,6 +295,14 @@ pub struct MetaMcp {
             Arc<dyn crate::identity_propagation::IdentityPropagation>,
         >,
     >,
+    /// Per-DESCRIPTOR account strategies, shared with the capability executor.
+    ///
+    /// The map above is keyed by backend name, which a REST capability does not
+    /// have: it names an `accounts.descriptors` map key directly and may be
+    /// that account's only consumer. The shared installer writes ONE strategy
+    /// per descriptor here and hands the same `Arc` to the per-backend map, so
+    /// both consumers of one account hold one instance.
+    pub(super) account_strategies: Arc<crate::identity_propagation::AccountStrategyRegistry>,
     pub(super) code_mode_enabled: bool,
     /// Whether this gateway serves more than one principal (ADR-008 INV-2).
     ///
@@ -512,6 +520,9 @@ impl MetaMcp {
             reload_context: RwLock::new(None),
             identity_propagation: RwLock::new(None),
             backend_identity_propagation: RwLock::new(std::collections::HashMap::new()),
+            account_strategies: Arc::new(
+                crate::identity_propagation::AccountStrategyRegistry::default(),
+            ),
             code_mode_enabled: false,
             multi_user: std::sync::atomic::AtomicBool::new(false),
             projection_mode: crate::projection::ProjectionMode::default(),
@@ -800,6 +811,12 @@ impl MetaMcp {
     /// writes into the same tamper-evident chain from the direct backend
     /// route, which does not go through `MetaMcp`.
     pub fn enable_transparency_log(&mut self, logger: Arc<crate::security::TransparencyLogger>) {
+        // The account registry mints credentials for REST capabilities under
+        // the same "no mint without a durable audit record" rule as the
+        // Meta-MCP route, and it is reached through the capability executor
+        // rather than through `self`, so it needs its own handle on the sink.
+        self.account_strategies
+            .set_audit_logger(Arc::clone(&logger));
         self.transparency_logger = Some(logger);
     }
 
@@ -906,6 +923,17 @@ impl MetaMcp {
             .read()
             .get(backend)
             .map(Arc::clone)
+    }
+
+    /// The per-descriptor account strategies.
+    ///
+    /// Handed out rather than consulted here: the REST consumer reaches it
+    /// through `CapabilityExecutor`, which has no view of `MetaMcp`. The same
+    /// `Arc` on both sides is what makes it ONE registry rather than two.
+    pub(crate) fn account_strategies(
+        &self,
+    ) -> Arc<crate::identity_propagation::AccountStrategyRegistry> {
+        Arc::clone(&self.account_strategies)
     }
 
     /// Declare whether this gateway serves more than one principal (ADR-008
@@ -2104,6 +2132,10 @@ mod account_resolver_fixture;
 mod account_resolver_gate;
 #[cfg(test)]
 mod account_resolver_tests;
+#[cfg(test)]
+mod account_rest_fixture;
+#[cfg(test)]
+mod account_rest_tests;
 
 #[cfg(test)]
 #[path = "tests.rs"]

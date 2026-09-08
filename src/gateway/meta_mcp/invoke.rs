@@ -7,6 +7,7 @@
 //! `gateway_list_disabled_capabilities`, `gateway_reload_config`,
 //! `gateway_webhook_status`, and `gateway_run_playbook`.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -1403,8 +1404,33 @@ impl MetaMcp {
                 ),
             ));
         }
-        let identity_suffix = caller_credential
-            .cache_binding
+        // THE CAPABILITY ROUTE'S ACCOUNT BOUNDARY, RESOLVED HERE — BEFORE THE
+        // OUTER RESPONSE CACHE IS CONSULTED.
+        //
+        // The MCP route resolves its per-user credential above, for the same
+        // reason: a cache key built before the caller's credential is known
+        // cannot name the caller. A REST capability's credential does not come
+        // from `backend_identity_propagation` (that map is keyed by BACKEND
+        // name) but from the capability's own `auth.account`, so it has to be
+        // resolved from the capability definition — the tool's PRIMARY auth —
+        // and it has to be resolved here rather than inside the executor, which
+        // only runs after this cache lookup has already happened. The credential
+        // is carried into dispatch and rechecked there; it is never minted
+        // twice, and a refusal returns now, before any lookup.
+        let account_credential = self
+            .resolve_capability_account_credential(server, tool, verified_identity)
+            .await?;
+        // ONE binding for both cache layers and for the transport's session
+        // partitioning. The MCP route's propagation binding when there is one,
+        // otherwise the account credential's — they are never both present,
+        // because one describes a backend's propagation config and the other a
+        // capability's account reference.
+        let dispatch_binding = caller_credential.cache_binding.clone().or_else(|| {
+            account_credential
+                .as_ref()
+                .map(|prepared| prepared.cache_binding().to_owned())
+        });
+        let identity_suffix = dispatch_binding
             .as_deref()
             .map(|b| format!("|idp:{b}"))
             .unwrap_or_default();
@@ -1419,7 +1445,7 @@ impl MetaMcp {
         // separate from `identity_suffix` above: that one keys retry
         // de-duplication, a different contract with a different lifetime.
         let caller_principal = super::support::caller_cache_principal(
-            caller_credential.cache_binding.as_deref(),
+            dispatch_binding.as_deref(),
             verified_identity,
             caller.grant_subject.as_ref(),
         );
@@ -1644,8 +1670,10 @@ impl MetaMcp {
                 want_full,
                 session_id,
                 caller_identity,
+                verified_identity,
                 &caller_credential.headers,
-                caller_credential.cache_binding.as_deref(),
+                dispatch_binding.as_deref(),
+                account_credential,
                 api_key_name,
                 trace_id,
                 policy_epoch,
@@ -2560,6 +2588,55 @@ impl MetaMcp {
         }
     }
 
+    /// Resolve the account credential a CAPABILITY tool needs, before any
+    /// cache is consulted.
+    ///
+    /// `Ok(None)` means there is nothing to resolve on this route: the target
+    /// is not the capability backend, the tool is not one of its capabilities,
+    /// the capability names no account, or the account is an explicit `shared`
+    /// descriptor whose static credential path is preserved unchanged. Every
+    /// other outcome is either a credential minted for the verified caller by
+    /// the ONE shared registry — the same instance the executor rechecks
+    /// against — or a refusal that returns before the response cache is read.
+    ///
+    /// The reference read here is the capability's PRIMARY `auth`, which is the
+    /// same `auth` the executor injects at egress; nothing here re-derives it
+    /// from a provider name or a backend name.
+    ///
+    /// # Errors
+    ///
+    /// Every refusal from
+    /// [`crate::identity_propagation::AccountStrategyRegistry::resolve`].
+    async fn resolve_capability_account_credential(
+        &self,
+        server: &str,
+        tool: &str,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> Result<Option<Arc<crate::identity_propagation::PreparedAccountCredential>>> {
+        use crate::identity_propagation::AccountCredential;
+
+        let Some(capabilities) = self.get_capabilities() else {
+            return Ok(None);
+        };
+        if server != capabilities.name {
+            return Ok(None);
+        }
+        let Some(definition) = capabilities.get(tool) else {
+            return Ok(None);
+        };
+        let Some(account) = definition.auth.account.as_deref() else {
+            return Ok(None);
+        };
+        match self
+            .account_strategies
+            .resolve(account, &definition.auth.key, verified_identity)
+            .await?
+        {
+            AccountCredential::Legacy => Ok(None),
+            AccountCredential::Prepared(prepared) => Ok(Some(prepared)),
+        }
+    }
+
     /// Dispatch one round to the backend and meter it.
     ///
     /// Holds every emission that must fire once per backend call: the
@@ -2585,8 +2662,15 @@ impl MetaMcp {
         want_full: bool,
         session_id: Option<&str>,
         caller_identity: Option<&GrantSubject>,
+        // The VERIFIED end-user identity, carried for the capability route
+        // whose account boundary is inside the executor. Pass-through only.
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         propagated_headers: &[(String, String)],
         cache_binding: Option<&str>,
+        // The capability route's account credential, resolved once above the
+        // response cache and carried down unchanged. `None` for every MCP
+        // backend and for a capability with no account reference.
+        account_credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
         api_key_name: Option<&str>,
         trace_id: &str,
         policy_epoch: u64,
@@ -2605,8 +2689,10 @@ impl MetaMcp {
                 want_full,
                 session_id,
                 caller_identity,
+                verified_identity,
                 propagated_headers,
                 cache_binding,
+                account_credential,
                 policy_epoch,
                 protocol_revision,
                 routing_profile,
@@ -2696,6 +2782,11 @@ impl MetaMcp {
         // re-decides it — this is the value the call is made *with*, not the
         // one it is checked against.
         caller_identity: Option<&GrantSubject>,
+        // The VERIFIED end-user identity, carried for the capability route,
+        // whose account boundary is inside the executor rather than at the
+        // resolver above. Pass-through only: nothing here decides it, and the
+        // MCP route continues to use the credential already resolved.
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         // Pre-resolved per-user propagation headers (empty = none). Resolved
         // once in `invoke_tool_traced` so the cache key and this dispatch share
         // one credential (MIK-6734); dispatch never mints.
@@ -2705,6 +2796,10 @@ impl MetaMcp {
         // copies the same already-resolved string into the inner cache key.
         // `None` → shared default bucket / public namespace.
         identity_key: Option<&str>,
+        // Resolved before the outer response cache, rechecked against the same
+        // registry inside the executor before the inner cache and before
+        // egress. Never minted here.
+        account_credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
         policy_epoch: u64,
         protocol_revision: Option<&str>,
         routing_profile: &str,
@@ -2733,6 +2828,18 @@ impl MetaMcp {
                     protocol_revision: protocol_revision.map(str::to_owned),
                     routing_profile: Some(routing_profile.to_owned()),
                     cache_binding: identity_key.map(str::to_owned),
+                    // The ONLY source of a verified identity on this route is
+                    // `MetaMcpCallerContext::verified_identity`, which carries a
+                    // verified issuer AND subject. `caller_identity` above is a
+                    // `GrantSubject`: an authorization handle whose authority is
+                    // not an OAuth issuer, so an account key built from it would
+                    // bind a person the gateway never authenticated. It is
+                    // threaded here untouched and never synthesised.
+                    verified_identity: verified_identity.cloned().map(Arc::new),
+                    // Carried, not re-resolved: the executor rechecks it
+                    // against the same registry before its own cache lookup
+                    // and again before egress.
+                    account_credential,
                 },
             )
             .await?;

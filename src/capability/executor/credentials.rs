@@ -12,28 +12,200 @@ use serde::Deserialize;
 use serde_json::Value;
 use tracing::{info, warn};
 
+use crate::capability::CapabilityExecutionContext;
+use crate::identity_propagation::AccountCredential;
 use crate::oauth::TokenInfo;
+use crate::personal_accounts::config::DescriptorMode;
 use crate::{Error, Result};
 
 use super::CapabilityExecutor;
 
 impl CapabilityExecutor {
     /// Fetch credential from secure storage.
-    pub(super) async fn fetch_credential(&self, auth: &super::super::AuthConfig) -> Result<String> {
+    /// Resolve a capability's `auth.account` reference into outbound headers.
+    ///
+    /// `Ok(None)` means there is nothing to resolve — no reference, or an
+    /// explicit `shared` descriptor whose existing static behaviour must be
+    /// preserved byte for byte. Everything else is either headers minted for
+    /// the verified caller by the shared strategy, or a refusal.
+    ///
+    /// # Errors
+    ///
+    /// Every refusal from [`crate::identity_propagation::AccountStrategyRegistry::resolve`],
+    /// plus the no-catalogue case. None of them falls through to a legacy
+    /// lookup.
+    pub(super) async fn resolve_account_headers(
+        &self,
+        auth: &super::super::AuthConfig,
+        context: &CapabilityExecutionContext,
+    ) -> Result<Option<Vec<(String, String)>>> {
+        let Some(account) = auth.account.as_deref() else {
+            return Ok(None);
+        };
+        let registry = self.require_account_catalogue(auth, account)?;
+        // The dispatch already resolved this account before its first cache
+        // lookup. Recheck it against the SAME registry here — the last point
+        // before the credential goes on the wire — and then present the headers
+        // it minted verbatim. Re-minting instead would mean the value that
+        // selected the cache entry and the value on the wire were two different
+        // credentials, which is exactly the drift the MCP route's
+        // resolve-once-reuse-verbatim rule exists to prevent.
+        if let Some(prepared) = context.account_credential.as_deref() {
+            Self::assert_prepared_matches(prepared, auth, account)?;
+            registry
+                .revalidate(prepared, context.verified_identity.as_deref())
+                .await?;
+            return Ok(Some(prepared.headers().to_vec()));
+        }
+        match registry
+            .resolve(account, &auth.key, context.verified_identity.as_deref())
+            .await?
+        {
+            AccountCredential::Legacy => Ok(None),
+            AccountCredential::Prepared(prepared) => Ok(Some(prepared.headers().to_vec())),
+        }
+    }
+
+    /// Resolve the capability's PRIMARY `auth.account` reference and publish
+    /// its binding onto the context, BEFORE the caller consults any cache.
+    ///
+    /// Returns the context to execute under. Unchanged for a capability with no
+    /// account reference and for an explicit `shared` descriptor — both keep
+    /// the existing cache key and the existing static credential path.
+    ///
+    /// When the invoke path already resolved a credential for this dispatch it
+    /// is RECHECKED against the registry rather than re-minted, so one dispatch
+    /// consumes exactly one credential; when nothing was carried (a standalone
+    /// executor, or any caller that did not prepare one) the account is
+    /// resolved here instead. There is no third case, and in particular no case
+    /// in which a cache is consulted for an account that was never resolved.
+    ///
+    /// # Errors
+    ///
+    /// Every refusal from
+    /// [`crate::identity_propagation::AccountStrategyRegistry::resolve`] and
+    /// [`crate::identity_propagation::AccountStrategyRegistry::revalidate`],
+    /// plus the no-catalogue case and a carried credential that does not belong
+    /// to this capability's reference. None of them falls back to a legacy
+    /// lookup and none of them degrades into a cache miss.
+    pub(super) async fn prepare_account_context(
+        &self,
+        capability: &super::super::CapabilityDefinition,
+        mut context: CapabilityExecutionContext,
+    ) -> Result<CapabilityExecutionContext> {
+        let auth = &capability.auth;
+        let Some(account) = auth.account.as_deref() else {
+            return Ok(context);
+        };
+        let registry = self.require_account_catalogue(auth, account)?;
+
+        if let Some(prepared) = context.account_credential.clone() {
+            Self::assert_prepared_matches(&prepared, auth, account)?;
+            registry
+                .revalidate(&prepared, context.verified_identity.as_deref())
+                .await?;
+            context.cache_binding = Some(prepared.cache_binding().to_owned());
+            return Ok(context);
+        }
+
+        match registry
+            .resolve(account, &auth.key, context.verified_identity.as_deref())
+            .await?
+        {
+            // A `shared` descriptor is not an account credential at all: the
+            // deployment already serves it statically, and its cache namespace
+            // must stay exactly what it was.
+            AccountCredential::Legacy => Ok(context),
+            AccountCredential::Prepared(prepared) => {
+                // The strategy's own opaque binding — the five-field account
+                // digest widened with the grant generation, authorization
+                // epoch, token revision and descriptor revision. Copied, never
+                // re-hashed: a re-authorized, rotated or revoked account
+                // publishes a different binding and therefore a different key.
+                context.cache_binding = Some(prepared.cache_binding().to_owned());
+                context.account_credential = Some(prepared);
+                Ok(context)
+            }
+        }
+    }
+
+    /// The account catalogue, or the no-catalogue refusal.
+    ///
+    /// A standalone executor has no catalogue, and a capability naming an
+    /// account must fail CLOSED there rather than resolving the gateway-held
+    /// `oauth:<provider>` token.
+    fn require_account_catalogue(
+        &self,
+        auth: &super::super::AuthConfig,
+        account: &str,
+    ) -> Result<&crate::identity_propagation::AccountStrategyRegistry> {
+        self.account_strategies().ok_or_else(|| {
+            Error::Config(format!(
+                "capability auth references account '{account}' but this executor has no \
+                 account catalogue; refusing rather than falling back to the gateway-held \
+                 credential for '{}'.",
+                auth.key
+            ))
+        })
+    }
+
+    /// A carried credential must be the one THIS capability's reference asks
+    /// for. A credential prepared for another descriptor or another auth key
+    /// belongs to another capability's account boundary and is refused rather
+    /// than reused.
+    fn assert_prepared_matches(
+        prepared: &crate::identity_propagation::PreparedAccountCredential,
+        auth: &super::super::AuthConfig,
+        account: &str,
+    ) -> Result<()> {
+        if prepared.descriptor_id == account && prepared.auth_key == auth.key {
+            return Ok(());
+        }
+        Err(Error::Config(format!(
+            "capability auth references account '{account}' but the credential resolved for \
+             this dispatch was minted for a different account reference; refusing rather than \
+             presenting one capability's account credential for another."
+        )))
+    }
+
+    /// Whether `account` is an explicit `shared` descriptor, whose credential
+    /// is the existing gateway-held one.
+    ///
+    /// Answers from the DECLARED catalogue and never mints: asking this question
+    /// must not consume a custody lease.
+    fn account_is_shared(&self, account: &str) -> bool {
+        self.account_strategies().is_some_and(|registry| {
+            registry
+                .declared(account)
+                .is_some_and(|declared| declared.mode == DescriptorMode::Shared)
+        })
+    }
+
+    /// Fetch credential from secure storage.
+    pub(super) async fn fetch_credential(
+        &self,
+        auth: &super::super::AuthConfig,
+        _context: &CapabilityExecutionContext,
+    ) -> Result<String> {
         let key = &auth.key;
 
-        // A recognized `auth.account` names a managed personal account, whose
-        // credential lives in custody and is bound to a VERIFIED caller
-        // identity. This path has no verified identity to bind to — REST
-        // verified-identity propagation is a later step — so it refuses
-        // BEFORE any legacy lookup. Falling through would resolve the
-        // gateway-held `oauth:<provider>` token from the shared TokenStorage
-        // and present one person's login as another's, which is precisely
-        // what the account reference exists to prevent.
-        if let Some(account) = auth.account.as_deref() {
+        // A managed or external account's credential is a per-caller HEADER
+        // minted by the shared resolver, not an opaque secret this function can
+        // return: the provider's own `token_type` and any additional header
+        // would be lost, and the caller of this function may be about to put
+        // the value in a URL query parameter. `inject_auth` is the one place
+        // that may resolve one. Everything else refuses BEFORE any legacy
+        // lookup — falling through would resolve the gateway-held
+        // `oauth:<provider>` token from the shared TokenStorage and present one
+        // person's login as another's. An explicit `shared` descriptor is not
+        // an account credential at all and continues below, unchanged.
+        if let Some(account) = auth.account.as_deref()
+            && !self.account_is_shared(account)
+        {
             return Err(Error::Config(format!(
-                "capability auth references managed account '{account}', but REST capability \
-                 execution cannot yet bind a verified caller identity to it. Refusing rather \
+                "capability auth references account '{account}', whose credential is a \
+                 per-caller header minted by the shared identity resolver; it cannot be \
+                 injected as a query parameter or rewritten with a prefix. Refusing rather \
                  than falling back to the gateway-held credential for '{key}'."
             )));
         }
@@ -407,6 +579,7 @@ mod tests {
             health: crate::failsafe::HealthTracker::new("test"),
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
+            account_strategies: None,
         }
     }
 
@@ -420,6 +593,7 @@ mod tests {
             health: crate::failsafe::HealthTracker::new("test"),
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
+            account_strategies: None,
         }
     }
 

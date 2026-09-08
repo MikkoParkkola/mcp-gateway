@@ -1253,10 +1253,17 @@ impl Gateway {
         // when webhook route construction does not depend on them, populate the
         // backend in the background so health/MCP endpoints bind promptly.
         let _capability_watcher: Option<CapabilityWatcher> = if self.config.capabilities.enabled {
+            // Declared synchronously, BEFORE the loader task is spawned: the
+            // declared catalogue is what the capability registration boundary
+            // checks against. Installation of the strategies themselves happens
+            // below, still before this gateway serves.
+            let account_strategies = meta_mcp.account_strategies();
+            account_bindings::declare_account_descriptors(&self.config, &account_strategies);
             let executor = Arc::new(
                 CapabilityExecutor::new()
                     .with_env(Arc::clone(&self.env))
-                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+                    .with_account_strategies(account_strategies),
             );
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
@@ -1279,16 +1286,50 @@ impl Gateway {
             let cap_backend_for_load = Arc::clone(&cap_backend);
             let webhook_registry_for_load = Arc::clone(&webhook_registry);
             let webhooks_enabled = self.config.webhooks.enabled;
-            tokio::spawn(async move {
-                // Let the HTTP listener bind before large capability scans start.
-                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+            // AN ACCOUNT-BOUND DEPLOYMENT SCANS BEFORE IT SERVES.
+            //
+            // The background scan below exists so a large capability directory
+            // does not delay the listener binding, and it stays the default.
+            // But when the configuration declares `accounts.descriptors`, the
+            // scan is also the ADMISSION GATE that rejects a capability whose
+            // `auth.account` names no declared descriptor or whose `auth.key`
+            // is not that descriptor's `oauth:<provider>`
+            // (`CapabilityBackend::register_capability`). Running that gate
+            // concurrently with serving would mean the first requests are
+            // answered while the catalogue is still partial — a tool that the
+            // gate is about to refuse could be absent, and a tool it will admit
+            // could be missing. So an account-bound gateway completes the whole
+            // scan HERE, before `start` returns to bind and serve, and the
+            // strategies are installed further below, still before serving.
+            let accounts_configured = self.config.accounts.as_ref().is_some_and(|accounts| {
+                accounts.enabled
+                    && accounts
+                        .descriptors
+                        .as_ref()
+                        .is_some_and(|descriptors| !descriptors.is_empty())
+            });
+
+            let scan = async move {
+                if !accounts_configured {
+                    // Let the HTTP listener bind before large capability scans start.
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
 
                 let mut total_caps = 0;
+                // Every capability the account admission gate refused during the
+                // INITIAL scan. A missing or unreadable optional directory is
+                // NOT collected here — that stays benign, exactly as before.
+                let mut refused: Vec<String> = Vec::new();
                 for dir in &capability_dirs {
-                    match cap_backend_for_load.load_from_directory(dir).await {
-                        Ok(count) => {
-                            total_caps += count;
-                            debug!(directory = %dir, count = count, "Loaded capabilities");
+                    match cap_backend_for_load
+                        .load_from_directory_reporting(dir)
+                        .await
+                    {
+                        Ok(report) => {
+                            total_caps += report.admitted;
+                            debug!(directory = %dir, count = report.admitted, "Loaded capabilities");
+                            refused.extend(report.rejected);
                         }
                         Err(e) => {
                             // Don't fail startup if capability dir doesn't exist
@@ -1312,7 +1353,33 @@ impl Gateway {
                         "Capability backend ready"
                     );
                 }
-            });
+
+                if refused.is_empty() {
+                    Ok(())
+                } else {
+                    Err(crate::Error::Config(format!(
+                        "{} capabilit{} rejected by the account admission gate: {}",
+                        refused.len(),
+                        if refused.len() == 1 { "y" } else { "ies" },
+                        refused.join("; ")
+                    )))
+                }
+            };
+
+            if accounts_configured {
+                // Completed before serving, and its refusals are FATAL: an
+                // invalid `auth.account` binding present at boot fails startup
+                // rather than being logged behind a listener that is already
+                // answering. A missing optional directory is still benign.
+                scan.await?;
+                info!("Capability scan completed before serving (accounts.descriptors configured)");
+            } else {
+                tokio::spawn(async move {
+                    if let Err(error) = scan.await {
+                        warn!(error = %error, "Capability scan reported refusals");
+                    }
+                });
+            }
 
             // Start file watcher for hot-reload
             match CapabilityWatcher::start(Arc::clone(&cap_backend), shutdown_tx.subscribe()) {
@@ -2122,10 +2189,17 @@ impl Gateway {
             };
 
         if self.config.capabilities.enabled {
+            // The stdio path installs no account strategies (it never called
+            // the installer, and this slice does not change that), so a managed
+            // reference is DECLARED here and refuses at dispatch rather than
+            // silently resolving the gateway-held token.
+            let account_strategies = meta_mcp.account_strategies();
+            account_bindings::declare_account_descriptors(&self.config, &account_strategies);
             let executor = Arc::new(
                 CapabilityExecutor::new()
                     .with_env(Arc::clone(&self.env))
-                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+                    .with_account_strategies(account_strategies),
             );
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
