@@ -200,11 +200,12 @@ precondition on `SessionLifecycle::register`: a handler may only reclaim state w
 indistinguishable from an eviction. U2 defers the rule's enforcement to the second registration; a
 line on `register` is what the next handler's author will actually read.
 
-**Pre-evaluate D1a shape (b) so U3 cannot force a third round (kimi IMPROVEMENT, accepted).** If the
-answer to U3 is "do not edit the loop signature", shape (b) — the `Arc<SessionLifecycle>` held as a
-multiplexer field, set at its construction — is the fallback, and it needs no new call sites because
-the multiplexer is already constructed once per server. Recording it here means either answer
-resolves straight to code.
+**Pre-evaluate D1a shape (b) so U3 cannot force a third round (kimi IMPROVEMENT, accepted —
+and SPENT UNUSED).** The fallback was shape (b), the `Arc<SessionLifecycle>` held as a multiplexer
+field set at construction, needing no new call sites. U3 came back (a), so it is not taken. The
+improvement still did its job: it made the answer resolve straight to code either way, which is
+the only thing a pre-evaluation is for. Recorded, not deleted, so a later reader can see that (b)
+was considered and why it lost rather than that it was never weighed.
 
 ### Findings carried in from the v1 review (both legs returned SHIP)
 
@@ -276,8 +277,12 @@ If it resolves badly: the handler needs an in-flight guard, D5 re-opens, and the
 counter rejected above comes back into play. Blocks: any registration beyond `on_session_end`.
 
 **U3 — may this change edit `src/gateway/streaming.rs`, and in which of D1a's two shapes? —
-ASKABLE, ASKED, OPEN.** R3a: "streaming.rs is not another lane's file, but tell me before you edit
-it." Owner: team lead. What resolves it: the answer to the message sent with this document.
-When: before any code. If it resolves badly (no edit permitted): D1 has no host, R3a's ban on a
-second loop stands, and the design returns for a third host — implementation does not proceed on a
-guess. Blocks: D1, D1a. Does not block: D2-D7, or the test plan for the write site.
+ASKABLE. RESOLVED.**
+Asked of: the team lead. Answer (§R9): yes to shape (a), `spawn_reaper_on(&self, lifecycle:
+Arc<SessionLifecycle>)`, on the reason D1a already gave — "a field lets a caller silently get a
+reaper-less loop and the compiler says nothing, while a parameter makes every one of the three
+call sites state what it is reaping". `Option` refused for the reason D1a gave: an empty lifecycle
+already reaps nothing, so the `Option` buys a second way to spell the same emptiness.
+What it changed: D1 has its host and D1a is settled as written — nothing in the design moved. The
+answer UNBLOCKS rather than redirects, which is the cheapest kind and worth saying plainly: had it
+come back "no edit", D1 would have had no host at all. Shape (b)'s pre-evaluation is spent unused.
