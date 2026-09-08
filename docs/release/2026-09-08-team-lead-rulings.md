@@ -612,3 +612,47 @@ can trust and one a reader can only sample.
 Backfilling 525 anchors by hand is not ordered and would not be done. The checker
 reports which are stale; only those get re-read. Anchors written from now carry
 their sha, so the backlog is bounded and shrinking rather than growing.
+
+## R31 — "strict CI green" cannot mean what R14 said while §P2 is in force
+
+`control4-lifecycle` disclosed that `cargo test` on this branch no longer builds
+`mik_7215_control4_reap_count_acs`: T3 asserts on a count `reap` does not return
+yet. That red is correct. §P2 requires the failing test first, and a test that
+fails because the surface is absent is the free, real failure the rule exists to
+buy.
+
+It also makes R14's trigger unsatisfiable. R14 releases the scored NFR.PERF.1 run
+on `MRTR.7a/7b MET plus strict CI green`, and strict CI cannot go green while any
+lane is correctly mid-TDD. Six lanes writing tests first means a permanent red, so
+the trigger as written would hold the scored run until the last implementation on
+the branch landed — which is after the moment the measurement is useful.
+
+Two rules cannot both be obeyed, so one of them was wrong. It was mine.
+
+**R14's trigger now reads: no UNREGISTERED red.** A lane landing a deliberately
+red target registers it, in the same commit, in `docs/release/expected-red.md`:
+the target name, the criterion it belongs to, whether it is compile-red or
+assert-red, and the commit that introduced it. The trigger is satisfied when every
+red in strict CI appears in that register and `MRTR.7a/7b` are MET.
+
+The register is what stops "intended red" being a claim anyone can make about any
+failure after seeing it. A red that is genuinely expected can be declared before it
+is observed; one declared afterwards is a story about a failure. Same asymmetry as
+§P2's own: order is what carries the proof, not effort.
+
+Registration is not a licence to leave it red. Every entry owes a green, and an
+entry whose criterion reaches MET while the entry still stands is a contradiction
+the RC check must catch — the register is a debt list, and it must be empty at RC.
+
+`control4-lifecycle`'s second disclosure stands as its own small rule: **a compile
+error is one error for the whole file, so a compile-red row proves the surface is
+absent and says nothing about whether its assertion can discriminate.** Every
+compile-red row owes one falsifier probe at green time — break the single operand
+it exists to pin, watch that row go red on its own assertion. The lane found this
+in its own test plan and relabelled every row by kind rather than being told. T3 is
+the one row where compile-red is the whole evidence, because there the signature
+*is* the criterion.
+
+The `gpt-20260908T144154Z` SHIP does not cover the corrected plan, and relaunching
+both legs rather than carrying the verdict forward was right: a self-found
+correction committed after a verdict is a new delta, not a confirmation pass.
