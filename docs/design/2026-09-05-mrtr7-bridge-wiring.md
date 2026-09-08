@@ -1366,17 +1366,13 @@ ruling that cannot be read against the text it ruled on is unauditable.
   either row until both review legs return on the amended material — the
   sequence the ruling reopens is §P0, then §P2, then §P4, with the round count
   carried rather than reset.
-- **who re-checks the repair, when there is one.** The repair protocol returns a
-  finding to the vendor that RAISED it, and that vendor is `gpt-review`, which is
-  usage-limited until 2026-09-12 with `process_status=error` rows since
-  2026-09-06. So the closure path is the finder-unavailable one, planned here
-  rather than improvised on the day: a 12h clock from the closure request,
-  extended to the end of any verdict-bearing round in flight at expiry, then the
-  re-check falls to the other vendor or a human under a NARROWER mandate —
-  confirm or refuse F1's own text, answer `CANNOT VERIFY` rather than
-  substituting its own materiality judgment — with the row marked
-  `closure_recheck: delegated`. Never a silent reassignment to whichever leg
-  happens to be up.
+- **who re-checks the repair.** `gpt-review` returned this round with `rc=0`, so
+  the finder is available and the ordinary path applies: F1 and F2 go back to
+  `gpt-review`. The finder-unavailable clock drafted here on 2026-09-06, when
+  that leg was erroring, is DELETED rather than kept dormant against a future
+  outage. Its terms are owned by the repair protocol in
+  `rules-source/workflows/development-process.md`, and a second copy of them in
+  a lane document would drift from the one that decides.
 
 ### Review provenance for this round
 
