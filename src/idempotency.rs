@@ -372,17 +372,18 @@ impl IdempotencyCache {
     }
 
     /// Evict all stale entries.  Called by the background maintenance task.
+    ///
+    /// The expiry test and the removal MUST happen under the same lock. A
+    /// collect-then-remove pass leaves a window in which a fresh admission
+    /// takes the key between the two halves and is then deleted as though it
+    /// were the stale entry it displaced — silently unprotecting a call the
+    /// client asked to protect. `retain` holds each shard's write lock across
+    /// the predicate and the removal, so the window does not exist rather than
+    /// being narrowed.
     pub fn evict_expired(&self) {
-        let stale: Vec<String> = self
-            .entries
-            .iter()
-            .filter_map(|e| e.value().state.is_expired().then(|| e.key().clone()))
-            .collect();
-
-        let count = stale.len();
-        for key in stale {
-            self.entries.remove(&key);
-        }
+        let before = self.entries.len();
+        self.entries.retain(|_, entry| !entry.state.is_expired());
+        let count = before.saturating_sub(self.entries.len());
         if count > 0 {
             debug!(count, "Evicted stale idempotency entries");
         }
@@ -819,6 +820,67 @@ mod tests {
     }
 
     // ── evict_expired ─────────────────────────────────────────────────────────
+
+    /// Repro harness for the eviction race gpt-review raised on 2026-09-08.
+    ///
+    /// A race has no honest single-shot failing test, so the repair protocol
+    /// asks for a deterministic repro harness instead. The invariant is
+    /// one-sided and holds under any interleaving: a freshly admitted entry is
+    /// not expired, so `evict_expired` must never remove it. Under the previous
+    /// collect-then-remove pass it could — the evictor selected the key while
+    /// the old entry was stale and deleted whatever held the key afterwards.
+    #[test]
+    fn eviction_never_removes_a_fresh_entry_that_replaced_an_expired_one() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        // GIVEN: one key that keeps alternating between an expired entry the
+        // evictor wants and a fresh entry it must leave alone
+        let cache = Arc::new(IdempotencyCache::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let lost = Arc::new(AtomicUsize::new(0));
+        let expired_at = Instant::now()
+            .checked_sub(COMPLETED_TTL)
+            .unwrap()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap();
+
+        // WHEN: the background evictor runs against that churn
+        let evictor = {
+            let cache = Arc::clone(&cache);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    cache.evict_expired();
+                }
+            })
+        };
+
+        let deadline = Instant::now() + Duration::from_millis(300);
+        while Instant::now() < deadline {
+            cache.entries.insert(
+                "k".to_string(),
+                Entry::new(IdempotencyState::Completed(json!(null), expired_at), ""),
+            );
+            cache.entries.insert(
+                "k".to_string(),
+                Entry::new(IdempotencyState::InFlight(Instant::now()), ""),
+            );
+            if !cache.entries.contains_key("k") {
+                lost.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        evictor.join().unwrap();
+
+        // THEN: the fresh entry survived every pass
+        assert_eq!(
+            lost.load(Ordering::Relaxed),
+            0,
+            "eviction deleted an entry that was not expired"
+        );
+    }
+
 
     #[test]
     fn evict_expired_removes_only_stale_entries() {
