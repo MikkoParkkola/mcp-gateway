@@ -1252,7 +1252,13 @@ extraction is unchanged, the helper keeps metering and the gate stays excluded
 from it (`src/gateway/meta_mcp/invoke.rs:2464`). What moves is the CALLER: the
 gate runs inside `for _ in 0..self.bounds.rounds`
 (`src/gateway/input_bridge.rs:387`) ahead of each `self.backend.invoke(..)`, so a
-refusal ends the exchange on the round it arrives on. It must reach the caller as
+refusal ends the exchange on the round it arrives on. **The invariant is ONE
+GATE CALL PER DISPATCH, not one gate call somewhere in the loop.** The pre-loop
+gate at `src/gateway/meta_mcp/invoke.rs:1413` is RETAINED — it is what admits the
+first dispatch — and the loop ADDS one call per retry, so a fully funded exchange
+under `BridgeBounds::DEFAULT` (`rounds: 3`) issues four dispatches and four gate
+calls. Nothing is moved out of the pre-loop position; a gate call is added to
+each round that did not have one. It must reach the caller as
 itself — the same `-32003` and the same block reason — which stays unwritable
 until `invoke` yields `Result<Value, Error>`. That widening was the round-3
 design event and is still this change's work, per D-D.
