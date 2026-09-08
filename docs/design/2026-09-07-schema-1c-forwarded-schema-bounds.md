@@ -58,6 +58,14 @@ before it reaches the client, and the verdict travels with the descriptor.
   assert a bound no design named. The existing composition rows stay
   observations of the current state.
 - **2020-12 meta-validation of forwarded schemas.** See the named decision.
+- **Schema exits that are not descriptors.** `gateway_search` at its full
+  disclosure tier copies a backend `input_schema` into a search result
+  (`src/gateway/search_disclosure.rs:136`), and a backend `tools/list` entry the
+  proxy cannot deserialize into a `Tool` is forwarded verbatim rather than
+  dropped (`src/gateway/router/backend_handlers.rs:186-203`). Neither crosses
+  `project_tool_descriptor_trust_card`, so neither carries a verdict. Named here
+  rather than left to be discovered: the same walker inspects them the day that
+  surface is decided to need one.
 - Composing a verdict for any criterion other than `SCHEMA.1c`. Ruling `R6`
   (2026-09-08) directs this lane to write the `SCHEMA.1c` row itself, with the
   limit stated; every other row in
