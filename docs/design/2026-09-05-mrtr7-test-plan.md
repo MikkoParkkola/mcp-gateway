@@ -26,7 +26,7 @@ here, and they are the three stdio rows carried, `#[ignore]`d, by
 | 317 | `ac_mrtr_7b_content_violating_the_requested_schema_is_forwarded_unchanged` |
 | 318 | `ac_mrtr_7b_the_retry_bound_cuts_off_after_three_retries` |
 | 319 | `ac_mrtr_7b_the_request_budget_is_checked_before_a_batch_is_sent` |
-| 320 | `ac_mrtr_7b_an_unanswered_prompt_fails_the_call_naming_the_entry` |
+| 320 | `ac_mrtr_7b_an_unanswered_prompt_fails_the_call_naming_the_entry` — name PENDING: the tree still holds this row under its pre-ruling name `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call`, and renaming it is part of the inversion below, not a separate edit |
 | 321 | `ac_mrtr_7b_answered_rounds_are_ended_by_the_aggregate_deadline` |
 | 322 | `ac_mrtr_7b_a_batch_of_three_answers_arrives_in_one_retry` |
 | 325 | `ac_mrtr_7a_a_session_declared_capability_is_asked_with_no_slice` |
@@ -206,6 +206,41 @@ its diagnosis cost is the price of that proof.
   waited at all, which is the failure this row was built to exclude.
   The retry-absence assertion at `:1173-1182` goes with the reading it belonged
   to — under the ruling there is no retry after an abandoned round to inspect.
+
+  **Correction, 2026-09-08, from a second sweep of the siblings.** The repair
+  this row now specifies does not stop at row 320, and the first sweep said it
+  did. The wait being inverted is
+  `tokio::time::timeout(self.bounds.per_prompt.min(left), sent)`
+  (`src/gateway/input_bridge.rs:484`), and `left` is the **aggregate**
+  remainder, `self.bounds.aggregate.saturating_sub(started.elapsed())`
+  (`:481`). One arm, two causes. The bare `continue` at `:486` discarded both,
+  which is exactly why the asymmetry was invisible: a skip does not have to say
+  why it skipped.
+  Row 321 is where it surfaces. Its fixture answers every prompt after 50ms
+  against `aggregate: 500ms`, one prompt per round
+  (`tests/mik_7212_mrtr7_bridge_acs.rs:1195-1208`), so by the tenth round
+  `left` has fallen below the reply's own latency and the clamp — not the
+  per-prompt bound — takes the prompt. Today's `continue` lets that round end,
+  and the next round's top-of-loop check at `:388-390` returns
+  `BridgeError::Deadline`, which is what `:1223` asserts. Under the repair as
+  first written the same prompt returns `Delivery { TimedOut }` and row 321
+  fails.
+  The row is the cheap part. `BridgeError::Deadline` becomes unreachable from
+  `ask` altogether: elapsed time can only cross the aggregate *inside* a wait,
+  so the clamp fires first every time, and the variant the ruling never touched
+  is swallowed by the variant it did. That is a §P3 design event, named as one
+  in the design document rather than settled here.
+  What it costs this plan: the repair owes a distinction the code does not draw
+  today — an exhausted aggregate is `Deadline`, a silent client inside a live
+  budget is `Delivery { TimedOut }`, and the arm has to report which fired. Row
+  321 keeps its assertion **unchanged** and is now also the row that pins that
+  distinction. It may not be quietly rewritten to expect the new variant; a
+  plan that rewrote it would be recording the collapse rather than catching it.
+  One last thing row 320's own fixture owes its reader. Under the ruling the
+  call fails on the first silent prompt, so the second scripted client reply and
+  the backend's `completed()` are unreachable staging. The row asserts on what
+  the first prompt does; the tail of both scripts is dead, and dead staging is
+  not evidence of anything.
 - **MIK-7388's stranded-pending-entry defect** (`:430`) — *not* absent from this
   plan. It was filed against `input_bridge.rs`, which holds no pending state; the
   obligation belongs to the `ClientChannel` implementor this change creates, per
