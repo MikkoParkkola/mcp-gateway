@@ -1,0 +1,52 @@
+{
+  "cases": {
+    "A_confirm": "ok",
+    "B_authenticated_start": "fail",
+    "anonymous_start": "fail",
+    "A_confirm_replay": "fail"
+  },
+  "counters": {
+    "bound": 1,
+    "bind_ok": 1,
+    "bind_fail": 3,
+    "proxy_ok": 2,
+    "proxy_fail": 0
+  },
+  "cookies": [
+    {
+      "name": "owui_bridge_csrf",
+      "secure": true,
+      "httpOnly": true,
+      "sameSite": "Lax",
+      "domain": "localhost",
+      "path": "/"
+    },
+    {
+      "name": "token",
+      "secure": true,
+      "httpOnly": true,
+      "sameSite": "Lax",
+      "domain": "localhost",
+      "path": "/"
+    },
+    {
+      "name": "owui_bridge_chal",
+      "secure": true,
+      "httpOnly": true,
+      "sameSite": "Lax",
+      "domain": "localhost",
+      "path": "/"
+    },
+    {
+      "name": "owui_bridge_sid",
+      "secure": true,
+      "httpOnly": true,
+      "sameSite": "Lax",
+      "domain": "localhost",
+      "path": "/"
+    }
+  ],
+  "tls": "self-signed ephemeral certificate trusted by exact SPKI pin; no system trust-store modification",
+  "upstream": "pinned OWUI 0.9.6 isolated container; real authenticated session lookup",
+  "scope": "Python bridge mechanism proof only, not Rust hosted-consent or Google acceptance"
+}

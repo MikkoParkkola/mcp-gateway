@@ -1,0 +1,11 @@
+{
+  "owned_pids_stopped": [
+    74384,
+    66747
+  ],
+  "container_removed": true,
+  "network_removed": true,
+  "synthetic_credentials_removed": true,
+  "private_key_removed": true,
+  "three_browser_sessions_closed": true
+}

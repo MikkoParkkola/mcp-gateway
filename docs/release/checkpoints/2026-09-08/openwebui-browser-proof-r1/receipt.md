@@ -1,0 +1,7 @@
+# Browser identity bridge mechanism proof — 2026-09-08
+
+PASS: real browser session A authenticated through pinned OpenWebUI and confirmed one fixture journey. Authenticated B opening the same start link, anonymous browser and replay of A confirmation were refused. Final counters: bound=1, bind_ok=1, bind_fail=3, proxy_ok=2, proxy_fail=0. Separate agent-browser sessions were used; no identity lookup was mocked in this browser run.
+
+Browser-facing HTTPS used a disposable self-signed certificate accepted only by its exact SPKI pin. Inspected token/challenge/CSRF/session cookies all Secure, HttpOnly, SameSite=Lax. This does not prove public-CA or deployed Spark routing. Isolated OWUI image sha256:816ec28f0db5fc226acea7ca83cbbaaa10289231a78db40898c2fb574367c30b on an internal Docker network; SSH forwards directly to its private address after internal-network host port publishing proved unavailable. Existing OWUI/deployments untouched. Synthetic A created by real signup, B by real admin provisioning; both authenticated via real signin through the HTTPS test UI.
+
+Proof boundary: verifies feasibility of same-origin server-side OWUI session ID comparison and refusal behavior in a Python harness. No canonical Rust stable_actor_id mapping, production OWUI UI redirect, hosted OAuth/PKCE exchange, encrypted journey storage, Google token commit or release acceptance is claimed. The 26 unit tests and this browser proof are prerequisites for design finalization, not C01-C07/A07 closure. See browser-evidence.json and final-counters.png. Cleanup recorded separately.
