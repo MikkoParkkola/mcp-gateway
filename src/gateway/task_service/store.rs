@@ -20,7 +20,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use chrono::{DateTime, Utc};
 
-use super::record::{CommittedTask, PreparedTask, RECORD_VERSION, Record};
+use super::record::{
+    CommittedTask, InterruptedTask, MARKER_VERSION, PreparedTask, RECORD_VERSION, Record,
+};
 use crate::fs_lock::ExclusiveFileLock;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
 
@@ -791,6 +793,31 @@ impl TaskStore {
                     },
                     id.clone(),
                 )
+            })
+            .collect()
+    }
+
+    /// Every row a previous process left mid-flight, for startup recovery BEFORE
+    /// serving. Terminal rows are not selected at all, which is what keeps a
+    /// settled record — and a second startup — free of any rewrite.
+    pub(super) fn interrupted(&self) -> Vec<InterruptedTask> {
+        let state = self.0.state();
+        state
+            .entries
+            .iter()
+            .filter(|(_, entry)| {
+                matches!(
+                    entry.task.status(),
+                    TaskStatus::Working | TaskStatus::InputRequired
+                )
+            })
+            .map(|(id, entry)| InterruptedTask {
+                id: id.clone(),
+                owner_digest: entry.record.admission.principal_digest.clone(),
+                revision: entry.record.revision,
+                never_dispatched: entry.task.status() == TaskStatus::Working
+                    && entry.record.version >= MARKER_VERSION
+                    && !entry.record.dispatched,
             })
             .collect()
     }

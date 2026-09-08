@@ -59,7 +59,8 @@ pub use service::TaskService;
 pub use store::StoreLimits;
 pub(crate) use store::{StoreError, TaskStore};
 
-/// Open the durable store, import restored bindings, and build the executor.
+/// Open the durable store, import restored bindings, build the executor, and
+/// settle whatever a previous process left mid-flight.
 ///
 /// A failed open is returned, never swapped for a volatile store.
 ///
@@ -101,5 +102,13 @@ pub(crate) async fn open_runtime_with_admission(
 ) -> Result<(Arc<TaskService>, Arc<TaskExecutor>), ServiceError> {
     let service = Arc::new(TaskService::open(store_dir, limits, admission).await?);
     let executor = TaskExecutor::new(Arc::clone(&service), subscriptions, max_workers);
+    // Ready to serve means recovered. Rows a previous process left mid-flight are
+    // settled here, after the admission import and before this returns; a store
+    // that cannot take that write gives custody back instead of serving half of
+    // it. Nothing is dispatched, resubmitted, or asked of a backend.
+    if let Err(error) = executor.recover_interrupted().await {
+        let _ = service.shutdown().await;
+        return Err(error);
+    }
     Ok((service, executor))
 }

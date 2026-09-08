@@ -53,7 +53,6 @@
 //!
 //! Both are compile limits, not behaviour findings, and the receipt reports them
 //! under a separate heading for exactly that reason.
-use super::*;
 
 mod support;
 

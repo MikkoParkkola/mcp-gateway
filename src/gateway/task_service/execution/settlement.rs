@@ -40,7 +40,7 @@ pub(super) fn abandoned_input_round() -> Value {
     )
 }
 
-fn interrupted_result(outcome: &str, reason: &str, text: &str) -> Value {
+pub(super) fn interrupted_result(outcome: &str, reason: &str, text: &str) -> Value {
     json!({
         "content": [{"type": "text", "text": text}],
         "isError": true,

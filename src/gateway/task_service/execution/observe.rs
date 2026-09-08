@@ -182,8 +182,8 @@ impl DrainOutcome {
 }
 
 /// I5 seam. Consulted only during startup recovery (I3/I5), never permitted to
-/// re-invoke the original operation. `None` on the executor keeps the
-/// conservative branch. I1 does not run recovery rewrite.
+/// re-invoke the original operation. `None` on the executor is the state today:
+/// I3's record-only branch settles interrupted rows and no adapter is consulted.
 pub(crate) struct RecoveryCheckpoint {
     pub handle: String,
 }
@@ -203,21 +203,16 @@ pub(crate) trait UpstreamRecovery: Send + Sync {
     ) -> Option<RecoveryOutcome>;
 }
 
-/// Named remaining work. I1 writes and honours the dispatch marker but does
-/// not rewrite restored `working` rows (I3) and does not sweep TTL (I4).
-pub(crate) const REMAINING_STARTUP_RECOVERY: &str =
-    "I3: split restored working rows on version>=2 && !dispatched vs dispatched-or-legacy";
+/// Named remaining work. I3 now settles restored `working` and `input_required`
+/// rows at startup; TTL sweeping (I4) and upstream recovery (I5) do not exist
+/// yet, and neither does notification emission for a recovery rewrite.
 pub(crate) const REMAINING_EXPIRY: &str =
     "I4: expiry sweep at tasks.expiry_interval over record-stamped ttl_ms";
 pub(crate) const REMAINING_UPSTREAM_RECOVERY: &str =
     "I5: consult tasks.recovery_adapters; never resubmit the original operation";
 
-pub(crate) fn remaining_implementation() -> [&'static str; 3] {
-    [
-        REMAINING_STARTUP_RECOVERY,
-        REMAINING_EXPIRY,
-        REMAINING_UPSTREAM_RECOVERY,
-    ]
+pub(crate) fn remaining_implementation() -> [&'static str; 2] {
+    [REMAINING_EXPIRY, REMAINING_UPSTREAM_RECOVERY]
 }
 
 pub(crate) fn drain_timeout_default() -> Duration {
