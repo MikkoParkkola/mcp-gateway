@@ -206,18 +206,21 @@ from the same unbounded identity keyspace, that motivated `MAX_TRACKED_IDENTITIE
 detector (`anomaly.rs:138-149`) — but it is not the same map and does not get a second ceiling. A
 ceiling here would be a second eviction rule that can disagree with the anomaly one, which is exactly
 why D3a was deleted. The bound is TEMPORAL and is stated instead: **the map holds at most the
-distinct control identities seen in one `IDLE_TTL + session_reaper_interval` window**, because every
+distinct control identities seen in one nominal `IDLE_TTL + 1s + session_reaper_interval` window**, because every
 key carries a deadline and `reap` removes it unconditionally (D5) — at the FIRST SWEEP AFTER the
-deadline, never at the deadline itself. That is the same arithmetic as D6's reclaim latency, and it
-is stated here rather than as `IDLE_TTL` alone because the correction applies at both sites: an
-earlier draft of this paragraph said one `IDLE_TTL` window and was wrong by exactly one sweep.
+deadline, never at the deadline itself, and `reap`'s strict `>` on whole seconds adds up to a further
+second. That is the same arithmetic as D6's reclaim latency, carried here in the same form: NOMINAL,
+because both terms after `IDLE_TTL` are the sweep's timing and not a guarantee. It is stated here
+rather than as `IDLE_TTL` alone because the correction applies at both sites: an earlier draft of
+this paragraph said one `IDLE_TTL` window and was wrong by exactly one sweep, and a later one omitted
+the whole-second slack D6 now carries inside its figure.
 
 The second term is NOT OURS, and that is the honest weakness of this bound. `session_reaper_interval`
 is `StreamingConfig`'s field (`src/config/features/streaming.rs:37`), read by the host loop at
 `src/gateway/streaming.rs:108`, defaulting to 60 s (`src/config/features/streaming.rs:14`) — with NO
 validation and NO ceiling: `rg session_reaper src/config/` returns the declaration and the default
 and nothing else. An operator who sets it to an hour widens this map's window to an hour, and no
-code in this change can refuse that. So the claim is `IDLE_TTL + <an interval the gateway operator
+code in this change can refuse that. So the claim is `IDLE_TTL + 1s + <an interval the gateway operator
 owns>`, not a number. It is still refused a ceiling for the reason above — a second eviction rule
 that can disagree with the anomaly one — and the residual is now stated at its true size rather than
 understated by a sweep — and that stated bound is the whole resolution. An earlier draft closed this
