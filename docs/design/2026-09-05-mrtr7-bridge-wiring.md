@@ -1182,10 +1182,15 @@ decides whether the caller sees the first round's or the last's.
 
 ### Policy — a bridge exchange is gated ONCE (design event)
 
-The governance gate stays **outside** `accounted_dispatch` deliberately. A
-mid-exchange re-gate would let a budget move between a bridge request and its
-reply and refuse a half-completed exchange, leaving a `PendingSampleGuard` with
-no path to resolution. Accounting still accrues per round — `record_spend`
+The governance gate stays **outside** `accounted_dispatch` deliberately, and
+the reason is the accounting one below, NOT a lifecycle one. An earlier draft
+of this paragraph argued that a mid-exchange refusal would strand a
+`PendingSampleGuard`. That argument is RETRACTED: the guard is RAII, taken
+inside `send_request` (`let _cleanup = PendingSampleGuard { proxy: self, id }`,
+`src/gateway/proxy.rs:532-533`), held across the await and dropped on return
+AND on unwind, so a refusal arriving after `send_request` returns has nothing
+left to strand. What makes gating once affordable is that the cost of not
+re-gating is bounded and visible. Accounting still accrues per round — `record_spend`
 writes both the `global_daily` and `tool_daily` accumulators on every dispatch —
 so the exposure is bounded to overspend within a single call, not to an
 unmetered retry loop. That bound is what makes gating once affordable.
@@ -1210,8 +1215,10 @@ unanswered prompt consume the whole aggregate budget.
 
 The residual this leaves, stated rather than mitigated: a bridged round may not
 be budget-refused, so an exchange CAN overspend by its rounds. Creating that
-refusal was considered and rejected — see the gate-once rationale above; a
-mid-exchange refusal strands a `PendingSampleGuard`.
+refusal was considered and rejected on the metered-overspend trade above —
+`3 × cost_for(tool)`, every unit of it recorded — and on nothing else. The
+lifecycle objection that used to end this sentence is retracted where the
+policy is stated.
 
 Today every `BridgeBounds` construction site is a test
 (`tests/mik_7212_mrtr7_bridge_acs.rs:306,430-450,1118,1195`). The production
