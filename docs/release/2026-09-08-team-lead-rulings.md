@@ -765,7 +765,14 @@ because a fourth dirty file in that directory belongs to a live lane.
 
 ## R35 — plain-http backend URLs carrying credentials are refused at startup, no override
 
-Operator decision, 2026-09-08, asked and answered. Closes CodeQL #90/#91.
+Operator decision, 2026-09-08, asked and answered.
+
+CodeQL alerts #90 and #91 (`src/transport/http/mod.rs:643`, `:826`) are still OPEN as of
+2026-09-08. The guard that answers them lives on `fix/mrtr2-continuation-handle` (PR #473),
+where `require_secure_oauth_target` appears three times in that file against zero on `main`.
+Code scanning runs through GitHub default setup (`state: configured`, weekly plus
+default-branch pushes), so the alerts close when #473 lands and the next analysis runs on
+`main` — not before. Stated as a prediction because that is what it is.
 
 A backend address that embeds a username and password over unencrypted `http` exposes those
 credentials to anyone on the path. The gateway REFUSES to start, naming the offending
