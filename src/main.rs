@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use mcp_gateway::{
     cli::{AuditCommand, Cli, Command, PluginCommand, SetupCommand, SkillsCommand},
-    config::Config,
+    config::{Config, EnvOverlay},
     config_persistence::{load_existing_or_default, write_config},
     gateway::Gateway,
     setup_tracing,
@@ -508,9 +508,21 @@ fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
     }
 }
 
-fn apply_cli_overrides_and_validate(config: &mut Config, cli: &Cli) -> mcp_gateway::Result<()> {
+/// Apply the CLI overrides, then validate against the environment the config
+/// was actually evaluated against.
+///
+/// `overlay`, not the process environment. An env file loads into an overlay and
+/// is never exported, so `Config::validate` — which validates against an empty
+/// overlay — refuses every `env:` reference an env file supplies, including the
+/// account store key. Validating here and resolving there is not a difference of
+/// strictness; it is validating a different configuration.
+fn apply_cli_overrides_and_validate(
+    config: &mut Config,
+    cli: &Cli,
+    overlay: &EnvOverlay,
+) -> mcp_gateway::Result<()> {
     apply_cli_overrides(config, cli);
-    config.validate()
+    config.validate_with_env(overlay)
 }
 
 /// Run the gateway in stdio mode (newline-delimited JSON-RPC on stdin/stdout).
@@ -556,7 +568,8 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     let (config, env) = match Config::load_evaluated(config_path.as_deref()) {
         Ok(evaluated) => {
             let mut config = evaluated.config;
-            if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli) {
+            if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
+            {
                 eprintln!("Failed to apply configuration overrides: {e}");
                 return ExitCode::FAILURE;
             }
@@ -574,8 +587,13 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
         }
     };
 
-    let gateway = match Gateway::new_with_path(config, config_path).await {
-        Ok(g) => g.with_env(env),
+    // `new_evaluated`, not `new_with_path().with_env()`: the constructor must
+    // hold the overlay while it validates and while it brings account custody
+    // up, and the await below must not begin until custody is READY. Attaching
+    // the environment afterwards would validate against an empty one and would
+    // reach serving with no custody at all.
+    let gateway = match Gateway::new_evaluated(config, env, config_path).await {
+        Ok(g) => g,
         Err(e) => {
             eprintln!("Failed to create gateway: {e}");
             return ExitCode::FAILURE;
@@ -609,7 +627,8 @@ async fn run_server(cli: Cli) -> ExitCode {
     let (config, env) = match Config::load_evaluated(cli.config.as_deref()) {
         Ok(evaluated) => {
             let mut config = evaluated.config;
-            if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli) {
+            if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
+            {
                 error!("Failed to apply configuration overrides: {e}");
                 return ExitCode::FAILURE;
             }
@@ -636,8 +655,10 @@ async fn run_server(cli: Cli) -> ExitCode {
     );
 
     let config_path = cli.config.as_deref().map(std::path::Path::to_path_buf);
-    let gateway = match Gateway::new_with_path(config, config_path).await {
-        Ok(g) => g.with_env(env),
+    // See `run_stdio_server`: the constructor owns validation-against-overlay
+    // and the custody bring-up, and both must complete before `run` serves.
+    let gateway = match Gateway::new_evaluated(config, env, config_path).await {
+        Ok(g) => g,
         Err(e) => {
             error!("Failed to create gateway: {e}");
             return ExitCode::FAILURE;
