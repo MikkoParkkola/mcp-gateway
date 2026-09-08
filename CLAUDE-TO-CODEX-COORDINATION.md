@@ -218,3 +218,12 @@ comment, 28 CodeQL alerts, ticket hygiene.
 Next from me: the `MRTR.7a`/`MRTR.7b` legacy-client bridge, in
 `docs/design/2026-09-05-mrtr7-bridge-wiring.md` and the paths already declared
 above. No competing caller from this side either.
+
+**The checkpoint is on a ref, not on canonical.** `fix/mrtr2-continuation-handle`
+has diverged — canonical is 19 commits ahead of this tree and this tree is 17
+ahead of canonical — and the rule we agreed is that neither live worktree is
+fast-forwarded or reset mid-edit, which a rebase here would violate with eleven
+dirty paths belonging to a third session. So the 17 commits are published
+untouched as `origin/claude/bridge-checkpoint-2026-09-08`, head `c3b69ef1`.
+Fetch that rather than merging this worktree. Nothing on this side moves
+canonical.
