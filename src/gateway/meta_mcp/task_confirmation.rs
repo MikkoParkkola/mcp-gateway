@@ -154,7 +154,25 @@ impl MetaMcp {
             request.retry.input_responses.as_ref(),
         ) {
             // A fresh call: ask, and admit nothing.
+            //
+            // Unless it is not fresh. A retry that carries no grant — a lost
+            // continuation, a job-queue replay, a retry after the grant's five
+            // minutes ran out at `keyring().open` — is the same owner, key and
+            // operation as work this gateway already admitted, and the answer it
+            // needs is the handle it already owns. Asking again would mint a
+            // second question for a task that is already running, and the caller
+            // would still never be told its id.
+            //
+            // Nothing is widened by letting it through: the entry consulted
+            // exists only because an earlier call for this exact operation
+            // passed this gate with a valid grant, and what it is let through
+            // to is admission, which returns that task rather than starting
+            // one. No hold is taken, no envelope minted, no ledger spent.
             (None, None) => {
+                if self.already_admitted(request, key) {
+                    record("admitted_replay");
+                    return TaskConfirmation::Granted(cleared(request.retry));
+                }
                 self.challenge(request, &backend_id, fingerprint, digest)
                     .await
             }
@@ -365,7 +383,15 @@ impl MetaMcp {
         // the hold, because the hold for that first acceptance is long gone —
         // and answered by letting the call through, so the original task comes
         // back from admission itself rather than from a handle minted here.
-        if self.already_committed(request, key) {
+        //
+        // "Already admitted" and not "already published": the first acceptance
+        // spends the hold and the ledger the moment it is granted, and only
+        // then commits. In the window between the record becoming readable and
+        // the dedupe entry naming it, a client that has timed out and retried
+        // the same acceptance would otherwise be told its grant is unusable —
+        // while its destructive task runs — and its next honest attempt would
+        // carry a fresh key and run the operation twice.
+        if self.already_admitted(request, key) {
             record("committed_replay");
             return TaskConfirmation::Granted(cleared(request.retry));
         }
@@ -407,13 +433,18 @@ impl MetaMcp {
         TaskConfirmation::Granted(cleared(request.retry))
     }
 
-    /// Whether this exact operation already owns a committed task under this
-    /// caller's key.
+    /// Whether this exact operation already owns an admitted task under this
+    /// caller's key — one being created, or one already published.
     ///
     /// Built through [`OwnedAdmissionRequest`] — the same type the admitting
     /// call site builds — so the identity asked about here is the identity that
-    /// would be admitted, not a second rendering of it.
-    fn already_committed(&self, request: &TaskConfirmationRequest<'_>, key: &str) -> bool {
+    /// would be admitted, not a second rendering of it. Which also fixes what
+    /// this question does *not* bind: the `task` member is part of the grant
+    /// digest but not of the admission identity, so a repeat differing only in
+    /// its TTL is answered here exactly as `admit_task` would answer it, with
+    /// the task it already owns. That is admission's contract for every
+    /// task-augmented call and is not relaxed for this one.
+    fn already_admitted(&self, request: &TaskConfirmationRequest<'_>, key: &str) -> bool {
         let Some(identity) = request.verified_identity else {
             return false;
         };
@@ -425,8 +456,7 @@ impl MetaMcp {
         );
         request
             .admission
-            .published_task_for(admission_request.borrow())
-            .is_some()
+            .already_admitted(admission_request.borrow())
     }
 }
 

@@ -848,7 +848,8 @@ impl ExecutionAdmission {
         }
     }
 
-    /// The task this exact request has ALREADY published, or `None`.
+    /// Whether this exact request is ALREADY admitted — being created right
+    /// now, or published.
     ///
     /// Read-only in the strongest sense available here: it takes the same lock
     /// every admission takes, reads one entry, and writes nothing — no slot, no
@@ -857,31 +858,48 @@ impl ExecutionAdmission {
     /// difference between answering a repeat with the handle it already owns and
     /// quietly reserving the key for a call that is about to be refused.
     ///
+    /// `Active` counts, and that is the whole correction: between the record
+    /// becoming readable and the dedupe entry being published there is a real
+    /// window in which the first caller's task exists and this index does not
+    /// yet name it. Answering `false` there tells a retrying caller that its own
+    /// accepted call never happened. It deliberately answers only yes/no: the
+    /// handle itself comes back from `admit_task`, which is the authority that
+    /// mints nothing for an `Active` key and returns the original task for a
+    /// published one.
+    ///
     /// Exact-bound, and deliberately narrower than `admit_task`'s own match: a
-    /// differing operation, representation or mode answers `None` rather than
+    /// differing operation, representation or mode answers `false` rather than
     /// `Mismatch`, because this is not the authority on refusal — `admit_task`
     /// is, and it will say so in its own words when the caller reaches it. What
-    /// this must never do is answer `Some` for a request that would not have
+    /// this must never do is answer `true` for a request that would not have
     /// been admitted onto that same task.
-    pub(crate) fn published_task_for(&self, request: Request<'_>) -> Option<String> {
+    pub(crate) fn already_admitted(&self, request: Request<'_>) -> bool {
         if request.mode != Mode::Task {
-            return None;
+            return false;
         }
-        let (identity, candidate) = request.prepare().ok()?;
+        let Ok((identity, candidate)) = request.prepare() else {
+            return false;
+        };
         let state = self.state.lock();
-        let entry = state.entries.get(&identity)?;
+        let Some(entry) = state.entries.get(&identity) else {
+            return false;
+        };
         if entry.operation != candidate.operation
             || entry.representation != candidate.representation
             || entry.mode != candidate.mode
         {
-            return None;
+            return false;
         }
         match &entry.status {
-            // Published entries are never `expired` (see `Entry::expired`):
-            // their lifetime belongs to the store, so there is no deadline to
-            // re-decide here.
-            Status::Published { task, .. } => Some(task.clone()),
-            _ => None,
+            // Neither is ever `expired` (see `Entry::expired`): an active key is
+            // owned by a live lease and a published one's lifetime belongs to
+            // the store, so there is no deadline to re-decide here.
+            Status::Active | Status::Published { .. } => true,
+            // Unreachable for `Mode::Task` — a task lease is either handed to a
+            // publication or dropped into `abandon`, and only the sync `Lease`
+            // reaches `finish` — so it is answered conservatively rather than
+            // assumed away.
+            Status::Completed { .. } => false,
         }
     }
 

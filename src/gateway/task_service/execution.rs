@@ -27,7 +27,7 @@ use super::record::CommittedTask;
 use super::service::{CreateOutcome, ServiceError, TaskService};
 use super::store::StoreError;
 use crate::gateway::subscription_registry::SubscriptionRegistry;
-use crate::protocol::tasks::{Task, TaskOptions, TaskTransition};
+use crate::protocol::tasks::{Task, TaskOptions, TaskStatus, TaskTransition};
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// Default worker cap when config has not yet been wired (lane 3).
@@ -171,19 +171,94 @@ impl TaskExecutor {
         id: &str,
         revision: u64,
     ) -> Result<CommittedTask, ServiceError> {
-        let outcome = self
+        let outcome = match self
             .commit(TaskWrite::Cancel {
                 principal,
                 id,
                 revision,
             })
             .await
-            .map_err(commit_to_service)?;
+        {
+            Ok(outcome) => outcome,
+            // The one race this write has: the worker settled between the
+            // caller reading its revision and this transition taking the
+            // store. The record is not broken and the store is not down, so
+            // neither may be reported. Every other failure keeps its type.
+            Err(CommitFailure::RevisionConflict) => {
+                return self.cancel_lost_the_revision(principal, id).await;
+            }
+            Err(error) => return Err(commit_to_service(error)),
+        };
         self.cancel_signal(id);
         match outcome {
             WriteOutcome::Transitioned(task) => Ok(task),
             WriteOutcome::Create(_) => Err(ServiceError::Unavailable),
         }
+    }
+
+    /// One bounded re-read after a cancel lost its revision, mirroring what
+    /// `settle_cas` already does for the settle side of the same race.
+    ///
+    /// Already terminal: answered from the committed view, never re-cancelled
+    /// and never signalled — a signal here would announce a write that did not
+    /// happen. Still working: the record simply moved, so the cancel is retried
+    /// once at the revision just read, and only a conflict that survives that
+    /// is surrendered as unavailability. `NotFound` and a genuinely unavailable
+    /// store come back through `self.service.get` with their own types.
+    async fn cancel_lost_the_revision(
+        &self,
+        principal: &str,
+        id: &str,
+    ) -> Result<CommittedTask, ServiceError> {
+        let current = self.service.get(principal, id)?;
+        if is_terminal(current.task.status()) {
+            return Ok(current);
+        }
+        match self
+            .commit(TaskWrite::Cancel {
+                principal,
+                id,
+                revision: current.revision,
+            })
+            .await
+        {
+            Ok(WriteOutcome::Transitioned(task)) => {
+                self.cancel_signal(id);
+                Ok(task)
+            }
+            Ok(WriteOutcome::Create(_)) => Err(ServiceError::Unavailable),
+            // Bounded: the record moved again. If that move was terminal the
+            // committed view is still the honest answer; otherwise this really
+            // is a store nobody can write to.
+            Err(CommitFailure::RevisionConflict) => {
+                let latest = self.service.get(principal, id)?;
+                if is_terminal(latest.task.status()) {
+                    Ok(latest)
+                } else {
+                    Err(ServiceError::Unavailable)
+                }
+            }
+            Err(error) => Err(commit_to_service(error)),
+        }
+    }
+
+    /// Test-only bridge to the store's own `Published` commit stage, which
+    /// fires between the readable-record insert and the dedupe publication —
+    /// the real window in which an admitted task is `Active`.
+    ///
+    /// Takes no argument and returns nothing so that no caller has to name
+    /// `store::CommitStage` or `store::CommitHook`: `mod store` is private to
+    /// this package and stays that way. The hook itself always reports success,
+    /// because a hook failure is a store failure and this seam is a barrier.
+    #[cfg(test)]
+    pub(crate) async fn barrier_on_publication(&self, barrier: Arc<dyn Fn() + Send + Sync>) {
+        let hook: super::store::CommitHook = Arc::new(move |stage| {
+            if matches!(stage, super::store::CommitStage::Published) {
+                barrier();
+            }
+            Ok(())
+        });
+        self.service.store.set_hook(Some(hook)).await;
     }
 
     pub(crate) async fn settle(
@@ -371,6 +446,19 @@ impl TaskExecutor {
             .as_ref()
             .is_some_and(|observer| observer.fail_state_upgrade(task_id))
     }
+}
+
+/// The three states a task never leaves.
+///
+/// Spelled here as well as at `worker.rs:242` because that one is private to
+/// the worker module; the two are the same three variants and a fourth
+/// terminal status would have to be added to both by the same edit that adds
+/// it to [`TaskStatus`].
+fn is_terminal(status: TaskStatus) -> bool {
+    matches!(
+        status,
+        TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+    )
 }
 
 fn commit_to_service(error: CommitFailure) -> ServiceError {

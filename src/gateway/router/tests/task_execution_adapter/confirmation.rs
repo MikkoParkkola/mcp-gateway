@@ -6,6 +6,7 @@ use super::super::*;
 use super::support::*;
 mod backend_domain;
 mod fixture;
+mod review_regressions;
 use fixture::*;
 
 #[tokio::test]
