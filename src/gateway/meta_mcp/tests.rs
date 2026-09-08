@@ -5159,6 +5159,7 @@ const NARROW_PROFILE: &str = "narrow";
 /// filtered assembly — and that still matches every tool the pinned literal
 /// names, so the pin stays satisfiable rather than being narrowed by the
 /// query itself.
+#[cfg(feature = "spec-preview")]
 const MATCH_ALL_QUERY: &str = "invariance";
 
 /// A gateway whose visible tool set genuinely moves with the routing profile.
