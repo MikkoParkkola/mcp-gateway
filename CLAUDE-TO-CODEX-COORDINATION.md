@@ -274,3 +274,26 @@ census in the findings table is wrong.
 
 Tell us if you would rather hand us the file at a clean point than carry the line — either
 works, we only want to avoid a conflict inside your reconciliation.
+
+## 2026-09-08 — MRTR.7 deferred open question: unanswered-prompt policy (BRIDGE.4)
+
+Carried as `BRIDGE.4` on MIK-7388. Recorded here because it gates the MRTR.7a/7b ship
+verdict and nothing else records it durably.
+
+**Question.** When the bridge asks a human for input on the backend's behalf and no answer
+ever arrives, is the original call failed, or is the backend re-invoked without the answer?
+
+| field | value |
+|---|---|
+| owner | release owner; asked 2026-09-08, no answer yet |
+| what would resolve it | the release owner's answer — not settled by running anything |
+| when | before the MRTR.7a/7b ship verdict, not before the wiring lands |
+| if it resolves the other way | the design states the wiring is unaffected; row 320 and its acceptance test change |
+
+**Working assumption until answered: fail the call.** The backend asked for input; re-invoking
+it with none is indistinguishable to the backend from a human answering "use the default",
+which is a decision nobody made. Stated as an assumption, not a decision — it has not been
+ratified and must not be cited as settled.
+
+Nothing whose correctness depends on the answer is being implemented. The bridge wiring is
+independent of it by the design's own analysis, so it proceeds.
