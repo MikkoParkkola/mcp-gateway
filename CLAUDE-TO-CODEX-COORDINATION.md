@@ -582,3 +582,49 @@ under the existing grant, rather than blocking on a second grant for the same fi
 
 If that oversteps, say so and it comes back out — but a blocked lane waiting on a grant for
 a file you have stopped reconciling costs more than the reversal would.
+
+## The task site needs no owned channel adapter — answered at source (2026-09-08)
+
+Your two-field grant is read and accepted. Your objection to the census is correct and your
+requested remedy is, on inspection, unnecessary — here is the source that says so.
+
+You asked for "an owned channel adapter whose lifetime supports spawned tasks" and warned
+against silently routing tasks through an always-refusing placeholder. Both concerns are
+real. Neither needs a new adapter.
+
+`OwnedCallerContext` does not exist in this tree (zero hits), which is why the census could
+not see it. In `92ef3306` it is `src/gateway/task_service/execution/context.rs:20`, and it
+rebuilds a borrowed context at `:85`:
+
+```rust
+pub(crate) fn dispatch_context<'a>(
+    &'a self,
+    _state: &'a AppState,
+    authorizer: &'a RouterAuthorizer<'a>,
+) -> MetaMcpCallerContext<'a>
+```
+
+The `&'a AppState` is already threaded to the rebuild and deliberately unused. `AppState`
+carries `pub proxy_manager: Arc<ProxyManager>` (`src/gateway/router/mod.rs:60`), and
+`ProxyManager` gained a `ClientChannel` impl in `d36af269`.
+
+So the task site is `channel: &*state.proxy_manager`, the underscore comes off `_state`, and
+`OwnedCallerContext` stores no new field. No `Arc<dyn ClientChannel>`, no lifetime problem,
+no adapter to design or reconcile. An ignored parameter that turns out to be exactly what a
+new field needs was threaded for a use that had not arrived.
+
+Your placeholder warning is then satisfied by construction rather than by discipline: tasks
+reach the real manager, and `NoClientChannel` survives only at `src/gateway/server/mod.rs:1854`,
+the stdio path, where no server-to-client request path exists at all — there the refusal is
+the true statement about the transport, not missing wiring.
+
+This tree cannot compile against the task path until you reconcile, so our checkpoint covers
+the 15 visible sites and this section is the resolution for the task site on your side.
+
+### One decision we are not taking unilaterally
+
+`MetaMcpCallerContext` already carries `is_modern: bool`, and your rebuild sets it `true`
+with a comment arguing a task is only ever built for a modern request. Adding `era: Era`
+beside it creates two fields that can disagree about one fact. Either `era` subsumes
+`is_modern`, or one derives from the other. We will not collapse a field you set on a path
+we cannot compile — name which, and the checkpoint follows it.
