@@ -1587,7 +1587,10 @@ impl MetaMcp {
             "tool": tool_name,
             "arguments": arguments,
         });
-        match self.invoke_tool(&invoke_args, session_id, caller).await {
+        match self
+            .invoke_tool(&invoke_args, session_id, caller, None)
+            .await
+        {
             Ok(content) => JsonRpcResponse::success_serialized(id, content),
             Err(e) => error_response_preserving_status(id, &e),
         }
@@ -1684,7 +1687,10 @@ impl MetaMcp {
             "gateway_list_servers" => self.list_servers().await,
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
-            "gateway_invoke" => self.invoke_tool(&arguments, session_id, &caller).await,
+            "gateway_invoke" => {
+                self.invoke_tool(&arguments, session_id, &caller, None)
+                    .await
+            }
             "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
             "gateway_cost_report" => self.get_cost_report(&arguments, session_id, &caller).await,
             "gateway_webhook_status" => self.webhook_status(),

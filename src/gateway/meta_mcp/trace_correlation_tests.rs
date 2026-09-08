@@ -112,7 +112,7 @@ async fn ac_control_3_a_trace_id_in_meta_is_the_correlation_key_not_the_session(
         "_meta": { "traceparent": TRACEPARENT },
     });
 
-    meta.invoke_tool(&args, Some("legacy-session-1"), &ctx())
+    meta.invoke_tool(&args, Some("legacy-session-1"), &ctx(), None)
         .await
         .expect("invoke ok");
 
@@ -138,7 +138,7 @@ async fn ac_control_3_no_trace_id_falls_back_to_the_session_id() {
     let (meta, log_path) = meta_with_transparency_log();
     let args = json!({ "server": "srv", "tool": "read", "arguments": {} });
 
-    meta.invoke_tool(&args, Some("legacy-session-2"), &ctx())
+    meta.invoke_tool(&args, Some("legacy-session-2"), &ctx(), None)
         .await
         .expect("invoke ok");
 
@@ -163,7 +163,7 @@ async fn ac_control_3a_minted_trace_id_is_the_key_when_nothing_else_is() {
     let args = json!({ "server": "srv", "tool": "read", "arguments": {} });
 
     let result = meta
-        .invoke_tool(&args, None, &ctx())
+        .invoke_tool(&args, None, &ctx(), None)
         .await
         .expect("invoke ok");
 

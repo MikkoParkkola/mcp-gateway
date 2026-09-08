@@ -115,7 +115,7 @@ async fn authz_13b_gateway_invoke_denied() {
     let meta = MetaMcp::new(registry);
 
     let result = meta
-        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&DenyAll))
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&DenyAll), None)
         .await;
 
     assert!(result.is_err(), "a denied gateway_invoke must be refused");
@@ -132,7 +132,7 @@ async fn authz_13b_gateway_invoke_allowed() {
     let meta = MetaMcp::new(registry);
 
     let result = meta
-        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll), None)
         .await;
 
     assert!(result.is_ok(), "an allowed invoke must succeed: {result:?}");
@@ -659,7 +659,7 @@ async fn authz_12_refused_caller_is_not_served_a_cached_result() {
 
     // Prime the cache as a permitted caller.
     let primed = meta
-        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll), None)
         .await;
     assert!(primed.is_ok(), "priming call must succeed: {primed:?}");
     assert_eq!(
@@ -671,7 +671,7 @@ async fn authz_12_refused_caller_is_not_served_a_cached_result() {
     // AUTHZ.12a — the cache is real and reachable, so the refusal below is not
     // just an empty cache.
     let hit = meta
-        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll), None)
         .await;
     assert!(hit.is_ok(), "a second permitted call must succeed");
     assert_eq!(
@@ -683,7 +683,7 @@ async fn authz_12_refused_caller_is_not_served_a_cached_result() {
 
     // Now refuse the same target.
     let refused = meta
-        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&DenyAll))
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&DenyAll), None)
         .await;
     let refusal = refused.expect_err("a refused caller must not be served the cached payload");
     assert!(
@@ -720,12 +720,12 @@ async fn authz_20_refused_call_consumes_no_nonce() {
     let mut args = invoke_args("alpha", "read");
     args["nonce"] = json!("nonce-used-once");
 
-    let refused = meta.invoke_tool(&args, None, &ctx(&DenyAll)).await;
+    let refused = meta.invoke_tool(&args, None, &ctx(&DenyAll), None).await;
     assert!(refused.is_err(), "the call must be refused");
 
     // The same nonce must still be usable: the refusal happened before it was
     // registered.
-    let allowed = meta.invoke_tool(&args, None, &ctx(&AllowAll)).await;
+    let allowed = meta.invoke_tool(&args, None, &ctx(&AllowAll), None).await;
     assert!(
         allowed.is_ok(),
         "a refused call must not burn the nonce — the honest retry is being \
@@ -733,7 +733,7 @@ async fn authz_20_refused_call_consumes_no_nonce() {
     );
 
     // And the nonce IS a real one: replaying it now must fail.
-    let replayed = meta.invoke_tool(&args, None, &ctx(&AllowAll)).await;
+    let replayed = meta.invoke_tool(&args, None, &ctx(&AllowAll), None).await;
     let replay_error = replayed.expect_err("a replayed nonce must be rejected");
     assert!(
         replay_error.to_string().to_lowercase().contains("nonce")
@@ -855,6 +855,7 @@ async fn a_second_verified_caller_is_not_served_the_firsts_idempotent_result() {
                 retry: &retry,
                 ..ctx(&AllowAll)
             },
+            None,
         )
         .await;
     assert!(first.is_ok(), "the first call must succeed: {first:?}");
@@ -873,6 +874,7 @@ async fn a_second_verified_caller_is_not_served_the_firsts_idempotent_result() {
                 retry: &retry,
                 ..ctx(&AllowAll)
             },
+            None,
         )
         .await;
     assert!(second.is_ok(), "the second call must succeed: {second:?}");
@@ -894,6 +896,7 @@ async fn a_second_verified_caller_is_not_served_the_firsts_idempotent_result() {
                 retry: &retry,
                 ..ctx(&AllowAll)
             },
+            None,
         )
         .await;
     assert!(repeat.is_ok(), "alice's repeat must succeed: {repeat:?}");

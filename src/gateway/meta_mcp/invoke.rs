@@ -858,11 +858,12 @@ impl MetaMcp {
         args: &Value,
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+        step: Option<usize>,
     ) -> Result<Value> {
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
         trace::with_trace_id(trace_id, async move {
-            self.invoke_tool_traced(args, session_id, caller, &trace_id_clone)
+            self.invoke_tool_traced(args, session_id, caller, &trace_id_clone, step)
                 .await
                 // Single delivery boundary: unwrap the guard-sealed result.
                 .map(GuardedValue::into_inner)
@@ -960,6 +961,7 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
         trace_id: &str,
+        step: Option<usize>,
     ) -> Result<GuardedValue> {
         // Unpacked once, here, so the context travels whole across the call
         // boundary for the same reason `invoke_tool` takes it whole: no call
@@ -1253,6 +1255,7 @@ impl MetaMcp {
             &projection_key_suffix,
             &identity_suffix,
             self.idempotency_cache.as_ref(),
+            step,
         );
         // What the key is a key *for*. A client key is an opaque string it
         // chose, so nothing about it says which request it was minted for;
@@ -3102,7 +3105,11 @@ impl MetaMcp {
                 .ok_or_else(|| Error::json_rpc(-32602, format!("Playbook not found: {name}")))?
         };
 
-        let invoker = MetaMcpInvoker { meta: self, caller };
+        let invoker = MetaMcpInvoker {
+            meta: self,
+            caller,
+            step: std::sync::atomic::AtomicUsize::new(0),
+        };
 
         let mut temp_engine = PlaybookEngine::new();
         temp_engine.register(definition);
