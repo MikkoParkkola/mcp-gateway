@@ -656,21 +656,49 @@ superseded sentence is gone, not footnoted.
    callback — a leak this change neither causes nor fixes.
 
 4. Should a prompt no human answers still retry the backend without that
-   answer? — **deferred, and it is an ASK, not a check.** Requirement row 320
-   says yes in terms ("abandoned at `min(remaining, 30s)`, and the rounds still
-   remaining are unaffected"), and the frozen acceptance row pins it. GPT-5
-   raised the same behaviour as a HIGH defect on the ground that a backend may
-   then continue without input a person was required to give. Both readings are
-   coherent; only the requester can choose. Owner: the release owner, with this
-   design. What resolves it: the requester answering, in one line, whether an
-   abandoned prompt ends the round (today) or the call (the reviewer's reading).
-   When: before this change ships, since the behaviour it settles is reachable
-   the moment the bridge has a caller. MIK-7388 already carries this question as
-   `BRIDGE.4` and has RETIRED the `:433` criterion that assumed the reviewer's
-   reading, so the ticket is waiting on the answer, not the other way round. If
-   it resolves toward the reviewer: row 320 and its acceptance test change
-   first, this wiring is unaffected, and `:433` returns to the ticket as a
-   requirements change rather than a bug fix.
+   answer? — **RESOLVED by the release owner on 2026-09-08.** This was an ASK,
+   not a check, and it stayed deferred here until the requester answered.
+
+   Asked of: the release owner, directly, relayed through the team lead. The
+   ruling confirms the criteria-row ruling of 2026-09-07 and is recorded as
+   `BRIDGE.4` in `docs/release/2026-09-08-team-lead-rulings.md`.
+
+   The answer: **the call fails, naming the unanswered entry.** Two
+   alternatives were put and both rejected — re-invoking the backend with what
+   arrived, and re-invoking it plus a wire field marking the gap.
+
+   What it changed, and it is not small. Requirement row 320's "abandoned at
+   `min(remaining, 30s)`, and the rounds still remaining are unaffected" is the
+   losing reading, so the row and the single test asserting it move, not the
+   ruling. That test is `tests/mik_7212_mrtr7_bridge_acs.rs:1117`
+   `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call`: it stages
+   `Reply::Silent` at `:1124` and asserts `outcome.is_ok()` at `:1148`, and it
+   inverts. Its two elapsed assertions at `:1152-1163` survive unchanged —
+   they pin that the wait ended at `per_prompt` rather than sooner or at a
+   multiple of it, which stays true once the call then fails. No other test
+   asserts the drop: `:1194` scripts twelve answered replies and expects
+   `BridgeError::Deadline`, and `:1254` answers every prompt.
+
+   In the bridge the ruling costs one line and no new type.
+   `src/gateway/input_bridge.rs:486` is a bare `continue` in the `else` arm of
+   the per-prompt `tokio::time::timeout` at `:484`; it becomes a
+   `return Err(BridgeError::Delivery { key: prompt.key, error: DeliveryError::TimedOut })`.
+   A new `BridgeError::Unanswered { key }` would duplicate what `:199` and
+   `:185` already declare, and the enum's own doc at `:150-156` says those
+   variants exist precisely so that "a client that never answered" stays a
+   distinct fact rather than collapsing into one "failed". The asymmetry the
+   ruling removes is visible across two adjacent arms of the same loop: the
+   projection failure at `:490` already constructs `BridgeError::Delivery`,
+   while the timeout arm dropped its entry in silence. `DeliveryError::TimedOut`
+   has in fact never been constructed in this module — its one production
+   construction is `src/gateway/proxy.rs:558`, whose comment a line above says
+   the variant means "the bridge's own timeout arm". The repair is that
+   variant's first use at the site it was written for.
+
+   MIK-7388's clause claiming this requirement "is refuted at source and has
+   been withdrawn" inverts the authority — a test is not the spec when an
+   operator ruling says otherwise — and no longer stands. The team lead has
+   posted the correction to the ticket.
 
 ## What is not claimed
 
