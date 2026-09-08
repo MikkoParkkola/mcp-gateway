@@ -44,7 +44,8 @@ pub struct TasksConfig {
     pub max_record_bytes: usize,
     /// Logical byte budget: `max_records * max_record_bytes` must fit.
     pub logical_budget_bytes: usize,
-    /// I4 sweep period. Parsed here so I1 config is complete; unused until I4.
+    /// Period of the gateway's periodic expiry sweep. Must be nonzero: a zero
+    /// period is a spin, not a cadence, and the runtime refuses to start one.
     #[serde(with = "humantime_serde")]
     pub expiry_interval: Duration,
     /// I5 trusted recovery adapter names. Empty keeps the conservative branch.
@@ -74,7 +75,8 @@ impl TasksConfig {
     ///
     /// # Errors
     /// Returns [`Error::ConfigValidation`] for an empty directory, a zero worker
-    /// cap, a zero store cap, or arithmetic that cannot represent the budget.
+    /// cap, a zero store cap, a zero expiry period, or arithmetic that cannot
+    /// represent the budget.
     pub fn validate(&self) -> Result<()> {
         if self.store_dir.trim().is_empty() {
             return Err(Error::ConfigValidation(
@@ -99,6 +101,13 @@ impl TasksConfig {
         if self.max_record_bytes == 0 {
             return Err(Error::ConfigValidation(
                 "tasks.max_record_bytes must be nonzero".to_string(),
+            ));
+        }
+        // Checked here rather than only at startup: the runtime refuses a zero
+        // period, and a config that cannot start is a config to refuse.
+        if self.expiry_interval.is_zero() {
+            return Err(Error::ConfigValidation(
+                "tasks.expiry_interval must be nonzero".to_string(),
             ));
         }
         if self.logical_budget_bytes == 0 {

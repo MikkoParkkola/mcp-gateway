@@ -223,6 +223,11 @@ impl TaskService {
         &self.admission
     }
 
+    /// Lend the same shared authority to the store's owned expiry transaction.
+    pub(super) fn admission_arc(&self) -> &Arc<ExecutionAdmission> {
+        &self.admission
+    }
+
     /// The admission-owned digest for a principal. A principal admission refuses
     /// to hash owns nothing, so it is told what anyone naming a task they do not
     /// own is told.

@@ -822,6 +822,32 @@ impl TaskStore {
             .collect()
     }
 
+    /// Every record the periodic owner may delete at `now`: terminal, and past
+    /// the retention its own creation stamped.
+    ///
+    /// Compact owned pairs, and the state lock is released with the snapshot —
+    /// each deletion re-reads the record under the store's own ordering lock, so
+    /// a pair that has since moved or gone is refused there rather than acted on
+    /// from this view. Nothing here reads the directory: the committed image is
+    /// the only enumeration this store has.
+    pub(super) fn expired_candidates(&self, now: DateTime<Utc>) -> Vec<(String, u64)> {
+        let state = self.0.state();
+        if !state.ready {
+            return Vec::new();
+        }
+        state
+            .entries
+            .iter()
+            .filter(|(_, entry)| {
+                matches!(
+                    entry.task.status(),
+                    TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+                ) && entry.task.retention_elapsed(now)
+            })
+            .map(|(id, entry)| (id.clone(), entry.record.revision))
+            .collect()
+    }
+
     /// Delete one terminal record and drop its dedupe entry TOGETHER, per §13.3.
     ///
     /// `revision` is the caller's expectation and is checked before anything is

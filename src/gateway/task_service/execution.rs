@@ -3,6 +3,7 @@
 //! Task executor: one admission, one publication seam, one spawned owner.
 
 mod context;
+mod expiry;
 mod observe;
 mod recovery;
 mod settlement;
@@ -16,6 +17,8 @@ use serde_json::{Value, json};
 use tokio::sync::{Semaphore, oneshot};
 
 pub(crate) use context::{OwnedAdmissionRequest, OwnedCallerContext};
+/// The guard the gateway holds for the periodic sweep it started.
+pub(crate) use expiry::ExpirySweep;
 pub(crate) use observe::{
     CommitObserver, CommitStage, DrainOutcome, RecoveryCheckpoint, RecoveryOutcome,
     UpstreamRecovery, remaining_implementation,

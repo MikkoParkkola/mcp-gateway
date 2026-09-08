@@ -203,16 +203,17 @@ pub(crate) trait UpstreamRecovery: Send + Sync {
     ) -> Option<RecoveryOutcome>;
 }
 
-/// Named remaining work. I3 now settles restored `working` and `input_required`
-/// rows at startup; TTL sweeping (I4) and upstream recovery (I5) do not exist
-/// yet, and neither does notification emission for a recovery rewrite.
-pub(crate) const REMAINING_EXPIRY: &str =
-    "I4: expiry sweep at tasks.expiry_interval over record-stamped ttl_ms";
+/// Named remaining work. I3 settles restored `working` and `input_required`
+/// rows at startup and I4 sweeps record-stamped retention from the gateway's
+/// own periodic owner; delivery of a committed transition to a subscribed
+/// listener (I2) and trusted upstream recovery (I5) do not exist yet.
+pub(crate) const REMAINING_NOTIFICATIONS: &str =
+    "I2: deliver committed task transitions to subscribed listeners";
 pub(crate) const REMAINING_UPSTREAM_RECOVERY: &str =
     "I5: consult tasks.recovery_adapters; never resubmit the original operation";
 
 pub(crate) fn remaining_implementation() -> [&'static str; 2] {
-    [REMAINING_EXPIRY, REMAINING_UPSTREAM_RECOVERY]
+    [REMAINING_NOTIFICATIONS, REMAINING_UPSTREAM_RECOVERY]
 }
 
 pub(crate) fn drain_timeout_default() -> Duration {
