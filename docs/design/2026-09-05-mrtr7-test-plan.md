@@ -65,6 +65,8 @@ So the delta below is entirely at the **call site**, and one row is end-to-end.
 | `MIK-7212.WIRE.9` | A successful bridge retry is judged on its own result | a backend that asks once and then succeeds; assert the idempotency key is settled as completed, the response is returned, and the settled result is cached — an equivalent follow-up call carrying a *different* idempotency key and the same response-cache key is served without a further backend invocation, since the cache gate at `src/gateway/meta_mcp/invoke.rs:1769` is the second consumer of the same verdict. The two assertions are separate on purpose: a follow-up reusing the settled key would be answered by the idempotency entry and would pass without the cache gate running at all | integration | regression | `src/gateway/meta_mcp/invoke.rs:1475` computes `stopped_to_ask` from the *first* result, so a passing test here proves the verdict is re-derived after the retry — against today's tree the key stays unsettled and the row fails |
 | `MIK-7212.WIRE.10` | An initialized stdio caller is still refused | stdio session declares elicitation at `initialize`, backend asks; assert the MRTR.9 refusal returns **inside a 2-second `tokio::time::timeout` wrapping the call** — an order of magnitude under the bridge's 30-second prompt timeout, so a regression that reaches the prompt path fails the deadline rather than eventually returning the right answer — no client request is sent, and no retry occurs | integration | regression | this row is not `#[ignore]`d: the refusal is stdio's behaviour until MIK-7387 lands, and a transport-scope regression would turn it into a 30–120s stall |
 | `MIK-7212.WIRE.11` (also satisfies `MIK-7388.BRIDGE.2`) | The production `ClientChannel` strands no pending entry when the prompt's outer timeout cancels the send | spawn `send_request` against a **live** peer that accepts the frame and never answers — a `NoSession` or an inner timeout would empty the map on its own and pass this row vacuously; wait until the pending map holds the id (precondition asserted under a 5s deadline, not slept for), `abort()` the task, **await the `JoinHandle` until it reports cancelled**, then assert the map is empty for that id |  integration | negative | an impl that inserts into the map and awaits without an RAII guard passes every other row here and fails only this one — neither the success nor the error path runs on cancellation, so the entry leaks for the life of the connection. Mirrors `cancelled_request_does_not_strand_pending_entry` (`src/transport/stdio.rs:815`), including its live-peer staging and its join-after-abort — inspecting the map while the aborted task is still unwinding is how correct cancellation-safe code fails in CI |
+| `MIK-7212.WIRE.12` | A retry round whose dispatch FAILS surfaces the failure; it is not flattened into a result | production invoker over `accounted_dispatch` (`src/gateway/meta_mcp/invoke.rs:2464`, already `Result<Value>`); backend asks once, client answers, the second dispatch returns `Err` (backend down mid-exchange). Assert the call returns an **error** to the caller, that **no continuation is minted**, and that the `PendingSampleGuard` is released | integration | error path | today `BackendInvoker::invoke` returns a bare `Value` (`src/gateway/input_bridge.rs:332-334`), so an `Err` from the dispatch beneath it can only be unwrapped, panicked on, or serialised into a success-shaped `Value` -- and `InputRequired::from_result` would then read that shape as "no further input required" and return it as the answer. A row asserting only "the call returned" passes against every one of those. The assertions that bite are on the error REACHING the caller and on the guard being released: a strand leaks a pending entry per failed retry |
+| `MIK-7212.WIRE.13` | The round cap is FOUR paid dispatches, and every one of them is metered | `BridgeBounds::DEFAULT` (`rounds: 3`, `src/gateway/input_bridge.rs:241-246`) and a backend that asks again on every round; assert **exactly four** backend invocations -- one gated first dispatch plus three retries, the `rounds + 1` the trait doc claims (`:220`) -- **exactly four** `record_spend` entries, and that the exchange ends as `BridgeError::RoundsExhausted` (`:405`) rather than as a budget refusal or a silent success | integration | boundary | `for _ in 0..self.bounds.rounds` (`:387`) is three retries on top of a dispatch that already happened, so reading `rounds` as the total asserts three and passes against a loop that ran four -- the off-by-one is invisible to any assertion that does not name the number. Asserting the SPEND count as well as the invocation count is what separates "four calls happened" from "four calls were paid for": the design's overspend ceiling of 3 x `cost_for(tool)` is a claim about the second, and the metering is `record_spend` inside `accounted_dispatch`, which makes the overspend VISIBLE rather than preventing it. A design carrying a number that no row asserts is a number that drifts |
 
 `WIRE.8` is the row the reviewers asked for, and the only one that proves the
 *composed production HTTP round*. It is not the only row that needs the call site
@@ -89,12 +91,29 @@ cheapest to falsify, so it goes first.
 1. `WIRE.11` — cancellation contract, direct against the new type, no HTTP fixture.
    Fails or compiles; either answer is bought in minutes.
 2. `WIRE.1`-`WIRE.4` — call-site shape and declaration gate, fakes only.
-3. `WIRE.5`-`WIRE.7`, `WIRE.9` — accounting, bound, budget, lifecycle.
-4. `WIRE.10` — stdio refusal, bounded.
-5. `WIRE.8` — full HTTP composition, the most expensive fixture in the set, last.
+3. `WIRE.5`-`WIRE.7`, `WIRE.9`, `WIRE.13` — accounting, bound, budget, lifecycle.
+   `WIRE.13` sits here because it shares `WIRE.5`'s fixture: both count dispatches
+   and spend records against a backend that keeps asking, and writing them apart
+   would build the same harness twice.
+4. `WIRE.12` — the failed retry round. After `WIRE.5` because it asserts on the
+   metering `WIRE.5` establishes, and before `WIRE.10` because the invoker's
+   signature is decided here: a row written against the bare-`Value` signature
+   cannot be made to fail for the right reason.
+5. `WIRE.10` — stdio refusal, bounded.
+6. `WIRE.8` — full HTTP composition, the most expensive fixture in the set, last.
 
 Running `WIRE.8` first would spend the largest fixture on the assumption that is
 already assumed by every row above it.
+
+**`WIRE.12` and `WIRE.13` come from the two rulings the plan predates.** Neither
+is a MIK-7212 acceptance criterion; both are criteria the design acquired after
+this table was first written, and a criterion with no row is the finding this
+section exists to prevent. `WIRE.12` is the test for the requester's ruling that
+`BackendInvoker::invoke` widens to `Result` — the widening is pointless if
+nothing ever asserts the `Err` arm is reachable and honoured. `WIRE.13` is the
+test for the round-cap figure the design now states in prose: four paid
+dispatches worst case, an overspend ceiling of three times the tool's cost,
+metered rather than prevented.
 
 ## The two questions a plan review answers
 
