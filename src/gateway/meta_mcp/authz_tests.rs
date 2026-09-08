@@ -858,7 +858,11 @@ async fn a_second_verified_caller_is_not_served_the_firsts_idempotent_result() {
         )
         .await;
     assert!(first.is_ok(), "the first call must succeed: {first:?}");
-    assert_eq!(calls.load(Ordering::SeqCst), 1, "and must reach the backend");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "and must reach the backend"
+    );
 
     let second = meta
         .invoke_tool(
