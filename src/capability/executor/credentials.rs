@@ -183,7 +183,7 @@ impl CapabilityExecutor {
     /// `client_id` is forwarded when present (required by Google and other providers).
     /// `client_secret` is looked up from the macOS Keychain under the key
     /// `"{provider}-client-secret"` and included when found.
-    async fn perform_token_refresh(
+    pub(super) async fn perform_token_refresh(
         &self,
         provider: &str,
         refresh_token: &str,
