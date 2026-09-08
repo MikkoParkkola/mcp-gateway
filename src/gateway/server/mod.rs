@@ -729,9 +729,14 @@ impl Gateway {
         // is a correctness mechanism, not a preference: the only thing an
         // operator toggle would buy is the ability to switch duplicated side
         // effects back on. Bounds are the constants in `crate::idempotency`.
-        // Reaches HTTP callers only until the stdio seam lands — stdio still
-        // discards the retry fields before dispatch, see
-        // `docs/design/2026-09-08-sub4-idempotency-wiring.md`.
+        // This is the only production construction site of `MetaMcp`, and both
+        // `run` and `run_stdio` reach it, so the cache is `Some` on every boot.
+        // That covers ONE of the criterion's three routes: generic `tools/call`.
+        // stdio discards the retry fields before dispatch (`:2633`, `:3671`) and
+        // the direct `POST /mcp/{name}` bypass never calls `idempotency_key_for`
+        // (`backend_handlers.rs:338-353`), so both are still unprotected. SUB.4
+        // is MET only when all three are covered — see
+        // `docs/design/2026-08-31-sub-4-idempotency-wiring.md`.
         Arc::get_mut(&mut meta_mcp)
             .expect("no other Arc references at this point")
             .enable_idempotency(

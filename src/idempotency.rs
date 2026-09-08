@@ -29,6 +29,18 @@ use crate::{Error, Result};
 // ── Public constants ──────────────────────────────────────────────────────────
 
 /// TTL for completed results (24 hours).
+///
+/// **Stated assumption, flagged to the team lead (MIK-7272.SUB.4, 2026-09-07,
+/// carried forward unchanged by the 2026-09-08 ruling).** Nobody has decided
+/// how long a client may retry a side-effecting call and still be owed the
+/// first result; 24 hours is a defensible default, not a settled requirement.
+/// The 2026-09-08 ruling removed the config field that would have carried it,
+/// so it lives here as a constant — that changed WHERE the assumption is
+/// recorded, never that it is one. It takes CONTROL.4's shape: a value with a
+/// defensible default, named as an assumption where a reader of the constant
+/// finds it. Revisit if an operator reports either half of the failure — a
+/// retry outside the window that duplicated a side effect, or memory pressure
+/// from entries held this long.
 pub const COMPLETED_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Timeout for in-flight markers (5 minutes).
