@@ -386,3 +386,125 @@ fn assert_child_profile(dir: &Option<PathBuf>, prior: &HashSet<PathBuf>, pid: u3
         dir.display()
     );
 }
+
+#[tokio::test]
+async fn stdio_followup_policy_error_does_not_consume_nonce() {
+    let backend = BackendFixture::start(backend_result()).await;
+    let mut gateway = StdioGateway::start(fixture_config(&backend.url)).await;
+    let nonce = json!("stdio-nonce-policy-refuse");
+    let mut refused = invoke(json!("stdio-policy-bad-tool"), nonce.clone(), json!({}));
+    refused["params"]["arguments"]["tool"] = json!("bad/tool");
+    let response = gateway.call(refused).await;
+    assert_eq!(response["id"], "stdio-policy-bad-tool");
+    assert_eq!(response["error"]["code"], -32600);
+    assert_eq!(
+        response["error"]["message"],
+        "Tool name 'bad/tool' contains disallowed character '/' (only [A-Za-z0-9_-] is permitted)"
+    );
+    assert!(response.get("result").is_none());
+    assert_eq!(backend.calls().len(), 0);
+
+    let honest = gateway
+        .call(invoke(
+            json!("stdio-policy-honest"),
+            nonce.clone(),
+            json!({}),
+        ))
+        .await;
+    assert_invoke_sentinel(&honest, SENTINEL);
+    verify_signed_wire(&honest, "stdio-policy-honest", nonce.clone()).await;
+    assert_eq!(backend.calls().len(), 1);
+
+    let replay = gateway
+        .call(invoke(json!("stdio-policy-replay"), nonce, json!({})))
+        .await;
+    assert_eq!(replay["error"]["code"], -32001);
+    assert_eq!(backend.calls().len(), 1);
+    gateway.finish().await;
+}
+
+#[tokio::test]
+async fn stdio_followup_client_meta_precedence_is_visible_at_backend() {
+    let backend = BackendFixture::start(backend_result()).await;
+    let mut gateway = StdioGateway::start(fixture_config(&backend.url)).await;
+    let payload = json!({"echo": "metadata-payload"});
+    let trace_a = "00-11111111111111111111111111111111-2222222222222222-01";
+    let trace_b = "00-33333333333333333333333333333333-4444444444444444-01";
+    let outer_meta = json!({
+        "traceparent": trace_a,
+        "prompt_cache_key": "outer-signing-meta",
+        "client_only": "must-not-forward"
+    });
+
+    let mut outer_only = invoke(
+        json!("stdio-meta-outer"),
+        json!("stdio-nonce-meta-outer"),
+        payload.clone(),
+    );
+    outer_only["params"]["_meta"] = outer_meta.clone();
+    let outer_response = gateway.call(outer_only).await;
+    assert_invoke_sentinel(&outer_response, SENTINEL);
+    verify_signed_wire(
+        &outer_response,
+        "stdio-meta-outer",
+        json!("stdio-nonce-meta-outer"),
+    )
+    .await;
+    assert_eq!(backend.calls().len(), 1);
+    assert_eq!(
+        backend.calls()[0]["params"]["_meta"],
+        json!({"traceparent": trace_a, "prompt_cache_key": "outer-signing-meta"})
+    );
+    assert_eq!(backend.calls()[0]["params"]["arguments"], payload);
+
+    let mut inner_wins = invoke(
+        json!("stdio-meta-inner"),
+        json!("stdio-nonce-meta-inner"),
+        payload.clone(),
+    );
+    inner_wins["params"]["_meta"] = outer_meta.clone();
+    inner_wins["params"]["arguments"]["_meta"] = json!({
+        "traceparent": trace_b,
+        "prompt_cache_key": "inner-signing-meta",
+        "client_only": "also-not-forward"
+    });
+    let inner_response = gateway.call(inner_wins).await;
+    assert_invoke_sentinel(&inner_response, SENTINEL);
+    verify_signed_wire(
+        &inner_response,
+        "stdio-meta-inner",
+        json!("stdio-nonce-meta-inner"),
+    )
+    .await;
+    assert_eq!(backend.calls().len(), 2);
+    assert_eq!(
+        backend.calls()[1]["params"]["_meta"],
+        json!({"traceparent": trace_b, "prompt_cache_key": "inner-signing-meta"})
+    );
+    assert_eq!(backend.calls()[1]["params"]["arguments"], payload);
+
+    let mut present_null = invoke(
+        json!("stdio-meta-null"),
+        json!("stdio-nonce-meta-null"),
+        payload.clone(),
+    );
+    present_null["params"]["_meta"] = outer_meta;
+    present_null["params"]["arguments"]["_meta"] = Value::Null;
+    let null_response = gateway.call(present_null).await;
+    assert_invoke_sentinel(&null_response, SENTINEL);
+    verify_signed_wire(
+        &null_response,
+        "stdio-meta-null",
+        json!("stdio-nonce-meta-null"),
+    )
+    .await;
+    assert_eq!(backend.calls().len(), 3);
+    let null_meta = &backend.calls()[2]["params"]["_meta"];
+    assert!(null_meta.get("traceparent").is_none());
+    assert_ne!(
+        null_meta.get("prompt_cache_key"),
+        Some(&json!("outer-signing-meta"))
+    );
+    assert_eq!(backend.calls()[2]["params"]["arguments"], payload);
+    gateway.finish().await;
+}

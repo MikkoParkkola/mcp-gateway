@@ -22,6 +22,22 @@ impl CapabilityExecutor {
     pub(super) async fn fetch_credential(&self, auth: &super::super::AuthConfig) -> Result<String> {
         let key = &auth.key;
 
+        // A recognized `auth.account` names a managed personal account, whose
+        // credential lives in custody and is bound to a VERIFIED caller
+        // identity. This path has no verified identity to bind to — REST
+        // verified-identity propagation is a later step — so it refuses
+        // BEFORE any legacy lookup. Falling through would resolve the
+        // gateway-held `oauth:<provider>` token from the shared TokenStorage
+        // and present one person's login as another's, which is precisely
+        // what the account reference exists to prevent.
+        if let Some(account) = auth.account.as_deref() {
+            return Err(Error::Config(format!(
+                "capability auth references managed account '{account}', but REST capability \
+                 execution cannot yet bind a verified caller identity to it. Refusing rather \
+                 than falling back to the gateway-held credential for '{key}'."
+            )));
+        }
+
         if let Some(var_name) = key.strip_prefix("env:") {
             self.env.get().resolve(var_name).ok_or_else(|| {
                 Error::Config(format!(

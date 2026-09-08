@@ -66,6 +66,16 @@ impl Backend {
         self.config.identity_propagation.as_ref()
     }
 
+    /// The `accounts.descriptors` key this backend is bound to, if any.
+    ///
+    /// The descriptor's logical id — the account key's `backend_id` — and never
+    /// this backend's registry name, which is [`Backend::name`]. Present only
+    /// when the operator wrote an `account` reference that resolved at load.
+    #[must_use]
+    pub fn account_descriptor_id(&self) -> Option<&str> {
+        self.config.account.as_deref()
+    }
+
     /// Whether this backend's configured transport can carry per-request
     /// outbound headers, e.g. a propagated end-user identity credential
     /// (MIK-6710).

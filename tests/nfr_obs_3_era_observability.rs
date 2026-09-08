@@ -254,6 +254,7 @@ impl Fixture {
             allow_cleartext_credentials: false,
             runtime_profile: None,
             identity_propagation: None,
+            account: None,
         };
         Backend::new(
             name,

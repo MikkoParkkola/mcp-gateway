@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Gateway server
 
+// Crate-visible on purpose: this is THE install a bound backend gets, and a
+// test that drives a real startup must call the same one rather than a copy of
+// its policy.
+pub(crate) mod account_bindings;
 mod persistence;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
@@ -528,12 +532,25 @@ impl Gateway {
 
         let backends = Arc::new(BackendRegistry::new());
 
+        // The EFFECTIVE configuration a bound backend runs with, resolved
+        // before any backend is constructed. A `personal_managed` binding
+        // compiles to vault propagation and DROPS the backend's own oauth
+        // block here, which is what keeps the legacy `OAuthClient` from ever
+        // being instantiated for a backend whose credential is in custody —
+        // the constructor below reads that field to decide whether to build
+        // one, so the decision has to be made before it, not after.
+        let bound_accounts = crate::config::account_bindings::compile(&config)?;
+
         // Register backends
         for (name, backend_config) in config.enabled_backends() {
-            let runtime_plan = runtime_plan_for_backend(name, backend_config, &config.runtime);
+            let effective = match bound_accounts.get(name) {
+                Some(bound) => bound.effective(backend_config),
+                None => backend_config.clone(),
+            };
+            let runtime_plan = runtime_plan_for_backend(name, &effective, &config.runtime);
             let backend = Backend::new_with_runtime_plan(
                 name,
-                backend_config.clone(),
+                effective,
                 &config.failsafe,
                 config.meta_mcp.cache_ttl,
                 runtime_plan,
@@ -1493,6 +1510,22 @@ impl Gateway {
             // Passthrough / Vault / no identity_propagation: install nothing.
             _ => {}
         }
+
+        // Per-backend strategies for `accounts.descriptors` bindings, installed
+        // BEFORE serving. This is where a managed account's vault custody and
+        // an external descriptor's minting strategy coexist: each is bound to
+        // its own backend, and the resolver prefers the per-backend entry over
+        // the single process-wide one above. A managed binding with no custody
+        // refuses here rather than dispatching as though it were shared.
+        let account_custody = self.custody.as_ref().map(|custody| {
+            Arc::clone(custody) as Arc<dyn crate::personal_accounts::AccountCustody>
+        });
+        account_bindings::install_account_strategies(
+            &self.config,
+            account_custody.as_ref(),
+            &gateway_key_pair,
+            &meta_mcp,
+        )?;
 
         // ADR-008 INV-2 (MIK-6752): declare multi-user status so dispatch can
         // fail closed on gateway-held OAuth tokens that are not per-user

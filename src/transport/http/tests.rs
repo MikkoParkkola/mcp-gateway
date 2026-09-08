@@ -4,6 +4,11 @@ use super::*;
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// RFC-0061 §2.4 startup, driven through the lifecycle rather than through this
+/// transport alone: the handshake decision is taken in `Backend::start_entry`,
+/// so a case that called `HttpTransport` directly could not see it.
+mod modern_startup;
+
 /// Helper: create an `HttpTransport` for testing (streamable HTTP mode, no OAuth)
 fn make_transport(url: &str) -> Arc<HttpTransport> {
     HttpTransport::new(url, HashMap::new(), Duration::from_secs(30), true).unwrap()

@@ -206,7 +206,10 @@ pub enum PropagationStrategyKind {
 
 /// Per-backend identity-propagation configuration (opt-in). Absent on a backend
 /// means today's static-credential behavior is unchanged (IDP.5).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `PartialEq`/`Eq` because an `accounts.descriptors` entry now embeds one as
+/// its `external_strategy`, and the descriptor DTO compares by value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IdentityPropagationConfig {
     /// The strategy to use.
@@ -264,16 +267,24 @@ impl IdentityPropagationConfig {
                     .to_string(),
             ));
         }
-        // Only signed-assertion, passthrough, and token-exchange are
-        // implemented; a required backend configured for an unimplemented
-        // strategy (vault) must fail closed, not silently run without
-        // propagation.
+        // Signed-assertion, passthrough, token-exchange and vault are
+        // implemented; a required backend configured for any other strategy
+        // must fail closed, not silently run without propagation.
+        //
+        // `Vault` joined the list when managed personal-account custody became
+        // the strategy behind it: a `personal_managed` descriptor compiles to
+        // this kind, and the gateway installs a per-backend vault strategy
+        // whose custody handle is claimed before Serving. A vault config that
+        // reaches dispatch without that installation still refuses — at the
+        // resolver, which is where "no strategy is configured" is decided —
+        // rather than being downgraded here.
         if self.required
             && !matches!(
                 self.strategy,
                 PropagationStrategyKind::SignedAssertion
                     | PropagationStrategyKind::Passthrough
                     | PropagationStrategyKind::TokenExchange
+                    | PropagationStrategyKind::Vault
             )
         {
             return Err(PropagationError::Misconfigured(format!(

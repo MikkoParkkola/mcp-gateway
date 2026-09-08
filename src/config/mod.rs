@@ -6,6 +6,7 @@
 //! Feature-specific types live in the [`features`] sub-module and are
 //! re-exported here so callers use `crate::config::KeyServerConfig`, etc.
 
+pub(crate) mod account_bindings;
 mod env_overlay;
 mod features;
 
@@ -771,6 +772,12 @@ impl Config {
         // descriptor never causes an account secret to be read.
         crate::personal_accounts::config::validate_descriptors(self.accounts.as_ref())
             .map_err(|error| Error::ConfigValidation(error.to_string()))?;
+        // Consumer side of the same contract: every `backends[*].account`
+        // reference resolves to a declared descriptor key, and a managed
+        // consumer carries no second answer to "how is this backend
+        // authenticated". Compiling here means an unresolved or contradictory
+        // reference is a load refusal rather than a dispatch-time discovery.
+        account_bindings::validate(self)?;
         match crate::personal_accounts::config::resolve(self.accounts.as_ref(), overlay) {
             Ok(_) | Err(crate::personal_accounts::config::AccountsConfigError::NotEnabled) => {}
             Err(error) => return Err(Error::ConfigValidation(error.to_string())),
@@ -1475,6 +1482,19 @@ pub struct BackendConfig {
     /// static-credential behavior (IDP.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity_propagation: Option<crate::identity_propagation::IdentityPropagationConfig>,
+    /// Explicit reference to an `accounts.descriptors` MAP KEY.
+    ///
+    /// The value is the descriptor's logical id — the `backend_id` half of the
+    /// account key — and never the backend registry name, the provider id, an
+    /// email or a display name. A name that is not a declared descriptor key is
+    /// a startup refusal (`account_bindings`), never a silent downgrade to the
+    /// static credential this backend also carries.
+    ///
+    /// Mutually exclusive with [`Self::identity_propagation`]: the descriptor
+    /// decides how this backend is authenticated, and two answers to that
+    /// question are a conflict rather than a precedence rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 // Manual `Debug` that redacts the credential-injection rules (CWE-532, mirrors
@@ -1504,6 +1524,7 @@ impl std::fmt::Debug for BackendConfig {
             )
             .field("runtime_profile", &self.runtime_profile)
             .field("identity_propagation", &self.identity_propagation)
+            .field("account", &self.account)
             .finish()
     }
 }
@@ -1524,6 +1545,7 @@ impl Default for BackendConfig {
             allow_cleartext_credentials: false,
             runtime_profile: None,
             identity_propagation: None,
+            account: None,
         }
     }
 }
@@ -2154,6 +2176,10 @@ mod cleartext_credential_guard {
 #[cfg(test)]
 #[path = "account_custody_tests.rs"]
 mod account_custody_tests;
+
+#[cfg(test)]
+#[path = "account_consumer_config_tests.rs"]
+mod account_consumer_config_tests;
 
 #[cfg(test)]
 #[path = "descriptor_config_tests.rs"]

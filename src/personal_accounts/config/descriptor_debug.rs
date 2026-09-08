@@ -30,6 +30,9 @@ impl fmt::Debug for AccountDescriptor {
             .field("redirect_uri", &self.redirect_uri)
             .field("scopes", &self.scopes)
             .field("send_resource_parameter", &self.send_resource_parameter)
+            // Non-secret by construction: strategy kind, audience, session mode
+            // and an endpoint URL. Its own `Debug` carries no credential.
+            .field("external_strategy", &self.external_strategy)
             .finish()
     }
 }

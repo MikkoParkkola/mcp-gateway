@@ -1372,7 +1372,10 @@ impl MetaMcp {
                 self.resolve_caller_credential(server, &idp_cfg, verified_identity)
                     .await?
             }
-            None => CallerCredential::default(),
+            None => {
+                self.refuse_unbound_account_backend(server)?;
+                CallerCredential::default()
+            }
         };
 
         // ADR-008 INV-2 fail-closed guard. On a multi-user gateway, a backend
@@ -2324,12 +2327,40 @@ impl MetaMcp {
             .get(server)
             .and_then(|b| b.identity_propagation_config().cloned())
         else {
+            self.refuse_unbound_account_backend(server)?;
             return Ok((Vec::new(), None));
         };
         let cred = self
             .resolve_caller_credential(server, &idp_cfg, verified_identity)
             .await?;
         Ok((cred.headers, cred.cache_binding))
+    }
+
+    /// Fail closed for a backend that names an `accounts.descriptors` entry but
+    /// reached dispatch with no compiled propagation configuration.
+    ///
+    /// Startup compiles a bound backend's descriptor into its effective
+    /// `identity_propagation` before the backend is constructed, so the only
+    /// way to observe this state is a registration rebuilt from the raw config
+    /// (a hot reload) that lost the binding. Dispatching then would send the
+    /// call with no per-user credential at all — the exact silent downgrade the
+    /// account reference exists to prevent — so it is refused instead.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] naming the backend and its descriptor reference.
+    fn refuse_unbound_account_backend(&self, server: &str) -> Result<()> {
+        let account = self
+            .backends
+            .get(server)
+            .and_then(|b| b.account_descriptor_id().map(str::to_string));
+        match account {
+            Some(account) => Err(Error::Config(format!(
+                "backend '{server}' is bound to account '{account}' but no account strategy is \
+                 installed for it; refusing to dispatch without the account holder's credential"
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// Resolve the per-user identity-propagation credential for a backend
@@ -2358,8 +2389,9 @@ impl MetaMcp {
         let subject_id = crate::identity_propagation::audit_subject(verified_identity);
         let audience = idp_cfg.audience.as_str();
 
+        let vault = idp_cfg.strategy == crate::identity_propagation::PropagationStrategyKind::Vault;
         let refuse = |msg: String| -> Result<CallerCredential> {
-            if idp_cfg.required {
+            if idp_cfg.required || vault {
                 // The request is already being refused on identity-propagation
                 // grounds; an audit-write failure here does not change that
                 // outcome (unlike the mint path below, which is fail-closed on
@@ -2391,6 +2423,18 @@ impl MetaMcp {
             }
         };
 
+        // Vault is installed only for a compiled account-bound backend. A raw
+        // declaration cannot borrow a global strategy, even when optional.
+        let account_bound = self
+            .backends
+            .get(server)
+            .is_some_and(|backend| backend.account_descriptor_id().is_some());
+        if vault && !account_bound {
+            return refuse(
+                "raw Vault identity propagation requires an account descriptor".to_string(),
+            );
+        }
+
         // MIK-6710: refuse BEFORE minting when this backend's transport cannot
         // carry `extra_headers` on the wire (stdio, websocket) — otherwise a
         // `required` backend would mint successfully here and then silently
@@ -2417,7 +2461,15 @@ impl MetaMcp {
         let Some(identity) = verified_identity else {
             return refuse("the request carries no verified end-user identity".to_string());
         };
-        let strategy = self.identity_propagation.read().clone();
+        // An explicit account reference requires its own installed strategy.
+        // A missing or stale install must never borrow an unrelated global
+        // strategy. Descriptorless callers retain their existing behavior.
+        let strategy = if account_bound {
+            self.backend_identity_strategy(server)
+        } else {
+            self.backend_identity_strategy(server)
+                .or_else(|| self.identity_propagation.read().clone())
+        };
         let Some(strategy) = strategy else {
             return refuse("no identity-propagation strategy is configured".to_string());
         };
