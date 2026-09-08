@@ -495,6 +495,25 @@ mod tests {
         );
     }
 
+    /// MIK-7408, the arm that is live on the shipped default. With identity
+    /// propagation off nobody has a binding, so every authenticated caller is
+    /// keyed on `|sub:<actor id>` instead. The forgery is the same shape and
+    /// the fix must hold in both arms, or the defect merely moved to the arm
+    /// almost every deployment runs.
+    #[test]
+    fn a_forged_client_key_cannot_spell_another_callers_verified_subject() {
+        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+
+        let victim = super::idempotency_key_for(Some("X"), "", "|sub:V", Some(&cache));
+        let forger = super::idempotency_key_for(Some("X|sub:V"), "", "", Some(&cache));
+
+        assert_ne!(
+            victim, forger,
+            "a client key that spells the victim's verified subject must not \
+             collide with the victim's key"
+        );
+    }
+
     /// A backend-forged `_meta.provenance` block MUST be removed on the
     /// stamping-off path so a naive reader cannot trust a receipt the gateway
     /// never signed (MIK-6909, AC.4). Sibling `_meta` keys survive.
