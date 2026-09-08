@@ -62,3 +62,33 @@ Test: `released_then_completed_entry_stays_bound_to_its_own_request`
 (`src/idempotency.rs`), asserting the fingerprint-mismatch refusal by message
 rather than by `is_err` — the in-flight and at-capacity refusals are errors too
 and neither would prove the binding held.
+
+## Branch clippy gate — `tests/common/mod.rs`
+
+`cargo clippy --all-targets -- -D warnings` failed on the
+`nfr_compat1_revisions` target with three errors, all in `tests/common/mod.rs`
+and all in content that predates the file's current uncommitted edits: two
+`unused_imports` at the re-export block, and `clippy::struct_excessive_bools`
+on `Fixture` at :38. The uncommitted change to that file is a 26-line append
+at :207, so it cannot be the cause of an error at :23.
+
+Root cause of the imports: the module already carries `#![allow(dead_code)]`
+with a doc comment explaining exactly this — Cargo compiles the module once
+per test binary, so an item one suite uses is dead in the others. The
+mitigation was written for the right reason and does not reach re-exports,
+which lint as `unused_imports` rather than `dead_code`. `Duration` is consumed
+by `nfr_sec1_controls` alone; the other two binaries that include the module
+never touch it.
+
+Fix: widen the existing allow to `#![allow(dead_code, unused_imports)]` and
+extend its comment to say which import the split affects. `Fixture` takes
+`#[allow(clippy::struct_excessive_bools)]` — its fields are independent
+switches each suite flips on its own, and folding them into enums would couple
+settings that vary independently.
+
+**Not committed.** `tests/common/mod.rs` also carries another session's
+`SPEC_ENCODING_TABLE`, consumed by their uncommitted `tests/mik_7214_acs.rs`
+and destined for `tests/mik_7214_header_9_acs.rs`. Committing the file would
+publish their in-flight work under this session's authorisation. The repair
+sits in the worktree, so whichever session commits that file next carries it
+and the gate goes green either way.
