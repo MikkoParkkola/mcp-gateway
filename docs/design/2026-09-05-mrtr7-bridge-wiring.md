@@ -1247,6 +1247,15 @@ an exchange that overspends an operator's limit stays describable and merely
 untested; after (A) it cannot be stated at all. Eliminating a mechanism is this
 lane's to do. Eliminating a criterion is not, and it was refused.
 
+That elimination is bounded to the SEQUENTIAL exchange, and the bound is stated
+rather than left to be discovered. The gate projects `current_usd + cost` and
+reserves nothing (`src/cost_accounting/enforcer.rs:217`), so two exchanges in
+flight read the same spent total and can each be admitted for a cost only one of
+them could afford. Per-round gating eliminates overspend BY ROUNDS — that is the
+claim, and it is the whole claim. Concurrent overspend across exchanges is
+untouched by it, remains describable, and is a residual of the cost accounting's
+read-then-add shape rather than of where this lane puts its gate.
+
 **Where the gate sits, precisely.** Outside `accounted_dispatch` still — D-D's
 extraction is unchanged, the helper keeps metering and the gate stays excluded
 from it (`src/gateway/meta_mcp/invoke.rs:2464`). What moves is the CALLER: the
