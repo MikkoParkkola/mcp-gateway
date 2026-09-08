@@ -121,7 +121,7 @@ use super::MetaMcp;
 use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_tokens};
 use super::support::{
     MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
-    idempotency_key_for, response_cache_key_for, strip_backend_provenance,
+    idempotency_key_for, response_cache_key_for, retry_identity_suffix, strip_backend_provenance,
 };
 
 async fn call_capability_tool_with_identity(
@@ -1195,21 +1195,26 @@ impl MetaMcp {
                 ),
             ));
         }
-        let identity_suffix = caller_credential
-            .cache_binding
-            .as_deref()
-            .map(|b| format!("|idp:{b}"))
-            .unwrap_or_default();
         // Who the response cache keys on. The binding when identity propagation
         // is minting per-user credentials, otherwise the verified subject —
         // which is still what the backend's answer depended on. Keying on the
         // binding alone let two authenticated callers share one entry whenever
-        // propagation was off, which is the shipped default. Kept separate from
-        // `identity_suffix` above: that one keys retry de-duplication, a
-        // different contract with a different lifetime.
+        // propagation was off, which is the shipped default.
         let caller_principal = caller_credential.cache_binding.clone().or_else(|| {
             verified_identity.map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
         });
+        // Who the RETRY entry belongs to. The same fallback, because the same
+        // default left it empty for everyone — but deliberately a separate
+        // value from `caller_principal` above: retry de-duplication and
+        // response caching are different contracts with different lifetimes,
+        // and collapsing them would make one contract's key change silently
+        // move the other's.
+        let identity_suffix = retry_identity_suffix(
+            caller_credential.cache_binding.as_deref(),
+            verified_identity
+                .map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
+                .as_deref(),
+        );
 
         // `want_full` no longer suppresses the key. It selects the shape of the
         // *reply*, not whether the backend acts, and a directive that switches
