@@ -1,20 +1,25 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! One spawned owner: admit/create, dispatch, settle, unregister, drop permit.
+//! One spawned owner: admit/create, dispatch, settle, drop permit, drop
+//! ownership — in that order, and on every path including the ones that unwind.
 
 use std::sync::Arc;
 
 use tokio::sync::{OwnedSemaphorePermit, oneshot, watch};
 
 use super::settlement::{DispatchSettlement, classify_dispatch, interrupted_before_dispatch};
-use super::{BeginOutcome, TaskCall, TaskExecutor, TaskIntent, TaskWrite, WriteOutcome};
+use super::{BeginOutcome, Handoff, TaskCall, TaskExecutor, TaskIntent, TaskWrite, WriteOutcome};
 use crate::gateway::task_service::service::{CreateOutcome, ServiceError};
 use crate::gateway::task_service::store::StoreError;
 use crate::protocol::RequestId;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
 
+/// The whole life of an owned handoff. `handoff` is the ownership `begin` took
+/// before this future existed; every `return` below, and any panic between
+/// them, releases it by dropping it, which is why no path releases it by name.
+/// It also names the executor this task belongs to, so there is only one.
 pub(super) async fn commit_and_run(
-    executor: Arc<TaskExecutor>,
+    handoff: Handoff,
     intent: TaskIntent,
     task: Task,
     backend: String,
@@ -22,7 +27,7 @@ pub(super) async fn commit_and_run(
     cancel_rx: watch::Receiver<bool>,
     tx: oneshot::Sender<Result<BeginOutcome, ServiceError>>,
 ) {
-    let provisional_id = task.id().to_string();
+    let executor = Arc::clone(handoff.executor());
     let principal = intent.request.principal().to_string();
 
     let outcome = match executor
@@ -35,7 +40,6 @@ pub(super) async fn commit_and_run(
     {
         Ok(WriteOutcome::Create(created)) => created,
         Ok(_) | Err(_) => {
-            executor.unregister(&provisional_id);
             let _ = tx.send(Err(ServiceError::Unavailable));
             return;
         }
@@ -43,7 +47,6 @@ pub(super) async fn commit_and_run(
 
     let (begin, slot) = split_create(outcome);
     if !matches!(begin, BeginOutcome::Created(_)) {
-        executor.unregister(&provisional_id);
         let _ = tx.send(Ok(begin));
         return;
     }
@@ -56,7 +59,7 @@ pub(super) async fn commit_and_run(
     // Ignorable: a dropped request future must not abort already-durable work.
     let _ = tx.send(Ok(BeginOutcome::Created(committed)));
     run_dispatched(
-        executor, intent, call, cancel_rx, principal, id, revision, slot,
+        executor, handoff, intent, call, cancel_rx, principal, id, revision, slot,
     )
     .await;
 }
@@ -75,6 +78,7 @@ fn split_create(outcome: CreateOutcome) -> (BeginOutcome, Option<OwnedSemaphoreP
 #[allow(clippy::too_many_arguments)]
 async fn run_dispatched(
     executor: Arc<TaskExecutor>,
+    handoff: Handoff,
     intent: TaskIntent,
     call: TaskCall,
     mut cancel_rx: watch::Receiver<bool>,
@@ -83,6 +87,10 @@ async fn run_dispatched(
     revision: u64,
     slot: Option<OwnedSemaphorePermit>,
 ) {
+    // Declared in this order, and dropped in the reverse of it: the permit goes
+    // back first, so a drain that has stopped seeing this handoff cannot then
+    // find the worker pool short of the permit that handoff was holding.
+    let _handoff = handoff;
     let _slot = slot;
     let fail_upgrade = executor.fail_state_upgrade(&id);
     let Some(state) = (!fail_upgrade)
@@ -90,30 +98,23 @@ async fn run_dispatched(
         .flatten()
     else {
         settle_interrupted(&executor, &principal, &id, revision).await;
-        executor.unregister(&id);
         return;
     };
 
     if *cancel_rx.borrow() {
-        executor.unregister(&id);
         return;
     }
 
     match executor.mark_dispatched(&principal, &id, revision).await {
         Marker::Marked => {}
-        Marker::Refused => {
-            executor.unregister(&id);
-            return;
-        }
+        Marker::Refused => return,
         Marker::Failed => {
             settle_interrupted(&executor, &principal, &id, revision).await;
-            executor.unregister(&id);
             return;
         }
     }
 
     if *cancel_rx.borrow() {
-        executor.unregister(&id);
         return;
     }
 
@@ -139,7 +140,6 @@ async fn run_dispatched(
             settle_response(&executor, &principal, &id, revision, response).await;
         }
     }
-    executor.unregister(&id);
 }
 
 pub(super) enum Marker {
@@ -246,8 +246,10 @@ fn is_terminal(status: TaskStatus) -> bool {
     )
 }
 
+/// Returned by `TaskExecutor::commit`, which is `pub(crate)`: the error type of
+/// a crate-visible write has to be nameable wherever that write is.
 #[derive(Debug)]
-pub(super) enum CommitFailure {
+pub(crate) enum CommitFailure {
     Service(ServiceError),
     RevisionConflict,
 }

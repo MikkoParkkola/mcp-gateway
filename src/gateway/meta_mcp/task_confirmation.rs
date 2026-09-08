@@ -169,7 +169,7 @@ impl MetaMcp {
             // to is admission, which returns that task rather than starting
             // one. No hold is taken, no envelope minted, no ledger spent.
             (None, None) => {
-                if self.already_admitted(request, key) {
+                if Self::already_admitted(request, key) {
                     record("admitted_replay");
                     return TaskConfirmation::Granted(cleared(request.retry));
                 }
@@ -391,7 +391,7 @@ impl MetaMcp {
         // the same acceptance would otherwise be told its grant is unusable —
         // while its destructive task runs — and its next honest attempt would
         // carry a fresh key and run the operation twice.
-        if self.already_admitted(request, key) {
+        if Self::already_admitted(request, key) {
             record("committed_replay");
             return TaskConfirmation::Granted(cleared(request.retry));
         }
@@ -444,7 +444,7 @@ impl MetaMcp {
     /// its TTL is answered here exactly as `admit_task` would answer it, with
     /// the task it already owns. That is admission's contract for every
     /// task-augmented call and is not relaxed for this one.
-    fn already_admitted(&self, request: &TaskConfirmationRequest<'_>, key: &str) -> bool {
+    fn already_admitted(request: &TaskConfirmationRequest<'_>, key: &str) -> bool {
         let Some(identity) = request.verified_identity else {
             return false;
         };

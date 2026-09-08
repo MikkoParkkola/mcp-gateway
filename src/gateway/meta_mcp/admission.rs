@@ -35,6 +35,7 @@ impl SyncLease {
 
     /// The HTTP owner calls this only after the existing response security
     /// pipeline. No backend value can settle admission on its own.
+    #[cfg(test)]
     pub(crate) fn complete_secured(self, response: &JsonRpcResponse) {
         self.complete_delivery(response, None);
     }

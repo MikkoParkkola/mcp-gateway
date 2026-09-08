@@ -38,9 +38,16 @@ pub use crate::protocol::tasks::{Task, TaskOptions, TaskStatus, TaskTransition};
 /// a public one (E0365). The type is `pub` at its definition; this line is only
 /// about which path names it.
 pub use execution::TaskExecutor;
+/// Re-exported at crate-public visibility for the same reason as
+/// [`TaskExecutor`]: `MetaMcpCallerContext.task` is a public field carrying an
+/// `Option<TaskIntent>`, so the intent's own name has to be reachable from
+/// outside the crate or that field is a private type escaping through a public
+/// one. The type is deliberately opaque — no public fields, no public
+/// constructor — so the only thing an outside caller can write is `task: None`.
+pub use execution::TaskIntent;
 pub(crate) use execution::{
     BeginOutcome, CommitObserver, CommitStage, DrainOutcome, OwnedAdmissionRequest,
-    OwnedCallerContext, TaskCall, TaskIntent, TaskWrite, UpstreamRecovery, WriteOutcome,
+    OwnedCallerContext, TaskCall, TaskWrite, UpstreamRecovery, WriteOutcome,
 };
 pub(crate) use record::CommittedTask;
 pub(crate) use service::CreateOutcome;

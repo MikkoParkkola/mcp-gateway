@@ -7,21 +7,23 @@ mod observe;
 mod settlement;
 mod worker;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
-use tokio::sync::{Semaphore, oneshot, watch};
+use tokio::sync::{Semaphore, oneshot};
 
 pub(crate) use context::{OwnedAdmissionRequest, OwnedCallerContext};
 pub(crate) use observe::{
     CommitObserver, CommitStage, DrainOutcome, RecoveryCheckpoint, RecoveryOutcome,
     UpstreamRecovery, remaining_implementation,
 };
-use worker::{CommitFailure, commit_and_run};
+use observe::{Handoff, HandoffRegistry};
+/// Reachable at the visibility of [`TaskExecutor::commit`], which returns it.
+pub(crate) use worker::CommitFailure;
+use worker::commit_and_run;
 
 use super::record::CommittedTask;
 use super::service::{CreateOutcome, ServiceError, TaskService};
@@ -39,11 +41,16 @@ pub(crate) struct TaskCall {
 }
 
 /// `'static` intent: nothing borrowed from the request-thread caller.
-pub(crate) struct TaskIntent {
-    pub executor: Arc<TaskExecutor>,
-    pub owned: OwnedCallerContext,
-    pub request: OwnedAdmissionRequest,
-    pub options: TaskOptions,
+///
+/// Public because it travels on the public `task` field of the meta-MCP caller
+/// context, and opaque because nothing outside this crate can build or read
+/// one: every field is `pub(crate)` and there is no constructor. An external
+/// caller can still write `task: None`, which is the only shape it ever had.
+pub struct TaskIntent {
+    pub(crate) executor: Arc<TaskExecutor>,
+    pub(crate) owned: OwnedCallerContext,
+    pub(crate) request: OwnedAdmissionRequest,
+    pub(crate) options: TaskOptions,
 }
 
 /// Request-facing outcomes never own a worker permit.
@@ -113,12 +120,19 @@ pub(crate) enum WriteOutcome {
     Transitioned(CommittedTask),
 }
 
+/// The one owner of a committed task record.
+///
+/// A `begin` accepts a handoff, spawns the future that commits and dispatches
+/// it, and answers the request thread over a `oneshot`; the record belongs to
+/// the spawned owner from that moment, so a request future that goes away
+/// cannot take it back. [`Self::drain`] joins those owners. Nothing here closes
+/// the executor: a drained executor still admits.
 pub struct TaskExecutor {
     pub(crate) service: Arc<TaskService>,
     subscriptions: Arc<SubscriptionRegistry>,
     workers: Arc<Semaphore>,
     max_workers: usize,
-    running: Mutex<HashMap<String, watch::Sender<bool>>>,
+    handoffs: HandoffRegistry,
     recovery: Option<Arc<dyn UpstreamRecovery>>,
     observer: Mutex<Option<Arc<dyn CommitObserver>>>,
 }
@@ -135,7 +149,7 @@ impl TaskExecutor {
             subscriptions,
             workers: Arc::new(Semaphore::new(max_workers)),
             max_workers,
-            running: Mutex::new(HashMap::new()),
+            handoffs: HandoffRegistry::new(),
             recovery: None,
             observer: Mutex::new(None),
         })
@@ -156,11 +170,13 @@ impl TaskExecutor {
         backend: String,
         call: TaskCall,
     ) -> Result<BeginOutcome, ServiceError> {
-        let cancel_rx = self.register(task.id());
+        // Ownership first, and only then the spawn: the guard is live before
+        // there is a task to run it, so the window in which the executor has
+        // accepted work that no drain can see does not exist.
+        let (handoff, cancel_rx) = Handoff::accept(self, task.id());
         let (tx, rx) = oneshot::channel();
-        let executor = Arc::clone(self);
         tokio::spawn(commit_and_run(
-            executor, intent, task, backend, call, cancel_rx, tx,
+            handoff, intent, task, backend, call, cancel_rx, tx,
         ));
         rx.await.map_err(|_| ServiceError::Unavailable)?
     }
@@ -272,8 +288,20 @@ impl TaskExecutor {
         Ok(())
     }
 
+    /// Join every owner, then every worker permit, inside one timeout budget.
+    ///
+    /// Two phases and this order. Ownership is joined first because a handoff
+    /// that has been accepted but not yet polled holds no permit — its capacity
+    /// is reserved inside `commit`, on the spawned task — so a permit sweep
+    /// alone would call an executor with queued work clean. The permits are
+    /// acquired second and never first: taking the pool ahead of work that
+    /// still has to reserve from it would be the deadlock, not the drain.
+    ///
+    /// A join, not a shutdown: nothing is closed, no admission is refused, and
+    /// every permit is released before a clean answer is returned.
     pub(crate) async fn drain(&self, timeout: Duration) -> DrainOutcome {
-        let acquire = async {
+        let join = async {
+            self.handoffs.join().await;
             let mut held = Vec::with_capacity(self.max_workers);
             for _ in 0..self.max_workers {
                 let permit = self
@@ -286,11 +314,17 @@ impl TaskExecutor {
             }
             held
         };
-        match tokio::time::timeout(timeout, acquire).await {
-            Ok(held) => DrainOutcome {
-                timed_out: false,
-                acquired: held.len(),
-            },
+        match tokio::time::timeout(timeout, join).await {
+            Ok(held) => {
+                let acquired = held.len();
+                // Explicit, before the outcome is built: a clean drain hands
+                // the whole pool back to the executor it just joined.
+                drop(held);
+                DrainOutcome {
+                    timed_out: false,
+                    acquired,
+                }
+            }
             Err(_) => DrainOutcome {
                 timed_out: true,
                 acquired: self
@@ -300,21 +334,8 @@ impl TaskExecutor {
         }
     }
 
-    fn register(&self, id: &str) -> watch::Receiver<bool> {
-        let (tx, rx) = watch::channel(false);
-        self.running.lock().insert(id.to_owned(), tx);
-        rx
-    }
-
-    pub(super) fn unregister(&self, id: &str) {
-        self.running.lock().remove(id);
-    }
-
     fn cancel_signal(&self, id: &str) {
-        let tx = self.running.lock().get(id).cloned();
-        if let Some(tx) = tx {
-            let _ = tx.send(true);
-        }
+        self.handoffs.cancel_signal(id);
     }
 
     pub(crate) async fn commit(&self, write: TaskWrite<'_>) -> Result<WriteOutcome, CommitFailure> {

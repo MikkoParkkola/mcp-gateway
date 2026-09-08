@@ -60,6 +60,7 @@ mod support;
 mod capacity;
 mod confirmation;
 mod dedupe;
+mod drain;
 mod interlock;
 mod lifecycle;
 mod refusals;
