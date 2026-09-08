@@ -115,8 +115,9 @@ streaming's `session_reaper_interval` config knob and a second constant beside i
 reader — a dead value that reads as a scheduling authority. (v2 GPT improvement, confirmed by
 construction: with D1 as the host, nothing could ever read it.) Streaming's `session_ttl` is
 likewise NOT collapsed in — `IDLE_TTL` governs only what `track` writes as a deadline.
-**Nominal reclaim latency is therefore `IDLE_TTL + session_reaper_interval`, not 60 seconds.** Nominal,
-not exact: `reap`'s strict `>` on whole seconds adds up to a second, a loaded runtime delays the tick by
+**Nominal reclaim latency is therefore `IDLE_TTL + 1s + session_reaper_interval`, not 60 seconds.** The
+`1s` is `reap`'s strict `>` on whole seconds, carried in the displayed figure rather than mentioned
+beside it. Nominal, not exact even so: a loaded runtime delays the tick by
 an amount this design does not bound, and a wall-clock step moves the deadline after it is written. §P2
 asserts against the INGREDIENTS of that figure — the write site's arithmetic and both constants — never
 against a measured latency; see the composition table in the test plan. Writing 60s anywhere would promise a sweep cadence this

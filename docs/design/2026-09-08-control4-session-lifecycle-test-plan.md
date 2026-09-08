@@ -99,7 +99,8 @@ not injectable at the level T4 runs at, and `IDLE_TTL` is 300 seconds against a 
 that literally measured the latency would either sleep for five minutes or inject its own `expires_at`
 and then assert on the value it just supplied. Both were considered and both are rejected.
 
-So the bound `[IDLE_TTL, IDLE_TTL + session_reaper_interval]` is NOMINAL. It is not the equality the
+So the bound `[IDLE_TTL, IDLE_TTL + 1s + session_reaper_interval]` — the `1s` being the whole-second
+comparison slack named below — is NOMINAL. It is not the equality the
 first draft of this plan claimed, and it is not a guarantee either. Three things push past it and no
 case in this table can bound any of them:
 
@@ -119,7 +120,7 @@ somewhere cheaper:
 |---|---|
 | the write site computes `expires_at = now + IDLE_TTL` | T1, at the write site, on real arithmetic |
 | `reap(now)` removes exactly the keys whose deadline has passed | the 3 shipped lifecycle tests (§P0 OUT) |
-| the host tick actually calls `reap` | T4 — a deadline already in the past is reclaimed within one tick |
+| the host tick actually calls `reap` | T4 — a deadline already in the past is reclaimed on the first sweep that observes it |
 | both constants are the ones the design names | T5 |
 
 T4's past deadline is a STAGING device for *the tick calls reap*; it makes no latency claim, so it is not
