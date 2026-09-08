@@ -121,7 +121,7 @@ impl SessionLifecycle {
     /// Each key fires the handlers exactly once and is then forgotten: these
     /// callbacks free things, and a handler that runs twice for one key is its
     /// own defect.
-    pub fn reap(&self, now: u64) {
+    pub fn reap(&self, now: u64) -> usize {
         let expired: Vec<String> = {
             let mut tracked = self.tracked.write();
             let expired: Vec<String> = tracked
@@ -134,11 +134,13 @@ impl SessionLifecycle {
             }
             expired
         };
+        let reclaimed = expired.len();
         for key in expired {
             // Already removed above. `on_disconnect` would remove it again, and
             // a second removal can only take an entry someone re-registered.
             self.fire_cleanup(&key);
         }
+        reclaimed
     }
 
     /// How many keys are awaiting reclamation.
