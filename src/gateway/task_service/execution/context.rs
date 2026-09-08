@@ -34,6 +34,9 @@ pub(crate) struct OwnedCallerContext {
     is_admin: bool,
     input_capabilities: Declared,
     session_id: Option<String>,
+    /// Classifier revision captured at admission. Borrowed into the rebuilt
+    /// caller at dispatch. Not persisted on the durable task record.
+    protocol_revision: Option<String>,
 }
 
 impl OwnedCallerContext {
@@ -49,6 +52,7 @@ impl OwnedCallerContext {
         is_admin: bool,
         input_capabilities: Declared,
         session_id: Option<String>,
+        protocol_revision: Option<String>,
     ) -> Self {
         // The very string the admission request is keyed on, passed in from the
         // one construction site: it is the durable task's owner, not a display
@@ -64,6 +68,7 @@ impl OwnedCallerContext {
             is_admin,
             input_capabilities,
             session_id,
+            protocol_revision,
         }
     }
 
@@ -93,6 +98,7 @@ impl OwnedCallerContext {
             // builder returns `None` for every other era — so this is a fact
             // about the request that created the task, not a default.
             is_modern: true,
+            protocol_revision: self.protocol_revision.as_deref(),
             // The owner the durable record was admitted under. Read as the
             // admission fallback for an identity-less caller, which a task has
             // whenever authentication is off; carried so the worker's caller

@@ -33,6 +33,7 @@ fn allow_all_ctx_named<'a>(
         execution: None,
         credential_principal: None,
         is_modern: false,
+        protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
         api_key_name,
         agent_id,
@@ -58,6 +59,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         execution: None,
         credential_principal: None,
         is_modern: false,
+        protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
         api_key_name: None,
         agent_id: None,
@@ -763,6 +765,7 @@ providers:
                     execution: None,
                     credential_principal: None,
                     is_modern: false,
+                    protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
                     authorizer: &ALLOW_ALL,
                     api_key_name: Some("shared-api-key"),
                     agent_id: Some("agent-1"),
@@ -3401,6 +3404,7 @@ fn allow_all_ctx_declaring(
         execution: None,
         credential_principal: None,
         is_modern: false,
+        protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
         api_key_name: None,
         agent_id: None,
@@ -4405,16 +4409,24 @@ providers:
     // that call produces: a key computed a second way would stage an entry no
     // read ever looks for, and the case would pass without proving anything.
     let profile = meta.active_profile(Some("session-1"));
+    // The staged entry has to carry the principal the assertions' caller keys
+    // on. With no identity propagation and no OIDC, that is the caller's own
+    // `GrantSubject` — the same one `grant_ctx` builds — namespaced by the
+    // one production helper rather than a second spelling of it here.
+    let staged_subject =
+        crate::identity_grants::GrantSubject::new("cloudflare_access", "user-123", None);
+    let staged_principal =
+        super::support::caller_cache_principal(None, None, Some(&staged_subject));
     let key = super::support::response_cache_key_for(
         "personal_caps",
         "calendar_read",
         &json!({}),
         &crate::projection::projection_key_suffix(meta.projection_mode, Some("session-1")),
-        None,
+        staged_principal.as_deref(),
         &crate::protocol::mrtr::NO_RETRY,
         crate::cache::KeyContext {
             routing_profile: &profile.name,
-            protocol_revision: None,
+            protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
             policy_epoch: 0,
         },
     );

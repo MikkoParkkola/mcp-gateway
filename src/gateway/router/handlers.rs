@@ -816,6 +816,22 @@ pub(super) async fn meta_mcp_handler(
     // moved by the per-method check below, ~100 lines before the caller context
     // is built.
     let declared_capabilities = shape.declared_capabilities();
+    // Owned: `shape` is moved ~100 lines before the caller is built. Classifier
+    // output, never the duplicate-header sentinel.
+    //
+    // Verified evidence only: the echoed `MCP-Protocol-Version` header, which
+    // the transport has already OWS-stripped, or the revision this session's
+    // `initialize` was answered with — bound once at the single negotiation
+    // site (`protocol_revision_telemetry::bind_session_revision`). The request
+    // body is not consulted: `params.protocolVersion` is not a `tools/call`
+    // field, so reading it would let a header-less caller pick the revision
+    // bucket its response is stored in and read from. With neither piece of
+    // evidence this is `None` and the request bypasses both caches.
+    let session_revision =
+        crate::protocol_revision_telemetry::session_negotiated_revision(Some(session_id.as_str()));
+    let protocol_revision_owned =
+        crate::protocol::meta::cache_protocol_revision(&shape, declared_version, session_revision)
+            .map(str::to_owned);
 
     debug!(method = %method, session_id = %session_id, "Meta-MCP request");
 
@@ -1467,6 +1483,7 @@ pub(super) async fn meta_mcp_handler(
                     client.as_ref().is_some_and(|c| c.admin),
                     declared_capabilities,
                     Some(session_id.as_str()),
+                    protocol_revision_owned.as_deref(),
                 ) {
                     Ok(intent) => intent,
                     Err(refusal) => {
@@ -1487,6 +1504,7 @@ pub(super) async fn meta_mcp_handler(
                 execution: None,
                 signing: None,
                 is_modern,
+                protocol_revision: protocol_revision_owned.as_deref(),
                 credential_principal: client.as_ref().map(|client| client.principal.as_str()),
                 authorizer: &router_authorizer,
                 api_key_name,

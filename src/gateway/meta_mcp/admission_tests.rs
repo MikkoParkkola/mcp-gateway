@@ -75,6 +75,7 @@ fn context<'a>(policy: &'a MutablePolicy, retry: &'a RetryFields) -> MetaMcpCall
         execution: None,
         signing: None,
         is_modern: true,
+        protocol_revision: None,
         credential_principal: Some("verified-credential-owner"),
         authorizer: policy,
         api_key_name: Some("same-display-label"),

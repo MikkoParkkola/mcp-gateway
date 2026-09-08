@@ -103,6 +103,7 @@ pub(super) fn task_intent_for_call(
     is_admin: bool,
     input_capabilities: Declared,
     session_id: Option<&str>,
+    protocol_revision: Option<&str>,
 ) -> Result<Option<TaskIntent>, JsonRpcResponse> {
     if !is_modern {
         return Ok(None);
@@ -156,6 +157,7 @@ pub(super) fn task_intent_for_call(
             is_admin,
             input_capabilities,
             session_id.filter(|id| !id.is_empty()).map(str::to_owned),
+            protocol_revision.map(str::to_owned),
         ),
         // One builder, shared with the confirmation gate's read-only committed
         // lookup, and the SAME owner string the read arms use. Two renderings

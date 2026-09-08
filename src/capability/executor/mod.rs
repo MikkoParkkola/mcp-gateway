@@ -70,6 +70,9 @@ pub struct CapabilityExecutor {
     /// environment; the gateway replaces it with the overlay startup published
     /// (`with_env`), which a reload republishes.
     pub(super) env: Arc<crate::config::LiveEnv>,
+    /// Shared authorization-policy generation. Bumpers clone this Arc;
+    /// readers use the `u64` snapshot on [`CapabilityExecutionContext`].
+    pub(super) policy_epoch: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 /// Maximum number of send attempts (1 initial + 2 retries) for transient
@@ -211,6 +214,25 @@ impl CapabilityExecutor {
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("capabilities"),
             env: Arc::new(crate::config::LiveEnv::default()),
+            policy_epoch: None,
+        }
+    }
+
+    /// Share the gateway policy epoch so capability reload can bump it.
+    #[must_use]
+    pub fn with_policy_epoch(mut self, epoch: Arc<std::sync::atomic::AtomicU64>) -> Self {
+        self.policy_epoch = Some(epoch);
+        self
+    }
+
+    /// Advance the shared epoch after a capability-registry mutation is visible.
+    pub(crate) fn bump_policy_epoch(&self) {
+        if let Some(epoch) = &self.policy_epoch {
+            let prev = epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
+            debug_assert!(
+                epoch.load(std::sync::atomic::Ordering::Relaxed) > prev,
+                "policy epoch must be monotonic"
+            );
         }
     }
 
@@ -250,6 +272,7 @@ impl CapabilityExecutor {
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("capabilities"),
             env: Arc::new(crate::config::LiveEnv::default()),
+            policy_epoch: None,
         }
     }
 
@@ -310,13 +333,19 @@ impl CapabilityExecutor {
             .primary_provider()
             .ok_or_else(|| Error::Config("No primary provider configured".to_string()))?;
 
-        // Check cache first
-        if capability.is_cacheable() {
-            let cache_key = self.build_cache_key(capability, &params);
-            if let Some(cached) = self.cache.get(&cache_key) {
-                tracing::debug!("Cache hit");
-                return Ok(cached);
-            }
+        // Check cache first. Loopback-relaxed fetches never enter the store.
+        // The key uses the invoke-path snapshot on `context` (revision, profile,
+        // epoch, already-resolved cache_binding), never a reload of the Arcs.
+        let cache_key = if capability.is_cacheable() && !context.allow_loopback_egress {
+            self.build_cache_key(capability, &params, &context)
+        } else {
+            None
+        };
+        if let Some(ref cache_key) = cache_key
+            && let Some(cached) = self.cache.get(cache_key)
+        {
+            tracing::debug!("Cache hit");
+            return Ok(cached);
         }
 
         // Route through the protocol executor trait.
@@ -344,9 +373,8 @@ impl CapabilityExecutor {
             "Capability executed successfully"
         );
 
-        if capability.is_cacheable() {
-            let cache_key = self.build_cache_key(capability, &params);
-            self.cache.set(&cache_key, &response, capability.cache.ttl);
+        if let Some(ref cache_key) = cache_key {
+            self.cache.set(cache_key, &response, capability.cache.ttl);
         }
 
         Ok(response)

@@ -88,6 +88,7 @@ fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
         execution: None,
         credential_principal: None,
         is_modern: false,
+        protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer,
         api_key_name: Some("test-caller"),
         agent_id: None,
@@ -1042,5 +1043,227 @@ async fn authz_cache_4b_read_and_write_keys_share_the_pre_dispatch_epoch() {
         2,
         "a third call under the still-bumped epoch must hit; without this, \
          an implementation that writes nothing dispatches twice and passes"
+    );
+}
+
+/// CACHE.4e production plumbing — two classified revisions do not share an
+/// entry. Hit control: the first revision's second call stays at 1.
+#[tokio::test]
+async fn authz_cache_4e_two_revisions_do_not_share_an_entry() {
+    let (registry, calls) = counted_backend("alpha");
+    let meta = MetaMcp::with_features(
+        registry,
+        Some(Arc::new(crate::cache::ResponseCache::new())),
+        None,
+        None,
+        Duration::from_secs(300),
+    );
+    let mut first = ctx(&AllowAll);
+    first.protocol_revision = Some("2025-03-26");
+    let mut second = ctx(&AllowAll);
+    second.protocol_revision = Some("2025-06-18");
+
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &first)
+        .await
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &first)
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "hit control: the first revision must be cached"
+    );
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &second)
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "a second classified revision must miss"
+    );
+}
+
+/// Unknown revision skips the response cache only. A later known-revision
+/// call still hits the entry primed under that revision.
+#[tokio::test]
+async fn authz_cache_4e_unknown_revision_skips_cache_not_all_caching() {
+    let (registry, calls) = counted_backend("alpha");
+    let meta = MetaMcp::with_features(
+        registry,
+        Some(Arc::new(crate::cache::ResponseCache::new())),
+        None,
+        None,
+        Duration::from_secs(300),
+    );
+    let known = ctx(&AllowAll);
+    let mut unknown = ctx(&AllowAll);
+    unknown.protocol_revision = None;
+
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &known)
+        .await
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &unknown)
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "unknown revision must not read the known entry"
+    );
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &known)
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "the known entry must still be live after an unknown-revision miss"
+    );
+}
+
+/// CACHE.4b / 4.f.2 — LiveConfig::set bumps the shared epoch so a subsequent
+/// invoke misses. Hit control before the set.
+#[tokio::test]
+async fn authz_cache_4b_live_config_set_strands_the_prior_entry() {
+    let (registry, calls) = counted_backend("alpha");
+    let cache = Arc::new(crate::cache::ResponseCache::new());
+    let meta = MetaMcp::with_features(
+        registry,
+        Some(Arc::clone(&cache)),
+        None,
+        None,
+        Duration::from_secs(300),
+    );
+    let live = crate::config_reload::LiveConfig::new(crate::config::Config::default())
+        .with_policy_epoch(Arc::clone(&meta.policy_epoch));
+
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .await
+        .unwrap();
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .await
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "hit control");
+
+    live.set(crate::config::Config::default());
+    assert_eq!(cache.stats().size, 1, "set strands, it does not clear");
+
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "a post-set invoke must miss"
+    );
+}
+
+/// CACHE.4 outer — the shipped default (no identity propagation, no OIDC) must
+/// still isolate two callers. Their only principal is the `GrantSubject` the
+/// router derives from trusted headers / mTLS / an OAuth agent, so a key that
+/// ignored it served one caller's body to the other. Hit control first: the
+/// same principal twice must stay at one dispatch, or a miss below would be
+/// explained equally well by a cache that never stores.
+#[tokio::test]
+async fn authz_cache_4_two_grant_subjects_do_not_share_an_outer_entry() {
+    let (registry, calls) = counted_backend("alpha");
+    let meta = MetaMcp::with_features(
+        registry,
+        Some(Arc::new(crate::cache::ResponseCache::new())),
+        None,
+        None,
+        Duration::from_secs(300),
+    );
+    let subject = |name: &'static str| {
+        Some(crate::identity_grants::GrantSubject::new(
+            "cloudflare_access",
+            name,
+            None,
+        ))
+    };
+    let alice = MetaMcpCallerContext {
+        grant_subject: subject("alice"),
+        ..ctx(&AllowAll)
+    };
+    let alice_again = MetaMcpCallerContext {
+        grant_subject: subject("alice"),
+        ..ctx(&AllowAll)
+    };
+    let bob = MetaMcpCallerContext {
+        grant_subject: subject("bob"),
+        ..ctx(&AllowAll)
+    };
+
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &alice)
+        .await
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "alice primes the cache");
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &alice_again)
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "hit control: the same principal must be served from cache"
+    );
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &bob)
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "a second principal must not be served alice's body"
+    );
+}
+
+/// A revision spelling the gateway never served names no bucket at all: it is
+/// not trimmed onto the canonical one, and it gets no bucket of its own.
+#[tokio::test]
+async fn authz_cache_4e_whitespace_padded_revision_is_not_a_bucket() {
+    let (registry, calls) = counted_backend("alpha");
+    let meta = MetaMcp::with_features(
+        registry,
+        Some(Arc::new(crate::cache::ResponseCache::new())),
+        None,
+        None,
+        Duration::from_secs(300),
+    );
+    let known = ctx(&AllowAll);
+    let mut padded = ctx(&AllowAll);
+    padded.protocol_revision = Some(" 2025-11-25 ");
+
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &known)
+        .await
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &known)
+        .await
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "hit control");
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &padded)
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "a padded spelling must not read the canonical entry"
+    );
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &padded)
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        3,
+        "and must not have stored a bucket of its own"
+    );
+    meta.invoke_tool(&invoke_args("alpha", "read"), None, &known)
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        3,
+        "the canonical entry must still be live"
     );
 }
