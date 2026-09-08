@@ -127,6 +127,17 @@ class ContractInterfaceTests(unittest.TestCase):
             text=True,
         )
 
+    def contract_error_lines(self, stderr):
+        """Split the aggregated 'Invalid scope contract:' body into exact error lines."""
+        prefix = "Invalid scope contract:\n  "
+        self.assertTrue(stderr.startswith(prefix), stderr)
+        body = stderr[len(prefix) :].rstrip("\n")
+        return body.split("\n  ")
+
+    def assert_exact_diagnostic(self, stderr, expected_line):
+        """Assert expected_line is a complete diagnostic line, not merely a substring."""
+        self.assertIn(expected_line, self.contract_error_lines(stderr))
+
     def test_documented_paths_and_approval_messages(self):
         plan = self.cli("--check")
         self.assertEqual(plan.returncode, 0, plan.stderr)
@@ -184,6 +195,11 @@ class ContractInterfaceTests(unittest.TestCase):
                 result = self.cli("--release")
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn(diagnostic, result.stderr)
+                if table == "decisions" and field == "selection":
+                    self.assert_exact_diagnostic(
+                        result.stderr,
+                        "reference_personal_account_journey: selection must be text",
+                    )
         self.data = original
         self.data["decisions"][0].pop("evidence")
         self.write_data()
@@ -236,6 +252,10 @@ class ContractInterfaceTests(unittest.TestCase):
                 result = self.cli("--publish-check", env_overrides=publish_env)
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn(diagnostic, result.stderr)
+                if diagnostic == (
+                    "Cargo.toml: [package].version is missing or not a string"
+                ):
+                    self.assert_exact_diagnostic(result.stderr, diagnostic)
                 manifest.unlink(missing_ok=True) if manifest.is_file() else None
                 if manifest.is_dir():
                     manifest.rmdir()
@@ -313,7 +333,9 @@ class ContractInterfaceTests(unittest.TestCase):
                 self.write_data()
                 result = self.cli("--release")
                 self.assertEqual(result.returncode, 2, result.stderr)
-                self.assertIn(f"GH462.CONFIG.1: {fragment}", result.stderr)
+                self.assert_exact_diagnostic(
+                    result.stderr, f"GH462.CONFIG.1: {fragment}"
+                )
                 # the untouched second criterion must not be blamed for this row's defect
                 self.assertNotIn(f"GH452.SESSION.1: {fragment}", result.stderr)
 
@@ -326,8 +348,8 @@ class ContractInterfaceTests(unittest.TestCase):
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn(
-            "each criterion needs id, status, evidence and note", result.stderr
+        self.assert_exact_diagnostic(
+            result.stderr, "each criterion needs id, status, evidence and note"
         )
         self.assertNotIn("GH452.SESSION.1", result.stderr)
 
@@ -336,7 +358,7 @@ class ContractInterfaceTests(unittest.TestCase):
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("criterion ID must be a string", result.stderr)
+        self.assert_exact_diagnostic(result.stderr, "criterion ID must be a string")
         self.assertNotIn("missing criterion verdict: GH452.SESSION.1", result.stderr)
 
         self.data = copy.deepcopy(baseline)
@@ -344,14 +366,18 @@ class ContractInterfaceTests(unittest.TestCase):
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("duplicate criterion: GH462.CONFIG.1", result.stderr)
+        self.assert_exact_diagnostic(
+            result.stderr, "duplicate criterion: GH462.CONFIG.1"
+        )
 
         self.data = copy.deepcopy(baseline)
         self.data["criteria"][0]["status"] = "waived"
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("GH462.CONFIG.1: status must be pending or met", result.stderr)
+        self.assert_exact_diagnostic(
+            result.stderr, "GH462.CONFIG.1: status must be pending or met"
+        )
         self.assertNotIn(
             "GH452.SESSION.1: status must be pending or met", result.stderr
         )
@@ -361,15 +387,17 @@ class ContractInterfaceTests(unittest.TestCase):
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("missing criterion verdict: GH462.CONFIG.1", result.stderr)
+        self.assert_exact_diagnostic(
+            result.stderr, "missing criterion verdict: GH462.CONFIG.1"
+        )
 
         self.data = copy.deepcopy(baseline)
         self.data["criteria"][0]["id"] = "GH999.UNDECLARED.1"
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn(
-            "verdict without a requirement: GH999.UNDECLARED.1", result.stderr
+        self.assert_exact_diagnostic(
+            result.stderr, "verdict without a requirement: GH999.UNDECLARED.1"
         )
 
         self.data = copy.deepcopy(baseline)
@@ -377,7 +405,7 @@ class ContractInterfaceTests(unittest.TestCase):
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("criteria must be a list", result.stderr)
+        self.assert_exact_diagnostic(result.stderr, "criteria must be a list")
 
     def test_decision_row_shape_and_identity_diagnostics(self):
         self.two_criterion_two_decision_contract()
@@ -388,8 +416,8 @@ class ContractInterfaceTests(unittest.TestCase):
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn(
-            "each decision needs id, status, selection and evidence", result.stderr
+        self.assert_exact_diagnostic(
+            result.stderr, "each decision needs id, status, selection and evidence"
         )
 
         self.data = copy.deepcopy(baseline)
@@ -397,15 +425,15 @@ class ContractInterfaceTests(unittest.TestCase):
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("decision ID must be a string", result.stderr)
+        self.assert_exact_diagnostic(result.stderr, "decision ID must be a string")
 
         self.data = copy.deepcopy(baseline)
         self.data["decisions"][1]["id"] = "reference_personal_account_journey"
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn(
-            "duplicate decision: reference_personal_account_journey", result.stderr
+        self.assert_exact_diagnostic(
+            result.stderr, "duplicate decision: reference_personal_account_journey"
         )
 
         self.data = copy.deepcopy(baseline)
@@ -413,9 +441,9 @@ class ContractInterfaceTests(unittest.TestCase):
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn(
-            "additional_operator_decision: decision must be pending or resolved",
+        self.assert_exact_diagnostic(
             result.stderr,
+            "additional_operator_decision: decision must be pending or resolved",
         )
         self.assertNotIn(
             "reference_personal_account_journey: decision must be pending or resolved",
@@ -427,8 +455,8 @@ class ContractInterfaceTests(unittest.TestCase):
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn(
-            "additional_operator_decision: selection must be text", result.stderr
+        self.assert_exact_diagnostic(
+            result.stderr, "additional_operator_decision: selection must be text"
         )
 
         self.data = copy.deepcopy(baseline)
@@ -436,9 +464,9 @@ class ContractInterfaceTests(unittest.TestCase):
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn(
-            "additional_operator_decision: resolved decision needs the operator's selection",
+        self.assert_exact_diagnostic(
             result.stderr,
+            "additional_operator_decision: resolved decision needs the operator's selection",
         )
 
         self.data = copy.deepcopy(baseline)
@@ -446,9 +474,9 @@ class ContractInterfaceTests(unittest.TestCase):
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn(
-            "additional_operator_decision: do not record a selection while awaiting the operator",
+        self.assert_exact_diagnostic(
             result.stderr,
+            "additional_operator_decision: do not record a selection while awaiting the operator",
         )
 
         self.data = copy.deepcopy(baseline)
@@ -456,8 +484,8 @@ class ContractInterfaceTests(unittest.TestCase):
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn(
-            "required decision set differs from the approved contract", result.stderr
+        self.assert_exact_diagnostic(
+            result.stderr, "required decision set differs from the approved contract"
         )
 
         self.data = copy.deepcopy(baseline)
@@ -465,7 +493,7 @@ class ContractInterfaceTests(unittest.TestCase):
         self.write_data()
         result = self.cli("--release")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("decisions must be a list", result.stderr)
+        self.assert_exact_diagnostic(result.stderr, "decisions must be a list")
 
     def test_ledger_top_level_and_schema_version_diagnostics(self):
         self.two_criterion_two_decision_contract()
@@ -475,9 +503,9 @@ class ContractInterfaceTests(unittest.TestCase):
                 self.write_raw_status(shape)
                 result = self.cli("--release")
                 self.assertEqual(result.returncode, 2, result.stderr)
-                self.assertIn(
-                    "ledger must contain schema_version, criteria and decisions",
+                self.assert_exact_diagnostic(
                     result.stderr,
+                    "ledger must contain schema_version, criteria and decisions",
                 )
         for version in (2, "1", True):
             with self.subTest(schema_version=version):
@@ -486,7 +514,9 @@ class ContractInterfaceTests(unittest.TestCase):
                 self.write_data()
                 result = self.cli("--release")
                 self.assertEqual(result.returncode, 2, result.stderr)
-                self.assertIn("unsupported scope ledger schema_version", result.stderr)
+                self.assert_exact_diagnostic(
+                    result.stderr, "unsupported scope ledger schema_version"
+                )
 
     def test_declared_requirement_ids_must_be_unique_and_nonempty(self):
         self.two_criterion_two_decision_contract()
@@ -495,9 +525,9 @@ class ContractInterfaceTests(unittest.TestCase):
         )
         result = self.cli("--check")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn(
-            "scope requirements must declare a nonempty set of unique IDs",
+        self.assert_exact_diagnostic(
             result.stderr,
+            "scope requirements must declare a nonempty set of unique IDs",
         )
         self.scope_doc.write_text(
             "Approved supplemental criteria: 2\n"
@@ -506,9 +536,9 @@ class ContractInterfaceTests(unittest.TestCase):
         )
         result = self.cli("--check")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn(
-            "scope requirements must declare a nonempty set of unique IDs",
+        self.assert_exact_diagnostic(
             result.stderr,
+            "scope requirements must declare a nonempty set of unique IDs",
         )
 
     def test_baseline_helper_failure_blocks_release(self):
@@ -517,8 +547,8 @@ class ContractInterfaceTests(unittest.TestCase):
         self.counter.write_text("def rows(text):\n    return [], True\n")
         result = self.cli("--check")
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn(
-            "baseline ledger is empty or has malformed criterion rows", result.stderr
+        self.assert_exact_diagnostic(
+            result.stderr, "baseline ledger is empty or has malformed criterion rows"
         )
 
 
