@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crate::{
     hashing::canonical_json_sha256,
     protocol::Tool,
-    trust::{TrustCard, TrustEvaluationStatus},
+    trust::{SchemaBounds, TrustCard, TrustEvaluationStatus},
 };
 
 /// Wire key for the additive MCP tool descriptor extension.
@@ -30,6 +30,13 @@ pub struct ToolDescriptorTrustCard {
     pub cbom_digest_sha256: String,
     /// Validation status for the generated local `TrustCard`.
     pub evaluation_status: TrustEvaluationStatus,
+    /// Whether every `$ref` in the published `inputSchema` resolves inside it.
+    ///
+    /// Inspected, never enforced: the descriptor is published exactly as the
+    /// backend sent it and the verdict travels beside it. Bounds `$ref`
+    /// resolution ONLY — see [`SchemaBounds`] for what is deliberately not
+    /// checked.
+    pub schema_bounds: SchemaBounds,
 }
 
 impl ToolDescriptorTrustCard {
@@ -48,6 +55,7 @@ impl ToolDescriptorTrustCard {
             trust_card_digest_sha256: trust_card_digest_sha256(&card),
             cbom_digest_sha256: cbom_digest_sha256(&card),
             evaluation_status: card.evaluation_status,
+            schema_bounds: SchemaBounds::inspect(&tool.input_schema),
         }
     }
 }
