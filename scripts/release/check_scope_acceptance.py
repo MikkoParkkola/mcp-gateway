@@ -4,25 +4,37 @@
 """Validate the approved scope; release mode also rejects unresolved acceptance.
 
 Evidence existence is the agreed bar, not automatic proof of a test execution.
-Exit 0: valid plan (--check), or accepted release (--release).
+Exit 0: valid plan (--check), or accepted release (--release/--publish-check).
 Exit 1: valid but incomplete release. Exit 2: invalid/unreadable contract.
+
+--publish-check runs the same consistency checks as --check on every ref, and
+additionally requires completed acceptance when GITHUB_EVENT_NAME/GITHUB_REF
+(and, for workflow_dispatch, INPUT_TAG) show a tag push or manual dispatch
+(publishing context) whose Cargo.toml [package].version or normalized tag/
+input is 4.0.0. The manifest must exist and parse with a valid version in
+that context regardless of which version it names.
 """
 
 import argparse
 import importlib.util
 import json
+import os
 import pathlib
 import re
 import subprocess
 import sys
+import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DOCS = pathlib.Path("docs/requirements")
 SCOPE = DOCS / "RELEASE-4.0.0-scope-update.md"
 STATUS = DOCS / "RELEASE-4.0.0-scope-status.json"
 BASELINE = DOCS / "RELEASE-4.0.0-criteria-status.md"
+MANIFEST = pathlib.Path("Cargo.toml")
 REQUIRED_DECISIONS = {"reference_personal_account_journey"}
 ID = re.compile(r"^\| ((?:MIK-\d+|NFR|GH\d+)\.[A-Z0-9]+\.\d+[a-z]?) \|", re.M)
+VERSION_400 = re.compile(r"^4\.0\.0([+-].*)?$")
+VERSION_FORMAT = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$")
 
 spec = importlib.util.spec_from_file_location(
     "release_counter", pathlib.Path(__file__).with_name("count-release-criteria.py")
@@ -39,6 +51,44 @@ def unique_object(pairs):
             raise ValueError(f"duplicate JSON field: {key}")
         result[key] = value
     return result
+
+
+def is_publishing_context(event_name, ref):
+    """A published artifact originates from a tag push or a manual dispatch."""
+    if event_name == "workflow_dispatch":
+        return True
+    return event_name == "push" and ref.startswith("refs/tags/")
+
+
+def normalize_ref(value):
+    value = value.strip()
+    if value.startswith("refs/tags/"):
+        value = value[len("refs/tags/") :]
+    if value.startswith("v"):
+        value = value[1:]
+    return value
+
+
+def manifest_version_errors(root):
+    """Read [package].version from the manifest; fail closed on any defect."""
+    path = root / MANIFEST
+    try:
+        text = path.read_text()
+    except OSError as error:
+        return None, [f"{MANIFEST}: {error}"]
+    try:
+        manifest = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        return None, [f"{MANIFEST}: invalid TOML: {error}"]
+    package = manifest.get("package")
+    version = package.get("version") if isinstance(package, dict) else None
+    if not isinstance(version, str) or not version.strip():
+        return None, [f"{MANIFEST}: [package].version is missing or not a string"]
+    if not VERSION_FORMAT.match(version):
+        return None, [
+            f"{MANIFEST}: [package].version is not a valid version: {version!r}"
+        ]
+    return version, []
 
 
 def evidence_errors(root, evidence, label, required):
@@ -66,6 +116,13 @@ def inspect_contract(root, document, data, baseline):
     """Return structural errors and pending obligations without conflating them."""
     errors, pending, blockers = [], [], []
     declared = ID.findall(document)
+    approved_counts = re.findall(
+        r"^Approved supplemental criteria: ([0-9]+)$", document, re.M
+    )
+    if len(approved_counts) != 1 or int(approved_counts[0]) != len(declared):
+        errors.append(
+            "approved supplemental criterion count does not match requirements"
+        )
     if not declared or len(declared) != len(set(declared)):
         errors.append("scope requirements must declare a nonempty set of unique IDs")
     if not isinstance(data, dict) or set(data) != {
@@ -148,7 +205,7 @@ def inspect_contract(root, document, data, baseline):
         )
         if row["status"] == "pending":
             pending.append(f"decision:{ident}")
-    if decision_ids != REQUIRED_DECISIONS:
+    if not REQUIRED_DECISIONS <= decision_ids:
         errors.append("required decision set differs from the approved contract")
 
     rows, malformed = counter.rows(baseline)
@@ -167,6 +224,11 @@ def main(argv=None):
     mode.add_argument(
         "--release", action="store_true", help="also require completed acceptance"
     )
+    mode.add_argument(
+        "--publish-check",
+        action="store_true",
+        help="enforce completed 4.0.0 acceptance in publish context",
+    )
     args = parser.parse_args(argv)
     try:
         data = json.loads((ROOT / STATUS).read_text(), object_pairs_hook=unique_object)
@@ -176,6 +238,23 @@ def main(argv=None):
     except (OSError, ValueError) as error:
         print(f"Invalid scope contract: {error}", file=sys.stderr)
         return 2
+
+    require_acceptance = args.release
+    if args.publish_check:
+        event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+        ref = os.environ.get("GITHUB_REF", "")
+        if is_publishing_context(event_name, ref):
+            version, manifest_errors = manifest_version_errors(ROOT)
+            errors.extend(manifest_errors)
+            ref_tag = ""
+            if event_name == "push" and ref.startswith("refs/tags/"):
+                ref_tag = normalize_ref(ref)
+            elif event_name == "workflow_dispatch":
+                ref_tag = normalize_ref(os.environ.get("INPUT_TAG", ""))
+            require_acceptance = bool(
+                (version is not None and VERSION_400.match(version))
+                or (ref_tag and VERSION_400.match(ref_tag))
+            )
 
     # Keep all of the existing coverage/count/method checks; this adds acceptance,
     # rather than maintaining another implementation of the baseline parser.
@@ -200,7 +279,7 @@ def main(argv=None):
         f"Scope contract consistent: {len(data['criteria'])} criteria; "
         f"{len(pending)} pending criteria/decisions; {len(blockers)} baseline blocking rows."
     )
-    if args.release and (pending or blockers):
+    if require_acceptance and (pending or blockers):
         print(
             "Release acceptance incomplete:\n  " + "\n  ".join(pending + blockers),
             file=sys.stderr,
@@ -208,7 +287,7 @@ def main(argv=None):
         return 1
     print(
         "Release acceptance complete."
-        if args.release
+        if require_acceptance
         else "Plan check only; not release approval."
     )
     return 0

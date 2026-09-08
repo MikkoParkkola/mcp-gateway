@@ -17,6 +17,8 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
+Approved supplemental criteria: 31
+
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
 The approval source for these product requirements is the decision record;

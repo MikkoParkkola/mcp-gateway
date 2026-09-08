@@ -99,12 +99,20 @@ active agent. Those integrations remain visible handoff work, not assumed done.
 `python3 scripts/release/check_scope_acceptance.py --check` verifies plan and
 ledger consistency, including the existing counter, and reports pending work.
 `--release` also requires no baseline blocking row, no pending supplemental
-criterion and no unanswered required decision. Both use the same data.
+criterion and no unanswered required decision. `--publish-check` runs the same
+consistency checks unconditionally, on every ref, and requires completed
+acceptance only in a publishing context (a tag push or a manual
+`workflow_dispatch`) whose Cargo.toml `[package].version` or normalized
+tag/`tag` input is `4.0.0` (including prerelease suffixes). While the manifest
+names `4.0.0`, that means any tag push or manual dispatch — not only a
+`v4.0.0` tag — requires completed acceptance. Pull requests and ordinary
+branch pushes stay consistency-only regardless of the manifest version. All
+three modes read the same underlying data.
 
-The gate is added to the existing publishing dependency chain in `release.yml`,
-`ci.yml` and `docker.yml` for `v4.0.0` tags (including prerelease suffixes) and
-the release workflow's manual `tag` input. Other versions retain their existing
-gate behavior. This is a local workflow change until integrated and run in CI.
+`release.yml`, `ci.yml` and `docker.yml` each now run
+`check_scope_acceptance.py --publish-check` unconditionally in place of the
+former tag-string-guarded `--release` step. This is a local workflow change
+until integrated and run in CI.
 
 Before recording MET: review actual acceptance evidence, place its repository
 path in the JSON row, and explain its scope in `note`. A script's existence is
