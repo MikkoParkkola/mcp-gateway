@@ -153,3 +153,30 @@ and it is recorded here rather than filed: the decision is whether
 `mark_completed_bound` becomes public, `mark_completed` takes a fingerprint as
 a breaking change, or the wildcard in `matches` goes away entirely. All three
 are release-scope calls for the operator.
+
+### Gate re-run — the three errors are gone, one different failure is not
+
+`cargo clippy --all-targets` after the repair: no `tests/common/mod.rs`
+diagnostic survives, and the `nfr_compat1_revisions` target compiles. The run
+still exits 101, on a different target and a different file:
+
+```
+tests/mik_7215_control4_reap_count_acs.rs:29:20: error[E0308]: mismatched types: expected `()`, found integer
+tests/mik_7215_control4_reap_count_acs.rs:51:27: error[E0308]: mismatched types: expected `()`, found integer
+```
+
+Not this session's, and not a defect. The file is committed as `09735d32`,
+"test(control4): T3 — reap reports what it reclaimed, **red by signature**".
+It asserts `lifecycle.reap(300)` returns a count; `reap` currently returns
+`()`. That is a test written before its implementation, doing exactly what the
+process asks of it, and it will compile when the owning session lands the
+signature change.
+
+It is nonetheless the branch's current gate failure, so `-D warnings` cannot
+go green until that increment lands. Left alone deliberately: implementing
+another session's `reap` mid-increment would collide with the work its RED
+test was written to drive.
+
+Recording the exit code separately mattered here. The background task reported
+`exited with code 0` — that is the trailing `echo`, not the compiler.
+`CLIPPY_EXIT=101` came from capturing `$?` before anything else ran.
