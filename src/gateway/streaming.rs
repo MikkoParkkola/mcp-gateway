@@ -21,7 +21,7 @@ use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 use crate::Result;
@@ -132,6 +132,13 @@ impl NotificationMultiplexer {
                 if reclaimed > 0 {
                     info!(reclaimed, "Session lifecycle reaper completed");
                 }
+                // Emitted LAST, so every line a sweep produces falls before its
+                // own marker and the markers partition the log into sweeps. An
+                // empty sweep is otherwise indistinguishable from a sweep that
+                // never ran, which leaves "no reclaim line was logged" unable
+                // to fail. Not compiled out under test: a log line that exists
+                // only in one build is a different program.
+                trace!("Session lifecycle sweep complete");
             }
         });
     }
