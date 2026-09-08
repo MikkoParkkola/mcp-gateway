@@ -315,8 +315,60 @@ Reviewed adversarially before any rep, on the amendment plus the contract as con
 | reviewer | verdict | disposition |
 |---|---|---|
 | `gpt-review` (codex, `~/.codex/config.toml` model) | `SHIP-WITH-FIXES` | 3 findings confirmed at source and repaired above (A3 statistic, A4 void mechanism, A5 unreachable remediation); 1 LOW finding recorded as A9; 3 improvements adopted as A7, A8 and the launch-argv record |
-| `kimi-review` | recorded at commit time | — |
+| `kimi-review` | `SHIP-WITH-FIXES` (process exit 0) | 4 findings, 4 improvements; dispositions in Amendment 2 below |
 
 The A3 counterexample was checked by hand before the repair, not taken on the reviewer's
 word: median-of-three passes a distribution whose pooled p99 regresses 10.1%. That is the
 finding that mattered, and it was the reviewer's, not the author's.
+
+## Amendment 2 — 2026-09-08, still before any measured rep
+
+Legality is the same as Amendment 1's and is checkable after the fact: Amendment 1 landed as
+`c3a042e3`, both arms finished building at 16:17 and 16:20 local time, and the first measured
+rep's start time is recorded with the results. A build is not a rep. If the results package
+shows a rep starting before this amendment's commit, the amendment is illegal and the run is
+void — that ordering is the whole authority for editing a contract, so it is stated as a
+checkable fact rather than an assurance.
+
+This amendment exists to record the second reviewer's verdict and dispose of its findings.
+
+### The second reviewer read the pre-repair draft — and that is why two of its findings are already closed
+
+`kimi-review` was launched against the draft in which A3 still substituted **median of three
+per-rep p99s**. `gpt-review` returned first, killed that statistic with a counterexample, and
+A3 was rewritten to pool the raw samples before the second reviewer's verdict landed. Stated
+plainly so nobody reads a stale finding as an open one:
+
+| finding | disposition |
+|---|---|
+| F1 — median-of-three is not the run's p99 and discards the worst rep | **Died at source.** The committed A3 computes p50/p99 once over the concatenated samples of an arm's measured reps. The reviewer's prescribed fix — compute true pooled percentiles from the raw JSON samples, reduced on Spark itself — is verbatim what A3 now does, arrived at independently. Two vendors converging on the same repair is the strongest signal either produced. |
+| F4 — the inconclusive rule's "margin the comparison passed by" has no units | **Died with F1.** That sentence guarded the median statistic. The rule now reads on the pooled figures, where the spread guard compares per-rep p99 spread in milliseconds against the pooled margin in milliseconds. Units are the same on both sides. |
+| F2 — void condition 3 tolerates a 1% check-failure rate | **Materially closed by void condition 7**, added in Amendment 1 for exactly this reason: any `tools/call` in a measured rep whose response is not a success voids the run, zero tolerance. Residual, named rather than waved away: condition 3 still admits up to 1% of *other* check failures. It is not raised to 100% here, because a single connection reset on a shared box would then void a run whose latency samples are all good. Instead: **any measured rep whose checks rate is below 100% has the names and counts of its failing checks recorded with the results.** A reviewer sees what failed instead of inferring it from an aggregate. |
+| F3 — nothing ties the measured SHA to the commit 4.0.0 actually ships | **Adopted as R1 below.** The one finding neither the author nor the first reviewer raised, and the only one that survives the run. |
+
+### R1 — the measurement expires if the release moves off the measured commit
+
+The candidate arm is pinned to `79352d15`. The branch moved twice while Amendment 1 was being
+written, so this is not hypothetical.
+
+**The NFR.PERF.1 evidence stands only if the shipped 4.0.0 release commit is `79352d15`, or a
+recorded diff of `src/`, `Cargo.toml` and `Cargo.lock` between `79352d15` and the release
+commit is empty.** Neither holds, and the row reverts to unmeasured with an amendment-legal
+re-run required before release. This is a release-gate rule, not a run rule: it cannot be
+satisfied today, and the criteria-status row will say so in as many words.
+
+### Improvements — dispositions
+
+| improvement | disposition |
+|---|---|
+| record per-rep sample counts, with a floor | **Adopted in part.** The frozen evaluator already reports pooled `n` per arm with the per-rep figures beside it. The numeric floor is **declined**: it was proposed because median-of-three mixes reps of unlike quality, and pooling already weights each rep by its own sample count. A floor invented now would be a threshold with no measured basis — the exact thing this contract exists to prevent. |
+| record the checkout SHA per build directory and each binary's SHA-256 | **Already implemented** as A7, before the review. |
+| per-rep gateway CPU and memory snapshot | **Declined, recorded as an observation.** It buys diagnostic attribution, not verdict correctness, and it would require re-freezing the runner whose SHA-256 is the guarantee that the evaluator was written before the numbers. The cost falls on the wrong thing. |
+| archive the amendment-legality evidence | **Adopted**, in the cheapest durable form: the commit SHAs of both amendments and the first rep's start time in the results package. Two timestamps a reviewer can order, rather than a copied log nobody can re-derive. |
+
+### What Amendment 2 does not change
+
+No threshold, no arm, no workload, no metric, no rep schedule. It adds one recording
+obligation (failing-check names), one release-gate rule (R1), and the second reviewer's
+verdict. Both reviewers now stand at `SHIP-WITH-FIXES`, with every confirmed finding either
+repaired or recorded with its reason.
