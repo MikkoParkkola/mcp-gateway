@@ -307,10 +307,33 @@ not before.
   may P8 land first with this tracked behind it?* — where a human will see it. The escalation is
   therefore closed, not pending. Not a competing disposal — the
   same one, escalated, because the repair constraint binds whoever lands P8, and P8's landing does
-  not wait on this review. Nothing is exposed in a running deployment today — the bullet above says
-  why, and that WEAKENS the ticket case rather than carrying it: the defect is dormant, activation
-  is SUB.4's own act, so the only timeline at stake is the ordering of the repair against the
-  activation, not production exposure. ISSUE-DOR then applies: acceptance criteria, ROI,
+  not wait on this review. FALSIFIED 2026-09-08 by this document's own §P4 review (gpt-review, SHIP-WITH-FIXES,
+  raised as CRITICAL and confirmed at source here). The paragraph used to read: *nothing is exposed
+  in a running deployment today, the defect is dormant, activation is SUB.4's own act, so the only
+  timeline at stake is the ordering of the repair against the activation, not production exposure.*
+  Every clause of that is now wrong, and it was wrong the moment `7851736d` landed. The chain, each
+  link read at source rather than inferred:
+  `RetryFields::from_params` extracts `_meta[IDEMPOTENCY_KEY_META]` from an ordinary `tools/call`
+  (`src/protocol/mrtr.rs:117-127`); the HTTP route calls it on every such request
+  (`src/gateway/router/handlers.rs:1220`); the key travels to the shared invoke funnel as
+  `caller.retry.idempotency_key` and is consumed there (`src/gateway/meta_mcp/invoke.rs:1218`);
+  and the cache it is consumed against is `Some` on the production boot path since `7851736d`
+  (`src/gateway/server/mod.rs:742`). Activation was not a future act of SUB.4's — SUB.4 performed
+  it for route 1 and this document did not notice.
+  What that exposes is the suffix defect itself, not a hypothetical one. The key is salted with
+  `identity_suffix`, which is the identity-propagation binding *or the empty string*
+  (`src/gateway/meta_mcp/invoke.rs:1198-1202`, consumed at `src/gateway/meta_mcp/support.rs:43`),
+  and propagation off is the shipped default — the comment eleven lines below the derivation says
+  so in terms, while fixing exactly this bug class for the neighbouring `caller_principal` and
+  leaving the idempotency key behind. So on a multi-user gateway with the default configuration,
+  two callers issuing the same tool with the same arguments under the same client-chosen key
+  collide in one namespace, and the second is served the first's stored result. The fingerprint
+  binding narrows the blast radius to same-tool/same-arguments calls; it does not close it.
+  What this changes: MIK-7408's human question was *is P8 blocked on the suffix repair, or may P8
+  land first with this tracked behind it?* — a question about ordering. That question is void. The
+  activation half already landed, so the suffix repair is no longer an ordering preference but a
+  live-defect repair on a shipped path, and it is a §11 stop-the-line, not a backlog row. Reported
+  to the team lead 2026-09-08. ISSUE-DOR then applies: acceptance criteria, ROI,
   fail-fast, and a source. The source is commit `a1578b81`, the ADR-008 bullet repair this was
   found during; the derivation is the P8 transfer blockquote in the MRTR.8b/10a lifetime-and-
   idempotency-wiring design, which records the same three repairs and leaves the choice here.
