@@ -473,11 +473,18 @@ impl CapabilityBackend {
             .get(name)
             .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
         validate_personal_capability_identity(&capability, &context)?;
-        validate_oauth_isolation(
-            &capability,
-            &context,
-            self.multi_user.load(std::sync::atomic::Ordering::Relaxed),
-        )?;
+
+        let multi_user = self.multi_user.load(std::sync::atomic::Ordering::Relaxed);
+        // A capability bound to an account descriptor is the one shape whose
+        // per-user OAuth isolation cannot be decided before the account is
+        // resolved: whether a per-caller credential exists at all is the
+        // registry's answer, not the YAML's. Every OTHER shape keeps the guard
+        // exactly where it has always been — first, ahead of argument
+        // validation — so no unbound call's error changes or moves.
+        let descriptor_bound = capability.auth.account.is_some();
+        if !(multi_user && descriptor_bound) {
+            validate_oauth_isolation(&capability, &context, multi_user)?;
+        }
 
         // Selector values choose an outbound URL path, so preserve their
         // declared string type instead of allowing generic schema coercion
@@ -505,6 +512,33 @@ impl CapabilityBackend {
                 is_error: true,
             });
         }
+
+        // THE ACCOUNT IS RESOLVED ONLY ONCE THE CALL IS OTHERWISE WELL FORMED.
+        //
+        // Both checks above reject without side effects, and acquiring a
+        // custody lease for a call that is about to be rejected for a bad path
+        // selector or an unknown argument would consume a real credential for a
+        // request that never happens. So the resolve happens HERE: after the
+        // arguments are known good, before the isolation guard, and through the
+        // SAME `prepare_account_context` the executor uses — a carried
+        // credential is rechecked against the live registry rather than
+        // re-minted, and a `shared` descriptor still resolves to the legacy
+        // credential and therefore still faces the unchanged guard below.
+        //
+        // The returned context is the one that is executed under, so the
+        // credential the guard consented to is the credential the inner cache
+        // key and the egress headers speak about. The executor's own resolve,
+        // inner-cache lookup and egress recheck are untouched.
+        let context = if multi_user && descriptor_bound {
+            let context = self
+                .executor
+                .prepare_account_context(&capability, context)
+                .await?;
+            validate_oauth_isolation(&capability, &context, multi_user)?;
+            context
+        } else {
+            context
+        };
 
         // Use the coerced arguments (e.g., "123" → 123 for integer fields).
         // The executor records transport health (success/failure) at the HTTP

@@ -88,7 +88,15 @@ impl CapabilityExecutor {
     /// plus the no-catalogue case and a carried credential that does not belong
     /// to this capability's reference. None of them falls back to a legacy
     /// lookup and none of them degrades into a cache miss.
-    pub(super) async fn prepare_account_context(
+    ///
+    /// # Visibility
+    ///
+    /// Visible to the whole `capability` module (not just the executor) because
+    /// [`crate::capability::CapabilityBackend::call_tool_with_context`] must
+    /// resolve the account BEFORE it evaluates per-user OAuth isolation on a
+    /// multi-user gateway. It is deliberately not `pub(crate)` and not public:
+    /// this is the ONE existing resolver, reused, not a second entry point.
+    pub(in crate::capability) async fn prepare_account_context(
         &self,
         capability: &super::super::CapabilityDefinition,
         mut context: CapabilityExecutionContext,

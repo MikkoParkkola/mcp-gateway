@@ -219,6 +219,9 @@ pub(crate) fn validate_oauth_isolation(
     {
         return Ok(());
     }
+    if account_credential_is_this_callers(capability, context) {
+        return Ok(());
+    }
 
     Err(Error::json_rpc(
         -32001,
@@ -231,6 +234,51 @@ pub(crate) fn validate_oauth_isolation(
             capability.name, auth.key
         ),
     ))
+}
+
+/// THE ONE NARROW EXCEPTION to the guard above: this dispatch already holds an
+/// account credential that is THIS capability's own, minted for THIS verified
+/// caller.
+///
+/// The premise of the refusal is that an `oauth:<provider>` key names one
+/// gateway-held login served to whoever calls. That premise is false exactly
+/// when the account registry has already minted a per-caller credential for the
+/// capability's `auth.account` descriptor: the credential on the wire is then
+/// the caller's own, and refusing would deny the very deployment the account
+/// binding exists for. Every conjunct is required:
+///
+/// * a credential was actually PREPARED — a `shared` descriptor resolves to
+///   [`crate::identity_propagation::AccountCredential::Legacy`] and therefore
+///   carries none, so it keeps facing the unchanged guard;
+/// * it was minted for THIS capability's descriptor reference, so one
+///   capability's account credential can never excuse another's;
+/// * it was minted under THIS capability's `auth.key`, so a re-pointed provider
+///   cannot ride an old mint;
+/// * and its actor is EXACTLY this request's
+///   [`VerifiedIdentity::stable_actor_id`] — the issuer+subject pair. A missing
+///   verified identity is a refusal, never a wildcard.
+///
+/// [`CapabilityExecutionContext::caller_identity`] is a `GrantSubject`: an
+/// authorization handle whose authority is not an OAuth issuer. It is
+/// deliberately not consulted here and can never establish account authority.
+/// Nothing here inspects `auth.shared_account`, extends an expiry, or mints:
+/// the credential was produced and rechecked by
+/// [`crate::capability::CapabilityExecutor::prepare_account_context`] against
+/// the live registry before this function ever sees it.
+fn account_credential_is_this_callers(
+    capability: &CapabilityDefinition,
+    context: &CapabilityExecutionContext,
+) -> bool {
+    let (Some(account), Some(prepared), Some(identity)) = (
+        capability.auth.account.as_deref(),
+        context.account_credential.as_deref(),
+        context.verified_identity.as_deref(),
+    ) else {
+        return false;
+    };
+    prepared.descriptor_id == account
+        && prepared.auth_key == capability.auth.key
+        && prepared.actor_id == identity.stable_actor_id()
 }
 
 /// Refuse a capability whose `auth.account` does not resolve, or whose

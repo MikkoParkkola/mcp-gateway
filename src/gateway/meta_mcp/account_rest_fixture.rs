@@ -293,6 +293,46 @@ pub(super) fn capability(base_url: &str, key: &str, account: Option<&str>) -> Ca
     .expect("fixture capability must parse")
 }
 
+/// The SAME account-bound capability, with ONE genuinely required argument.
+///
+/// The default fixture capability declares no schema, so every dispatch of it
+/// is well formed and no case could state what happens to a MALFORMED one.
+/// A single required string is the smallest schema that makes `json!({})` an
+/// invalid call — and the resulting rejection is the production
+/// `validate_arguments` refusal, not a test-only branch.
+pub(super) fn capability_requiring_argument(
+    base_url: &str,
+    key: &str,
+    account: Option<&str>,
+) -> CapabilityDefinition {
+    let account_line = account.map_or_else(String::new, |id| format!("  account: {id}\n"));
+    parse_capability(&format!(
+        "name: {TOOL}\n\
+         description: Read one named folder through a personal account\n\
+         schema:\n\
+         \x20 input:\n\
+         \x20   type: object\n\
+         \x20   properties:\n\
+         \x20     folder:\n\
+         \x20       type: string\n\
+         \x20       description: The folder to read\n\
+         \x20   required: [folder]\n\
+         auth:\n\
+         \x20 required: true\n\
+         \x20 type: bearer\n\
+         \x20 key: {key}\n\
+         {account_line}\
+         providers:\n\
+         \x20 primary:\n\
+         \x20   service: rest\n\
+         \x20   config:\n\
+         \x20     base_url: {base_url}\n\
+         \x20     path: /read\n\
+         \x20     method: GET\n"
+    ))
+    .expect("fixture capability with a required argument must parse")
+}
+
 /// The capability backend a dispatch actually goes through, with the shared
 /// registry wired into its executor exactly as gateway startup wires it.
 ///
@@ -400,6 +440,30 @@ pub(super) fn caching_executor(
     executor
         .with_account_strategies(Arc::clone(registry))
         .with_test_http_client(finite_http_client())
+}
+
+/// A CACHING capability backend that declares itself MULTI-USER, exactly as
+/// `MetaMcp::set_multi_user`/`set_capabilities` declare it at gateway startup.
+///
+/// Nothing here is a test-only posture: `set_multi_user(true)` is the same
+/// production setter `Gateway::start` calls once
+/// `AuthConfig::implies_multi_user` is true, and the executor is the EXISTING
+/// [`caching_executor`] — so the live response cache, the account registry and
+/// the seeded legacy `oauth:google` trap are all the ones the sibling
+/// single-user caching cases already use. The ONLY difference from those cases
+/// is the multi-user declaration and the fact that the dispatch goes through
+/// `CapabilityBackend::call_tool_with_context`, which is where the
+/// per-user OAuth isolation guard runs.
+pub(super) fn multi_user_caching_backend(
+    registry: &Arc<AccountStrategyRegistry>,
+    legacy_token: Option<(&str, &tempfile::TempDir)>,
+    capability: CapabilityDefinition,
+) -> crate::Result<Arc<CapabilityBackend>> {
+    let executor = Arc::new(caching_executor(registry, legacy_token));
+    let backend = Arc::new(CapabilityBackend::new(CAPABILITIES, executor));
+    backend.register_capability(capability)?;
+    backend.set_multi_user(true);
+    Ok(backend)
 }
 
 /// The context a CACHING dispatch carries: verified identity, no loopback
