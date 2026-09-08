@@ -735,3 +735,50 @@ built". After two passing legs, the answer is almost always no.
 
 Lanes hold this themselves. Nobody needs my sign-off to stop revising a design that
 has passed; you need it only to change what the design requires.
+
+## R34 — the orphaned SPEC_ENCODING_TABLE change lands whole, with a custodian
+
+R26 ordered `tests/common/mod.rs` committed first so a sibling lane's clippy fixes could
+follow. That sequencing is WITHDRAWN. The reason envelope-meta gave for holding is correct
+and does not depend on who wrote the code: `HEAD:tests/mik_7214_acs.rs` still declares its
+own `const SPEC_ENCODING_TABLE`, so committing the shared copy alone puts two live
+transcriptions of the specification's encoding table in the tree — the exact defect the
+hunk's own doc comment names — and `#![allow(dead_code)]` at `tests/common/mod.rs:8` keeps
+it silent. A rule that produces the defect it was written to prevent is wrong, not subtle.
+
+Two facts settled it, both verified at source:
+
+- `git diff -U0 -- tests/common/mod.rs` returns ONE hunk, `@@ -207,3 +207,29 @@`. Nothing at
+  `:13`, `:23`, `:38`. The sibling lane's lints are not in the working diff at all, so the
+  sequencing R26 existed to enable was solving a problem the tree does not have.
+- Ownership is not findable, and that is stronger than a disclaimer. `header-9` is not in the
+  lane roster, and both author-side files were last written Sep 7 (08:43 and 14:24) while the
+  fleet committed 174 times in the three hours to Sep 8 18:00. That is an ended session.
+
+An abandoned coherent change gets a CUSTODIAN: one lane lands all three files in one commit
+and says in the commit body that it did not author them. This does not weaken the shared-tree
+rule. The forbidden act there is sweeping a peer's edits into your commit UNNOTICED; a
+disclosed custodial landing, after the author has been cold for a day and is unaddressable,
+is its opposite. Conditions: build and run the tests first — signing code you did not write
+without executing it is how an orphan becomes a regression — and name the paths explicitly,
+because a fourth dirty file in that directory belongs to a live lane.
+
+## R35 — plain-http backend URLs carrying credentials are refused at startup, no override
+
+Operator decision, 2026-09-08, asked and answered. Closes CodeQL #90/#91.
+
+A backend address that embeds a username and password over unencrypted `http` exposes those
+credentials to anyone on the path. The gateway REFUSES to start, naming the offending
+address. Addresses resolving to the local machine are exempt: there is no network segment to
+observe. There is NO opt-out setting.
+
+The opt-out was considered and rejected on the grounds that decides it: a flag that suppresses
+a startup error is pasted in to make the error go away and never removed, so the unsafe path
+survives and the alerts stay open. Warning-only was rejected because startup-log warnings are
+not read, and shipping a known credential-exposure path in a release we are calling ready is
+not a trade — it is the thing the release is supposed to have fixed.
+
+This is a BREAKING CHANGE and is meant to be. A site running a plain-http backend with inline
+credentials will fail to start on upgrade and must move to `https` or take the credentials out
+of the URL. 4.0.0 is a major version, which is when a breaking security fix is cheapest; the
+migration note ships with the change, not after it.
