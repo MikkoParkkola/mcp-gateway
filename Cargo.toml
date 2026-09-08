@@ -192,6 +192,8 @@ metrics = ["dep:metrics-exporter-prometheus"]
 ## Opt-in preview of draft MCP spec extensions (SEP-1821, SEP-1862).
 ## NOT included in default — operators must explicitly enable.
 spec-preview = []
+## External pinned SDK/Redis acceptance journey; run by the dedicated CI gate.
+task-sdk-recovery = []
 
 ## Dual-substrate OCI runtime abstraction (MIK-5226, B4-PLATFORM).
 ## Gates the dormant descriptor->substrate compiler behind an explicit opt-in:
@@ -202,6 +204,11 @@ runtime-substrate = []
 [[bin]]
 name = "mcp-gateway"
 path = "src/main.rs"
+
+[[test]]
+name = "task_upstream_recovery_sdk"
+path = "tests/task_upstream_recovery_sdk.rs"
+required-features = ["task-sdk-recovery"]
 
 [[bench]]
 name = "gateway_benchmarks"
