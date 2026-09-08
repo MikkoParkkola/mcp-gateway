@@ -433,7 +433,9 @@ open — consistent with the fix being on this branch and not on `main`.
 
 Prediction, recorded so it can be wrong: the alerts close when this branch is on `main`
 and CodeQL re-scans with `require_secure_oauth_target` present. If they are still open
-after that re-scan, the transport guard does not sanitise the sink and that is a finding.
+after that re-scan, that is a finding to INVESTIGATE, not a proof. An analyzer that cannot
+recognise a guard and a guard that does not work produce the same open alert, and only
+reading the flagged path tells them apart.
 
 The alerts are **not** dismissed and carry no suppression comment. An alert dismissed
 because the fix is elsewhere is an alert nobody re-checks. The criteria ledger records
@@ -457,7 +459,7 @@ dressed up as new coverage.
 | 2 | `http` + username only, non-loopback, flag unset | refuse | no — regression guard |
 | 3 | `http` + user + password, non-loopback, flag `true` | refuse | **yes — falsifier** |
 | 4 | `http` + username only, non-loopback, flag `true` | refuse | **yes — falsifier** |
-| 5 | error names the sanitized address and contains neither username nor password | both asserted | **yes — falsifier** |
+| 5 | error names the sanitized address and contains none of: username, password, path, query, fragment | all asserted | **yes — falsifier** |
 | 6 | `https` + credentials | accept | no — regression guard |
 | 7 | `http` + credentials on `localhost` / `127.0.0.1` / `[::1]`, flag unset | accept | no — regression guard |
 | 8 | `http`, no credentials, non-loopback | accept | no — regression guard |
@@ -465,6 +467,14 @@ dressed up as new coverage.
 | 10 | `http://user:pw@2130706433/` accept; `http://user:pw@127.evil.com/` refuse | as stated | no — pins the exemption's two edges |
 
 Rows 3, 4 and 5 are run and shown red before the implementation exists.
+
+Row 5's sentinels widened at the confirmation pass, and the reason matters more than the
+row. `strips_every_credential_bearing_part` (`src/security/sanitize.rs:618`) pins what the
+HELPER returns. Row 5 pins what `reject_cleartext_credentials` EMITS. Those are different
+claims: an implementation that formats its message from the raw URL, or that appends
+anything after the sanitized origin, passes the helper's test and still leaks. The fixture
+therefore carries a path, a query and a fragment with distinctive sentinel values, and the
+row asserts none of them reaches the message.
 
 Which existing test moves, corrected after design review. The first reading of this was
 wrong. `explicit_opt_in_permits_cleartext_credentials` (`src/config/mod.rs:1946`) sets the
@@ -567,3 +577,27 @@ places this design reads R35's letter loosely — loopback as literal hosts rath
 says "username and password". Both fail closed. Both are deviations from the text of a
 ruling, and a ruling is reinterpreted by the person who made it, not by the person
 implementing it. Escalated with the proxy finding.
+
+
+## Confirmation pass — leg 1 (`gpt-review`, verdict SHIP)
+
+Ledger row `2026-09-08T15:57:28Z`, `head c46119a8`, `model codex-default`, `verdict SHIP`,
+`process_status: ok`, material sha256 `8aad791e`. Material was the diff of this document
+from the reviewed revision plus the disposal section above, scoped to leg 1's own items.
+
+**The proxy finding was re-raised, and it closes as recorded rather than as repaired.** The
+reviewer restates it at `gate: BEFORE-PRODUCTION` and ships the design anyway — "proxy
+exposure remaining a separate production gate" is the verdict line. That is the disposal
+this document already made, confirmed by the vendor that raised it. It stays escalated.
+
+**The row-5 refusal was REVERSED.** The refusal above said extending row 5 duplicates the
+helper's own test. The re-raise makes a different argument and a better one: the helper
+test pins the helper, row 5 pins the caller's output, and a caller can leak while the
+helper's contract holds. Taken; the row and the paragraph under the table now say so. The
+original refusal is left standing above rather than edited away, because a reversed
+judgment that leaves no trace is a judgment nobody can audit.
+
+**The CodeQL wording was tightened**, as above: a still-open alert after the re-scan is an
+investigation, not a verdict on the guard.
+
+No blocking finding survived. Leg 1's gaps are closed.
