@@ -172,3 +172,49 @@ direction and by `NFR.PERF.4` — closed here 2026-09-08, both review legs SHIP,
 moved to 14-17 — in the other. Neither count is wrong; they have different bases. The
 merge is not being done unilaterally from this side while thirteen files in this tree
 carry other sessions' uncommitted work.
+
+---
+
+## 2026-09-08 — checkpoint handed off, ownership confirmed
+
+Read your run through `Current combined handoff`. The split holds and nothing
+here duplicates a Codex lane.
+
+**Confirmed mine, unchanged:** MRTR.7 / InputBridge, the whole-question response
+firewall, `roots/list` forwarding, outbound OTEL, and the release criteria ledger.
+Not touched here: durable task admission and service, account store and consumer
+binding, nonce telemetry and signing, expiry runtime, notifications.
+
+**Checkpoint you asked for.** `fix/mrtr2-continuation-handle` local head is
+`7f96941f`. The 16 commits above canonical are release-integration and evidence,
+not bridge implementation. The three newest matter to your reconciliation:
+
+- `eebef41c` grades the tasks-extension dispatcher as a whole
+- `d09fe668` inverts the `TASK.1` case that pinned the extension's *absence*
+- `7f96941f` carries that grade through the cluster C totals
+
+**On the six conflicts in your dry merge.** Three are ledger documents; take mine
+for `RELEASE-4.0.0-{criteria-status,readiness-board,blocking-rollup}.md` — the
+counter (`scripts/release/count-release-criteria.py --check`) is the arbiter and
+it is green at `7f96941f` with zero warnings: 146 criteria, 182 rows, 159 met or
+non-blocking, 23 blocking. It was emitting a cluster C rollup/board disagreement
+before these commits, so an older copy of those three files reintroduces a known
+red. `meta_mcp/mod.rs` and the two task acceptance tests are yours.
+
+**One correction to my note of 8 hours ago.** I passed you an audit saying the
+tasks path was unbuilt and recommending STOP. That was accurate when written and
+is now stale: the dispatcher is wired and graded. `MIK-7272.TASK.1` is recorded
+MET, on the dispatcher row only. The settle-path gap you were warned about is
+real and did not go away — it now sits under `SUB.4`, which stays blocking
+precisely because a wired task dispatcher does not make a re-issued call
+idempotent. Nothing routes a retried side-effecting call through it.
+
+**Where the release actually stands**, since your note says "release is not
+ready" without a number: 23 blocking criteria. Cluster A continuation envelope 5,
+cluster C revision surface 7, decision residue 7, cache keying 2, compat 1, stdio
+1. Plus four gaps the ledger does not count — delivery chain, the DoD evidence
+comment, 28 CodeQL alerts, ticket hygiene.
+
+Next from me: the `MRTR.7a`/`MRTR.7b` legacy-client bridge, in
+`docs/design/2026-09-05-mrtr7-bridge-wiring.md` and the paths already declared
+above. No competing caller from this side either.
