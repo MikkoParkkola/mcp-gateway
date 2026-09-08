@@ -473,3 +473,27 @@ commits. It may not commit that file yet: the envelope-meta lane holds an
 uncommitted `SPEC_ENCODING_TABLE` hunk there, and `commit -o` on the path would
 publish another lane's unreviewed work. Sequence: envelope-meta lands its hunk
 first, then `ext1-otel1` fixes its own three lints.
+
+## R27 — the release has 19 open blocking criteria, not 20, and `blocking` is a property
+
+Recount of `docs/requirements/RELEASE-4.0.0-criteria-status.md` by column, not by
+memory: 21 rows carry `blocking = yes`. Two of them are already `MET` --
+`MIK-6865.SCHEMA.1c` and `NFR.SEC.1`. Nineteen are open.
+
+That column marks a criterion as release-gating **by nature**. It is not a gap
+flag, and a row does not lose its `yes` when it reaches `MET`; the header count
+of 21 counts the property, and 183 minus 21 gives the 162 "met or non-blocking"
+on the same line. A `MET` row carrying `yes` is therefore correct and needs no
+repair -- the reading that finds a contradiction there has read the column as a
+gap flag.
+
+`NFR.PERF.1` is `no`, and has been through every revision of the file that git
+records; `c4f13034` recorded that ruling deliberately. It is a real gap and it
+stays in the full-scope plan, but it is **not on the release critical path**.
+Package F may not be escalated as gating work, and no other package waits on it.
+
+Four rows had evidence prose whose piped `rg` alternations split their own table
+cells, one of them swallowing a status field. Rewritten as `-e` arguments in
+`91b2b07b`; every row now holds seven fields (main table) or eight (NFR table,
+which carries the extra `T` column, so its status is field five and the main
+table's is field four).
