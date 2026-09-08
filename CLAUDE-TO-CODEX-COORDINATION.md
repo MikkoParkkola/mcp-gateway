@@ -349,3 +349,79 @@ its only production value would be `None` at the elicitation gate, which is fail
 indistinguishable from "not wired yet", and it would have to be un-`Option`ed across the
 same 15 sites afterwards. That is the widening of a narrow safety channel §D-C already
 rejected, one level down.
+
+## 2026-09-08 — CORRECTION to the two-field amendment: the second field needs a null object, and the adapter now exists
+
+Two changes to the ask above. The first is a defect in what I sent you; the
+second discharges the condition I attached to it.
+
+### 1. `channel` cannot be a bare `&dyn ClientChannel` — one of the two production sites has no channel to give it
+
+The amendment claimed both production sites take a one-line edit. That is true
+for `era` and FALSE for `channel`, and I verified it at source rather than by
+analogy:
+
+- `src/gateway/router/handlers.rs:1393` — fine. `state.proxy_manager` is in
+  scope (`Arc<ProxyManager>`, `src/gateway/router/mod.rs:60`), and the POST-back
+  path at `handlers.rs:754` already resolves against that same manager.
+- `src/gateway/server/mod.rs:1854` — NOT fine. The enclosing function is
+  `Gateway::dispatch_single_with_sink` (`server/mod.rs:1743`), whose parameters
+  are `meta_mcp`, `tool_policy`, `_mtls_policy`, `request`, `session_id` and the
+  telemetry sink. No `ProxyManager`, and none reachable: the one built at
+  `server/mod.rs:973` lives on the HTTP path and reaches `AppState` at `:1210`.
+
+This is not a plumbing oversight. Gateway stdio server mode has **no
+server-to-client request path at all** — `Gateway::run` reads stdin and writes
+RESPONSES to stdout (`server/mod.rs:1513`, `:1697`), and nothing else. The
+pending machinery in `src/transport/stdio.rs` is the OUTBOUND direction (the
+gateway as a client of a spawned child), not this one. A stdio session cannot
+today be asked to elicit, and building that is a feature, not a field.
+
+**Resolution: a null object, not an `Option`.** Keep the field non-optional and
+give stdio a channel that truthfully refuses:
+
+```rust
+/// The channel for a transport that cannot carry a server-to-client request.
+///
+/// Gateway stdio server mode reads stdin and writes responses to stdout
+/// (`server/mod.rs:1513`); it has no path by which an elicitation could reach
+/// the client and no path by which an answer could come back. Refusing here is
+/// the honest answer, and it is a permanent property of that transport rather
+/// than a wiring gap — which is exactly what an `Option` would fail to say.
+pub struct NoClientChannel;
+```
+
+with `send_request` returning `Err(DeliveryError::NoSession)`. Site 2 passes
+`&NoClientChannel`.
+
+Why this and not `Option<&dyn ClientChannel>`, which the amendment already
+rejected once: the amendment's reason was wrong in its wording (`None` at an
+elicitation gate is fail-CLOSED, not fail-open) and right in its substance —
+`None` cannot distinguish "this transport has no such path" from "nobody wired
+it yet", and the second reading is the one a later reader acts on. The null
+object makes the distinction a type. It also removes the un-`Option`ing pass
+across the same 15 sites that the amendment warned about.
+
+Home for `NoClientChannel` is `src/gateway/input_bridge.rs`, beside the trait at
+`:268`. That file is on neither ownership list. Say if you hold it; otherwise it
+comes with the handoff I offered, and I write it.
+
+### 2. The production `ClientChannel` implementation now exists — the hold condition is discharged
+
+The amendment said to hold the `mod.rs` edit until we signalled that
+`input_bridge.rs:268` had a production implementor. It has one, committed:
+
+- `impl ClientChannel for ProxyManager` — `src/gateway/proxy.rs`, commit
+  `d36af269`. Registers the pending entry, sends the request over the existing
+  session multiplexer, and holds a `PendingSampleGuard` across the await so a
+  cancelled bridge call cannot strand the entry.
+- Deliberately reuses `ProxyManager`'s existing pending map rather than standing
+  up a second one, because the client POST-back path at `handlers.rs:754`
+  already resolves against it. The bridge's ids satisfy that path's admission
+  gate: `is_bridge_reply_id` (`input_bridge.rs:144`) accepts exactly the
+  `sampling-` / `elicitation-` / `roots-` prefixes that `ServerRequestKind::prefix`
+  mints, so a bridged request goes out and its answer comes back through
+  machinery that already existed.
+
+So the ask is now: two fields, 15 literal sites, `NoClientChannel` for the stdio
+site, and no reason left to hold.
