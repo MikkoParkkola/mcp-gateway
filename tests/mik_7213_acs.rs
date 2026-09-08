@@ -560,3 +560,39 @@ fn ac_cache_4a_two_routing_profiles_do_not_share_an_entry() {
     // that is merely different every time.
     assert_eq!(key("readonly"), key("readonly"));
 }
+
+#[test]
+fn ac_cache_4e_seam_guard_only_this_does_not_close_the_criterion() {
+    // SEAM GUARD ONLY — this does not close CACHE.4e / 4.e. Production still
+    // passes `protocol_revision: None` at both invoke sites. The assertion
+    // below proves `KeyContext::digest` reads the field, not that anything
+    // on the invoke path supplies a negotiated revision. Wiring that value
+    // is a later increment; an unlabelled guard becomes false evidence for
+    // the criterion within a week, which is why the name says so.
+    use mcp_gateway::cache::{KeyContext, ResponseCache};
+    let arguments = serde_json::json!({ "query": "quarterly numbers" });
+    let key = |protocol_revision| {
+        ResponseCache::response_key(
+            "memory",
+            "search",
+            &arguments,
+            "",
+            None,
+            KeyContext {
+                protocol_revision,
+                ..KeyContext::default()
+            },
+        )
+    };
+
+    assert_ne!(
+        key(Some("2025-03-26")),
+        key(Some("2025-06-18")),
+        "two protocol revisions sharing one key means a body shaped for one \
+         era is served to the other — but this is the seam, not production"
+    );
+
+    // Same determinism control as 4.d: without it the difference above
+    // passes for a key that is merely different every call.
+    assert_eq!(key(Some("2025-03-26")), key(Some("2025-03-26")));
+}

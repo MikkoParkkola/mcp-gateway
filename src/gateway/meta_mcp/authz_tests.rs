@@ -12,7 +12,7 @@
 //! which contains policy logic. The thing under test is the real dispatch path.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -700,12 +700,41 @@ async fn authz_12_refused_caller_is_not_served_a_cached_result() {
     );
 }
 
+/// Outer envelope a client sends: `tools/call` / `gateway_invoke` with the
+/// nonce on `params.arguments`, the same shape `handlers.rs` captures.
+fn captured_external_gateway_invoke(
+    nonce: &str,
+) -> (super::signing::SigningInvocationContext, Value) {
+    let mut request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "gateway_invoke",
+            "arguments": {
+                "server": "alpha",
+                "tool": "read",
+                "arguments": {},
+                "nonce": nonce,
+            }
+        }
+    });
+    let context = super::signing::SigningInvocationContext::capture(&mut request);
+    let arguments = request
+        .pointer("/params/arguments")
+        .expect("arguments survive capture")
+        .clone();
+    (context, arguments)
+}
+
 /// AUTHZ.20 — a refused call consumes no nonce.
 ///
-/// The nonce store is consulted at `invoke.rs:634`, below the chokepoint. If
-/// the order were reversed, a refused call would burn the caller's nonce and
-/// the legitimate retry below would be rejected as a replay — a refusal
-/// causing a denial of service on the next honest request.
+/// Replay admission is `prepare_signing_invocation` (`signing.rs:169`), which
+/// registers the nonce only after policy, and only for a captured external
+/// `gateway_invoke`. `invoke_tool` with `caller.signing = None` never reaches
+/// the store, so a third call would succeed and this case would pass for the
+/// wrong reason. Each step captures from a raw envelope the way the adapters
+/// do.
 #[tokio::test]
 async fn authz_20_refused_call_consumes_no_nonce() {
     let (registry, _calls) = counted_backend("alpha");
@@ -720,23 +749,32 @@ async fn authz_20_refused_call_consumes_no_nonce() {
         false,
     );
 
-    let mut args = invoke_args("alpha", "read");
-    args["nonce"] = json!("nonce-used-once");
+    const NONCE: &str = "nonce-used-once";
 
-    let refused = meta.invoke_tool(&args, None, &ctx(&DenyAll)).await;
+    let (mut denied_signing, denied_args) = captured_external_gateway_invoke(NONCE);
+    let refused =
+        meta.prepare_signing_invocation(&mut denied_signing, &denied_args, None, &ctx(&DenyAll));
     assert!(refused.is_err(), "the call must be refused");
 
     // The same nonce must still be usable: the refusal happened before it was
-    // registered.
-    let allowed = meta.invoke_tool(&args, None, &ctx(&AllowAll)).await;
+    // registered. A new capture is a new request carrying that nonce, which
+    // is how a retry arrives on the wire.
+    let (mut allowed_signing, allowed_args) = captured_external_gateway_invoke(NONCE);
+    meta.prepare_signing_invocation(&mut allowed_signing, &allowed_args, None, &ctx(&AllowAll))
+        .expect("a refused call must not burn the nonce");
+    let mut allowed_caller = ctx(&AllowAll);
+    allowed_caller.signing = Some(&allowed_signing);
+    let allowed = meta.invoke_tool(&allowed_args, None, &allowed_caller).await;
     assert!(
         allowed.is_ok(),
         "a refused call must not burn the nonce — the honest retry is being \
          rejected as a replay: {allowed:?}"
     );
 
-    // And the nonce IS a real one: replaying it now must fail.
-    let replayed = meta.invoke_tool(&args, None, &ctx(&AllowAll)).await;
+    // And the nonce IS a real one: replaying it now must fail at admission.
+    let (mut replay_signing, replay_args) = captured_external_gateway_invoke(NONCE);
+    let replayed =
+        meta.prepare_signing_invocation(&mut replay_signing, &replay_args, None, &ctx(&AllowAll));
     let replay_error = replayed.expect_err("a replayed nonce must be rejected");
     assert!(
         replay_error.to_string().to_lowercase().contains("nonce")
@@ -808,5 +846,201 @@ async fn authz_13a_surfaced_tool_allowed_reaches_the_backend() {
         calls.load(Ordering::SeqCst),
         1,
         "and must actually reach the backend"
+    );
+}
+
+// ===========================================================================
+// CACHE.4b — policy epoch at the grant-store writer (4.f.1) and the
+// in-flight bump between read-key and write-key (4.g).
+//
+// Plan: docs/design/2026-09-06-cache4-policy-epoch-test-plan.md.
+// The caller stays AUTHORIZED across the grant mutation: a revocation is
+// decided above the cache, so a denying swap would go green without an
+// epoch anywhere. The observable is the backend call counter, never body
+// text (the counted backend returns a constant).
+// ===========================================================================
+
+fn still_authorized_grants() -> crate::identity_grants::LocalIdentityGrantStore {
+    use crate::identity_grants::{
+        GrantAgent, GrantScope, GrantSubject, IdentityGrant, LocalIdentityGrantStore,
+    };
+    let subject = GrantSubject::new("test-authority", "user-still-allowed", None);
+    LocalIdentityGrantStore::from_grants([IdentityGrant {
+        grant_id: "grant-still-authorized".to_string(),
+        subject,
+        agent: GrantAgent::Any,
+        capability: "unrelated".to_string(),
+        tool: None,
+        scope: GrantScope::Execute,
+        owner: None,
+        expires_at: None,
+        revoked_at: None,
+        provenance: "cache-4b-test".to_string(),
+        reason: "adds a permission; does not revoke the caller".to_string(),
+    }])
+}
+
+/// CACHE.4b / 4.f.1 — a grant-store mutation that leaves the caller
+/// authorized must strand the prior cache entry. The swapped store adds a
+/// permission; it does not revoke. Dispatch after the swap is the
+/// falsifier; an error is the wrong green.
+#[tokio::test]
+async fn authz_cache_4b_a_grant_change_strands_the_prior_entry() {
+    let (registry, calls) = counted_backend("alpha");
+    let cache = Arc::new(crate::cache::ResponseCache::new());
+    let meta = MetaMcp::with_features(
+        registry,
+        Some(Arc::clone(&cache)),
+        None,
+        None,
+        Duration::from_secs(300),
+    );
+
+    let primed = meta
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .await;
+    assert!(primed.is_ok(), "priming call must succeed: {primed:?}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the backend was called once"
+    );
+
+    let hit = meta
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .await;
+    assert!(hit.is_ok(), "hit control must succeed: {hit:?}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the cache must be live — if this dispatches, the miss half below \
+         proves nothing"
+    );
+
+    meta.set_identity_grants(still_authorized_grants());
+
+    assert_eq!(
+        cache.stats().size,
+        1,
+        "stranding leaves the prior entry in the map; ResponseCache::clear() \
+         would drop it, which is the racy alternative this change refuses"
+    );
+
+    let after = meta
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .await;
+    assert!(
+        after.is_ok(),
+        "the swapped grants must leave the caller authorized, not fail the \
+         invoke: {after:?}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "a post-bump invoke under still-authorized grants must miss and \
+         dispatch; a hit here means the epoch was not mixed into the key"
+    );
+}
+
+/// Transport that advances the handler's policy epoch once, on its first
+/// backend call — the one interleave a test can drive through the production
+/// path, sitting between the read-side key and the write-side key.
+struct EpochBumpingTransport {
+    calls: Arc<AtomicUsize>,
+    epoch: Arc<AtomicU64>,
+    bumped: AtomicBool,
+    result: Value,
+}
+
+#[async_trait::async_trait]
+impl Transport for EpochBumpingTransport {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        assert_eq!(method, "tools/call");
+        if !self.bumped.swap(true, Ordering::SeqCst) {
+            self.epoch.fetch_add(1, Ordering::Release);
+        }
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            self.result.clone(),
+        ))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// CACHE.4b / 4.g — read and write keys share the pre-dispatch epoch.
+///
+/// Three invokes, no priming: a primed entry is hit before the bump fires.
+/// Invoke 1 dispatches and bumps mid-call; invoke 2 must dispatch because
+/// the first write landed under the pre-bump epoch; invoke 3 must hit
+/// (count stays 2), or the first two only proved the backend ran twice.
+#[tokio::test]
+async fn authz_cache_4b_read_and_write_keys_share_the_pre_dispatch_epoch() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "alpha",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let _ = registry.register(Arc::clone(&backend));
+    let meta = MetaMcp::with_features(
+        registry,
+        Some(Arc::new(crate::cache::ResponseCache::new())),
+        None,
+        None,
+        Duration::from_secs(300),
+    );
+    backend.set_transport_for_test(Arc::new(EpochBumpingTransport {
+        calls: Arc::clone(&calls),
+        epoch: Arc::clone(&meta.policy_epoch),
+        bumped: AtomicBool::new(false),
+        result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+    }));
+
+    let first = meta
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .await;
+    assert!(first.is_ok(), "first invoke must dispatch: {first:?}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the backend was called once"
+    );
+
+    let second = meta
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .await;
+    assert!(second.is_ok(), "second invoke must succeed: {second:?}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "the first write must have landed under the pre-bump epoch, so a \
+         post-bump reader cannot retrieve it — re-reading the epoch at the \
+         write site would serve this call from cache"
+    );
+
+    let third = meta
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .await;
+    assert!(third.is_ok(), "third invoke must succeed: {third:?}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "a third call under the still-bumped epoch must hit; without this, \
+         an implementation that writes nothing dispatches twice and passes"
     );
 }
