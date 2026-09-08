@@ -1,8 +1,15 @@
 # v4.0.0 release plan — closing the blocking criteria
 
-Companion to `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is the status SSOT.
+Companion to `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is the baseline status SSOT.
 This file is the ORDER OF WORK, not a second status table. When the two disagree, the status
 doc wins.
+
+The approved 2026-09-06 expansion adds a separate
+[delivery plan](RELEASE-4.0.0-scope-delivery.md) and
+[acceptance ledger](RELEASE-4.0.0-scope-status.json). Both ledgers govern release
+acceptance; `check_scope_acceptance.py --release` checks the combined set.
+Keep current implementation ownership; integrate supplemental work as the
+delivery plan describes instead of starting overlapping edits.
 
 The standing counts are not repeated here. `docs/requirements/RELEASE-4.0.0-criteria-status.md`
 carries them, `scripts/release/count-release-criteria.py --check` verifies its headline against
