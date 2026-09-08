@@ -1195,14 +1195,20 @@ impl MetaMcp {
                 ),
             ));
         }
+        // One derivation of the verified actor id for both keys below:
+        // `stable_actor_id` allocates, and it ran once per key for a single
+        // value. Only the sub-expression is shared — the keys stay separate.
+        let verified_actor =
+            verified_identity.map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id);
         // Who the response cache keys on. The binding when identity propagation
         // is minting per-user credentials, otherwise the verified subject —
         // which is still what the backend's answer depended on. Keying on the
         // binding alone let two authenticated callers share one entry whenever
         // propagation was off, which is the shipped default.
-        let caller_principal = caller_credential.cache_binding.clone().or_else(|| {
-            verified_identity.map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
-        });
+        let caller_principal = caller_credential
+            .cache_binding
+            .clone()
+            .or_else(|| verified_actor.clone());
         // Who the RETRY entry belongs to. The same fallback, because the same
         // default left it empty for everyone — but deliberately a separate
         // value from `caller_principal` above: retry de-duplication and
@@ -1211,9 +1217,7 @@ impl MetaMcp {
         // move the other's.
         let identity_suffix = retry_identity_suffix(
             caller_credential.cache_binding.as_deref(),
-            verified_identity
-                .map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
-                .as_deref(),
+            verified_actor.as_deref(),
         );
 
         // `want_full` no longer suppresses the key. It selects the shape of the
