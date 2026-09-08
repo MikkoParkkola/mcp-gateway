@@ -15,7 +15,7 @@ explicitly.
 | BLOCK-1 | pending | |
 | BLOCK-2 | pending | |
 | BLOCK-3 | fixed, uncommittable (shared file) | |
-| BLOCK-4 | fixed | pending commit |
+| BLOCK-4 | fixed | `7abb3514` |
 | BLOCK-5 | pending | |
 
 ---

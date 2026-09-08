@@ -10,7 +10,8 @@ criterion met with evidence, no red checks, no unreviewed code.
 | fact | evidence |
 |---|---|
 | branch compiles; 4054 lib tests pass | `cargo test --lib` on the branch |
-| ONE red test | `honest_task_tokens::tests::schema_only_100_tools_matches_readme_model` |
+| the red lib test is GREEN as of 2026-09-08 | `cargo test --lib honest_task_tokens` = 6 passed, 0 failed. `README_META_TOOLS` moved 16 -> 17 with matching assertions; base `c3626cf8` still carries 16/1_600/89.333 |
+| NEW red: `cargo clippy --all-targets -- -D warnings` fails | 3 errors, all in `tests/common/mod.rs`, a file this PR adds (absent from `c3626cf8`) — so the failure is the PR's, not inherited |
 | CodeQL FAILURE on #473 | the only red check on the PR |
 | 21 blocking criteria of 183 rows | `rg -c '\| yes \|' docs/requirements/RELEASE-4.0.0-criteria-status.md` = 21; `\| no \|` = 162 |
 | 326 of 329 changed files never reviewed by anyone | PR473-REVIEW-BRIEF.md, operator decision 2026-09-08 |
@@ -22,7 +23,9 @@ criterion met with evidence, no red checks, no unreviewed code.
   test that can fail. Not yet determined: how many are already met, because
   `count-release-criteria.py --blocking` is malformed on `MIK-7272.EXT.1` and cannot
   enumerate them mechanically.
-- **B2 — red signals.** CodeQL failure plus the one failing lib test.
+- **B2 — red signals.** CodeQL failure plus a clippy failure in `tests/common/mod.rs`.
+  The lib-test red named above has since gone green on its own; the clippy red replaced it
+  and is the one that now blocks, because CI gates on `-D warnings`.
 - **B3 — unreviewed code.** ~27K insertions across the shards; verdicts still PENDING
   in most shard reports. Expected to add findings; how many is not yet established.
   Covers the whole changed surface INCLUDING the 21.6K-line test diff, at two depths:
