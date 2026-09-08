@@ -173,9 +173,22 @@ from the same unbounded identity keyspace, that motivated `MAX_TRACKED_IDENTITIE
 detector (`anomaly.rs:138-149`) — but it is not the same map and does not get a second ceiling. A
 ceiling here would be a second eviction rule that can disagree with the anomaly one, which is exactly
 why D3a was deleted. The bound is TEMPORAL and is stated instead: **the map holds at most the
-distinct control identities seen in one `IDLE_TTL` window**, because every key carries a deadline and
-`reap` removes it unconditionally (D5). If that window's cardinality is ever measured to be the
-problem the anomaly ceiling was built for, a ceiling becomes a design event then, with a number.
+distinct control identities seen in one `IDLE_TTL + session_reaper_interval` window**, because every
+key carries a deadline and `reap` removes it unconditionally (D5) — at the FIRST SWEEP AFTER the
+deadline, never at the deadline itself. That is the same arithmetic as D6's reclaim latency, and it
+is stated here rather than as `IDLE_TTL` alone because the correction applies at both sites: an
+earlier draft of this paragraph said one `IDLE_TTL` window and was wrong by exactly one sweep.
+
+The second term is NOT OURS, and that is the honest weakness of this bound. `session_reaper_interval`
+is `StreamingConfig`'s field (`src/config/features/streaming.rs:37`), read by the host loop at
+`src/gateway/streaming.rs:108`, defaulting to 60 s (`src/config/features/streaming.rs:14`) — with NO
+validation and NO ceiling: `rg session_reaper src/config/` returns the declaration and the default
+and nothing else. An operator who sets it to an hour widens this map's window to an hour, and no
+code in this change can refuse that. So the claim is `IDLE_TTL + <an interval the gateway operator
+owns>`, not a number. It is still refused a ceiling for the reason above — a second eviction rule
+that can disagree with the anomaly one — and the residual is now stated at its true size rather than
+understated by a sweep. If that window's cardinality is ever measured to be the problem the anomaly
+ceiling was built for, a ceiling becomes a design event then, with a number.
 
 **Name the observable the §P2 test asserts on (kimi IMPROVEMENT, converging with GPT's).** The plan's
 case asserts the reclaimed thing is GONE — the predecessor `last_tool` entry absent after the sweep —
