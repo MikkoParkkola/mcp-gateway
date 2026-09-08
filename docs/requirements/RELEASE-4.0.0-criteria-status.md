@@ -324,6 +324,12 @@ was part of wiring the two above and not a separate tidy-up.
 
 ## NFR (section 4 of the requirements) — 22 criteria, opened 2026-09-01
 
+Tracked by **MIK-7417** (filed 2026-09-08). Every other section here is grouped under a
+ticket; this one was under none, so its rows had nowhere to post the per-criterion verdicts
+DoD §1 requires. That absence had already cost a day twice — `NFR.SEC.1` was in no
+gap-closure package at all because the packages were derived from ticket groups, and package
+E ran a day untracked before MIK-7414. Post NFR verdicts there.
+
 These rows exist so the ledger stops silently omitting a fifth of its own requirement set. A row
 marked `not assessed` was an admission, not a verdict: it counted against the release exactly as an
 unmet criterion does, because a criterion nobody has checked cannot be claimed. As of 2026-09-01
