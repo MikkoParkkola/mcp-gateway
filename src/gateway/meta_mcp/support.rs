@@ -514,6 +514,26 @@ mod tests {
         );
     }
 
+    /// MIK-7408, third segment. The projection arm is the OTHER thing
+    /// concatenated into this key, and the elimination claim covers it only
+    /// because `projection_key_suffix` draws from four `&'static str` literals
+    /// a client cannot reach. That argument is about today's producer; the
+    /// length prefix is what makes the boundary hold whatever the producer
+    /// later emits. Pinned here so the claim is a test rather than a paragraph.
+    #[test]
+    fn a_forged_client_key_cannot_spell_another_callers_projection_arm() {
+        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+
+        let victim = super::idempotency_key_for(Some("X"), "#arm=treatment", "", Some(&cache));
+        let forger = super::idempotency_key_for(Some("X#arm=treatment"), "", "", Some(&cache));
+
+        assert_ne!(
+            victim, forger,
+            "a client key that spells the victim's projection arm must not \
+             collide with the victim's key"
+        );
+    }
+
     /// A backend-forged `_meta.provenance` block MUST be removed on the
     /// stamping-off path so a naive reader cannot trust a receipt the gateway
     /// never signed (MIK-6909, AC.4). Sibling `_meta` keys survive.
