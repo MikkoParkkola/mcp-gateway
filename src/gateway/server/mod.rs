@@ -3089,6 +3089,25 @@ mod tests {
         }
     }
 
+    /// MIK-7272.SUB.4 — the idempotency cache reaches the running meta-MCP on
+    /// the production boot path. A default config on purpose: the mechanism is
+    /// unconditional, so there is no section for an operator to write and
+    /// nothing for one to switch off. While the field stays `None`,
+    /// `idempotency_key_for` short-circuits and the guard in `invoke_tool` is
+    /// skipped, so a retried side-effecting call executes a second time with no
+    /// refusal and no warning.
+    #[tokio::test]
+    async fn sub4_boot_populates_the_idempotency_cache() {
+        let gateway = Gateway::new(Config::default()).await.unwrap();
+        let built = gateway.build_meta_mcp().await.unwrap();
+
+        assert!(
+            built.meta_mcp.idempotency_cache.is_some(),
+            "the boot path must populate the idempotency cache; an unpopulated \
+             one makes every client-supplied idempotency key inert"
+        );
+    }
+
     /// GH475.CFG.5 — a configured threshold reaches the running budget, and a
     /// key the operator left out keeps the value that has been shipping.
     #[tokio::test]

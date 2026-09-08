@@ -5695,3 +5695,52 @@ async fn ac_cache_4c_two_principals_do_not_share_one_cache_entry() {
         "bob's own entry must serve his repeat call"
     );
 }
+
+// MIK-7272.SUB.4 — what wiring the cache actually buys. The response cache is
+// deliberately left out: with one installed, a second identical call is served
+// from it and this test would pass with the idempotency guard removed. The only
+// thing that can keep the backend at one call here is the guard.
+#[tokio::test]
+async fn a_reissued_idempotency_key_is_served_from_the_stored_result() {
+    let registry = Arc::new(BackendRegistry::new());
+    let (payments, calls) = counting_backend("payments", "CHARGED-ONCE");
+    let _ = registry.register(payments);
+
+    let mut meta = MetaMcp::with_features(registry, None, None, None, Duration::from_secs(300));
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        crate::idempotency::CLEANUP_INTERVAL,
+    );
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("client-chosen-key".to_string()),
+        ..Default::default()
+    };
+    let mut ctx = allow_all_ctx();
+    ctx.retry = &retry;
+
+    let invoke = async || {
+        meta.invoke_tool(
+            &json!({"server": "payments", "tool": "charge", "arguments": {"cents": 500}}),
+            Some("session-1"),
+            &ctx,
+        )
+        .await
+        .expect("the charge must succeed")
+        .to_string()
+    };
+
+    let first = invoke().await;
+    let second = invoke().await;
+
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the re-issued key must be served from what the first call stored; a \
+         second dispatch is the duplicated side effect the key exists to prevent"
+    );
+    assert!(
+        first.contains("CHARGED-ONCE") && second.contains("CHARGED-ONCE"),
+        "both replies must carry the backend's own body, not an empty \
+         placeholder: first={first}, second={second}"
+    );
+}

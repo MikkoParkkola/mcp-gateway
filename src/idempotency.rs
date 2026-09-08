@@ -45,6 +45,14 @@ pub const IN_FLIGHT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// that entry existed to suppress. Entries already tracked stay servable.
 pub const MAX_ENTRIES: usize = 10_000;
 
+/// How often the background sweep evicts stale entries (1 minute).
+///
+/// Not a correctness bound — [`IN_FLIGHT_TIMEOUT`] and [`COMPLETED_TTL`] decide
+/// what an entry means, and a lookup honours both whether or not the sweep has
+/// run. This only decides how long a dead entry keeps occupying one of the
+/// [`MAX_ENTRIES`] slots.
+pub const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
+
 // ── State machine ─────────────────────────────────────────────────────────────
 
 /// State of an idempotency entry.
