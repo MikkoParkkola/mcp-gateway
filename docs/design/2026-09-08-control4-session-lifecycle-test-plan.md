@@ -22,6 +22,21 @@ OUT: `SessionLifecycle`'s own already-shipped mechanics. `register`, `track`, `u
 (3 tests, passing against the real type). Re-testing them here would be a second copy that drifts.
 The ONE exception is called out in T3 and it is a genuine behaviour change, not a re-test.
 
+## The disconnect half of the criterion has no row, and the reason is structural
+
+Both review legs asked for the *previously done by disconnect* half: one wanted a case proving state
+survives a disconnect before its deadline, the other wanted a pin that disconnect cannot double-apply
+cleanup alongside reap. Neither is buildable, for the same reason, and it is not an omission:
+**the 2026 path has no disconnect.** `on_disconnect` gains no production caller under this change and
+stays unreached deliberately (`...wiring.md:270-272`); the criterion exists precisely because the
+transport close it fired on no longer happens (`:10-12`). A case staged around an event production
+never emits is the fixture-replaces-production shape §P2 exists to reject, and a double-apply pin needs
+two appliers where there is one.
+
+The half that IS buildable — reclaimed state is still PRESENT before the deadline, and gone after — is
+not a row either: it is two assertions inside T4, which already asserts presence at step 3 and absence
+at step 5 on the anomaly entry itself.
+
 ## The table
 
 | ID | what it proves | level | type | how it can fail (Q2) |
