@@ -694,7 +694,7 @@ pub(crate) async fn start_custody_with_http(
 /// account identity. `secret_refs_read` names the environment variables the
 /// resolution looked up, which is what makes "which key did it read" answerable
 /// without printing what it read.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct InitializedStore {
     /// `accounts.instance_id` the fresh authority was sealed for.
     pub instance_id: String,
@@ -704,6 +704,17 @@ pub struct InitializedStore {
     pub authority_dir: PathBuf,
     /// Environment variable NAMES read while resolving keys, sorted.
     pub secret_refs_read: Vec<String>,
+}
+
+impl std::fmt::Debug for InitializedStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InitializedStore")
+            .field("instance_id", &self.instance_id)
+            .field("store_dir", &self.store_dir)
+            .field("authority_dir", &self.authority_dir)
+            .field("secret_refs_read", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Why offline initialization was refused. Carries no key material.
@@ -782,3 +793,24 @@ pub fn initialize_store_offline(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod initialization_debug_redaction_tests {
+    use super::InitializedStore;
+
+    #[test]
+    fn debug_redacts_initialization_secret_references() {
+        let canary = "PRIVATE_KEY_REFERENCE_CANARY_928734";
+        let initialized = InitializedStore {
+            instance_id: "office-gateway".into(),
+            store_dir: "account-records".into(),
+            authority_dir: "account-authority".into(),
+            secret_refs_read: vec![canary.into()],
+        };
+        let rendered = format!("{initialized:?}");
+        assert!(rendered.contains("office-gateway"));
+        assert!(rendered.contains("account-records"));
+        assert!(rendered.contains("secret_refs_read: \"[REDACTED]\""));
+        assert!(!rendered.contains(canary));
+    }
+}

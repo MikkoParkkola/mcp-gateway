@@ -88,7 +88,7 @@ pub(crate) enum AdapterKind {
 /// bounded-time fields carry the approved defaults through serde defaults and
 /// are always serialized, so a rewritten configuration states the window it is
 /// actually running with instead of leaving it implicit.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AdapterConfig {
     pub(crate) kind: AdapterKind,
@@ -108,6 +108,21 @@ pub(crate) struct AdapterConfig {
     pub(crate) max_lifetime_seconds: u64,
     #[serde(default = "default_clock_skew_seconds")]
     pub(crate) clock_skew_seconds: u64,
+}
+
+impl std::fmt::Debug for AdapterConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdapterConfig")
+            .field("kind", &self.kind)
+            .field("installation_id", &self.installation_id)
+            .field("header", &self.header)
+            .field("issuer", &self.issuer)
+            .field("hmac_secret_ref", &"[REDACTED]")
+            .field("allowed_api_key_names", &self.allowed_api_key_names)
+            .field("max_lifetime_seconds", &self.max_lifetime_seconds)
+            .field("clock_skew_seconds", &self.clock_skew_seconds)
+            .finish()
+    }
 }
 
 /// The approved default assertion lifetime bound, in seconds.
@@ -482,3 +497,28 @@ pub(crate) fn validate_no_gateway_material_reuse(
 #[cfg(test)]
 #[path = "adapter_secret_tests.rs"]
 mod secret_tests;
+
+#[cfg(test)]
+mod debug_redaction_tests {
+    use super::{AdapterConfig, AdapterKind};
+
+    #[test]
+    fn debug_redacts_unvalidated_adapter_secret_reference() {
+        let canary = "unvalidated-hmac-material-canary-928734";
+        let adapter = AdapterConfig {
+            kind: AdapterKind::OpenwebuiSignedHeader,
+            installation_id: "office-webui".into(),
+            header: "x-openwebui-assertion".into(),
+            issuer: "open-webui".into(),
+            hmac_secret_ref: canary.into(),
+            allowed_api_key_names: vec!["webui-key".into()],
+            max_lifetime_seconds: 300,
+            clock_skew_seconds: 30,
+        };
+        let rendered = format!("{adapter:?}");
+        assert!(rendered.contains("office-webui"));
+        assert!(rendered.contains("webui-key"));
+        assert!(rendered.contains("hmac_secret_ref: \"[REDACTED]\""));
+        assert!(!rendered.contains(canary));
+    }
+}
