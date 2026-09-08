@@ -64,7 +64,10 @@ T4's assertion is *absence*. An absence assertion passes trivially against a map
 populated — a fixture that forgets to build the predecessor entry produces a green test proving
 nothing. So T4's arrangement is a precondition ASSERTION, not a setup step:
 
-1. firewall feature compiled in, `enabled = true`, `anomaly_detection = true`;
+1. firewall feature compiled in, `enabled = true`, `anomaly_detection = true`, and the lifecycle handle
+   obtained from `wire_session_lifecycle` (D8) — the production function that registers
+   `Firewall::on_session_end`. The case registers NO handler of its own: a fixture that registers the
+   thing under test proves the fixture;
 2. drive a request so the anomaly detector writes a `last_tool` predecessor entry for the identity;
 3. **assert that entry is PRESENT** — if this assertion fails, the test fails as a fixture error,
    loudly, rather than proceeding to a vacuous pass;
@@ -172,10 +175,33 @@ design's happy path.
 
 Per row, because one row breaks the blanket claim the first draft made.
 
-T1, T4, T5 and T6 test wiring that does not exist yet, so each fails by absence today — the free failure
-§P2 is built on. T3 is the closest call, since `reap` exists, but its assertion is on a return value the
-current signature cannot produce, so it fails to COMPILE rather than passing hollowly. T7 has no test at all,
-by construction.
+**Red BY COMPILE and red BY ASSERTION are different evidence, and every row here is the first kind.**
+A case that names surface which does not exist yet does not fail its assertion — it fails to compile, and a
+compile error is ONE error for the whole file. The assertion is never evaluated, so the red proves the
+SURFACE IS ABSENT and says nothing about whether the assertion could discriminate. An earlier revision of
+this paragraph said T1, T4, T5 and T6 "fail by absence today — the free failure §P2 is built on", which
+reads as an assertion red and is wrong in exactly the way T2's label was wrong, two paragraphs down.
+
+| row | red today | what that red proves |
+|---|---|---|
+| T1 | compile | the write site and the lifecycle handle it needs do not exist |
+| T2 | compile, shared with T1 | nothing T1's red does not already prove |
+| T3 | compile | `reap` returns `()`. Here the signature IS the criterion, so the compile red is the whole evidence — the one row where this label is not a deficit |
+| T4 | compile | `wire_session_lifecycle` (D8) does not exist |
+| T5 | compile | `IDLE_TTL` does not exist |
+| T6 | compile | the D7 marker and the handle do not exist |
+| T8 | compile | `spawn_reaper_on` takes no lifecycle argument |
+
+T8's earlier label — "fails on its own assertion" — does not survive this either: at integration level it
+drives a production tick whose signature it cannot yet name. T7 has no test at all, by construction.
+
+**The consequence is a step, not a caveat.** For every row above except T3, the assertion is UNPROVEN
+until the wiring exists. So at green time each such row gets one falsifier probe (§P2's retrofitting
+mechanism, the `mktemp`/`trap` recipe): break the single operand the row exists to pin — the D4 guard
+polarity for T2, the constant for T5, the returned count for T3 and T6, the `register` call for T4, the
+host's `reap` call for T8 — and observe THAT row go red ON ITS OWN ASSERTION. A row that stays green
+under its own probe was never a test. No coverage measurement can see this, and nothing else in this
+plan can either.
 
 **T2's label was wrong, and the correction is a downgrade of its evidence, not an upgrade.** An
 earlier revision said T2 "is green the moment it is written" and filed it as one of the two survivors

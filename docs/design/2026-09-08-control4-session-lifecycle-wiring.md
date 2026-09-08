@@ -149,6 +149,30 @@ sweeps, an observer counts them, and "no `info!` between marker N and marker N+1
 about exactly one sweep. Emit it first and that same wait catches the marker of the sweep that
 just logged a count, which is the false pass this event exists to close.
 
+**D8 — the registration lives in ONE production function, which the startup path and T4 both call.**
+Nothing constructs a `SessionLifecycle` today and nothing calls `register`: outside its own module the
+identifier appears only as the module declaration (`src/gateway/mod.rs:21`) and three doc comments
+(`anomaly.rs:26`, `:187`, `firewall/mod.rs:680`). So D1a's "created at gateway startup" names no site,
+and the gap matters most for the row that carries the criterion: a T4 that registers `on_session_end`
+itself is a fixture standing in for the production code it exists to prove — the shape §P2 records as
+two shipped defects.
+
+So one named function owns it — `wire_session_lifecycle(firewall: Option<&Arc<Firewall>>) ->
+Arc<SessionLifecycle>`, placed beside the firewall block (`src/gateway/server/mod.rs:1197-1211`). It
+creates the instance, registers `Firewall::on_session_end` (`firewall/mod.rs:682`) under a
+`Weak<Firewall>`, and returns the handle. Startup calls it; T4 calls the SAME function and supplies
+only a firewall. No test registers a handler. The capture is `Weak` because the handle is stored on
+`AppState` beside `firewall` (`server/mod.rs:1249`) and a strong `Arc` inside the callback would close
+a cycle through the state that owns both.
+
+**Ordering, which the sites force and the design had not stated.** The reaper is spawned at
+`server/mod.rs:992`, roughly two hundred lines BEFORE the firewall exists at `:1197`. The instance is
+therefore created before `:992` and passed to `spawn_reaper_on` (D1a), and the handler is registered
+afterwards. That is safe, not a race: `register` takes `&self` (`session_lifecycle.rs:48`), and no key
+is tracked until requests flow, which requires the `AppState` built at `:1220` — so the first possible
+`reap` with anything in it happens after registration. Rejected: moving `spawn_reaper_on` below the
+firewall block, which reorders two unrelated subsystems' startup to save one `Arc::clone`.
+
 ### Findings carried in from the v2 review
 
 **Reviewed baseline, disclosed.** Both v2 verdicts rendered on `55ee043d`. Everything folded in
