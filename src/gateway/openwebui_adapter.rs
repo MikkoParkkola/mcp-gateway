@@ -65,10 +65,19 @@ pub(crate) struct OpenWebUiAdapterState {
 }
 
 struct AdapterInner {
-    /// Header name -> verified adapter. Empty when refusing.
-    trusted: HashMap<HeaderName, Trusted>,
+    /// Header name -> every trusted installation configured to read it.
+    ///
+    /// A `Vec` and not one entry: configuration deliberately permits several
+    /// installations to share a header (a fleet behind one proxy), so keying by
+    /// header alone would silently drop all but the last one and make the
+    /// surviving installation the only identity anyone could assert.
+    /// Empty when refusing.
+    trusted: HashMap<HeaderName, Vec<Trusted>>,
     /// Every configured header, trusted or not, so a refusing runtime still
-    /// recognises what it must reject.
+    /// recognises what it must reject. DEDUPLICATED: this list drives the
+    /// "how many assertion headers did the request present" count, and a header
+    /// named by two installations would otherwise count one request header
+    /// twice and refuse every legitimate caller as a duplicate.
     configured: Vec<HeaderName>,
 }
 
@@ -84,10 +93,15 @@ impl OpenWebUiAdapterState {
     /// adapter that happens to allow everything".
     pub(crate) fn from_config(config: &Config, overlay: &dyn SecretOverlay) -> Option<Self> {
         let accounts = config.accounts.as_ref();
-        let configured: Vec<HeaderName> = adapter_header_names(accounts)
+        let mut configured: Vec<HeaderName> = Vec::new();
+        for name in adapter_header_names(accounts)
             .iter()
             .filter_map(|name| header_name(name))
-            .collect();
+        {
+            if !configured.contains(&name) {
+                configured.push(name);
+            }
+        }
         if configured.is_empty() {
             return None;
         }
@@ -99,20 +113,22 @@ impl OpenWebUiAdapterState {
         let credentials = gateway_credentials(config);
 
         let trusted = match resolve_adapter_runtime(accounts, overlay, &credentials) {
-            Ok(runtimes) => runtimes
-                .into_iter()
-                .filter_map(|runtime| {
-                    let name = header_name(&runtime.header)?;
+            Ok(runtimes) => {
+                let mut trusted: HashMap<HeaderName, Vec<Trusted>> = HashMap::new();
+                for runtime in runtimes {
+                    let Some(name) = header_name(&runtime.header) else {
+                        continue;
+                    };
                     let decoding_key = DecodingKey::from_secret(&runtime.secret);
-                    Some((
-                        name,
-                        Trusted {
-                            runtime,
-                            decoding_key,
-                        },
-                    ))
-                })
-                .collect(),
+                    // Appended, never inserted over: every installation that
+                    // named this header stays a candidate.
+                    trusted.entry(name).or_default().push(Trusted {
+                        runtime,
+                        decoding_key,
+                    });
+                }
+                trusted
+            }
             Err(error) => {
                 // The error is logged WITHOUT the offending value: these
                 // failures are about secret material, and the diagnostic must
@@ -133,6 +149,28 @@ impl OpenWebUiAdapterState {
                 configured,
             }),
         })
+    }
+}
+
+#[cfg(test)]
+impl OpenWebUiAdapterState {
+    /// Test-only view of the identity half of the middleware: which principal,
+    /// if any, this state resolves an assertion to once the caller checks (a
+    /// named API key, no conflicting identity) have already passed.
+    ///
+    /// It calls the SAME [`resolve_identity`] the middleware calls, so a test
+    /// asserting that two installations sharing a header keep distinct
+    /// principals is asserting about the production path and not a
+    /// reimplementation of it.
+    pub(crate) fn resolved_identity_for_test(
+        &self,
+        header: &str,
+        api_key_name: &str,
+        token: &str,
+    ) -> Option<VerifiedIdentity> {
+        let name = header_name(header)?;
+        let candidates = self.inner.trusted.get(&name)?;
+        resolve_identity(candidates, api_key_name, token).ok()
     }
 }
 
@@ -179,6 +217,7 @@ enum Refusal {
     NotApiKeyAuthenticated,
     KeyNotAllowed,
     ConflictingIdentity,
+    AmbiguousIdentity,
     Invalid(&'static str),
 }
 
@@ -191,6 +230,7 @@ impl Refusal {
             Self::NotApiKeyAuthenticated => "caller did not authenticate with an API key",
             Self::KeyNotAllowed => "API key not permitted to assert for this adapter",
             Self::ConflictingIdentity => "request already carries a verified identity",
+            Self::AmbiguousIdentity => "assertion verified for more than one installation",
             Self::Invalid(detail) => detail,
         }
     }
@@ -241,22 +281,17 @@ pub(crate) async fn openwebui_adapter_middleware(
     };
     let token = token.trim();
 
-    let Some(trusted) = inner.trusted.get(&header) else {
-        return refuse(&Refusal::NoTrustedMaterial);
+    let candidates = match inner.trusted.get(&header) {
+        Some(candidates) if !candidates.is_empty() => candidates,
+        _ => return refuse(&Refusal::NoTrustedMaterial),
     };
 
-    // The presenter must be a named API key, and one this adapter lists.
+    // The presenter must be a named API key. Checked once, before any adapter
+    // is consulted: it is a property of the caller, not of an installation.
     let Some(api_key) = request.extensions().get::<NamedApiKey>() else {
         return refuse(&Refusal::NotApiKeyAuthenticated);
     };
-    if !trusted
-        .runtime
-        .allowed_api_key_names
-        .iter()
-        .any(|allowed| allowed == api_key.name())
-    {
-        return refuse(&Refusal::KeyNotAllowed);
-    }
+    let api_key_name = api_key.name().to_owned();
 
     // A request that already carries a verified identity (key-server temporary
     // token, delegated OIDC bearer) is refused rather than overwritten: two
@@ -266,7 +301,7 @@ pub(crate) async fn openwebui_adapter_middleware(
         return refuse(&Refusal::ConflictingIdentity);
     }
 
-    let identity = match verify(&trusted.runtime, &trusted.decoding_key, token) {
+    let identity = match resolve_identity(candidates, &api_key_name, token) {
         Ok(identity) => identity,
         Err(refusal) => return refuse(&refusal),
     };
@@ -276,6 +311,55 @@ pub(crate) async fn openwebui_adapter_middleware(
     request.headers_mut().remove(&header);
     request.extensions_mut().insert(identity);
     next.run(request).await
+}
+
+/// Resolve one assertion against every installation configured to read the
+/// header it arrived on.
+///
+/// Several installations may share a header, so the assertion is offered to
+/// each of them and the SIGNATURE decides which one minted it. Every candidate
+/// is tried — no early return on the first failure — because a failure only
+/// means "not this installation's token", and stopping there would make
+/// acceptance depend on configuration order.
+///
+/// EXACTLY ONE must succeed. Zero is a plain refusal, reported as the first
+/// reason seen so the operator log names a real cause. Two or more means two
+/// installations hold material that verifies the same assertion: the subject is
+/// then ambiguous and is refused rather than resolved by preferring one, since
+/// preferring one would silently pick which installation's user a caller is
+/// acting for.
+fn resolve_identity(
+    candidates: &[Trusted],
+    api_key_name: &str,
+    token: &str,
+) -> Result<VerifiedIdentity, Refusal> {
+    let mut accepted: Option<VerifiedIdentity> = None;
+    let mut first_refusal: Option<Refusal> = None;
+    for candidate in candidates {
+        // Per-installation: the allow-list belongs to the installation being
+        // asserted for, not to the header they happen to share.
+        if !candidate
+            .runtime
+            .allowed_api_key_names
+            .iter()
+            .any(|allowed| allowed == api_key_name)
+        {
+            first_refusal.get_or_insert(Refusal::KeyNotAllowed);
+            continue;
+        }
+        match verify(&candidate.runtime, &candidate.decoding_key, token) {
+            Ok(identity) => {
+                if accepted.is_some() {
+                    return Err(Refusal::AmbiguousIdentity);
+                }
+                accepted = Some(identity);
+            }
+            Err(refusal) => {
+                first_refusal.get_or_insert(refusal);
+            }
+        }
+    }
+    accepted.ok_or(first_refusal.unwrap_or(Refusal::NoTrustedMaterial))
 }
 
 /// Verify one assertion against one adapter's material and rules.
@@ -428,6 +512,51 @@ mod tests {
         assert!(a.name.is_none());
         assert!(a.groups.is_empty());
         assert_ne!(a.issuer, "open-webui");
+    }
+
+    fn trusted(installation: &str, secret: &[u8]) -> Trusted {
+        let mut runtime = runtime(installation);
+        runtime.secret = secret.to_vec();
+        Trusted {
+            decoding_key: DecodingKey::from_secret(secret),
+            runtime,
+        }
+    }
+
+    /// Installations sharing a header are resolved by SIGNATURE, and exactly
+    /// one of them must succeed.
+    #[test]
+    fn shared_header_resolves_to_exactly_one_installation() {
+        const OTHER: &[u8] = b"fixture-second-installation-secret-987654321";
+        let candidates = vec![trusted("desk", SECRET), trusted("laptop", OTHER)];
+        let desk = token(&claims("alice"), Algorithm::HS256, SECRET);
+        let laptop = token(&claims("alice"), Algorithm::HS256, OTHER);
+
+        let first = resolve_identity(&candidates, "owui", &desk)
+            .unwrap_or_else(|_| panic!("desk assertion"));
+        let second = resolve_identity(&candidates, "owui", &laptop)
+            .unwrap_or_else(|_| panic!("laptop assertion"));
+        // Order-independent: the second installation is reachable even though
+        // it is not the first candidate tried.
+        assert_ne!(first.stable_actor_id(), second.stable_actor_id());
+        assert_eq!(first.subject, second.subject);
+
+        // Signed by neither, and presented by an API key neither installation
+        // lists: both are refusals, not a fallback to some other installation.
+        assert!(
+            resolve_identity(
+                &candidates,
+                "owui",
+                &token(&claims("alice"), Algorithm::HS256, b"unconfigured-secret")
+            )
+            .is_err()
+        );
+        assert!(resolve_identity(&candidates, "unlisted", &desk).is_err());
+
+        // Two installations that both verify the same assertion give two
+        // answers to "who is this", so the assertion is refused outright.
+        let ambiguous = vec![trusted("desk", SECRET), trusted("laptop", SECRET)];
+        assert!(resolve_identity(&ambiguous, "owui", &desk).is_err());
     }
 
     #[test]
