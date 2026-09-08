@@ -2016,6 +2016,32 @@ mod cleartext_credential_guard {
         );
     }
 
+    // Row 2 — a username with NO password. The guard ORs the two userinfo arms
+    // (`src/config/mod.rs:1031-1032`), so either half alone is a credential.
+    // Row 14 above pairs them and would survive a loosening to require both;
+    // this row is what forbids that loosening.
+    #[test]
+    fn url_username_without_a_password_counts_as_a_credential() {
+        let backend = http_backend(&format!("http://user@{REMOTE}"));
+        let message = refusal(backend);
+        assert!(
+            message.contains("cleartext"),
+            "a username alone is a credential path: {message}"
+        );
+    }
+
+    // The other half of Row 2: a password with no username. Same predicate,
+    // opposite arm, so a loosening in either direction fails a test.
+    #[test]
+    fn url_password_without_a_username_counts_as_a_credential() {
+        let backend = http_backend(&format!("http://:pw@{REMOTE}"));
+        let message = refusal(backend);
+        assert!(
+            message.contains("cleartext"),
+            "a password alone is a credential path: {message}"
+        );
+    }
+
     // Row 15 — a disabled backend connects to nothing, so it leaks nothing.
     #[test]
     fn disabled_backend_skips_the_cleartext_guard() {
