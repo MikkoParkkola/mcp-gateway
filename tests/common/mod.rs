@@ -15,7 +15,10 @@ pub use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 pub use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 pub use mcp_gateway::gateway::proxy::ProxyManager;
 pub use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-pub use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+pub use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+pub use mcp_gateway::gateway::test_helpers::{
+    AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+};
 pub use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 pub use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 pub use serde_json::{Value, json};
@@ -69,7 +72,14 @@ impl Default for Fixture {
     }
 }
 
-pub fn state(f: Fixture) -> Arc<AppState> {
+/// The gateway state a case drives, plus the directory its task store leases.
+///
+/// The `TempDir` is returned rather than dropped here because the store holds
+/// its directory for the life of the service: dropping it at the end of this
+/// function would delete the records under a state the test is still posting
+/// to. Callers bind it for the whole test — `let (app, _store_dir) = …` — and
+/// each call gets a fresh private directory, so no two cases share a lease.
+pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
     let mut config = Config::default();
     config.server.modern_protocol = f.modern_protocol;
     config.auth = f.auth;
@@ -79,7 +89,22 @@ pub fn state(f: Fixture) -> Arc<AppState> {
         config.streaming.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    Arc::new(AppState {
+
+    // One registry, shared between the state the router reads and the executor
+    // that publishes: two would send a task's notifications to a listener set
+    // no client here is on.
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let (tasks, task_executor) = open_runtime(
+        &store_dir.path().join("tasks"),
+        config.tasks.max_workers,
+        StoreLimits::default(),
+        Arc::clone(&subscriptions),
+    )
+    .await
+    .expect("the fixture task store opens");
+
+    let app = Arc::new(AppState {
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         env: None,
         meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
@@ -108,11 +133,11 @@ pub fn state(f: Fixture) -> Arc<AppState> {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
-    })
+        tasks,
+        task_executor,
+        subscriptions,
+    });
+    (app, store_dir)
 }
 
 /// POST to `/mcp` as a conforming modern client: body `_meta` mirrored into the

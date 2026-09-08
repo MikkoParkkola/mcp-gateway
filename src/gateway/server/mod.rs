@@ -3,6 +3,9 @@
 //! Gateway server
 
 mod persistence;
+#[cfg(test)]
+#[path = "tests/mod.rs"]
+mod signing_allocation_tests;
 mod support;
 // Two questions leave this module, both to `config_reload`, and each is
 // exported under the question it answers. A reload asks about the config that
@@ -384,6 +387,70 @@ fn resolve_provenance_signer(
     }
 }
 
+/// Copy only the fields backend target mapping routes on.
+///
+/// `gateway_invoke` routes on `server` and `tool`, `gateway_execute` on
+/// each `chain` step's `tool` or a single top-level `tool`, and a
+/// surfaced tool routes on its own name. Everything else in the tree is
+/// the payload, which the mapping copies into a target and the response
+/// contract then never reads. A malformed key is left out exactly as
+/// the mapping would have ignored it, so the servers and tools derived
+/// from this projection are the ones derived from the whole tree.
+fn stdio_routing_keys_only(arguments: &serde_json::Value) -> serde_json::Value {
+    let mut routing = serde_json::Map::new();
+    for key in ["server", "tool"] {
+        if let Some(value) = arguments.get(key).filter(|value| value.is_string()) {
+            routing.insert(key.to_owned(), value.clone());
+        }
+    }
+    if let Some(chain) = arguments.get("chain").and_then(serde_json::Value::as_array) {
+        let steps = chain
+            .iter()
+            .map(|step| {
+                let mut routing = serde_json::Map::new();
+                if let Some(tool) = step.get("tool").filter(|tool| tool.is_string()) {
+                    routing.insert("tool".to_owned(), tool.clone());
+                }
+                serde_json::Value::Object(routing)
+            })
+            .collect();
+        routing.insert("chain".to_owned(), serde_json::Value::Array(steps));
+    }
+    serde_json::Value::Object(routing)
+}
+
+/// Move the client's `params._meta` into the call's `arguments`.
+///
+/// The borrowed merge can only insert into a copy, because it holds a
+/// view of someone else's tree. This dispatcher owns the request, so
+/// the same insertion is a move: `arguments` and `_meta` are taken out
+/// of the request — which nothing reads after the dispatch below — and
+/// handed to the merge's own insertion step. Neither subtree is copied,
+/// so an unbounded payload and an unbounded `_meta` both cost the same
+/// as a small one.
+///
+/// Called only where `client_meta_insert_required` has just answered
+/// yes, so the fallbacks here are the shapes that predicate already
+/// excluded; each returns what the merge returns for it. An absent
+/// `arguments` becomes the `{}` the borrowed path substitutes, and
+/// still receives the metadata.
+fn stdio_take_merged_client_meta(request: &mut serde_json::Value) -> serde_json::Value {
+    let empty = || serde_json::Value::Object(serde_json::Map::new());
+    let Some(params) = request
+        .get_mut("params")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return empty();
+    };
+    let Some(meta) = params.remove("_meta") else {
+        return empty();
+    };
+    let arguments = params
+        .get_mut("arguments")
+        .map_or_else(empty, serde_json::Value::take);
+    super::router::helpers::insert_client_meta(arguments, meta)
+}
+
 impl Gateway {
     /// Create a new gateway
     ///
@@ -461,9 +528,14 @@ impl Gateway {
     ///
     /// # Errors
     ///
-    /// Currently infallible; returns `Result` for forward-compatibility.
+    /// Rejects invalid effective signing configuration before shared setup.
     #[allow(clippy::too_many_lines)]
     async fn build_meta_mcp(&self) -> Result<BuiltMetaMcp> {
+        let signing = self
+            .config
+            .security
+            .message_signing
+            .resolve_with_env(&self.env.get())?;
         // ── Response cache ───────────────────────────────────────────────────
         let cache = if self.config.cache.enabled {
             let cache = if self.config.cache.max_entries > 0 {
@@ -565,6 +637,8 @@ impl Gateway {
             meta_mcp_builder = meta_mcp_builder.with_cost_governance(enforcer, registry);
         }
 
+        meta_mcp_builder.set_idempotency_config(self.config.idempotency.clone());
+
         // ── Per-action attestation (MIK-5223 / MIK-6163, B1-IDENT) ────────────
         // Wire the attestation validator from operator config (env-driven).
         // Default posture is OBSERVE: audit every presented token at the
@@ -578,6 +652,20 @@ impl Gateway {
                 "Per-action attestation wired at gateway_invoke boundary"
             );
             meta_mcp_builder = meta_mcp_builder.with_attestation(validator, mode);
+        }
+
+        if signing.enabled {
+            let previous =
+                (!signing.previous_secret.is_empty()).then(|| signing.previous_secret.into_bytes());
+            meta_mcp_builder.enable_message_signing(
+                crate::security::message_signing::MessageSigner::new(
+                    signing.shared_secret.into_bytes(),
+                    previous,
+                    signing.key_id,
+                ),
+                std::time::Duration::from_secs(signing.replay_window),
+                signing.require_nonce,
+            );
         }
 
         let mut meta_mcp = Arc::new(meta_mcp_builder);
@@ -1200,6 +1288,83 @@ impl Gateway {
         let control_plane_store =
             build_control_plane_store(&self.config, self.config_path.as_deref());
 
+        // The durable task runtime, opened before any listener exists.
+        //
+        // Fail-closed, with no volatile fallback. Two things are at stake and
+        // both survive a restart: a `tools/call` answered with a handle has
+        // promised a record that a later `tasks/get` can read, and `open_runtime`
+        // imports the store's committed ownership bindings into admission. A
+        // store that will not open is therefore also a store whose owners are
+        // unknown — serving past that point would answer a returning caller's
+        // own task as absent, which is the one answer the ownership rule uses
+        // for a task that is not theirs.
+        //
+        // Built here rather than inside the `AppState` literal because the
+        // subscription registry is shared with the executor's publication seam:
+        // two registries would leave a task's notifications going to a listener
+        // set no client is on.
+        self.config.tasks.validate()?;
+        let task_store_dir = expand_home_path(&self.config.tasks.store_dir);
+        let subscriptions = Arc::new(
+            crate::gateway::subscription_registry::SubscriptionRegistry::new(
+                crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
+            ),
+        );
+        // The runtime shares meta-MCP's admission authority rather than opening
+        // one of its own: a task and a later synchronous call carrying the same
+        // owner and idempotency key have to meet at ONE admission index, or the
+        // backend runs twice for what the caller sent once.
+        let (task_service, task_executor) =
+            crate::gateway::task_service::open_runtime_with_admission(
+                &task_store_dir,
+                self.config.tasks.max_workers,
+                crate::gateway::task_service::StoreLimits {
+                    records: self.config.tasks.max_records,
+                    per_principal: self.config.tasks.max_per_principal,
+                    record_bytes: self.config.tasks.max_record_bytes,
+                    logical_bytes: self.config.tasks.logical_budget_bytes,
+                },
+                Arc::clone(&subscriptions),
+                Arc::clone(meta_mcp.execution_admission()),
+            )
+            .await
+            .map_err(|error| {
+                Error::Config(format!(
+                    "task store at '{}' could not be opened: {error}",
+                    task_store_dir.display()
+                ))
+            })?;
+        info!(
+            path = %task_store_dir.display(),
+            max_workers = self.config.tasks.max_workers,
+            "Durable task store opened"
+        );
+        // The periodic expiry owner, started only now: the recovery inside
+        // `open_runtime_with_admission` has succeeded, so the sweep can never see
+        // a row a restart had not yet settled. The guard is held for the server's
+        // lifetime and joined below, before the store closes — dropping it on an
+        // early return signals the loop to stop without cutting a deletion that
+        // is already in flight.
+        let expiry_sweep: crate::gateway::task_service::execution::ExpirySweep =
+            match task_executor.start_expiry(self.config.tasks.expiry_interval) {
+                Ok(sweep) => sweep,
+                Err(error) => {
+                    let _ = task_service.shutdown().await;
+                    return Err(Error::Config(format!(
+                        "task expiry sweep at {:?} could not be started: {error}",
+                        self.config.tasks.expiry_interval
+                    )));
+                }
+            };
+        info!(
+            interval = ?self.config.tasks.expiry_interval,
+            "Durable task expiry sweep started"
+        );
+        // Cloned before the state takes them: shutdown drains the SAME executor
+        // that served the traffic, not a second one built to stand in for it.
+        let task_service_for_shutdown = Arc::clone(&task_service);
+        let task_executor_for_shutdown = Arc::clone(&task_executor);
+
         let state = Arc::new(AppState {
             // Shared, not minted: the invoke path mints continuations against
             // `meta_mcp`'s keyring, so a second one here would be a keyring
@@ -1232,12 +1397,9 @@ impl Gateway {
             firewall: firewall_arc,
             agent_identity_config: self.config.security.agent_identity.clone(),
             control_plane_store,
-            tasks: Arc::new(crate::protocol::task_store::TaskStore::new()),
-            subscriptions: Arc::new(
-                crate::gateway::subscription_registry::SubscriptionRegistry::new(
-                    crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
-                ),
-            ),
+            tasks: task_service,
+            task_executor,
+            subscriptions,
             live_config: Arc::clone(&live_config),
             export_status,
             transparency_log,
@@ -1504,6 +1666,41 @@ impl Gateway {
             }
         }
 
+        // Before the drain and well before the close: the sweep is joined while
+        // the store is still open, so a deletion already in flight finishes its
+        // own transaction and no new one starts against a store about to give
+        // its lease back. The join returns what the sweep actually met, so a
+        // store it could not delete from is not reported as a clean stop.
+        if let Err(error) = expiry_sweep.shutdown().await {
+            warn!(%error, "Task expiry sweep did not stop cleanly");
+        } else {
+            info!("Task expiry sweep stopped");
+        }
+
+        // Task workers hold no inflight permit — the request that created one
+        // was answered with a handle and released its permit long before the
+        // work finished — so the drain above cannot see them and a second wait
+        // is what makes shutdown graceful for them too.
+        //
+        // Ahead of `stop_all`, because a worker's dispatch IS a backend call:
+        // stopping the pool first would fail the very work this wait exists to
+        // let finish. The store closes afterwards, which joins any writer still
+        // in flight and gives the directory lease back — a lease this process
+        // kept would refuse the next start its own store.
+        info!(timeout = ?drain_timeout, "Draining in-flight tasks...");
+        let task_drain = task_executor_for_shutdown.drain(drain_timeout).await;
+        if task_drain.timed_out {
+            warn!(
+                acquired_workers = task_drain.acquired,
+                "Task drain timeout reached, proceeding with shutdown"
+            );
+        } else {
+            info!("All in-flight tasks completed");
+        }
+        if let Err(error) = task_service_for_shutdown.shutdown().await {
+            warn!(%error, "Task store did not release its lease cleanly");
+        }
+
         // Stop all backends
         info!("Shutting down backends...");
         self.backends.stop_all().await;
@@ -1539,6 +1736,21 @@ impl Gateway {
             data_dir,
             ..
         } = self.build_meta_mcp().await?;
+        // Give stdio the same explicit reload context as HTTP.
+        if let Some(ref path) = self.config_path {
+            let live_config = Arc::new(LiveConfig::new(self.config.clone()));
+            let reload_ctx = Arc::new(
+                ReloadContext::new(
+                    path.clone(),
+                    Arc::clone(&live_config),
+                    Arc::clone(&self.backends),
+                    self.config.failsafe.clone(),
+                    self.config.meta_mcp.cache_ttl,
+                )
+                .with_env(Arc::clone(&self.env)),
+            );
+            meta_mcp.set_reload_context(reload_ctx);
+        }
         let mut protocol_telemetry_sink =
             match crate::protocol_revision_telemetry::DurableTelemetrySink::open(&data_dir) {
                 Ok(sink) => Some(sink),
@@ -1652,7 +1864,7 @@ impl Gateway {
                 &meta_mcp,
                 &tool_policy,
                 &mtls_policy,
-                &request,
+                request,
                 session_id,
                 protocol_telemetry_sink.as_mut(),
             )
@@ -1734,7 +1946,7 @@ impl Gateway {
             meta_mcp,
             tool_policy,
             mtls_policy,
-            request,
+            request.clone(),
             session_id,
             None,
         )
@@ -1747,18 +1959,185 @@ impl Gateway {
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
         _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
-        request: &serde_json::Value,
+        mut request: serde_json::Value,
         session_id: &str,
         protocol_telemetry_sink: Option<
             &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
         >,
     ) -> Option<serde_json::Value> {
-        use super::router::helpers::{extract_tools_call_params, merge_client_meta, parse_request};
+        // Borrowed views throughout: a request this dispatcher refuses must not
+        // be copied on its way to the refusal. Ownership is taken once, after
+        // admission, where the payload is actually executed.
+        use super::router::helpers::extract_tools_call_params_ref;
         use crate::protocol::JsonRpcResponse;
 
-        let (id, method, params) = match parse_request(request) {
-            Ok(parsed) => parsed,
-            Err(response) => return Some(response.to_value_lossy()),
+        let mut signing_context = match Self::prepare_signing(meta_mcp, &mut request) {
+            Ok(context) => context,
+            Err(response) => return Some(response),
+        };
+
+        let (id, method, params, request_shape) =
+            match Self::parse_and_observe(&request, session_id, protocol_telemetry_sink) {
+                Ok(parsed) => parsed,
+                Err(early) => return early,
+            };
+
+        let (external_tool, response_targets) = {
+            // Response targets are still derived here, before anything dispatches,
+            // so no change in live backend state can move an accepted call's
+            // provenance. What is withheld is the payload: a target owns a copy of
+            // the call arguments, and the response-target mapping reads a target's
+            // server and tool and discards that copy on the next line. So the
+            // mapping is fed the routing keys alone — same servers, same tools,
+            // same sort, dedup and discovery handling, none of the megabytes.
+            let (external_tool, backend_targets) = if method == "tools/call" {
+                let empty_arguments = serde_json::Value::Object(serde_json::Map::new());
+                let (tool, arguments) = extract_tools_call_params_ref(params);
+                (
+                    tool.to_string(),
+                    super::router::backend_tool_targets_for_call(
+                        meta_mcp,
+                        tool,
+                        &stdio_routing_keys_only(arguments.unwrap_or(&empty_arguments)),
+                    ),
+                )
+            } else {
+                (method.clone(), Vec::new())
+            };
+            let response_targets = super::meta_mcp::response_security::meta_response_targets(
+                &external_tool,
+                &backend_targets,
+            );
+            (external_tool, response_targets)
+        };
+        let (response, execution) = if method == "tools/call" {
+            Self::dispatch_tools_call(
+                meta_mcp,
+                tool_policy,
+                &mut request,
+                id,
+                session_id,
+                &mut signing_context,
+                &request_shape,
+            )
+            .await
+        } else {
+            (
+                match method.as_str() {
+                    // 2026-07-28 MUST. Answered before anything else and without a
+                    // handshake, because on stdio this is also the backward-compatibility
+                    // probe: a legacy server answers it with an error, not a document.
+                    // Always the legacy list on stdio. This dispatcher has no
+                    // access to the running config, and the stateless revision is
+                    // specified over streamable HTTP; advertising it on a transport
+                    // whose modern path is not wired would be a claim the gateway
+                    // cannot honour. Recorded as a limitation, not a decision that
+                    // stdio is excluded.
+                    "server/discover" => {
+                        JsonRpcResponse::success_serialized(id, meta_mcp.discover_document(false))
+                    }
+                    "initialize" => meta_mcp.handle_initialize(
+                        id,
+                        params,
+                        Some(session_id),
+                        None,
+                        request_shape.era(),
+                    ),
+                    "tools/list" => {
+                        meta_mcp.handle_tools_list_with_params(id, params, Some(session_id))
+                    }
+                    "prompts/list" => meta_mcp.handle_prompts_list(id, params).await,
+                    "prompts/get" => meta_mcp.handle_prompts_get(id, params).await,
+                    "resources/list" => meta_mcp.handle_resources_list(id, params).await,
+                    "resources/read" => meta_mcp.handle_resources_read(id, params).await,
+                    "resources/templates/list" => {
+                        meta_mcp.handle_resources_templates_list(id, params).await
+                    }
+                    "logging/setLevel" => meta_mcp.handle_logging_set_level(id, params).await,
+                    "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
+                    other => {
+                        debug!(method = %other, "stdio: unknown method");
+                        let message = format!("Method not found: {other}");
+                        JsonRpcResponse::error(Some(id), -32601, message)
+                    }
+                },
+                None,
+            )
+        };
+
+        let response = meta_mcp.finalize_response_for_delivery(
+            response,
+            &super::meta_mcp::response_security::ResponseDeliveryContext {
+                method: &method,
+                targets: &response_targets,
+                correlation: super::meta_mcp::response_security::ResponseCorrelation {
+                    session_id,
+                    caller: "stdio",
+                    external_server: "gateway",
+                    external_tool: &external_tool,
+                },
+                mutation:
+                    crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
+                signing: signing_context.as_ref(),
+            },
+        );
+        if let Some(execution) = execution {
+            execution.complete_delivery(&response, signing_context.as_ref());
+        }
+        Some(response.to_value_lossy())
+    }
+
+    /// Capture and restore the signing envelope ahead of parsing, if signing
+    /// is enabled: the envelope lives in the caller's request, so it is taken
+    /// out before anything else reads that tree.
+    fn prepare_signing(
+        meta_mcp: &Arc<MetaMcp>,
+        request: &mut serde_json::Value,
+    ) -> std::result::Result<
+        Option<super::meta_mcp::signing::SigningInvocationContext>,
+        serde_json::Value,
+    > {
+        let mut signing_context = meta_mcp
+            .signing_enabled()
+            .then(|| super::meta_mcp::signing::SigningInvocationContext::capture(request));
+        if let Some(context) = signing_context.as_mut()
+            && let Err(error) = context.restore(request)
+        {
+            return Err(crate::protocol::JsonRpcResponse::error(
+                None,
+                error.to_rpc_code(),
+                super::meta_mcp::signing::wire_error_message(&error),
+            )
+            .to_value_lossy());
+        }
+        Ok(signing_context)
+    }
+
+    /// Parse, classify and durably observe one inbound stdio request.
+    ///
+    /// `Err(None)` means no response is due (a notification); `Err(Some(_))`
+    /// carries an already-serialized error response.
+    fn parse_and_observe<'r>(
+        request: &'r serde_json::Value,
+        session_id: &str,
+        protocol_telemetry_sink: Option<
+            &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
+        >,
+    ) -> std::result::Result<
+        (
+            crate::protocol::RequestId,
+            String,
+            Option<&'r serde_json::Value>,
+            crate::protocol::meta::RequestShape,
+        ),
+        Option<serde_json::Value>,
+    > {
+        use super::router::helpers::parse_request_ref;
+        use crate::protocol::JsonRpcResponse;
+
+        let (id, method, params) = match parse_request_ref(request) {
+            Ok((id, method, params)) => (id, method.to_string(), params),
+            Err(response) => return Err(Some(response.to_value_lossy())),
         };
 
         // NFR.OBS.1. Recorded here, above every early return below, so a
@@ -1766,13 +2145,10 @@ impl Gateway {
         // carries no headers, so the transport declares no revision and a
         // modern request can only have sourced its own from `_meta`.
         //
-        // Bound rather than discarded: `initialize` advertises its extension
-        // set against the declared era, and stdio must answer that question the
-        // same way HTTP does. The rest of stdio's method dispatch still
-        // predates the revision split and this change does not move it.
-        let shape = crate::protocol::meta::classify_and_observe(
+        // The same classification also controls modern explicit-key admission.
+        let request_shape = crate::protocol::meta::classify_and_observe(
             &method,
-            params.as_ref(),
+            params,
             None,
             // Stdio carries no header, so the revision this session negotiated
             // at `initialize` is the only thing a later legacy request can be
@@ -1782,7 +2158,7 @@ impl Gateway {
         );
         crate::protocol_revision_telemetry::observe_inbound_request(
             request,
-            params.as_ref(),
+            params,
             &method,
             None,
             Some(session_id),
@@ -1800,113 +2176,183 @@ impl Gateway {
         // Notifications have no id — send no response
         if method.starts_with("notifications/") {
             debug!(notification = %method, "stdio: notification (no response)");
-            return None;
+            return Err(None);
         }
 
         // Requests must have an id
         let Some(id) = id else {
             let resp = JsonRpcResponse::error(None, -32600, "Missing id");
-            return Some(resp.to_value_lossy());
+            return Err(Some(resp.to_value_lossy()));
         };
 
-        let response = match method.as_str() {
-            // 2026-07-28 MUST. Answered before anything else and without a
-            // handshake, because on stdio this is also the backward-compatibility
-            // probe: a legacy server answers it with an error, not a document.
-            "server/discover" => {
-                JsonRpcResponse::success_serialized(
-                    id, // Always the legacy list on stdio. This dispatcher has no
-                    // access to the running config, and the stateless revision is
-                    // specified over streamable HTTP; advertising it on a transport
-                    // whose modern path is not wired would be a claim the gateway
-                    // cannot honour. Recorded as a limitation, not a decision that
-                    // stdio is excluded.
-                    meta_mcp.discover_document(false),
-                )
-            }
-            "initialize" => {
-                meta_mcp.handle_initialize(id, params.as_ref(), Some(session_id), None, shape.era())
-            }
-            "tools/list" => {
-                meta_mcp.handle_tools_list_with_params(id, params.as_ref(), Some(session_id))
-            }
-            "tools/call" => {
-                let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
-                // See the HTTP path: meta-tool only, direct route untouched.
-                let arguments = merge_client_meta(
-                    arguments,
-                    params.as_ref(),
-                    meta_mcp.exposes_meta_tool(tool_name),
+        Ok((id, method, params, request_shape))
+    }
+
+    /// Handle `tools/call`: policy, signing, admission/replay, then dispatch.
+    ///
+    /// Ownership of `arguments` is taken only past every refusal — signing,
+    /// nonce, admission, replay — because only an executing call needs to
+    /// own its payload. `params` is re-derived from `request` here (already
+    /// validated by the caller) so the immutable borrow it needs can end
+    /// before the one branch below that needs `request` mutably.
+    async fn dispatch_tools_call(
+        meta_mcp: &Arc<MetaMcp>,
+        tool_policy: &Arc<crate::security::ToolPolicy>,
+        request: &mut serde_json::Value,
+        id: crate::protocol::RequestId,
+        session_id: &str,
+        signing_context: &mut Option<super::meta_mcp::signing::SigningInvocationContext>,
+        request_shape: &crate::protocol::meta::RequestShape,
+    ) -> (
+        crate::protocol::JsonRpcResponse,
+        Option<super::meta_mcp::admission::SyncLease>,
+    ) {
+        use super::router::helpers::{
+            client_meta_insert_required, extract_tools_call_params_ref, merge_client_meta_ref,
+        };
+        use crate::protocol::JsonRpcResponse;
+
+        let empty_arguments = serde_json::Value::Object(serde_json::Map::new());
+        let mut execution = None;
+        let response = 'tool_call: {
+            let params = request.get("params");
+            let (tool_name, arguments) = extract_tools_call_params_ref(params);
+            let is_meta_tool = meta_mcp.exposes_meta_tool(tool_name);
+            let tool_name = tool_name.to_string();
+
+            // The tool policy is applied at the dispatch chokepoint via the
+            // authorizer below, not here. The inline check this replaces ran
+            // for `gateway_invoke` alone, so a stdio playbook or code-mode
+            // step reached a backend with no policy check at all.
+            let stdio_authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
+                tool_policy: tool_policy.as_ref(),
+            };
+
+            let retry = crate::protocol::mrtr::RetryFields::from_params(params);
+            let is_modern = matches!(
+                request_shape,
+                crate::protocol::meta::RequestShape::Modern(_)
+            );
+            if matches!(
+                request_shape,
+                crate::protocol::meta::RequestShape::Malformed { .. }
+            ) {
+                break 'tool_call JsonRpcResponse::error(
+                    Some(id),
+                    -32602,
+                    "Malformed protocol metadata",
                 );
-                let tool_name = tool_name.to_string();
-
-                // The tool policy is applied at the dispatch chokepoint via the
-                // authorizer below, not here. The inline check this replaces ran
-                // for `gateway_invoke` alone, so a stdio playbook or code-mode
-                // step reached a backend with no policy check at all.
-                let stdio_authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
-                    tool_policy: tool_policy.as_ref(),
-                };
-
-                meta_mcp
-                    .handle_tools_call(
-                        id,
-                        &tool_name,
-                        arguments,
-                        Some(session_id),
-                        MetaMcpCallerContext {
-                            authorizer: &stdio_authorizer,
-                            // Stdio has no port and no network surface: the
-                            // client SPAWNED this process, so it already holds
-                            // whatever the operator holds — it could edit the
-                            // config file just as easily. Withholding admin
-                            // here would take the management tools away from
-                            // exactly the single-user setup the origin gate
-                            // exists to protect, and protect nothing.
-                            //
-                            // Explicit since the admin gate moved to the
-                            // dispatcher: it previously lived on the HTTP path
-                            // alone, so stdio was never checked and the default
-                            // non-admin context went unnoticed.
-                            is_admin: true,
-                            // stdio carries no per-request capability
-                            // declaration to read, and absent means absent.
-                            input_capabilities: crate::protocol::meta::Declared::NONE,
-                            retry: &crate::protocol::mrtr::NO_RETRY,
-                            api_key_name: None,
-                            agent_id: None,
-                            grant_subject: None,
-                            verified_identity: None,
-                            // stdio speaks to one process over two pipes and
-                            // has no elicitation channel: there is no operator
-                            // this transport can reach, so a destructive call
-                            // it cannot confirm is refused rather than asked
-                            // about. Not "found no session" -- no asker can
-                            // exist here at all.
-                            confirmation:
-                                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
-                        },
-                    )
-                    .await
             }
-            "prompts/list" => meta_mcp.handle_prompts_list(id, params.as_ref()).await,
-            "prompts/get" => meta_mcp.handle_prompts_get(id, params.as_ref()).await,
-            "resources/list" => meta_mcp.handle_resources_list(id, params.as_ref()).await,
-            "resources/read" => meta_mcp.handle_resources_read(id, params.as_ref()).await,
-            "resources/templates/list" => {
-                meta_mcp
-                    .handle_resources_templates_list(id, params.as_ref())
-                    .await
+            // The canonical merge, still ahead of everything that reads the
+            // arguments — signing, policy, nonce, admission — and now below
+            // the two things that need the request whole: the retry fields
+            // read `params._meta`, which is exactly the subtree the owning
+            // branch moves out, and the shape classification already
+            // observed it.
+            //
+            // The borrowed form still answers the four cases where the
+            // merge would insert nothing by aliasing the caller's tree.
+            // Where it would insert, the copy it makes is the whole payload
+            // and the whole metadata, so the dispatcher spends the
+            // ownership it already has instead: same insertion, same
+            // precedence, moved rather than copied.
+            let arguments = if client_meta_insert_required(arguments, params, is_meta_tool) {
+                std::borrow::Cow::Owned(stdio_take_merged_client_meta(request))
+            } else {
+                merge_client_meta_ref(arguments.unwrap_or(&empty_arguments), params, is_meta_tool)
+            };
+            let mut caller = MetaMcpCallerContext {
+                // stdio has no task route: the extension's handle is read
+                // back over `tasks/get`, which only the HTTP surface serves,
+                // so a handle minted here would name work nobody could ask
+                // about. Every stdio call stays synchronous.
+                task: None,
+                execution: None,
+                signing: None,
+                is_modern,
+                credential_principal: None,
+                authorizer: &stdio_authorizer,
+                // Stdio has no port and no network surface: the
+                // client SPAWNED this process, so it already holds
+                // whatever the operator holds — it could edit the
+                // config file just as easily. Withholding admin
+                // here would take the management tools away from
+                // exactly the single-user setup the origin gate
+                // exists to protect, and protect nothing.
+                //
+                // Explicit since the admin gate moved to the
+                // dispatcher: it previously lived on the HTTP path
+                // alone, so stdio was never checked and the default
+                // non-admin context went unnoticed.
+                is_admin: true,
+                // stdio carries no per-request capability
+                // declaration to read, and absent means absent.
+                input_capabilities: crate::protocol::meta::Declared::NONE,
+                retry: &retry,
+                api_key_name: None,
+                agent_id: None,
+                grant_subject: None,
+                verified_identity: None,
+                // stdio speaks to one process over two pipes and
+                // has no elicitation channel: there is no operator
+                // this transport can reach, so a destructive call
+                // it cannot confirm is refused rather than asked
+                // about. Not "found no session" -- no asker can
+                // exist here at all.
+                confirmation:
+                    crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+            };
+            if let Some(context) = signing_context.as_mut()
+                && let Err(error) = meta_mcp.prepare_signing_invocation(
+                    context,
+                    arguments.as_ref(),
+                    Some(session_id),
+                    &caller,
+                )
+            {
+                break 'tool_call JsonRpcResponse::error(
+                    Some(id),
+                    error.to_rpc_code(),
+                    super::meta_mcp::signing::wire_error_message(&error),
+                );
             }
-            "logging/setLevel" => meta_mcp.handle_logging_set_level(id, params.as_ref()).await,
-            "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
-            other => {
-                debug!(method = %other, "stdio: unknown method");
-                JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {other}"))
-            }
+            caller.signing = signing_context.as_ref();
+            let admission = meta_mcp.admit_meta_sync(
+                &caller,
+                &tool_name,
+                arguments.as_ref(),
+                Some(session_id),
+                &id,
+            );
+            execution = match admission {
+                Ok(super::meta_mcp::admission::SyncAdmission::Unprotected) => None,
+                Ok(super::meta_mcp::admission::SyncAdmission::Owned(lease)) => Some(lease),
+                Ok(super::meta_mcp::admission::SyncAdmission::Replay(response)) => {
+                    break 'tool_call response;
+                }
+                Err(error) => {
+                    break 'tool_call JsonRpcResponse::error(
+                        Some(id),
+                        error.to_rpc_code(),
+                        error.to_string(),
+                    );
+                }
+            };
+            caller.execution = execution.as_ref();
+            // The one copy this path still makes, taken past every refusal
+            // above — signing, nonce, admission, replay — because only an
+            // executing call needs to own its arguments.
+            meta_mcp
+                .handle_tools_call(
+                    id,
+                    &tool_name,
+                    arguments.into_owned(),
+                    Some(session_id),
+                    caller,
+                )
+                .await
         };
-
-        Some(response.to_value_lossy())
+        (response, execution)
     }
 
     /// Dispatch a JSON-RPC batch request.
@@ -1940,7 +2386,7 @@ impl Gateway {
             crate::protocol_revision_telemetry::DurableTelemetrySink,
         >,
     ) -> Vec<serde_json::Value> {
-        let Some(requests) = batch.as_array() else {
+        let serde_json::Value::Array(requests) = batch else {
             return vec![
                 crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
                     .to_value_lossy(),
@@ -2584,7 +3030,7 @@ mod tests {
             &test_meta_mcp(),
             &test_tool_policy(),
             &test_mtls_policy(),
-            &json!({
+            json!({
                 "jsonrpc": "2.0",
                 "id": 7219,
                 "method": "initialize",
@@ -2659,6 +3105,11 @@ mod tests {
                 json!({ "server": "row19-sentinel" }),
                 Some("stdio-session"),
                 crate::gateway::meta_mcp::MetaMcpCallerContext {
+                    task: None,
+                    signing: None,
+                    execution: None,
+                    credential_principal: None,
+                    is_modern: false,
                     authorizer: &authorizer,
                     api_key_name: None,
                     agent_id: None,

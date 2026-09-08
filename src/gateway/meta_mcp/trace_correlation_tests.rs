@@ -83,6 +83,10 @@ fn meta_with_transparency_log() -> (MetaMcp, std::path::PathBuf) {
 
 fn ctx() -> MetaMcpCallerContext<'static> {
     MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
         authorizer: &AllowAll,
         api_key_name: Some("test-caller"),
         agent_id: None,
@@ -92,6 +96,7 @@ fn ctx() -> MetaMcpCallerContext<'static> {
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        task: None,
     }
 }
 

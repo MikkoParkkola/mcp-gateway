@@ -22,6 +22,7 @@ pub mod session_lifecycle;
 pub mod state;
 pub mod streaming;
 pub mod subscription_registry;
+pub(crate) mod task_service;
 pub mod trace;
 #[cfg(feature = "webui")]
 pub mod ui;
@@ -56,4 +57,7 @@ pub mod test_helpers {
     pub use super::meta_mcp::prune_constant_signals;
     pub use super::meta_mcp::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
     pub use super::router::{AppState, create_router};
+    pub use super::task_service::{
+        ServiceError, StoreLimits, TaskExecutor, TaskService, open_runtime,
+    };
 }

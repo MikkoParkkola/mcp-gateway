@@ -34,12 +34,13 @@ pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvF
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
     CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
-    CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, ErrorBudgetSection,
-    FailsafeConfig, HealthCheckConfig, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
+    CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS,
+    ErrorBudgetSection, FailsafeConfig, HealthCheckConfig, IdempotencyConfig,
+    IdempotencyReadOnlyTool, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
     KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
     PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
     RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
-    StreamingConfig, ToolContractConfig, WebhookConfig,
+    StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -71,6 +72,8 @@ pub struct Config {
     pub capabilities: CapabilityConfig,
     /// Cache configuration.
     pub cache: CacheConfig,
+    /// Operator-owned read-only exceptions to execution admission.
+    pub idempotency: IdempotencyConfig,
     /// Playbook configuration.
     pub playbooks: PlaybooksConfig,
     /// Security policy configuration.
@@ -108,6 +111,9 @@ pub struct Config {
     #[cfg(feature = "cost-governance")]
     #[serde(default)]
     pub cost_governance: crate::cost_accounting::config::CostGovernanceConfig,
+    /// Durable tasks extension: store directory, worker cap, record limits.
+    #[serde(default)]
+    pub tasks: TasksConfig,
 }
 
 fn default_routing_profile() -> String {
@@ -527,7 +533,12 @@ impl Config {
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
         let secret_refs = match expansion {
-            Expansion::Resolve => config.expand_env_vars(&overlay),
+            Expansion::Resolve => {
+                let refs = config.expand_env_vars(&overlay);
+                config.security.message_signing =
+                    config.security.message_signing.resolve_with_env(&overlay)?;
+                refs
+            }
             Expansion::Literal => BTreeSet::new(),
         };
         config.validate_with_env(&overlay)?;
@@ -727,13 +738,16 @@ impl Config {
         self.validate_remote_backend_provenance()?;
         self.validate_required_env_references(overlay)?;
         self.runtime.validate()?;
+        self.idempotency.validate()?;
         self.validate_backend_runtime_profiles()?;
         self.validate_stop_when_idle_ownership()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
         self.validate_agent_key_material(overlay)?;
+        self.security.message_signing.resolve_with_env(overlay)?;
         self.key_server.validate()?;
         self.error_budget.validate()?;
+        self.tasks.validate()?;
         Ok(())
     }
 

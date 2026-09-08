@@ -204,14 +204,22 @@ pub(crate) fn is_notification_method(method: &str) -> bool {
 /// Returns `("", {})` when the expected fields are absent so callers never
 /// need to deal with `Option`.
 pub(crate) fn extract_tools_call_params(params: Option<&Value>) -> (&str, Value) {
+    let (tool_name, arguments) = extract_tools_call_params_ref(params);
+    (tool_name, arguments.cloned().unwrap_or_else(|| json!({})))
+}
+
+/// Borrowed form of [`extract_tools_call_params`]: same field selection, no
+/// copy of `arguments`.
+///
+/// `None` arguments means absent; the owned wrapper is what substitutes the
+/// empty object, so a caller that refuses the request never materialises the
+/// payload.
+pub(crate) fn extract_tools_call_params_ref(params: Option<&Value>) -> (&str, Option<&Value>) {
     let tool_name = params
         .and_then(|p| p.get("name"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let arguments = params
-        .and_then(|p| p.get("arguments"))
-        .cloned()
-        .unwrap_or(json!({}));
+    let arguments = params.and_then(|p| p.get("arguments"));
     (tool_name, arguments)
 }
 
@@ -236,18 +244,93 @@ pub(crate) fn merge_client_meta(
     params: Option<&Value>,
     is_meta_tool: bool,
 ) -> Value {
-    if !is_meta_tool {
+    // Asked before the copy, not after: a caller that already wrote its own
+    // `arguments._meta` keeps it, and the metadata it did not need is never
+    // copied to be dropped. `entry().or_insert_with` used to give that for
+    // free, and moving the insertion out of this function would have lost it.
+    if !client_meta_insert_required(Some(&arguments), params, is_meta_tool) {
         return arguments;
     }
     let Some(meta) = params.and_then(|p| p.get("_meta")) else {
         return arguments;
     };
+    insert_client_meta(arguments, meta.clone())
+}
+
+/// Insertion step of [`merge_client_meta`] over values the caller already owns.
+///
+/// Split out so a caller that owns the request tree can hand over the `_meta`
+/// subtree itself instead of a copy of it: the metadata is as unbounded as the
+/// payload, and a merge that moved the arguments but copied the metadata would
+/// have traded one payload-sized allocation for another.
+///
+/// `or_insert` and not `insert`: an `arguments._meta` the client wrote itself
+/// wins, present-but-null included, which is the rule the borrowed predicate
+/// below reads with `contains_key`. Non-object arguments are returned untouched,
+/// exactly as the merge leaves them.
+pub(crate) fn insert_client_meta(arguments: Value, meta: Value) -> Value {
     let mut arguments = arguments;
     let Some(map) = arguments.as_object_mut() else {
         return arguments;
     };
-    map.entry("_meta").or_insert_with(|| meta.clone());
+    map.entry("_meta").or_insert(meta);
     arguments
+}
+
+/// Whether [`merge_client_meta`] would insert a `_meta` into these arguments.
+///
+/// The single definition of the merge's precondition, decided from borrowed
+/// views alone so a caller can find out before it owns anything. The four cases
+/// the merge returns its input untouched — not a meta tool, no `params._meta` to
+/// carry, arguments that are not an object, and arguments that already carry a
+/// `_meta` — answer `false` here.
+///
+/// `None` arguments means absent, which the merge sees as the substituted empty
+/// object: an object with no `_meta`, so the answer is `true` and an absent
+/// `arguments` still receives the client's metadata.
+pub(crate) fn client_meta_insert_required(
+    arguments: Option<&Value>,
+    params: Option<&Value>,
+    is_meta_tool: bool,
+) -> bool {
+    if !is_meta_tool {
+        return false;
+    }
+    if params.and_then(|p| p.get("_meta")).is_none() {
+        return false;
+    }
+    match arguments {
+        None => true,
+        Some(arguments) => arguments
+            .as_object()
+            .is_some_and(|map| !map.contains_key("_meta")),
+    }
+}
+
+/// Borrowed form of [`merge_client_meta`]: same result, no copy when the merge
+/// would have inserted nothing.
+///
+/// The four cases the owned merge returns its input untouched — not a meta
+/// tool, no `params._meta` to carry, arguments that are not an object, and
+/// arguments the client already gave a `_meta` — are exactly the cases where a
+/// copy buys nothing, so each returns an alias. [`client_meta_insert_required`]
+/// decides them, and the same predicate decides them for a caller that owns the
+/// request tree, so the alias case and the ownership case cannot drift apart.
+///
+/// The insertion case still delegates to [`merge_client_meta`] on a clone, so
+/// there is one definition of the merge semantics rather than two. That copy
+/// remains for callers holding only a borrow of someone else's arguments; a
+/// caller that owns the tree asks the predicate first and moves the subtrees in
+/// through [`insert_client_meta`] instead.
+pub(crate) fn merge_client_meta_ref<'a>(
+    arguments: &'a Value,
+    params: Option<&Value>,
+    is_meta_tool: bool,
+) -> std::borrow::Cow<'a, Value> {
+    if !client_meta_insert_required(Some(arguments), params, is_meta_tool) {
+        return std::borrow::Cow::Borrowed(arguments);
+    }
+    std::borrow::Cow::Owned(merge_client_meta(arguments.clone(), params, is_meta_tool))
 }
 
 /// Parse JSON-RPC request or notification.
@@ -258,6 +341,19 @@ pub(crate) fn merge_client_meta(
 pub(crate) fn parse_request(
     value: &Value,
 ) -> Result<(Option<RequestId>, String, Option<Value>), JsonRpcResponse> {
+    let (id, method, params) = parse_request_ref(value)?;
+    Ok((id, method.to_string(), params.cloned()))
+}
+
+/// Borrowed form of [`parse_request`]: identical validation and identical
+/// errors, but `method` and `params` are views into `value`.
+///
+/// The owned wrapper above is the only thing that copies, so a caller that
+/// refuses a request can decide on it without duplicating its payload.
+#[allow(clippy::result_large_err)] // mirrors `parse_request`
+pub(crate) fn parse_request_ref(
+    value: &Value,
+) -> Result<(Option<RequestId>, &str, Option<&Value>), JsonRpcResponse> {
     // Check jsonrpc version
     let jsonrpc = value.get("jsonrpc").and_then(|v| v.as_str());
     if jsonrpc != Some("2.0") {
@@ -278,7 +374,7 @@ pub(crate) fn parse_request(
         .ok_or_else(|| JsonRpcResponse::error(id.clone(), -32600, "Missing method"))?;
 
     // Get params (optional)
-    let params = value.get("params").cloned();
+    let params = value.get("params");
 
     // For notifications (methods starting with "notifications/"), id is optional
     // For requests, id is required
@@ -286,5 +382,9 @@ pub(crate) fn parse_request(
         return Err(JsonRpcResponse::error(None, -32600, "Missing id"));
     }
 
-    Ok((id, method.to_string(), params))
+    Ok((id, method, params))
 }
+
+#[cfg(test)]
+#[path = "merge_client_meta_borrow_tests.rs"]
+mod merge_client_meta_borrow_tests;

@@ -1078,6 +1078,7 @@ fn session_expired_response_detection_matches_known_signatures() {
     use crate::protocol::JsonRpcError;
 
     let make = |code: i32, message: &str| JsonRpcResponse {
+        delivery_refusal: false,
         jsonrpc: "2.0".to_string(),
         id: None,
         result: None,
@@ -1110,6 +1111,7 @@ fn session_expired_response_detection_matches_known_signatures() {
     )));
     // A successful response (no error) must not match.
     assert!(!is_session_expired_response(&JsonRpcResponse {
+        delivery_refusal: false,
         jsonrpc: "2.0".to_string(),
         id: None,
         result: Some(serde_json::json!({"ok": true})),
