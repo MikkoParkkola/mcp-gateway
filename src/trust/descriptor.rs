@@ -55,7 +55,10 @@ impl ToolDescriptorTrustCard {
             trust_card_digest_sha256: trust_card_digest_sha256(&card),
             cbom_digest_sha256: cbom_digest_sha256(&card),
             evaluation_status: card.evaluation_status,
-            schema_bounds: SchemaBounds::inspect(&tool.input_schema),
+            schema_bounds: SchemaBounds::inspect_descriptor(
+                &tool.input_schema,
+                tool.output_schema.as_ref(),
+            ),
         }
     }
 }

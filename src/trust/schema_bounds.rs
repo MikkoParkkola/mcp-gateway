@@ -17,6 +17,17 @@
 //!
 //! Composition (`allOf`/`anyOf`/`oneOf`/`not`/`if`) is legal 2020-12 and is not
 //! a bound under reading (c). It is observed in tests, never constrained here.
+//!
+//! POPULATION: this closes the DESCRIPTOR surface — every `tools/list` route
+//! crosses `project_tool_descriptor_trust_card`. Two client-visible schema
+//! exits are not descriptors and carry no verdict: `gateway_search` at its full
+//! disclosure tier copies a backend `input_schema` into a search result
+//! (`src/gateway/search_disclosure.rs`), and a backend entry the proxy cannot
+//! deserialize into a `Tool` is forwarded verbatim rather than dropped
+//! (`src/gateway/router/backend_handlers.rs`). Both are inspectable by this same
+//! walker the day that surface is decided to need a verdict.
+
+use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -63,6 +74,30 @@ impl SchemaBounds {
             Self::OutOfBounds { unresolved_refs }
         }
     }
+
+    /// Inspect BOTH schema documents a descriptor can publish.
+    ///
+    /// A `$ref` resolves inside its OWN document, so the two are walked
+    /// separately. An output-schema pointer is reported qualified
+    /// (`outputSchema#/$defs/X`) — the bare fragment would be indistinguishable
+    /// from an input-schema one, and a client cannot act on an ambiguous
+    /// pointer.
+    #[must_use]
+    pub fn inspect_descriptor(input: &Value, output: Option<&Value>) -> Self {
+        let mut unresolved_refs = unresolved_refs(input);
+        if let Some(output) = output {
+            unresolved_refs.extend(
+                self::unresolved_refs(output)
+                    .into_iter()
+                    .map(|pointer| format!("outputSchema{pointer}")),
+            );
+        }
+        if unresolved_refs.is_empty() {
+            Self::Within
+        } else {
+            Self::OutOfBounds { unresolved_refs }
+        }
+    }
 }
 
 /// Return every `$ref` in `schema` that does not resolve inside `schema`.
@@ -77,7 +112,10 @@ pub fn unresolved_refs(schema: &Value) -> Vec<String> {
     found
 }
 
-/// Resolve one `$ref` against the document root.
+/// Resolve one `$ref` against the root of its own resource.
+///
+/// `root` is the nearest enclosing `$id`, not necessarily the whole document —
+/// see `walk`.
 ///
 /// Only local pointers can resolve in-document. An external `$ref` is a fetch
 /// this gateway must never make (the `jsonschema` dependency is built
@@ -92,23 +130,27 @@ fn resolves(root: &Value, pointer: &str) -> bool {
     let Some(rest) = pointer.strip_prefix('#') else {
         return false;
     };
-    if rest.is_empty() {
+    let Some(decoded) = percent_decode(rest) else {
+        return false;
+    };
+    if decoded.is_empty() {
         return true;
     }
-    let Some(path) = rest.strip_prefix('/') else {
+    let Some(path) = decoded.strip_prefix('/') else {
         return false;
     };
     let mut node = root;
     for raw in path.split('/') {
-        // RFC 6901 escaping: `~1` is `/` and `~0` is `~`, in that order.
-        let token = raw.replace("~1", "/").replace("~0", "~");
+        let Some(token) = unescape(raw) else {
+            return false;
+        };
         node = match node {
-            Value::Object(map) => match map.get(&token) {
+            Value::Object(map) => match map.get(token.as_ref()) {
                 Some(child) => child,
                 None => return false,
             },
-            Value::Array(items) => match token.parse::<usize>() {
-                Ok(index) if index < items.len() => &items[index],
+            Value::Array(items) => match array_index(&token) {
+                Some(index) if index < items.len() => &items[index],
                 _ => return false,
             },
             _ => return false,
@@ -117,25 +159,132 @@ fn resolves(root: &Value, pointer: &str) -> bool {
     true
 }
 
+/// Percent-decode a URI fragment, per RFC 6901 §6.
+///
+/// A malformed escape makes the pointer unusable, not lenient: `None` is
+/// reported as unresolved rather than matched as literal text.
+fn percent_decode(fragment: &str) -> Option<Cow<'_, str>> {
+    if !fragment.contains('%') {
+        return Some(Cow::Borrowed(fragment));
+    }
+    let bytes = fragment.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok().map(Cow::Owned)
+}
+
+/// Unescape one reference token: `~1` is `/`, `~0` is `~` (RFC 6901 §3).
+///
+/// A `~` followed by anything else is NOT a token — the whole pointer is
+/// malformed, so the ref is reported rather than matched literally.
+fn unescape(token: &str) -> Option<Cow<'_, str>> {
+    if !token.contains('~') {
+        return Some(Cow::Borrowed(token));
+    }
+    let mut out = String::with_capacity(token.len());
+    let mut chars = token.chars();
+    while let Some(c) = chars.next() {
+        if c != '~' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('0') => out.push('~'),
+            Some('1') => out.push('/'),
+            _ => return None,
+        }
+    }
+    Some(Cow::Owned(out))
+}
+
+/// Parse an array index under the RFC 6901 §4 grammar: `0` or `[1-9][0-9]*`.
+///
+/// `str::parse` is wider than the grammar — it accepts `00`, `+0` and unicode
+/// digits, each of which would silently resolve a pointer no conforming
+/// implementation resolves.
+fn array_index(token: &str) -> Option<usize> {
+    if token.is_empty() || (token != "0" && token.starts_with('0')) {
+        return None;
+    }
+    if !token.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    token.parse().ok()
+}
+
+/// Keywords whose value is a schema, or a legacy array of schemas (`items`).
+const SCHEMA_VALUED: &[&str] = &[
+    "additionalProperties",
+    "allOf",
+    "anyOf",
+    "contains",
+    "contentSchema",
+    "else",
+    "if",
+    "items",
+    "not",
+    "oneOf",
+    "prefixItems",
+    "propertyNames",
+    "then",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+];
+
+/// Keywords whose value maps a name to a schema.
+const SCHEMA_MAPPED: &[&str] = &[
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+    "patternProperties",
+    "properties",
+];
+
 /// Depth-first walk collecting unresolvable `$ref` pointers in document order.
+///
+/// Only SCHEMA-BEARING keyword locations are descended. A `$ref` key sitting
+/// inside a `const`, `enum`, `default` or `examples` VALUE is ordinary data that
+/// happens to spell a keyword, and reporting it would be a false alarm on a
+/// schema that is perfectly bounded.
+///
+/// `$id` starts a new resource: a fragment inside an embedded resource resolves
+/// against THAT resource, never the outer document. Without this a `#/$defs/x`
+/// the embedded resource does not define reads as resolved because the outer
+/// document happens to define it — a false `within`, the one direction of error
+/// that matters.
 fn walk(root: &Value, node: &Value, found: &mut Vec<String>) {
-    match node {
-        Value::Object(map) => {
-            if let Some(Value::String(pointer)) = map.get("$ref")
-                && !resolves(root, pointer)
-            {
-                found.push(pointer.clone());
-            }
-            for child in map.values() {
-                walk(root, child, found);
-            }
+    let Value::Object(map) = node else {
+        return;
+    };
+    let root = match map.get("$id") {
+        Some(Value::String(_)) => node,
+        _ => root,
+    };
+    if let Some(Value::String(pointer)) = map.get("$ref")
+        && !resolves(root, pointer)
+    {
+        found.push(pointer.clone());
+    }
+    for child in SCHEMA_VALUED.iter().filter_map(|key| map.get(*key)) {
+        match child {
+            Value::Array(items) => items.iter().for_each(|item| walk(root, item, found)),
+            other => walk(root, other, found),
         }
-        Value::Array(items) => {
-            for child in items {
-                walk(root, child, found);
-            }
+    }
+    for key in SCHEMA_MAPPED {
+        if let Some(Value::Object(children)) = map.get(*key) {
+            children.values().for_each(|child| walk(root, child, found));
         }
-        _ => {}
     }
 }
 
@@ -245,6 +394,137 @@ mod tests {
         assert_eq!(
             serde_json::to_value(verdict).expect("verdict must serialize"),
             json!({ "status": "outOfBounds", "unresolvedRefs": ["#/$defs/Absent"] })
+        );
+    }
+
+    #[test]
+    fn a_percent_encoded_fragment_names_the_decoded_token() {
+        // GIVEN a target whose name contains a space, pointed at per RFC 6901 §6
+        let schema = json!({
+            "$defs": { "a b": { "type": "string" } },
+            "properties": { "p": { "$ref": "#/$defs/a%20b" } }
+        });
+
+        // WHEN inspected
+        // THEN the fragment is percent-decoded before it is split into tokens
+        assert_eq!(SchemaBounds::inspect(&schema), SchemaBounds::Within);
+    }
+
+    #[test]
+    fn a_malformed_escape_does_not_resolve() {
+        // GIVEN a pointer whose `~` is followed by neither `0` nor `1`
+        let schema = json!({
+            "$defs": { "a~2b": {} },
+            "properties": { "p": { "$ref": "#/$defs/a~2b" } }
+        });
+
+        // WHEN inspected
+        // THEN the token is rejected as malformed rather than matched literally
+        assert_eq!(
+            SchemaBounds::inspect(&schema),
+            SchemaBounds::OutOfBounds {
+                unresolved_refs: vec!["#/$defs/a~2b".to_string()]
+            }
+        );
+    }
+
+    #[test]
+    fn an_array_index_outside_the_rfc_6901_grammar_does_not_resolve() {
+        // GIVEN pointers using `00` and `+0`, neither of which is a legal index
+        let schema = json!({
+            "prefixItems": [{ "type": "string" }],
+            "$defs": {
+                "a": { "$ref": "#/prefixItems/00" },
+                "b": { "$ref": "#/prefixItems/+0" }
+            }
+        });
+
+        // WHEN inspected
+        // THEN both are reported, not silently parsed as index zero
+        assert_eq!(
+            SchemaBounds::inspect(&schema),
+            SchemaBounds::OutOfBounds {
+                unresolved_refs: vec![
+                    "#/prefixItems/00".to_string(),
+                    "#/prefixItems/+0".to_string()
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn a_literal_ref_key_inside_a_const_is_not_a_reference() {
+        // GIVEN a schema whose `const`, `enum` and `default` values happen to
+        // contain the string key `$ref` as ordinary data
+        let schema = json!({
+            "properties": {
+                "p": {
+                    "const": { "$ref": "#/$defs/Absent" },
+                    "default": { "$ref": "#/$defs/AlsoAbsent" }
+                },
+                "q": { "enum": [{ "$ref": "#/$defs/StillAbsent" }] }
+            }
+        });
+
+        // WHEN inspected
+        // THEN the walk visits schema-bearing keywords only, so none is a $ref
+        assert_eq!(SchemaBounds::inspect(&schema), SchemaBounds::Within);
+    }
+
+    #[test]
+    fn a_fragment_inside_a_nested_id_resolves_against_that_resource() {
+        // GIVEN an embedded resource that does NOT define the target its inner
+        // `$ref` names, while the OUTER document happens to
+        let schema = json!({
+            "$defs": {
+                "b": { "type": "string" },
+                "inner": {
+                    "$id": "https://example.com/inner",
+                    "properties": { "p": { "$ref": "#/$defs/b" } }
+                }
+            }
+        });
+
+        // WHEN inspected
+        // THEN the inner fragment is resolved against the inner resource, so the
+        // outer `$defs/b` does not rescue it
+        assert_eq!(
+            SchemaBounds::inspect(&schema),
+            SchemaBounds::OutOfBounds {
+                unresolved_refs: vec!["#/$defs/b".to_string()]
+            }
+        );
+    }
+
+    #[test]
+    fn a_dangling_ref_in_the_output_schema_is_reported_qualified() {
+        // GIVEN a bounded input schema and an output schema that dangles
+        let input = json!({ "type": "object" });
+        let output = json!({ "properties": { "r": { "$ref": "#/$defs/Absent" } } });
+
+        // WHEN the descriptor's two documents are inspected together
+        // THEN the output pointer is reported, named for the document it came from
+        assert_eq!(
+            SchemaBounds::inspect_descriptor(&input, Some(&output)),
+            SchemaBounds::OutOfBounds {
+                unresolved_refs: vec!["outputSchema#/$defs/Absent".to_string()]
+            }
+        );
+    }
+
+    #[test]
+    fn a_descriptor_with_no_output_schema_is_judged_on_its_input_alone() {
+        // GIVEN a bounded input schema and no output schema at all
+        let input = json!({
+            "$defs": { "T": { "type": "string" } },
+            "properties": { "t": { "$ref": "#/$defs/T" } }
+        });
+
+        // WHEN inspected
+        // THEN the absent document adds nothing
+        assert_eq!(
+            SchemaBounds::inspect_descriptor(&input, None),
+            SchemaBounds::Within
         );
     }
 }
