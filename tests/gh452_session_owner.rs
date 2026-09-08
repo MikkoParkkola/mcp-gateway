@@ -59,6 +59,7 @@ fn state(auth_enabled: bool, public_mcp: bool, names: [&str; 2]) -> Arc<AppState
         config.streaming.clone(),
     ));
     Arc::new(AppState {
+        session_lifecycle: None,
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
         env: None,
