@@ -181,39 +181,65 @@ impl DrainOutcome {
     }
 }
 
-/// I5 seam. Consulted only during startup recovery (I3/I5), never permitted to
-/// re-invoke the original operation. `None` on the executor is the state today:
-/// I3's record-only branch settles interrupted rows and no adapter is consulted.
-pub(crate) struct RecoveryCheckpoint {
+/// The durable coordinates of one live upstream job: a backend and the opaque
+/// identifier that backend chose. Deliberately the WHOLE vocabulary an adapter
+/// receives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UpstreamHandle {
+    pub backend: String,
     pub handle: String,
 }
 
-pub(crate) struct RecoveryOutcome {
-    pub result: Option<Value>,
-    pub error: Option<JsonRpcError>,
+/// What one bounded read-only query learned.
+///
+/// `Live` and `Unavailable` are distinct only in the log: both retain the
+/// handle and the `working` record so a later authenticated read can make
+/// progress. Neither is ever committed as a terminal `unknown`, and neither
+/// resubmits anything.
+pub(crate) enum UpstreamAnswer {
+    /// The job finished and the peer handed back its tool result verbatim.
+    /// Still faces the ordinary post-dispatch gates before it is committed.
+    Completed(Value),
+    /// The job failed and the peer handed back a JSON-RPC error.
+    Failed(JsonRpcError),
+    /// Pending, working, or waiting on an input round this gateway cannot
+    /// continue. The record stays as it is.
+    Live,
+    /// Transport unavailable, circuit open, timeout, refusal, or an answer this
+    /// gateway could not parse. Indistinguishable from `Live` in effect.
+    Unavailable,
 }
 
+/// I5 seam, reduced from r3's `checkpoint`/`query` pair.
+///
+/// It can name neither a tool nor arguments, so "never resubmit the original
+/// operation" is structural rather than promised: there is no argument through
+/// which an implementation could be handed the original call. Its vocabulary is
+/// one read — `tasks/get` — and `tasks/cancel` and every other mutation are
+/// outside it. `claims` reads configured trust and the peer's own declaration;
+/// an unclaimed backend is never queried at all.
 #[async_trait::async_trait]
 pub(crate) trait UpstreamRecovery: Send + Sync {
-    fn checkpoint(&self, task_id: &str, backend: &str) -> Option<RecoveryCheckpoint>;
-    async fn query(
-        &self,
-        task_id: &str,
-        checkpoint: &RecoveryCheckpoint,
-    ) -> Option<RecoveryOutcome>;
+    /// Whether this adapter is trusted for `backend` right now. Re-evaluated
+    /// against current configuration on every read; historic admission
+    /// authorizes nothing.
+    async fn claims(&self, backend: &str) -> bool;
+
+    /// One bounded read-only query. No retry loop, no polling across a process
+    /// boundary, and no write of any kind upstream.
+    async fn query(&self, handle: &UpstreamHandle, deadline: Duration) -> UpstreamAnswer;
 }
 
 /// Named remaining work. I3 settles restored `working` and `input_required`
-/// rows at startup and I4 sweeps record-stamped retention from the gateway's
-/// own periodic owner; delivery of a committed transition to a subscribed
-/// listener (I2) and trusted upstream recovery (I5) do not exist yet.
+/// rows at startup, I4 sweeps record-stamped retention, and I5 recovers a
+/// durable upstream handle under the reader's own current authorization;
+/// delivery of a committed transition to a subscribed listener (I2) is the
+/// remaining gap in this package.
 pub(crate) const REMAINING_NOTIFICATIONS: &str =
     "I2: deliver committed task transitions to subscribed listeners";
-pub(crate) const REMAINING_UPSTREAM_RECOVERY: &str =
-    "I5: consult tasks.recovery_adapters; never resubmit the original operation";
 
-pub(crate) fn remaining_implementation() -> [&'static str; 2] {
-    [REMAINING_NOTIFICATIONS, REMAINING_UPSTREAM_RECOVERY]
+pub(crate) fn remaining_implementation() -> [&'static str; 1] {
+    [REMAINING_NOTIFICATIONS]
 }
 
 pub(crate) fn drain_timeout_default() -> Duration {

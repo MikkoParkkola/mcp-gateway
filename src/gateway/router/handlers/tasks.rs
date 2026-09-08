@@ -171,20 +171,161 @@ pub(super) fn task_intent_for_call(
     }))
 }
 
-pub(super) fn tasks_get(
-    state: &AppState,
+/// The caller-side context an upstream recovery read re-authorizes with.
+///
+/// Every field is THIS request's live context. Nothing here is restored from
+/// the record: the durable descriptor supplies the target, and the target is
+/// then judged against the caller in front of us.
+pub(super) struct RecoveryCaller<'a> {
+    pub client: Option<&'a AuthenticatedClient>,
+    pub oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
+    pub cert_identity: Option<&'a CertIdentity>,
+    pub api_key_name: Option<&'a str>,
+    pub agent_id: Option<&'a str>,
+    pub grant_subject: Option<crate::identity_grants::GrantSubject>,
+    pub verified_identity: Option<&'a VerifiedIdentity>,
+    pub is_admin: bool,
+    pub input_capabilities: Declared,
+    pub session_id: Option<&'a str>,
+}
+
+pub(super) async fn tasks_get(
+    state: &Arc<AppState>,
     owner: &str,
     id: RequestId,
     params: Option<&Value>,
+    caller: &RecoveryCaller<'_>,
 ) -> JsonRpcResponse {
     let Some(task_id) = task_id_param(params) else {
         return missing_task_error(id);
     };
+    // The existing owner-scoped lookup FIRST. A foreign or missing identity gets
+    // the existing absence response and causes zero upstream calls, because
+    // there is nothing below this line for it to reach.
+    let committed = match state.tasks.get(owner, task_id) {
+        Ok(committed) => committed,
+        Err(ServiceError::NotFound) => return missing_task_error(id),
+        Err(_) => return store_unavailable(id),
+    };
+    if committed.task.status() == crate::protocol::tasks::TaskStatus::Working {
+        recover_from_upstream(state, owner, task_id, params, caller).await;
+    }
+    // Re-read: recovery may have committed a terminal outcome, and this read
+    // serves whatever is durably committed now.
     match state.tasks.get(owner, task_id) {
-        Ok(committed) => JsonRpcResponse::success(id, task_envelope(&committed.task, "complete")),
+        Ok(current) => JsonRpcResponse::success(id, task_envelope(&current.task, "complete")),
         Err(ServiceError::NotFound) => missing_task_error(id),
         Err(_) => store_unavailable(id),
     }
+}
+
+/// Re-authorize the ORIGINAL target against THIS caller, then allow at most one
+/// bounded read-only upstream query.
+///
+/// Zero queries when: no adapter claims the backend, the row carries no
+/// consistent durable handle, or the current `RouterAuthorizer`, tool policy,
+/// active profile or attestation checker refuses the original target. A
+/// gateway-owned upstream credential grants the caller no authority, and
+/// authorizing `tasks/get` alone is explicitly not enough — the check below is
+/// the invocation check for the original call.
+async fn recover_from_upstream(
+    state: &Arc<AppState>,
+    owner: &str,
+    task_id: &str,
+    params: Option<&Value>,
+    caller: &RecoveryCaller<'_>,
+) {
+    let Ok(task_owner) = state.tasks.owner(owner) else {
+        return;
+    };
+    let executor = &state.task_executor;
+    let Ok(target) = executor.recovery_target(task_owner.as_digest(), task_id) else {
+        return;
+    };
+
+    // Scoped: the rebuilt authorizer and caller context exist only for the
+    // verdict, and are gone before the query's await. Nothing about this
+    // caller is carried into the upstream call.
+    let authorized = {
+        let router_authorizer = OwnedRouterAuthorizer::capture(
+            caller.client,
+            caller.oauth_agent_identity,
+            caller.cert_identity,
+        );
+        let borrowed = router_authorizer.borrow(state);
+        let authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync) = &borrowed;
+        let policy_caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            is_modern: true,
+            credential_principal: caller.client.map(|client| client.principal.as_str()),
+            execution: None,
+            // No saved prepared-signing context: `None` is what keeps
+            // `check_invocation_policy` running on this read, which is the point.
+            signing: None,
+            authorizer,
+            api_key_name: caller.api_key_name,
+            agent_id: caller.agent_id,
+            grant_subject: caller.grant_subject.clone(),
+            verified_identity: caller.verified_identity,
+            is_admin: caller.is_admin,
+            input_capabilities: caller.input_capabilities,
+            confirmation:
+                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+            retry: &crate::protocol::mrtr::NO_RETRY,
+            task: None,
+        };
+        // A fresh token for THIS read, from the gateway-namespaced recovery
+        // field. Missing or expired denies before any query; nothing spent is
+        // restored, and no saved prepared-signing context is reconstructed.
+        let policy_args = crate::gateway::meta_mcp::upstream::recovery_policy_args(
+            &target.backend,
+            &target.tool,
+            &target.arguments,
+            crate::gateway::meta_mcp::upstream::recovery_attestation(params),
+        );
+        state
+            .meta_mcp
+            .check_invocation_policy(&policy_args, caller.session_id, &policy_caller)
+            .is_ok()
+    };
+    if !authorized {
+        tracing::info!(
+            task_id,
+            "recovery read refused by current policy; zero upstream queries"
+        );
+    }
+
+    let (server, tool) = (target.backend.clone(), target.tool.clone());
+    let meta_mcp = Arc::clone(&state.meta_mcp);
+    let api_key_name = caller.api_key_name.map(str::to_owned);
+    let trace = task_id.to_owned();
+    // The failure half of the same processing, from the same implementation.
+    let error_policy = {
+        let (meta_mcp, server, tool) = (Arc::clone(&state.meta_mcp), server.clone(), tool.clone());
+        let (api_key_name, trace) = (api_key_name.clone(), trace.clone());
+        move |error| {
+            meta_mcp.recover_task_error(&server, &tool, api_key_name.as_deref(), &trace, error)
+        }
+    };
+    let _ = executor
+        .recover_upstream_read(
+            task_owner.as_digest(),
+            task_id,
+            authorized,
+            move |result| {
+                // The same output/firewall/contract/inspection processing a live
+                // dispatch applies, from the same implementation.
+                meta_mcp
+                    .recover_task_result(&server, &tool, api_key_name.as_deref(), &trace, result)
+                    .map_err(|error| crate::protocol::JsonRpcError {
+                        code: -32603,
+                        message: error.to_string(),
+                        data: None,
+                    })
+            },
+            error_policy,
+            crate::gateway::meta_mcp::upstream::QUERY_DEADLINE,
+        )
+        .await;
 }
 
 pub(super) async fn tasks_update(

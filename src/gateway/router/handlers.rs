@@ -1680,7 +1680,37 @@ pub(super) async fn meta_mcp_handler(
         // The owner is `task_principal`'s answer, not the raw session key: it is
         // what admission was keyed on when the record was created, and reading
         // with anything else would miss a task the caller does own.
-        "tasks/get" => tasks::tasks_get(&state, &owner, id.clone(), params.as_ref()),
+        "tasks/get" => {
+            // The recovery read re-authorizes the ORIGINAL target with THIS
+            // request's live context, so the context is handed over whole
+            // rather than rebuilt inside the arm from a different set of
+            // extractions.
+            tasks::tasks_get(
+                &state,
+                &owner,
+                id.clone(),
+                params.as_ref(),
+                &tasks::RecoveryCaller {
+                    client: client.as_ref(),
+                    oauth_agent_identity: oauth_agent_identity.as_ref(),
+                    cert_identity: cert_identity.as_ref(),
+                    api_key_name: client.as_ref().map(|client| client.name.as_str()),
+                    agent_id: agent_identity.as_ref().map(|agent| agent.id.as_str()),
+                    grant_subject: caller_grant_subject(
+                        verified_identity.as_ref(),
+                        &headers,
+                        state.meta_mcp.trust_caller_identity_headers(),
+                        cert_identity.as_ref(),
+                        oauth_agent_identity.as_ref(),
+                    ),
+                    verified_identity: verified_identity.as_ref(),
+                    is_admin: client.as_ref().is_some_and(|client| client.admin),
+                    input_capabilities: declared_capabilities,
+                    session_id: Some(session_id.as_str()),
+                },
+            )
+            .await
+        }
         // `tasks/update` and `tasks/cancel` differ in what they do to the
         // record — one acknowledges without writing, the other commits a
         // durable terminal transition — but both answer with the bare

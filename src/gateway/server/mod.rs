@@ -1587,8 +1587,23 @@ impl Gateway {
         // one of its own: a task and a later synchronous call carrying the same
         // owner and idempotency key have to meet at ONE admission index, or the
         // backend runs twice for what the caller sent once.
+        //
+        // The adapters that are BOTH named in `tasks.recovery_adapters` and
+        // still configured backends. Computed here because this is the one
+        // place that can see both lists before `AppState` exists; it is the
+        // weakest evaluable test on purpose, since deferring a row is not a
+        // trust claim and issues no upstream call. Empty means the recovery
+        // below is byte-identical to the no-adapter behaviour.
+        let managed_adapters: Vec<String> = self
+            .config
+            .tasks
+            .recovery_adapters
+            .iter()
+            .filter(|name| self.backends.get(name).is_some())
+            .cloned()
+            .collect();
         let (task_service, task_executor) =
-            crate::gateway::task_service::open_runtime_with_admission(
+            crate::gateway::task_service::open_runtime_with_recovery(
                 &task_store_dir,
                 self.config.tasks.max_workers,
                 crate::gateway::task_service::StoreLimits {
@@ -1599,6 +1614,7 @@ impl Gateway {
                 },
                 Arc::clone(&subscriptions),
                 Arc::clone(meta_mcp.execution_admission()),
+                &managed_adapters,
             )
             .await
             .map_err(|error| {
@@ -1612,6 +1628,24 @@ impl Gateway {
             max_workers = self.config.tasks.max_workers,
             "Durable task store opened"
         );
+        // The trusted upstream adapter, installed after the store recovered and
+        // before the socket serves. It needs the started backend registry, which
+        // is why it cannot be a constructor argument to `open`. With no
+        // configured names it is not installed at all and every upstream path
+        // stays unreachable.
+        if !managed_adapters.is_empty() {
+            let installed = task_executor.install_recovery(Arc::new(
+                crate::gateway::meta_mcp::upstream::NativeUpstreamTasks::new(
+                    Arc::clone(&self.backends),
+                    &managed_adapters,
+                ),
+            ));
+            info!(
+                adapters = ?managed_adapters,
+                installed,
+                "Upstream task recovery adapter configured"
+            );
+        }
         // The periodic expiry owner, started only now: the recovery inside
         // `open_runtime_with_admission` has succeeded, so the sweep can never see
         // a row a restart had not yet settled. The guard is held for the server's
