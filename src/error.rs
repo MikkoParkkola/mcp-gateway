@@ -198,9 +198,8 @@ impl Error {
     pub fn to_rpc_code(&self) -> i32 {
         match self {
             Self::JsonRpc { code, .. } | Self::Forbidden { code, .. } => *code,
-            Self::Json(_) => -32700,     // Parse error
-            Self::Protocol(_) => -32600, // Invalid request
-            Self::ResponseFirewallRefused => -32600,
+            Self::Json(_) => -32700, // Parse error
+            Self::Protocol(_) | Self::ResponseFirewallRefused => -32600, // Invalid request
             Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
             Self::BackendUnavailable(_)
             | Self::CircuitOpen(_)
