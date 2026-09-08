@@ -141,7 +141,7 @@ async fn call_capability_tool_with_identity(
     .await
 }
 
-fn enforce_output_schema(
+pub(super) fn enforce_output_schema(
     server: &str,
     tool: &str,
     result: Value,
@@ -789,7 +789,7 @@ static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl MetaMcp {
     /// Current authorization must run before either execution or retained replay.
-    pub(super) fn check_invocation_policy(
+    pub(crate) fn check_invocation_policy(
         &self,
         args: &Value,
         session_id: Option<&str>,
@@ -1052,6 +1052,190 @@ impl MetaMcp {
             // directive, so there is no client claim-under-test here.
             None,
         )
+    }
+
+    /// The post-dispatch response gates a backend result must pass before any
+    /// caller — or any durable record — may hold it.
+    ///
+    /// Extracted so the ONE implementation serves both the live dispatch below
+    /// and an upstream task result recovered later
+    /// (`meta_mcp::upstream::recover_task_result`). The dispatch half is
+    /// deliberately not reachable from here: recovering a result must never be
+    /// able to invoke anything.
+    ///
+    /// Scope is exactly the gates that judge the payload — response contract,
+    /// anomaly screening, context integrity. Dispatch ACCOUNTING is not here
+    /// and must not be: an idempotency reservation, a response-cache write, an
+    /// error budget or a prediction belongs to the call that dispatched, and a
+    /// later read of an already-executed job must not consume or refresh any of
+    /// them.
+    pub(super) fn apply_response_gates(
+        &self,
+        server: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        result: Value,
+    ) -> Result<Value> {
+        let mut result = result;
+        // === POST-INVOKE: Response contract gate (issue #133, D1) ===
+        //
+        // Validates the response against the per-tool contract declared in
+        // config.  Default-deny (fail_closed=true) can block responses from
+        // tools with no declared contract.
+        //
+        // Runs BEFORE D2 anomaly screening so contract violations abort early.
+        if let Some(ref contract_cfg) = self.response_contract {
+            let text = crate::security::response_inspect::extract_text_from_result(&result);
+            let tool_entry = contract_cfg.tools.get(tool);
+
+            // fail_closed: no contract declared for this tool → treat as violation
+            if contract_cfg.fail_closed && tool_entry.is_none() {
+                let effective_action_mode = contract_cfg.action_mode;
+                warn!(
+                    server,
+                    tool,
+                    trace_id,
+                    reason = "no_contract_declared",
+                    detail = "fail_closed is enabled and no contract is declared for this tool",
+                    "Response contract violation"
+                );
+                if effective_action_mode {
+                    return Err(Error::json_rpc(
+                        -32603,
+                        format!(
+                            "Tool '{tool}' on server '{server}' response blocked by contract gate: \
+                             no contract declared and fail_closed is enabled."
+                        ),
+                    ));
+                }
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert(
+                        "_contract_violation".to_string(),
+                        serde_json::Value::Bool(true),
+                    );
+                    obj.insert(
+                        "_contract_reason".to_string(),
+                        serde_json::Value::String("no_contract_declared".to_string()),
+                    );
+                }
+            } else if !text.is_empty() {
+                // Build effective contract merging global defaults with per-tool overrides.
+                let effective_max_bytes = tool_entry
+                    .and_then(|e| e.max_bytes)
+                    .or(contract_cfg.default_max_bytes);
+                let effective_action_mode = tool_entry
+                    .and_then(|e| e.action_mode)
+                    .unwrap_or(contract_cfg.action_mode);
+                let patterns: &[String] =
+                    tool_entry.map_or(&[], |e| e.forbidden_patterns.as_slice());
+
+                let forbidden_patterns = if patterns.is_empty() {
+                    regex::RegexSet::empty()
+                } else {
+                    match regex::RegexSet::new(patterns) {
+                        Ok(set) => set,
+                        Err(e) => {
+                            warn!(
+                                server,
+                                tool,
+                                trace_id,
+                                error = %e,
+                                "Failed to compile forbidden_patterns for tool contract — skipping pattern check"
+                            );
+                            regex::RegexSet::empty()
+                        }
+                    }
+                };
+
+                let contract = crate::security::response_contract::ToolResponseContract {
+                    max_bytes: effective_max_bytes,
+                    forbidden_patterns,
+                    action_mode: effective_action_mode,
+                };
+
+                if let Some(violation) = contract.validate(&text) {
+                    warn!(
+                        server,
+                        tool,
+                        trace_id,
+                        reason = violation.reason,
+                        detail = %violation.detail,
+                        "Response contract violation"
+                    );
+                    if violation.should_block {
+                        return Err(Error::json_rpc(
+                            -32603,
+                            format!(
+                                "Tool '{tool}' on server '{server}' response blocked by contract gate: \
+                                 {} — {}",
+                                violation.reason, violation.detail
+                            ),
+                        ));
+                    }
+                    if let Some(obj) = result.as_object_mut() {
+                        obj.insert(
+                            "_contract_violation".to_string(),
+                            serde_json::Value::Bool(true),
+                        );
+                        obj.insert(
+                            "_contract_reason".to_string(),
+                            serde_json::Value::String(violation.reason.to_string()),
+                        );
+                    }
+                }
+            }
+        }
+
+        // === POST-INVOKE: Response content inspection (issue #133, D2) ===
+        //
+        // Scan the backend response for secrets, exfiltration URLs, code
+        // injection patterns, and suspicious encoding.
+        //
+        // Observe mode (default, `action_mode = false`): logs findings and
+        // annotates the result with `_security_findings`.
+        // Action mode (`action_mode = true`): blocks any response with a
+        // HIGH/CRITICAL finding, returning a security error to the caller.
+        {
+            let text = crate::security::response_inspect::extract_text_from_result(&result);
+            if !text.is_empty() {
+                let inspection = crate::security::response_inspect::inspect_response(
+                    &text,
+                    self.response_inspection_action_mode,
+                );
+                if inspection.has_findings() {
+                    for finding in &inspection.findings {
+                        warn!(
+                            server,
+                            tool,
+                            trace_id,
+                            category = finding.category,
+                            severity = ?finding.severity,
+                            description = finding.description,
+                            "Response inspection finding"
+                        );
+                    }
+                    if inspection.should_block {
+                        return Err(Error::json_rpc(
+                            -32603,
+                            format!(
+                                "Tool '{tool}' on server '{server}' returned a response blocked \
+                                 by anomaly screening (HIGH/CRITICAL security finding detected). \
+                                 See gateway logs for details."
+                            ),
+                        ));
+                    }
+                    if let Some(obj) = result.as_object_mut() {
+                        obj.insert(
+                            "_security_findings".to_string(),
+                            serde_json::to_value(&inspection.findings).unwrap_or_default(),
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(self.apply_context_integrity(server, tool, api_key_name, trace_id, result))
     }
 
     /// Inner implementation executed within a trace-ID scope.
@@ -1617,164 +1801,7 @@ impl MetaMcp {
             result["requestState"] = json!(envelope);
         }
 
-        // === POST-INVOKE: Response contract gate (issue #133, D1) ===
-        //
-        // Validates the response against the per-tool contract declared in
-        // config.  Default-deny (fail_closed=true) can block responses from
-        // tools with no declared contract.
-        //
-        // Runs BEFORE D2 anomaly screening so contract violations abort early.
-        if let Some(ref contract_cfg) = self.response_contract {
-            let text = crate::security::response_inspect::extract_text_from_result(&result);
-            let tool_entry = contract_cfg.tools.get(tool);
-
-            // fail_closed: no contract declared for this tool → treat as violation
-            if contract_cfg.fail_closed && tool_entry.is_none() {
-                let effective_action_mode = contract_cfg.action_mode;
-                warn!(
-                    server,
-                    tool,
-                    trace_id,
-                    reason = "no_contract_declared",
-                    detail = "fail_closed is enabled and no contract is declared for this tool",
-                    "Response contract violation"
-                );
-                if effective_action_mode {
-                    return Err(Error::json_rpc(
-                        -32603,
-                        format!(
-                            "Tool '{tool}' on server '{server}' response blocked by contract gate: \
-                             no contract declared and fail_closed is enabled."
-                        ),
-                    ));
-                }
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert(
-                        "_contract_violation".to_string(),
-                        serde_json::Value::Bool(true),
-                    );
-                    obj.insert(
-                        "_contract_reason".to_string(),
-                        serde_json::Value::String("no_contract_declared".to_string()),
-                    );
-                }
-            } else if !text.is_empty() {
-                // Build effective contract merging global defaults with per-tool overrides.
-                let effective_max_bytes = tool_entry
-                    .and_then(|e| e.max_bytes)
-                    .or(contract_cfg.default_max_bytes);
-                let effective_action_mode = tool_entry
-                    .and_then(|e| e.action_mode)
-                    .unwrap_or(contract_cfg.action_mode);
-                let patterns: &[String] =
-                    tool_entry.map_or(&[], |e| e.forbidden_patterns.as_slice());
-
-                let forbidden_patterns = if patterns.is_empty() {
-                    regex::RegexSet::empty()
-                } else {
-                    match regex::RegexSet::new(patterns) {
-                        Ok(set) => set,
-                        Err(e) => {
-                            warn!(
-                                server,
-                                tool,
-                                trace_id,
-                                error = %e,
-                                "Failed to compile forbidden_patterns for tool contract — skipping pattern check"
-                            );
-                            regex::RegexSet::empty()
-                        }
-                    }
-                };
-
-                let contract = crate::security::response_contract::ToolResponseContract {
-                    max_bytes: effective_max_bytes,
-                    forbidden_patterns,
-                    action_mode: effective_action_mode,
-                };
-
-                if let Some(violation) = contract.validate(&text) {
-                    warn!(
-                        server,
-                        tool,
-                        trace_id,
-                        reason = violation.reason,
-                        detail = %violation.detail,
-                        "Response contract violation"
-                    );
-                    if violation.should_block {
-                        return Err(Error::json_rpc(
-                            -32603,
-                            format!(
-                                "Tool '{tool}' on server '{server}' response blocked by contract gate: \
-                                 {} — {}",
-                                violation.reason, violation.detail
-                            ),
-                        ));
-                    }
-                    if let Some(obj) = result.as_object_mut() {
-                        obj.insert(
-                            "_contract_violation".to_string(),
-                            serde_json::Value::Bool(true),
-                        );
-                        obj.insert(
-                            "_contract_reason".to_string(),
-                            serde_json::Value::String(violation.reason.to_string()),
-                        );
-                    }
-                }
-            }
-        }
-
-        // === POST-INVOKE: Response content inspection (issue #133, D2) ===
-        //
-        // Scan the backend response for secrets, exfiltration URLs, code
-        // injection patterns, and suspicious encoding.
-        //
-        // Observe mode (default, `action_mode = false`): logs findings and
-        // annotates the result with `_security_findings`.
-        // Action mode (`action_mode = true`): blocks any response with a
-        // HIGH/CRITICAL finding, returning a security error to the caller.
-        {
-            let text = crate::security::response_inspect::extract_text_from_result(&result);
-            if !text.is_empty() {
-                let inspection = crate::security::response_inspect::inspect_response(
-                    &text,
-                    self.response_inspection_action_mode,
-                );
-                if inspection.has_findings() {
-                    for finding in &inspection.findings {
-                        warn!(
-                            server,
-                            tool,
-                            trace_id,
-                            category = finding.category,
-                            severity = ?finding.severity,
-                            description = finding.description,
-                            "Response inspection finding"
-                        );
-                    }
-                    if inspection.should_block {
-                        return Err(Error::json_rpc(
-                            -32603,
-                            format!(
-                                "Tool '{tool}' on server '{server}' returned a response blocked \
-                                 by anomaly screening (HIGH/CRITICAL security finding detected). \
-                                 See gateway logs for details."
-                            ),
-                        ));
-                    }
-                    if let Some(obj) = result.as_object_mut() {
-                        obj.insert(
-                            "_security_findings".to_string(),
-                            serde_json::to_value(&inspection.findings).unwrap_or_default(),
-                        );
-                    }
-                }
-            }
-        }
-
-        result = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
+        result = self.apply_response_gates(server, tool, api_key_name, trace_id, result)?;
 
         // === POST-INVOKE: Inject cost warnings and suggestions ===
         //
@@ -2729,12 +2756,42 @@ impl MetaMcp {
         // never on the shared transport — tenant isolation, IDP.3). Only when
         // there are neither headers nor an identity key do we take the unchanged
         // static path (shared default session bucket).
-        let response = if propagated_headers.is_empty() && identity_key.is_none() {
-            backend.request("tools/call", Some(params)).await?
-        } else {
-            backend
-                .request_with_headers("tools/call", Some(params), propagated_headers, identity_key)
-                .await?
+        // The upstream-task leg, and the ONLY one. It is a different transport
+        // entry point on the same dispatch, reached after every gate above —
+        // kill switch, capability cooldown, `_full`/`_claim` stripping,
+        // idempotency, authorization, secret injection — has already run. A
+        // parallel submission path would be a second dispatcher with a
+        // different set of gates, which is exactly what this funnel exists to
+        // prevent.
+        //
+        // Armed only by the task worker, for exactly this `(server, tool)`, and
+        // sent exactly once: a retried task-augmented call is a second upstream
+        // job this gateway would not hold the handle for.
+        let submission = crate::gateway::meta_mcp::upstream::armed_submission(server, tool);
+        let response = match &submission {
+            Some(_) => {
+                backend
+                    .request_with_task_capability(
+                        "tools/call",
+                        Some(params),
+                        propagated_headers,
+                        identity_key,
+                    )
+                    .await?
+            }
+            None if propagated_headers.is_empty() && identity_key.is_none() => {
+                backend.request("tools/call", Some(params)).await?
+            }
+            None => {
+                backend
+                    .request_with_headers(
+                        "tools/call",
+                        Some(params),
+                        propagated_headers,
+                        identity_key,
+                    )
+                    .await?
+            }
         };
 
         if let Some(error) = response.error {
@@ -2760,6 +2817,13 @@ impl MetaMcp {
         }
 
         let result = response.result.unwrap_or(json!(null));
+        // The RAW reply, here and nowhere else: this value has not been through
+        // projection, the contract gate or any shaping, so a `resultType:
+        // "task"` in it is the peer's own envelope and never one this gateway
+        // stamped on its own answer.
+        if let Some(submission) = &submission {
+            submission.offer(&result);
+        }
         let output_schema = self
             .get_tool_registry()
             .and_then(|registry| registry.get(&format!("{server}:{tool}")))

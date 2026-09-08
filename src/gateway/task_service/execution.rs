@@ -7,6 +7,7 @@ mod expiry;
 mod observe;
 mod recovery;
 mod settlement;
+mod upstream;
 mod worker;
 
 use std::sync::Arc;
@@ -20,10 +21,11 @@ pub(crate) use context::{OwnedAdmissionRequest, OwnedCallerContext};
 /// The guard the gateway holds for the periodic sweep it started.
 pub(crate) use expiry::ExpirySweep;
 pub(crate) use observe::{
-    CommitObserver, CommitStage, DrainOutcome, RecoveryCheckpoint, RecoveryOutcome,
-    UpstreamRecovery, remaining_implementation,
+    CommitObserver, CommitStage, DrainOutcome, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+    remaining_implementation,
 };
 use observe::{Handoff, HandoffRegistry};
+pub(crate) use upstream::{RecoveredRead, RecoveryRefusal, UpstreamCapture};
 /// Reachable at the visibility of [`TaskExecutor::commit`], which returns it.
 pub(crate) use worker::CommitFailure;
 use worker::commit_and_run;
@@ -138,7 +140,16 @@ pub struct TaskExecutor {
     workers: Arc<Semaphore>,
     max_workers: usize,
     handoffs: HandoffRegistry,
-    recovery: Option<Arc<dyn UpstreamRecovery>>,
+    /// Installed AFTER the backends are started, from `server/mod.rs`, because
+    /// an adapter needs a live backend registry and `open` runs before one
+    /// exists. `OnceLock` rather than a constructor field for exactly that
+    /// ordering, and write-once so a running gateway cannot have its trusted
+    /// recovery vocabulary swapped underneath an in-flight read.
+    recovery: std::sync::OnceLock<Arc<dyn UpstreamRecovery>>,
+    /// One in-flight upstream query per record. `tasks/get` is read-only, but
+    /// two concurrent reads of the same row would each commit the outcome, and
+    /// the second would find a revision that moved.
+    query_gate: tokio::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     observer: Mutex<Option<Arc<dyn CommitObserver>>>,
 }
 
@@ -155,13 +166,22 @@ impl TaskExecutor {
             workers: Arc::new(Semaphore::new(max_workers)),
             max_workers,
             handoffs: HandoffRegistry::new(),
-            recovery: None,
+            recovery: std::sync::OnceLock::new(),
+            query_gate: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             observer: Mutex::new(None),
         })
     }
 
     pub(crate) fn recovery(&self) -> Option<&Arc<dyn UpstreamRecovery>> {
-        self.recovery.as_ref()
+        self.recovery.get()
+    }
+
+    /// Install the trusted upstream adapter, once, before the socket serves.
+    ///
+    /// Returns whether this call installed it. With none installed every path
+    /// below is skipped and recovery behaviour is byte-identical to I3's.
+    pub(crate) fn install_recovery(&self, adapter: Arc<dyn UpstreamRecovery>) -> bool {
+        self.recovery.set(adapter).is_ok()
     }
 
     pub(crate) fn observe_commits(&self, observer: Arc<dyn CommitObserver>) {
@@ -280,6 +300,21 @@ impl TaskExecutor {
             Ok(())
         });
         self.service.store.set_hook(Some(hook)).await;
+    }
+
+    /// Test-only: the recovery descriptor a dispatch made durable for `id`.
+    ///
+    /// The one seam through which a route-level regression can tell "the
+    /// candidate fitted and its descriptor was written" from "the candidate
+    /// fitted, the backend ran, and the row is unrecoverable" — two outcomes
+    /// that are identical at the wire. Kept here rather than in the suite so
+    /// that `mod store` stays private to this package.
+    #[cfg(test)]
+    pub(crate) fn durable_upstream_for_test(
+        &self,
+        id: &str,
+    ) -> Option<super::record::UpstreamRecord> {
+        self.service.store.upstream_for_test(id)
     }
 
     pub(crate) async fn settle(
@@ -477,7 +512,7 @@ impl TaskExecutor {
 
 /// The three states a task never leaves.
 ///
-/// Spelled here as well as at `worker.rs:242` because that one is private to
+/// Spelled here as well as at `worker.rs:510` because that one is private to
 /// the worker module; the two are the same three variants and a fourth
 /// terminal status would have to be added to both by the same edit that adds
 /// it to [`TaskStatus`].

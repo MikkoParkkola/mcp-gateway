@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Startup recovery of records a previous process left mid-flight.
 //!
-//! A restart inherits a directory, not a process. Whatever a task was doing when
-//! the gateway went away, nobody can continue it: the backend call, if it
+//! These rows have no captured upstream handle. A restart inherits a directory,
+//! not their old process, so nobody can continue them: the backend call, if it
 //! happened at all, happened somewhere this process cannot reach, and an input
 //! round belongs to an exchange that no longer has two ends. So the constructor
 //! the gateway itself calls — [`open_runtime_with_admission`] — has to settle
@@ -72,6 +72,9 @@ enum Seed {
     Undispatched,
     /// The durable dispatch marker was written; the answer never came back.
     Dispatched,
+    /// The v2 format recorded a marker but had no upstream descriptor.
+    V2Undispatched,
+    V2Dispatched,
     /// A v1 row, which had no marker to write. Seeded as `Undispatched` and then
     /// rewritten on disk to the legacy shape.
     Legacy,
@@ -140,6 +143,24 @@ fn rows() -> Vec<(&'static str, Seed, Option<Expected>)> {
                 revision: 3,
             }),
         ),
+        (
+            "x6h-v2-undispatched",
+            Seed::V2Undispatched,
+            Some(Expected {
+                outcome: "not_executed",
+                reason: "gateway_restart_before_dispatch",
+                revision: 2,
+            }),
+        ),
+        (
+            "x6i-v2-dispatched",
+            Seed::V2Dispatched,
+            Some(Expected {
+                outcome: "unknown",
+                reason: "gateway_restart_after_dispatch",
+                revision: 2,
+            }),
+        ),
         ("x6e-terminal", Seed::Terminal, None),
         ("x6f-failed", Seed::Failed, None),
         ("x6g-cancelled", Seed::Cancelled, None),
@@ -205,8 +226,8 @@ async fn seed_store(
         let id = task.task.id().to_owned();
         let mut revision = task.revision;
         match seed {
-            Seed::Undispatched | Seed::Legacy => {}
-            Seed::Dispatched => {
+            Seed::Undispatched | Seed::V2Undispatched | Seed::Legacy => {}
+            Seed::Dispatched | Seed::V2Dispatched => {
                 service
                     .store
                     .mark_dispatched(&owner, &id, revision)
@@ -267,8 +288,10 @@ async fn seed_store(
     service.close().await.expect("custody is released");
     drop(admission);
     for row in &seeded {
-        if matches!(row.seed, Seed::Legacy) {
-            rewrite_as_v1(dir, &row.id);
+        match row.seed {
+            Seed::Legacy => rewrite_as_v1(dir, &row.id),
+            Seed::V2Undispatched | Seed::V2Dispatched => rewrite_as_v2(dir, &row.id),
+            _ => {}
         }
     }
     seeded
@@ -285,7 +308,11 @@ fn rewrite_as_v1(dir: &std::path::Path, id: &str) {
     let path = dir.join(format!("{id}.json"));
     let before: Value = serde_json::from_slice(&std::fs::read(&path).unwrap())
         .expect("the committed record parses");
-    assert_eq!(before["version"], json!(2), "the fixture starts modern");
+    assert_eq!(
+        before["version"],
+        json!(crate::gateway::task_service::record::RECORD_VERSION),
+        "the fixture starts in the current record format"
+    );
     assert_eq!(
         before.get("dispatched"),
         Some(&json!(false)),
@@ -316,6 +343,25 @@ fn rewrite_as_v1(dir: &std::path::Path, id: &str) {
             "only the record version changed on disk"
         );
     }
+}
+
+/// Preserve a real committed row and its marker, changing only the format tag.
+fn rewrite_as_v2(dir: &std::path::Path, id: &str) {
+    let path = dir.join(format!("{id}.json"));
+    let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        record["version"],
+        json!(crate::gateway::task_service::record::RECORD_VERSION)
+    );
+    assert!(record.get("upstream").is_none());
+    assert!(record["dispatched"].is_boolean());
+    record["version"] = json!(2);
+    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let actual: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        actual, record,
+        "v2 preserves every field including its marker"
+    );
 }
 
 /// Every recovery expectation for one row, as disagreements rather than a

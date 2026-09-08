@@ -27,6 +27,7 @@ use super::Transport;
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
 use crate::protocol::era::Era;
+use crate::protocol::extensions::Extension;
 use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
@@ -440,6 +441,56 @@ fn with_modern_meta(method: &str, params: Option<Value>) -> Result<Option<Value>
         Value::Object(serde_json::Map::new()),
     );
     params.insert("_meta".to_string(), Value::Object(meta));
+    Ok(Some(Value::Object(params)))
+}
+
+/// The methods that may carry the tasks opt-in, and nothing else.
+///
+/// The opt-in selects task-augmented execution upstream, so the vocabulary it
+/// unlocks is exactly the one the adapter implements: the initial submission
+/// (`tools/call`) and the poll (`tasks/get`). `tasks/update` and `tasks/cancel`
+/// exist upstream and are outside this adapter by construction — an allow-list
+/// keeps a future caller from reaching them through this door by passing a
+/// method name.
+const TASK_CAPABILITY_METHODS: [&str; 2] = ["tools/call", "tasks/get"];
+
+/// Build the modern `_meta` envelope, then declare the one tasks extension in it.
+///
+/// Layered on [`with_modern_meta`] rather than beside it: the protocol version,
+/// the params/`_meta` object validation and their two local failures are the
+/// same facts here as on any other modern request, and a second copy of them
+/// would be a second thing to keep in step. This adds exactly one key —
+/// `_meta[clientCapabilities].extensions["io.modelcontextprotocol/tasks"] = {}`
+/// — on top of the empty capabilities that path always writes.
+///
+/// What it does NOT do is preserve a caller's own `extensions`. The declaration
+/// is the transport's, about what this gateway implements; forwarding whatever
+/// a caller put there would let an upstream select behaviour the gateway has no
+/// code to handle, and would make the capability set forgeable from params.
+fn with_task_capability_meta(method: &str, params: Option<Value>) -> Result<Option<Value>> {
+    let params = with_modern_meta(method, params)?;
+    let Some(Value::Object(mut params)) = params else {
+        // Unreachable: `with_modern_meta` returns `Some(object)` or an error.
+        return Err(Error::Protocol(format!(
+            "cannot send `{method}` with the tasks capability: modern `_meta` envelope missing"
+        )));
+    };
+    let Some(Value::Object(meta)) = params.get_mut("_meta") else {
+        return Err(Error::Protocol(format!(
+            "cannot send `{method}` with the tasks capability: modern `_meta` envelope missing"
+        )));
+    };
+    let mut extensions = serde_json::Map::new();
+    extensions.insert(
+        Extension::Tasks.id().to_string(),
+        Value::Object(serde_json::Map::new()),
+    );
+    let mut capabilities = serde_json::Map::new();
+    capabilities.insert("extensions".to_string(), Value::Object(extensions));
+    meta.insert(
+        KEY_CLIENT_CAPABILITIES.to_string(),
+        Value::Object(capabilities),
+    );
     Ok(Some(Value::Object(params)))
 }
 
@@ -1359,6 +1410,63 @@ impl Transport for HttpTransport {
         }
 
         result
+    }
+
+    /// The typed upstream-tasks entry point. See the trait method for why this
+    /// is its own method and not a flag.
+    ///
+    /// Three refusals, all local, all before anything reaches the wire:
+    ///
+    /// 1. A method outside `TASK_CAPABILITY_METHODS`.
+    /// 2. A peer not *known* to be modern. `outbound_era()` reads a determined
+    ///    era only — `None` (undetermined, or a probe in flight) is legacy, and
+    ///    a legacy peer has no `_meta` envelope to read the opt-in from, so it
+    ///    would run the call synchronously and hand back a result the caller
+    ///    would then have to mistake for a task handle.
+    /// 3. A `params`/`_meta` that cannot carry the envelope (from
+    ///    `with_task_capability_meta`).
+    ///
+    /// It sends through `send_request_with_headers` rather than
+    /// `request_with_headers`: that wrapper re-runs `with_modern_meta` (which
+    /// would overwrite the declaration with empty capabilities) and owns the
+    /// session-expiry re-handshake, which resubmits the identical request. A
+    /// resubmitted `tools/call` is a second upstream task, orphaning the first,
+    /// so this path never retries — a caller that must retry is the one that
+    /// knows whether its submission is idempotent. Passing `Some(Era::Modern)`
+    /// keeps the final modern-header writer running exactly once, as it does
+    /// for every other modern request, and `extra_headers`/`identity_key` reach
+    /// it unchanged so the caller's credential and session bucket still apply.
+    async fn request_with_task_capability(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
+    ) -> Result<JsonRpcResponse> {
+        if !TASK_CAPABILITY_METHODS.contains(&method) {
+            return Err(Error::Protocol(format!(
+                "refusing to send `{method}` with the upstream tasks capability: only {allowed} \
+                 may carry it",
+                allowed = TASK_CAPABILITY_METHODS.join(" and "),
+            )));
+        }
+        if self.outbound_era() != Some(Era::Modern) {
+            return Err(Error::Protocol(format!(
+                "refusing to send `{method}` with the upstream tasks capability: the peer is not \
+                 known to speak a 2026 revision, which is the only dialect that can carry the \
+                 declaration"
+            )));
+        }
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: self.next_id(),
+            method: method.to_string(),
+            params: with_task_capability_meta(method, params)?,
+        };
+
+        self.send_request_with_headers(&request, extra_headers, identity_key, Some(Era::Modern))
+            .await
     }
 
     // MIK-6710: HTTP is the only transport whose `request_with_headers`

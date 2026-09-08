@@ -63,7 +63,7 @@ use super::meta_mcp_tool_defs::{
 use super::webhooks::WebhookRegistry;
 
 pub(crate) mod admission;
-mod invoke;
+pub(crate) mod invoke;
 mod prompt_cache;
 mod protocol;
 mod resources;
@@ -77,6 +77,7 @@ mod spec_preview;
 mod support;
 mod surfaced;
 mod task_confirmation;
+pub(crate) mod upstream;
 
 pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
 pub use support::prune_constant_signals;

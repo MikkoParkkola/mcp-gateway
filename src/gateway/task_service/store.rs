@@ -21,7 +21,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use chrono::{DateTime, Utc};
 
 use super::record::{
-    CommittedTask, InterruptedTask, MARKER_VERSION, PreparedTask, RECORD_VERSION, Record,
+    CommittedTask, InterruptedTask, MARKER_VERSION, MAX_UPSTREAM_HANDLE_BYTES, PreparedTask,
+    RECORD_VERSION, Record, UPSTREAM_VERSION, UpstreamRecord, widest_handle_reservation,
 };
 use crate::fs_lock::ExclusiveFileLock;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
@@ -203,6 +204,138 @@ impl TaskStore {
         .map_err(|_| StoreError::Storage)?
     }
 
+    /// Durably attach `upstream` to a non-terminal row at `expected_revision`.
+    ///
+    /// The `mark_dispatched` idiom exactly: read-modify-write inside the same
+    /// ordering-lock section, refusing a moved revision or a terminal row, and
+    /// NOT bumping `revision` — no reader observes the field, so the settle CAS
+    /// is untouched. It does raise `version` to [`UPSTREAM_VERSION`], because
+    /// the row now holds a field an older loader must not silently drop.
+    ///
+    /// A row is recoverable only once this write has landed. Until then the
+    /// crash window is `unknown`, never `not_executed` and never claimed.
+    pub(crate) async fn mark_upstream(
+        &self,
+        owner: &str,
+        id: &str,
+        expected_revision: u64,
+        upstream: UpstreamRecord,
+    ) -> Result<(), StoreError> {
+        let shared = Arc::clone(&self.0);
+        let (owner, id) = (owner.to_owned(), id.to_owned());
+        tokio::task::spawn_blocking(move || {
+            shared.mark_upstream_blocking(&owner, &id, expected_revision, upstream)
+        })
+        .await
+        .map_err(|_| StoreError::Storage)?
+    }
+
+    /// The owner-scoped upstream descriptor of one committed row, with the
+    /// revision and status it was read at.
+    ///
+    /// Owner-scoped through [`owned`], so a foreign caller is told the task is
+    /// absent and learns nothing about a handle. A descriptor that does not
+    /// belong to the record it was read from is dropped here rather than
+    /// returned: a read path may not authorize against an inconsistent target.
+    pub(crate) fn upstream_of(
+        &self,
+        owner: &str,
+        id: &str,
+    ) -> Result<(Option<UpstreamRecord>, u64, TaskStatus), StoreError> {
+        let state = self.0.state();
+        if !state.ready {
+            return Err(StoreError::Unavailable);
+        }
+        let entry = owned(&state, owner, id)?;
+        let descriptor = entry
+            .record
+            .upstream
+            .clone()
+            .filter(|upstream| upstream.consistent_with(&entry.record.admission));
+        Ok((descriptor, entry.record.revision, entry.task.status()))
+    }
+
+    /// Whether the committed row could still hold the COMPLETE recovery
+    /// descriptor for `(backend, tool, arguments)` and the widest handle a peer
+    /// may answer with.
+    ///
+    /// Measured, never estimated: the candidate is the record as it stands with
+    /// the descriptor `mark_upstream` would attach, serialized by the same
+    /// [`serialize`] the write uses and compared against the same
+    /// `record_bytes` bound. JSON escaping is therefore counted by
+    /// construction — an argument whose bytes fit but whose ENCODING does not is
+    /// refused here — and the handle is reserved at
+    /// [`widest_handle_reservation`], so no answer this store would accept can
+    /// make a measured-fitting descriptor overflow afterwards. There is no
+    /// arithmetic to overflow: nothing is added up, one candidate is encoded.
+    ///
+    /// Owner-scoped through [`owned`] and read-only: it takes no ordering lock,
+    /// writes nothing, and tells a foreign caller only what an absent task
+    /// tells it. Conservative at the revision it is asked at — `dispatched` is
+    /// still `false`, which encodes one byte WIDER than the `true` the row will
+    /// carry when the descriptor is written — and `mark_upstream`'s own check
+    /// stays the authority over anything that grows in between.
+    pub(crate) fn admits_upstream_descriptor(
+        &self,
+        owner: &str,
+        id: &str,
+        backend: &str,
+        tool: &str,
+        arguments: &serde_json::Value,
+    ) -> Result<bool, StoreError> {
+        let mut candidate = {
+            let state = self.0.state();
+            if !state.ready {
+                return Err(StoreError::Unavailable);
+            }
+            owned(&state, owner, id)?.record.clone()
+        };
+        // The record's OWN admitted digest, exactly as `capture_upstream` binds
+        // it: measuring against a digest derived a second time would measure a
+        // descriptor this record could never be given.
+        let operation_digest = candidate.admission.operation_digest.clone();
+        candidate.upstream = Some(UpstreamRecord {
+            handle: widest_handle_reservation(),
+            backend: backend.to_owned(),
+            tool: tool.to_owned(),
+            arguments: arguments.clone(),
+            operation_digest,
+        });
+        candidate.version = candidate.version.max(UPSTREAM_VERSION);
+        Ok(serialize(&candidate)?.len() <= self.0.limits.record_bytes)
+    }
+
+    /// Test-only: the durable recovery descriptor of `id`, whatever owner holds
+    /// it.
+    ///
+    /// Owner-agnostic on purpose. A route-level regression knows the task
+    /// identifier the client was answered with and nothing else; reproducing
+    /// admission's principal hashing to read what dispatch persisted would put
+    /// the test's own derivation between it and the record. It is a read of the
+    /// committed image and exists only under `cfg(test)`.
+    #[cfg(test)]
+    pub(crate) fn upstream_for_test(&self, id: &str) -> Option<UpstreamRecord> {
+        self.0
+            .state()
+            .entries
+            .get(id)
+            .and_then(|entry| entry.record.upstream.clone())
+    }
+
+    /// The admitted operation digest of one owner-scoped row.
+    ///
+    /// Read, never recomputed: the dispatch path binds its recovery descriptor
+    /// to the digest the record itself was admitted under.
+    pub(crate) fn operation_digest_of(&self, owner: &str, id: &str) -> Option<String> {
+        let state = self.0.state();
+        if !state.ready {
+            return None;
+        }
+        owned(&state, owner, id)
+            .ok()
+            .map(|entry| entry.record.admission.operation_digest.clone())
+    }
+
     pub(super) fn ready(&self) -> bool {
         self.0.state().ready
     }
@@ -332,6 +465,55 @@ impl Shared {
         };
         record.dispatched = true;
         let bytes = serialize(&record)?;
+        if bytes.len() > self.limits.record_bytes {
+            return Err(StoreError::Capacity);
+        }
+        self.commit(&record_name(task.id()), &bytes)?;
+        self.publish(task, record);
+        Ok(())
+    }
+
+    fn mark_upstream_blocking(
+        &self,
+        owner: &str,
+        id: &str,
+        expected_revision: u64,
+        upstream: UpstreamRecord,
+    ) -> Result<(), StoreError> {
+        // Bounded before anything is read or written: an over-long handle is
+        // refused rather than persisted or truncated, and the row stays
+        // unrecoverable — which is the honest state for a handle we do not hold.
+        if upstream.handle.len() > MAX_UPSTREAM_HANDLE_BYTES {
+            return Err(StoreError::Capacity);
+        }
+        let _order = self.order();
+        let (task, mut record) = {
+            let state = self.state();
+            if !state.ready {
+                return Err(StoreError::Unavailable);
+            }
+            let entry = owned(&state, owner, id)?;
+            if entry.record.revision != expected_revision {
+                return Err(StoreError::RevisionConflict);
+            }
+            if matches!(
+                entry.task.status(),
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+            ) {
+                return Err(StoreError::InvalidTransition);
+            }
+            (entry.task.clone(), entry.record.clone())
+        };
+        // The descriptor must name the operation this record was admitted for.
+        if upstream.operation_digest != record.admission.operation_digest {
+            return Err(StoreError::InvalidTransition);
+        }
+        record.upstream = Some(upstream);
+        record.version = record.version.max(UPSTREAM_VERSION);
+        let bytes = serialize(&record)?;
+        // The descriptor counts against the record budget. Refused BEFORE the
+        // write, so an oversized recovery descriptor is never silently omitted
+        // from a row the reader would then authorize with missing arguments.
         if bytes.len() > self.limits.record_bytes {
             return Err(StoreError::Capacity);
         }
@@ -818,6 +1000,14 @@ impl TaskStore {
                 never_dispatched: entry.task.status() == TaskStatus::Working
                     && entry.record.version >= MARKER_VERSION
                     && !entry.record.dispatched,
+                is_working: entry.task.status() == TaskStatus::Working,
+                // Only a v3+ row whose descriptor still names this record's
+                // admitted operation is offered as recoverable. Everything else
+                // reads as absent and takes the unchanged I3 table.
+                upstream: (entry.record.version >= UPSTREAM_VERSION)
+                    .then(|| entry.record.upstream.clone())
+                    .flatten()
+                    .filter(|upstream| upstream.consistent_with(&entry.record.admission)),
             })
             .collect()
     }

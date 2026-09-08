@@ -11,6 +11,16 @@ use super::Backend;
 use super::registry::{BackendLifecycle, BackendRuntimeState, BackendRuntimeStatus, BackendStatus};
 use crate::config::TransportConfig;
 use crate::failsafe::with_retry;
+
+/// Which transport entry point one outbound request takes, and how many times.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Attempts {
+    /// The ordinary path: the slot's retry policy decides.
+    WithRetry,
+    /// The upstream-tasks declaration, sent exactly once. A duplicate would
+    /// create durable state upstream that this gateway could not then own.
+    TaskCapabilityOnce,
+}
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::param_headers::{is_param_header, mirror_headers};
 use crate::{Error, Result};
@@ -155,6 +165,67 @@ impl Backend {
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
+        self.request_attempted(
+            method,
+            params,
+            extra_headers,
+            identity_key,
+            Attempts::WithRetry,
+        )
+        .await
+    }
+
+    /// The same request, declaring the gateway's upstream tasks extension and
+    /// sent EXACTLY ONCE.
+    ///
+    /// Two properties, both structural rather than promised.
+    ///
+    /// The declaration is made by the transport
+    /// ([`crate::transport::Transport::request_with_task_capability`]), not by a
+    /// marker in `params`: a JSON flag would be forgeable by anything that can
+    /// reach the ordinary request path, including caller-supplied arguments.
+    /// That method also refuses any method outside its own allow-list and any
+    /// peer not known to be modern, locally, before the wire.
+    ///
+    /// One attempt, because `with_retry` cannot tell a lost response from a
+    /// request the peer never saw: retrying a task-augmented `tools/call` would
+    /// create a second upstream job and leave this gateway holding only the
+    /// second handle, with the first running unowned. No later layer can undo
+    /// a second submission, so it must not be possible to make one.
+    ///
+    /// Everything else is unchanged: the same pool slot, failsafe gate,
+    /// concurrency permit, activity guard and outcome recording.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend is unavailable, the concurrency limit
+    /// is reached, the transport cannot declare the extension, or the single
+    /// attempt fails.
+    pub async fn request_with_task_capability(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
+    ) -> Result<JsonRpcResponse> {
+        self.request_attempted(
+            method,
+            params,
+            extra_headers,
+            identity_key,
+            Attempts::TaskCapabilityOnce,
+        )
+        .await
+    }
+
+    async fn request_attempted(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
+        attempts: Attempts,
+    ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
 
         // SEP-2243 (MIK-7214.HEADER.5): mirror the arguments a tool's schema
@@ -215,19 +286,41 @@ impl Backend {
         // attempt) can hand a borrow to each attempt's future without tying the
         // closure to the caller's borrow lifetime (MIK-6784).
         let identity_key = identity_key.map(str::to_string);
-        let result = with_retry(&entry.failsafe.retry_policy, &name, || {
+        let attempt = || {
             let transport = std::sync::Arc::clone(&transport);
             let method = method.to_string();
             let params = params.clone();
             let extra_headers = extra_headers.clone();
             let identity_key = identity_key.clone();
             async move {
-                transport
-                    .request_with_headers(&method, params, &extra_headers, identity_key.as_deref())
-                    .await
+                match attempts {
+                    Attempts::WithRetry => {
+                        transport
+                            .request_with_headers(
+                                &method,
+                                params,
+                                &extra_headers,
+                                identity_key.as_deref(),
+                            )
+                            .await
+                    }
+                    Attempts::TaskCapabilityOnce => {
+                        transport
+                            .request_with_task_capability(
+                                &method,
+                                params,
+                                &extra_headers,
+                                identity_key.as_deref(),
+                            )
+                            .await
+                    }
+                }
             }
-        })
-        .await;
+        };
+        let result = match attempts {
+            Attempts::WithRetry => with_retry(&entry.failsafe.retry_policy, &name, attempt).await,
+            Attempts::TaskCapabilityOnce => attempt().await,
+        };
 
         // Calculate latency
         let latency = start_time.elapsed();

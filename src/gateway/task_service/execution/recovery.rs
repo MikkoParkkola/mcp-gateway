@@ -23,7 +23,41 @@ impl TaskExecutor {
     /// the selector, so nothing is held across the writes below. Failure is a
     /// startup failure — a store this cannot settle is not served half-recovered.
     pub(crate) async fn recover_interrupted(&self) -> Result<(), ServiceError> {
+        self.recover_interrupted_deferring(&[]).await
+    }
+
+    /// The same recovery, deferring rows a trusted adapter may still recover.
+    ///
+    /// `managed` names the adapters that are BOTH configured in
+    /// `tasks.recovery_adapters` and still configured backends — computed by
+    /// the caller, which is the only place that can see both lists at `open`.
+    /// An empty slice makes this byte-identical to [`Self::recover_interrupted`].
+    ///
+    /// Deferral is not a trust claim and not a query: a deferred row is left
+    /// exactly as the previous process left it, as a managed `working` record,
+    /// and no backend is contacted here. Full trust selection and the single
+    /// bounded query happen later, on an owner-authenticated `tasks/get`.
+    /// Every other interrupted row keeps the exact I3 table.
+    pub(crate) async fn recover_interrupted_deferring(
+        &self,
+        managed: &[String],
+    ) -> Result<(), ServiceError> {
         for row in self.service.store.interrupted() {
+            // `input_required` is never deferred: `recovery_target` refuses a
+            // row that is not `working`, so deferring one would strand it
+            // non-terminal until its TTL with no read able to advance it. It
+            // takes the reviewed I3 treatment below, unchanged.
+            if row.is_working
+                && let Some(upstream) = row.upstream.as_ref()
+                && managed.iter().any(|name| *name == upstream.backend)
+            {
+                tracing::info!(
+                    task_id = %row.id,
+                    backend = %upstream.backend,
+                    "interrupted task retained as managed working; no upstream call at startup"
+                );
+                continue;
+            }
             let event = TaskTransition::Complete(restart_result(row.never_dispatched));
             match self
                 .commit(TaskWrite::Recover {

@@ -47,9 +47,10 @@ pub use execution::TaskExecutor;
 pub use execution::TaskIntent;
 pub(crate) use execution::{
     BeginOutcome, CommitObserver, CommitStage, DrainOutcome, OwnedAdmissionRequest,
-    OwnedCallerContext, TaskCall, TaskWrite, UpstreamRecovery, WriteOutcome,
+    OwnedCallerContext, RecoveredRead, RecoveryRefusal, TaskCall, TaskWrite, UpstreamAnswer,
+    UpstreamCapture, UpstreamHandle, UpstreamRecovery, WriteOutcome,
 };
-pub(crate) use record::CommittedTask;
+pub(crate) use record::{CommittedTask, UpstreamRecord};
 pub(crate) use service::CreateOutcome;
 /// Re-exported at crate-public visibility for the same reason as
 /// [`TaskExecutor`]: [`open_runtime`] is `pub` and returns this error, so its
@@ -100,13 +101,46 @@ pub(crate) async fn open_runtime_with_admission(
     subscriptions: Arc<SubscriptionRegistry>,
     admission: Arc<ExecutionAdmission>,
 ) -> Result<(Arc<TaskService>, Arc<TaskExecutor>), ServiceError> {
+    open_runtime_with_recovery(
+        store_dir,
+        max_workers,
+        limits,
+        subscriptions,
+        admission,
+        &[],
+    )
+    .await
+}
+
+/// The same open, told which adapters may keep an interrupted row alive.
+///
+/// Additive rather than a signature change on [`open_runtime_with_admission`],
+/// which twelve call sites reach directly: with an empty `managed` slice the
+/// recovery below is byte-identical to the increment before this one, so the
+/// no-adapter behaviour is unchanged by construction and not merely by test.
+///
+/// `managed` holds the names in `tasks.recovery_adapters` that are ALSO still
+/// configured backends. The caller computes it because it is the only place
+/// that can see both lists here: `AppState` does not exist yet, and a deferred
+/// row is decided by configuration and the record alone — the weakest evaluable
+/// test, which is right, because deferral is not a trust claim.
+pub(crate) async fn open_runtime_with_recovery(
+    store_dir: &Path,
+    max_workers: usize,
+    limits: StoreLimits,
+    subscriptions: Arc<SubscriptionRegistry>,
+    admission: Arc<ExecutionAdmission>,
+    managed: &[String],
+) -> Result<(Arc<TaskService>, Arc<TaskExecutor>), ServiceError> {
     let service = Arc::new(TaskService::open(store_dir, limits, admission).await?);
     let executor = TaskExecutor::new(Arc::clone(&service), subscriptions, max_workers);
     // Ready to serve means recovered. Rows a previous process left mid-flight are
     // settled here, after the admission import and before this returns; a store
     // that cannot take that write gives custody back instead of serving half of
-    // it. Nothing is dispatched, resubmitted, or asked of a backend.
-    if let Err(error) = executor.recover_interrupted().await {
+    // it. Nothing is dispatched, resubmitted, or asked of a backend — including
+    // for a deferred row, which is retained as a managed `working` record and
+    // queried only when its owner next authenticates.
+    if let Err(error) = executor.recover_interrupted_deferring(managed).await {
         let _ = service.shutdown().await;
         return Err(error);
     }
