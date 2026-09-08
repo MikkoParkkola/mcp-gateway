@@ -656,3 +656,36 @@ the one row where compile-red is the whole evidence, because there the signature
 The `gpt-20260908T144154Z` SHIP does not cover the corrected plan, and relaunching
 both legs rather than carrying the verdict forward was right: a self-found
 correction committed after a verdict is a new delta, not a confirmation pass.
+
+## R32 — SUB.4's design is finished at revision 6; the remaining work is code
+
+MIK-7272.SUB.4 stays UNWIRED because two of its three routes are unbuilt, not
+because anything about them is still undecided. Route 1 landed on the production
+boot path in `7851736d` (`server/mod.rs:742`), and the criteria ledger records it
+at line 288. The design document reached revision 6, both review legs returned
+`SHIP-WITH-FIXES` with `rc=0`, and the document's own §P4 paragraph states that
+none of the three findings moved a decision.
+
+A review round that moves no decision changes nothing about what gets built. That
+is the stuckness test in `development-process.md`, stated there as: a round that
+only tightens edges means you are polishing a protocol that should be code.
+
+RULING: `docs/design/2026-08-31-sub-4-idempotency-wiring.md` is frozen at revision 6.
+No revision 7. Routes 2 and 3 are built against it as written. A finding that would
+have produced revision 7 becomes a code-level finding on the implementing change,
+where it is cheaper to answer and lands with a test.
+
+The one exit: a finding that changes what routes 2 and 3 must DO — not how the
+document explains them. That reopens §P0 on its own terms and is a scope move, not
+a revision. Anything else is recorded as residual risk in the row and does not
+block.
+
+Evidence for the wider pattern, measured over the three hours to `1003b393`:
+174 commits, of which 23 touch `src/` or `tests/`. 59 are design or test-plan
+edits. 11 carry reversal language — retract, reverse, un-kill, falsify, withdraw.
+Package G holds 17 of the 23 code commits, so the fleet's code throughput is
+concentrated in one package while six gating packages produced none.
+
+This ruling binds SUB.4 only. It is not a general licence to stop designing: the
+other open criteria have not reached revision 6 with two passing legs, and for
+most of them the design is still the cheapest place to be wrong.
