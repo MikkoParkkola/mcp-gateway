@@ -185,6 +185,14 @@ impl std::fmt::Debug for NonceStore {
     }
 }
 
+// ── Nonce telemetry ──────────────────────────────────────────────────────────
+//
+// Two series, and deliberately nothing else. `reason` is the only label a
+// refusal carries: a nonce, a principal or a digest attached here would
+// republish through the metrics endpoint exactly what `QuotaPrincipal` and the
+// `Debug` impls above exist to keep opaque, and a scrape target is read by more
+// systems than a log is.
+
 /// Bounded refusal reasons. Closed set: a new one is a deliberate cardinality
 /// decision, not something a caller can introduce.
 pub(crate) const NONCE_REASON_INVALID: &str = "invalid";
@@ -206,6 +214,24 @@ pub(crate) fn record_nonce_rejection(reason: &'static str) {
 #[cfg(not(feature = "metrics"))]
 #[inline]
 pub(crate) fn record_nonce_rejection(_reason: &'static str) {}
+
+/// Publish the aggregate live-entry count. No labels: occupancy is a property of
+/// the store, not of any caller.
+///
+/// Callers MUST hold the state guard. An observation taken after releasing it
+/// can be published out of order and leave a reader looking at a number a
+/// concurrent operation has already superseded, with nothing to correct it.
+#[cfg(feature = "metrics")]
+fn publish_nonce_occupancy(state: &NonceState) {
+    // Saturating rather than lossy: the global bound is 100_000, so the
+    // conversion is exact in practice and a future bound cannot silently round.
+    let live = u32::try_from(state.seen.len()).unwrap_or(u32::MAX);
+    telemetry_metrics::gauge!("mcp_message_signing_nonce_entries").set(f64::from(live));
+}
+
+#[cfg(not(feature = "metrics"))]
+#[inline]
+fn publish_nonce_occupancy(_state: &NonceState) {}
 
 impl NonceStore {
     /// Create a new nonce store with the given replay window.
@@ -247,6 +273,9 @@ impl NonceStore {
         principal: &str,
     ) -> Result<()> {
         if nonce.is_empty() || nonce.len() > 256 {
+            // Decided before the lock, so there is no occupancy to publish: the
+            // store has not been consulted and cannot have changed.
+            record_nonce_rejection(NONCE_REASON_INVALID);
             return Err(Error::json_rpc(-32602, "Invalid signing nonce"));
         }
         let mut state = self.state.lock();
@@ -257,16 +286,25 @@ impl NonceStore {
         #[cfg(not(test))]
         let now = Instant::now();
         self.reclaim_expired(&mut state, now);
+        // Every exit below publishes before releasing the guard: reclamation
+        // above may already have moved the aggregate, so even a refusal leaves a
+        // number a reader would otherwise never see corrected.
         if state.seen.contains_key(nonce) {
+            record_nonce_rejection(NONCE_REASON_REPLAY);
+            publish_nonce_occupancy(&state);
             return Err(Error::json_rpc(-32001, "Nonce replay detected"));
         }
-        // The combined condition is split so the two capacity refusals stay
-        // separately observable. Order and error are unchanged: global is
-        // tested first, and both refuse with the same message.
+        // The combined condition is split only so the two capacity refusals can
+        // be told apart in telemetry. Order and error are unchanged: global is
+        // still tested first, and both still refuse with the same message.
         if state.seen.len() >= self.global_limit {
+            record_nonce_rejection(NONCE_REASON_GLOBAL_CAPACITY);
+            publish_nonce_occupancy(&state);
             return Err(Error::json_rpc(-32001, "Signing nonce capacity exceeded"));
         }
         if state.principal_counts.get(principal).copied().unwrap_or(0) >= self.principal_limit {
+            record_nonce_rejection(NONCE_REASON_PRINCIPAL_CAPACITY);
+            publish_nonce_occupancy(&state);
             return Err(Error::json_rpc(-32001, "Signing nonce capacity exceeded"));
         }
         state.seen.insert(
@@ -281,6 +319,7 @@ impl NonceStore {
             .entry(principal.to_owned())
             .or_default() += 1;
         state.expiries.push_back((now, nonce.to_owned()));
+        publish_nonce_occupancy(&state);
         Ok(())
     }
 
@@ -304,6 +343,7 @@ impl NonceStore {
         let before = state.seen.len();
         self.reclaim_expired(&mut state, now);
         let count = before - state.seen.len();
+        publish_nonce_occupancy(&state);
         if count > 0 {
             debug!(count, "Evicted expired nonce entries");
         }
@@ -725,3 +765,7 @@ mod tests {
 #[cfg(all(test, feature = "metrics"))]
 #[path = "message_signing_nonce_metrics_support.rs"]
 pub(crate) mod nonce_metrics_support;
+
+#[cfg(all(test, feature = "metrics"))]
+#[path = "message_signing_nonce_metrics_tests.rs"]
+mod nonce_metrics_tests;
