@@ -1238,6 +1238,39 @@ Today every `BridgeBounds` construction site is a test
 wiring is what puts `DEFAULT` on the live path, and until it does, the ceiling
 above is a property of a struct nothing constructs.
 
+### Round 6 escalation — `gpt-review` F1, `WIRE.5` versus gate-once — OPEN
+
+Stated in full here, because the header says it is and because a team lead
+cannot rule on a summary of a finding.
+
+- **the finding.** `WIRE.5`'s criterion reads "Every backend attempt is
+  accounted exactly once, including bridge retries, **and governance is
+  re-checked before each**", and its second fixture asserts a budget sized to
+  admit the first attempt and reject the second, with the retry never reaching
+  the backend (`docs/design/2026-09-05-mrtr7-test-plan.md:61`). The policy
+  section above says the opposite in this same design: the gate stays outside
+  `accounted_dispatch` deliberately, an exchange is gated ONCE, and the residual
+  — "a bridged round may not be budget-refused" — is ACCEPTED as metered
+  overspend bounded at `3 × cost_for(tool)`. A plan row and a design event
+  cannot both be met. The tree agrees with neither yet: `accounted_dispatch`
+  (`src/gateway/meta_mcp/invoke.rs:2464-2560`) meters, it does not gate, so
+  there is no pre-dispatch re-check to observe.
+- **why this lane cannot settle it.** The two exits are not symmetric. (A) move
+  the design to per-round gating: it ELIMINATES the residual, and takes with it
+  the `3 × cost_for(tool)` ceiling and `WIRE.13`'s four-dispatch arithmetic. It
+  is a §P3 design event that moves what an acceptance criterion asserts, so §P0
+  and §P2 re-open on their own terms first. (B) narrow `WIRE.5`'s criterion to
+  accounting alone: one row edit, but it DROPS an acceptance criterion, and the
+  repair protocol requires the requester's recorded agreement BEFORE that
+  happens, never after.
+- **recommendation: (A).** The elimination test decides it. After (B) the
+  finding can still be stated — an exchange that overspends a limit the operator
+  set stays describable, merely untested. After (A) it cannot be stated at all.
+  Eliminating a mechanism is always this lane's to do; eliminating a criterion
+  is not.
+- **blocked until ruled.** `WIRE.5` and `WIRE.13` are frozen in their current
+  form; neither is repaired, and no test is written against either.
+
 ### Review provenance for this round
 
 The `gpt-review` ledger holds **no row** for this material. The most recent row
