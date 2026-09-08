@@ -21,7 +21,7 @@ total. Each row is the agent's claim; none is independently verified here.
 | MIK-7213.CACHE.4 | no policy-epoch cache invalidation on grant/profile change; TTL-only | `src/gateway/meta_mcp/invoke.rs:835-839` | BLOCKS |
 | MIK-7272.ERROR.2 | resource-not-found returns -32002, spec requires -32602 | `src/gateway/meta_mcp/resources.rs:276-280` | BLOCKS |
 | TASK.1 | `tasks/get` and `tasks/update` resolve to method-not-found | `src/protocol/meta.rs:240-246` | BLOCKS |
-| EXT.1 | gateway never declares its own extensions; `ExtensionSet::gateway_declares()` has zero callers | `src/protocol/extensions.rs:59-64` | BLOCKS |
+| EXT.1 | ~~gateway never declares its own extensions; `ExtensionSet::gateway_declares()` has zero callers~~ **WITHDRAWN (2026-09-08, verified at source)** — refuted on both clauses. `gateway_declares()` is called at `src/gateway/meta_mcp_helpers.rs:182` inside `discovery_extensions()` (defined `:181`), which is in turn called at `src/gateway/meta_mcp/mod.rs:1207` on the live discovery path, so the gateway does declare its own extensions in production. `RELEASE-4.0.0-criteria-status.md:241` already corrected this same fact; this row was never updated to match | `src/protocol/extensions.rs:74`; callers at `src/gateway/meta_mcp_helpers.rs:182`, `src/gateway/meta_mcp/mod.rs:1207` | WITHDRAWN |
 | SCHEMA.1 | truncated mid-emit — finding lost, concerned `gateway_execute`'s `chain` parameter | not recoverable | UNRESOLVED |
 
 ## What this changes
