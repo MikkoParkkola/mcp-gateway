@@ -132,6 +132,20 @@ question the log cannot answer.
 
 ### Findings carried in from the v2 review
 
+**Reviewed baseline, disclosed.** Both v2 verdicts rendered on `55ee043d`. Everything folded in
+below, and the D6 reclaim-latency correction at `a6616d5c`, landed AFTER that commit — so the
+sentence "the design passed both legs" is true of `55ee043d` and overstates the tree by the repair
+commits that followed. Per §R11 those repairs are the confirmation pass, not a new review: they
+apply what both legs specified. The in-flight closure re-check goes back to kimi, the vendor that
+raised the finding, which is the one place the author does not get to declare a finding closed.
+
+**Observation on the review ledger, no action.** A `synthetic-review` row records no model. A kimi
+leg and any other synthetic-model leg are indistinguishable in `~/.claude/data/reviews/runs/`, so
+the row above cannot prove on its own that the second vendor was kimi — the provenance rests on
+the wrapper (`bin/kimi-review` execs `synthetic-review --model kimi-k3`) plus the run timestamp.
+Recorded, not filed: it is a defect in our tooling and nobody must act on it today.
+
+
 GPT-5.x returned **SHIP** with zero FINDING blocks and four distinct improvements
 (`~/.claude/data/reviews/runs/gpt-20260908T133849Z-53568.md`). Three are folded in above and here.
 One is rejected, with its reason, because a finding is a lead until it survives its own citation.
