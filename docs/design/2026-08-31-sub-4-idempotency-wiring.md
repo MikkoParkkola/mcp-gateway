@@ -91,14 +91,40 @@ reaches the funnel.
 
 Two further gaps compound it, both found in review and verified at source.
 
-**No advertised way for a client to send a key.** The carrier plumbing exists — the meta
-route reads `caller.retry.idempotency_key` (the MRTR retry envelope, `src/protocol/mrtr.rs`)
-and passes it to `idempotency_key_for` (`src/gateway/meta_mcp/support.rs:35-44`,
-`invoke.rs:1148`). What does not exist is any way for a client to *learn* that it may send one:
-the field is in no tool schema. A client cannot discover it, and since the automatic derivation
-was removed (P2 below) there is now no reachable protection at all. This is the finding that
-reshapes the design: "enforce only on an explicit client key" is not an available option until
-a carrier exists on both routes.
+**Undocumented, but NOT unreachable — corrected 2026-09-08 against source.** The
+carrier is UNDISCOVERABLE, and revision 6 wrongly read that as UNREACHABLE. It is not.
+On route 1 a client that knows the field can send a key TODAY and be protected by it. The
+whole chain is read at source, no hop inferred:
+
+```
+POST /mcp  tools/call        src/gateway/router/handlers.rs:1220
+  RetryFields::from_params   src/protocol/mrtr.rs:117  <- reads params["_meta"][IDEMPOTENCY_KEY_META]
+  retry: &retry             src/gateway/router/handlers.rs:1401
+  handle_tools_call          src/gateway/meta_mcp/mod.rs:1599
+  "gateway_invoke" => invoke_tool   src/gateway/meta_mcp/mod.rs:1682
+  invoke_tool -> invoke_tool_traced src/gateway/meta_mcp/invoke.rs:831,840
+  idempotency_key_for        src/gateway/meta_mcp/invoke.rs:1218, support.rs:35-44
+```
+
+`from_params` reads the key straight off the client's own `tools/call` params, and since
+`7851736d` made the cache `Some`, the enforcement site no longer takes the `None` branch. So
+the guard is LIVE IN PRODUCTION on route 1 as of that commit. What is missing is DISCOVERY —
+the field appears in no tool schema — not reachability.
+
+Two consequences the previous wording hid, and they are the reason this correction is a §P0
+scope move rather than a typo fix:
+
+1. This change is no longer *activating dormant machinery*. It is *finishing a live path*.
+   Every ordering argument below that rests on "nothing is protected yet, so order is free"
+   is void and re-decided on its own terms.
+2. Defects on that path are shipped defects, not pre-activation concerns. There is no
+   pre-activation window left in which to fix them quietly, and no operator disable switch
+   to reach for. The gate on any defect found in `invoke_tool_traced`'s idempotency handling
+   moves from BEFORE-PRODUCTION to NOW.
+
+"Enforce only on an explicit client key" IS therefore an available option on route 1 — it is
+in force. It remains unavailable on stdio and on the direct route, which is a statement about
+those two routes and not, as revision 6 had it, about the design as a whole.
 
 **The direct route bypasses the machinery entirely.** `POST /mcp/{name}`
 (`backend_handler`, `src/gateway/router/backend_handlers.rs:434`) does not go through
@@ -396,7 +422,10 @@ not before.
   cleanup task is an optimisation, not a correctness requirement.
 - MIK-7212.MRTR.10a (continuation fields inside the key) is promoted from a noted dependency to a
   PREREQUISITE. Wiring SUB.4 on a key that omits those fields makes continuation collisions live
-  rather than dormant.
+  rather than dormant. RE-DATED 2026-09-08: "makes live" was already the wrong tense. Route 1
+  reaches `idempotency_key_for` with a client-supplied key today (Problem section, chain read at
+  source), so a continuation collision on that route is live NOW, not on some future wiring. The
+  prerequisite stands; what changes is that it is overdue rather than upcoming.
 
 ## Two decisions, plus four the review created
 
@@ -425,8 +454,10 @@ three.
 CARRIERS — the meta route's `_meta` and the direct route's raw JSON-RPC `_meta`; stdio shares the
 meta route's carrier and is a separate *route* in Axis 2, not a third carrier — advertised and
 validated. Nothing in the tree advertises one. This axis is upstream of the other
-two: with the automatic derivation already deleted and no advertised carrier, the criterion is
-unsatisfiable as things stand — which is why this axis is decided rather than deferred.
+two. CORRECTED 2026-09-08: "unsatisfiable as things stand" was true only of stdio and the direct
+route. Route 1 satisfies it already — an undocumented carrier is still a carrier, and source shows
+a client's `_meta` key reaching the funnel (Problem section). The axis is decided rather than
+deferred because the criterion needs ALL THREE routes, not because nothing carries a key today.
 
 DECIDED 2026-08-31. Asked of the operator, four options put with their costs, answered
 **`_meta` on both routes** (`RELEASE-4.0.0-operator-decisions.md` row 7).
