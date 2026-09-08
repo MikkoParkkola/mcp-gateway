@@ -115,8 +115,11 @@ streaming's `session_reaper_interval` config knob and a second constant beside i
 reader — a dead value that reads as a scheduling authority. (v2 GPT improvement, confirmed by
 construction: with D1 as the host, nothing could ever read it.) Streaming's `session_ttl` is
 likewise NOT collapsed in — `IDLE_TTL` governs only what `track` writes as a deadline.
-**Effective reclaim latency is therefore `IDLE_TTL + session_reaper_interval`, not 60 seconds**, and
-that is the figure §P2 asserts against. Writing 60s anywhere would promise a sweep cadence this
+**Nominal reclaim latency is therefore `IDLE_TTL + session_reaper_interval`, not 60 seconds.** Nominal,
+not exact: `reap`'s strict `>` on whole seconds adds up to a second, a loaded runtime delays the tick by
+an amount this design does not bound, and a wall-clock step moves the deadline after it is written. §P2
+asserts against the INGREDIENTS of that figure — the write site's arithmetic and both constants — never
+against a measured latency; see the composition table in the test plan. Writing 60s anywhere would promise a sweep cadence this
 design does not own. (v2 kimi FINDING, MEDIUM/LIKELY/NOW — the same defect GPT raised independently.) Thirty seconds would hold less abandoned state under churn; an
 hour would never lose a long human-in-the-loop elicitation. Nobody has ruled.
 

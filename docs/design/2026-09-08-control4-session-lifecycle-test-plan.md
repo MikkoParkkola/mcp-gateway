@@ -93,8 +93,21 @@ not injectable at the level T4 runs at, and `IDLE_TTL` is 300 seconds against a 
 that literally measured the latency would either sleep for five minutes or inject its own `expires_at`
 and then assert on the value it just supplied. Both were considered and both are rejected.
 
-So the bound `[IDLE_TTL, IDLE_TTL + session_reaper_interval]` — an upper bound, not the equality the
-first draft of this plan claimed — is a COMPOSITION of facts each pinned somewhere cheaper:
+So the bound `[IDLE_TTL, IDLE_TTL + session_reaper_interval]` is NOMINAL. It is not the equality the
+first draft of this plan claimed, and it is not a guarantee either. Three things push past it and no
+case in this table can bound any of them:
+
+- `reap` compares whole seconds with a strict `>` (`session_lifecycle.rs:129`), so a deadline is
+  reclaimed no earlier than the first whole second PAST it — up to ~1s of slack before the window starts;
+- the tick is a scheduled task on a shared runtime, so its period is a floor, not a promise: under load
+  a sweep arrives late by an amount nothing here measures;
+- `SystemTime` is wall-clock and not monotonic, so an NTP step or a suspend moves the deadline itself
+  after it was written.
+
+What this plan asserts, and all it asserts, is the composition below — that each ingredient of the bound
+is the value the design names. The bound holds on a quiet clock and an unloaded runtime; it is a NOMINAL
+figure for capacity planning, never a timing guarantee a test enforces. Each ingredient is pinned
+somewhere cheaper:
 
 | the fact | where it is pinned |
 |---|---|
