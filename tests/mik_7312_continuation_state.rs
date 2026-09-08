@@ -18,9 +18,10 @@ use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp};
+use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, StoreLimits, open_runtime};
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-use mcp_gateway::protocol::continuation::{ContinuationError, ContinuationState, Payload};
+use mcp_gateway::protocol::continuation::{ContinuationError, ContinuationState, Payload, Purpose};
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 
 /// One gateway process, built the way the server builds it.
@@ -28,7 +29,12 @@ use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 /// The `continuation` field is what this test file exists for: it is filled
 /// from `ContinuationState::new()`, the same call `serve` makes, rather than
 /// from key bytes a test chose.
-fn app_state() -> Arc<AppState> {
+///
+/// The `TempDir` comes back with the state because the task store leases its
+/// directory for as long as the service lives: a directory dropped here would
+/// be deleted under a service the test is still holding. Each call gets its own,
+/// so the two states this file builds are two processes and not one.
+async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
     let config = Config::default();
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -37,7 +43,19 @@ fn app_state() -> Arc<AppState> {
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
     let agent_registry = Arc::new(AgentRegistry::new());
-    Arc::new(AppState {
+
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let (tasks, task_executor) = open_runtime(
+        &store_dir.path().join("tasks"),
+        config.tasks.max_workers,
+        StoreLimits::default(),
+        Arc::clone(&subscriptions),
+    )
+    .await
+    .expect("the fixture task store opens");
+
+    let state = Arc::new(AppState {
         env: None,
         meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
         backends,
@@ -65,12 +83,12 @@ fn app_state() -> Arc<AppState> {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
+        tasks,
+        task_executor,
+        subscriptions,
         continuation: Arc::new(ContinuationState::new()),
-    })
+    });
+    (state, store_dir)
 }
 
 /// A deadline inside the mint-side lifetime ceiling.
@@ -93,6 +111,9 @@ fn payload(jti: &str, origin: &str, expires_at: u64) -> Payload {
         expires_at,
         jti: jti.to_string(),
         hold_key: format!("exchange-{jti}"),
+        // A backend `input_required` continuation, which is the domain every
+        // case in this file redeems through.
+        purpose: Purpose::BackendInput,
     }
 }
 
@@ -103,7 +124,7 @@ fn payload(jti: &str, origin: &str, expires_at: u64) -> Payload {
 /// owner rather than a loose `ConsumedLedger` a test constructed.
 #[tokio::test]
 async fn continuation_state_is_reachable_from_the_production_app_state() {
-    let state = app_state();
+    let (state, _store_dir) = app_state().await;
     let minted = payload("jti-reachable", "replica-a", EXPIRES_AT);
 
     let token = state
@@ -144,8 +165,8 @@ async fn continuation_state_is_reachable_from_the_production_app_state() {
 /// shared store decides it.
 #[tokio::test]
 async fn a_token_minted_by_one_app_state_is_refused_by_another() {
-    let a = app_state();
-    let b = app_state();
+    let (a, _a_store_dir) = app_state().await;
+    let (b, _b_store_dir) = app_state().await;
 
     let token = a
         .continuation

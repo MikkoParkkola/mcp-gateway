@@ -53,6 +53,23 @@ const NONCE_LEN: usize = 12;
 /// unauthenticated caller can demand small.
 const MAX_ENVELOPE_LEN: usize = 8 * 1024;
 
+/// Why a sealed envelope exists. Distinct domains share one keyring and
+/// ledger; they must not redeem each other.
+///
+/// Default is [`Self::BackendInput`]: every envelope minted before this field
+/// existed, and [`Payload::mint`] today, continues a backend elicitation.
+/// Unknown wire values fail to deserialize, so an unrecognised domain cannot
+/// masquerade as either supported one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Purpose {
+    /// Continues a backend `input_required` exchange.
+    #[default]
+    BackendInput,
+    /// Confirms a destructive outer tool call before task admission.
+    DestructiveConfirm,
+}
+
 /// What the envelope carries. None of it is visible to the client.
 ///
 /// `Debug` is implemented by hand rather than derived, and the omissions are the
@@ -95,6 +112,13 @@ pub struct Payload {
     /// caller, so a retry whose own exchange has ended would be admitted on the
     /// strength of a stranger's.
     pub hold_key: String,
+    /// Which domain this envelope belongs to.
+    ///
+    /// Absent on envelopes sealed before the field existed; those deserialize
+    /// as [`Purpose::BackendInput`]. Confirmation grants set
+    /// [`Purpose::DestructiveConfirm`] explicitly at mint.
+    #[serde(default)]
+    pub purpose: Purpose,
 }
 
 impl std::fmt::Debug for Payload {
@@ -111,6 +135,7 @@ impl std::fmt::Debug for Payload {
             .field("expires_at", &self.expires_at)
             .field("jti", &self.jti)
             .field("hold_key", &self.hold_key)
+            .field("purpose", &self.purpose)
             .finish()
     }
 }
@@ -177,6 +202,48 @@ impl Payload {
             expires_at: expiry_for(now),
             jti: uuid::Uuid::new_v4().to_string(),
             hold_key,
+            purpose: Purpose::BackendInput,
+        }
+    }
+
+    /// Seal one destructive-confirmation grant, valid from `now`.
+    ///
+    /// Same lifetime, `jti`, and hold contract as [`Self::mint`]. The only
+    /// difference is [`Purpose::DestructiveConfirm`], which a backend-input
+    /// redeem must refuse before touching hold or ledger.
+    #[must_use]
+    pub fn mint_confirmation(
+        backend_id: String,
+        backend_request_state: Option<String>,
+        principal_fingerprint: String,
+        original_request_digest: String,
+        origin_replica: String,
+        hold_key: String,
+        now: u64,
+    ) -> Self {
+        let mut payload = Self::mint(
+            backend_id,
+            backend_request_state,
+            principal_fingerprint,
+            original_request_digest,
+            origin_replica,
+            hold_key,
+            now,
+        );
+        payload.purpose = Purpose::DestructiveConfirm;
+        payload
+    }
+
+    /// Refuse a payload whose domain is not `expected`.
+    ///
+    /// Kept beside [`Self::redeemable_by`]: authenticity is not purpose, and
+    /// folding the two would let a caller skip the domain check by reaching
+    /// for the payload directly.
+    pub fn require_purpose(&self, expected: Purpose) -> Result<(), ContinuationError> {
+        if self.purpose == expected {
+            Ok(())
+        } else {
+            Err(ContinuationError::NotAuthentic)
         }
     }
 
@@ -673,7 +740,20 @@ pub struct InFlight {
 /// A free function rather than a method because [`InFlight::guard`] calls it
 /// while already holding the lock.
 fn reclaim_abandoned(held: &mut std::collections::HashMap<String, (String, u64)>, now: u64) {
+    let before = held.len();
     held.retain(|_, (_, deadline)| now <= *deadline);
+    let evicted = before - held.len();
+    if evicted > 0 {
+        // The only trace this event leaves. A client refused for presenting a
+        // stale envelope is counted at its own call site with
+        // `reason="deadline_passed"`; a client that simply stops calling makes
+        // no call to be counted in, so without this an operator cannot see it
+        // at all (NFR.OBS.4). Counted here rather than at the caller because
+        // this is where the eviction is decided, and the emission is pinned
+        // end-to-end by `tests/continuation_expiry_metric_test.rs`.
+        telemetry_metrics::counter!("continuation_expiry_total", "reason" => "hold_evicted")
+            .increment(evicted as u64);
+    }
 }
 
 impl InFlight {
@@ -880,6 +960,35 @@ impl ContinuationState {
             .hold(&backend_id, expiry_for(now), now)
             .await?;
         Some(Payload::mint(
+            backend_id,
+            backend_request_state,
+            principal_fingerprint,
+            original_request_digest,
+            self.replica.clone(),
+            hold_key,
+            now,
+        ))
+    }
+
+    /// Open a confirmation exchange on this replica and seal a
+    /// [`Purpose::DestructiveConfirm`] continuation for it.
+    ///
+    /// Same hold-then-mint pairing as [`Self::begin_exchange`]: the envelope
+    /// names a slot this process is holding, and a full table declines rather
+    /// than answering with a handle it cannot honour.
+    pub async fn begin_confirmation_exchange(
+        &self,
+        backend_id: String,
+        backend_request_state: Option<String>,
+        principal_fingerprint: String,
+        original_request_digest: String,
+        now: u64,
+    ) -> Option<Payload> {
+        let hold_key = self
+            .in_flight
+            .hold(&backend_id, expiry_for(now), now)
+            .await?;
+        Some(Payload::mint_confirmation(
             backend_id,
             backend_request_state,
             principal_fingerprint,

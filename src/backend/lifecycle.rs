@@ -229,7 +229,7 @@ impl Backend {
                 // first request already knows which dialect to speak. Runs
                 // under this slot's `start_lock`; see `Backend::resolve_era`
                 // for the lock order that imposes.
-                self.resolve_era(&transport).await;
+                self.resolve_era_after_start(&transport).await;
                 return Ok(transport);
             }
             // Lost the race: `reconcile_after_start` already closed the
@@ -284,6 +284,22 @@ impl Backend {
             let _ = orphaned.close().await;
         }
         None
+    }
+
+    /// Resolve the era for a transport that did not resolve it while starting.
+    ///
+    /// HTTP resolves it inside [`Backend::start_entry`], because that is where
+    /// RFC-0061 §2.4's handshake decision is taken and the decision needs the
+    /// answer. Probing again here would not merely duplicate a request: the
+    /// start path probes through `restart_with`, which discards first, so a
+    /// second call would throw away a verdict the peer has already given and
+    /// re-derive it — and the transport shapes requests from that cache while
+    /// it is empty. Every other transport still resolves here, unchanged.
+    async fn resolve_era_after_start(&self, transport: &Arc<dyn Transport>) {
+        if matches!(self.config.transport, TransportConfig::Http { .. }) {
+            return;
+        }
+        self.resolve_era(transport).await;
     }
 
     /// Start the backend's canonical (shared) transport.
@@ -372,12 +388,31 @@ impl Backend {
                 if matches!(key, PoolKey::PerUser { .. }) {
                     transport.mark_single_tenant();
                 }
-                // Before `initialize()`, deliberately: the handshake must stay
-                // legacy-shaped, and it reaches the wire via `send_request`,
-                // which shapes nothing. Attaching after would leave every
-                // request between start and the first shaped call unshaped.
+                // RFC-0061 §2.4 startup: ask first, handshake only if the
+                // answer is not modern. Attached before anything reaches the
+                // wire, deliberately — the probe below is itself a request, and
+                // it reads this cache to know it is the one message that may
+                // not wait for a verdict.
                 transport.attach_era(Arc::clone(&self.era));
-                transport.initialize().await?;
+                // Connect without handshaking: the probe needs the credential
+                // and the message endpoint, and nothing else.
+                transport.connect().await?;
+                // The probe, its deadline and the meaning of its answer stay in
+                // `Backend::resolve_era` and `EraCache`. This path chooses when
+                // to ask, never what the answer means.
+                let peer: Arc<dyn Transport> = transport.clone();
+                self.resolve_era(&peer).await;
+                // Only a determined `Modern` skips the handshake. A legacy
+                // answer, an unrecognised error and silence all read as `None`
+                // or `Legacy` here, which is the fallback the RFC requires —
+                // and is the same fallback `outbound_era` will apply to every
+                // later request, so shaping and startup cannot disagree.
+                let era = self
+                    .era
+                    .cached()
+                    .await
+                    .unwrap_or(crate::protocol::era::Era::Legacy);
+                transport.finish_startup(era).await?;
                 transport
             }
             #[cfg(feature = "a2a")]
@@ -899,7 +934,7 @@ impl Backend {
                 // process on the other end, and this one has just been
                 // replaced. Runs under the `start_lock` taken above, which is
                 // the order `Backend::resolve_era` documents.
-                self.resolve_era(&transport).await;
+                self.resolve_era_after_start(&transport).await;
                 Ok(RestartOutcome::Rebuilt)
             }
             Err(error) => {

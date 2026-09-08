@@ -6,6 +6,7 @@
 //! Feature-specific types live in the [`features`] sub-module and are
 //! re-exported here so callers use `crate::config::KeyServerConfig`, etc.
 
+pub(crate) mod account_bindings;
 mod env_overlay;
 mod features;
 
@@ -34,13 +35,17 @@ pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvF
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
     CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
-    CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, ErrorBudgetSection,
-    FailsafeConfig, HealthCheckConfig, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
+    CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS,
+    ErrorBudgetSection, FailsafeConfig, HealthCheckConfig, IdempotencyConfig,
+    IdempotencyReadOnlyTool, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
     KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
     PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
     RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
-    StreamingConfig, ToolContractConfig, WebhookConfig,
+    StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig,
 };
+
+// Personal-account custody DTO only — not the rest of `personal_accounts`.
+pub use crate::personal_accounts::config::{AccountsConfig, AccountsLimits};
 
 // ── Root config ───────────────────────────────────────────────────────────────
 
@@ -71,6 +76,8 @@ pub struct Config {
     pub capabilities: CapabilityConfig,
     /// Cache configuration.
     pub cache: CacheConfig,
+    /// Operator-owned read-only exceptions to execution admission.
+    pub idempotency: IdempotencyConfig,
     /// Playbook configuration.
     pub playbooks: PlaybooksConfig,
     /// Security policy configuration.
@@ -108,6 +115,12 @@ pub struct Config {
     #[cfg(feature = "cost-governance")]
     #[serde(default)]
     pub cost_governance: crate::cost_accounting::config::CostGovernanceConfig,
+    /// Durable tasks extension: store directory, worker cap, record limits.
+    #[serde(default)]
+    pub tasks: TasksConfig,
+    /// Optional managed personal-account custody. Omitted enables none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounts: Option<AccountsConfig>,
 }
 
 fn default_routing_profile() -> String {
@@ -526,8 +539,41 @@ impl Config {
         let mut config: Self = figment
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
+        // ORDER MATTERS, AND IT DID NOT BEFORE.
+        //
+        // `expand_env_vars` below INLINES `auth.bearer_token` and
+        // `auth.api_keys[].key`: after it, a credential written `env:SHARED`
+        // holds the VALUE `SHARED` had, and the `env:` spelling is gone. The
+        // structural alias check inside `validate_with_env` compares an
+        // adapter's `env:SHARED` reference against that gateway text, so on
+        // this path it was comparing a reference against plaintext and never
+        // matched. With a DISABLED store the material half is deliberately
+        // skipped, so the one variable wired into both places was accepted in
+        // silence — the very case the structural check exists to catch, and the
+        // one an operator only discovers on the day they enable custody.
+        //
+        // Running it here, before any inlining, is the only point on this path
+        // where BOTH sides are still references. The call inside
+        // `validate_with_env` stays exactly where it is: callers that parse and
+        // validate without ever inlining (and the reload/validation entry
+        // points) reach only that one, and re-running a text-only check costs
+        // nothing. Nothing else moves — allowlist semantics and runtime wiring
+        // are untouched by this.
+        {
+            let gateway_credentials = config.gateway_credentials();
+            crate::personal_accounts::config::validate_adapter_gateway_reference_separation(
+                config.accounts.as_ref(),
+                &gateway_credentials,
+            )
+            .map_err(|error| Error::ConfigValidation(error.to_string()))?;
+        }
         let secret_refs = match expansion {
-            Expansion::Resolve => config.expand_env_vars(&overlay),
+            Expansion::Resolve => {
+                let refs = config.expand_env_vars(&overlay);
+                config.security.message_signing =
+                    config.security.message_signing.resolve_with_env(&overlay)?;
+                refs
+            }
             Expansion::Literal => BTreeSet::new(),
         };
         config.validate_with_env(&overlay)?;
@@ -672,6 +718,27 @@ impl Config {
         if let Some(token) = self.key_server.admin_token.as_mut() {
             subst(token);
         }
+        // Record names only. Leave `env:` spellings in place so a rewrite cannot
+        // persist decoded account key material.
+        if let Some(accounts) = &self.accounts {
+            for reference in accounts.keys.values() {
+                if let Some(name) = reference.strip_prefix("env:") {
+                    seen.insert(name.to_string());
+                }
+            }
+            // Adapter signing references, recorded the same way and for the
+            // same reason as the account keys above: NAMES only, and the
+            // `env:` spelling stays in the config so a rewrite cannot persist
+            // signing material. Until now an adapter secret was the one
+            // startup-only secret this set did not mention, so a reload that
+            // compares these names across overlays could not report a rotated
+            // adapter secret that no running holder can take.
+            for adapter in &accounts.adapters {
+                if let Some(name) = adapter.hmac_secret_ref.strip_prefix("env:") {
+                    seen.insert(name.to_string());
+                }
+            }
+        }
         seen
     }
 
@@ -727,14 +794,79 @@ impl Config {
         self.validate_remote_backend_provenance()?;
         self.validate_required_env_references(overlay)?;
         self.runtime.validate()?;
+        self.idempotency.validate()?;
         self.validate_backend_runtime_profiles()?;
         self.validate_stop_when_idle_ownership()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
         self.validate_agent_key_material(overlay)?;
+        self.security.message_signing.resolve_with_env(overlay)?;
         self.key_server.validate()?;
         self.error_budget.validate()?;
+        self.tasks.validate()?;
+        // Descriptor structure first, and separately: a `personal_managed`
+        // descriptor under `enabled: false` must refuse, and the arm below
+        // deliberately accepts `NotEnabled` from `resolve` so that an
+        // explicitly disabled store-only block stays an ordinary
+        // configuration. Checking structure here also means a malformed
+        // descriptor never causes an account secret to be read.
+        crate::personal_accounts::config::validate_descriptors(self.accounts.as_ref())
+            .map_err(|error| Error::ConfigValidation(error.to_string()))?;
+        // Structural half of the approved "no reuse with gateway authentication
+        // secrets" rule: one variable wired into both an adapter and a gateway
+        // credential is one secret whatever it holds, so this is decided from
+        // the text and reads nothing, disabled store included.
+        let gateway_credentials = self.gateway_credentials();
+        crate::personal_accounts::config::validate_adapter_gateway_reference_separation(
+            self.accounts.as_ref(),
+            &gateway_credentials,
+        )
+        .map_err(|error| Error::ConfigValidation(error.to_string()))?;
+        // Consumer side of the same contract: every `backends[*].account`
+        // reference resolves to a declared descriptor key, and a managed
+        // consumer carries no second answer to "how is this backend
+        // authenticated". Compiling here means an unresolved or contradictory
+        // reference is a load refusal rather than a dispatch-time discovery.
+        account_bindings::validate(self)?;
+        match crate::personal_accounts::config::resolve(self.accounts.as_ref(), overlay) {
+            Ok(_) | Err(crate::personal_accounts::config::AccountsConfigError::NotEnabled) => {}
+            Err(error) => return Err(Error::ConfigValidation(error.to_string())),
+        }
+        // Material half of the same rule, and only where material is resolved:
+        // two differently NAMED variables holding one value, or a literal
+        // gateway credential, are invisible to the reference check above.
+        crate::personal_accounts::config::validate_adapter_gateway_material_separation(
+            self.accounts.as_ref(),
+            overlay,
+            &gateway_credentials,
+        )
+        .map_err(|error| Error::ConfigValidation(error.to_string()))?;
         Ok(())
+    }
+
+    /// The gateway authentication credentials AS CONFIGURED, for the adapter
+    /// separation checks.
+    ///
+    /// Borrowed spec text, never a resolved value: `resolve_bearer_token` and
+    /// `resolve_key` read `std::env` directly rather than the overlay this load
+    /// was evaluated against, and the `auto` bearer mints a fresh random token
+    /// per call. Handing over the configured text lets the checks resolve
+    /// through the overlay and skip `auto` deliberately.
+    fn gateway_credentials(&self) -> Vec<crate::personal_accounts::config::GatewayCredential<'_>> {
+        use crate::personal_accounts::config::GatewayCredential;
+
+        let mut credentials: Vec<GatewayCredential<'_>> = Vec::new();
+        if let Some(token) = self.auth.bearer_token.as_deref() {
+            credentials.push(GatewayCredential::BearerToken(token));
+        }
+        for (index, api_key) in self.auth.api_keys.iter().enumerate() {
+            credentials.push(GatewayCredential::ApiKey {
+                index,
+                name: api_key.name.as_str(),
+                spec: api_key.key.as_str(),
+            });
+        }
+        credentials
     }
 
     /// Refuse to start when an enabled agent's key material cannot reject
@@ -1434,6 +1566,19 @@ pub struct BackendConfig {
     /// static-credential behavior (IDP.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity_propagation: Option<crate::identity_propagation::IdentityPropagationConfig>,
+    /// Explicit reference to an `accounts.descriptors` MAP KEY.
+    ///
+    /// The value is the descriptor's logical id — the `backend_id` half of the
+    /// account key — and never the backend registry name, the provider id, an
+    /// email or a display name. A name that is not a declared descriptor key is
+    /// a startup refusal (`account_bindings`), never a silent downgrade to the
+    /// static credential this backend also carries.
+    ///
+    /// Mutually exclusive with [`Self::identity_propagation`]: the descriptor
+    /// decides how this backend is authenticated, and two answers to that
+    /// question are a conflict rather than a precedence rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 // Manual `Debug` that redacts the credential-injection rules (CWE-532, mirrors
@@ -1463,6 +1608,7 @@ impl std::fmt::Debug for BackendConfig {
             )
             .field("runtime_profile", &self.runtime_profile)
             .field("identity_propagation", &self.identity_propagation)
+            .field("account", &self.account)
             .finish()
     }
 }
@@ -1483,6 +1629,7 @@ impl Default for BackendConfig {
             allow_cleartext_credentials: false,
             runtime_profile: None,
             identity_propagation: None,
+            account: None,
         }
     }
 }
@@ -1707,12 +1854,24 @@ pub mod humantime_serde {
     ///
     /// # Errors
     ///
-    /// Returns a serialization error if the serializer fails.
+    /// Returns a serialization error if the serializer fails, the duration has
+    /// sub-millisecond precision, or its millisecond total exceeds `u64` when
+    /// fractional seconds require the millisecond encoding.
     pub fn serialize<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_str(&format!("{}s", duration.as_secs()))
+        if duration.subsec_nanos() == 0 {
+            return serializer.serialize_str(&format!("{}s", duration.as_secs()));
+        }
+        if !duration.subsec_nanos().is_multiple_of(1_000_000) {
+            return Err(serde::ser::Error::custom(
+                "duration has sub-millisecond precision",
+            ));
+        }
+        let millis = u64::try_from(duration.as_millis())
+            .map_err(|_| serde::ser::Error::custom("duration millisecond total exceeds u64"))?;
+        serializer.serialize_str(&format!("{millis}ms"))
     }
 
     /// Deserialize a human-readable duration string.
@@ -2097,3 +2256,15 @@ mod cleartext_credential_guard {
         assert!(validate(with_oauth(a2a(&format!("https://{REMOTE}")))).is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "account_custody_tests.rs"]
+mod account_custody_tests;
+
+#[cfg(test)]
+#[path = "account_consumer_config_tests.rs"]
+mod account_consumer_config_tests;
+
+#[cfg(test)]
+#[path = "descriptor_config_tests.rs"]
+mod descriptor_config_tests;

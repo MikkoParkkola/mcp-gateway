@@ -13,6 +13,10 @@ mod meta_mcp_helpers;
 mod meta_mcp_tool_defs;
 mod middleware;
 pub mod oauth;
+// Crate-internal on purpose: the adapter is wired by `router` and by nothing
+// else, so no caller outside the gateway can install it without the standard
+// auth layer that must run first.
+mod openwebui_adapter;
 pub mod proxy;
 pub mod recovery;
 mod router;
@@ -22,6 +26,7 @@ pub mod session_lifecycle;
 pub mod state;
 pub mod streaming;
 pub mod subscription_registry;
+pub(crate) mod task_service;
 pub mod trace;
 #[cfg(feature = "webui")]
 pub mod ui;
@@ -56,4 +61,7 @@ pub mod test_helpers {
     pub use super::meta_mcp::prune_constant_signals;
     pub use super::meta_mcp::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
     pub use super::router::{AppState, create_router};
+    pub use super::task_service::{
+        ServiceError, StoreLimits, TaskExecutor, TaskService, open_runtime,
+    };
 }

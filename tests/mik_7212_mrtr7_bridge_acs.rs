@@ -81,7 +81,7 @@ use serde_json::{Value, json};
 
 use mcp_gateway::gateway::input_bridge::{
     BackendInvoker, BridgeBounds, BridgeError, BridgeObserver, BridgeRecord, ClientChannel,
-    DeliveryError, InputBridge,
+    DeliveryError, InputBridge, NoClientChannel,
 };
 use mcp_gateway::protocol::meta::{Declared, classify_request};
 use mcp_gateway::protocol::mrtr::{InputRequired, Refusal};
@@ -1101,28 +1101,29 @@ async fn ac_mrtr_7b_the_request_budget_is_checked_before_a_batch_is_sent() {
     );
 }
 
-/// Row 320 — a prompt nobody answers ends its round at the per-prompt bound,
-/// and the rounds still remaining run.
+/// Row 320 — a prompt nobody answers, while the aggregate budget is still
+/// live, ends the CALL and names the key the bridge was waiting on.
 ///
-/// The second round is what makes this row worth writing. A bridge that turns
-/// one unanswered prompt into a failed call satisfies "abandoned at the
-/// per-prompt bound" perfectly and fails here, on the round that never ran. The
-/// elapsed floor is asserted so that a bridge abandoning immediately — which
-/// would also let the second round run — cannot pass: the wait has to be the
-/// bound's, and the fixture never times itself out.
+/// INVERTED 2026-09-08 on `R8a`. This row previously asserted the opposite: the
+/// round was abandoned and the remaining rounds ran. What made that reading
+/// untenable is the retry it produced — a bare `continue` at the timeout site
+/// handed the backend the same call with `k1` simply MISSING and no error
+/// anywhere, so a client that stops answering is indistinguishable from a
+/// question the backend never asked. `R8a` splits the silence by which bound
+/// bound it: with `left > per_prompt` the budget is still live, so the failure
+/// belongs to the prompt and is attributed to its key.
 ///
 /// Scaled bounds, in milliseconds, so the suite stays fast. The relation is
 /// what is asserted; the shipped literals are pinned elsewhere.
 #[tokio::test]
-async fn ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call() {
+async fn ac_mrtr_7b_an_unanswered_prompt_inside_a_live_budget_ends_the_call() {
     let bounds = BridgeBounds {
         aggregate: Duration::from_millis(400),
         per_prompt: Duration::from_millis(60),
         ..BridgeBounds::DEFAULT
     };
-    let content = json!({"branch": "main"});
-    let client = FakeClient::new(vec![Reply::Silent, accepted(&content)]);
-    let backend = FakeBackend::new(vec![asking(&[("k2", ask("second?"))]), completed()]);
+    let client = FakeClient::new(vec![Reply::Silent]);
+    let backend = FakeBackend::never();
     let records = Records::default();
 
     let started = std::time::Instant::now();
@@ -1145,39 +1146,84 @@ async fn ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call() {
     );
     let elapsed = started.elapsed();
 
-    assert!(
-        outcome.is_ok(),
-        "one unanswered prompt must not end the call: {outcome:?}"
+    assert_eq!(
+        outcome,
+        Err(BridgeError::Delivery {
+            key: "k1".to_string(),
+            error: DeliveryError::TimedOut,
+        }),
+        "an unanswered prompt inside a live budget must end the call as that prompt's \
+         delivery failure, naming `k1`: a bridge that skips the prompt instead retries the \
+         backend with the key missing, which reads to the backend as a question nobody asked"
     );
     assert!(
         elapsed >= bounds.per_prompt,
         "the wait must be ended by the per-prompt bound, not sooner: waited {elapsed:?}"
     );
     assert!(
-        elapsed < bounds.per_prompt * 3,
-        "the wait must be the per-prompt bound's, not merely under the aggregate: a bridge \
-         abandoning at a multiple of the bound still leaves room for round 2 and would \
-         otherwise pass; waited {elapsed:?} against a bound of {:?}",
-        bounds.per_prompt
-    );
-    assert_eq!(
-        client.frames().len(),
-        2,
-        "the round after the abandoned one must still put its question"
-    );
-    assert_eq!(
-        backend.calls().len(),
-        2,
-        "the abandoned round retries the backend, and the answered one retries it again"
+        elapsed < bounds.aggregate,
+        "the per-prompt bound must be what ends this wait, not the aggregate — otherwise the \
+         row proves nothing about which of the two arms was taken: waited {elapsed:?} against \
+         an aggregate of {:?}",
+        bounds.aggregate
     );
     assert!(
-        backend.calls()[0].pointer("/inputResponses/k1").is_none(),
-        "an abandoned prompt must reach the backend as a MISSING key, never as a filed \
-         placeholder: a bridge that files null, an empty object or a synthesized decline \
-         under `k1` satisfies every assertion above — the round ends, the next one runs — \
-         while telling the backend the question it asked was answered. Absence is what \
-         makes the abandonment observable, and an accepted empty answer (`k1: {{}}`) is a \
-         different retry from this one"
+        backend.calls().is_empty(),
+        "a call ended by its own prompt must not retry the backend at all: {} retries",
+        backend.calls().len()
+    );
+}
+
+/// Row 320a — the same silence, when the AGGREGATE remainder is what bounds the
+/// wait, is the budget's failure and not the prompt's.
+///
+/// The discriminator `R8a` spells is `left <= per_prompt`, and this row is the
+/// only one that can observe it. Making `aggregate` equal to `per_prompt` puts
+/// the very first prompt on that side of it: no round has run, so `left` is the
+/// whole budget and the whole budget is the shorter of the two.
+///
+/// Two wrong implementations fail here and pass row 320. One that returns
+/// `Delivery`/`TimedOut` for every timeout attributes an expired budget to
+/// whichever prompt happened to be in flight — the key names an owner, and that
+/// owner did nothing wrong. One that keeps the bare `continue` never fails at
+/// all: it skips the prompt, retries a backend that answers, and the call
+/// succeeds while its budget is gone.
+#[tokio::test]
+async fn ac_mrtr_7b_a_wait_bounded_by_the_aggregate_remainder_is_a_deadline() {
+    let bounds = BridgeBounds {
+        aggregate: Duration::from_millis(60),
+        per_prompt: Duration::from_millis(60),
+        ..BridgeBounds::DEFAULT
+    };
+    let client = FakeClient::new(vec![Reply::Silent]);
+    let backend = FakeBackend::never();
+    let records = Records::default();
+
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(3),
+        bridge_with(
+            &client,
+            &backend,
+            &records,
+            declared_all(),
+            None,
+            &interim(&[("k1", ask("first?"))]),
+            bounds,
+        ),
+    )
+    .await
+    .expect("the bridge's own bound must end the wait, not the suite's outer timeout");
+
+    assert_eq!(
+        outcome,
+        Err(BridgeError::Deadline),
+        "a wait the aggregate remainder bounded must end the call as a deadline: attributing \
+         an expired budget to `k1` blames the prompt for a bound it never reached"
+    );
+    assert!(
+        backend.calls().is_empty(),
+        "a call ended by its budget must not retry the backend: {} retries",
+        backend.calls().len()
     );
 }
 
@@ -1583,6 +1629,29 @@ fn ac_mrtr_7a_the_capability_fixture_declares_what_it_names() {
             all.has(capability),
             "the fixture claiming every capability must declare {capability}, \
              or every capability row gates on a client that declared nothing"
+        );
+    }
+}
+
+/// The null channel refuses every admitted method, and says why in one way.
+///
+/// `NoClientChannel` is what a transport with no server-to-client path carries
+/// on the caller context, and a null object that answered anything other than
+/// `NoSession` — or answered it for only some of the closed method set — would
+/// be a fail-open dressed as a default. The loop runs over `ServerRequestKind::ALL`
+/// so a fourth kind cannot arrive unrefused.
+#[tokio::test]
+async fn ac_mrtr_7a_the_null_channel_refuses_every_admitted_method() {
+    for kind in ServerRequestKind::ALL {
+        let refusal = NoClientChannel
+            .send_request("session-1", "bridge-1", kind.method(), Some(json!({})))
+            .await;
+
+        assert_eq!(
+            refusal,
+            Err(DeliveryError::NoSession),
+            "the null channel must refuse {} with NoSession, not answer it",
+            kind.method()
         );
     }
 }

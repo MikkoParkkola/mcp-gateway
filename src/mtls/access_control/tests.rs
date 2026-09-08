@@ -17,6 +17,7 @@ fn identity(
         san_uris: san_uris.iter().map(|s| (*s).to_owned()).collect(),
         san_dns_names: san_dns.iter().map(|s| (*s).to_owned()).collect(),
         display_name: cn.unwrap_or("<unknown>").to_owned(),
+        quota_principal: None,
     }
 }
 

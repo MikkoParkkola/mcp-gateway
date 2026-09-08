@@ -50,7 +50,10 @@ use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+use mcp_gateway::gateway::test_helpers::{
+    AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+};
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 use serde_json::{Value, json};
@@ -80,7 +83,10 @@ fn modern_frame(method: &str) -> Value {
 /// A gateway built from `base`, differing from any other state here only in the
 /// flag under test. Passing the whole `Config` is what makes the revert case a
 /// revert: both sides come from one configuration.
-fn state(base: &Config, modern_protocol: bool) -> Arc<AppState> {
+///
+/// The directory the task store leases comes back with the state: the store
+/// holds it while the service lives, so the case binds it for its own lifetime.
+async fn state(base: &Config, modern_protocol: bool) -> (Arc<AppState>, tempfile::TempDir) {
     let mut config = base.clone();
     config.server.modern_protocol = modern_protocol;
     let backends = Arc::new(BackendRegistry::new());
@@ -89,7 +95,20 @@ fn state(base: &Config, modern_protocol: bool) -> Arc<AppState> {
         config.streaming.clone(),
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    Arc::new(AppState {
+
+    // One registry, shared with the executor that publishes through it.
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let (tasks, task_executor) = open_runtime(
+        &store_dir.path().join("tasks"),
+        config.tasks.max_workers,
+        StoreLimits::default(),
+        Arc::clone(&subscriptions),
+    )
+    .await
+    .expect("the fixture task store opens");
+
+    let state = Arc::new(AppState {
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         env: None,
         meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
@@ -118,11 +137,11 @@ fn state(base: &Config, modern_protocol: bool) -> Arc<AppState> {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
-    })
+        tasks,
+        task_executor,
+        subscriptions,
+    });
+    (state, store_dir)
 }
 
 async fn send(
@@ -229,7 +248,7 @@ async fn a_default_gateway_serves_a_modern_frame() {
     // default's own flag value, so this reads the SHIPPED default rather than a
     // `true` the fixture chose.
     let default_config = Config::default();
-    let app = state(&default_config, default_config.server.modern_protocol);
+    let (app, _store_dir) = state(&default_config, default_config.server.modern_protocol).await;
 
     // WHEN: a conforming modern caller sends a frame.
     let (status, body) = post_modern(&app, &modern_frame("tools/list")).await;
@@ -259,7 +278,7 @@ async fn a_default_gateway_serves_a_modern_frame() {
 #[tokio::test]
 async fn a_default_gateway_advertises_the_modern_revision() {
     let default_config = Config::default();
-    let app = state(&default_config, default_config.server.modern_protocol);
+    let (app, _store_dir) = state(&default_config, default_config.server.modern_protocol).await;
 
     let (status, body) = post_legacy(&app, &legacy_discover()).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
@@ -279,7 +298,7 @@ async fn a_default_gateway_advertises_the_modern_revision() {
 #[tokio::test]
 async fn turning_the_flag_off_refuses_the_modern_revision() {
     // GIVEN: the default configuration with the flag explicitly off.
-    let app = state(&Config::default(), false);
+    let (app, _store_dir) = state(&Config::default(), false).await;
 
     // WHEN: the frame case 1 sends arrives.
     let (status, body) = post_modern(&app, &modern_frame("tools/list")).await;
@@ -312,8 +331,8 @@ async fn turning_the_flag_off_refuses_the_modern_revision() {
 async fn reverting_the_flag_stops_modern_serving_and_costs_the_legacy_caller_nothing() {
     // GIVEN: one configuration, served with the flag on, then with it off.
     let base = Config::default();
-    let before = state(&base, true);
-    let after = state(&base, false);
+    let (before, _before_store_dir) = state(&base, true).await;
+    let (after, _after_store_dir) = state(&base, false).await;
 
     // AND: a legacy peer that handshook before the flip.
     let (legacy_status_before, legacy_before) = post_legacy(&before, &legacy_initialize()).await;
@@ -401,7 +420,7 @@ async fn reverting_the_flag_stops_modern_serving_and_costs_the_legacy_caller_not
 #[tokio::test]
 async fn a_default_gateway_negotiates_down_to_each_supported_revision() {
     let default_config = Config::default();
-    let app = state(&default_config, default_config.server.modern_protocol);
+    let (app, _store_dir) = state(&default_config, default_config.server.modern_protocol).await;
 
     for offered in ["2025-06-18", "2025-03-26", "2024-11-05"] {
         let (status, body) = post_at_version(&app, offered, &initialize_at(offered)).await;

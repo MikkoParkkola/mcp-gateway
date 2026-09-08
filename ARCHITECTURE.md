@@ -39,7 +39,7 @@ This is why `src/gateway/meta_mcp/prompt_cache.rs` exists even though the projec
 
 ## Meta-Tools
 
-The gateway advertises 14 to 16 meta-tools to connecting clients. Fourteen are unconditional — `gateway_cost_report` among them, because the served path builds it whatever the configuration says. `gateway_get_stats` and `gateway_reload_config` are the only conditional additions, and they are where the ceiling of 16 comes from. The table below is the derivation: count the `yes` rows for the floor. When `code_mode.enabled` is set, this whole set is replaced by two tools, `gateway_search` and `gateway_execute`.
+The gateway advertises 14 to 17 meta-tools to connecting clients. Fourteen are unconditional — `gateway_cost_report` among them, because the served path builds it whatever the configuration says. `gateway_get_stats`, `gateway_reload_config` and `gateway_webhook_status` are the conditional additions, and they are where the ceiling of 17 comes from. The table below is the derivation: count the `yes` rows for the floor. When `code_mode.enabled` is set, this whole set is replaced by two tools, `gateway_search` and `gateway_execute`.
 
 | Tool | Always | Purpose |
 |------|--------|---------|
@@ -49,7 +49,7 @@ The gateway advertises 14 to 16 meta-tools to connecting clients. Fourteen are u
 | `gateway_invoke` | yes | Call any tool on any backend. Handles caching, idempotency, kill switch |
 | `gateway_get_stats` | if stats enabled | Usage stats: invocations, cache hits, top tools, and discovery counts |
 | `gateway_cost_report` | yes | Current session and API-key spend |
-| `gateway_webhook_status` | never listed | Callable by name when webhooks are enabled, but not enumerated in `tools/list` — it does not count against the band |
+| `gateway_webhook_status` | if a webhook registry is attached | Delivery counters for the webhook push pipeline. Listed where the registry exists (HTTP transports); callable by name everywhere, and governed either way |
 | `gateway_run_playbook` | yes | Execute a multi-step playbook as a single call |
 | `gateway_kill_server` | yes | Operator kill switch: immediately disable routing to a backend |
 | `gateway_revive_server` | yes | Re-enable a killed backend and reset its error budget |

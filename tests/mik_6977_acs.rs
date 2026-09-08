@@ -164,11 +164,29 @@ fn mik6977_claim_3_compact_surfaces_match_the_canonical_tool_counts() {
     assert!(llms.contains("1.2-16.1% more input tokens"));
     assert!(!llms.contains("7.1-16.1% more input tokens"));
 
+    // Derived from the canonical claim rather than repeated as a literal. Four
+    // surfaces quote this count and every one of them drifted the last time it
+    // moved -- the benchmark reproducer refused to import, and three doc
+    // surfaces advertised the superseded number for a week. A hand-maintained
+    // literal here would have passed through all of it.
+    let claims: serde_json::Value =
+        serde_json::from_str(&read("benchmarks/public_claims.json")).expect("public_claims.json");
+    let scenario_tools = claims["readme_token_savings"]["gateway_tools"]
+        .as_u64()
+        .expect("readme_token_savings.gateway_tools");
+
     let library_docs = read("src/lib.rs");
     assert!(library_docs.contains("14 tools minimum"));
-    assert!(library_docs.contains("16 in the README benchmark scenario"));
-    assert!(library_docs.contains("16 in the README benchmark scenario"));
+    assert!(library_docs.contains(&format!(
+        "{scenario_tools} in the README benchmark scenario"
+    )));
     assert!(!library_docs.contains("12 tools minimum"));
+
+    assert!(llms.contains(&format!("{scenario_tools} Meta-MCP tools in context")));
+    assert!(llms.contains(&format!(
+        "{scenario_tools} in the README benchmark scenario"
+    )));
+    assert!(read("docs/show-hn.md").contains(&format!("{scenario_tools} in the README scenario")));
 
     let benchmark_docs = read("docs/BENCHMARKS.md");
     assert!(benchmark_docs.contains("Direct mean total task tokens grew"));

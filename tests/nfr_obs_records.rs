@@ -108,7 +108,10 @@ mod http {
     use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
     use mcp_gateway::gateway::proxy::ProxyManager;
     use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-    use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+    use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+    use mcp_gateway::gateway::test_helpers::{
+        AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+    };
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
     use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
     use serde_json::{Value, json};
@@ -116,7 +119,10 @@ mod http {
 
     use super::{Record, capture_lock, observation_records};
 
-    fn state() -> Arc<AppState> {
+    /// The gateway state, plus the directory its task store leases: the store
+    /// holds that directory while the service lives, so the caller binds it
+    /// until the response has been read.
+    async fn state() -> (Arc<AppState>, tempfile::TempDir) {
         let mut config = Config::default();
         config.server.modern_protocol = true;
         let backends = Arc::new(BackendRegistry::new());
@@ -126,7 +132,20 @@ mod http {
         ));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let agent_registry = Arc::new(AgentRegistry::new());
-        Arc::new(AppState {
+
+        // One registry, shared with the executor that publishes through it.
+        let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+        let store_dir = tempfile::tempdir().expect("a private task-store directory");
+        let (tasks, task_executor) = open_runtime(
+            &store_dir.path().join("tasks"),
+            config.tasks.max_workers,
+            StoreLimits::default(),
+            Arc::clone(&subscriptions),
+        )
+        .await
+        .expect("the fixture task store opens");
+
+        let state = Arc::new(AppState {
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
             env: None,
             meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
@@ -155,11 +174,11 @@ mod http {
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-            tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-            subscriptions: Arc::new(
-                mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-            ),
-        })
+            tasks,
+            task_executor,
+            subscriptions,
+        });
+        (state, store_dir)
     }
 
     async fn post_with_headers(body: Value, headers: &[(&str, &str)]) -> (StatusCode, Value) {
@@ -173,7 +192,10 @@ mod http {
         let request = builder
             .body(Body::from(serde_json::to_vec(&body).expect("body")))
             .expect("request");
-        let response = create_router(state())
+        // `_store_dir` stays bound until this helper returns, which is after the
+        // response body has been read: the store's directory outlives the request.
+        let (app, _store_dir) = state().await;
+        let response = create_router(app)
             .oneshot(request)
             .await
             .expect("router must answer");

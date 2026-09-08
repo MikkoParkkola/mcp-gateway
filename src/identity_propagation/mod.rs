@@ -45,7 +45,13 @@ use serde::{Deserialize, Serialize};
 use crate::gateway::oauth::GatewayKeyPair;
 use crate::key_server::oidc::VerifiedIdentity;
 
+mod account_strategies;
 mod token_exchange;
+
+pub(crate) use account_strategies::{
+    AccountCredential, AccountStrategyRegistry, DeclaredAccount, InstalledAccount,
+    PreparedAccountCredential,
+};
 pub use token_exchange::TokenExchangeStrategy;
 
 #[cfg(test)]
@@ -206,7 +212,10 @@ pub enum PropagationStrategyKind {
 
 /// Per-backend identity-propagation configuration (opt-in). Absent on a backend
 /// means today's static-credential behavior is unchanged (IDP.5).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `PartialEq`/`Eq` because an `accounts.descriptors` entry now embeds one as
+/// its `external_strategy`, and the descriptor DTO compares by value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IdentityPropagationConfig {
     /// The strategy to use.
@@ -264,16 +273,24 @@ impl IdentityPropagationConfig {
                     .to_string(),
             ));
         }
-        // Only signed-assertion, passthrough, and token-exchange are
-        // implemented; a required backend configured for an unimplemented
-        // strategy (vault) must fail closed, not silently run without
-        // propagation.
+        // Signed-assertion, passthrough, token-exchange and vault are
+        // implemented; a required backend configured for any other strategy
+        // must fail closed, not silently run without propagation.
+        //
+        // `Vault` joined the list when managed personal-account custody became
+        // the strategy behind it: a `personal_managed` descriptor compiles to
+        // this kind, and the gateway installs a per-backend vault strategy
+        // whose custody handle is claimed before Serving. A vault config that
+        // reaches dispatch without that installation still refuses — at the
+        // resolver, which is where "no strategy is configured" is decided —
+        // rather than being downgraded here.
         if self.required
             && !matches!(
                 self.strategy,
                 PropagationStrategyKind::SignedAssertion
                     | PropagationStrategyKind::Passthrough
                     | PropagationStrategyKind::TokenExchange
+                    | PropagationStrategyKind::Vault
             )
         {
             return Err(PropagationError::Misconfigured(format!(
@@ -740,8 +757,8 @@ mod tests {
         };
         assert!(cfg.validate().is_err());
 
-        // A required backend on an unimplemented strategy (vault) is rejected
-        // (no silent downgrade).
+        // Vault is implemented. Structural validation accepts its configuration;
+        // missing account authority must still fail at the runtime custody boundary.
         let cfg = IdentityPropagationConfig {
             strategy: PropagationStrategyKind::Vault,
             audience: "https://mail".to_string(),
@@ -750,7 +767,7 @@ mod tests {
             token_exchange_endpoint: None,
             token_exchange_scope: None,
         };
-        assert!(cfg.validate().is_err());
+        assert!(cfg.validate().is_ok());
 
         // A required backend on strategy token_exchange with no
         // token_exchange_endpoint is rejected — the endpoint check runs

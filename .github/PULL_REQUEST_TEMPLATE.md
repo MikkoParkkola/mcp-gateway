@@ -37,3 +37,5 @@ What inputs come from untrusted sources? What validation do you run? What did yo
 ## First time contributing?
 
 Mention that in the description. We are happy to have you. See `CONTRIBUTING.md` for the full checklist.
+
+For the external SDK journey, follow [the two-step full-suite instructions](../docs/tests/task-sdk-recovery.md). Its dedicated CI gate must also pass.

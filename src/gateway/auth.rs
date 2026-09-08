@@ -26,7 +26,11 @@ use super::middleware::{
 use crate::Result;
 use crate::config::{AuthConfig, CircuitBreakerConfig};
 use crate::failsafe::{CircuitBreaker, CircuitState};
-use crate::key_server::KeyServer;
+use crate::key_server::{KeyServer, oidc::VerifiedIdentity};
+
+#[path = "auth_quota.rs"]
+mod quota;
+pub use quota::QuotaPrincipal;
 
 /// Type alias for our rate limiter
 type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
@@ -49,6 +53,8 @@ pub struct ResolvedAuthConfig {
     pub enabled: bool,
     /// Resolved bearer token
     pub bearer_token: Option<String>,
+    /// Precomputed full digest, published only after validating the bearer.
+    bearer_quota_principal: Option<QuotaPrincipal>,
     /// Resolved API keys
     pub api_keys: Vec<ResolvedApiKey>,
     /// Public paths
@@ -66,6 +72,7 @@ pub struct ResolvedAuthConfig {
 pub struct ResolvedApiKey {
     /// The actual key value
     pub key: String,
+    quota_principal: QuotaPrincipal,
     /// Client name
     pub name: String,
     /// Rate limit (requests per minute)
@@ -113,7 +120,29 @@ impl std::fmt::Debug for ResolvedApiKey {
             .field("allowed_tools", &self.allowed_tools)
             .field("denied_tools", &self.denied_tools)
             .field("admin", &self.admin)
-            .finish()
+            .finish_non_exhaustive()
+    }
+}
+
+/// Proof that THIS request authenticated with a configured API key, naming
+/// which one.
+///
+/// Deliberately not constructible outside this module (private field, no public
+/// constructor): the only mint site is
+/// [`ResolvedAuthConfig::validate_token_with_origin`], the one place that
+/// compares a presented secret against `api_keys`. An adapter allow-list is
+/// written against these names, so if any other code could build one — from a
+/// header, from `AuthenticatedClient::name`, from an OIDC subject — the
+/// allow-list would be satisfiable by an identity that never presented the key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NamedApiKey {
+    name: String,
+}
+
+impl NamedApiKey {
+    /// The configured `name` of the API key that authenticated this request.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -125,6 +154,9 @@ impl ResolvedAuthConfig {
     /// Returns an error if any `env:VAR_NAME` secret reference cannot be resolved.
     pub fn try_from_config(config: &AuthConfig) -> Result<Self> {
         let bearer_token = config.resolve_bearer_token()?;
+        let bearer_quota_principal = bearer_token
+            .as_deref()
+            .map(QuotaPrincipal::configured_bearer);
 
         // Signal auto-generation WITHOUT logging the secret (CWE-532). The
         // plaintext bearer is a master gateway credential; INFO logs ship to
@@ -144,8 +176,11 @@ impl ResolvedAuthConfig {
             .api_keys
             .iter()
             .map(|k| {
+                let key = k.resolve_key()?;
+                let quota_principal = QuotaPrincipal::api_key(&key);
                 Ok(ResolvedApiKey {
-                    key: k.resolve_key()?,
+                    key,
+                    quota_principal,
                     name: k.name.clone(),
                     rate_limit: k.rate_limit,
                     backends: k.backends.clone(),
@@ -170,6 +205,7 @@ impl ResolvedAuthConfig {
         Ok(Self {
             enabled: config.enabled,
             bearer_token,
+            bearer_quota_principal,
             api_keys,
             public_paths: config.public_paths.clone(),
             rate_limiters,
@@ -196,6 +232,26 @@ impl ResolvedAuthConfig {
     /// Validate a token and return the client info if valid
     #[must_use]
     pub fn validate_token(&self, token: &str) -> Option<AuthenticatedClient> {
+        self.validate_token_with_origin(token)
+            .map(|(client, _origin)| client)
+    }
+
+    /// The same validation, also saying WHICH configured credential matched.
+    ///
+    /// `AuthenticatedClient::name` cannot answer that question: the bearer
+    /// identity is named `"bearer"`, a key-server identity is named from a
+    /// verified OIDC subject, and an operator may name an API key anything at
+    /// all — so a rule written against the name would let a non-API-key
+    /// identity claim an API key's privileges by being called the same thing.
+    /// The provenance is therefore recorded HERE, at the one place that
+    /// actually compares a presented secret against `api_keys`, and nowhere
+    /// else can mint it. `validate_token` delegates so both callers keep one
+    /// precedence: a token equal to the bearer is the bearer, never a key.
+    #[must_use]
+    pub(crate) fn validate_token_with_origin(
+        &self,
+        token: &str,
+    ) -> Option<(AuthenticatedClient, Option<NamedApiKey>)> {
         use subtle::ConstantTimeEq;
 
         // Check bearer token first. Constant-time comparison prevents a timing
@@ -204,31 +260,43 @@ impl ResolvedAuthConfig {
         if let Some(ref bearer) = self.bearer_token
             && token.as_bytes().ct_eq(bearer.as_bytes()).into()
         {
-            return Some(AuthenticatedClient {
-                name: "bearer".to_string(),
-                principal: principal_of(token),
-                rate_limit: 0,
-                backends: vec!["*".to_string()],
-                allowed_tools: None,
-                denied_tools: None,
-                admin: true,
-                authenticated: true,
-            });
+            return Some((
+                AuthenticatedClient {
+                    quota_principal: self.bearer_quota_principal.clone(),
+                    name: "bearer".to_string(),
+                    principal: principal_of(token),
+                    rate_limit: 0,
+                    backends: vec!["*".to_string()],
+                    allowed_tools: None,
+                    denied_tools: None,
+                    admin: true,
+                    authenticated: true,
+                },
+                // The bearer is NOT an API key, whatever an operator named their
+                // keys: no adapter allow-list entry may be satisfied by it.
+                None,
+            ));
         }
 
         // Check API keys (constant-time to avoid a per-key timing oracle).
         for key in &self.api_keys {
             if token.as_bytes().ct_eq(key.key.as_bytes()).into() {
-                return Some(AuthenticatedClient {
-                    name: key.name.clone(),
-                    principal: principal_of(&key.key),
-                    rate_limit: key.rate_limit,
-                    backends: key.backends.clone(),
-                    allowed_tools: key.allowed_tools.clone(),
-                    denied_tools: key.denied_tools.clone(),
-                    admin: key.admin,
-                    authenticated: true,
-                });
+                return Some((
+                    AuthenticatedClient {
+                        quota_principal: Some(key.quota_principal.clone()),
+                        name: key.name.clone(),
+                        principal: principal_of(&key.key),
+                        rate_limit: key.rate_limit,
+                        backends: key.backends.clone(),
+                        allowed_tools: key.allowed_tools.clone(),
+                        denied_tools: key.denied_tools.clone(),
+                        admin: key.admin,
+                        authenticated: true,
+                    },
+                    Some(NamedApiKey {
+                        name: key.name.clone(),
+                    }),
+                ));
             }
         }
 
@@ -350,6 +418,8 @@ pub struct AuthenticatedClient {
     /// attach to each other's sessions. Empty for an identity that presented
     /// no credential.
     pub principal: String,
+    /// Authenticated nonce-quota authority; never derived from audit labels.
+    pub quota_principal: Option<QuotaPrincipal>,
     /// Whether a credential was actually presented and validated.
     ///
     /// False for the anonymous identity used when authentication is disabled,
@@ -733,6 +803,7 @@ fn try_dashboard_bootstrap(state: &AuthState, request: &Request<Body>) -> Option
 /// The identity a validated dashboard session carries.
 fn dashboard_client() -> AuthenticatedClient {
     AuthenticatedClient {
+        quota_principal: Some(QuotaPrincipal::dashboard_session()),
         name: "dashboard".to_string(),
         principal: "dashboard-session".to_string(),
         rate_limit: 0,
@@ -795,6 +866,7 @@ pub fn session_cookie_value(headers: &axum::http::HeaderMap) -> Option<String> {
 #[must_use]
 pub fn anonymous_client() -> AuthenticatedClient {
     AuthenticatedClient {
+        quota_principal: None,
         name: "anonymous".to_string(),
         principal: String::new(),
         rate_limit: 0,
@@ -823,7 +895,8 @@ pub struct AuthState {
 ///
 /// Validation order (for performance and backward compatibility):
 /// 1. Static auth (existing `ResolvedAuthConfig`) — O(n) comparison.
-/// 2. Temporary token (key server `DashMap` lookup) — O(1).
+/// 2. Key server credential — temporary token (`DashMap` lookup, O(1)), then a
+///    delegated OIDC bearer when enabled.
 /// 3. Reject.
 pub async fn auth_middleware(
     State(state): State<AuthState>,
@@ -855,16 +928,35 @@ pub async fn auth_middleware(
 
     if auth_config.is_public_path(path)
         && let Some(presented) = presented_credential(request.headers())
-        && let Some(client) = auth_config.validate_token(&presented)
     {
-        request.extensions_mut().insert(client);
-        return next.run(request).await;
+        if let Some((client, api_key)) = auth_config.validate_token_with_origin(&presented) {
+            // The adapter allow-list is checked downstream against this, so the
+            // provenance has to travel with the request rather than be re-derived.
+            if let Some(api_key) = api_key {
+                request.extensions_mut().insert(api_key);
+            }
+            request.extensions_mut().insert(client);
+            return next.run(request).await;
+        }
+        // A gateway-issued temporary token and a verified delegated bearer are
+        // credentials here for the same reason a configured key is: the caller
+        // proved who they are, and a public path that ignores that hands them
+        // the anonymous identity — and with it the anonymous quota, which any
+        // unauthenticated flood can exhaust. Unrecognised input still falls
+        // through to the anonymous identity below, exactly as before.
+        if let Some((client, identity, via)) = key_server_credential(&state, &presented).await {
+            debug!(client = %client.name, path = %path, "Public path authenticated via {via}");
+            request.extensions_mut().insert(identity);
+            request.extensions_mut().insert(client);
+            return next.run(request).await;
+        }
     }
 
     // Check if path is public
     if auth_config.is_public_path(path) {
         debug!(path = %path, "Public path, skipping auth");
         request.extensions_mut().insert(AuthenticatedClient {
+            quota_principal: None,
             name: "public".to_string(),
             principal: String::new(),
             rate_limit: 0,
@@ -898,52 +990,63 @@ pub async fn auth_middleware(
     let token = token.as_str();
 
     // 1. Try static auth (existing behavior)
-    if let Some(client) = auth_config.validate_token(token) {
+    if let Some((client, api_key)) = auth_config.validate_token_with_origin(token) {
         if let Some(deny) = client_preflight(auth_config, &client, path) {
             return deny;
         }
         debug!(client = %client.name, path = %path, "Authenticated via static key");
-        request.extensions_mut().insert(client);
-        return next.run(request).await;
-    }
-
-    // 2. Try temporary token (key server)
-    if let Some(ref ks) = state.key_server
-        && let Some((client, identity_token)) = ks.validate_token(token).await
-    {
-        if let Some(deny) = client_preflight(auth_config, &client, path) {
-            return deny;
+        if let Some(api_key) = api_key {
+            request.extensions_mut().insert(api_key);
         }
-        debug!(client = %client.name, path = %path, "Authenticated via temporary token");
-        request
-            .extensions_mut()
-            .insert(identity_token.identity.clone());
         request.extensions_mut().insert(client);
         return next.run(request).await;
     }
 
-    // 3. Try a raw OIDC ID token presented directly as a bearer (delegated
-    //    auth, MIK-6648). Gated on `delegated_bearer` and a cheap JWT-shape
-    //    check so we never run JWKS verification on opaque/static tokens. The
+    // 2. Try the key server: temporary token, then delegated OIDC bearer. The
     //    verified subject is bound into request extensions so downstream grant
     //    evaluation can scope capabilities to the caller identity.
-    if let Some(ref ks) = state.key_server
-        && ks.config.delegated_bearer
-        && looks_like_jwt(token)
-        && let Some((client, identity)) = ks.verify_bearer_identity(token).await
-    {
+    if let Some((client, identity, via)) = key_server_credential(&state, token).await {
         if let Some(deny) = client_preflight(auth_config, &client, path) {
             return deny;
         }
-        debug!(client = %client.name, path = %path, "Authenticated via delegated OIDC bearer");
+        debug!(client = %client.name, path = %path, "Authenticated via {via}");
         request.extensions_mut().insert(identity);
         request.extensions_mut().insert(client);
         return next.run(request).await;
     }
 
-    // 4. Reject
+    // 3. Reject
     warn!(path = %path, "Invalid token");
     bearer_unauthorized_response("Invalid token")
+}
+
+/// Resolve a presented bearer against the key server, in the order the
+/// protected path has always used: the opaque temporary token first (an O(1)
+/// store lookup), then a raw OIDC ID token presented directly as a bearer
+/// (delegated auth, MIK-6648).
+///
+/// One function so the protected and public branches recognise exactly the same
+/// credentials. They did not, and the public path is where it mattered: a
+/// verified caller was handed the anonymous identity, and so shared the
+/// anonymous nonce quota with every unauthenticated request on the box.
+///
+/// The `via` label exists only so each caller keeps its own log line; it is a
+/// fixed string, never anything the caller sent.
+async fn key_server_credential(
+    state: &AuthState,
+    token: &str,
+) -> Option<(AuthenticatedClient, VerifiedIdentity, &'static str)> {
+    let ks = state.key_server.as_ref()?;
+    if let Some((client, temporary)) = ks.validate_token(token).await {
+        return Some((client, temporary.identity.clone(), "temporary token"));
+    }
+    // Gated on config and a cheap JWT-shape check so JWKS verification never
+    // runs on an opaque or static token.
+    if ks.config.delegated_bearer && looks_like_jwt(token) {
+        let (client, identity) = ks.verify_bearer_identity(token).await?;
+        return Some((client, identity, "delegated OIDC bearer"));
+    }
+    None
 }
 
 /// Per-client rate-limit + circuit-breaker preflight shared by every auth path.
@@ -1019,6 +1122,7 @@ mod tests {
         let config = ResolvedAuthConfig {
             enabled: true,
             bearer_token: Some("bearer-ADMIN".to_string()),
+            bearer_quota_principal: Some(QuotaPrincipal::configured_bearer("bearer-ADMIN")),
             api_keys: vec![],
             public_paths: vec![],
             rate_limiters: DashMap::new(),
@@ -1054,6 +1158,7 @@ mod tests {
         let config = ResolvedAuthConfig {
             enabled: true,
             bearer_token: Some("test".to_string()),
+            bearer_quota_principal: Some(QuotaPrincipal::configured_bearer("test")),
             api_keys: vec![],
             public_paths: vec!["/health".to_string(), "/metrics".to_string()],
             rate_limiters: DashMap::new(),
@@ -1074,8 +1179,12 @@ mod tests {
         let config = ResolvedAuthConfig {
             enabled: true,
             bearer_token: Some("super-secret-bearer-VALUE".to_string()),
+            bearer_quota_principal: Some(QuotaPrincipal::configured_bearer(
+                "super-secret-bearer-VALUE",
+            )),
             api_keys: vec![ResolvedApiKey {
                 key: "api-key-SECRET-VALUE".to_string(),
+                quota_principal: QuotaPrincipal::api_key("api-key-SECRET-VALUE"),
                 name: "client-a".to_string(),
                 rate_limit: 60,
                 backends: vec![],
@@ -1121,6 +1230,7 @@ mod tests {
         let config = ResolvedAuthConfig {
             enabled: true,
             bearer_token: Some("secret123".to_string()),
+            bearer_quota_principal: Some(QuotaPrincipal::configured_bearer("secret123")),
             api_keys: vec![],
             public_paths: vec![],
             rate_limiters: DashMap::new(),
@@ -1144,8 +1254,10 @@ mod tests {
         let config = ResolvedAuthConfig {
             enabled: true,
             bearer_token: Some("bearer-EXACT".to_string()),
+            bearer_quota_principal: Some(QuotaPrincipal::configured_bearer("bearer-EXACT")),
             api_keys: vec![ResolvedApiKey {
                 key: "apikey-EXACT".to_string(),
+                quota_principal: QuotaPrincipal::api_key("apikey-EXACT"),
                 name: "client-ct".to_string(),
                 rate_limit: 10,
                 backends: vec![],
@@ -1192,9 +1304,11 @@ mod tests {
         let config = ResolvedAuthConfig {
             enabled: true,
             bearer_token: None,
+            bearer_quota_principal: None,
             api_keys: vec![
                 ResolvedApiKey {
                     key: "key1".to_string(),
+                    quota_principal: QuotaPrincipal::api_key("key1"),
                     name: "Client A".to_string(),
                     rate_limit: 100,
                     backends: vec!["tavily".to_string()],
@@ -1204,6 +1318,7 @@ mod tests {
                 },
                 ResolvedApiKey {
                     key: "key2".to_string(),
+                    quota_principal: QuotaPrincipal::api_key("key2"),
                     name: "Client B".to_string(),
                     rate_limit: 0,
                     backends: vec![],
@@ -1240,6 +1355,7 @@ mod tests {
         let config = ResolvedAuthConfig {
             enabled: true,
             bearer_token: None,
+            bearer_quota_principal: None,
             api_keys: vec![],
             public_paths: vec![],
             rate_limiters,
@@ -1259,6 +1375,7 @@ mod tests {
     #[test]
     fn test_backend_access_control() {
         let client_restricted = AuthenticatedClient {
+            quota_principal: None,
             principal: String::new(),
             name: "restricted".to_string(),
             rate_limit: 0,
@@ -1270,6 +1387,7 @@ mod tests {
         };
 
         let client_unrestricted = AuthenticatedClient {
+            quota_principal: None,
             principal: String::new(),
             name: "unrestricted".to_string(),
             rate_limit: 0,
@@ -1281,6 +1399,7 @@ mod tests {
         };
 
         let client_wildcard = AuthenticatedClient {
+            quota_principal: None,
             principal: String::new(),
             name: "wildcard".to_string(),
             rate_limit: 0,
@@ -1308,6 +1427,7 @@ mod tests {
     #[test]
     fn test_tool_scope_no_restrictions() {
         let client = AuthenticatedClient {
+            quota_principal: None,
             principal: String::new(),
             name: "unrestricted".to_string(),
             rate_limit: 0,
@@ -1326,6 +1446,7 @@ mod tests {
     #[test]
     fn test_tool_scope_allowlist_exact_match() {
         let client = AuthenticatedClient {
+            quota_principal: None,
             principal: String::new(),
             name: "restricted".to_string(),
             rate_limit: 0,
@@ -1348,6 +1469,7 @@ mod tests {
     #[test]
     fn test_tool_scope_allowlist_glob_pattern() {
         let client = AuthenticatedClient {
+            quota_principal: None,
             principal: String::new(),
             name: "search_only".to_string(),
             rate_limit: 0,
@@ -1376,6 +1498,7 @@ mod tests {
     #[test]
     fn test_tool_scope_denylist_exact_match() {
         let client = AuthenticatedClient {
+            quota_principal: None,
             principal: String::new(),
             name: "no_writes".to_string(),
             rate_limit: 0,
@@ -1398,6 +1521,7 @@ mod tests {
     #[test]
     fn test_tool_scope_denylist_glob_pattern() {
         let client = AuthenticatedClient {
+            quota_principal: None,
             principal: String::new(),
             name: "no_filesystem".to_string(),
             rate_limit: 0,
@@ -1430,6 +1554,7 @@ mod tests {
     #[test]
     fn test_tool_scope_qualified_name_match() {
         let client = AuthenticatedClient {
+            quota_principal: None,
             principal: String::new(),
             name: "specific_server".to_string(),
             rate_limit: 0,
@@ -1454,6 +1579,7 @@ mod tests {
     #[test]
     fn test_tool_scope_both_allow_and_deny() {
         let client = AuthenticatedClient {
+            quota_principal: None,
             principal: String::new(),
             name: "complex".to_string(),
             rate_limit: 0,
@@ -1494,6 +1620,7 @@ mod tests {
     #[test]
     fn test_tool_scope_error_messages() {
         let client_allow = AuthenticatedClient {
+            quota_principal: None,
             principal: String::new(),
             name: "frontend".to_string(),
             rate_limit: 0,
@@ -1513,6 +1640,7 @@ mod tests {
         assert!(err.contains("frontend"));
 
         let client_deny = AuthenticatedClient {
+            quota_principal: None,
             principal: String::new(),
             name: "restricted_bot".to_string(),
             rate_limit: 0,
@@ -1542,6 +1670,7 @@ mod tests {
         let config = ResolvedAuthConfig {
             enabled: true,
             bearer_token: bearer.map(ToString::to_string),
+            bearer_quota_principal: bearer.map(QuotaPrincipal::configured_bearer),
             api_keys: keys,
             public_paths: vec![],
             rate_limiters: DashMap::new(),
@@ -1564,6 +1693,7 @@ mod tests {
     fn admin_key(admin: bool) -> ResolvedApiKey {
         ResolvedApiKey {
             key: "key-value".to_string(),
+            quota_principal: QuotaPrincipal::api_key("key-value"),
             name: "ops".to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],
@@ -1609,6 +1739,263 @@ mod tests {
             redeem(&state, &printed),
             axum::http::StatusCode::UNAUTHORIZED,
             "a restricted key is not an admin credential"
+        );
+    }
+}
+
+/// SIGNING.5 row 44: which nonce-quota authority a dashboard session carries.
+///
+/// Every identity here is produced by [`auth_middleware`] itself, from a handle
+/// [`DashboardBootstrap::issue_session`] actually issued. Copying
+/// [`dashboard_client`] would assert what this file already says; only the
+/// middleware can say what a presented cookie is worth. The last two cases
+/// carry that identity into a real [`NonceStore`], because the quota claim is
+/// about admission, not about a struct field.
+#[cfg(test)]
+mod signing_dashboard_quota_tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use tower::Service;
+
+    use super::{
+        AuthState, AuthenticatedClient, DashboardBootstrap, ResolvedAuthConfig, SESSION_COOKIE,
+        auth_middleware,
+    };
+    use crate::config::AuthConfig;
+    use crate::security::message_signing::NonceStore;
+
+    const PRIMARY: &str = "dashboard-primary-0123456789abcdef";
+    const OPS: &str = "dashboard-ops-0123456789abcdef";
+    /// The production per-principal admission limit (`NonceStore::new`).
+    const PRINCIPAL_LIMIT: usize = 10_000;
+    /// A public path, so an unauthenticated probe reaches the handler and the
+    /// identity it was handed can be read, instead of being answered 401.
+    const PROBE_PATH: &str = "/mcp";
+    const REPLAY_WINDOW: Duration = Duration::from_secs(300);
+
+    /// Real resolved auth over a real bootstrap, with nothing hand-built.
+    fn auth_state(enabled: bool) -> (AuthState, Arc<DashboardBootstrap>) {
+        let config: AuthConfig = serde_json::from_value(serde_json::json!({
+            "enabled": enabled,
+            "bearer_token": PRIMARY,
+            "public_paths": ["/health", PROBE_PATH],
+            "api_keys": [{"key": OPS, "name": "ops", "admin": true}]
+        }))
+        .expect("auth config fixture deserializes");
+        let bootstrap = Arc::new(DashboardBootstrap::new());
+        (
+            AuthState {
+                auth_config: Arc::new(ResolvedAuthConfig::from_config(&config)),
+                key_server: None,
+                dashboard_bootstrap: Arc::clone(&bootstrap),
+                tls_enabled: false,
+            },
+            bootstrap,
+        )
+    }
+
+    /// Drive the real middleware and return the identity it published.
+    ///
+    /// `label` travels as the caller-chosen audit header, which must never
+    /// reach the quota decision.
+    async fn identity_for_request(
+        state: &AuthState,
+        cookie: Option<&str>,
+        bearer: Option<&str>,
+        label: &str,
+    ) -> AuthenticatedClient {
+        let seen: Arc<Mutex<Option<AuthenticatedClient>>> = Arc::new(Mutex::new(None));
+        let sink = Arc::clone(&seen);
+        let mut router = axum::Router::new()
+            .route(
+                PROBE_PATH,
+                axum::routing::get(
+                    move |axum::Extension(client): axum::Extension<AuthenticatedClient>| {
+                        let sink = Arc::clone(&sink);
+                        async move {
+                            *sink.lock().expect("probe sink") = Some(client);
+                            StatusCode::OK
+                        }
+                    },
+                ),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth_middleware,
+            ));
+
+        let mut builder = Request::builder()
+            .uri(PROBE_PATH)
+            .header("x-agent-id", label);
+        if let Some(handle) = cookie {
+            builder = builder.header(header::COOKIE, format!("{SESSION_COOKIE}={handle}"));
+        }
+        if let Some(credential) = bearer {
+            builder = builder.header(header::AUTHORIZATION, format!("Bearer {credential}"));
+        }
+        let request = builder.body(Body::empty()).expect("probe request builds");
+
+        let response = router
+            .call(request)
+            .await
+            .expect("middleware is infallible");
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "the probe was not admitted, so no identity was published"
+        );
+        seen.lock()
+            .expect("probe sink")
+            .clone()
+            .expect("the middleware published no identity")
+    }
+
+    async fn identity_for(state: &AuthState, cookie: Option<&str>) -> AuthenticatedClient {
+        identity_for_request(state, cookie, None, "caller-label").await
+    }
+
+    /// The mapping the production caller performs: the authenticated bucket
+    /// when the transport published one, the shared anonymous bucket otherwise.
+    fn admit(store: &NonceStore, identity: &AuthenticatedClient, nonce: &str) -> crate::Result<()> {
+        identity.quota_principal.as_ref().map_or_else(
+            || store.check_and_register(nonce),
+            |principal| store.check_and_register_for_principal(nonce, principal.as_store_key()),
+        )
+    }
+
+    /// Exhaust one identity's bucket. Direct registration: no I/O, and it is
+    /// the production limit rather than a fixture-shrunk one.
+    fn fill(store: &NonceStore, identity: &AuthenticatedClient, tag: &str) {
+        for i in 0..PRINCIPAL_LIMIT {
+            admit(store, identity, &format!("{tag}-{i}")).expect("a bucket admits its own limit");
+        }
+    }
+
+    fn refusal(result: crate::Result<()>) -> String {
+        result
+            .expect_err("admission should have been refused")
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn a_validated_dashboard_session_carries_one_authenticated_quota_bucket() {
+        let (state, bootstrap) = auth_state(true);
+        let first = bootstrap.issue_session();
+        let second = bootstrap.issue_session();
+        // Compared, never printed: a failing `assert_ne!` would put both live
+        // session handles in the test output.
+        assert!(first != second, "two browsers, two handles");
+
+        let one = identity_for_request(&state, Some(&first), None, "browser-one").await;
+        let two = identity_for_request(&state, Some(&second), None, "browser-two").await;
+        let relabelled = identity_for_request(&state, Some(&first), None, "browser-two").await;
+
+        for identity in [&one, &two] {
+            assert!(
+                identity.authenticated,
+                "a session validated against this process's store is a credential"
+            );
+            assert!(identity.admin, "the dashboard session is an admin session");
+            assert!(
+                identity.quota_principal.is_some(),
+                "an operator's own dashboard must not draw on the anonymous \
+                 bucket that any unauthenticated caller can fill"
+            );
+        }
+        assert_eq!(
+            one.quota_principal, two.quota_principal,
+            "every session of one gateway is the same operator, so they share \
+             one bucket — a per-handle bucket would let a browser mint quota by \
+             reloading the dashboard"
+        );
+        assert_eq!(
+            one.quota_principal, relabelled.quota_principal,
+            "a caller-chosen label is not an identity"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dashboard_bucket_is_not_a_static_credential_bucket() {
+        let (state, bootstrap) = auth_state(true);
+        let session = identity_for(&state, Some(&bootstrap.issue_session())).await;
+        let bearer = identity_for_request(&state, None, Some(PRIMARY), "ops").await;
+        let ops = identity_for_request(&state, None, Some(OPS), "ops").await;
+
+        assert!(bearer.quota_principal.is_some() && ops.quota_principal.is_some());
+        assert_ne!(
+            session.quota_principal, bearer.quota_principal,
+            "the dashboard must not spend the configured bearer's quota"
+        );
+        assert_ne!(session.quota_principal, ops.quota_principal);
+        assert_ne!(bearer.quota_principal, ops.quota_principal);
+    }
+
+    #[tokio::test]
+    async fn a_cookie_this_process_did_not_issue_mints_no_quota_authority() {
+        let (state, _bootstrap) = auth_state(true);
+
+        for cookie in [None, Some("not-a-handle-this-process-issued"), Some("")] {
+            let identity = identity_for(&state, cookie).await;
+            assert!(
+                identity.quota_principal.is_none(),
+                "an unvalidated cookie must leave the caller anonymous"
+            );
+            assert!(!identity.authenticated);
+            assert!(!identity.admin);
+        }
+
+        // Auth disabled: the handle is genuinely this process's, and still
+        // nothing validated it, so it may not mint authority.
+        let (disabled, disabled_bootstrap) = auth_state(false);
+        let handle = disabled_bootstrap.issue_session();
+        let anonymous = identity_for(&disabled, Some(&handle)).await;
+        assert!(
+            anonymous.quota_principal.is_none(),
+            "an auth-disabled gateway authenticates nobody, so a cookie is a string"
+        );
+        assert!(!anonymous.authenticated);
+    }
+
+    #[tokio::test]
+    async fn an_anonymous_flood_cannot_starve_the_operator_dashboard() {
+        let (state, bootstrap) = auth_state(true);
+        let anonymous = identity_for(&state, None).await;
+        let session = identity_for(&state, Some(&bootstrap.issue_session())).await;
+        let store = NonceStore::new(REPLAY_WINDOW);
+
+        fill(&store, &anonymous, "anon");
+        assert!(
+            refusal(admit(&store, &anonymous, "anon-over"))
+                .contains("Signing nonce capacity exceeded"),
+            "the anonymous bucket is not full, so this proves nothing"
+        );
+
+        admit(&store, &session, "dashboard-fresh")
+            .expect("a validated operator session must hold capacity a public flood cannot spend");
+    }
+
+    #[tokio::test]
+    async fn dashboard_sessions_share_a_bucket_and_never_a_private_namespace() {
+        let (state, bootstrap) = auth_state(true);
+        let first = identity_for(&state, Some(&bootstrap.issue_session())).await;
+        let second = identity_for(&state, Some(&bootstrap.issue_session())).await;
+        let bearer = identity_for_request(&state, None, Some(PRIMARY), "ops").await;
+        let store = NonceStore::new(REPLAY_WINDOW);
+
+        fill(&store, &first, "dash");
+        assert!(
+            refusal(admit(&store, &second, "second-fresh"))
+                .contains("Signing nonce capacity exceeded"),
+            "a second browser must not double the operator's quota"
+        );
+        admit(&store, &bearer, "bearer-fresh")
+            .expect("a static credential owns a bucket of its own");
+        assert!(
+            refusal(admit(&store, &bearer, "dash-0")).contains("Nonce replay detected"),
+            "nonce uniqueness is global: a bucket is capacity, not a namespace"
         );
     }
 }

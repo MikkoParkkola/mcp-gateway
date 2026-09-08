@@ -5,7 +5,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    branches: [main, codex/v4-release-delivery, fix/mrtr2-continuation-handle]
+    branches: [main, "codex/v4-*", fix/mrtr2-continuation-handle]
 
 permissions:
   contents: read
@@ -195,7 +195,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-      - run: cargo test --all-features
+      # The external journey is executed by the mandatory SDK job below.
+      - run: cargo test --all-features -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
+
+  task-sdk-recovery:
+    uses: ./.github/workflows/task-sdk-recovery.yml
 
   fmt:
     name: Format
@@ -311,7 +315,7 @@ jobs:
     # previously this job's needs: covered clippy/test/fmt/audit but not the
     # security jobs, so a red secrets-scan or leak-lint would not have
     # blocked ghcr.io publish.
-    needs: [check, test, fmt, audit, secrets-scan, secret-leak-lint, public-claims, public-repo-hygiene, service-template-smoke, usability-smoke, helm-chart-smoke, helm-oci-roundtrip, helm-supply-chain, helm-airgap, release-criteria]
+    needs: [check, test, task-sdk-recovery, fmt, audit, secrets-scan, secret-leak-lint, public-claims, public-repo-hygiene, service-template-smoke, usability-smoke, helm-chart-smoke, helm-oci-roundtrip, helm-supply-chain, helm-airgap, release-criteria]
     permissions:
       contents: read
       packages: write

@@ -91,18 +91,9 @@ fn all_meta_tool_schemas() -> Vec<(String, serde_json::Value)> {
         }
     }
 
-    // Population EQUALITY, not a floor. The population is the 18 names the two
-    // builders in `src/gateway/meta_mcp_tool_defs.rs` actually publish through
-    // `tools/list`; a floor of 14 permits four of them to go unwalked, so a
-    // dangling `$ref` in one of the four would ship with every assertion below
-    // still green. Equality also makes the list self-maintaining: adding or
-    // retiring a published definition fails here until this list is updated
-    // deliberately.
-    //
-    // `gateway_webhook_status` is a 19th definition but is deliberately absent:
-    // it is dispatchable by name and chained into the governed-name set outside
-    // `build_meta_tools`, so it is never listed and its schema is never handed
-    // to a client.
+    // Enumerate all 19 published names across both modes, including webhook
+    // status when the operational fixture attaches its registry. Equality
+    // prevents a newly published schema from silently escaping validation.
     let mut published: Vec<&str> = names.iter().map(String::as_str).collect();
     published.sort_unstable();
     assert_eq!(
@@ -126,8 +117,9 @@ fn all_meta_tool_schemas() -> Vec<(String, serde_json::Value)> {
             "traditional/gateway_search_tools",
             "traditional/gateway_set_profile",
             "traditional/gateway_set_state",
+            "traditional/gateway_webhook_status",
         ],
-        "the enumerated surface is not the 18 published `gateway_*` \
+        "the enumerated surface is not the 19 published `gateway_*` \
          definitions: either the fixture stopped enabling the real surface, or \
          a published definition was added or retired without updating this list"
     );
@@ -181,71 +173,13 @@ fn falsifier_invalid_schema_is_rejected_by_the_same_validator() {
 ///
 /// Returns each unresolvable pointer, so the surface test and its falsifier
 /// exercise the same code.
+///
+/// The walk itself lives in `src/trust/schema_bounds.rs` and is the SAME code
+/// the gateway runs while publishing a descriptor. One walker decides for both,
+/// so a schema these tests call bounded cannot be one the gateway publishes
+/// unbounded.
 fn dangling_refs(schema: &serde_json::Value) -> Vec<String> {
-    fn resolve(root: &serde_json::Value, pointer: &str) -> bool {
-        // Only local pointers can resolve in-document. An external `$ref` is a
-        // fetch this gateway must never make (the `jsonschema` dependency is
-        // built `default-features = false` precisely to disable remote
-        // resolution), so it cannot resolve here and is reported.
-        // ponytail: JSON-pointer fragments only. A plain-name fragment
-        // (`#name`, resolved against `$anchor`) and an `$id`-relative base are
-        // both legal 2020-12 and would be reported here as dangling. No
-        // published schema uses either today — the surface has no `$ref` at
-        // all — so the walker stays a pointer walker; teach it `$anchor` and
-        // `$id` bases the day one appears, rather than editing the schema to
-        // suit the check.
-        let Some(rest) = pointer.strip_prefix('#') else {
-            return false;
-        };
-        if rest.is_empty() {
-            return true;
-        }
-        let Some(path) = rest.strip_prefix('/') else {
-            return false;
-        };
-        let mut node = root;
-        for raw in path.split('/') {
-            // RFC 6901 escaping: `~1` is `/` and `~0` is `~`, in that order.
-            let token = raw.replace("~1", "/").replace("~0", "~");
-            node = match node {
-                serde_json::Value::Object(map) => match map.get(&token) {
-                    Some(child) => child,
-                    None => return false,
-                },
-                serde_json::Value::Array(items) => match token.parse::<usize>() {
-                    Ok(i) if i < items.len() => &items[i],
-                    _ => return false,
-                },
-                _ => return false,
-            };
-        }
-        true
-    }
-
-    fn walk(root: &serde_json::Value, node: &serde_json::Value, found: &mut Vec<String>) {
-        match node {
-            serde_json::Value::Object(map) => {
-                if let Some(serde_json::Value::String(pointer)) = map.get("$ref")
-                    && !resolve(root, pointer)
-                {
-                    found.push(pointer.clone());
-                }
-                for child in map.values() {
-                    walk(root, child, found);
-                }
-            }
-            serde_json::Value::Array(items) => {
-                for child in items {
-                    walk(root, child, found);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let mut found = Vec::new();
-    walk(schema, schema, &mut found);
-    found
+    mcp_gateway::trust::unresolved_refs(schema)
 }
 
 #[test]
@@ -476,26 +410,25 @@ fn falsifier_a_composed_subschema_is_reported_by_the_same_walker() {
     }
 }
 
-/// The population is NOT closed to first-party sources, and this is what says
-/// so.
+/// The population is closed at the projection, and this is what says so.
 ///
 /// `MetaMcp::handle_tools_list_for_session` appends every configured surfaced
 /// tool to the emitted list, resolving it through `Backend::get_cached_tool`
 /// (see `src/gateway/meta_mcp/surfaced.rs`) — a `Tool` deserialized verbatim
 /// from a connected MCP server's own `tools/list` reply — and projects it with
 /// the same `project_tool_descriptor_trust_card` used for the gateway's own
-/// definitions. That projection serializes the tool as given. No `$ref`
-/// resolution, meta-validation or composition check stands anywhere between a
-/// backend's schema and the client, so the two rows above constrain the
-/// schemas this repository WRITES and cannot constrain the schemas it
-/// FORWARDS. Searching the tree cannot find this population: it does not exist
-/// in the tree.
+/// definitions, as does the direct backend proxy
+/// (`src/gateway/router/backend_handlers.rs`). The two rows above can only
+/// constrain the schemas this repository WRITES; searching the tree cannot
+/// find the FORWARDED population, because it does not exist in the tree. So
+/// the bound is established where every route passes: the projection inspects
+/// the schema it is about to publish and records the verdict beside it.
 ///
-/// The assertion is deliberately the gap and not a bound: whether forwarding
-/// such a schema violates the criterion depends on U9, and on whether the
-/// bound is the gateway's to enforce on a third party's tool at all.
+/// AC1 (an unresolved local `$ref` from a backend is reported) and AC3 (the
+/// published schema is judged, never altered) of
+/// `docs/design/2026-09-07-schema-1c-forwarded-schema-bounds-test-plan.md`.
 #[test]
-fn a_backend_forwarded_schema_reaches_the_client_uninspected() {
+fn a_backend_forwarded_schema_is_inspected_before_it_reaches_the_client() {
     // Exactly what a remote server sends, deserialized the way the backend
     // tool cache deserializes it.
     let from_backend: mcp_gateway::protocol::Tool = serde_json::from_value(serde_json::json!({
@@ -522,16 +455,55 @@ fn a_backend_forwarded_schema_reaches_the_client_uninspected() {
         .expect("the projection must publish the tool's inputSchema");
 
     assert_eq!(
+        emitted["trustCard"]["schemaBounds"],
+        serde_json::json!({
+            "status": "outOfBounds",
+            "unresolvedRefs": ["#/$defs/Absent"],
+        }),
+        "the projection must name the backend's unresolvable $ref on the descriptor it publishes"
+    );
+
+    // AC3: judged, not altered. The backend's own schema still reaches the
+    // client byte for byte — composition included, which is legal 2020-12 and
+    // is observed here, never bounded.
+    assert_eq!(
         composition_sites(schema),
         vec!["/properties/target/allOf".to_string()],
-        "the composition the backend sent is expected to reach the client untouched; if this \
-         is now empty, an inspection step was added and this row should become an assertion \
-         about that step"
+        "the composition the backend sent must reach the client untouched"
     );
     assert_eq!(
         dangling_refs(schema),
         vec!["#/$defs/Absent".to_string()],
-        "an unresolvable $ref from a backend is expected to reach the client untouched, for \
-         the same reason"
+        "the inspection must not drop, rewrite or sanitize the forwarded schema"
+    );
+}
+
+/// AC2: the inspector reports UNRESOLVED pointers, not every pointer.
+///
+/// Without this row a walker that flagged each `$ref` it met would satisfy the
+/// row above and be wrong about every legitimate backend that uses `$defs`.
+#[test]
+fn a_forwarded_schema_whose_local_ref_resolves_is_within_bounds() {
+    let from_backend: mcp_gateway::protocol::Tool = serde_json::from_value(serde_json::json!({
+        "name": "remote_tool",
+        "description": "a tool this repository did not write",
+        "inputSchema": {
+            "type": "object",
+            "$defs": { "Target": { "type": "string" } },
+            "properties": { "target": { "$ref": "#/$defs/Target" } }
+        }
+    }))
+    .expect("a backend tool descriptor must deserialize");
+
+    let emitted = mcp_gateway::trust::project_tool_descriptor_trust_card(
+        "backend:remote",
+        "remote",
+        &from_backend,
+    );
+
+    assert_eq!(
+        emitted["trustCard"]["schemaBounds"],
+        serde_json::json!({ "status": "within" }),
+        "a $ref that resolves in its own document is within the revision's bounds"
     );
 }

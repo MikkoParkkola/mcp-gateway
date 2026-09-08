@@ -25,9 +25,17 @@
 //!
 //! - **Elicitation supported**: the client receives an `elicitation/create`
 //!   message; the call is aborted unless the client responds `"accept"`.
-//! - **Elicitation not supported / no session**: the action proceeds after a
-//!   `WARN` log entry.  This matches the MCP spec guidance that servers MUST NOT
-//!   break when a client omits optional capabilities.
+//! - **Elicitation not supported / no session**: the two eras answer
+//!   differently, and this fork is what the rest of the module turns on. A
+//!   **modern** request is REFUSED: the caller carries
+//!   [`ConfirmationPolicy::for_modern`], which is [`ConfirmationPolicy::REFUSE`],
+//!   and the gate returns JSON-RPC `-32001` without running the tool. A
+//!   **legacy** request PROCEEDS after a `WARN` log entry
+//!   ([`ConfirmationPolicy::for_legacy`]), unchanged — a 2025 client that never
+//!   declared elicitation has been served that way for the life of the gateway,
+//!   and that matches the MCP spec guidance that servers MUST NOT break when a
+//!   client omits optional capabilities. Which era a request belongs to is
+//!   decided at the edge that can see it, not here.
 //!
 //! # Usage
 //!
@@ -35,7 +43,9 @@
 //! match require_destructive_confirmation(&proxy, session_id, "kill server 'payments'").await {
 //!     ConfirmationOutcome::Confirmed => { /* execute */ }
 //!     ConfirmationOutcome::Declined  => return /* abort, surface denial */ ,
-//!     ConfirmationOutcome::Unsupported => { /* proceed with warning already logged */ }
+//!     // Nobody could be asked. Refuse or proceed is the CALLER's decision,
+//!     // taken from the era's ConfirmationPolicy; the WARN is logged either way.
+//!     ConfirmationOutcome::Unsupported => { /* consult ConfirmationPolicy */ }
 //! }
 //! ```
 
@@ -45,9 +55,7 @@ use std::time::Duration;
 
 use tracing::warn;
 
-use crate::gateway::meta_mcp_tool_defs::{
-    build_code_mode_tools, build_meta_tools, build_webhook_status_tool,
-};
+use crate::gateway::meta_mcp_tool_defs::{MetaToolGates, build_code_mode_tools, build_meta_tools};
 use crate::gateway::proxy::{ProxyManager, SamplingError};
 use crate::protocol::ElicitationCreateParams;
 
@@ -62,7 +70,9 @@ pub enum ConfirmationOutcome {
     /// The operator declined or cancelled; abort execution.
     Declined,
     /// Elicitation could not be delivered (no session, timeout, transport
-    /// failure).  The caller should proceed with a warning already emitted.
+    /// failure).  The warning is already emitted; whether the call then
+    /// proceeds is the caller's decision, taken from [`ConfirmationPolicy`] —
+    /// a legacy request proceeds, a modern one is refused.
     Unsupported,
 }
 
@@ -201,11 +211,19 @@ const FLOOR_TOOL_NAME: &str = "gateway_kill_server";
 /// unconditional refusal — governing them here would refuse a large slice of
 /// the tool surface with no confirmation path. See the module docs.
 static DESTRUCTIVE_META_TOOLS: LazyLock<HashSet<String>> = LazyLock::new(|| {
-    let mut tools = build_meta_tools(true, true, true, 0, 0);
+    // Every flag on, webhook status included: this set governs what is
+    // *dispatchable*, which is wider than what any one deployment lists.
+    let mut tools = build_meta_tools(
+        MetaToolGates {
+            stats: true,
+            reload: true,
+            cost_report: true,
+            webhook_status: true,
+        },
+        0,
+        0,
+    );
     tools.extend(build_code_mode_tools());
-    // Callable but never enumerated, so the builder does not produce it — and a
-    // gate over what is *listed* would leave a dispatchable tool ungoverned.
-    tools.push(build_webhook_status_tool());
     let json = serde_json::to_value(&tools).unwrap_or(serde_json::Value::Null);
     let mut governed = destructive_tools_from_annotations(&json);
     governed.insert(FLOOR_TOOL_NAME.to_string());
@@ -385,9 +403,20 @@ mod tests {
         // GIVEN: the REAL compile-time meta-tool definitions, built with every
         // feature flag on (so a flag-gated destructive tool is still covered),
         // plus the Code Mode tool set.
-        use crate::gateway::meta_mcp_tool_defs::{build_code_mode_tools, build_meta_tools};
+        use crate::gateway::meta_mcp_tool_defs::{
+            MetaToolGates, build_code_mode_tools, build_meta_tools,
+        };
 
-        let mut tools = build_meta_tools(true, true, true, 0, 0);
+        let mut tools = build_meta_tools(
+            MetaToolGates {
+                stats: true,
+                reload: true,
+                cost_report: true,
+                webhook_status: true,
+            },
+            0,
+            0,
+        );
         tools.extend(build_code_mode_tools());
 
         // WHEN/THEN: every tool whose annotations carry `destructiveHint: true`
@@ -426,9 +455,20 @@ mod tests {
         // fails to compile until that static exists — the RED before
         // `is_destructive_meta_tool` stops being a hardcoded match arm) rather
         // than a second, hand-maintained copy of the same predicate.
-        use crate::gateway::meta_mcp_tool_defs::{build_code_mode_tools, build_meta_tools};
+        use crate::gateway::meta_mcp_tool_defs::{
+            MetaToolGates, build_code_mode_tools, build_meta_tools,
+        };
 
-        let mut tools = build_meta_tools(true, true, true, 0, 0);
+        let mut tools = build_meta_tools(
+            MetaToolGates {
+                stats: true,
+                reload: true,
+                cost_report: true,
+                webhook_status: true,
+            },
+            0,
+            0,
+        );
         tools.extend(build_code_mode_tools());
         let json = serde_json::to_value(&tools).expect("tool defs must serialize");
         let mut expected = destructive_tools_from_annotations(&json);

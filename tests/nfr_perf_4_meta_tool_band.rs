@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `NFR.PERF.4` — the Meta-MCP surface a model is shown stays inside 14..=16.
+//! `NFR.PERF.4` — the Meta-MCP surface a model is shown stays inside 14..=17.
 //!
 //! Measured through `handle_tools_list`, never through builder arithmetic: the
 //! served path pins `cost_report_enabled` on and appends surfaced tools, so a
@@ -18,7 +18,11 @@ use mcp_gateway::{
 };
 
 /// The band `NFR.PERF.4` states, as a range rather than a pinned number.
-const BAND: std::ops::RangeInclusive<usize> = 14..=16;
+/// The top of the band is 17, not 16: `webhooks.enabled` defaults to true, so
+/// an HTTP deployment serving `gateway_webhook_status` is the shipped default
+/// rather than an exotic combination. See
+/// `docs/design/2026-09-08-perf4-webhook-status-restoration.md`.
+const BAND: std::ops::RangeInclusive<usize> = 14..=17;
 
 fn decode_tools_list(response: JsonRpcResponse) -> ToolsListResult {
     serde_json::from_value(response.result.expect("tools/list should return a result"))
@@ -65,12 +69,22 @@ fn nfr_perf_4_1_every_feature_combination_serves_a_surface_inside_the_band() {
                     meta_mcp_with(stats, webhooks, reload).handle_tools_list(RequestId::Number(1)),
                 )
                 .tools;
+                let names: Vec<&str> = served.iter().map(|t| t.name.as_str()).collect();
                 assert!(
                     BAND.contains(&served.len()),
                     "served meta-tool surface must stay inside {BAND:?}: \
-                     stats={stats} webhooks={webhooks} reload={reload} served {} tools: {:?}",
-                    served.len(),
-                    served.iter().map(|t| t.name.as_str()).collect::<Vec<_>>()
+                     stats={stats} webhooks={webhooks} reload={reload} served {} tools: {names:?}",
+                    served.len()
+                );
+                // Widening the band alone would let the tool stay deleted and
+                // still pass every range assertion, so what reaches the model
+                // is pinned here rather than only how many things do.
+                assert_eq!(
+                    names.contains(&"gateway_webhook_status"),
+                    webhooks,
+                    "the webhook diagnostic is served exactly when its registry \
+                     is attached: stats={stats} webhooks={webhooks} reload={reload} \
+                     served {names:?}"
                 );
             }
         }

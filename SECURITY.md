@@ -82,3 +82,8 @@ MCP Gateway implements defense-in-depth across the six attack vectors identified
 - **Dependency audit**: All crypto via `rustls` (no OpenSSL)
 
 For the full security audit report, see [docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md).
+
+The external SDK recovery test is gated by its own required CI job. See
+[the SDK runner instructions](docs/tests/task-sdk-recovery.md) for the two-step
+all-feature suite and Linux/Redis prerequisites; ordinary `cargo test` needs
+no external SDK services.

@@ -95,8 +95,13 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
         run: python3 scripts/release/check_scope_acceptance.py --publish-check
 
+  task-sdk-recovery:
+    uses: ./.github/workflows/task-sdk-recovery.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+
   verify:
-    needs: [security-gate, secret-leak-lint, release-criteria]
+    needs: [security-gate, secret-leak-lint, release-criteria, task-sdk-recovery]
     runs-on: avrea-ubuntu-latest-4-vcpu
 
     steps:
@@ -116,7 +121,7 @@ jobs:
         run: cargo clippy --all-features -- -D warnings
 
       - name: Test
-        run: cargo test --all-features
+        run: cargo test --all-features -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result
 
       - name: Verify publish package
         # The runner image replaces the crates-io source with a mirror, and

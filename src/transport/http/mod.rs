@@ -27,6 +27,7 @@ use super::Transport;
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
 use crate::protocol::era::Era;
+use crate::protocol::extensions::Extension;
 use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
@@ -443,6 +444,63 @@ fn with_modern_meta(method: &str, params: Option<Value>) -> Result<Option<Value>
     Ok(Some(Value::Object(params)))
 }
 
+/// The methods that may carry the tasks opt-in, and nothing else.
+///
+/// The opt-in selects task-augmented execution upstream, so the vocabulary it
+/// unlocks is exactly the one the adapter implements: the initial submission
+/// (`tools/call`) and the poll (`tasks/get`). `tasks/update` and `tasks/cancel`
+/// exist upstream and are outside this adapter by construction — an allow-list
+/// keeps a future caller from reaching them through this door by passing a
+/// method name.
+const TASK_CAPABILITY_METHODS: [&str; 2] = ["tools/call", "tasks/get"];
+
+/// Build the modern `_meta` envelope, then declare the one tasks extension in it.
+///
+/// Layered on [`with_modern_meta`] rather than beside it: the protocol version,
+/// the params/`_meta` object validation and their two local failures are the
+/// same facts here as on any other modern request, and a second copy of them
+/// would be a second thing to keep in step. This adds exactly one key —
+/// `_meta[clientCapabilities].extensions["io.modelcontextprotocol/tasks"] = {}`
+/// — on top of the empty capabilities that path always writes.
+///
+/// What it does NOT do is preserve a caller's own `extensions`. The declaration
+/// is the transport's, about what this gateway implements; forwarding whatever
+/// a caller put there would let an upstream select behaviour the gateway has no
+/// code to handle, and would make the capability set forgeable from params.
+fn with_task_capability_meta(method: &str, params: Option<Value>) -> Result<Option<Value>> {
+    let params = with_modern_meta(method, params)?;
+    let Some(Value::Object(mut params)) = params else {
+        // Unreachable: `with_modern_meta` returns `Some(object)` or an error.
+        return Err(Error::Protocol(format!(
+            "cannot send `{method}` with the tasks capability: modern `_meta` envelope missing"
+        )));
+    };
+    let Some(Value::Object(meta)) = params.get_mut("_meta") else {
+        return Err(Error::Protocol(format!(
+            "cannot send `{method}` with the tasks capability: modern `_meta` envelope missing"
+        )));
+    };
+    let mut extensions = serde_json::Map::new();
+    extensions.insert(
+        Extension::Tasks.id().to_string(),
+        Value::Object(serde_json::Map::new()),
+    );
+    let mut capabilities = serde_json::Map::new();
+    capabilities.insert("extensions".to_string(), Value::Object(extensions));
+    meta.insert(
+        KEY_CLIENT_CAPABILITIES.to_string(),
+        Value::Object(capabilities),
+    );
+    Ok(Some(Value::Object(params)))
+}
+
+/// The era probe's method, spelled here because `backend::era`'s constant is
+/// private to that module. Kept as its own predicate so the two sites that must
+/// treat the probe as a pre-handshake message read the same rule.
+fn is_era_probe(method: &str) -> bool {
+    method == "server/discover"
+}
+
 /// Name a JSON value's kind for an error a human has to act on.
 fn value_kind(value: &Value) -> &'static str {
     match value {
@@ -595,12 +653,35 @@ impl HttpTransport {
     /// For Streamable HTTP: uses URL directly (trailing slash only for localhost/Starlette)
     /// For OAuth-enabled backends: initializes OAuth client and obtains token first
     ///
+    /// Still the legacy startup, whole: [`Self::connect`] then the handshake.
+    /// The start path no longer calls it (it asks first — see
+    /// [`Self::finish_startup`]), but the session-expiry recovery in
+    /// `request_with_headers` re-enters exactly this, and a peer that issued a
+    /// session is by definition one we handshook with.
+    ///
     /// # Errors
     ///
     /// Returns an error if OAuth authorization fails, SSE handshake fails,
     /// or protocol version negotiation is unsuccessful.
-    #[allow(clippy::too_many_lines)] // MIK-4486 OAuth detach adds ~2 lines
     pub async fn initialize(&self) -> Result<()> {
+        self.connect().await?;
+        self.legacy_handshake().await
+    }
+
+    /// Everything a request needs before one can be sent: the OAuth token and
+    /// its refresh task, and the message endpoint.
+    ///
+    /// Split out of [`Self::initialize`] for RFC-0061 §2.4: the era probe is a
+    /// real request, so it needs a credential and an endpoint, and it must go
+    /// out *before* any handshake decision. Re-running the whole of
+    /// `initialize` for the probe and again for the fallback would run the
+    /// OAuth flow twice per start and replace a refresh task that is already
+    /// the right one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if OAuth authorization or the SSE handshake fails.
+    pub(crate) async fn connect(&self) -> Result<()> {
         // Initialize OAuth client if configured
         if let Some(ref oauth_arc) = self.oauth_client {
             // MIK-4486: Detach the OAuth handshake from the calling request
@@ -661,6 +742,44 @@ impl HttpTransport {
             info!(sse_url = %sanitize_url_for_diagnostics(&self.base_url), message_url = %sanitize_url_for_diagnostics(full_message_url.as_str()), oauth = self.oauth_client.is_some(), "SSE handshake complete");
         }
 
+        Ok(())
+    }
+
+    /// Finish a connected start in the dialect `era` names (RFC-0061 §2.4).
+    ///
+    /// `Modern` is the whole point of asking first: the 2026 revision removed
+    /// the handshake, so a modern peer is usable the moment the transport is
+    /// connected, and sending it an `initialize` it must reject is what kept
+    /// this gateway off every stateless backend. Anything else — a legacy
+    /// answer, an unrecognised error, silence — takes the handshake unchanged.
+    ///
+    /// The caller awaits the era cache commit and passes the resolved verdict
+    /// explicitly, keeping the handshake decision tied to that probe.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the legacy handshake fails. The modern branch has
+    /// nothing left to fail at.
+    pub(crate) async fn finish_startup(&self, era: Era) -> Result<()> {
+        match era {
+            Era::Modern => {
+                self.connected.store(true, Ordering::Relaxed);
+                debug!(
+                    url = %sanitize_url_for_diagnostics(&self.base_url),
+                    "Modern peer: started without a handshake"
+                );
+                Ok(())
+            }
+            Era::Legacy => self.legacy_handshake().await,
+        }
+    }
+
+    /// The 2025 handshake: `initialize`, version negotiation, `initialized`.
+    ///
+    /// Unchanged from the body `initialize()` has always run. It assumes
+    /// [`Self::connect`] has already resolved the endpoint and the credential.
+    #[allow(clippy::too_many_lines)] // MIK-4486 OAuth detach adds ~2 lines
+    async fn legacy_handshake(&self) -> Result<()> {
         // Send initialize request via the message endpoint
         // Use configured protocol version if set, otherwise use latest
         let version = self
@@ -1134,8 +1253,16 @@ impl HttpTransport {
         // empty (MIK-6784: store under the caller's identity key, never a shared
         // slot). The first request for a new identity has no session; the
         // upstream mints one and we bind it to that identity for reuse.
+        //
+        // The probe is exempt. It runs before the handshake decision now, so a
+        // session minted on its response would be one no handshake negotiated:
+        // a legacy fallback would then send its `initialize` already carrying a
+        // session id, which is not the message this gateway has ever sent, and
+        // a modern peer's shape strips the header anyway.
         let bucket = Self::bucket_key(identity_key);
-        if self.sessions.read().contains_key(bucket) {
+        if is_era_probe(&request.method) {
+            debug!("Era probe: not binding a session before the handshake decision");
+        } else if self.sessions.read().contains_key(bucket) {
             debug!("Using existing session ID for caller bucket");
         } else if let Some(session_id) = response.headers().get("mcp-session-id") {
             if let Ok(id) = session_id.to_str() {
@@ -1302,7 +1429,18 @@ impl Transport for HttpTransport {
         // inside the header builder instead would leave the body half of the
         // envelope decided somewhere else, and the two must agree about which
         // dialect this one message is written in.
-        let era = self.outbound_era();
+        //
+        // The probe is the one request that cannot wait for the era it is
+        // resolving, and an undetermined era shapes everything else legacy.
+        // `server/discover` exists only in the 2026 revision, so a legacy-shaped
+        // probe asks a modern peer a question in a dialect that peer may refuse
+        // — the probe has to be a *valid* 2026 request to be evidence of
+        // anything. Legacy peers may return a non-modern answer or time out;
+        // the existing classifier then selects the legacy fallback. A
+        // determined verdict still takes precedence over this probe default.
+        let era = self
+            .outbound_era()
+            .or_else(|| is_era_probe(method).then_some(Era::Modern));
         let params = if era == Some(Era::Modern) {
             with_modern_meta(method, params)?
         } else {
@@ -1359,6 +1497,63 @@ impl Transport for HttpTransport {
         }
 
         result
+    }
+
+    /// The typed upstream-tasks entry point. See the trait method for why this
+    /// is its own method and not a flag.
+    ///
+    /// Three refusals, all local, all before anything reaches the wire:
+    ///
+    /// 1. A method outside `TASK_CAPABILITY_METHODS`.
+    /// 2. A peer not *known* to be modern. `outbound_era()` reads a determined
+    ///    era only — `None` (undetermined, or a probe in flight) is legacy, and
+    ///    a legacy peer has no `_meta` envelope to read the opt-in from, so it
+    ///    would run the call synchronously and hand back a result the caller
+    ///    would then have to mistake for a task handle.
+    /// 3. A `params`/`_meta` that cannot carry the envelope (from
+    ///    `with_task_capability_meta`).
+    ///
+    /// It sends through `send_request_with_headers` rather than
+    /// `request_with_headers`: that wrapper re-runs `with_modern_meta` (which
+    /// would overwrite the declaration with empty capabilities) and owns the
+    /// session-expiry re-handshake, which resubmits the identical request. A
+    /// resubmitted `tools/call` is a second upstream task, orphaning the first,
+    /// so this path never retries — a caller that must retry is the one that
+    /// knows whether its submission is idempotent. Passing `Some(Era::Modern)`
+    /// keeps the final modern-header writer running exactly once, as it does
+    /// for every other modern request, and `extra_headers`/`identity_key` reach
+    /// it unchanged so the caller's credential and session bucket still apply.
+    async fn request_with_task_capability(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
+    ) -> Result<JsonRpcResponse> {
+        if !TASK_CAPABILITY_METHODS.contains(&method) {
+            return Err(Error::Protocol(format!(
+                "refusing to send `{method}` with the upstream tasks capability: only {allowed} \
+                 may carry it",
+                allowed = TASK_CAPABILITY_METHODS.join(" and "),
+            )));
+        }
+        if self.outbound_era() != Some(Era::Modern) {
+            return Err(Error::Protocol(format!(
+                "refusing to send `{method}` with the upstream tasks capability: the peer is not \
+                 known to speak a 2026 revision, which is the only dialect that can carry the \
+                 declaration"
+            )));
+        }
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: self.next_id(),
+            method: method.to_string(),
+            params: with_task_capability_meta(method, params)?,
+        };
+
+        self.send_request_with_headers(&request, extra_headers, identity_key, Some(Era::Modern))
+            .await
     }
 
     // MIK-6710: HTTP is the only transport whose `request_with_headers`

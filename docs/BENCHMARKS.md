@@ -14,11 +14,11 @@ Public quantitative claims are tracked in [benchmarks/public_claims.json](../ben
 
 | Claim | Value | Source |
 |------|-------|--------|
-| Meta-tools exposed to the AI | 14 minimum / 16 README benchmark | `benchmarks/public_claims.json` |
+| Meta-tools exposed to the AI | 14 minimum / 17 README benchmark | `benchmarks/public_claims.json` |
 | Built-in capability YAMLs | 119 total (marketed as 110+) | `benchmarks/public_claims.json` + `find capabilities -name '*.yaml' -not -path '*/examples/*' \| wc -l` |
 | Startup time | ~8ms | `hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'` |
 | Live agent task cost | no measured saving; the meta path cost more input tokens in all 8 matched pairs | `benchmarks/results/mik-6977-live-agent-2026-09-04.json` |
-| Schema-only model | 100 tools → ~1600 gateway schema tokens → 89% smaller first request; not completed-task cost | `python3 benchmarks/token_savings.py --scenario readme` |
+| Schema-only model | 100 tools → ~1700 gateway schema tokens → 89% smaller first request; not completed-task cost | `python3 benchmarks/token_savings.py --scenario readme` |
 
 ## Startup Performance
 
@@ -87,13 +87,13 @@ python3 benchmarks/token_savings.py --scenario readme --json
 Reference scenario assumptions:
 
 - 100 direct tools at ~150 tokens each
-- 16 Meta-MCP tools in the README benchmark scenario at ~100 tokens each
+- 17 Meta-MCP tools in the README benchmark scenario at ~100 tokens each
 - 1,000 requests
 - Claude Opus input pricing at $15 / million tokens
 
 The base discovery quartet stays constant, and the README benchmark scenario adds stats, cost report, playbooks, profile controls, disabled-capability listing, and reload. Surfacing webhook status adds the 17th tool.
 
-This yields the schema-only first-request numbers: **~1600 gateway tokens** and **89% smaller**, with a modeled **$201 per 1K requests**. It is not a completed-task saving. Discovery turns (`gateway_search_tools` then `gateway_invoke`) reload the host context and Meta-MCP surface while carrying earlier responses forward.
+This yields the schema-only first-request numbers: **~1700 gateway tokens** and **89% smaller**, with a modeled **$200 per 1K requests**. It is not a completed-task saving. Discovery turns (`gateway_search_tools` then `gateway_invoke`) reload the host context and Meta-MCP surface while carrying earlier responses forward.
 
 At 50–100 tools, the direct-path observations imply roughly 24,900–27,500 non-schema host tokens per request. Using 27,000 puts the simple crossover near 107 tools: schema savings must cover both the extra request's host context and its carried discovery output. Catalog compaction invalidates the extrapolation above that boundary.
 

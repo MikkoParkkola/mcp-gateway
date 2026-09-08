@@ -30,7 +30,8 @@ use super::hash::compute_capability_hash;
 use super::schema_validator::validate_arguments;
 use super::{
     CapabilityDefinition, CapabilityExecutionContext, CapabilityExecutor, CapabilityLoader,
-    validate_oauth_isolation, validate_personal_capability_identity,
+    validate_capability_account_binding, validate_oauth_isolation,
+    validate_personal_capability_identity,
 };
 use crate::Result;
 use crate::protocol::{Content, Tool, ToolsCallResult};
@@ -115,6 +116,19 @@ impl IndexedCapabilities {
 // CapabilityBackend
 // ============================================================================
 
+/// The outcome of loading one capability directory.
+///
+/// `rejected` holds one rendered refusal per capability the account admission
+/// gate turned away, so a caller that must not serve a partially admitted
+/// catalogue can fail instead of only logging.
+#[derive(Debug, Default, Clone)]
+pub struct DirectoryLoad {
+    /// Capabilities that entered the tool surface.
+    pub admitted: usize,
+    /// `"<capability>: <error>"` for each refused capability, in load order.
+    pub rejected: Vec<String>,
+}
+
 /// Backend that exposes capabilities as MCP tools
 ///
 /// This backend is thread-safe and supports hot-reloading via the
@@ -191,6 +205,13 @@ impl CapabilityBackend {
     /// Used by the file watcher when a rug-pull is detected so that the
     /// tampered capability is no longer callable until the operator
     /// explicitly re-pins it.
+    ///
+    /// A removal is a live-policy mutation, so it bumps the shared policy
+    /// epoch while the write lock is still held — exactly as `reload()` does.
+    /// Without that, outer and inner cache entries for the quarantined
+    /// capability stay servable under the unchanged epoch; the watcher happens
+    /// to call `reload()` immediately afterwards, but this method is `pub` and
+    /// no caller is obliged to.
     pub fn unload_capability(&self, name: &str) -> bool {
         let mut caps = self.capabilities.write();
         if let Some(&pos) = caps.index.get(name) {
@@ -203,6 +224,9 @@ impl CapabilityBackend {
                     *idx -= 1;
                 }
             }
+            // Published, and the lock still held: no reader can observe the
+            // removal under the old epoch.
+            self.executor.bump_policy_epoch();
             true
         } else {
             false
@@ -254,8 +278,28 @@ impl CapabilityBackend {
     ///
     /// Returns an error if the directory cannot be loaded.
     pub async fn load_from_directory(&self, path: &str) -> Result<usize> {
+        Ok(self.load_from_directory_reporting(path).await?.admitted)
+    }
+
+    /// Load a directory and REPORT, rather than only log, every capability the
+    /// account admission gate refused.
+    ///
+    /// `load_from_directory` keeps its log-and-drop behaviour for the hot-reload
+    /// and account-less paths. Startup uses this variant so an invalid
+    /// `auth.account` binding present in the INITIAL catalogue can be turned
+    /// into a startup failure instead of a warning behind a serving listener.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory itself cannot be loaded. A refused
+    /// capability is not an error here — it is reported in
+    /// [`DirectoryLoad::rejected`] so the caller decides.
+    pub async fn load_from_directory_reporting(&self, path: &str) -> Result<DirectoryLoad> {
         let loaded = CapabilityLoader::load_directory(path).await?;
-        let count = loaded.len();
+        let mut report = DirectoryLoad {
+            admitted: loaded.len(),
+            rejected: Vec::new(),
+        };
 
         // Register directory for future hot-reloads.
         {
@@ -265,17 +309,27 @@ impl CapabilityBackend {
             }
         }
 
-        // Upsert each capability into the indexed store.
+        // Upsert each capability into the indexed store, through the account
+        // admission gate. A refused capability is LOGGED and dropped rather
+        // than published: the operator gets a named error, and no caller gets a
+        // tool whose account reference cannot resolve.
         for cap in loaded {
-            {
-                let mut caps = self.capabilities.write();
-                caps.upsert(cap);
+            let capability = cap.name.clone();
+            if let Err(error) = self.register_capability(cap) {
+                warn!(
+                    backend = %self.name,
+                    capability = %capability,
+                    error = %error,
+                    "Capability refused: its account binding does not resolve"
+                );
+                report.admitted -= 1;
+                report.rejected.push(format!("{capability}: {error}"));
             }
             tokio::task::yield_now().await;
         }
 
-        info!(backend = %self.name, count = count, path = path, "Loaded capabilities");
-        Ok(count)
+        info!(backend = %self.name, count = report.admitted, path = path, "Loaded capabilities");
+        Ok(report)
     }
 
     /// Reload all capabilities from registered directories
@@ -309,10 +363,29 @@ impl CapabilityBackend {
             }
         }
 
-        // Atomic swap: rebuild index and tool cache in one write lock.
+        // The same admission gate the initial load applies.
+        let mut admitted = Vec::with_capacity(all_caps.len());
+        for cap in all_caps {
+            match validate_capability_account_binding(&cap, self.executor.account_strategies()) {
+                Ok(()) => admitted.push(cap),
+                Err(error) => {
+                    total -= 1;
+                    warn!(
+                        backend = %self.name,
+                        capability = %cap.name,
+                        error = %error,
+                        "Capability refused on reload: its account binding does not resolve"
+                    );
+                }
+            }
+        }
+
+        // Atomic swap: rebuild index and tool cache in one write lock, then
+        // bump the shared policy epoch while that lock is still held.
         {
             let mut caps = self.capabilities.write();
-            caps.replace_all(all_caps);
+            caps.replace_all(admitted);
+            self.executor.bump_policy_epoch();
         }
 
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
@@ -400,11 +473,18 @@ impl CapabilityBackend {
             .get(name)
             .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
         validate_personal_capability_identity(&capability, &context)?;
-        validate_oauth_isolation(
-            &capability,
-            &context,
-            self.multi_user.load(std::sync::atomic::Ordering::Relaxed),
-        )?;
+
+        let multi_user = self.multi_user.load(std::sync::atomic::Ordering::Relaxed);
+        // A capability bound to an account descriptor is the one shape whose
+        // per-user OAuth isolation cannot be decided before the account is
+        // resolved: whether a per-caller credential exists at all is the
+        // registry's answer, not the YAML's. Every OTHER shape keeps the guard
+        // exactly where it has always been — first, ahead of argument
+        // validation — so no unbound call's error changes or moves.
+        let descriptor_bound = capability.auth.account.is_some();
+        if !(multi_user && descriptor_bound) {
+            validate_oauth_isolation(&capability, &context, multi_user)?;
+        }
 
         // Selector values choose an outbound URL path, so preserve their
         // declared string type instead of allowing generic schema coercion
@@ -433,6 +513,33 @@ impl CapabilityBackend {
             });
         }
 
+        // THE ACCOUNT IS RESOLVED ONLY ONCE THE CALL IS OTHERWISE WELL FORMED.
+        //
+        // Both checks above reject without side effects, and acquiring a
+        // custody lease for a call that is about to be rejected for a bad path
+        // selector or an unknown argument would consume a real credential for a
+        // request that never happens. So the resolve happens HERE: after the
+        // arguments are known good, before the isolation guard, and through the
+        // SAME `prepare_account_context` the executor uses — a carried
+        // credential is rechecked against the live registry rather than
+        // re-minted, and a `shared` descriptor still resolves to the legacy
+        // credential and therefore still faces the unchanged guard below.
+        //
+        // The returned context is the one that is executed under, so the
+        // credential the guard consented to is the credential the inner cache
+        // key and the egress headers speak about. The executor's own resolve,
+        // inner-cache lookup and egress recheck are untouched.
+        let context = if multi_user && descriptor_bound {
+            let context = self
+                .executor
+                .prepare_account_context(&capability, context)
+                .await?;
+            validate_oauth_isolation(&capability, &context, multi_user)?;
+            context
+        } else {
+            context
+        };
+
         // Use the coerced arguments (e.g., "123" → 123 for integer fields).
         // The executor records transport health (success/failure) at the HTTP
         // boundary, so cache hits and application-level errors do not skew
@@ -443,6 +550,22 @@ impl CapabilityBackend {
             .await?;
 
         Ok(build_success_tool_result(&capability, result))
+    }
+
+    /// Register one capability through the account-binding admission gate.
+    ///
+    /// A capability whose `auth.account` does not name a configured descriptor,
+    /// or whose `auth.key` is not `oauth:<descriptor.provider>`, never enters
+    /// the tool surface. Descriptorless capabilities are unaffected.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Config`] naming the unresolved reference, or the key the
+    /// descriptor's provider requires.
+    pub fn register_capability(&self, capability: CapabilityDefinition) -> Result<()> {
+        validate_capability_account_binding(&capability, self.executor.account_strategies())?;
+        self.capabilities.write().upsert(capability);
+        Ok(())
     }
 
     /// Check if a capability exists — O(1) via the name index.
@@ -940,6 +1063,109 @@ providers:
         assert_eq!(reload_count, 1);
         assert!(backend.has_capability("alpha"));
         assert_eq!(backend.get_tools().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cache_4_capability_reload_bumps_attached_epoch() {
+        use std::io::Write as _;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("alpha.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r"
+name: alpha
+description: Alpha tool
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /alpha
+"
+        )
+        .unwrap();
+
+        let epoch = Arc::new(AtomicU64::new(0));
+        let backend = CapabilityBackend::new(
+            "test",
+            Arc::new(CapabilityExecutor::new().with_policy_epoch(Arc::clone(&epoch))),
+        );
+        backend
+            .load_from_directory(dir.path().to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            epoch.load(Ordering::SeqCst),
+            0,
+            "initial load is not a live-policy mutation"
+        );
+        backend.reload().await.unwrap();
+        assert_eq!(
+            epoch.load(Ordering::SeqCst),
+            1,
+            "reload must bump after replace_all"
+        );
+    }
+
+    /// CACHE.4 — unloading a quarantined capability is a live-policy mutation,
+    /// so entries keyed under the old epoch must be stranded. The watcher
+    /// follows an unload with `reload()`, but `unload_capability` is `pub` and
+    /// nothing obliges another caller to.
+    #[tokio::test]
+    async fn cache_4_capability_unload_bumps_attached_epoch() {
+        use std::io::Write as _;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("alpha.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r"
+name: alpha
+description: Alpha tool
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /alpha
+"
+        )
+        .unwrap();
+
+        let epoch = Arc::new(AtomicU64::new(0));
+        let backend = CapabilityBackend::new(
+            "test",
+            Arc::new(CapabilityExecutor::new().with_policy_epoch(Arc::clone(&epoch))),
+        );
+        backend
+            .load_from_directory(dir.path().to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(epoch.load(Ordering::SeqCst), 0, "load is not a mutation");
+
+        assert!(backend.unload_capability("alpha"), "fixture must unload");
+        assert_eq!(
+            epoch.load(Ordering::SeqCst),
+            1,
+            "unload must invalidate the policy epoch"
+        );
+
+        assert!(
+            !backend.unload_capability("alpha"),
+            "second unload removes nothing"
+        );
+        assert_eq!(
+            epoch.load(Ordering::SeqCst),
+            1,
+            "a no-op unload must not bump"
+        );
     }
 
     #[test]

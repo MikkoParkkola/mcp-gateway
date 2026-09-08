@@ -6,7 +6,7 @@
 //!
 //! # Features
 //!
-//! - **Meta-MCP Mode**: 14 tools minimum; 16 in the README benchmark scenario
+//! - **Meta-MCP Mode**: 14 tools minimum; 17 in the README benchmark scenario
 //! - **Streaming**: Real-time notifications via SSE (MCP 2025-03-26 Streamable HTTP)
 //! - **Notification Multiplexer**: Routes backend notifications to connected clients
 //! - **Multi-Transport**: stdio, Streamable HTTP, SSE support
@@ -60,6 +60,7 @@ pub mod kubernetes;
 pub mod metrics;
 pub mod mtls;
 pub mod oauth;
+pub(crate) mod personal_accounts;
 pub mod playbook;
 pub mod projection;
 pub mod protocol;
@@ -92,6 +93,12 @@ pub mod tunnel;
 pub mod validator;
 
 pub use error::{Error, Result};
+
+// Offline account-store initialization only — the same narrowing `config`
+// already applies to the `AccountsConfig` DTO. The store, the service and the
+// worker stay crate-private; this exposes one explicit, offline entry point so
+// the `accounts init-store` command can reach it without opening the module.
+pub use personal_accounts::{InitializedStore, OfflineInitError, initialize_store_offline};
 
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 

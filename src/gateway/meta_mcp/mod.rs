@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 #[cfg(feature = "spec-preview")]
@@ -57,21 +58,33 @@ use super::meta_mcp_helpers::{
     build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
     wrap_tool_success,
 };
-use super::meta_mcp_tool_defs::{MetaToolExposure, build_meta_tools_filtered};
+use super::meta_mcp_tool_defs::{
+    MetaToolExposure, MetaToolGates, build_meta_tools_filtered, require_gateway_invoke_nonce,
+};
 use super::webhooks::WebhookRegistry;
 
-mod invoke;
+pub(crate) mod admission;
+pub(crate) mod invoke;
 mod prompt_cache;
 mod protocol;
 mod resources;
+pub(crate) mod response_security;
+#[cfg(test)]
+mod response_security_tests;
 mod search;
+pub(crate) mod signing;
 #[cfg(feature = "spec-preview")]
 mod spec_preview;
 mod support;
 mod surfaced;
+mod task_confirmation;
+pub(crate) mod upstream;
 
 pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
 pub use support::prune_constant_signals;
+pub(crate) use task_confirmation::{
+    TaskConfirmation, TaskConfirmationRequest, task_admission_request,
+};
 
 // ============================================================================
 // Constants
@@ -111,6 +124,20 @@ impl CallerIdentityHeaderTrust {
 /// site names the authorizer it means, which in tests makes a permissive one
 /// visible in the test source rather than hidden in a struct default.
 pub struct MetaMcpCallerContext<'a> {
+    /// Explicit request era, classified by the transport from reserved metadata.
+    pub is_modern: bool,
+    /// Validated protocol revision this request is served under.
+    ///
+    /// Classifier output, never the duplicate-header sentinel. `None` skips
+    /// outer response-cache get/set and, on an attached executor, inner cache.
+    /// Distinct from `is_modern` and from any peer `era` field on this struct.
+    pub protocol_revision: Option<&'a str>,
+    /// Stable validated credential principal; display names are never authority.
+    pub credential_principal: Option<&'a str>,
+    /// Outer execution owner; an inner step can mark dispatch but cannot settle it.
+    pub(crate) execution: Option<&'a admission::SyncLease>,
+    /// Private external origin and completed signing admission, never backend metadata.
+    pub(crate) signing: Option<&'a signing::SigningInvocationContext>,
     /// Decides whether this caller may invoke a given backend tool.
     ///
     /// Borrowed, never stored: `AppState` owns `meta_mcp`, so holding an
@@ -154,6 +181,36 @@ pub struct MetaMcpCallerContext<'a> {
     /// gateway opens it as one of its own sealed envelopes. Nothing downstream
     /// may forward this field to a backend verbatim.
     pub retry: &'a crate::protocol::mrtr::RetryFields,
+    /// Background-task intent, taken after the destructive confirmation gate.
+    /// `None` on every synchronous call and on the worker's rebuilt context.
+    pub task: Option<crate::gateway::task_service::TaskIntent>,
+    /// Which protocol era this caller declared on **this** request.
+    ///
+    /// Carried rather than re-derived: both production sites already hold the
+    /// `RequestShape` classification that `initialize` advertises against, and
+    /// a second era predicate computed downstream is exactly the drift
+    /// [`crate::protocol::meta::classify_request`] exists to prevent.
+    ///
+    /// No `Default`, for the same reason the authorizer has none — a defaulted
+    /// era is a site that silently claims an era it never saw.
+    ///
+    /// SCAFFOLD as of this commit: the reader is the MRTR.9 gate at
+    /// `meta_mcp::invoke` (`interim.undeclared(caller.input_capabilities)`),
+    /// which must merge the session declaration for `Legacy` and read only the
+    /// request's own `_meta` for `Modern`. That merge is `MIK-7212.WIRE.1`
+    /// through `WIRE.4` and lands next; until it does, nothing on the
+    /// production path reads this field.
+    pub era: crate::protocol::meta::Era,
+    /// How this caller can be sent a request of the gateway's own — a bridged
+    /// `sampling/createMessage` or `elicitation/create`.
+    ///
+    /// Distinct from `confirmation`, which answers a narrower question and
+    /// would become a general client-request pipe if reused for this. A
+    /// transport with nowhere to send carries
+    /// [`crate::gateway::input_bridge::NoClientChannel`], so "cannot ask" is a
+    /// channel that refuses rather than an absent one every read site must
+    /// remember to check.
+    pub channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
 }
 
 // ============================================================================
@@ -171,7 +228,14 @@ pub struct MetaMcpCallerContext<'a> {
 /// branches emit the generic `-32600`, and `-32003` already means something
 /// else elsewhere.
 fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> JsonRpcResponse {
-    let mut response = JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string());
+    let mut response = match error {
+        crate::Error::ResponseFirewallRefused => JsonRpcResponse::delivery_refusal_error(
+            Some(id),
+            error.to_rpc_code(),
+            &error.to_string(),
+        ),
+        _ => JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string()),
+    };
     if let Some(ref mut rpc_error) = response.error {
         // Written unconditionally, so this function is the sole authority on
         // the field. `JsonRpcResponse::error` starts it at `None` and nothing
@@ -219,6 +283,9 @@ pub struct MetaMcp {
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
     pub(super) idempotency_cache: Option<Arc<IdempotencyCache>>,
+    /// One bounded execution owner shared by the meta and direct transports.
+    pub(super) execution_admission: Arc<crate::idempotency::admission::ExecutionAdmission>,
+    pub(super) idempotency_config: RwLock<crate::config::IdempotencyConfig>,
     /// Continuation keys, spent-ledger and held legacy exchanges.
     ///
     /// Here rather than on `AppState` because of lifetime: this struct is built
@@ -246,6 +313,30 @@ pub struct MetaMcp {
     /// propagation entirely (all backends keep static-credential behavior).
     pub(super) identity_propagation:
         RwLock<Option<Arc<dyn crate::identity_propagation::IdentityPropagation>>>,
+    /// Per-backend identity-propagation strategies, installed at startup for
+    /// backends bound to an `accounts.descriptors` entry.
+    ///
+    /// The process-wide field above installs at most ONE minting strategy, so a
+    /// deployment mixing an external token-exchange descriptor with a managed
+    /// vault one could never dispatch both. A per-backend entry is consulted
+    /// FIRST by the single resolver: the credential a backend gets is the one
+    /// its own descriptor compiled to, never whichever kind happened to be
+    /// installed process-wide. A backend with no entry keeps the existing
+    /// behaviour exactly.
+    pub(super) backend_identity_propagation: RwLock<
+        std::collections::HashMap<
+            String,
+            Arc<dyn crate::identity_propagation::IdentityPropagation>,
+        >,
+    >,
+    /// Per-DESCRIPTOR account strategies, shared with the capability executor.
+    ///
+    /// The map above is keyed by backend name, which a REST capability does not
+    /// have: it names an `accounts.descriptors` map key directly and may be
+    /// that account's only consumer. The shared installer writes ONE strategy
+    /// per descriptor here and hands the same `Arc` to the per-backend map, so
+    /// both consumers of one account hold one instance.
+    pub(super) account_strategies: Arc<crate::identity_propagation::AccountStrategyRegistry>,
     pub(super) code_mode_enabled: bool,
     /// Whether this gateway serves more than one principal (ADR-008 INV-2).
     ///
@@ -393,6 +484,16 @@ pub struct MetaMcp {
     /// owner, and live grant evidence.
     pub(super) identity_grants: RwLock<LocalIdentityGrantStore>,
 
+    /// Authorization-policy generation mixed into every response-cache key.
+    ///
+    /// One counter for this handler. Bumped in [`Self::set_identity_grants`]
+    /// after the new grant store is published, while that write lock is still
+    /// held. Captured once per invoke with `Acquire` before authorization
+    /// runs; that snapshot is the only value either cache-key build may use.
+    /// A second load at the write site publishes a pre-bump body under the
+    /// post-bump epoch.
+    pub(super) policy_epoch: Arc<AtomicU64>,
+
     /// Trust caller identity headers from an authenticated edge proxy.
     ///
     /// Disabled by default because direct clients can otherwise spoof headers.
@@ -428,6 +529,7 @@ impl MetaMcp {
         stats: Option<Arc<UsageStats>>,
         ranker: Option<Arc<SearchRanker>>,
         default_cache_ttl: Duration,
+        clock: Arc<dyn Fn() -> u64 + Send + Sync>,
     ) -> Self {
         Self {
             backends,
@@ -435,6 +537,8 @@ impl MetaMcp {
             cache,
             default_cache_ttl,
             idempotency_cache: None,
+            execution_admission: crate::idempotency::admission::ExecutionAdmission::new(clock),
+            idempotency_config: RwLock::new(crate::config::IdempotencyConfig::default()),
             continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
             stats,
             ranker,
@@ -449,6 +553,10 @@ impl MetaMcp {
             session_profiles: Arc::new(SessionProfileStore::new()),
             reload_context: RwLock::new(None),
             identity_propagation: RwLock::new(None),
+            backend_identity_propagation: RwLock::new(std::collections::HashMap::new()),
+            account_strategies: Arc::new(
+                crate::identity_propagation::AccountStrategyRegistry::default(),
+            ),
             code_mode_enabled: false,
             multi_user: std::sync::atomic::AtomicBool::new(false),
             projection_mode: crate::projection::ProjectionMode::default(),
@@ -477,6 +585,7 @@ impl MetaMcp {
             attestation_validator: None,
             attestation_mode: crate::attestation::AttestationMode::Observe,
             identity_grants: RwLock::new(LocalIdentityGrantStore::new()),
+            policy_epoch: Arc::new(AtomicU64::new(0)),
             caller_identity_header_trust: CallerIdentityHeaderTrust::Disabled,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
             #[cfg(feature = "firewall")]
@@ -486,7 +595,7 @@ impl MetaMcp {
 
     /// Create a new Meta-MCP handler.
     pub fn new(backends: Arc<BackendRegistry>) -> Self {
-        Self::build(backends, None, None, None, Duration::from_secs(60))
+        Self::with_features(backends, None, None, None, Duration::from_secs(60))
     }
 
     /// Create a new Meta-MCP handler with cache, stats, and ranking support.
@@ -497,7 +606,26 @@ impl MetaMcp {
         ranker: Option<Arc<SearchRanker>>,
         default_ttl: Duration,
     ) -> Self {
-        Self::build(backends, cache, stats, ranker, default_ttl)
+        Self::with_features_and_clock(
+            backends,
+            cache,
+            stats,
+            ranker,
+            default_ttl,
+            Arc::new(crate::protocol::continuation::now_unix_secs),
+        )
+    }
+
+    /// Build the real handler with its serving runtime's trusted epoch source.
+    pub(crate) fn with_features_and_clock(
+        backends: Arc<BackendRegistry>,
+        cache: Option<Arc<ResponseCache>>,
+        stats: Option<Arc<UsageStats>>,
+        ranker: Option<Arc<SearchRanker>>,
+        default_ttl: Duration,
+        clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> Self {
+        Self::build(backends, cache, stats, ranker, default_ttl, clock)
     }
 
     /// The continuation state this run mints and redeems with.
@@ -507,6 +635,16 @@ impl MetaMcp {
     #[must_use]
     pub fn continuation(&self) -> Arc<crate::protocol::continuation::ContinuationState> {
         Arc::clone(&self.continuation)
+    }
+
+    pub(crate) fn execution_admission(
+        &self,
+    ) -> &Arc<crate::idempotency::admission::ExecutionAdmission> {
+        &self.execution_admission
+    }
+
+    pub(crate) fn set_idempotency_config(&self, config: crate::config::IdempotencyConfig) {
+        *self.idempotency_config.write() = config;
     }
 
     /// Expose the cost tracker for external use (budget configuration, REST handler).
@@ -652,7 +790,9 @@ impl MetaMcp {
     }
 
     /// Enable idempotency support with a background cleanup task.
-    #[allow(dead_code)]
+    ///
+    /// Called unconditionally from the boot path; while the cache is `None`
+    /// every client-supplied idempotency key is inert.
     pub fn enable_idempotency(&mut self, cache: Arc<IdempotencyCache>, cleanup_interval: Duration) {
         spawn_cleanup_task(Arc::clone(&cache), cleanup_interval);
         self.idempotency_cache = Some(cache);
@@ -707,6 +847,12 @@ impl MetaMcp {
     /// writes into the same tamper-evident chain from the direct backend
     /// route, which does not go through `MetaMcp`.
     pub fn enable_transparency_log(&mut self, logger: Arc<crate::security::TransparencyLogger>) {
+        // The account registry mints credentials for REST capabilities under
+        // the same "no mint without a durable audit record" rule as the
+        // Meta-MCP route, and it is reached through the capability executor
+        // rather than through `self`, so it needs its own handle on the sink.
+        self.account_strategies
+            .set_audit_logger(Arc::clone(&logger));
         self.transparency_logger = Some(logger);
     }
 
@@ -786,6 +932,44 @@ impl MetaMcp {
         strategy: Arc<dyn crate::identity_propagation::IdentityPropagation>,
     ) {
         *self.identity_propagation.write() = Some(strategy);
+    }
+
+    /// Install the strategy for ONE backend (account-descriptor binding).
+    ///
+    /// Called at startup, before serving, once per backend whose `account`
+    /// reference resolved. The resolver prefers this over the process-wide
+    /// strategy, which is what lets an external minting descriptor and a
+    /// managed vault descriptor coexist in one configuration.
+    pub fn set_backend_identity_propagation(
+        &self,
+        backend: &str,
+        strategy: Arc<dyn crate::identity_propagation::IdentityPropagation>,
+    ) {
+        self.backend_identity_propagation
+            .write()
+            .insert(backend.to_string(), strategy);
+    }
+
+    /// The strategy installed for `backend`, if it has its own.
+    pub(super) fn backend_identity_strategy(
+        &self,
+        backend: &str,
+    ) -> Option<Arc<dyn crate::identity_propagation::IdentityPropagation>> {
+        self.backend_identity_propagation
+            .read()
+            .get(backend)
+            .map(Arc::clone)
+    }
+
+    /// The per-descriptor account strategies.
+    ///
+    /// Handed out rather than consulted here: the REST consumer reaches it
+    /// through `CapabilityExecutor`, which has no view of `MetaMcp`. The same
+    /// `Arc` on both sides is what makes it ONE registry rather than two.
+    pub(crate) fn account_strategies(
+        &self,
+    ) -> Arc<crate::identity_propagation::AccountStrategyRegistry> {
+        Arc::clone(&self.account_strategies)
     }
 
     /// Declare whether this gateway serves more than one principal (ADR-008
@@ -887,8 +1071,19 @@ impl MetaMcp {
     }
 
     /// Replace the local identity grant store.
+    ///
+    /// The store is published first, under the write lock; the epoch then
+    /// advances with `Release` while that lock is still held, so a reader that
+    /// observes the new epoch cannot still see the old grants. Bump-then-write
+    /// is the 4.g race on the writer side.
     pub fn set_identity_grants(&self, grants: LocalIdentityGrantStore) {
-        *self.identity_grants.write() = grants;
+        let mut lock = self.identity_grants.write();
+        *lock = grants;
+        let prev = self.policy_epoch.fetch_add(1, Ordering::Release);
+        debug_assert!(
+            self.policy_epoch.load(Ordering::Relaxed) > prev,
+            "policy epoch must be monotonic; a reset reuses keys minted under superseded grants"
+        );
     }
 
     /// Snapshot all identity-grant rows for read-only projection (e.g. the
@@ -1327,19 +1522,29 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> JsonRpcResponse {
         self.shadow_tools_list_assembly(session_id, false);
-        let tools = if self.code_mode_enabled {
+        let mut tools = if self.code_mode_enabled {
             self.meta_tool_exposure.filter(build_code_mode_tools())
         } else {
             let (tool_count, server_count) = self.backend_counts();
             build_meta_tools_filtered(
-                self.stats.is_some(),
-                self.get_reload_context().is_some(),
-                true, // cost_report always enabled (tracker is always present)
+                MetaToolGates {
+                    stats: self.stats.is_some(),
+                    reload: self.get_reload_context().is_some(),
+                    // The tracker is always present, so this gate is always on.
+                    cost_report: true,
+                    // Attachment, not configuration: the registry is set after
+                    // construction and never over stdio, so this is read here
+                    // rather than passed in.
+                    webhook_status: self.get_webhook_registry().is_some(),
+                },
                 tool_count,
                 server_count,
                 &self.meta_tool_exposure,
             )
         };
+        if self.signing_enabled() && self.require_nonce {
+            require_gateway_invoke_nonce(&mut tools);
+        }
         let mut tool_descriptors =
             project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
 
@@ -1570,7 +1775,7 @@ impl MetaMcp {
         tool_name: &str,
         arguments: Value,
         session_id: Option<&str>,
-        caller: MetaMcpCallerContext<'_>,
+        mut caller: MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
         // Operator exposure allow-list. Enforced ahead of the admin gate, not
         // beside it: a meta-tool hidden from `tools/list` but still executable is
@@ -1628,30 +1833,132 @@ impl MetaMcp {
             return response;
         }
 
+        if let Some(intent) = caller.task.take() {
+            return self.begin_task(id, tool_name, arguments, intent).await;
+        }
+
+        self.dispatch_below_gate(id, tool_name, arguments, session_id, &caller)
+            .await
+    }
+
+    async fn begin_task(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: Value,
+        intent: crate::gateway::task_service::TaskIntent,
+    ) -> JsonRpcResponse {
+        let task = crate::gateway::task_service::Task::create_at(
+            tool_name,
+            chrono::Utc::now(),
+            intent.options,
+        );
+        let backend = task_backend_name(self, tool_name, &arguments);
+        let executor = Arc::clone(&intent.executor);
+        let call = crate::gateway::task_service::TaskCall {
+            tool: tool_name.to_owned(),
+            arguments,
+        };
+        match executor.begin(intent, task, backend, call).await {
+            Ok(outcome) => outcome.into_response(id),
+            Err(_) => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
+        }
+    }
+
+    /// The dispatch tail below the confirmation gate. The request thread and
+    /// the task worker call the same function; there is no parallel handler.
+    pub(crate) async fn dispatch_below_gate(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> JsonRpcResponse {
+        self.dispatch_below_gate_shaped(
+            id,
+            tool_name,
+            arguments,
+            session_id,
+            caller,
+            ResultShape::Wrapped,
+        )
+        .await
+    }
+
+    /// The same dispatch, answered with the tool's own result verbatim.
+    ///
+    /// One caller: the task worker, because a task settles on what the backend
+    /// said and not on how a synchronous reply presents it (adapter design r3
+    /// §4 — "result verbatim **including `isError: true`**"). The meta-tool
+    /// wrapper below buries exactly that: it pretty-prints the result into a
+    /// single text block, drops `structuredContent` for every tool without an
+    /// output schema, and states `isError: false` over whatever the backend
+    /// reported. It also hides an interim round — `resultType:
+    /// "input_required"` inside a JSON string is not a claim the settlement
+    /// classifier can read, so a question would be committed as an answer.
+    ///
+    /// Only this last step differs. The routing above is the identical call:
+    /// the same direct-backend route, the same match arms, the same
+    /// authorization, firewall, destructive, capability and signing contexts,
+    /// and the same `error_response_preserving_status` on the error side.
+    /// Settlement strips the internal HTTP-status key from that error itself.
+    pub(crate) async fn dispatch_below_gate_native_result(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> JsonRpcResponse {
+        self.dispatch_below_gate_shaped(
+            id,
+            tool_name,
+            arguments,
+            session_id,
+            caller,
+            ResultShape::Native,
+        )
+        .await
+    }
+
+    async fn dispatch_below_gate_shaped(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+        shape: ResultShape,
+    ) -> JsonRpcResponse {
         // T2.4: a call naming a backend tool directly — because an operator
         // surfaced it, or because it is a retry of an exchange this gateway
         // opened — is routed BEFORE the meta-tool match.
         if let Some(response) = self
-            .route_direct_backend_call(id.clone(), tool_name, &arguments, session_id, &caller)
+            .route_direct_backend_call(id.clone(), tool_name, &arguments, session_id, caller)
             .await
         {
             return response;
         }
 
+        if let Some(execution) = caller.execution
+            && let Err(error) =
+                self.mark_management_dispatch(tool_name, &arguments, session_id, execution)
+        {
+            return error_response_preserving_status(id, &error);
+        }
+
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id).await,
-            "gateway_execute" => {
-                self.code_mode_execute(&arguments, session_id, &caller)
-                    .await
-            }
+            "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
             "gateway_list_servers" => self.list_servers().await,
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
-            "gateway_invoke" => self.invoke_tool(&arguments, session_id, &caller).await,
+            "gateway_invoke" => self.invoke_tool(&arguments, session_id, caller).await,
             "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
-            "gateway_cost_report" => self.get_cost_report(&arguments, session_id, &caller).await,
+            "gateway_cost_report" => self.get_cost_report(&arguments, session_id, caller).await,
             "gateway_webhook_status" => self.webhook_status(),
-            "gateway_run_playbook" => self.run_playbook(&arguments, &caller).await,
+            "gateway_run_playbook" => self.run_playbook(&arguments, caller).await,
             "gateway_kill_server" => self.kill_server(&arguments),
             "gateway_revive_server" => self.revive_server(&arguments),
             "gateway_list_disabled_capabilities" => self.list_disabled_capabilities(),
@@ -1706,12 +2013,47 @@ impl MetaMcp {
         };
 
         match result {
-            Ok(content) => {
-                let has_output_schema = tool_name == "gateway_search_tools";
-                wrap_tool_success(id, &content, has_output_schema)
-            }
+            Ok(content) => match shape {
+                ResultShape::Wrapped => {
+                    let has_output_schema = tool_name == "gateway_search_tools";
+                    wrap_tool_success(id, &content, has_output_schema)
+                }
+                ResultShape::Native => JsonRpcResponse::success(id, content),
+            },
             Err(e) => error_response_preserving_status(id, &e),
         }
+    }
+}
+
+/// How a dispatch's own result is presented, and the only thing the two
+/// entry points above disagree about. The routing, the checks and the error
+/// side are one code path.
+#[derive(Clone, Copy)]
+enum ResultShape {
+    /// The synchronous meta-tool reply: `wrap_tool_success`, unchanged.
+    Wrapped,
+    /// The tool's result as it came back, for a task to settle on.
+    Native,
+}
+
+fn task_backend_name(meta: &MetaMcp, tool_name: &str, arguments: &Value) -> String {
+    if let Some(server) = meta.surfaced_tools_map.get(tool_name) {
+        return server.clone();
+    }
+    match tool_name {
+        "gateway_invoke" => arguments
+            .get("server")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned(),
+        "gateway_execute" => arguments
+            .get("tool")
+            .and_then(Value::as_str)
+            .and_then(|tool_ref| tool_ref.split_once(':'))
+            .map(|(server, _)| server.to_owned())
+            .unwrap_or_else(|| "execute".to_owned()),
+        "gateway_run_playbook" => "playbook".to_owned(),
+        other => other.to_owned(),
     }
 }
 
@@ -1819,6 +2161,17 @@ impl MetaMcp {
 // ============================================================================
 // Tests (extracted to tests.rs for LOC compliance)
 // ============================================================================
+
+#[cfg(test)]
+mod account_resolver_fixture;
+#[cfg(test)]
+mod account_resolver_gate;
+#[cfg(test)]
+mod account_resolver_tests;
+#[cfg(test)]
+mod account_rest_fixture;
+#[cfg(test)]
+mod account_rest_tests;
 
 #[cfg(test)]
 #[path = "tests.rs"]

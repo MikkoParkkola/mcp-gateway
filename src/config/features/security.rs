@@ -77,7 +77,7 @@ impl Default for TransparencyLogConfig {
 /// Configuration for inter-agent HMAC-SHA256 message signing (ADR-001).
 ///
 /// When `enabled = true` the gateway:
-/// 1. Appends a `_signature` block to every `gateway_invoke` response.
+/// 1. Appends a `_signature` block to successful external `gateway_invoke` responses.
 /// 2. Rejects replayed request nonces within the `replay_window`.
 ///
 /// The `shared_secret` MUST be at least 32 bytes (256 bits). Use an env-var
@@ -100,7 +100,8 @@ pub struct MessageSigningConfig {
     ///
     /// Must be at least 32 bytes when `enabled = true`.
     pub shared_secret: String,
-    /// Previous secret for zero-downtime rotation. Empty means no rotation active.
+    /// Previous key material, validated when supplied. Empty means absent.
+    /// Only the current key signs gateway responses.
     pub previous_secret: String,
     /// When `true`, requests without a `nonce` field are rejected (`-32001`).
     /// Default: `false` (backward-compatible).
@@ -110,6 +111,18 @@ pub struct MessageSigningConfig {
     pub replay_window: u64,
     /// Key identifier included in `_signature.key_id` for rotation tracking.
     pub key_id: String,
+    // Effective key bytes are opaque. A public field mutation invalidates only
+    // that field's marker; clones retain markers, deserialization never does.
+    #[serde(skip)]
+    resolved_shared_secret: Option<[u8; 32]>,
+    #[serde(skip)]
+    resolved_previous_secret: Option<[u8; 32]>,
+    // Preserve configured-reference identity across evaluation, without keeping
+    // another copy of raw key material or publishing these markers.
+    #[serde(skip)]
+    configured_shared_secret: Option<[u8; 32]>,
+    #[serde(skip)]
+    configured_previous_secret: Option<[u8; 32]>,
 }
 
 // Manual `Debug` that redacts both HMAC signing secrets (CWE-532, mirrors PR
@@ -132,7 +145,7 @@ impl std::fmt::Debug for MessageSigningConfig {
             .field("require_nonce", &self.require_nonce)
             .field("replay_window", &self.replay_window)
             .field("key_id", &self.key_id)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -145,7 +158,142 @@ impl Default for MessageSigningConfig {
             require_nonce: false,
             replay_window: 300,
             key_id: "default".to_string(),
+            resolved_shared_secret: None,
+            resolved_previous_secret: None,
+            configured_shared_secret: None,
+            configured_previous_secret: None,
         }
+    }
+}
+
+impl MessageSigningConfig {
+    /// Resolve and validate signing settings without changing the literal config.
+    ///
+    /// Disabled settings are dormant. Errors identify only the field: neither
+    /// a secret nor its environment reference belongs in a diagnostic.
+    pub(crate) fn resolve_with_env(
+        &self,
+        overlay: &crate::config::EnvOverlay,
+    ) -> crate::Result<Self> {
+        if !self.enabled {
+            return Ok(self.clone());
+        }
+        if self.key_id.trim().is_empty() {
+            return Err(Self::signing_config_error("key_id", "must not be blank"));
+        }
+        if self.replay_window == 0 {
+            return Err(Self::signing_config_error(
+                "replay_window",
+                "must be greater than zero",
+            ));
+        }
+        let mut resolved = self.clone();
+        if self.resolved_shared_secret != Some(Self::key_identity(&self.shared_secret)) {
+            resolved.configured_shared_secret = Some(Self::key_identity(&self.shared_secret));
+            resolved.shared_secret =
+                Self::resolve_key(&self.shared_secret, "shared_secret", overlay)?;
+            resolved.resolved_shared_secret = Some(Self::key_identity(&resolved.shared_secret));
+        }
+        if self.previous_secret.is_empty() {
+            resolved.resolved_previous_secret = None;
+            resolved.configured_previous_secret = None;
+        } else if self.resolved_previous_secret != Some(Self::key_identity(&self.previous_secret)) {
+            resolved.configured_previous_secret = Some(Self::key_identity(&self.previous_secret));
+            resolved.previous_secret =
+                Self::resolve_key(&self.previous_secret, "previous_secret", overlay)?;
+            resolved.resolved_previous_secret = Some(Self::key_identity(&resolved.previous_secret));
+        }
+        Ok(resolved)
+    }
+
+    /// A signer and its replay state retain startup settings. Compare both the
+    /// configured key source and effective bytes, including equal-byte reference
+    /// edits that the ordinary effective-config diff cannot see.
+    pub(crate) fn restart_changed_field(
+        &self,
+        candidate: &Self,
+        startup_overlay: &crate::config::EnvOverlay,
+        candidate_overlay: &crate::config::EnvOverlay,
+    ) -> crate::Result<Option<&'static str>> {
+        let running = self.resolve_with_env(startup_overlay)?;
+        let proposed = candidate.resolve_with_env(candidate_overlay)?;
+        let field = if running.enabled != proposed.enabled {
+            Some("enabled")
+        } else if running.shared_secret != proposed.shared_secret
+            || running
+                .configured_shared_secret
+                .unwrap_or_else(|| Self::key_identity(&running.shared_secret))
+                != proposed
+                    .configured_shared_secret
+                    .unwrap_or_else(|| Self::key_identity(&proposed.shared_secret))
+        {
+            Some("shared_secret")
+        } else if running.previous_secret != proposed.previous_secret
+            || running
+                .configured_previous_secret
+                .unwrap_or_else(|| Self::key_identity(&running.previous_secret))
+                != proposed
+                    .configured_previous_secret
+                    .unwrap_or_else(|| Self::key_identity(&proposed.previous_secret))
+        {
+            Some("previous_secret")
+        } else if running.key_id != proposed.key_id {
+            Some("key_id")
+        } else if running.require_nonce != proposed.require_nonce {
+            Some("require_nonce")
+        } else if running.replay_window != proposed.replay_window {
+            Some("replay_window")
+        } else {
+            None
+        };
+        Ok(field)
+    }
+
+    fn key_identity(value: &str) -> [u8; 32] {
+        use sha2::Digest;
+        sha2::Sha256::digest(value.as_bytes()).into()
+    }
+
+    fn resolve_key(
+        literal: &str,
+        field: &str,
+        overlay: &crate::config::EnvOverlay,
+    ) -> crate::Result<String> {
+        let missing =
+            || Self::signing_config_error(field, "requires an available environment value");
+        let resolved = if let Some(name) = literal.strip_prefix("env:") {
+            overlay.resolve(name).ok_or_else(missing)?
+        } else {
+            // Match the existing config expansion grammar, but refuse a missing
+            // required variable instead of silently substituting an empty key.
+            let pattern = regex::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
+                .expect("constant signing environment pattern");
+            let mut result = String::with_capacity(literal.len());
+            let mut end = 0;
+            for captures in pattern.captures_iter(literal) {
+                let matched = captures.get(0).expect("matched environment reference");
+                result.push_str(&literal[end..matched.start()]);
+                let value = overlay
+                    .resolve(&captures[1])
+                    .or_else(|| captures.get(2).map(|default| default.as_str().to_owned()))
+                    .ok_or_else(missing)?;
+                result.push_str(&value);
+                end = matched.end();
+            }
+            result.push_str(&literal[end..]);
+            result
+        };
+        if resolved.len() < 32 || resolved.bytes().all(|byte| byte == 0) {
+            return Err(Self::signing_config_error(
+                field,
+                "must contain at least 32 bytes and must not be all zero",
+            ));
+        }
+        Ok(resolved)
+    }
+
+    fn signing_config_error(field: &str, reason: &str) -> crate::Error {
+        crate::Error::ConfigValidation(format!("security.message_signing.{field} {reason}"))
     }
 }
 

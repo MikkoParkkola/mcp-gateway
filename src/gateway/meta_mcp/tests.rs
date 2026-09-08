@@ -29,6 +29,11 @@ fn allow_all_ctx_named<'a>(
     agent_id: Option<&'a str>,
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'a> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
+        protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
         api_key_name,
         agent_id,
@@ -38,6 +43,11 @@ fn allow_all_ctx_named<'a>(
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
+        task: None,
+        // Fail-closed: a helper that declared nothing is a 2025 client, the
+        // same reasoning that puts `Declared::NONE` on the line above.
+        era: crate::protocol::meta::Era::Legacy,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
     }
 }
 
@@ -49,6 +59,11 @@ fn allow_all_ctx_named<'a>(
 /// `#[cfg(test)]`, so no release build can reach this path.
 fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
+        protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
         api_key_name: None,
         agent_id: None,
@@ -58,6 +73,11 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
+        task: None,
+        // Fail-closed: a helper that declared nothing is a 2025 client, the
+        // same reasoning that puts `Declared::NONE` on the line above.
+        era: crate::protocol::meta::Era::Legacy,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
     }
 }
 
@@ -660,6 +680,7 @@ providers:
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn personal_capability_accepts_propagated_identity_before_schema_validation() {
     use crate::{
         capability::{CapabilityBackend, CapabilityExecutor},
@@ -748,6 +769,12 @@ providers:
             Some("session-1"),
             &{
                 crate::gateway::meta_mcp::MetaMcpCallerContext {
+                    task: None,
+                    signing: None,
+                    execution: None,
+                    credential_principal: None,
+                    is_modern: false,
+                    protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
                     authorizer: &ALLOW_ALL,
                     api_key_name: Some("shared-api-key"),
                     agent_id: Some("agent-1"),
@@ -757,6 +784,8 @@ providers:
                     input_capabilities: crate::protocol::meta::Declared::NONE,
                     retry: &crate::protocol::mrtr::NO_RETRY,
                     confirmation: ConfirmationChannel::Unavailable,
+                    era: crate::protocol::meta::Era::Legacy,
+                    channel: &crate::gateway::input_bridge::NoClientChannel,
                 }
             },
         )
@@ -3382,6 +3411,11 @@ fn allow_all_ctx_declaring(
     declared: crate::protocol::meta::Declared,
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
+        protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
         api_key_name: None,
         agent_id: None,
@@ -3391,6 +3425,11 @@ fn allow_all_ctx_declaring(
         input_capabilities: declared,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
+        task: None,
+        // Fail-closed: a helper that declared nothing is a 2025 client, the
+        // same reasoning that puts `Declared::NONE` on the line above.
+        era: crate::protocol::meta::Era::Legacy,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
     }
 }
 
@@ -4385,16 +4424,24 @@ providers:
     // that call produces: a key computed a second way would stage an entry no
     // read ever looks for, and the case would pass without proving anything.
     let profile = meta.active_profile(Some("session-1"));
+    // The staged entry has to carry the principal the assertions' caller keys
+    // on. With no identity propagation and no OIDC, that is the caller's own
+    // `GrantSubject` — the same one `grant_ctx` builds — namespaced by the
+    // one production helper rather than a second spelling of it here.
+    let staged_subject =
+        crate::identity_grants::GrantSubject::new("cloudflare_access", "user-123", None);
+    let staged_principal =
+        super::support::caller_cache_principal(None, None, Some(&staged_subject));
     let key = super::support::response_cache_key_for(
         "personal_caps",
         "calendar_read",
         &json!({}),
         &crate::projection::projection_key_suffix(meta.projection_mode, Some("session-1")),
-        None,
+        staged_principal.as_deref(),
         &crate::protocol::mrtr::NO_RETRY,
         crate::cache::KeyContext {
             routing_profile: &profile.name,
-            protocol_revision: None,
+            protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
             policy_epoch: 0,
         },
     );
@@ -5192,6 +5239,7 @@ const NARROW_PROFILE: &str = "narrow";
 /// filtered assembly — and that still matches every tool the pinned literal
 /// names, so the pin stays satisfiable rather than being narrowed by the
 /// query itself.
+#[cfg(feature = "spec-preview")]
 const MATCH_ALL_QUERY: &str = "invariance";
 
 /// A gateway whose visible tool set genuinely moves with the routing profile.
@@ -5315,6 +5363,7 @@ const B01_EXPECTED_TOOLS: &[&str] = &[
 /// `initialize_with_header_profile_takes_precedence_over_params`, and what
 /// this case is about is the binding decision, not the parse.
 #[tokio::test]
+#[allow(clippy::similar_names)]
 async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
     let meta = meta_with_narrowable_tools().await;
 
@@ -5726,5 +5775,54 @@ async fn ac_cache_4c_two_principals_do_not_share_one_cache_entry() {
         calls.load(std::sync::atomic::Ordering::SeqCst),
         2,
         "bob's own entry must serve his repeat call"
+    );
+}
+
+// MIK-7272.SUB.4 — what wiring the cache actually buys. The response cache is
+// deliberately left out: with one installed, a second identical call is served
+// from it and this test would pass with the idempotency guard removed. The only
+// thing that can keep the backend at one call here is the guard.
+#[tokio::test]
+async fn a_reissued_idempotency_key_is_served_from_the_stored_result() {
+    let registry = Arc::new(BackendRegistry::new());
+    let (payments, calls) = counting_backend("payments", "CHARGED-ONCE");
+    let _ = registry.register(payments);
+
+    let mut meta = MetaMcp::with_features(registry, None, None, None, Duration::from_secs(300));
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        crate::idempotency::CLEANUP_INTERVAL,
+    );
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("client-chosen-key".to_string()),
+        ..Default::default()
+    };
+    let mut ctx = allow_all_ctx();
+    ctx.retry = &retry;
+
+    let invoke = async || {
+        meta.invoke_tool(
+            &json!({"server": "payments", "tool": "charge", "arguments": {"cents": 500}}),
+            Some("session-1"),
+            &ctx,
+        )
+        .await
+        .expect("the charge must succeed")
+        .to_string()
+    };
+
+    let first = invoke().await;
+    let second = invoke().await;
+
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the re-issued key must be served from what the first call stored; a \
+         second dispatch is the duplicated side effect the key exists to prevent"
+    );
+    assert!(
+        first.contains("CHARGED-ONCE") && second.contains("CHARGED-ONCE"),
+        "both replies must carry the backend's own body, not an empty \
+         placeholder: first={first}, second={second}"
     );
 }

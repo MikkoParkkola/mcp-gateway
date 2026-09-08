@@ -259,3 +259,8 @@ We want your PR to merge fast. Here is what helps.
 - Open a draft PR early. We would rather help you finish than review a polished PR that missed the target.
 - Leave a comment and tag `@MikkoParkkola`. No minimum response-time promise, usually within 24h on weekdays.
 - First PR? Say so in the description. We will be patient.
+
+The external SDK recovery test is gated by its own required CI job. See
+[the SDK runner instructions](docs/tests/task-sdk-recovery.md) for the two-step
+all-feature suite and Linux/Redis prerequisites; ordinary `cargo test` needs
+no external SDK services.

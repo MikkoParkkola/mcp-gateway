@@ -202,37 +202,46 @@ mod http {
     use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
     use mcp_gateway::gateway::proxy::ProxyManager;
     use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-    use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+    use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+    use mcp_gateway::gateway::test_helpers::{
+        AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+    };
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
     use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
-    fn state() -> Arc<AppState> {
-        state_with_modern(true)
+    /// Every state constructor here hands back the directory its task store
+    /// leases, because the store holds that directory for as long as the
+    /// service lives. Callers bind it for the whole request.
+    async fn state() -> (Arc<AppState>, tempfile::TempDir) {
+        state_with_modern(true).await
     }
 
-    fn state_with_modern(modern: bool) -> Arc<AppState> {
-        state_with(modern, Config::default().auth)
+    async fn state_with_modern(modern: bool) -> (Arc<AppState>, tempfile::TempDir) {
+        state_with(modern, Config::default().auth).await
     }
 
     /// The destructive-confirmation gate sits behind the admin check, so the
     /// only caller who can reach it is an authenticated admin. That needs a
     /// real auth config, which is why this is parameterised rather than a
     /// second copy of the state below.
-    fn state_with(modern: bool, auth: mcp_gateway::config::AuthConfig) -> Arc<AppState> {
-        state_with_exposure(modern, auth, &[])
+    async fn state_with(
+        modern: bool,
+        auth: mcp_gateway::config::AuthConfig,
+    ) -> (Arc<AppState>, tempfile::TempDir) {
+        state_with_exposure(modern, auth, &[]).await
     }
 
     /// As [`state_with`], plus the operator's meta-tool allow-list. An empty
     /// slice exposes every meta-tool, which is what every other caller here
     /// wants; the exposure row needs a list that deliberately omits the tool it
     /// then calls.
-    fn state_with_exposure(
+    async fn state_with_exposure(
         modern: bool,
         auth: mcp_gateway::config::AuthConfig,
         exposed: &[String],
-    ) -> Arc<AppState> {
+    ) -> (Arc<AppState>, tempfile::TempDir) {
         let mut config = Config::default();
         config.server.modern_protocol = modern;
         config.auth = auth;
@@ -243,7 +252,20 @@ mod http {
         ));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let agent_registry = Arc::new(AgentRegistry::new());
-        Arc::new(AppState {
+
+        // One registry, shared with the executor that publishes through it.
+        let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+        let store_dir = tempfile::tempdir().expect("a private task-store directory");
+        let (tasks, task_executor) = open_runtime(
+            &store_dir.path().join("tasks"),
+            config.tasks.max_workers,
+            StoreLimits::default(),
+            Arc::clone(&subscriptions),
+        )
+        .await
+        .expect("the fixture task store opens");
+
+        let state = Arc::new(AppState {
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
             env: None,
             meta_mcp: Arc::new(
@@ -274,16 +296,19 @@ mod http {
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-            tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-            subscriptions: Arc::new(
-                mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-            ),
-        })
+            tasks,
+            task_executor,
+            subscriptions,
+        });
+        (state, store_dir)
     }
 
     /// POST to `/mcp`, returning status, the session header if any, and the body.
     async fn post_mcp(body: Value) -> (StatusCode, Option<String>, Value) {
-        post_mcp_against(state(), body).await
+        // Bound, not dropped: the store's directory has to outlive the request
+        // this helper makes on the state built from it.
+        let (state, _store_dir) = state().await;
+        post_mcp_against(state, body).await
     }
 
     async fn post_mcp_against(
@@ -603,8 +628,8 @@ mod http {
         // served completely, a client that asks for it is refused with an
         // answer it can act on — not served half a revision, where the working
         // half hides the missing one.
-        let (status, _, body) =
-            post_mcp_against(state_with_modern(false), modern_tools_list(11)).await;
+        let (state, _store_dir) = state_with_modern(false).await;
+        let (status, _, body) = post_mcp_against(state, modern_tools_list(11)).await;
 
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], -32022, "{body}");
@@ -620,8 +645,9 @@ mod http {
         // The switch governs the modern path and nothing else. A 2025 client
         // sees the same gateway either way.
         for modern in [false, true] {
+            let (state, _store_dir) = state_with_modern(modern).await;
             let (status, session, body) = post_mcp_against(
-                state_with_modern(modern),
+                state,
                 json!({ "jsonrpc": "2.0", "id": 12, "method": "tools/list" }),
             )
             .await;
@@ -701,8 +727,9 @@ mod http {
             client_circuit_breaker: None,
             single_user: false,
         };
+        let (state, _store_dir) = state_with(true, auth).await;
         let (status, _session, body) = post_mcp_authed(
-            state_with(true, auth),
+            state,
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -809,7 +836,8 @@ mod http {
         };
         // The allow-list names one unrelated meta-tool, so it is non-empty — an
         // empty list exposes everything — and `gateway_kill_server` is absent.
-        let state = state_with_exposure(true, auth, &["gateway_invoke".to_string()]);
+        let (state, _store_dir) =
+            state_with_exposure(true, auth, &["gateway_invoke".to_string()]).await;
         let (status, _session, body) = post_mcp_authed(
             Arc::clone(&state),
             modern_tools_call(
@@ -943,7 +971,7 @@ mod http {
             }),
             single_user: false,
         };
-        let state = state_with(true, auth);
+        let (state, _store_dir) = state_with(true, auth).await;
         let accounting = Arc::clone(&state.auth_config);
 
         // Control: one genuine failure over this path, as this client.

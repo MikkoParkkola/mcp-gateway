@@ -6,7 +6,7 @@
 //! interface. Kept separate from the helper utilities so the schema definitions
 //! can be updated without touching the routing/search logic.
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::protocol::{Tool, ToolAnnotations};
 
@@ -145,7 +145,13 @@ fn build_invoke_tool() -> Tool {
             "properties": {
                 "server":    { "type": "string", "description": "Backend server name" },
                 "tool":      { "type": "string", "description": "Tool name to invoke" },
-                "arguments": { "type": "object", "description": "Tool arguments", "default": {} }
+                "arguments": { "type": "object", "description": "Tool arguments", "default": {} },
+                "nonce": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "description": "Optional signing nonce of at most 256 UTF-8 bytes; JSON Schema maxLength is a character ceiling. Required when message signing requires a nonce."
+                }
             },
             "required": ["server", "tool"]
         }),
@@ -160,6 +166,28 @@ fn build_invoke_tool() -> Tool {
         role: None,
         projection: None,
     }
+}
+
+/// Mark the advertised `gateway_invoke` nonce as required.
+///
+/// [`build_invoke_tool`] always declares the optional nonce property. Call this
+/// only when message signing is active and a nonce is required. Code Mode and an
+/// exposure filter that hid `gateway_invoke` leave the slice unchanged.
+pub(crate) fn require_gateway_invoke_nonce(tools: &mut [Tool]) {
+    let Some(tool) = tools.iter_mut().find(|tool| tool.name == "gateway_invoke") else {
+        return;
+    };
+    let Some(required) = tool
+        .input_schema
+        .get_mut("required")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    if required.iter().any(|value| value.as_str() == Some("nonce")) {
+        return;
+    }
+    required.push(json!("nonce"));
 }
 
 /// Build the base set of 4 meta-tools with dynamic tool and server counts.
@@ -534,32 +562,55 @@ pub(crate) fn build_cost_report_tool() -> Tool {
     }
 }
 
+/// Which conditionally-served meta-tools a caller wants.
+///
+/// Four independent booleans in a parameter list are silently transposable --
+/// nothing at a call site says which position is which, and the positions are
+/// not interchangeable. Named fields make each gate something the caller
+/// states rather than something a reader counts.
+#[allow(clippy::struct_excessive_bools)]
+// Independent gates; each is read from a
+// different source and none constrains another, so an enum would only rename them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MetaToolGates {
+    /// `gateway_stats`, served when a stats collector is attached.
+    pub(crate) stats: bool,
+    /// `gateway_reload_config`, served when a reload context exists.
+    pub(crate) reload: bool,
+    /// `gateway_cost_report`, hardcoded true on the served path.
+    pub(crate) cost_report: bool,
+    /// `gateway_webhook_status`, served where a webhook registry is attached.
+    pub(crate) webhook_status: bool,
+}
+
 /// Construct the full meta-tool list, optionally including stats, cost reporting, and reload.
 ///
 /// `tool_count` and `server_count` are threaded into [`build_base_tools`] so descriptions
 /// reflect live registry state rather than static placeholder text.
 ///
-/// Webhook status is deliberately absent: it stays dispatchable by name, but a
-/// tool enumerated to a model costs context in every request, and `NFR.PERF.4`
-/// caps that surface at 16. See [`governed_meta_tool_names`], which keeps the
-/// name governed even though nothing lists it.
+/// `gates.webhook_status` is whether a webhook registry is actually attached,
+/// not whether the feature is configured on. Dispatchable is not the same as
+/// answerable, and only the HTTP transport makes it both: `run_stdio` never
+/// calls `set_webhook_registry`, so over stdio the handler refuses the call
+/// whatever the configuration says. Webhooks need an HTTP endpoint to receive
+/// on, so absence over stdio is correct rather than a gap. Enumerating on the
+/// config flag would advertise a tool that cannot answer on the commonest local
+/// transport; enumerating on attachment cannot.
 ///
-/// Dispatchable is not the same as answerable, and only the HTTP transport
-/// makes it both: `run_stdio` never calls `set_webhook_registry`, so over stdio
-/// the call reaches the handler and is refused whatever the configuration says.
-/// That gap predates this cap and is not repaired here.
+/// This is why `NFR.PERF.4` bands the surface at 14-17 rather than 14-16: the
+/// webhook feature defaults to enabled, so an HTTP deployment reaching 17 is
+/// the shipped default, not an exotic combination. See
+/// `docs/design/2026-09-08-perf4-webhook-status-restoration.md`.
 pub(crate) fn build_meta_tools(
-    stats_enabled: bool,
-    reload_enabled: bool,
-    cost_report_enabled: bool,
+    gates: MetaToolGates,
     tool_count: usize,
     server_count: usize,
 ) -> Vec<Tool> {
     let mut tools = build_base_tools(tool_count, server_count);
-    if stats_enabled {
+    if gates.stats {
         tools.push(build_stats_tool());
     }
-    if cost_report_enabled {
+    if gates.cost_report {
         tools.push(build_cost_report_tool());
     }
     tools.push(build_playbook_tool());
@@ -570,10 +621,17 @@ pub(crate) fn build_meta_tools(
     tools.push(build_list_disabled_capabilities_tool());
     tools.push(build_list_profiles_tool());
     tools.push(build_set_state_tool());
-    if reload_enabled {
+    if gates.reload {
         tools.push(build_reload_config_tool());
     }
     tools.push(build_reload_capabilities_tool());
+    if gates.webhook_status {
+        // The only surface answering "are events still arriving". A push
+        // pipeline fails silently -- a rotated secret makes signature
+        // validation reject everything and events simply stop -- so a
+        // diagnostic the model cannot see is a diagnostic that does not exist.
+        tools.push(build_webhook_status_tool());
+    }
     tools
 }
 
@@ -749,19 +807,27 @@ fn governed_meta_tool_names() -> &'static std::collections::HashSet<String> {
     static NAMES: std::sync::OnceLock<std::collections::HashSet<String>> =
         std::sync::OnceLock::new();
     NAMES.get_or_init(|| {
-        // Every built-in the dispatcher recognises, from *both* builders, plus
-        // the unenumerated ones. Code Mode's `gateway_execute` reaches every
-        // backend tool, and `gateway_webhook_status` is dispatchable by name
-        // without appearing in any list; either one left outside this set gives
-        // an operator allow-list an escape hatch, because `is_exposed` admits
-        // anything ungoverned. Membership follows what is *callable*, never
-        // what is listed.
-        build_meta_tools(true, true, true, 0, 0)
-            .into_iter()
-            .chain(build_code_mode_tools())
-            .chain(std::iter::once(build_webhook_status_tool()))
-            .map(|t| t.name)
-            .collect()
+        // Every built-in the dispatcher recognises, from *both* builders. Every
+        // gate is on because membership follows what is *callable*, never what
+        // any one deployment lists: `gateway_webhook_status` is dispatchable by
+        // name on a surface that does not enumerate it, and Code Mode's
+        // `gateway_execute` reaches every backend tool. Either one left outside
+        // this set gives an operator allow-list an escape hatch, because
+        // `is_exposed` admits anything ungoverned.
+        build_meta_tools(
+            MetaToolGates {
+                stats: true,
+                reload: true,
+                cost_report: true,
+                webhook_status: true,
+            },
+            0,
+            0,
+        )
+        .into_iter()
+        .chain(build_code_mode_tools())
+        .map(|t| t.name)
+        .collect()
     })
 }
 
@@ -850,18 +916,10 @@ impl MetaToolExposure {
 /// The filter is the whole difference: the listed set is the predicate's
 /// output, so `tools/list` and `tools/call` cannot disagree about a tool.
 pub(crate) fn build_meta_tools_filtered(
-    stats_enabled: bool,
-    reload_enabled: bool,
-    cost_report_enabled: bool,
+    gates: MetaToolGates,
     tool_count: usize,
     server_count: usize,
     exposure: &MetaToolExposure,
 ) -> Vec<Tool> {
-    exposure.filter(build_meta_tools(
-        stats_enabled,
-        reload_enabled,
-        cost_report_enabled,
-        tool_count,
-        server_count,
-    ))
+    exposure.filter(build_meta_tools(gates, tool_count, server_count))
 }

@@ -2,7 +2,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Gateway server
 
+// Crate-visible on purpose: this is THE install a bound backend gets, and a
+// test that drives a real startup must call the same one rather than a copy of
+// its policy.
+pub(crate) mod account_bindings;
 mod persistence;
+#[cfg(test)]
+#[path = "tests/mod.rs"]
+mod signing_allocation_tests;
 mod support;
 // Two questions leave this module, both to `config_reload`, and each is
 // exported under the question it answers. A reload asks about the config that
@@ -307,6 +314,13 @@ pub struct Gateway {
     /// file watcher — resolves through this rather than the process
     /// environment, which no env file is written to.
     env: Arc<crate::config::LiveEnv>,
+    /// Managed personal-account custody, present only when the config carries an
+    /// `accounts` block. `None` is the ordinary gateway: no store, no locks.
+    ///
+    /// Holding the handle rather than the store is deliberate: an explicit
+    /// account shutdown releases the store and its two file locks while this
+    /// handle stays here to refuse everything that arrives afterwards.
+    custody: Option<Arc<crate::personal_accounts::GatewayCustody>>,
 }
 
 /// Shared components produced by [`Gateway::build_meta_mcp`].
@@ -384,6 +398,70 @@ fn resolve_provenance_signer(
     }
 }
 
+/// Copy only the fields backend target mapping routes on.
+///
+/// `gateway_invoke` routes on `server` and `tool`, `gateway_execute` on
+/// each `chain` step's `tool` or a single top-level `tool`, and a
+/// surfaced tool routes on its own name. Everything else in the tree is
+/// the payload, which the mapping copies into a target and the response
+/// contract then never reads. A malformed key is left out exactly as
+/// the mapping would have ignored it, so the servers and tools derived
+/// from this projection are the ones derived from the whole tree.
+fn stdio_routing_keys_only(arguments: &serde_json::Value) -> serde_json::Value {
+    let mut routing = serde_json::Map::new();
+    for key in ["server", "tool"] {
+        if let Some(value) = arguments.get(key).filter(|value| value.is_string()) {
+            routing.insert(key.to_owned(), value.clone());
+        }
+    }
+    if let Some(chain) = arguments.get("chain").and_then(serde_json::Value::as_array) {
+        let steps = chain
+            .iter()
+            .map(|step| {
+                let mut routing = serde_json::Map::new();
+                if let Some(tool) = step.get("tool").filter(|tool| tool.is_string()) {
+                    routing.insert("tool".to_owned(), tool.clone());
+                }
+                serde_json::Value::Object(routing)
+            })
+            .collect();
+        routing.insert("chain".to_owned(), serde_json::Value::Array(steps));
+    }
+    serde_json::Value::Object(routing)
+}
+
+/// Move the client's `params._meta` into the call's `arguments`.
+///
+/// The borrowed merge can only insert into a copy, because it holds a
+/// view of someone else's tree. This dispatcher owns the request, so
+/// the same insertion is a move: `arguments` and `_meta` are taken out
+/// of the request — which nothing reads after the dispatch below — and
+/// handed to the merge's own insertion step. Neither subtree is copied,
+/// so an unbounded payload and an unbounded `_meta` both cost the same
+/// as a small one.
+///
+/// Called only where `client_meta_insert_required` has just answered
+/// yes, so the fallbacks here are the shapes that predicate already
+/// excluded; each returns what the merge returns for it. An absent
+/// `arguments` becomes the `{}` the borrowed path substitutes, and
+/// still receives the metadata.
+fn stdio_take_merged_client_meta(request: &mut serde_json::Value) -> serde_json::Value {
+    let empty = || serde_json::Value::Object(serde_json::Map::new());
+    let Some(params) = request
+        .get_mut("params")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return empty();
+    };
+    let Some(meta) = params.remove("_meta") else {
+        return empty();
+    };
+    let arguments = params
+        .get_mut("arguments")
+        .map_or_else(empty, serde_json::Value::take);
+    super::router::helpers::insert_client_meta(arguments, meta)
+}
+
 impl Gateway {
     /// Create a new gateway
     ///
@@ -402,22 +480,77 @@ impl Gateway {
     ///
     /// # Errors
     ///
-    /// Returns an error if backend registration fails.
-    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future initialization needs
+    /// Returns an error if the config is invalid, or if backend registration
+    /// fails.
     pub async fn new_with_path(
         config: Config,
         config_path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
-        config.validate()?;
+        // The process environment and nothing else, which is what this
+        // constructor has always validated against: `LiveEnv::default` is
+        // `EnvOverlay::none`, and `Config::validate` is `validate_with_env`
+        // against exactly that. A caller building a `Config` in memory has no
+        // env files, so nothing here changes for it.
+        Self::new_with_env(
+            config,
+            Arc::new(crate::config::LiveEnv::default()),
+            config_path,
+        )
+        .await
+    }
+
+    /// Build an ordinary gateway that resolves through `env` — the one place
+    /// normal construction happens.
+    ///
+    /// The config is validated against the overlay it will ACTUALLY resolve
+    /// against, and the same `LiveEnv` is the one the gateway keeps. Validating
+    /// against the process environment and attaching the overlay afterwards is
+    /// not equivalent: an `env:` reference an env file supplies is a value here
+    /// and nothing at all there, so a valid deployment was refused at the
+    /// validation it never reached its own environment for.
+    ///
+    /// Validation happens before any backend is built, so a refused config
+    /// costs nothing, and the overlay snapshot is scoped to that step rather
+    /// than held across the await this returns through.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config is invalid against `env`, or if backend
+    /// registration fails.
+    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future initialization needs
+    async fn new_with_env(
+        config: Config,
+        env: Arc<crate::config::LiveEnv>,
+        config_path: Option<std::path::PathBuf>,
+    ) -> Result<Self> {
+        {
+            // A cheap snapshot, dropped here: nothing environmental is held
+            // while the gateway is built or awaited on.
+            let overlay = env.get();
+            config.validate_with_env(&overlay)?;
+        }
 
         let backends = Arc::new(BackendRegistry::new());
 
+        // The EFFECTIVE configuration a bound backend runs with, resolved
+        // before any backend is constructed. A `personal_managed` binding
+        // compiles to vault propagation and DROPS the backend's own oauth
+        // block here, which is what keeps the legacy `OAuthClient` from ever
+        // being instantiated for a backend whose credential is in custody —
+        // the constructor below reads that field to decide whether to build
+        // one, so the decision has to be made before it, not after.
+        let bound_accounts = crate::config::account_bindings::compile(&config)?;
+
         // Register backends
         for (name, backend_config) in config.enabled_backends() {
-            let runtime_plan = runtime_plan_for_backend(name, backend_config, &config.runtime);
+            let effective = match bound_accounts.get(name) {
+                Some(bound) => bound.effective(backend_config),
+                None => backend_config.clone(),
+            };
+            let runtime_plan = runtime_plan_for_backend(name, &effective, &config.runtime);
             let backend = Backend::new_with_runtime_plan(
                 name,
-                backend_config.clone(),
+                effective,
                 &config.failsafe,
                 config.meta_mcp.cache_ttl,
                 runtime_plan,
@@ -437,7 +570,13 @@ impl Gateway {
             config_path,
             backends,
             shutdown_tx: None,
-            env: Arc::new(crate::config::LiveEnv::default()),
+            // The environment the config was just validated against, retained:
+            // every later resolution answers from the same overlay the decision
+            // to start was made on.
+            env,
+            // Attached by `start_account_custody`, so this constructor stays
+            // exactly what it was for a caller building a Config in memory.
+            custody: None,
         })
     }
 
@@ -452,6 +591,224 @@ impl Gateway {
         self
     }
 
+    /// Create a gateway from an already evaluated config and the environment it
+    /// was evaluated against, bringing up managed account custody if the config
+    /// asks for one.
+    ///
+    /// The constructor a deployment uses: the ordinary construction every
+    /// caller gets, against THIS environment rather than the process
+    /// environment, plus one further step. `new_with_path` stays as it was for
+    /// callers that build a `Config` in memory and want no custody — it is the
+    /// same construction with an empty overlay. The further step is what makes a
+    /// gateway READY: it returns only after every managed descriptor's issuer
+    /// metadata has been validated and pinned AND the custody store's two
+    /// exclusive locks are held.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if backend registration fails, if the `accounts` block
+    /// is invalid, if a managed descriptor's issuer metadata is unacceptable, or
+    /// if custody cannot be brought up — a store another owner holds is a
+    /// startup failure, never a degraded start.
+    pub async fn new_evaluated(
+        config: Config,
+        env: Arc<crate::config::LiveEnv>,
+        config_path: Option<std::path::PathBuf>,
+    ) -> Result<Self> {
+        Self::new_evaluated_inner(
+            config,
+            env,
+            config_path,
+            #[cfg(test)]
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::new_evaluated`] with the account transport supplied.
+    ///
+    /// Not a second constructor: it calls the SAME body with `Some(http)` where
+    /// `new_evaluated` passes `None`. Exists so a wire test can point a real
+    /// startup at a real loopback endpoint; there is no fake provider type it
+    /// could accept.
+    #[cfg(test)]
+    pub(crate) async fn new_evaluated_with_account_http(
+        config: Config,
+        env: Arc<crate::config::LiveEnv>,
+        config_path: Option<std::path::PathBuf>,
+        http: crate::personal_accounts::GatewayProviderHttp,
+    ) -> Result<Self> {
+        Self::new_evaluated_inner(config, env, config_path, Some(http)).await
+    }
+
+    /// THE evaluated construction. One body: validation through the overlay,
+    /// custody start, one error mapping. The `http` parameter does not exist
+    /// outside `cfg(test)`, so production neither names nor carries it.
+    ///
+    /// Constructed WITH the environment, never validated without it and
+    /// handed the overlay afterwards: the account key is an env-file
+    /// assignment, so a validation against the process environment refuses
+    /// the very config this constructor exists to accept.
+    async fn new_evaluated_inner(
+        config: Config,
+        env: Arc<crate::config::LiveEnv>,
+        config_path: Option<std::path::PathBuf>,
+        #[cfg(test)] http: Option<crate::personal_accounts::GatewayProviderHttp>,
+    ) -> Result<Self> {
+        let mut gateway = Self::new_with_env(config, env, config_path).await?;
+        gateway
+            .start_account_custody_inner(
+                #[cfg(test)]
+                http,
+            )
+            .await
+            .map_err(|e| Error::Config(format!("personal account custody could not start: {e}")))?;
+        Ok(gateway)
+    }
+
+    /// Resolve the `accounts` block and bring custody up, or do nothing.
+    ///
+    /// Both halves are real: the block is resolved through the overlay, then the
+    /// refresh provider is bootstrapped and the store is opened on a blocking
+    /// thread. Exactly one custody handle is attached, and only on success.
+    ///
+    /// Separate from [`Self::new_evaluated`] because the typed outcome is the
+    /// difference between "this deployment is misconfigured" and "another owner
+    /// holds the store", and the crate `Error` cannot carry that distinction.
+    ///
+    /// The key resolves through the env overlay, never the process environment:
+    /// an env file assigns it and no process ever sees it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the configuration layer's refusal, or the store's own.
+    #[cfg(test)]
+    pub(crate) async fn start_account_custody(
+        &mut self,
+    ) -> std::result::Result<(), crate::personal_accounts::CustodyBootstrapError> {
+        self.start_account_custody_inner(
+            #[cfg(test)]
+            None,
+        )
+        .await
+    }
+
+    /// Shared custody startup body. The transport parameter
+    /// exists only under `cfg(test)`; the production path is unchanged and
+    /// builds its client exactly where it always did, inside `start_custody`.
+    async fn start_account_custody_inner(
+        &mut self,
+        #[cfg(test)] http: Option<crate::personal_accounts::GatewayProviderHttp>,
+    ) -> std::result::Result<(), crate::personal_accounts::CustodyBootstrapError> {
+        let resolved = {
+            // Scoped, so no environment read is held across the await below.
+            let overlay = self.env.get();
+            match crate::personal_accounts::config::resolve(
+                self.config.accounts.as_ref(),
+                &*overlay,
+            ) {
+                Ok(resolved) => resolved,
+                // `enabled: false` is an operator's decision, not a fault:
+                // schema and deployment are validated ABOVE this refusal, so a
+                // disabled block has been checked and declined. It is the second
+                // producer of `None` here, alongside an omitted block, and means
+                // the same thing: ordinary startup, no store, no lock, nothing
+                // created on disk.
+                //
+                // INVARIANT RELIED ON, and it is now enforced rather than
+                // structural: `personal_managed` descriptors ARE representable,
+                // and `config::validate_descriptors` — run inside
+                // `Config::validate_with_env`, before any gateway exists —
+                // refuses a managed descriptor under `enabled: false`. So a
+                // block reaching this arm has no managed descriptor to lose.
+                // This arm still cannot make that distinction and must not be
+                // taught to.
+                //
+                // Only the gateway's own start softens `NotEnabled`. Config
+                // resolution keeps refusing it, because every later descriptor
+                // caller needs that refusal.
+                Err(crate::personal_accounts::config::AccountsConfigError::NotEnabled) => None,
+                Err(error) => {
+                    return Err(crate::personal_accounts::CustodyBootstrapError::Config(
+                        error,
+                    ));
+                }
+            }
+        };
+        // Omitted `accounts` preserves ordinary construction: no store, no lock,
+        // and no default custody invented on the operator's behalf.
+        let Some(resolved) = resolved else {
+            return Ok(());
+        };
+        // The descriptors as configured. Absent means a store-only deployment:
+        // custody still starts, with nothing to discover.
+        let descriptors = self
+            .config
+            .accounts
+            .as_ref()
+            .and_then(|accounts| accounts.descriptors.clone())
+            .unwrap_or_default();
+        // The SAME `LiveEnv` this gateway was validated against and keeps: the
+        // client secret an env file assigns is resolved from that overlay at
+        // refresh time and never from the process environment.
+        #[cfg(not(test))]
+        let custody = crate::personal_accounts::start_custody(
+            resolved.store,
+            descriptors,
+            Arc::clone(&self.env),
+        )
+        .await?;
+        // Test-only dispatch. `None` runs the identical production call; the
+        // supplied arm differs by the transport instance and nothing else, and
+        // both arms end in the same `start_custody_with_http` body.
+        #[cfg(test)]
+        let custody = match http {
+            Some(http) => {
+                crate::personal_accounts::start_custody_with_http(
+                    http,
+                    resolved.store,
+                    descriptors,
+                    Arc::clone(&self.env),
+                )
+                .await?
+            }
+            None => {
+                crate::personal_accounts::start_custody(
+                    resolved.store,
+                    descriptors,
+                    Arc::clone(&self.env),
+                )
+                .await?
+            }
+        };
+        self.custody = Some(Arc::new(custody));
+        Ok(())
+    }
+
+    /// The managed custody this gateway owns, if any.
+    #[must_use]
+    pub(crate) fn account_custody(&self) -> Option<&Arc<crate::personal_accounts::GatewayCustody>> {
+        self.custody.as_ref()
+    }
+
+    /// Drain account work and release the custody store, keeping the gateway.
+    ///
+    /// Takes `&self`, like the handle it delegates to: both file locks are freed
+    /// while this gateway — and the handle that now refuses — stay alive.
+    /// Idempotent, and a no-op when no `accounts` block was configured.
+    ///
+    /// # Errors
+    ///
+    /// Returns the custody handle's own refusal if the drain cannot complete.
+    pub(crate) async fn shutdown_account_custody(
+        &self,
+    ) -> std::result::Result<(), crate::personal_accounts::CustodyError> {
+        match self.account_custody() {
+            Some(custody) => custody.shutdown().await,
+            None => Ok(()),
+        }
+    }
+
     /// Build [`MetaMcp`] and all supporting components shared between HTTP and
     /// stdio modes.
     ///
@@ -461,9 +818,14 @@ impl Gateway {
     ///
     /// # Errors
     ///
-    /// Currently infallible; returns `Result` for forward-compatibility.
+    /// Rejects invalid effective signing configuration before shared setup.
     #[allow(clippy::too_many_lines)]
     async fn build_meta_mcp(&self) -> Result<BuiltMetaMcp> {
+        let signing = self
+            .config
+            .security
+            .message_signing
+            .resolve_with_env(&self.env.get())?;
         // ── Response cache ───────────────────────────────────────────────────
         let cache = if self.config.cache.enabled {
             let cache = if self.config.cache.max_entries > 0 {
@@ -565,6 +927,8 @@ impl Gateway {
             meta_mcp_builder = meta_mcp_builder.with_cost_governance(enforcer, registry);
         }
 
+        meta_mcp_builder.set_idempotency_config(self.config.idempotency.clone());
+
         // ── Per-action attestation (MIK-5223 / MIK-6163, B1-IDENT) ────────────
         // Wire the attestation validator from operator config (env-driven).
         // Default posture is OBSERVE: audit every presented token at the
@@ -578,6 +942,20 @@ impl Gateway {
                 "Per-action attestation wired at gateway_invoke boundary"
             );
             meta_mcp_builder = meta_mcp_builder.with_attestation(validator, mode);
+        }
+
+        if signing.enabled {
+            let previous =
+                (!signing.previous_secret.is_empty()).then(|| signing.previous_secret.into_bytes());
+            meta_mcp_builder.enable_message_signing(
+                crate::security::message_signing::MessageSigner::new(
+                    signing.shared_secret.into_bytes(),
+                    previous,
+                    signing.key_id,
+                ),
+                std::time::Duration::from_secs(signing.replay_window),
+                signing.require_nonce,
+            );
         }
 
         let mut meta_mcp = Arc::new(meta_mcp_builder);
@@ -727,6 +1105,26 @@ impl Gateway {
             info!(action, "Response contract gate enabled");
         }
 
+        // ── Idempotency (MIK-7272.SUB.4) ─────────────────────────────────────
+        // Unconditional and unconfigurable. A client-supplied idempotency key
+        // is a correctness mechanism, not a preference: the only thing an
+        // operator toggle would buy is the ability to switch duplicated side
+        // effects back on. Bounds are the constants in `crate::idempotency`.
+        // This is the only production construction site of `MetaMcp`, and both
+        // `run` and `run_stdio` reach it, so the cache is `Some` on every boot.
+        // That covers ONE of the criterion's three routes: generic `tools/call`.
+        // stdio discards the retry fields before dispatch (`:2633`, `:3671`) and
+        // the direct `POST /mcp/{name}` bypass never calls `idempotency_key_for`
+        // (`backend_handlers.rs:338-353`), so both are still unprotected. SUB.4
+        // is MET only when all three are covered — see
+        // `docs/design/2026-08-31-sub-4-idempotency-wiring.md`.
+        Arc::get_mut(&mut meta_mcp)
+            .expect("no other Arc references at this point")
+            .enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                crate::idempotency::CLEANUP_INTERVAL,
+            );
+
         // ── Local identity grants (MIK-6553 free/core) ───────────────────────
         if let Some((path, grants)) =
             load_configured_identity_grants(&self.config.security.identity_grants).await?
@@ -875,7 +1273,18 @@ impl Gateway {
         // when webhook route construction does not depend on them, populate the
         // backend in the background so health/MCP endpoints bind promptly.
         let _capability_watcher: Option<CapabilityWatcher> = if self.config.capabilities.enabled {
-            let executor = Arc::new(CapabilityExecutor::new().with_env(Arc::clone(&self.env)));
+            // Declared synchronously, BEFORE the loader task is spawned: the
+            // declared catalogue is what the capability registration boundary
+            // checks against. Installation of the strategies themselves happens
+            // below, still before this gateway serves.
+            let account_strategies = meta_mcp.account_strategies();
+            account_bindings::declare_account_descriptors(&self.config, &account_strategies);
+            let executor = Arc::new(
+                CapabilityExecutor::new()
+                    .with_env(Arc::clone(&self.env))
+                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+                    .with_account_strategies(account_strategies),
+            );
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
                 executor,
@@ -897,16 +1306,50 @@ impl Gateway {
             let cap_backend_for_load = Arc::clone(&cap_backend);
             let webhook_registry_for_load = Arc::clone(&webhook_registry);
             let webhooks_enabled = self.config.webhooks.enabled;
-            tokio::spawn(async move {
-                // Let the HTTP listener bind before large capability scans start.
-                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+            // AN ACCOUNT-BOUND DEPLOYMENT SCANS BEFORE IT SERVES.
+            //
+            // The background scan below exists so a large capability directory
+            // does not delay the listener binding, and it stays the default.
+            // But when the configuration declares `accounts.descriptors`, the
+            // scan is also the ADMISSION GATE that rejects a capability whose
+            // `auth.account` names no declared descriptor or whose `auth.key`
+            // is not that descriptor's `oauth:<provider>`
+            // (`CapabilityBackend::register_capability`). Running that gate
+            // concurrently with serving would mean the first requests are
+            // answered while the catalogue is still partial — a tool that the
+            // gate is about to refuse could be absent, and a tool it will admit
+            // could be missing. So an account-bound gateway completes the whole
+            // scan HERE, before `start` returns to bind and serve, and the
+            // strategies are installed further below, still before serving.
+            let accounts_configured = self.config.accounts.as_ref().is_some_and(|accounts| {
+                accounts.enabled
+                    && accounts
+                        .descriptors
+                        .as_ref()
+                        .is_some_and(|descriptors| !descriptors.is_empty())
+            });
+
+            let scan = async move {
+                if !accounts_configured {
+                    // Let the HTTP listener bind before large capability scans start.
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
 
                 let mut total_caps = 0;
+                // Every capability the account admission gate refused during the
+                // INITIAL scan. A missing or unreadable optional directory is
+                // NOT collected here — that stays benign, exactly as before.
+                let mut refused: Vec<String> = Vec::new();
                 for dir in &capability_dirs {
-                    match cap_backend_for_load.load_from_directory(dir).await {
-                        Ok(count) => {
-                            total_caps += count;
-                            debug!(directory = %dir, count = count, "Loaded capabilities");
+                    match cap_backend_for_load
+                        .load_from_directory_reporting(dir)
+                        .await
+                    {
+                        Ok(report) => {
+                            total_caps += report.admitted;
+                            debug!(directory = %dir, count = report.admitted, "Loaded capabilities");
+                            refused.extend(report.rejected);
                         }
                         Err(e) => {
                             // Don't fail startup if capability dir doesn't exist
@@ -930,7 +1373,33 @@ impl Gateway {
                         "Capability backend ready"
                     );
                 }
-            });
+
+                if refused.is_empty() {
+                    Ok(())
+                } else {
+                    Err(crate::Error::Config(format!(
+                        "{} capabilit{} rejected by the account admission gate: {}",
+                        refused.len(),
+                        if refused.len() == 1 { "y" } else { "ies" },
+                        refused.join("; ")
+                    )))
+                }
+            };
+
+            if accounts_configured {
+                // Completed before serving, and its refusals are FATAL: an
+                // invalid `auth.account` binding present at boot fails startup
+                // rather than being logged behind a listener that is already
+                // answering. A missing optional directory is still benign.
+                scan.await?;
+                info!("Capability scan completed before serving (accounts.descriptors configured)");
+            } else {
+                tokio::spawn(async move {
+                    if let Err(error) = scan.await {
+                        warn!(error = %error, "Capability scan reported refusals");
+                    }
+                });
+            }
 
             // Start file watcher for hot-reload
             match CapabilityWatcher::start(Arc::clone(&cap_backend), shutdown_tx.subscribe()) {
@@ -986,7 +1455,10 @@ impl Gateway {
         // mapping through it, so a reload takes effect without restart —
         // MIK-6702). Created unconditionally; without a config path it simply
         // never changes.
-        let live_config = Arc::new(LiveConfig::new(self.config.clone()));
+        let live_config = Arc::new(
+            LiveConfig::new(self.config.clone())
+                .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+        );
 
         // SIEM evidence-export background task (MIK-6703). None when disabled.
         let export_status = spawn_export_task(
@@ -1133,6 +1605,22 @@ impl Gateway {
             _ => {}
         }
 
+        // Per-backend strategies for `accounts.descriptors` bindings, installed
+        // BEFORE serving. This is where a managed account's vault custody and
+        // an external descriptor's minting strategy coexist: each is bound to
+        // its own backend, and the resolver prefers the per-backend entry over
+        // the single process-wide one above. A managed binding with no custody
+        // refuses here rather than dispatching as though it were shared.
+        let account_custody = self.custody.as_ref().map(|custody| {
+            Arc::clone(custody) as Arc<dyn crate::personal_accounts::AccountCustody>
+        });
+        account_bindings::install_account_strategies(
+            &self.config,
+            account_custody.as_ref(),
+            &gateway_key_pair,
+            &meta_mcp,
+        )?;
+
         // ADR-008 INV-2 (MIK-6752): declare multi-user status so dispatch can
         // fail closed on gateway-held OAuth tokens that are not per-user
         // isolated. Detection is fail-closed — any enabled auth is treated as
@@ -1200,6 +1688,117 @@ impl Gateway {
         let control_plane_store =
             build_control_plane_store(&self.config, self.config_path.as_deref());
 
+        // The durable task runtime, opened before any listener exists.
+        //
+        // Fail-closed, with no volatile fallback. Two things are at stake and
+        // both survive a restart: a `tools/call` answered with a handle has
+        // promised a record that a later `tasks/get` can read, and `open_runtime`
+        // imports the store's committed ownership bindings into admission. A
+        // store that will not open is therefore also a store whose owners are
+        // unknown — serving past that point would answer a returning caller's
+        // own task as absent, which is the one answer the ownership rule uses
+        // for a task that is not theirs.
+        //
+        // Built here rather than inside the `AppState` literal because the
+        // subscription registry is shared with the executor's publication seam:
+        // two registries would leave a task's notifications going to a listener
+        // set no client is on.
+        self.config.tasks.validate()?;
+        let task_store_dir = expand_home_path(&self.config.tasks.store_dir);
+        let subscriptions = Arc::new(
+            crate::gateway::subscription_registry::SubscriptionRegistry::new(
+                crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
+            ),
+        );
+        // The runtime shares meta-MCP's admission authority rather than opening
+        // one of its own: a task and a later synchronous call carrying the same
+        // owner and idempotency key have to meet at ONE admission index, or the
+        // backend runs twice for what the caller sent once.
+        //
+        // The adapters that are BOTH named in `tasks.recovery_adapters` and
+        // still configured backends. Computed here because this is the one
+        // place that can see both lists before `AppState` exists; it is the
+        // weakest evaluable test on purpose, since deferring a row is not a
+        // trust claim and issues no upstream call. Empty means the recovery
+        // below is byte-identical to the no-adapter behaviour.
+        let managed_adapters: Vec<String> = self
+            .config
+            .tasks
+            .recovery_adapters
+            .iter()
+            .filter(|name| self.backends.get(name).is_some())
+            .cloned()
+            .collect();
+        let (task_service, task_executor) =
+            crate::gateway::task_service::open_runtime_with_recovery(
+                &task_store_dir,
+                self.config.tasks.max_workers,
+                crate::gateway::task_service::StoreLimits {
+                    records: self.config.tasks.max_records,
+                    per_principal: self.config.tasks.max_per_principal,
+                    record_bytes: self.config.tasks.max_record_bytes,
+                    logical_bytes: self.config.tasks.logical_budget_bytes,
+                },
+                Arc::clone(&subscriptions),
+                Arc::clone(meta_mcp.execution_admission()),
+                &managed_adapters,
+            )
+            .await
+            .map_err(|error| {
+                Error::Config(format!(
+                    "task store at '{}' could not be opened: {error}",
+                    task_store_dir.display()
+                ))
+            })?;
+        info!(
+            path = %task_store_dir.display(),
+            max_workers = self.config.tasks.max_workers,
+            "Durable task store opened"
+        );
+        // The trusted upstream adapter, installed after the store recovered and
+        // before the socket serves. It needs the started backend registry, which
+        // is why it cannot be a constructor argument to `open`. With no
+        // configured names it is not installed at all and every upstream path
+        // stays unreachable.
+        if !managed_adapters.is_empty() {
+            let installed = task_executor.install_recovery(Arc::new(
+                crate::gateway::meta_mcp::upstream::NativeUpstreamTasks::new(
+                    Arc::clone(&self.backends),
+                    &managed_adapters,
+                ),
+            ));
+            info!(
+                adapters = ?managed_adapters,
+                installed,
+                "Upstream task recovery adapter configured"
+            );
+        }
+        // The periodic expiry owner, started only now: the recovery inside
+        // `open_runtime_with_admission` has succeeded, so the sweep can never see
+        // a row a restart had not yet settled. The guard is held for the server's
+        // lifetime and joined below, before the store closes — dropping it on an
+        // early return signals the loop to stop without cutting a deletion that
+        // is already in flight.
+        let expiry_sweep: crate::gateway::task_service::execution::ExpirySweep =
+            match task_executor.start_expiry(self.config.tasks.expiry_interval) {
+                Ok(sweep) => sweep,
+                Err(error) => {
+                    let _ = task_service.shutdown().await;
+                    return Err(Error::Config(format!(
+                        "task expiry sweep at {:?} could not be started: {error}",
+                        self.config.tasks.expiry_interval
+                    )));
+                }
+            };
+        info!(
+            interval = ?self.config.tasks.expiry_interval,
+            "Durable task expiry sweep started"
+        );
+        // Cloned before the state takes them: shutdown drains the SAME executor
+        // that served the traffic, not a second one built to stand in for it.
+        let task_service_for_shutdown = Arc::clone(&task_service);
+        let task_executor_for_shutdown = Arc::clone(&task_executor);
+
         let state = Arc::new(AppState {
             // Shared, not minted: the invoke path mints continuations against
             // `meta_mcp`'s keyring, so a second one here would be a keyring
@@ -1232,12 +1831,9 @@ impl Gateway {
             firewall: firewall_arc,
             agent_identity_config: self.config.security.agent_identity.clone(),
             control_plane_store,
-            tasks: Arc::new(crate::protocol::task_store::TaskStore::new()),
-            subscriptions: Arc::new(
-                crate::gateway::subscription_registry::SubscriptionRegistry::new(
-                    crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
-                ),
-            ),
+            tasks: task_service,
+            task_executor,
+            subscriptions,
             live_config: Arc::clone(&live_config),
             export_status,
             transparency_log,
@@ -1504,6 +2100,48 @@ impl Gateway {
             }
         }
 
+        // Before the drain and well before the close: the sweep is joined while
+        // the store is still open, so a deletion already in flight finishes its
+        // own transaction and no new one starts against a store about to give
+        // its lease back. The join returns what the sweep actually met, so a
+        // store it could not delete from is not reported as a clean stop.
+        if let Err(error) = expiry_sweep.shutdown().await {
+            warn!(%error, "Task expiry sweep did not stop cleanly");
+        } else {
+            info!("Task expiry sweep stopped");
+        }
+
+        // Task workers hold no inflight permit — the request that created one
+        // was answered with a handle and released its permit long before the
+        // work finished — so the drain above cannot see them and a second wait
+        // is what makes shutdown graceful for them too.
+        //
+        // Ahead of `stop_all`, because a worker's dispatch IS a backend call:
+        // stopping the pool first would fail the very work this wait exists to
+        // let finish. The store closes afterwards, which joins any writer still
+        // in flight and gives the directory lease back — a lease this process
+        // kept would refuse the next start its own store.
+        info!(timeout = ?drain_timeout, "Draining in-flight tasks...");
+        let task_drain = task_executor_for_shutdown.drain(drain_timeout).await;
+        if task_drain.timed_out {
+            warn!(
+                acquired_workers = task_drain.acquired,
+                "Task drain timeout reached, proceeding with shutdown"
+            );
+        } else {
+            info!("All in-flight tasks completed");
+        }
+        if let Err(error) = task_service_for_shutdown.shutdown().await {
+            warn!(%error, "Task store did not release its lease cleanly");
+        }
+
+        // Release the custody store before the backends go: the drain above is
+        // what guarantees no in-flight request is still holding a credential.
+        // Not covered by gateway_bootstrap_tests — no test drives `run`.
+        if let Err(e) = self.shutdown_account_custody().await {
+            warn!(error = %e, "Personal account custody shutdown failed");
+        }
+
         // Stop all backends
         info!("Shutting down backends...");
         self.backends.stop_all().await;
@@ -1539,6 +2177,24 @@ impl Gateway {
             data_dir,
             ..
         } = self.build_meta_mcp().await?;
+        // Give stdio the same explicit reload context as HTTP.
+        if let Some(ref path) = self.config_path {
+            let live_config = Arc::new(
+                LiveConfig::new(self.config.clone())
+                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+            );
+            let reload_ctx = Arc::new(
+                ReloadContext::new(
+                    path.clone(),
+                    Arc::clone(&live_config),
+                    Arc::clone(&self.backends),
+                    self.config.failsafe.clone(),
+                    self.config.meta_mcp.cache_ttl,
+                )
+                .with_env(Arc::clone(&self.env)),
+            );
+            meta_mcp.set_reload_context(reload_ctx);
+        }
         let mut protocol_telemetry_sink =
             match crate::protocol_revision_telemetry::DurableTelemetrySink::open(&data_dir) {
                 Ok(sink) => Some(sink),
@@ -1552,16 +2208,55 @@ impl Gateway {
                 }
             };
 
+        // Account strategies must exist before stdio can admit a request, just
+        // as they do before the HTTP listener starts serving.
+        if self.config.accounts.is_some() {
+            let gateway_key_pair = Arc::new(GatewayKeyPair::generate().map_err(|error| {
+                crate::Error::Config(format!(
+                    "stdio account signing key generation failed: {error}"
+                ))
+            })?);
+            let account_custody = self.custody.as_ref().map(|custody| {
+                Arc::clone(custody) as Arc<dyn crate::personal_accounts::AccountCustody>
+            });
+            account_bindings::install_account_strategies(
+                &self.config,
+                account_custody.as_ref(),
+                &gateway_key_pair,
+                &meta_mcp,
+            )?;
+        }
+
         if self.config.capabilities.enabled {
-            let executor = Arc::new(CapabilityExecutor::new().with_env(Arc::clone(&self.env)));
+            let account_strategies = meta_mcp.account_strategies();
+            account_bindings::declare_account_descriptors(&self.config, &account_strategies);
+            let executor = Arc::new(
+                CapabilityExecutor::new()
+                    .with_env(Arc::clone(&self.env))
+                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+                    .with_account_strategies(account_strategies),
+            );
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
                 executor,
             ));
+            let mut refused = Vec::new();
             for dir in &self.config.capabilities.directories {
-                if let Ok(count) = cap_backend.load_from_directory(dir).await {
-                    debug!(directory = %dir, count, "Loaded capabilities (stdio)");
+                match cap_backend.load_from_directory_reporting(dir).await {
+                    Ok(report) => {
+                        debug!(directory = %dir, count = report.admitted, "Loaded capabilities (stdio)");
+                        refused.extend(report.rejected);
+                    }
+                    Err(error) => {
+                        debug!(directory = %dir, %error, "Failed to load optional capabilities (stdio)");
+                    }
                 }
+            }
+            if !refused.is_empty() {
+                return Err(crate::Error::Config(format!(
+                    "capabilities rejected by the account admission gate: {}",
+                    refused.join("; ")
+                )));
             }
             meta_mcp.set_capabilities(cap_backend);
         }
@@ -1652,7 +2347,7 @@ impl Gateway {
                 &meta_mcp,
                 &tool_policy,
                 &mtls_policy,
-                &request,
+                request,
                 session_id,
                 protocol_telemetry_sink.as_mut(),
             )
@@ -1679,6 +2374,12 @@ impl Gateway {
         // starts for a gateway that is on its way out. The guard remains the
         // backstop for every path that does not reach this line.
         warm_start_tasks.cancel().await;
+        // Release the custody store before the backends go. Reached on the EOF
+        // path only: a cancelled `run_stdio` releases it by dropping the Gateway.
+        // Not covered by gateway_bootstrap_tests — no test drives `run_stdio`.
+        if let Err(e) = self.shutdown_account_custody().await {
+            warn!(error = %e, "Personal account custody shutdown failed");
+        }
         self.backends.stop_all().await;
         Ok(())
     }
@@ -1734,7 +2435,7 @@ impl Gateway {
             meta_mcp,
             tool_policy,
             mtls_policy,
-            request,
+            request.clone(),
             session_id,
             None,
         )
@@ -1747,18 +2448,185 @@ impl Gateway {
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
         _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
-        request: &serde_json::Value,
+        mut request: serde_json::Value,
         session_id: &str,
         protocol_telemetry_sink: Option<
             &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
         >,
     ) -> Option<serde_json::Value> {
-        use super::router::helpers::{extract_tools_call_params, merge_client_meta, parse_request};
+        // Borrowed views throughout: a request this dispatcher refuses must not
+        // be copied on its way to the refusal. Ownership is taken once, after
+        // admission, where the payload is actually executed.
+        use super::router::helpers::extract_tools_call_params_ref;
         use crate::protocol::JsonRpcResponse;
 
-        let (id, method, params) = match parse_request(request) {
-            Ok(parsed) => parsed,
-            Err(response) => return Some(response.to_value_lossy()),
+        let mut signing_context = match Self::prepare_signing(meta_mcp, &mut request) {
+            Ok(context) => context,
+            Err(response) => return Some(response),
+        };
+
+        let (id, method, params, request_shape) =
+            match Self::parse_and_observe(&request, session_id, protocol_telemetry_sink) {
+                Ok(parsed) => parsed,
+                Err(early) => return early,
+            };
+
+        let (external_tool, response_targets) = {
+            // Response targets are still derived here, before anything dispatches,
+            // so no change in live backend state can move an accepted call's
+            // provenance. What is withheld is the payload: a target owns a copy of
+            // the call arguments, and the response-target mapping reads a target's
+            // server and tool and discards that copy on the next line. So the
+            // mapping is fed the routing keys alone — same servers, same tools,
+            // same sort, dedup and discovery handling, none of the megabytes.
+            let (external_tool, backend_targets) = if method == "tools/call" {
+                let empty_arguments = serde_json::Value::Object(serde_json::Map::new());
+                let (tool, arguments) = extract_tools_call_params_ref(params);
+                (
+                    tool.to_string(),
+                    super::router::backend_tool_targets_for_call(
+                        meta_mcp,
+                        tool,
+                        &stdio_routing_keys_only(arguments.unwrap_or(&empty_arguments)),
+                    ),
+                )
+            } else {
+                (method.clone(), Vec::new())
+            };
+            let response_targets = super::meta_mcp::response_security::meta_response_targets(
+                &external_tool,
+                &backend_targets,
+            );
+            (external_tool, response_targets)
+        };
+        let (response, execution) = if method == "tools/call" {
+            Self::dispatch_tools_call(
+                meta_mcp,
+                tool_policy,
+                &mut request,
+                id,
+                session_id,
+                &mut signing_context,
+                &request_shape,
+            )
+            .await
+        } else {
+            (
+                match method.as_str() {
+                    // 2026-07-28 MUST. Answered before anything else and without a
+                    // handshake, because on stdio this is also the backward-compatibility
+                    // probe: a legacy server answers it with an error, not a document.
+                    // Always the legacy list on stdio. This dispatcher has no
+                    // access to the running config, and the stateless revision is
+                    // specified over streamable HTTP; advertising it on a transport
+                    // whose modern path is not wired would be a claim the gateway
+                    // cannot honour. Recorded as a limitation, not a decision that
+                    // stdio is excluded.
+                    "server/discover" => {
+                        JsonRpcResponse::success_serialized(id, meta_mcp.discover_document(false))
+                    }
+                    "initialize" => meta_mcp.handle_initialize(
+                        id,
+                        params,
+                        Some(session_id),
+                        None,
+                        request_shape.era(),
+                    ),
+                    "tools/list" => {
+                        meta_mcp.handle_tools_list_with_params(id, params, Some(session_id))
+                    }
+                    "prompts/list" => meta_mcp.handle_prompts_list(id, params).await,
+                    "prompts/get" => meta_mcp.handle_prompts_get(id, params).await,
+                    "resources/list" => meta_mcp.handle_resources_list(id, params).await,
+                    "resources/read" => meta_mcp.handle_resources_read(id, params).await,
+                    "resources/templates/list" => {
+                        meta_mcp.handle_resources_templates_list(id, params).await
+                    }
+                    "logging/setLevel" => meta_mcp.handle_logging_set_level(id, params).await,
+                    "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
+                    other => {
+                        debug!(method = %other, "stdio: unknown method");
+                        let message = format!("Method not found: {other}");
+                        JsonRpcResponse::error(Some(id), -32601, message)
+                    }
+                },
+                None,
+            )
+        };
+
+        let response = meta_mcp.finalize_response_for_delivery(
+            response,
+            &super::meta_mcp::response_security::ResponseDeliveryContext {
+                method: &method,
+                targets: &response_targets,
+                correlation: super::meta_mcp::response_security::ResponseCorrelation {
+                    session_id,
+                    caller: "stdio",
+                    external_server: "gateway",
+                    external_tool: &external_tool,
+                },
+                mutation:
+                    crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
+                signing: signing_context.as_ref(),
+            },
+        );
+        if let Some(execution) = execution {
+            execution.complete_delivery(&response, signing_context.as_ref());
+        }
+        Some(response.to_value_lossy())
+    }
+
+    /// Capture and restore the signing envelope ahead of parsing, if signing
+    /// is enabled: the envelope lives in the caller's request, so it is taken
+    /// out before anything else reads that tree.
+    fn prepare_signing(
+        meta_mcp: &Arc<MetaMcp>,
+        request: &mut serde_json::Value,
+    ) -> std::result::Result<
+        Option<super::meta_mcp::signing::SigningInvocationContext>,
+        serde_json::Value,
+    > {
+        let mut signing_context = meta_mcp
+            .signing_enabled()
+            .then(|| super::meta_mcp::signing::SigningInvocationContext::capture(request));
+        if let Some(context) = signing_context.as_mut()
+            && let Err(error) = context.restore(request)
+        {
+            return Err(crate::protocol::JsonRpcResponse::error(
+                None,
+                error.to_rpc_code(),
+                super::meta_mcp::signing::wire_error_message(&error),
+            )
+            .to_value_lossy());
+        }
+        Ok(signing_context)
+    }
+
+    /// Parse, classify and durably observe one inbound stdio request.
+    ///
+    /// `Err(None)` means no response is due (a notification); `Err(Some(_))`
+    /// carries an already-serialized error response.
+    fn parse_and_observe<'r>(
+        request: &'r serde_json::Value,
+        session_id: &str,
+        protocol_telemetry_sink: Option<
+            &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
+        >,
+    ) -> std::result::Result<
+        (
+            crate::protocol::RequestId,
+            String,
+            Option<&'r serde_json::Value>,
+            crate::protocol::meta::RequestShape,
+        ),
+        Option<serde_json::Value>,
+    > {
+        use super::router::helpers::parse_request_ref;
+        use crate::protocol::JsonRpcResponse;
+
+        let (id, method, params) = match parse_request_ref(request) {
+            Ok((id, method, params)) => (id, method.to_string(), params),
+            Err(response) => return Err(Some(response.to_value_lossy())),
         };
 
         // NFR.OBS.1. Recorded here, above every early return below, so a
@@ -1766,13 +2634,10 @@ impl Gateway {
         // carries no headers, so the transport declares no revision and a
         // modern request can only have sourced its own from `_meta`.
         //
-        // Bound rather than discarded: `initialize` advertises its extension
-        // set against the declared era, and stdio must answer that question the
-        // same way HTTP does. The rest of stdio's method dispatch still
-        // predates the revision split and this change does not move it.
-        let shape = crate::protocol::meta::classify_and_observe(
+        // The same classification also controls modern explicit-key admission.
+        let request_shape = crate::protocol::meta::classify_and_observe(
             &method,
-            params.as_ref(),
+            params,
             None,
             // Stdio carries no header, so the revision this session negotiated
             // at `initialize` is the only thing a later legacy request can be
@@ -1782,7 +2647,7 @@ impl Gateway {
         );
         crate::protocol_revision_telemetry::observe_inbound_request(
             request,
-            params.as_ref(),
+            params,
             &method,
             None,
             Some(session_id),
@@ -1800,113 +2665,198 @@ impl Gateway {
         // Notifications have no id — send no response
         if method.starts_with("notifications/") {
             debug!(notification = %method, "stdio: notification (no response)");
-            return None;
+            return Err(None);
         }
 
         // Requests must have an id
         let Some(id) = id else {
             let resp = JsonRpcResponse::error(None, -32600, "Missing id");
-            return Some(resp.to_value_lossy());
+            return Err(Some(resp.to_value_lossy()));
         };
 
-        let response = match method.as_str() {
-            // 2026-07-28 MUST. Answered before anything else and without a
-            // handshake, because on stdio this is also the backward-compatibility
-            // probe: a legacy server answers it with an error, not a document.
-            "server/discover" => {
-                JsonRpcResponse::success_serialized(
-                    id, // Always the legacy list on stdio. This dispatcher has no
-                    // access to the running config, and the stateless revision is
-                    // specified over streamable HTTP; advertising it on a transport
-                    // whose modern path is not wired would be a claim the gateway
-                    // cannot honour. Recorded as a limitation, not a decision that
-                    // stdio is excluded.
-                    meta_mcp.discover_document(false),
-                )
-            }
-            "initialize" => {
-                meta_mcp.handle_initialize(id, params.as_ref(), Some(session_id), None, shape.era())
-            }
-            "tools/list" => {
-                meta_mcp.handle_tools_list_with_params(id, params.as_ref(), Some(session_id))
-            }
-            "tools/call" => {
-                let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
-                // See the HTTP path: meta-tool only, direct route untouched.
-                let arguments = merge_client_meta(
-                    arguments,
-                    params.as_ref(),
-                    meta_mcp.exposes_meta_tool(tool_name),
+        Ok((id, method, params, request_shape))
+    }
+
+    /// Handle `tools/call`: policy, signing, admission/replay, then dispatch.
+    ///
+    /// Ownership of `arguments` is taken only past every refusal — signing,
+    /// nonce, admission, replay — because only an executing call needs to
+    /// own its payload. `params` is re-derived from `request` here (already
+    /// validated by the caller) so the immutable borrow it needs can end
+    /// before the one branch below that needs `request` mutably.
+    async fn dispatch_tools_call(
+        meta_mcp: &Arc<MetaMcp>,
+        tool_policy: &Arc<crate::security::ToolPolicy>,
+        request: &mut serde_json::Value,
+        id: crate::protocol::RequestId,
+        session_id: &str,
+        signing_context: &mut Option<super::meta_mcp::signing::SigningInvocationContext>,
+        request_shape: &crate::protocol::meta::RequestShape,
+    ) -> (
+        crate::protocol::JsonRpcResponse,
+        Option<super::meta_mcp::admission::SyncLease>,
+    ) {
+        use super::router::helpers::{
+            client_meta_insert_required, extract_tools_call_params_ref, merge_client_meta_ref,
+        };
+        use crate::protocol::JsonRpcResponse;
+
+        let empty_arguments = serde_json::Value::Object(serde_json::Map::new());
+        let mut execution = None;
+        let response = 'tool_call: {
+            let params = request.get("params");
+            let (tool_name, arguments) = extract_tools_call_params_ref(params);
+            let is_meta_tool = meta_mcp.exposes_meta_tool(tool_name);
+            let tool_name = tool_name.to_string();
+
+            // The tool policy is applied at the dispatch chokepoint via the
+            // authorizer below, not here. The inline check this replaces ran
+            // for `gateway_invoke` alone, so a stdio playbook or code-mode
+            // step reached a backend with no policy check at all.
+            let stdio_authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
+                tool_policy: tool_policy.as_ref(),
+            };
+
+            let retry = crate::protocol::mrtr::RetryFields::from_params(params);
+            let is_modern = matches!(
+                request_shape,
+                crate::protocol::meta::RequestShape::Modern(_)
+            );
+            if matches!(
+                request_shape,
+                crate::protocol::meta::RequestShape::Malformed { .. }
+            ) {
+                break 'tool_call JsonRpcResponse::error(
+                    Some(id),
+                    -32602,
+                    "Malformed protocol metadata",
                 );
-                let tool_name = tool_name.to_string();
-
-                // The tool policy is applied at the dispatch chokepoint via the
-                // authorizer below, not here. The inline check this replaces ran
-                // for `gateway_invoke` alone, so a stdio playbook or code-mode
-                // step reached a backend with no policy check at all.
-                let stdio_authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
-                    tool_policy: tool_policy.as_ref(),
-                };
-
-                meta_mcp
-                    .handle_tools_call(
-                        id,
-                        &tool_name,
-                        arguments,
-                        Some(session_id),
-                        MetaMcpCallerContext {
-                            authorizer: &stdio_authorizer,
-                            // Stdio has no port and no network surface: the
-                            // client SPAWNED this process, so it already holds
-                            // whatever the operator holds — it could edit the
-                            // config file just as easily. Withholding admin
-                            // here would take the management tools away from
-                            // exactly the single-user setup the origin gate
-                            // exists to protect, and protect nothing.
-                            //
-                            // Explicit since the admin gate moved to the
-                            // dispatcher: it previously lived on the HTTP path
-                            // alone, so stdio was never checked and the default
-                            // non-admin context went unnoticed.
-                            is_admin: true,
-                            // stdio carries no per-request capability
-                            // declaration to read, and absent means absent.
-                            input_capabilities: crate::protocol::meta::Declared::NONE,
-                            retry: &crate::protocol::mrtr::NO_RETRY,
-                            api_key_name: None,
-                            agent_id: None,
-                            grant_subject: None,
-                            verified_identity: None,
-                            // stdio speaks to one process over two pipes and
-                            // has no elicitation channel: there is no operator
-                            // this transport can reach, so a destructive call
-                            // it cannot confirm is refused rather than asked
-                            // about. Not "found no session" -- no asker can
-                            // exist here at all.
-                            confirmation:
-                                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
-                        },
-                    )
-                    .await
             }
-            "prompts/list" => meta_mcp.handle_prompts_list(id, params.as_ref()).await,
-            "prompts/get" => meta_mcp.handle_prompts_get(id, params.as_ref()).await,
-            "resources/list" => meta_mcp.handle_resources_list(id, params.as_ref()).await,
-            "resources/read" => meta_mcp.handle_resources_read(id, params.as_ref()).await,
-            "resources/templates/list" => {
-                meta_mcp
-                    .handle_resources_templates_list(id, params.as_ref())
-                    .await
+            // Verified evidence only: stdio echoes no header, so the session's
+            // negotiated revision is the whole reading. The body is not
+            // consulted — `params.protocolVersion` is not a `tools/call` field.
+            let protocol_revision_owned = crate::protocol::meta::cache_protocol_revision(
+                request_shape,
+                None,
+                crate::protocol_revision_telemetry::session_negotiated_revision(Some(session_id)),
+            )
+            .map(str::to_owned);
+            // The canonical merge, still ahead of everything that reads the
+            // arguments — signing, policy, nonce, admission — and now below
+            // the two things that need the request whole: the retry fields
+            // read `params._meta`, which is exactly the subtree the owning
+            // branch moves out, and the shape classification already
+            // observed it.
+            //
+            // The borrowed form still answers the four cases where the
+            // merge would insert nothing by aliasing the caller's tree.
+            // Where it would insert, the copy it makes is the whole payload
+            // and the whole metadata, so the dispatcher spends the
+            // ownership it already has instead: same insertion, same
+            // precedence, moved rather than copied.
+            let arguments = if client_meta_insert_required(arguments, params, is_meta_tool) {
+                std::borrow::Cow::Owned(stdio_take_merged_client_meta(request))
+            } else {
+                merge_client_meta_ref(arguments.unwrap_or(&empty_arguments), params, is_meta_tool)
+            };
+            let mut caller = MetaMcpCallerContext {
+                // stdio has no task route: the extension's handle is read
+                // back over `tasks/get`, which only the HTTP surface serves,
+                // so a handle minted here would name work nobody could ask
+                // about. Every stdio call stays synchronous.
+                task: None,
+                execution: None,
+                signing: None,
+                is_modern,
+                protocol_revision: protocol_revision_owned.as_deref(),
+                credential_principal: None,
+                authorizer: &stdio_authorizer,
+                // Stdio has no port and no network surface: the
+                // client SPAWNED this process, so it already holds
+                // whatever the operator holds — it could edit the
+                // config file just as easily. Withholding admin
+                // here would take the management tools away from
+                // exactly the single-user setup the origin gate
+                // exists to protect, and protect nothing.
+                //
+                // Explicit since the admin gate moved to the
+                // dispatcher: it previously lived on the HTTP path
+                // alone, so stdio was never checked and the default
+                // non-admin context went unnoticed.
+                is_admin: true,
+                // stdio carries no per-request capability
+                // declaration to read, and absent means absent.
+                input_capabilities: crate::protocol::meta::Declared::NONE,
+                retry: &retry,
+                api_key_name: None,
+                agent_id: None,
+                grant_subject: None,
+                verified_identity: None,
+                // Same `RequestShape` the `initialize` arm advertises against.
+                era: request_shape.era(),
+                // No `ProxyManager` in this scope -- it is HTTP-only --
+                // so there is no session to put a request on.
+                channel: &crate::gateway::input_bridge::NoClientChannel,
+                // stdio speaks to one process over two pipes and
+                // has no elicitation channel: there is no operator
+                // this transport can reach, so a destructive call
+                // it cannot confirm is refused rather than asked
+                // about. Not "found no session" -- no asker can
+                // exist here at all.
+                confirmation:
+                    crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+            };
+            if let Some(context) = signing_context.as_mut()
+                && let Err(error) = meta_mcp.prepare_signing_invocation(
+                    context,
+                    arguments.as_ref(),
+                    Some(session_id),
+                    &caller,
+                )
+            {
+                break 'tool_call JsonRpcResponse::error(
+                    Some(id),
+                    error.to_rpc_code(),
+                    super::meta_mcp::signing::wire_error_message(&error),
+                );
             }
-            "logging/setLevel" => meta_mcp.handle_logging_set_level(id, params.as_ref()).await,
-            "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
-            other => {
-                debug!(method = %other, "stdio: unknown method");
-                JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {other}"))
-            }
+            caller.signing = signing_context.as_ref();
+            let admission = meta_mcp.admit_meta_sync(
+                &caller,
+                &tool_name,
+                arguments.as_ref(),
+                Some(session_id),
+                &id,
+            );
+            execution = match admission {
+                Ok(super::meta_mcp::admission::SyncAdmission::Unprotected) => None,
+                Ok(super::meta_mcp::admission::SyncAdmission::Owned(lease)) => Some(lease),
+                Ok(super::meta_mcp::admission::SyncAdmission::Replay(response)) => {
+                    break 'tool_call response;
+                }
+                Err(error) => {
+                    break 'tool_call JsonRpcResponse::error(
+                        Some(id),
+                        error.to_rpc_code(),
+                        error.to_string(),
+                    );
+                }
+            };
+            caller.execution = execution.as_ref();
+            // The one copy this path still makes, taken past every refusal
+            // above — signing, nonce, admission, replay — because only an
+            // executing call needs to own its arguments.
+            meta_mcp
+                .handle_tools_call(
+                    id,
+                    &tool_name,
+                    arguments.into_owned(),
+                    Some(session_id),
+                    caller,
+                )
+                .await
         };
-
-        Some(response.to_value_lossy())
+        (response, execution)
     }
 
     /// Dispatch a JSON-RPC batch request.
@@ -1940,7 +2890,7 @@ impl Gateway {
             crate::protocol_revision_telemetry::DurableTelemetrySink,
         >,
     ) -> Vec<serde_json::Value> {
-        let Some(requests) = batch.as_array() else {
+        let serde_json::Value::Array(requests) = batch else {
             return vec![
                 crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
                     .to_value_lossy(),
@@ -2181,6 +3131,67 @@ fn spawn_idle_reaper(
         }
     })
 }
+
+/// The caller context every stdio `tools/call` runs under.
+///
+/// Extracted from `dispatch_single_with_sink` so the transport-specific
+/// reasoning below -- why stdio is admin, why it has no channel and no
+/// asker -- sits in one named place instead of forty lines inside a match
+/// arm. `era` is the caller's because the `initialize` arm advertises
+/// against the same `shape`.
+fn stdio_caller_context<'a>(
+    authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
+    era: crate::protocol::meta::Era,
+) -> MetaMcpCallerContext<'a> {
+    MetaMcpCallerContext {
+        // stdio has no task route: the extension's handle is read back over
+        // `tasks/get`, which only the HTTP surface serves.
+        task: None,
+        execution: None,
+        signing: None,
+        is_modern: era == crate::protocol::meta::Era::Modern,
+        protocol_revision: None,
+        credential_principal: None,
+        authorizer,
+        // Stdio has no port and no network surface: the
+        // client SPAWNED this process, so it already holds
+        // whatever the operator holds — it could edit the
+        // config file just as easily. Withholding admin
+        // here would take the management tools away from
+        // exactly the single-user setup the origin gate
+        // exists to protect, and protect nothing.
+        //
+        // Explicit since the admin gate moved to the
+        // dispatcher: it previously lived on the HTTP path
+        // alone, so stdio was never checked and the default
+        // non-admin context went unnoticed.
+        is_admin: true,
+        // stdio carries no per-request capability
+        // declaration to read, and absent means absent.
+        input_capabilities: crate::protocol::meta::Declared::NONE,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+        // Same `shape` the `initialize` arm advertises
+        // against, two arms up.
+        era,
+        // No `ProxyManager` in this scope -- it is HTTP-only
+        // -- so there is no session to put a request on.
+        channel: &crate::gateway::input_bridge::NoClientChannel,
+        api_key_name: None,
+        agent_id: None,
+        grant_subject: None,
+        verified_identity: None,
+        // stdio speaks to one process over two pipes and
+        // has no elicitation channel: there is no operator
+        // this transport can reach, so a destructive call
+        // it cannot confirm is refused rather than asked
+        // about. Not "found no session" -- no asker can
+        // exist here at all.
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+    }
+}
+
+#[cfg(test)]
+mod gateway_bootstrap_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2584,7 +3595,7 @@ mod tests {
             &test_meta_mcp(),
             &test_tool_policy(),
             &test_mtls_policy(),
-            &json!({
+            json!({
                 "jsonrpc": "2.0",
                 "id": 7219,
                 "method": "initialize",
@@ -2658,18 +3669,7 @@ mod tests {
                 "gateway_kill_server",
                 json!({ "server": "row19-sentinel" }),
                 Some("stdio-session"),
-                crate::gateway::meta_mcp::MetaMcpCallerContext {
-                    authorizer: &authorizer,
-                    api_key_name: None,
-                    agent_id: None,
-                    grant_subject: None,
-                    verified_identity: None,
-                    is_admin: true,
-                    input_capabilities: crate::protocol::meta::Declared::NONE,
-                    retry: &crate::protocol::mrtr::NO_RETRY,
-                    confirmation:
-                        crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
-                },
+                super::stdio_caller_context(&authorizer, crate::protocol::meta::Era::Legacy),
             )
             .await;
 
@@ -3071,6 +4071,25 @@ mod tests {
         async fn close(&self) -> crate::Result<()> {
             Ok(())
         }
+    }
+
+    /// MIK-7272.SUB.4 — the idempotency cache reaches the running meta-MCP on
+    /// the production boot path. A default config on purpose: the mechanism is
+    /// unconditional, so there is no section for an operator to write and
+    /// nothing for one to switch off. While the field stays `None`,
+    /// `idempotency_key_for` short-circuits and the guard in `invoke_tool` is
+    /// skipped, so a retried side-effecting call executes a second time with no
+    /// refusal and no warning.
+    #[tokio::test]
+    async fn sub4_boot_populates_the_idempotency_cache() {
+        let gateway = Gateway::new(Config::default()).await.unwrap();
+        let built = gateway.build_meta_mcp().await.unwrap();
+
+        assert!(
+            built.meta_mcp.idempotency_cache.is_some(),
+            "the boot path must populate the idempotency cache; an unpopulated \
+             one makes every client-supplied idempotency key inert"
+        );
     }
 
     /// GH475.CFG.5 — a configured threshold reaches the running budget, and a

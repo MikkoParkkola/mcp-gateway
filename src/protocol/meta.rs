@@ -274,13 +274,18 @@ pub const REMOVED_IN_2026_07_28: &[&str] = &[
 /// previously answered every handle with a `not_found` **success**, which is
 /// not in the protocol's task model and told a client its handle had been
 /// looked up and missed. Both now reach the ordinary method-not-found answer,
-/// which is true. The specification page for the tasks extension returns 404 at
-/// the path its own index links, so there is no shape to implement against yet.
+/// which is true.
+///
+/// `notifications/tasks` is listed for the same reason as the methods: a durable
+/// task transition is published on `subscriptions/listen`, and a 2025 peer that
+/// could reach it would be told this gateway speaks a revision it never
+/// negotiated.
 pub const ADDED_IN_2026_07_28: &[&str] = &[
     "subscriptions/listen",
     "tasks/get",
     "tasks/update",
     "tasks/cancel",
+    "notifications/tasks",
 ];
 
 /// The client capability a method needs, if it needs one.
@@ -449,6 +454,75 @@ impl RequestShape {
             _ => Declared::NONE,
         }
     }
+}
+
+/// Revision a classified request is served under, for response-cache keying.
+///
+/// Evidence only. Modern uses the validated `_meta` string, and only when
+/// this build can serve it ([`MODERN_VERSIONS`]). Legacy accepts only a
+/// [`crate::protocol::SUPPORTED_VERSIONS`] spelling from the echoed header
+/// or from the revision this session's handshake was answered with — never
+/// the duplicate-header sentinel, never the log tokens `absent`/`none`,
+/// never an unsupported string.
+///
+/// `tools/call` `params.protocolVersion` is deliberately NOT a source: it is
+/// not a field of that request, so it is arbitrary caller input, and reading
+/// it would let a header-less caller choose the revision bucket its response
+/// is stored in and read from. `initialize` is unaffected —
+/// [`crate::protocol::negotiate_version`] still reads the client's ask from
+/// the body, and the revision it *answers* is what `bind_session_revision`
+/// records and what arrives here as `session_revision`.
+///
+/// Matched exactly, never trimmed: negotiation compares spellings exactly,
+/// so a whitespace-padded value is one this gateway never served and must
+/// not name a canonical bucket. Malformed has no served revision. Unknown →
+/// `None` (fail-closed, skip cache).
+#[must_use]
+pub fn cache_protocol_revision<'a>(
+    shape: &'a RequestShape,
+    header_version: Option<&'a str>,
+    session_revision: Option<&'a str>,
+) -> Option<&'a str> {
+    match shape {
+        RequestShape::Modern(fields) => accepted_modern_revision(fields.protocol_version.as_str()),
+        RequestShape::Malformed { .. } => None,
+        RequestShape::Legacy => accepted_legacy_revision(header_version)
+            .or_else(|| accepted_legacy_revision(session_revision)),
+    }
+}
+
+/// A revision this build can serve, from either era, matched exactly.
+///
+/// The union is deliberate and both halves are needed: `SUPPORTED_VERSIONS`
+/// is what `initialize` negotiates, [`MODERN_VERSIONS`] is what the
+/// stateless path serves, and the two are kept disjoint on purpose (see the
+/// comment on [`crate::protocol::SUPPORTED_VERSIONS`]). A cache layer that
+/// took only the first would refuse to key any modern-era request.
+#[must_use]
+pub fn served_revision(value: &str) -> Option<&'static str> {
+    crate::protocol::SUPPORTED_VERSIONS
+        .iter()
+        .chain(MODERN_VERSIONS)
+        .copied()
+        .find(|&supported| supported == value)
+}
+
+fn accepted_modern_revision(value: &str) -> Option<&'static str> {
+    MODERN_VERSIONS
+        .iter()
+        .copied()
+        .find(|&supported| supported == value)
+}
+
+fn accepted_legacy_revision(value: Option<&str>) -> Option<&str> {
+    let value = value.filter(|v| !v.is_empty())?;
+    if value.eq_ignore_ascii_case("absent") || value.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    crate::protocol::SUPPORTED_VERSIONS
+        .iter()
+        .copied()
+        .find(|&supported| supported == value)
 }
 
 impl RequestFields {
@@ -641,6 +715,128 @@ mod declared_capabilities_tests {
             "fixture must be legacy"
         );
         assert_eq!(shape.declared_capabilities(), Declared::NONE);
+    }
+
+    #[test]
+    fn cache_revision_for_modern_is_the_validated_body_version() {
+        let params = modern_params(&json!({}));
+        let shape = classify_request(Some(&params), Some("2026-07-28"));
+        assert_eq!(
+            super::cache_protocol_revision(&shape, Some("2026-07-28"), None),
+            Some("2026-07-28")
+        );
+    }
+
+    #[test]
+    fn cache_revision_for_legacy_is_the_header_not_a_log_token() {
+        let params = json!({});
+        let shape = classify_request(Some(&params), Some("2025-11-25"));
+        assert_eq!(
+            super::cache_protocol_revision(&shape, Some("2025-11-25"), None),
+            Some("2025-11-25")
+        );
+    }
+
+    #[test]
+    fn cache_revision_for_malformed_is_none() {
+        let shape = RequestShape::Malformed {
+            missing: vec!["protocolVersion"],
+        };
+        assert_eq!(
+            super::cache_protocol_revision(&shape, Some("2026-07-28"), None),
+            None
+        );
+    }
+
+    #[test]
+    fn cache_revision_legacy_rejects_the_modern_sentinel() {
+        let params = json!({});
+        let shape = classify_request(Some(&params), None);
+        assert!(matches!(shape, RequestShape::Legacy));
+        assert_eq!(
+            super::cache_protocol_revision(&shape, Some("2026-07-28"), None),
+            None,
+            "the duplicate-header sentinel is a classification trick, not a served revision"
+        );
+    }
+
+    #[test]
+    fn cache_revision_legacy_rejects_unsupported_and_log_tokens() {
+        let params = json!({});
+        let shape = classify_request(Some(&params), None);
+        for bogus in ["not-a-revision", "absent", "none", " ABSENT "] {
+            assert_eq!(
+                super::cache_protocol_revision(&shape, Some(bogus), None),
+                None,
+                "{bogus}"
+            );
+        }
+    }
+
+    #[test]
+    fn cache_revision_legacy_accepts_a_supported_session_handshake() {
+        let params = json!({});
+        let shape = classify_request(Some(&params), None);
+        assert_eq!(
+            super::cache_protocol_revision(&shape, None, Some("2025-06-18")),
+            Some("2025-06-18")
+        );
+    }
+
+    /// A `tools/call` body cannot choose the revision bucket. `protocolVersion`
+    /// is not a field of that request, so a header-less caller that adds one
+    /// would otherwise select where its response is stored and read from.
+    #[test]
+    fn cache_revision_legacy_ignores_a_body_protocol_version() {
+        let params = json!({"protocolVersion": "2025-03-26"});
+        let shape = classify_request(Some(&params), None);
+        assert!(matches!(shape, RequestShape::Legacy), "fixture is legacy");
+        assert_eq!(
+            super::cache_protocol_revision(&shape, None, None),
+            None,
+            "an arbitrary body field is not evidence of the revision served"
+        );
+        assert_eq!(
+            super::cache_protocol_revision(&shape, None, Some("2025-11-25")),
+            Some("2025-11-25"),
+            "the handshake the gateway answered still decides, not the body"
+        );
+    }
+
+    /// Whitespace is not normalised away: `negotiate_version` compares
+    /// spellings exactly, so a padded value names no bucket at all.
+    #[test]
+    fn cache_revision_rejects_whitespace_padded_spellings() {
+        let params = json!({});
+        let shape = classify_request(Some(&params), None);
+        for padded in [" 2025-11-25", "2025-11-25 ", "\t2025-06-18\n"] {
+            assert_eq!(
+                super::cache_protocol_revision(&shape, Some(padded), None),
+                None,
+                "header: {padded:?}"
+            );
+            assert_eq!(
+                super::cache_protocol_revision(&shape, None, Some(padded)),
+                None,
+                "session: {padded:?}"
+            );
+        }
+    }
+
+    /// The two eras are one accepted set for the cache layers, and `2026-07-28`
+    /// is deliberately absent from `SUPPORTED_VERSIONS` — a helper built on
+    /// that constant alone accepts no modern revision at all.
+    #[test]
+    fn served_revision_spans_both_eras_and_matches_exactly() {
+        for legacy in crate::protocol::SUPPORTED_VERSIONS {
+            assert_eq!(super::served_revision(legacy), Some(*legacy), "{legacy}");
+        }
+        for modern in super::MODERN_VERSIONS {
+            assert_eq!(super::served_revision(modern), Some(*modern), "{modern}");
+        }
+        for bogus in ["", " 2026-07-28", "2026-07-28 ", "not-a-revision"] {
+            assert_eq!(super::served_revision(bogus), None, "{bogus:?}");
+        }
     }
 }
 
