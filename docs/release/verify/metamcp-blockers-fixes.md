@@ -333,3 +333,18 @@ order fails rather than silently re-keying every stored single invocation.
 
 Evidence: `test result: ok. 3 passed; 0 failed` (filter `block2_`, exit 0).
 `cargo fmt --check` returns 0. Commit `1e8d6967`.
+
+Scope of that evidence, stated rather than implied. Both runs were measured in
+a shared worktree that also carries another session's uncommitted BLOCK-1 work,
+so the tree tested is not the tree committed. The committed revision was checked
+for the one way that could matter — neither `mod.rs` nor `tests.rs` at
+`1e8d6967` references `promote_interim_envelope`, the symbol whose hunks were
+deliberately left out of the split — so the green transfers to the commit.
+
+Branch-wide `cargo clippy --all-targets -- -D warnings` is NOT provable here and
+is not claimed. It exits 101 on `tests/mik_7215_control4_reap_count_acs.rs`
+(`E0308` at lines 29 and 51), a file introduced whole by commit `09735d32`
+("red by signature"): a failing test written before the `reap` return-type
+change it specifies. That is another session's test-first step doing its job,
+not a lint regression. It is absent from the base revision and from all seven
+files this fix touches, so it is reported, not repaired.
