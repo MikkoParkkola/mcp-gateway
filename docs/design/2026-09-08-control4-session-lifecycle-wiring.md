@@ -133,6 +133,13 @@ strictly smaller than the racy alternative. (v2 GPT improvement, confirmed at so
 `debug!` already exists (`session_lifecycle.rs:87-95`). No new metric until an operator asks a
 question the log cannot answer.
 
+**Design event (§P3), decided at test-plan review.** The tick ALSO emits a `trace!` marker on every
+sweep, including one that reclaimed nothing. The `info!` alone cannot be observed to be absent: an
+empty sweep and a sweep that never ran are the same silence, so the negative half of the observability
+test had no way to fail. This marker is the completion acknowledgement that makes "no `info!` on an
+empty sweep" a falsifiable claim. One line at `trace!`, off in every normal build, and it stays — not
+a test-only conditional, because a log line compiled out under test is a different program.
+
 ### Findings carried in from the v2 review
 
 **Reviewed baseline, disclosed.** Both v2 verdicts rendered on `55ee043d`. Everything folded in
