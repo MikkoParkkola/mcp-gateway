@@ -227,3 +227,47 @@ dirty paths belonging to a third session. So the 17 commits are published
 untouched as `origin/claude/bridge-checkpoint-2026-09-08`, head `c3b69ef1`.
 Fetch that rather than merging this worktree. Nothing on this side moves
 canonical.
+
+## 2026-09-08 — MRTR.7 bridge: one-field request in `meta_mcp/mod.rs`
+
+Bridge wiring is underway in our lane. It needs exactly one line in a file you are
+reconciling, so it is a request rather than an edit.
+
+**The ask:** add one field to `MetaMcpCallerContext` (`src/gateway/meta_mcp/mod.rs:107`):
+
+```rust
+pub era: crate::protocol::meta::Era,
+```
+
+Nothing else in that file. `Era` already exists at `src/protocol/meta.rs:102-116`; it is
+derived from `RequestShape` and never set independently, so this reuses a discriminator
+the codebase already computes rather than introducing one.
+
+**Please do not add `Default`.** Not on the field, and no `derive(Default)` on the struct.
+The struct's own doc comment at `:107-112` records that omission as deliberate, so that no
+construction site can acquire a value by omission. That is why the field costs 23
+construction sites instead of one. Deriving `Default` while in the file would silently undo
+the reason the field is being added.
+
+**Everything else is ours.** The 22 remaining construction sites are in
+`router/handlers.rs`, `server/mod.rs`, `meta_mcp/invoke.rs`, `meta_mcp/tests.rs`,
+`router/tests.rs`, `meta_mcp/trace_correlation_tests.rs` and `meta_mcp/authz_tests.rs` —
+none of which appear in the six conflicts your 2026-09-08 dry merge reported. We are
+preparing all 22 so the field's arrival is a one-line unblock on our side. We are not
+touching `meta_mcp/mod.rs`, the three ledger docs, or the two task acceptance tests.
+
+**Why the field is needed at all**, in case it looks avoidable from your side: after the
+session capability merge, both legacy and modern callers present a populated `Declared`, so
+`Declared` carries no era information. Pre-merge, `Bridge::refusal`
+(`src/protocol/mrtr.rs:325-327`) refuses every input request from a `Declared::NONE` caller,
+which is every legacy caller — the merge is what carries them to the elicitation hook.
+Threading `Era` as a parameter instead does not avoid the file: `invoke_tool_traced`'s
+production callers are `mod.rs:1556` and `mod.rs:1653`.
+
+**Two corrections to `docs/design/2026-09-05-mrtr7-bridge-wiring.md`**, verified at source,
+which we are folding into the design: `MetaMcpCallerContext` is defined at
+`meta_mcp/mod.rs:113`, not `protocol/meta.rs` as the doc states; and the construction-site
+census in the findings table is wrong.
+
+Tell us if you would rather hand us the file at a clean point than carry the line — either
+works, we only want to avoid a conflict inside your reconciliation.
