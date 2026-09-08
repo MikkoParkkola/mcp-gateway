@@ -133,3 +133,26 @@ one with an unresolved pointer is out of bounds and the pointers are named. The
 `$ref` walker already exists in `tests/schema_2020_12_validity.rs` as
 `dangling_refs`; it moves into `src` and the test consumes it, so one walker
 decides for both the observing tests and the emit path.
+
+## Review improvements not taken, and their disposal (§P0)
+
+Two improvements survived the review round without becoming repairs. Each names
+its disposal, so neither ages into a ticket by default.
+
+- **Hoist the inspection to the backend cache insert** (cost SMALL): compute the
+  verdict once per tool when the backend cache is populated, instead of walking
+  the schema in `ToolDescriptorTrustCard::from_tool` on every emission.
+  DISPOSAL: **recorded as an observation.** It is pure cost — no behaviour
+  changes — so there is no decision for a human to make, and the walk is cheap
+  on realistically sized schemas. It is not free either: the closed row's
+  `by construction` claim rests on `project_tool_descriptor_trust_card` being the
+  single choke point every `tools/list` route crosses. Moving the computation
+  upstream of that projection moves what has to be proved, and the proof, not the
+  traversal, is the expensive part. Take it when a profile shows the walk on a hot
+  path; re-establish the choke-point argument in the same change.
+- **Teach `resolves` plain-name `$anchor` fragments and `$id`-relative bases**
+  (cost MEDIUM): closes the disclosed false-alarm class, where a legal 2020-12
+  backend using anchors is reported unresolved. DISPOSAL: **handed to the team
+  lead**, because closing a disclosed limit for 4.0.0 changes what the shipped
+  verdict claims, and that is a release decision rather than an engineering one.
+  The limit is stated in the row and in the module until it is answered.
