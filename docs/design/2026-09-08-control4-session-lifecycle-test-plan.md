@@ -50,7 +50,7 @@ six supports and one compile-time obligation.
 | ID | what it proves | level | type | how it can fail (Q2) |
 |---|---|---|---|---|
 | T1 | a request reaching `check_request` with a non-empty `control_identity` leaves a tracked entry keyed on that identity, whose deadline is `now + IDLE_TTL` | integration (handler) | positive / functional | the write site does not exist yet, so this fails by absence today — the free failure §P2 is built on. The fixture sets `control_identity` and `session_owner_key` to DELIBERATELY DIFFERENT values; without that discriminator the D3 key-provenance half of this row cannot fail, and a write site keyed on the wrong one ships green. After wiring, it also fails if the guard is inverted or the deadline is computed from the wrong base |
-| T2 | an empty `control_identity` leaves NO entry | integration (handler) | negative | fails if the D4 guard is dropped. Cannot self-pass: the assertion is on an EMPTY map, so a fixture that accidentally tracks makes it red, not green. **Green today, and labelled below** — the map is empty before the write site exists too |
+| T2 | an empty `control_identity` leaves NO entry | integration (handler) | negative | fails if the D4 guard is dropped. Cannot self-pass: the assertion is on an EMPTY map, so a fixture that accidentally tracks makes it red, not green. **Red today only by shared compile failure, and labelled below** — its own assertion cannot be reached until the write site T1 drives exists |
 | T3 | `reap` returns the number of keys it removed | unit | contract change | `reap` returns `()` today. The test cannot compile against the current signature — a compile failure IS the red, and it is honest because the signature change is the point. NOT a re-test of reap's removal logic, which is already covered |
 | T4 | after a sweep, the reclaimed thing is GONE: the predecessor `last_tool` entry for the reaped identity is ABSENT from the anomaly detector | integration | functional — THE criterion | **this is the row the whole plan is for.** It fails if `on_session_end` was never registered, if the registered closure captured a `Weak` that is already dead, or if reap removed the key without firing handlers. It CANNOT be satisfied by an empty map: see the fixture rule below |
 | T5 | the two constants the latency bound rests on are read where the design says: the write site reads `IDLE_TTL` (300s, D6) and the host tick reads `session_reaper_interval` from config (`streaming.rs:108`) | unit | boundary / constants | a wrong-by-10x constant passes every other row in this table while silently breaking the stated reclaim latency, because no other row reads either value. Fails if the write site hard-codes a literal, if it reaches for the unrelated shipped `PER_USER_IDLE_TTL` (`server/mod.rs:2131`) instead of D6's module constant, or if the tick uses a fixed interval rather than the configured one — which is what makes the streaming tests' 10-20 ms overrides work at all |
@@ -76,6 +76,40 @@ nothing. So T4's arrangement is a precondition ASSERTION, not a setup step:
    absence assertion is green when the tick was merely late and green when the tick never calls `reap` at
    all — the two failures this row exists to catch;
 5. assert the entry is ABSENT.
+
+### What T4 actually observes, since `last_tool` is private
+
+`AnomalyDetector::last_tool` is a private `DashMap` (`anomaly.rs:50`); an integration test cannot read it.
+The entry is observed INDIRECTLY, through the score `Firewall::check_request` returns (`anomaly_score:
+Option<f64>`, `firewall/mod.rs:250`). Two branches of `score_transition` discriminate:
+
+- vacant entry -> insert, return `0.5` (`anomaly.rs:154-158`);
+- occupied entry -> `0.95` when the current tool is not a known successor of the recorded predecessor
+  (`:171`).
+
+The discriminant only holds if the tracker HAS data for that predecessor: with an untrained tracker
+`predictions.is_empty()` returns `0.5` from the occupied branch too (`:166-168`), and present and absent
+become indistinguishable. The fixture therefore trains the tracker it owns — `Firewall::new` takes the
+`Option<Arc<TransitionTracker>>` (`firewall/mod.rs:310`), so the test holds the same `Arc` — with
+`record_transition("sess-train", "srv:tool_a")` then `("sess-train", "srv:tool_b")`, giving `tool_a` a
+known successor.
+
+The probe is then the SAME call every time, `check_request(identity, "srv", "tool_a")`:
+
+| call | state before | score | state after |
+|---|---|---|---|
+| step 2 | absent | 0.5 | present, predecessor `srv:tool_a` |
+| step 3 (presence assertion) | present | 0.95 | present, predecessor unchanged |
+| step 5 (absence assertion) | absent, if reclamation ran | 0.5 | present again |
+
+Re-probing with `tool_a` rather than a third tool is what keeps the discriminant stable: any other tool
+would be written back as the new predecessor, and a predecessor the tracker has no data for scores 0.5
+whether the entry exists or not — a step-5 pass that proves nothing. The identity is a control identity
+that is never reclaimed by anything but the sweep under test, which is what makes step 3's 0.95 an
+assertion about presence rather than about the detector's mood.
+
+Step 5's 0.5 has the same single-cause argument as the paragraph below: eviction cannot reach it, so an
+absent entry means the registered handler ran.
 
 Step 3 is the whole design of the case. Without it, T4 is the exact shape §P2 warns about: a test
 that is green when the feature is compiled out, when the detector is disabled, and when the handler
@@ -143,15 +177,19 @@ T1, T4, T5 and T6 test wiring that does not exist yet, so each fails by absence 
 current signature cannot produce, so it fails to COMPILE rather than passing hollowly. T7 has no test at all,
 by construction.
 
-**T2 is the exception, stated rather than hidden.** Its assertion is that the map holds NO entry for an empty
-`control_identity`. Today the map holds no entry for ANY identity, because nothing tracks yet — so T2 is green
-the moment it is written, for a reason that has nothing to do with the D4 guard it exists to pin. It goes red
-only against a future write site that tracks the empty key, which is exactly what it is for. That makes it one
-of the two survivors `test-plan-honesty` names — a case that can never go red NOW — and the honest handling is
-to label it. The falsifier probe (§P2's recovery mechanism for tests written after the code) would not help:
-there is no pre-fix revision to restore, because nothing is being fixed. T2 is still worth writing: it is the
-negative polarity of a guard whose positive polarity (T1) is red-first, and a guard tested in one direction only
-is a guard that passes when it is inverted.
+**T2's label was wrong, and the correction is a downgrade of its evidence, not an upgrade.** An
+earlier revision said T2 "is green the moment it is written" and filed it as one of the two survivors
+`test-plan-honesty` names — a case that can never go red now. Both halves are false. T2 shares a
+compilation unit with T1: to assert that an empty `control_identity` leaves NO entry, it must drive the
+same handler entry point T1 drives, and that entry point does not exist. The file does not compile, so
+T2 is red today for exactly the reason T1 and T3 are — a compile error is ONE error for the whole file,
+and T2 contributes no independent evidence to the red observation. Nothing is proved by its redness
+that T1's does not already prove.
+
+Once the write site exists the case becomes real: it goes red against a write site that tracks the empty
+key, which is the D4 guard it exists to pin. So T2 is red-capable, just not independently red TODAY.
+The honest statement is the narrow one — its red is shared, its green is deferred — and the falsifier
+probe still does not apply, because nothing is being fixed.
 
 **T8 is red-first, and only because its level moved.** An earlier revision of this plan carried T8 as a unit
 case on `reap` and labelled it green-today; that label did not survive the level change to integration (host).
