@@ -41,7 +41,6 @@ criterion met with evidence, no red checks, no unreviewed code.
   finish shard reviews, land verdicts (B3)           -+- parallel
   assess and repair blocking criteria (B1)           -+
   functional pass as soon as a surface runs (B4)     -+
-  finish shard reviews, land verdicts (B3)      -+
                     |
                     v
   fold B3 findings into the blocking set
