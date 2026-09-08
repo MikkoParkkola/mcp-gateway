@@ -249,11 +249,14 @@ construction site can acquire a value by omission. That is why the field costs 2
 construction sites instead of one. Deriving `Default` while in the file would silently undo
 the reason the field is being added.
 
-**Everything else is ours.** The 22 remaining construction sites are in
+**Everything else is ours.** `mod.rs` holds the *definition* only — it contains no
+construction of the struct, so all 23 construction sites sit outside it, in
 `router/handlers.rs`, `server/mod.rs`, `meta_mcp/invoke.rs`, `meta_mcp/tests.rs`,
 `router/tests.rs`, `meta_mcp/trace_correlation_tests.rs` and `meta_mcp/authz_tests.rs` —
 none of which appear in the six conflicts your 2026-09-08 dry merge reported. We are
-preparing all 22 so the field's arrival is a one-line unblock on our side. We are not
+preparing all 23 so the field's arrival is a one-line unblock on our side. Only 2 of the
+23 are production (`router/handlers.rs:1393`, `server/mod.rs:1854`); both already have the
+value in scope from a local `shape` binding, so each is a one-line edit. We are not
 touching `meta_mcp/mod.rs`, the three ledger docs, or the two task acceptance tests.
 
 **Why the field is needed at all**, in case it looks avoidable from your side: after the
