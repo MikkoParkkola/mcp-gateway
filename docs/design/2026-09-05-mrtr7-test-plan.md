@@ -26,7 +26,7 @@ here, and they are the three stdio rows carried, `#[ignore]`d, by
 | 317 | `ac_mrtr_7b_content_violating_the_requested_schema_is_forwarded_unchanged` |
 | 318 | `ac_mrtr_7b_the_retry_bound_cuts_off_after_three_retries` |
 | 319 | `ac_mrtr_7b_the_request_budget_is_checked_before_a_batch_is_sent` |
-| 320 | `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call` |
+| 320 | `ac_mrtr_7b_an_unanswered_prompt_fails_the_call_naming_the_entry` |
 | 321 | `ac_mrtr_7b_answered_rounds_are_ended_by_the_aggregate_deadline` |
 | 322 | `ac_mrtr_7b_a_batch_of_three_answers_arrives_in_one_retry` |
 | 325 | `ac_mrtr_7a_a_session_declared_capability_is_asked_with_no_slice` |
@@ -189,18 +189,23 @@ its diagnosis cost is the price of that proof.
   that ticket rather than to this plan. The two findings once counted alongside
   it (`:433`, `:409`) died at requirement rows 320 and 308; the design says
   where.
-- **`MIK-7388.BRIDGE.4`** — the one condition of that ticket this change owns:
-  an abandoned prompt must reach the backend as a **non-answer**, distinguishable
-  from an accepted empty answer and from a decline. It is not a criterion without
-  a case; row 320 above is its case, and the assertion that pins it is
-  `tests/mik_7212_mrtr7_bridge_acs.rs:1173-1182` — the retry after the abandoned
-  round carries **no `/inputResponses/k1` key at all**. Absence is the whole
-  property: `ask()` skips the prompt on timeout (`src/gateway/input_bridge.rs:453`)
-  and `retry_params` files only collected keys (`src/protocol/mrtr.rs:482-488`),
-  so an accepted `{}` is a different retry and a decline is not a retry at all
-  (`project()` returns `DeliveryError::Declined`, which fails the call). Every
-  other assertion on row 320 is satisfied by a bridge that files a placeholder,
-  which is why the row needed one more.
+- **`MIK-7388.BRIDGE.4`** — RULED by the release owner on 2026-09-08, and the
+  ruling reverses what this bullet previously said. An unanswered prompt **fails
+  the call, naming the entry**. It does not reach the backend as a non-answer:
+  that was one of the two rejected alternatives (re-invoke with what arrived;
+  re-invoke plus a wire field marking the gap), and the second is precisely the
+  property this plan used to pin.
+  Row 320 is still its case, inverted rather than replaced. The assertion becomes
+  `Err(BridgeError::Delivery { key: "k1", error: DeliveryError::TimedOut })` where
+  `tests/mik_7212_mrtr7_bridge_acs.rs:1148` asserts `outcome.is_ok()`.
+  What the inversion must not lose is the row's two elapsed assertions at
+  `:1152-1163`. They pin that the wait ended at the per-prompt bound rather than
+  sooner or at a multiple of it, and that stays load-bearing under the ruling: a
+  call that fails on the first silent prompt still has to fail *at that bound*.
+  A row asserting only the error variant would pass against a bridge that never
+  waited at all, which is the failure this row was built to exclude.
+  The retry-absence assertion at `:1173-1182` goes with the reading it belonged
+  to — under the ruling there is no retry after an abandoned round to inspect.
 - **MIK-7388's stranded-pending-entry defect** (`:430`) — *not* absent from this
   plan. It was filed against `input_bridge.rs`, which holds no pending state; the
   obligation belongs to the `ClientChannel` implementor this change creates, per
