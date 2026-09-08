@@ -635,3 +635,49 @@ you should not act on it. The collapse is yours to name, as this section says; o
 adds `era` beside `is_modern` and changes neither field's semantics. Nothing in the 15 sites we
 touched reads or writes `is_modern` — the `is_modern` bindings in `router/handlers.rs` are
 function-local variables that predate this change, not the context field.
+
+## The task-site lifetime argument, and the semantic hole it does not fill
+
+Two additions to the resolution recorded above. The first strengthens it. The second says
+what it does not cover, because the entry as written reads as *the task site is resolved*
+and it resolves only the plumbing.
+
+### Why `&*state.proxy_manager` is sound, stated so it is not re-litigated
+
+`dispatch_context` returns `MetaMcpCallerContext<'a>` — a borrowed struct tied to the
+`&'a AppState` parameter. A borrowed struct cannot be moved into a `'static` spawn. The
+signature therefore proves, on its own, that every use of that context happens inside the
+frame holding the state borrow; there is no path by which a context outlives it. So
+`&*state.proxy_manager` is valid for exactly as long as the context is, and no owned
+adapter is needed for the lifetime reason.
+
+The `Weak<AppState>` on `OwnedCallerContext` is not evidence against this. It is how the
+caller obtains the `&AppState` in the first place — the upgrade happens, the borrow is
+taken, the context is built and used within that frame. Mechanism, not counter-argument.
+
+### The half this does not answer — a second deferred question, on the task path
+
+The objection had two halves. The lifetime half is closed above. The other half — *do not
+silently route tasks through an always-refusing placeholder* — is not only about the
+placeholder, and wiring the real `ProxyManager` does not close it.
+
+Route a durable task's elicitation to the real `ProxyManager` and it will frequently
+return `NoSession`: the client that created the task is definitionally gone by the time a
+durable task dispatches. That is BRIDGE.4 recurring on a path where BRIDGE.4's reasoning
+does not transfer. Our working assumption there — fail the original call — was argued for
+a *live request*, where re-invoking the backend without an answer forges a decision no
+human made. For a durable task, failing means the task dies because nobody was listening
+at that moment, which is a different question and plausibly has a different answer
+(queue the elicitation, expire it, resume on reconnect, or fail — all defensible).
+
+Recorded as deferred, in the four fields, on the same terms as BRIDGE.4:
+
+| field | value |
+|---|---|
+| owner | the owner of the task execution path — not this lane, and not the release owner who holds BRIDGE.4 |
+| what would resolve it | a decision, not a check: what a durable task should do when its elicitation finds no live client session |
+| when | before the task-path elicitation route is declared done. It does not gate the `channel` field or the MRTR.7a/7b wiring |
+| if it resolves badly | if the answer is "fail", the task path matches BRIDGE.4 and nothing changes. If it is "queue and resume", the bridge needs a durable pending-elicitation store, which nothing in the current design provides — that is the expensive branch and the reason to answer it before building on the wiring |
+
+Nothing depending on this answer is being implemented. The wiring lands either way; what
+the task does with a `NoSession` from a real channel is the open part.
