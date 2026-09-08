@@ -539,6 +539,34 @@ impl Config {
         let mut config: Self = figment
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
+        // ORDER MATTERS, AND IT DID NOT BEFORE.
+        //
+        // `expand_env_vars` below INLINES `auth.bearer_token` and
+        // `auth.api_keys[].key`: after it, a credential written `env:SHARED`
+        // holds the VALUE `SHARED` had, and the `env:` spelling is gone. The
+        // structural alias check inside `validate_with_env` compares an
+        // adapter's `env:SHARED` reference against that gateway text, so on
+        // this path it was comparing a reference against plaintext and never
+        // matched. With a DISABLED store the material half is deliberately
+        // skipped, so the one variable wired into both places was accepted in
+        // silence — the very case the structural check exists to catch, and the
+        // one an operator only discovers on the day they enable custody.
+        //
+        // Running it here, before any inlining, is the only point on this path
+        // where BOTH sides are still references. The call inside
+        // `validate_with_env` stays exactly where it is: callers that parse and
+        // validate without ever inlining (and the reload/validation entry
+        // points) reach only that one, and re-running a text-only check costs
+        // nothing. Nothing else moves — allowlist semantics and runtime wiring
+        // are untouched by this.
+        {
+            let gateway_credentials = config.gateway_credentials();
+            crate::personal_accounts::config::validate_adapter_gateway_reference_separation(
+                config.accounts.as_ref(),
+                &gateway_credentials,
+            )
+            .map_err(|error| Error::ConfigValidation(error.to_string()))?;
+        }
         let secret_refs = match expansion {
             Expansion::Resolve => {
                 let refs = config.expand_env_vars(&overlay);
@@ -695,6 +723,18 @@ impl Config {
         if let Some(accounts) = &self.accounts {
             for reference in accounts.keys.values() {
                 if let Some(name) = reference.strip_prefix("env:") {
+                    seen.insert(name.to_string());
+                }
+            }
+            // Adapter signing references, recorded the same way and for the
+            // same reason as the account keys above: NAMES only, and the
+            // `env:` spelling stays in the config so a rewrite cannot persist
+            // signing material. Until now an adapter secret was the one
+            // startup-only secret this set did not mention, so a reload that
+            // compares these names across overlays could not report a rotated
+            // adapter secret that no running holder can take.
+            for adapter in &accounts.adapters {
+                if let Some(name) = adapter.hmac_secret_ref.strip_prefix("env:") {
                     seen.insert(name.to_string());
                 }
             }
