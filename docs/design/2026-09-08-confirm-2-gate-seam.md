@@ -62,7 +62,7 @@ So the redeem side needs no new plumbing into the gate on HTTP: `RetryFields::fr
    at `src/gateway/meta_mcp/mod.rs:1941`. Its comment there — "No asker can exist on this transport"
    — is precisely what Option I falsifies, so that comment is part of the bridge lane's change
    (§P4a), not a leftover to tidy later. The era edge that decides the variant is
-   `src/gateway/router/handlers.rs:1364` and `:1366`.
+   `src/gateway/router/handlers.rs:1413` and `:1416`.
 
 ## Four invariants the in-band path must not move
 
@@ -71,7 +71,7 @@ tests that would catch it are named in the CONFIRM.1a cell of `docs/requirements
 
 1. A modern caller that declared no input capabilities is still refused: JSON-RPC `-32001`, message
    containing `none could be obtained`, no `result`. `Declared::NONE` is the discriminator, and
-   `ConfirmationPolicy::for_modern()` (`src/gateway/destructive_confirmation.rs:87`) returning
+   `ConfirmationPolicy::for_modern()` (`src/gateway/destructive_confirmation.rs:99`) returning
    `REFUSE` stays the fallback for it.
 2. The refusal marker is not for the new result. `confirmation_refusal_response`
    (`src/gateway/meta_mcp/mod.rs:1896`) sets `response.confirmation_refusal = true`, which the
@@ -79,12 +79,12 @@ tests that would catch it are named in the CONFIRM.1a cell of `docs/requirements
    is neither — it must not travel through that constructor, or asking a question will walk callers
    toward a tripped breaker.
 3. An operator decline stays a decline, distinct from unconfirmable: the `Declined` arm at
-   `src/gateway/meta_mcp/mod.rs:1957` returns `Operator declined: {desc}`, and the two messages are
+   `src/gateway/meta_mcp/mod.rs:1949` returns `Operator declined: {desc}`, and the two messages are
    what separate the branches in test assertions.
-4. The 120-second `ELICITATION_TIMEOUT` (`src/gateway/destructive_confirmation.rs:53`) is the
+4. The 120-second `ELICITATION_TIMEOUT` (`src/gateway/destructive_confirmation.rs:63`) is the
    elicitation channel's bound and is not the in-band one. The in-band bound is the continuation's:
-   the mint budget (`src/protocol/continuation.rs:382`), the expiry checked by
-   `Keyring::open` (`:473`), and the in-flight ledger (`:557`, `:664`). Reusing the constant would
+   the mint budget (`src/protocol/continuation.rs:340`), the expiry checked by
+   `Keyring::open` (`:473`), and the in-flight ledger (`:664`). Reusing the constant would
    pin an unrelated number to a different mechanism.
 
 ## What this note does not decide
