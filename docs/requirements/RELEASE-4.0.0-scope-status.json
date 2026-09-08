@@ -171,9 +171,16 @@
     },
     {
       "id": "NFR.RELEASEGATE.1",
-      "status": "pending",
-      "evidence": [],
-      "note": "Checker and publishing workflow connections implemented locally in the scope-contract worktree. Local negative/positive tests pass; target-branch integration and CI execution still need release-owner acceptance."
+      "status": "met",
+      "evidence": [
+        "docs/release/v4.0.0-scope-contract-validation.md",
+        ".github/workflows/ci.yml",
+        ".github/workflows/docker.yml",
+        ".github/workflows/release.yml",
+        "scripts/release/test_scope_acceptance.py",
+        "scripts/release/test_scope_contract_interface.py"
+      ],
+      "note": "Integrated by PR497 at424f997eb06f0590d31dc604c52c5dbe536db318. All18 applicable pre-merge checks and post-merge CI34187040999/Docker34187040990 passed.44 scope tests,100% native checker line coverage and90.21% mutation score; publishing paths enforce complete baseline/supplemental acceptance and decisions. This closes the tooling criterion only."
     },
     {
       "id": "NFR.DEMO.1",
@@ -192,7 +199,7 @@
     {
       "id": "reference_personal_account_journey",
       "status": "resolved",
-      "selection": "Open WebUI on Spark → gateway → Google Workspace",
+      "selection": "Open WebUI on Spark \u2192 gateway \u2192 Google Workspace",
       "evidence": [
         "docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md"
       ]
