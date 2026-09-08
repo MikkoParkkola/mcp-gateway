@@ -8,10 +8,14 @@
 
 pub(crate) mod config;
 mod consent;
-mod identity;
+// Visible to the crate for the descriptor contract only: `account_key` and the
+// `AccountDescriptor` it binds. The store, the service and the worker stay
+// private, so a consumer cannot reach past custody to the records themselves.
+pub(crate) mod identity;
 mod provider;
 mod service;
 mod storage;
+mod vault;
 mod worker;
 
 // Test-only fault control for the durable-commit boundaries. The commit path
@@ -534,7 +538,19 @@ impl PersonalAccountStore {
 // Names are fully qualified through `service::` on purpose: `worker.rs` already
 // imports the same six, and an import here would be one more chance to collide.
 
+#[cfg(test)]
+pub(crate) use service::{
+    CredentialLease, CredentialReleaseObserver, ProviderRefreshError, RefreshProvider,
+    ReleasedCredentials, TokenRefresh,
+};
+#[cfg(test)]
+pub(crate) use worker::CustodyHandle;
 pub(crate) use worker::{CustodyError, CustodyStartError};
+
+/// The managed-account dispatch strategy and the object-safe custody it runs
+/// against. The gateway installs one `VaultStrategy` per bound backend; both
+/// consumers reach it through the existing identity-propagation resolver.
+pub(crate) use vault::{AccountCustody, VaultStrategy};
 
 /// The one refresh provider a gateway runs: the real policy over the real
 /// transport, the system clock, and the gateway's own environment overlay.

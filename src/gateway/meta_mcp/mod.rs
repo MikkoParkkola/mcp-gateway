@@ -271,6 +271,22 @@ pub struct MetaMcp {
     /// propagation entirely (all backends keep static-credential behavior).
     pub(super) identity_propagation:
         RwLock<Option<Arc<dyn crate::identity_propagation::IdentityPropagation>>>,
+    /// Per-backend identity-propagation strategies, installed at startup for
+    /// backends bound to an `accounts.descriptors` entry.
+    ///
+    /// The process-wide field above installs at most ONE minting strategy, so a
+    /// deployment mixing an external token-exchange descriptor with a managed
+    /// vault one could never dispatch both. A per-backend entry is consulted
+    /// FIRST by the single resolver: the credential a backend gets is the one
+    /// its own descriptor compiled to, never whichever kind happened to be
+    /// installed process-wide. A backend with no entry keeps the existing
+    /// behaviour exactly.
+    pub(super) backend_identity_propagation: RwLock<
+        std::collections::HashMap<
+            String,
+            Arc<dyn crate::identity_propagation::IdentityPropagation>,
+        >,
+    >,
     pub(super) code_mode_enabled: bool,
     /// Whether this gateway serves more than one principal (ADR-008 INV-2).
     ///
@@ -477,6 +493,7 @@ impl MetaMcp {
             session_profiles: Arc::new(SessionProfileStore::new()),
             reload_context: RwLock::new(None),
             identity_propagation: RwLock::new(None),
+            backend_identity_propagation: RwLock::new(std::collections::HashMap::new()),
             code_mode_enabled: false,
             multi_user: std::sync::atomic::AtomicBool::new(false),
             projection_mode: crate::projection::ProjectionMode::default(),
@@ -843,6 +860,33 @@ impl MetaMcp {
         strategy: Arc<dyn crate::identity_propagation::IdentityPropagation>,
     ) {
         *self.identity_propagation.write() = Some(strategy);
+    }
+
+    /// Install the strategy for ONE backend (account-descriptor binding).
+    ///
+    /// Called at startup, before serving, once per backend whose `account`
+    /// reference resolved. The resolver prefers this over the process-wide
+    /// strategy, which is what lets an external minting descriptor and a
+    /// managed vault descriptor coexist in one configuration.
+    pub fn set_backend_identity_propagation(
+        &self,
+        backend: &str,
+        strategy: Arc<dyn crate::identity_propagation::IdentityPropagation>,
+    ) {
+        self.backend_identity_propagation
+            .write()
+            .insert(backend.to_string(), strategy);
+    }
+
+    /// The strategy installed for `backend`, if it has its own.
+    pub(super) fn backend_identity_strategy(
+        &self,
+        backend: &str,
+    ) -> Option<Arc<dyn crate::identity_propagation::IdentityPropagation>> {
+        self.backend_identity_propagation
+            .read()
+            .get(backend)
+            .map(Arc::clone)
     }
 
     /// Declare whether this gateway serves more than one principal (ADR-008
@@ -2016,6 +2060,13 @@ impl MetaMcp {
 // ============================================================================
 // Tests (extracted to tests.rs for LOC compliance)
 // ============================================================================
+
+#[cfg(test)]
+mod account_resolver_fixture;
+#[cfg(test)]
+mod account_resolver_gate;
+#[cfg(test)]
+mod account_resolver_tests;
 
 #[cfg(test)]
 #[path = "tests.rs"]

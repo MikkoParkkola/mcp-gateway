@@ -28,6 +28,7 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
         allow_cleartext_credentials: false,
         runtime_profile: None,
         identity_propagation: None,
+        account: None,
     };
 
     let failsafe = FailsafeConfig::default();

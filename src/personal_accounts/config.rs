@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use super::StoreConfig;
+use crate::identity_propagation::{IdentityPropagationConfig, PropagationStrategyKind};
 use serde::{Deserialize, Serialize};
 
 mod descriptor_debug;
@@ -115,6 +116,14 @@ pub(crate) struct AccountDescriptor {
     pub(crate) scopes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) send_resource_parameter: Option<bool>,
+    /// How an `external` descriptor mints its credential: the EXISTING
+    /// [`IdentityPropagationConfig`], carried verbatim so the endpoint,
+    /// audience and session rules that type already enforces are the same ones
+    /// here. Required on `external`, forbidden on every other mode — `vault` is
+    /// what `personal_managed` COMPILES to, never something a descriptor asks
+    /// for, and `passthrough` mints nothing at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) external_strategy: Option<IdentityPropagationConfig>,
 }
 
 /// Only the two bounds this slice maps onto `StoreConfig`. The other limit
@@ -186,6 +195,13 @@ pub(crate) enum AccountsConfigError {
         account_id: String,
         problem: &'static str,
     },
+    /// The existing `IdentityPropagationConfig::validate` refusal for an
+    /// `external_strategy` block, quoted rather than re-worded: that validator
+    /// owns the audience/endpoint/session rules and its wording is what
+    /// operators already see for a backend-level `identity_propagation`.
+    /// Its messages name configuration shapes, never configured values.
+    #[error("accounts.descriptors[{account_id}]: external_strategy is invalid: {problem}")]
+    DescriptorStrategy { account_id: String, problem: String },
 }
 
 /// `StoreConfig` itself carries raw key bytes and deliberately has no `Debug`,
@@ -370,12 +386,74 @@ pub(crate) fn validate_descriptors(
                     return Err(AccountsConfigError::NotEnabled);
                 }
                 validate_managed(account_id, descriptor)?;
+                forbid_external_strategy(account_id, descriptor)?;
             }
-            // Shared and external acceptance — including `external_strategy`
-            // and its existing `IdentityPropagationConfig` validation — arrive
-            // with their own increment. Nothing is inferred for them here.
-            DescriptorMode::Shared | DescriptorMode::External => {}
+            DescriptorMode::External => validate_external(account_id, descriptor)?,
+            DescriptorMode::Shared => forbid_external_strategy(account_id, descriptor)?,
         }
+    }
+    Ok(())
+}
+
+/// `external` mode carries the EXISTING `IdentityPropagationConfig`, and only
+/// the two strategies that actually MINT an external credential are accepted
+/// there.
+///
+/// `vault` is refused by name rather than by omission: it is the compilation
+/// target of `personal_managed`, so a descriptor asking for it is asking the
+/// external path to serve a managed account's custody, which it cannot. And
+/// `passthrough` mints nothing — the caller supplies its own credential — so it
+/// is not an external minting strategy either. Everything else about the block
+/// (audience, token-exchange endpoint, session mode) is validated by the
+/// existing `IdentityPropagationConfig::validate`, not re-implemented here.
+fn validate_external(
+    account_id: &str,
+    descriptor: &AccountDescriptor,
+) -> Result<(), AccountsConfigError> {
+    let strategy =
+        descriptor
+            .external_strategy
+            .as_ref()
+            .ok_or_else(|| AccountsConfigError::Descriptor {
+                account_id: account_id.to_string(),
+                problem: "mode external requires an external_strategy block",
+            })?;
+    if !matches!(
+        strategy.strategy,
+        PropagationStrategyKind::SignedAssertion | PropagationStrategyKind::TokenExchange
+    ) {
+        return Err(AccountsConfigError::Descriptor {
+            account_id: account_id.to_string(),
+            problem: "external_strategy accepts only signed_assertion or token_exchange",
+        });
+    }
+    if !strategy.required {
+        return Err(AccountsConfigError::Descriptor {
+            account_id: account_id.to_string(),
+            problem: "external_strategy must set required: true for an account-bound external descriptor",
+        });
+    }
+    strategy
+        .validate()
+        .map_err(|error| AccountsConfigError::DescriptorStrategy {
+            account_id: account_id.to_string(),
+            problem: error.to_string(),
+        })
+}
+
+/// `external_strategy` on a non-external descriptor is a mode the operator did
+/// not declare. A `shared` account mints nothing, and a `personal_managed` one
+/// compiles to vault custody; honouring a strategy block on either would run a
+/// backend under a trust model its `mode` line does not name.
+fn forbid_external_strategy(
+    account_id: &str,
+    descriptor: &AccountDescriptor,
+) -> Result<(), AccountsConfigError> {
+    if descriptor.external_strategy.is_some() {
+        return Err(AccountsConfigError::Descriptor {
+            account_id: account_id.to_string(),
+            problem: "external_strategy is valid only on mode external",
+        });
     }
     Ok(())
 }

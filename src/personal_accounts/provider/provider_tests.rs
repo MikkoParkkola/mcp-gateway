@@ -242,6 +242,7 @@ fn descriptor_with(
             "https://www.googleapis.com/auth/drive.readonly".to_string(),
         ]),
         send_resource_parameter: Some(send_resource),
+        external_strategy: None,
     }
 }
 
