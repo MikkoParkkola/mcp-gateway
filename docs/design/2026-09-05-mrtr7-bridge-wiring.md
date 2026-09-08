@@ -683,9 +683,13 @@ superseded sentence is gone, not footnoted.
    they pin that the wait ended at `per_prompt` rather than sooner or at a
    multiple of it, which stays true once the call then fails. No other test
    asserts the drop: `:1194` scripts twelve answered replies and expects
-   `BridgeError::Deadline`, and `:1254` answers every prompt.
+   `BridgeError::Deadline`, and `:1254` answers every prompt. Read that as a
+   claim about ASSERTIONS, never as the blast radius: `:1194` reaches the
+   edited line anyway, through the aggregate clamp sharing that same wait, and
+   what keeps it green is the design event below — *the timeout arm has two
+   causes and reports only one*.
 
-   In the bridge the ruling costs one line and no new type.
+   In the bridge the ruling costs one branch and no new type.
    `src/gateway/input_bridge.rs:486` is a bare `continue` in the `else` arm of
    the per-prompt `tokio::time::timeout` at `:484`; it becomes a
    `return Err(BridgeError::Delivery { key: prompt.key, error: DeliveryError::TimedOut })`.
