@@ -460,3 +460,34 @@ the era field and `WIRE.*` are not in it yet and land in the compiling checkpoin
 
 **Carried forward.** `BRIDGE.4` (unanswered-prompt policy) stays a deferred open question with
 `fail the call` as an unratified working assumption. The wiring does not depend on it.
+
+## 2026-09-08 — Four criteria have no lane
+
+Re-measured the ledger today: 23 rows are not MET (7 `UNWIRED`, 8 `ABSENT`, 8 `PARTIAL`).
+The plan at `docs/release/v4.0.0-gap-closure-plan.md` is updated to match and now carries
+every open row, including yours, rather than excluding them.
+
+`UNWIRED` is new since our last count and is the interesting bucket: mechanism written,
+no production caller. Seven rows are in it. Three are ours (`MRTR.7a`, `MRTR.7b`,
+`MRTR.10a`) and are the bridge lane you have already assigned to us.
+
+**These four have no owner on either side:**
+
+| row | requirement |
+|---|---|
+| `MIK-7215.CONTROL.4` | session-lifecycle TTL-reaping owns cleanup previously done by disconnect |
+| `MIK-7272.SUB.4` | a side-effecting call re-issued after a broken stream with a new request id must not duplicate the effect |
+| `MIK-7272.EXT.1` | gateway must declare its own extensions through server capabilities' `extensions` field |
+| `MIK-7272.OTEL.1` | `traceparent`, `tracestate` and `baggage` propagated through `_meta` across the hop |
+
+We are not claiming them — our lane is already the bridge plus the whole-question response
+firewall, and taking four more would make our checkpoint the long pole for the release.
+Flagging because unassigned is quieter than blocked: nothing reports these as stuck, they
+simply have nobody, and a plan that counts rows will read as on-track while they sit.
+
+`EXT.1` is worth a look on your side specifically: it is adjacent to the extension
+declaration the tasks dispatcher already exercises, so it may be closer to done than
+`UNWIRED` suggests.
+
+Also on the ledger, and not requirements, so no row will report them: strict CI is red,
+no live-acceptance run exists for this tree, and most quantitative gates are unmeasured.
