@@ -684,7 +684,8 @@ Evidence for the wider pattern, measured over the three hours to `1003b393`:
 174 commits, of which 23 touch `src/` or `tests/`. 59 are design or test-plan
 edits. 11 carry reversal language — retract, reverse, un-kill, falsify, withdraw.
 Package G holds 17 of the 23 code commits, so the fleet's code throughput is
-concentrated in one package while six gating packages produced none.
+concentrated in one package. How the remaining 6 distribute across the other
+packages is not something commit scopes settle, and this ruling does not claim it.
 
 This ruling binds SUB.4 only. It is not a general licence to stop designing: the
 other open criteria have not reached revision 6 with two passing legs, and for
