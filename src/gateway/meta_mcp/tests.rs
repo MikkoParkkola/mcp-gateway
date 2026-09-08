@@ -665,6 +665,7 @@ providers:
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn personal_capability_accepts_propagated_identity_before_schema_validation() {
     use crate::{
         capability::{CapabilityBackend, CapabilityExecutor},
@@ -5283,6 +5284,7 @@ const B01_EXPECTED_TOOLS: &[&str] = &[
 /// `initialize_with_header_profile_takes_precedence_over_params`, and what
 /// this case is about is the binding decision, not the parse.
 #[tokio::test]
+#[allow(clippy::similar_names)]
 async fn b01_a_two_modern_connections_are_shown_the_same_tool_set() {
     let meta = meta_with_narrowable_tools().await;
 
