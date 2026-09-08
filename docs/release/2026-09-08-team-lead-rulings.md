@@ -50,6 +50,38 @@ under the stated assumption — maintenance-tick reaper, TTL as a defensible def
 as an assumption, not as an operator decision. Update the triage document to say so, or the
 next reader finds the same contradiction and rules on it again.
 
+### R3a — amendment, same day: wire it to the identity, not to the session
+
+R3 said wire it and named the mechanism as a maintenance-tick reaper fired off session
+lifecycle. The second half is wrong on the 2026 path, and the lane must not build it as
+written. Read at source before designing:
+
+- `src/security/firewall/anomaly.rs:187` `remove_session` and
+  `src/security/firewall/mod.rs:682` `on_session_end` have exactly one caller between them,
+  a test at `mod.rs:1062`. Nothing in production reclaims `last_tool`. The subject of
+  `CONTROL.4` is real, so the row is not `N/A` — that disposition was considered and fails.
+- The only bound today is `MAX_TRACKED_IDENTITIES` with arbitrary eviction
+  (`anomaly.rs:129`). A ceiling reached by evicting a stranger's predecessor is not
+  reclamation: the evicted caller's next call scores as a first call, which is the sequence
+  the detector exists to notice.
+- The 2026 path mints no session. `router/handlers.rs:1633`: "the connection carries no
+  state. There is no `Mcp-Session-Id`, because the revision deleted protocol sessions." The
+  comment at `anomaly.rs:129` says the same from the other end — "a stateless caller never
+  disconnects because it never connected."
+
+So a reaper hung off session disconnect reclaims nothing for exactly the traffic 4.0 is
+about, and `CONTROL.4` would read MET over an empty map. The key must be whatever
+`last_tool` is keyed by — the caller identity — tracked where that entry is written, not
+where a session is opened.
+
+`src/gateway/streaming.rs:122` already runs a TTL reaper on a live maintenance loop, with
+tests at `:647`-`:737`. Hang the identity reap on that loop; do not build a second one.
+
+Precondition on the design, before any code: name the write site that will call `track`,
+and show the registered callback reaching `Firewall::on_session_end`. A reaper whose
+`tracked` map no production path populates passes its own tests and closes a blocking row
+falsely, which is the fourth unreachable mechanism this plan exists to avoid.
+
 ## R4 — `confirm-gate`: `CONFIRM.2` stays with the bridge lane, and the seam note is written anyway
 
 The row is reachable-through-the-MRTR-path, and that path is the bridge lane's file. Moving
