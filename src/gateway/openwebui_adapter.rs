@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Open WebUI assertion adapter: a signed header, verified with adapter-owned
 //! HMAC material, turned into a namespaced [`VerifiedIdentity`].
 //!
