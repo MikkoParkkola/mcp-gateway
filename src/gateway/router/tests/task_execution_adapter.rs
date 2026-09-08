@@ -63,5 +63,6 @@ mod dedupe;
 mod interlock;
 mod lifecycle;
 mod refusals;
+mod result_shapes;
 mod settlement;
 mod x1_dispatch;
