@@ -4,6 +4,37 @@ Six lanes asked for rulings on the same day. Each is recorded here because a rul
 delivered only to a mailbox reaches one agent; the lanes that inherit the consequence
 read the repository. Each ruling names what was verified, at source, before it was made.
 
+Three lanes in one day asked for a ruling on a section that was already ruled. That is a
+defect in this file, not in those lanes: a document nobody can search is a document nobody
+reads twice. Find the question below before asking it.
+
+| # | lane | the question it answers |
+|---|---|---|
+| R1 | `bridge-mrtr7` | can a mid-exchange refusal strand a pending sample? (no — `WIRE.5` stands) |
+| R2 | `sub4-idempotency` | does the replay cache keep a config gate? (no — enabled unconditionally) |
+| R3 | `control4-lifecycle` | wire the lifecycle reaper or delete it? |
+| R4 | `confirm-gate` | which lane owns `CONFIRM.2`, and is the seam note still written? |
+| R5 | `envelope-meta` | may phase 2 start on a tree holding another lane's dirty files? |
+| R6 | `ext1-otel1` | can `SCHEMA.1c` close without adding a runtime dependency? |
+| R7 | `sub4-idempotency` | who repairs a replay path that is already live? |
+| R8 | `bridge-mrtr7` | is `WIRE.5` narrowed by per-round gating? (no) |
+| R8a | `bridge-mrtr7` | which `DeliveryError` variant a silent client produces — `TimedOut`, not `Deadline` |
+| R9 | `control4-lifecycle` | how does the reaper reach its collaborator? (parameter, not global) |
+| R10 | `confirm-gate` | rewrite a commit contaminated by a peer's file? (no — `CONFIRM.1a` says which PARTIAL) |
+| R11 | `envelope-meta` | is a third review round owed? (no) |
+| R12 | `control4-lifecycle` | may reaper wiring edit `src/gateway/streaming.rs`? (U3 granted) |
+| R13 | team lead | the `$ref` criteria for MIK-7414 were mis-stated, and are amended here |
+| R14 | release | when does the DoD functional pass run, and who owns it? |
+| R15 | any | a stale comment a ticket *cites* has a consumer, and gets fixed |
+| R16 | `envelope-meta` | which package owns an uncommitted criteria row? (E) |
+| R17 | any | who owns a `cargo fmt` failure? (the commit that introduced it) |
+| R18 | package F | is the soak on the release critical path? (no — but a FAILING run is §11) |
+| R19 | package F | when is the benchmark candidate pinned, and is a rehearsal discarded? |
+| R20 | package F | is rustc 1.98.1 against a 1.98.0 pin a void run? (no) |
+| R21 | `bridge-mrtr7` | `BRIDGE.4` aggregate expiry is `Deadline`; the reason is attribution |
+| R22 | `bridge-mrtr7` | `WIRE.5` is ruled twice; a residual is stated as one sentence |
+| R23 | `ext1-otel1` | package E's `$anchor` work: one ticket, one observation, neither built for 4.0.0 |
+
 ## R1 — `bridge-mrtr7`: the sampling-guard objection falls; `WIRE.5` stands
 
 The lane proposed dropping `WIRE.5`'s second fixture on the grounds that a mid-exchange
