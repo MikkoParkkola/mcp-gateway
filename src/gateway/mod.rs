@@ -13,6 +13,10 @@ mod meta_mcp_helpers;
 mod meta_mcp_tool_defs;
 mod middleware;
 pub mod oauth;
+// Crate-internal on purpose: the adapter is wired by `router` and by nothing
+// else, so no caller outside the gateway can install it without the standard
+// auth layer that must run first.
+mod openwebui_adapter;
 pub mod proxy;
 pub mod recovery;
 mod router;

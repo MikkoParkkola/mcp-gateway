@@ -75,6 +75,117 @@ pub(crate) fn validate_adapter_gateway_material_separation(
     adapters::validate_no_gateway_material_reuse(&accounts.adapters, overlay, credentials)
 }
 
+/// One adapter as a RUNTIME may trust it: the approved fields plus the resolved
+/// signing material, produced only by [`resolve_adapter_runtime`].
+///
+/// No `Debug`, deliberately: `secret` is HMAC signing material and a derived
+/// `Debug` would put it in any trace that formats the struct.
+#[derive(Clone)]
+pub(crate) struct AdapterRuntime {
+    pub(crate) installation_id: String,
+    pub(crate) header: String,
+    pub(crate) issuer: String,
+    pub(crate) allowed_api_key_names: Vec<String>,
+    pub(crate) max_lifetime_seconds: u64,
+    pub(crate) clock_skew_seconds: u64,
+    /// Resolved HMAC secret, already length- and separation-checked.
+    pub(crate) secret: Vec<u8>,
+}
+
+/// Everything a runtime must establish BEFORE an adapter assertion may be
+/// trusted, in one call that either yields material or refuses.
+///
+/// WHY THIS EXISTS RATHER THAN A READ OF [`resolve`]. `resolve` returns
+/// [`AccountsConfigError::NotEnabled`] before it resolves anything, and
+/// [`validate_adapter_gateway_material_separation`] returns `Ok(())` for a
+/// disabled store on purpose. So for `accounts.enabled: false` the load has run
+/// the STRUCTURAL half only: no adapter secret was read, no length was checked,
+/// and no reuse with a store key or a gateway credential was compared. A runtime
+/// that treated "configuration validated" as "adapter trusted" would verify
+/// signatures with material nothing ever checked. The adapter list is a gateway
+/// IDENTITY path and is not gated on custody being open, so the material half
+/// runs here, for enabled and disabled blocks alike, and a failure is a refusal
+/// rather than a downgrade.
+///
+/// Store keys are decoded here for the same reason, `enabled` or not: they are
+/// the comparison set for the no-reuse rule, and a key that cannot be resolved
+/// leaves that rule undecidable — which is a refusal, never a pass.
+///
+/// Reads nothing when no adapter is configured, so the common deployment causes
+/// no environment lookup.
+pub(crate) fn resolve_adapter_runtime(
+    accounts: Option<&AccountsConfig>,
+    overlay: &dyn SecretOverlay,
+    credentials: &[GatewayCredential<'_>],
+) -> Result<Vec<AdapterRuntime>, AccountsConfigError> {
+    let Some(accounts) = accounts else {
+        return Ok(Vec::new());
+    };
+    if accounts.adapters.is_empty() {
+        return Ok(Vec::new());
+    }
+    if accounts.schema_version != SCHEMA_VERSION {
+        return Err(AccountsConfigError::SchemaVersion);
+    }
+    if accounts.deployment != DEPLOYMENT {
+        return Err(AccountsConfigError::Deployment);
+    }
+
+    // Structure before material, and both halves of gateway separation before
+    // any adapter secret is handed out.
+    adapters::validate(&accounts.adapters)?;
+    adapters::validate_no_gateway_reference_alias(&accounts.adapters, credentials)?;
+    adapters::validate_no_gateway_material_reuse(&accounts.adapters, overlay, credentials)?;
+
+    let mut keys = BTreeMap::new();
+    for (key_id, reference) in &accounts.keys {
+        let variable = reference.strip_prefix("env:").ok_or_else(|| {
+            AccountsConfigError::KeyNotAReference {
+                key_id: key_id.clone(),
+            }
+        })?;
+        let encoded = overlay.resolve(variable).ok_or_else(|| {
+            AccountsConfigError::KeyReferenceUnresolved {
+                key_id: key_id.clone(),
+                variable: variable.to_string(),
+            }
+        })?;
+        keys.insert(key_id.clone(), decode_key(key_id, &encoded)?);
+    }
+
+    let secrets = adapters::resolve_runtime_secrets(&accounts.adapters, overlay, &keys)?;
+    Ok(accounts
+        .adapters
+        .iter()
+        .zip(secrets)
+        .map(|(adapter, secret)| AdapterRuntime {
+            installation_id: adapter.installation_id.clone(),
+            header: adapter.header.clone(),
+            issuer: adapter.issuer.clone(),
+            allowed_api_key_names: adapter.allowed_api_key_names.clone(),
+            max_lifetime_seconds: adapter.max_lifetime_seconds,
+            clock_skew_seconds: adapter.clock_skew_seconds,
+            secret,
+        })
+        .collect())
+}
+
+/// The configured assertion headers, as TEXT, with no material resolved.
+///
+/// What a refusing runtime needs: when material cannot be trusted the adapter
+/// must not verify anything, but it must still recognise — and refuse — the
+/// headers the operator configured, instead of letting them fall through
+/// unexamined to a handler.
+pub(crate) fn adapter_header_names(accounts: Option<&AccountsConfig>) -> Vec<String> {
+    accounts.map_or_else(Vec::new, |accounts| {
+        accounts
+            .adapters
+            .iter()
+            .map(|adapter| adapter.header.clone())
+            .collect()
+    })
+}
+
 /// The `accounts` block as configured. Unknown fields reject startup.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
