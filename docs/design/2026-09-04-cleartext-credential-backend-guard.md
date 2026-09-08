@@ -601,3 +601,47 @@ judgment that leaves no trace is a judgment nobody can audit.
 investigation, not a verdict on the guard.
 
 No blocking finding survived. Leg 1's gaps are closed.
+
+## Escalation disposal (team-lead, 2026-09-08)
+
+Recorded verbatim, because a disposal paraphrased by the person who asked for it is not a
+disposal.
+
+> **Escalation 1 (proxy defeats the loopback exemption).** Your disposal is right and I am
+> approving it: design amendment stays, plus a ticket. This is the one case in the §P0
+> table where filing is genuinely the cheapest disposal — a human has to decide whether the
+> exemption should survive a proxied environment at all, and the finding says exactly what
+> that decision is. Cross-transport change with its own tests, squarely outside your FOR.
+> File it with the `no_proxy` evidence you already have at source.
+>
+> **2(a) DNS literal-only — held, my sign-off.** No regression, fails closed, and a
+> resolver result at startup is not a security boundary. That is an engineering call inside
+> the ruling's letter, not a reinterpretation of it, so it is mine to make and it is made.
+>
+> **2(b) username-only — not mine.** R35 says "username and password"; refusing
+> username-only is stricter than the operator's text, and a ruling is reinterpreted by
+> whoever made it. I am putting it to the operator with your reasoning (a username in a URL
+> is a credential on the wire; fails closed). Your plan is correct: rows 3 and 5 now, row 4
+> waits.
+
+Filed per that ruling: **MIK-7418** — "Loopback exemption for cleartext credentials is
+defeated by HTTP_PROXY", carrying the `src/transport/http/mod.rs:501` and
+`src/a2a/client.rs` evidence, three acceptance criteria, and a fail-fast that settles it
+either way (a listener on loopback, `HTTP_PROXY` pointed at it, assert zero bytes).
+
+### The one unknown still open, in §P1's deferred form
+
+| field | value |
+|---|---|
+| question | Does R35's "username and password" mean userinfo carrying BOTH, or any userinfo at all? This design refuses username-only, which is stricter than the ruling's text. |
+| owner | the operator, via team-lead |
+| what would resolve it | asked, not checked — a ruling is reinterpreted by whoever made it |
+| when | before test-plan row 4 is written; rows 3 and 5 do not depend on it |
+| what if it resolves badly | if the operator reads R35 as both-required, row 4 inverts to `accept` and `reject_cleartext_credentials` gains a password-present condition. Fails closed either way, so the current design is the safe side to wait on. |
+
+Row 4 is BLOCKED on this and is not written. Rows 3 and 5 turn only on the userinfo
+carve-out, which is not under escalation, and proceed now.
+
+2(a) is RESOLVED, in the askable form: *does refusing DNS aliases that resolve to loopback
+deviate from R35 unacceptably?* — asked of team-lead — held, with sign-off, as an
+engineering call inside the ruling's letter — changed nothing in the design.
