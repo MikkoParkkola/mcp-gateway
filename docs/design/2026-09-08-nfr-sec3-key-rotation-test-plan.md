@@ -4,6 +4,15 @@
 # MIK-7417.SEC3 — continuation key rotation and retention: test plan
 
 Status: plan, for review. Design: `2026-09-06-nfr-sec3-key-rotation.md`.
+
+**Review disclosure.** Both legs returned SHIP-WITH-FIXES against commit `e45102a7`
+(gpt-review; kimi-review, run
+`~/.claude/data/reviews/runs/synthetic-20260908T150120Z-18792.md`). Everything after
+that — `5c4bb2ee`, `9ceaeb54`, `3ec5e0fa` — applies what the two legs specified and has
+been read by neither. That is the confirmation pass, not a third round: no finding was
+answered with a design change, and the two findings that died at source (`.4`'s
+"unconstructible" premise held; kimi's unverifiable T1c claim) are recorded as such
+rather than repaired.
 Criterion: *continuation envelope versioned, key rotatable, verification keys
 retained for the max lifetime*. VERSIONED is already met (`const VERSION: u8 = 1`,
 `src/protocol/continuation.rs:36`); this plan covers ROTATABLE and RETAINED.
