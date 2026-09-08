@@ -12,6 +12,9 @@
 use std::sync::Arc;
 
 use super::{ServiceError, StoreLimits, open_runtime};
+
+/// Startup recovery of records a previous process left mid-flight.
+mod recovery;
 use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};
 
 fn test_subscriptions() -> Arc<SubscriptionRegistry> {
@@ -193,3 +196,5 @@ async fn shared_runtime_restores_task_bindings_before_synchronous_admission() {
     restored.shutdown().await.unwrap();
     drop(restored_executor);
 }
+
+mod expiry;

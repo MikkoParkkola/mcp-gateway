@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 /// never rewrites a supported legacy row.
 pub(super) const RECORD_VERSION: u32 = 2;
 
+/// The record version that introduced `dispatched`. Spelled separately from
+/// [`RECORD_VERSION`] because it is a fact about one field: a later format bump
+/// must not silently reclassify a v2 row that did record its marker.
+pub(super) const MARKER_VERSION: u32 = 2;
+
 /// Persisted values supplied by the sole admission authority. Production
 /// conversion from its opaque `TaskBinding` is deliberately not installed yet.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -96,6 +101,19 @@ impl PreparedTask {
             },
         }
     }
+}
+
+/// One non-terminal row as startup found it: what recovery needs and nothing it
+/// may derive. The owner is the digest the record itself persisted — recovery
+/// holds no principal to hash and never invents one.
+pub(super) struct InterruptedTask {
+    pub(super) id: String,
+    pub(super) owner_digest: String,
+    pub(super) revision: u64,
+    /// `working`, `version >= MARKER_VERSION`, marker unset: the only state a
+    /// record can prove the backend never saw. An abandoned input round is not
+    /// one, whatever its marker says.
+    pub(super) never_dispatched: bool,
 }
 
 /// A committed view; the private admission and backend fields stay in Record.

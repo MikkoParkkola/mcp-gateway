@@ -98,7 +98,7 @@ impl Pause {
 
     /// Answer the held request. Dropping a `Pause` instead is a REFUSAL.
     pub(super) fn release(mut self) {
-        drop(self.release.take().map(|tx| tx.send(())));
+        let _ = self.release.take().map(|tx| tx.send(()));
     }
 }
 
@@ -236,7 +236,7 @@ impl Fixture {
 
     /// Stop accepting and join; aborted past the bound so cleanup cannot hang.
     pub(super) async fn stop(mut self) {
-        drop(self.shutdown.take().map(|tx| tx.send(())));
+        let _ = self.shutdown.take().map(|tx| tx.send(()));
         let mut task = self.task;
         if timeout(FIXTURE_TIMEOUT, &mut task).await.is_err() {
             task.abort();

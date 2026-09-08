@@ -3,19 +3,22 @@
 //! Task executor: one admission, one publication seam, one spawned owner.
 
 mod context;
+mod expiry;
 mod observe;
+mod recovery;
 mod settlement;
 mod worker;
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 use tokio::sync::{Semaphore, oneshot};
 
 pub(crate) use context::{OwnedAdmissionRequest, OwnedCallerContext};
+/// The guard the gateway holds for the periodic sweep it started.
+pub(crate) use expiry::ExpirySweep;
 pub(crate) use observe::{
     CommitObserver, CommitStage, DrainOutcome, RecoveryCheckpoint, RecoveryOutcome,
     UpstreamRecovery, remaining_implementation,
@@ -27,7 +30,6 @@ use worker::commit_and_run;
 
 use super::record::CommittedTask;
 use super::service::{CreateOutcome, ServiceError, TaskService};
-use super::store::StoreError;
 use crate::gateway::subscription_registry::SubscriptionRegistry;
 use crate::protocol::tasks::{Task, TaskOptions, TaskStatus, TaskTransition};
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -107,8 +109,11 @@ pub(crate) enum TaskWrite<'a> {
         id: &'a str,
         revision: u64,
     },
+    /// Startup only, and the one write that names an owner by the digest the
+    /// record persisted: recovery has no principal to hash, and hashing a stored
+    /// digest again would address a task nobody owns.
     Recover {
-        principal: &'a str,
+        owner_digest: &'a str,
         id: &'a str,
         revision: u64,
         event: TaskTransition,
@@ -372,14 +377,20 @@ impl TaskExecutor {
                 id,
                 revision,
                 event,
+            } => {
+                self.transition_write(principal, id, revision, event)
+                    .await?
             }
-            | TaskWrite::Recover {
-                principal,
+            // Its own arm, never merged with `Settle`: the two carry the same
+            // field types and merging them would hand a stored digest to the
+            // adapter that hashes a principal.
+            TaskWrite::Recover {
+                owner_digest,
                 id,
                 revision,
                 event,
             } => {
-                self.transition_write(principal, id, revision, event)
+                self.transition_digest_write(owner_digest, id, revision, event)
                     .await?
             }
             TaskWrite::Cancel {
@@ -398,6 +409,10 @@ impl TaskExecutor {
         Ok(outcome)
     }
 
+    /// The request-side adapter: a caller-supplied principal becomes an owner
+    /// through admission's one hasher, and only then a transition. Ordinary auth
+    /// is unchanged by recovery — the digest form lives below this, in
+    /// `recovery::transition_digest_write`, and no request path reaches it.
     async fn transition_write(
         &self,
         principal: &str,
@@ -409,25 +424,8 @@ impl TaskExecutor {
             .service
             .owner(principal)
             .map_err(CommitFailure::Service)?;
-        match self
-            .service
-            .store
-            .transition(owner.as_digest(), id, revision, event, Utc::now())
+        self.transition_digest_write(owner.as_digest(), id, revision, event)
             .await
-        {
-            Ok(committed) => {
-                let wrote = committed.revision != revision;
-                Ok((
-                    WriteOutcome::Transitioned(committed),
-                    wrote,
-                    CommitStage::Transitioned,
-                    id.to_owned(),
-                ))
-            }
-            Err(StoreError::RevisionConflict) => Err(CommitFailure::RevisionConflict),
-            Err(StoreError::NotFound) => Err(CommitFailure::Service(ServiceError::NotFound)),
-            Err(_) => Err(CommitFailure::Service(ServiceError::Unavailable)),
-        }
     }
 
     fn published(&self, outcome: &WriteOutcome, task_id: &str) {

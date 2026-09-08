@@ -665,6 +665,7 @@ impl Gateway {
     /// # Errors
     ///
     /// Returns the configuration layer's refusal, or the store's own.
+    #[cfg(test)]
     pub(crate) async fn start_account_custody(
         &mut self,
     ) -> std::result::Result<(), crate::personal_accounts::CustodyBootstrapError> {
@@ -675,7 +676,7 @@ impl Gateway {
         .await
     }
 
-    /// The body of [`Self::start_account_custody`]. The transport parameter
+    /// Shared custody startup body. The transport parameter
     /// exists only under `cfg(test)`; the production path is unchanged and
     /// builds its client exactly where it always did, inside `start_custody`.
     async fn start_account_custody_inner(
@@ -1611,6 +1612,27 @@ impl Gateway {
             max_workers = self.config.tasks.max_workers,
             "Durable task store opened"
         );
+        // The periodic expiry owner, started only now: the recovery inside
+        // `open_runtime_with_admission` has succeeded, so the sweep can never see
+        // a row a restart had not yet settled. The guard is held for the server's
+        // lifetime and joined below, before the store closes — dropping it on an
+        // early return signals the loop to stop without cutting a deletion that
+        // is already in flight.
+        let expiry_sweep: crate::gateway::task_service::execution::ExpirySweep =
+            match task_executor.start_expiry(self.config.tasks.expiry_interval) {
+                Ok(sweep) => sweep,
+                Err(error) => {
+                    let _ = task_service.shutdown().await;
+                    return Err(Error::Config(format!(
+                        "task expiry sweep at {:?} could not be started: {error}",
+                        self.config.tasks.expiry_interval
+                    )));
+                }
+            };
+        info!(
+            interval = ?self.config.tasks.expiry_interval,
+            "Durable task expiry sweep started"
+        );
         // Cloned before the state takes them: shutdown drains the SAME executor
         // that served the traffic, not a second one built to stand in for it.
         let task_service_for_shutdown = Arc::clone(&task_service);
@@ -1915,6 +1937,17 @@ impl Gateway {
                     "Drain timeout reached, proceeding with shutdown"
                 );
             }
+        }
+
+        // Before the drain and well before the close: the sweep is joined while
+        // the store is still open, so a deletion already in flight finishes its
+        // own transaction and no new one starts against a store about to give
+        // its lease back. The join returns what the sweep actually met, so a
+        // store it could not delete from is not reported as a clean stop.
+        if let Err(error) = expiry_sweep.shutdown().await {
+            warn!(%error, "Task expiry sweep did not stop cleanly");
+        } else {
+            info!("Task expiry sweep stopped");
         }
 
         // Task workers hold no inflight permit — the request that created one

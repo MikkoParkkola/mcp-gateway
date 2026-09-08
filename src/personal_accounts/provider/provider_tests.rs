@@ -39,8 +39,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use super::{
-    Clock, GatewayProviderHttp, HttpError, HttpResponse, PersonalOAuthRefresh, ProviderBuildError,
-    ProviderHttp, RetrievalFailure, SecretSource, TerminalFailure, discovery_urls,
+    Clock, HttpError, HttpResponse, PersonalOAuthRefresh, ProviderBuildError, ProviderHttp,
+    RetrievalFailure, SecretSource, TerminalFailure, discovery_urls,
 };
 use crate::personal_accounts::config::{AccountDescriptor, DescriptorMode};
 use crate::personal_accounts::service::{ProviderRefreshError, RefreshProvider};

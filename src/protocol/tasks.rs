@@ -212,6 +212,27 @@ impl Task {
         self.wire.error.as_ref()
     }
 
+    /// Whether the record's own stamped retention has run out at `now`.
+    ///
+    /// Measured from `createdAt`, which is the anchor the record was stamped
+    /// with; a null `ttlMs` is unlimited and never runs out. Crate-private and
+    /// read-only, so a retention question costs no serialization of the wire
+    /// task and no field of it becomes writable.
+    ///
+    /// Overflow-safe in both directions: a creation time in the future gives a
+    /// negative age and answers no, and a TTL larger than any age this process
+    /// can observe answers no rather than wrapping into an early deletion.
+    #[must_use]
+    pub(crate) fn retention_elapsed(&self, now: DateTime<Utc>) -> bool {
+        let Some(ttl_ms) = self.wire.ttl_ms else {
+            return false;
+        };
+        let age_ms = now
+            .signed_duration_since(self.wire.created_at)
+            .num_milliseconds();
+        u64::try_from(age_ms).is_ok_and(|age_ms| age_ms >= ttl_ms)
+    }
+
     /// A flat public protocol projection; no private model history is exposed.
     #[must_use]
     pub fn wire(&self) -> impl Serialize + '_ {
