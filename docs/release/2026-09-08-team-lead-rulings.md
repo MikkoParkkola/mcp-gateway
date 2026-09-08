@@ -115,3 +115,113 @@ person. Two — `R3` and `R2` — were genuine collisions between two documents 
 authoritative, and both existed because a decision was recorded in one place and its
 consequence in another. That is the recurring cost here, and it is why each ruling above says
 which document to amend, not only what the answer is.
+
+## R7 — `sub4-idempotency`: the replay is live; the lane that activated it repairs it
+
+`SUB.4`'s route-1 wiring made a dormant defect reachable, and the design went on calling
+it dormant. Verified at source rather than taken on report: `identity_suffix` is
+`|idp:{binding}` **or the empty string** (`src/gateway/meta_mcp/invoke.rs:1198-1202`),
+`idempotency_key_for` concatenates it verbatim (`src/gateway/meta_mcp/support.rs:43`), and
+the comment at `:1203-1209` fixes exactly this bug class for `caller_principal` while
+leaving the retry key on the old derivation. Two callers under the same client-chosen key,
+same tool, same arguments, share one entry on the shipped default.
+
+0BUG stop-the-line. The repair stays in the lane that performed the activation: it is one
+derivation inside the funnel that lane already occupies. Fall back to the verified subject;
+keep `identity_suffix` and `caller_principal` separate values, because the comment is right
+that they are different contracts with different lifetimes. Auth off with no verified
+identity still pools — that is the operator's own decision, already computed as
+`unattributed` at `src/gateway/router/handlers.rs:1013`, and `control4-lifecycle` reached
+the same conclusion independently the same morning. Do not mint a third rule about empty
+keys. The two-caller test goes red first (repair protocol step 4).
+
+**MIK-7408 is re-scoped to this repair.** Its question — whether P8 blocks on the suffix fix
+or lands with it tracked behind — assumed the repair could be ordered against a future
+activation. The activation already happened, so the question is void, not answered.
+
+### R7a — the R2 supersession clause is withdrawn
+
+R2 told the lane to mark the unreviewed revision superseded. The lane checked and the two
+documents R2 names are one file — reviewed at revision 2, unreviewed at revision 5. The
+instruction would have put a supersession header on the document R2 had just made
+governing, naming itself. Withdrawn. The fold the lane was already running is the stronger
+fix and is what R2 should have said: one document survives and the other is deleted, rather
+than two surviving with a pointer between them.
+
+## R8 — `bridge-mrtr7`: `WIRE.5` takes per-round gating; the criterion is not narrowed
+
+Two exits: (A) move the design to gate inside the retry loop, or (B) narrow `WIRE.5` to
+accounting alone. (A). The elimination test decides it — after (B) the finding is still
+statable, because an exchange that overspends an operator's limit stays describable and
+merely untested; after (A) it cannot be stated at all. Eliminating a mechanism is the lane's
+to do. Eliminating a criterion needs recorded agreement, and it is refused.
+
+Accepted costs, recorded so they are not later read as drift: this is a §P3 design event
+moving what a criterion asserts, so §P0 and §P2 reopen on their own terms before §P4
+resumes, and the round count does not reset — the spec moves, the history does not. **The
+four-dispatch ceiling clause R1 asked for on `WIRE.13` is withdrawn by its author**; it was
+derived from the fixture (A) deletes.
+
+### R8a — `BRIDGE.4`: the lane's error shape beats the one this document specified
+
+An earlier ruling named `BridgeError::Unanswered`. The lane read the site and found the
+outer `Delivery` variant already covers a timeout by its own doc text, so the missing thing
+is the inner reason: `DeliveryError::Unanswered { key }`, returned where the bare `continue`
+sits at `src/gateway/input_bridge.rs:484-486`. Take the lane's. What survives from the
+ruling is the cancellation-safe hold on the pending entry — the `PendingSampleGuard`
+construction at `src/gateway/proxy.rs:98-103` — and that
+`tests/mik_7212_mrtr7_bridge_acs.rs:1117` inverts rather than gets annotated.
+
+## R9 — `control4-lifecycle`: the reaper takes its collaborator as a parameter
+
+`spawn_reaper_on(&self, lifecycle: Arc<SessionLifecycle>)`, not a field. A field lets a
+caller silently get a reaper-less loop with no compiler complaint; a parameter forces all
+three call sites to state what they reap. Not an `Option` — an empty lifecycle already reaps
+nothing, so the `Option` would only add a second spelling of the same emptiness.
+
+The lane's open question — does `CONTROL.4` close with zero handlers registered — was
+answered by its own v2 before it reached this document: R3a option (b) moved
+`Firewall::on_session_end` from OUT to FOR, so one real consumer is registered and the
+criterion no longer closes over an empty map. Recorded rather than ruled, because ruling on
+a superseded question is how a stale answer gets authority.
+
+Endorsed without change: D5's bar that a handler may only reclaim state whose loss is
+indistinguishable from an eviction, and its rejection of a per-key generation counter as a
+second mechanism deciding when a key is live.
+
+## R10 — `confirm-gate`: leave the contaminated commit; `CONFIRM.1a` says which PARTIAL it is
+
+`868a940d` swept a sibling lane's uncommitted `SCHEMA.1c` regrade in under this lane's
+message. Leave it. Every lane is committing against that base, and rewriting a shared base
+to repair an attribution line trades a cosmetic wrong for a real one. The owning lane posts
+its own evidence comment citing that SHA.
+
+**Branch rule, all lanes**: `git commit -o <path>` commits the path's whole working-tree
+content, so on a shared tree it will commit a peer's uncommitted edits to the same file.
+Stage the hunk, verify with `git diff --cached --stat`, then commit.
+
+`CONFIRM.1a` stays PARTIAL and the cell must state which kind. The requirement is met by
+construction — all three producers return one variant and reach one arm at
+`src/gateway/meta_mcp/mod.rs:1964-1967`. What is open is coverage: two tests nobody has
+written, each costing 120 seconds against a module-private `ELICITATION_TIMEOUT`
+(`src/gateway/destructive_confirmation.rs:53`). Name the constant as the obstacle. A release
+owner reading "coverage residual, closing action is two slow tests" decides differently from
+one reading a bare PARTIAL, and the difference is a shipped release. Not MET: a refusal path
+never executed against the timeout arm carries no evidence of its own, and this release has
+already produced rows reading MET over machinery nothing reached.
+
+## R11 — `envelope-meta`: no third review round
+
+The two repair commits apply findings both legs raised and the lane accepted at source. That
+is §12's confirmation pass, not a new review. Re-reading repairs the reviewers themselves
+specified spends a round without converging. Record the disclosure on the rows — both
+verdicts are against `d1dd5056`, the repairs are unreviewed — because a stated limit a
+reader can check beats a round nobody learns from. The three rows stay PARTIAL: the SSE GET
+stream is a real remaining gap, verified at source this turn.
+
+## A wrapper name is not a vendor
+
+`kimi-review` is a one-line wrapper that execs `synthetic-review --model kimi-k3`, so a
+valid kimi leg logs and records its verdict under a `synthetic-review:` prefix. Two lanes
+have now read that prefix as a foreign or disqualified vendor, and one was about to discard
+a passing dual-vendor review over it. It is the wrapper's own name.
