@@ -59,6 +59,8 @@ pub enum ServiceError {
     NotFound,
 }
 
+/// Durable task ownership and transitions backed by an exclusively leased
+/// store and the execution admission authority supplied at startup.
 pub struct TaskService {
     pub(crate) store: TaskStore,
     admission: Arc<ExecutionAdmission>,

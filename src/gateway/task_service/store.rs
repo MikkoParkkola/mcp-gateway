@@ -61,6 +61,8 @@ pub(crate) enum StoreError {
     Duplicate,
 }
 
+/// Bounds on durable task count and encoded record bytes, enforced during
+/// store opening and before writes. `Default` supplies the gateway defaults.
 #[derive(Clone, Copy)]
 pub struct StoreLimits {
     pub(crate) records: usize,
