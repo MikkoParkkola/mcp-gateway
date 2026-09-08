@@ -538,10 +538,17 @@ impl PersonalAccountStore {
 // Names are fully qualified through `service::` on purpose: `worker.rs` already
 // imports the same six, and an import here would be one more chance to collide.
 
+/// The non-secret lease a managed credential was released under.
+///
+/// Exported unconditionally because the REST account registry RETAINS it beside
+/// the prepared credential: its recheck before the inner cache and before egress
+/// is `VaultStrategy::recheck`, the real custody release, which needs the lease
+/// this dispatch's credential came from. A lease is a binding, never authority.
+pub(crate) use service::CredentialLease;
 #[cfg(test)]
 pub(crate) use service::{
-    CredentialLease, CredentialReleaseObserver, ProviderRefreshError, RefreshProvider,
-    ReleasedCredentials, TokenRefresh,
+    CredentialReleaseObserver, ProviderRefreshError, RefreshProvider, ReleasedCredentials,
+    TokenRefresh,
 };
 #[cfg(test)]
 pub(crate) use worker::CustodyHandle;

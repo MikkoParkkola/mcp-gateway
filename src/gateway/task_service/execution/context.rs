@@ -128,6 +128,8 @@ impl OwnedCallerContext {
             confirmation: ConfirmationChannel::Unavailable,
             retry: &NO_RETRY,
             task: None,
+            era: crate::protocol::meta::Era::Modern,
+            channel: &crate::gateway::input_bridge::NoClientChannel,
         }
     }
 }

@@ -91,41 +91,30 @@ impl VaultStrategy {
             descriptor,
         }
     }
-}
 
-/// What a cache or an upstream session may be keyed on.
-///
-/// The five account-key fields, separated by the existing versioned
-/// length-prefixed digest, plus the grant authority the credential was released
-/// under: a re-authorized or rotated account produces a different binding, so a
-/// result cached for the previous grant is never served for the new one. No
-/// token material, and no raw subject: the digest already distinguishes
-/// principals without publishing them into cache keys and log lines.
-fn cache_binding(
-    account: &AccountKey,
-    lease: &CredentialLease,
-) -> Result<String, PropagationError> {
-    let digest = account
-        .digest()
-        .map_err(|error| PropagationError::Refuse(format!("account key is unusable: {error}")))?;
-    Ok(format!(
-        "acct:v1:{digest}:{}:{}:{}:{}:{}:{}",
-        lease.generation.len(),
-        lease.generation,
-        lease.authorization_epoch,
-        lease.token_revision,
-        lease.descriptor_revision.len(),
-        lease.descriptor_revision,
-    ))
-}
-
-#[async_trait::async_trait]
-impl IdentityPropagation for VaultStrategy {
-    async fn propagate(
+    /// The WHOLE of `propagate`, plus the lease the credential was released
+    /// under.
+    ///
+    /// Factored out rather than duplicated: [`IdentityPropagation::propagate`]
+    /// below is this function with the lease dropped, so the MCP route's trait
+    /// behaviour is byte for byte what it was. A consumer that must RECHECK the
+    /// credential later — the REST account registry, which resolves before its
+    /// cache lookup and rechecks before egress — keeps the lease instead, so the
+    /// recheck can be the real custody boundary rather than an expiry
+    /// comparison. The lease is a non-secret binding: it authorizes nothing on
+    /// its own, and holding it is not holding a token.
+    ///
+    /// # Errors
+    ///
+    /// [`PropagationError::Misconfigured`] when the backend audience and the
+    /// descriptor resource have drifted; [`PropagationError::Refuse`] for an
+    /// unusable account key, an unusable account (revoked, reconnect-required,
+    /// superseded) or a refused release. Nothing here falls back.
+    pub(crate) async fn prepare(
         &self,
         identity: &VerifiedIdentity,
         backend: &BackendDescriptor,
-    ) -> Result<PropagatedCredential, PropagationError> {
+    ) -> Result<(PropagatedCredential, CredentialLease), PropagationError> {
         // The installed descriptor and the backend's compiled propagation
         // config are produced together by `config::account_bindings`. A
         // mismatch means an install and a configuration have drifted, and
@@ -161,7 +150,7 @@ impl IdentityPropagation for VaultStrategy {
             ))
         })?;
 
-        Ok(PropagatedCredential {
+        let credential = PropagatedCredential {
             headers: vec![(
                 "Authorization".to_string(),
                 authorization_value(&credentials),
@@ -178,7 +167,79 @@ impl IdentityPropagation for VaultStrategy {
             // durable record — never from a claim the caller made.
             scopes: lease.scopes.clone(),
             cache_binding: binding,
-        })
+        };
+        Ok((credential, lease))
+    }
+
+    /// Re-run the REAL release recheck for a lease released earlier in this
+    /// dispatch, and discard what it releases.
+    ///
+    /// This is the durable-custody half of a credential recheck: it asks the
+    /// store, under its authority lock, whether THIS lease — this generation,
+    /// this authorization epoch, this token revision, this descriptor revision
+    /// — is still the current grant. A revocation, a reconnect requirement, a
+    /// re-authorization or a rotation committed after the credential was
+    /// prepared therefore refuses HERE, before a cache entry may be selected
+    /// and before anything reaches the wire.
+    ///
+    /// It never refreshes and never re-mints: a recheck that could mint would
+    /// answer "still valid" for a lease that is not, by quietly acquiring a
+    /// different one. The released credential is dropped immediately; the
+    /// credential this dispatch presents is the one prepared with it.
+    ///
+    /// # Errors
+    ///
+    /// [`PropagationError::Refuse`] naming the custody refusal.
+    pub(crate) async fn recheck(&self, lease: &CredentialLease) -> Result<(), PropagationError> {
+        // Bound to this statement: the released token is never bound to a name
+        // that outlives the check it exists for (CWE-226).
+        self.custody.release(lease).await.map_err(|error| {
+            PropagationError::Refuse(format!(
+                "managed account credential is no longer releasable: {error}"
+            ))
+        })?;
+        Ok(())
+    }
+}
+
+/// What a cache or an upstream session may be keyed on.
+///
+/// The five account-key fields, separated by the existing versioned
+/// length-prefixed digest, plus the grant authority the credential was released
+/// under: a re-authorized or rotated account produces a different binding, so a
+/// result cached for the previous grant is never served for the new one. No
+/// token material, and no raw subject: the digest already distinguishes
+/// principals without publishing them into cache keys and log lines.
+fn cache_binding(
+    account: &AccountKey,
+    lease: &CredentialLease,
+) -> Result<String, PropagationError> {
+    let digest = account
+        .digest()
+        .map_err(|error| PropagationError::Refuse(format!("account key is unusable: {error}")))?;
+    Ok(format!(
+        "acct:v1:{digest}:{}:{}:{}:{}:{}:{}",
+        lease.generation.len(),
+        lease.generation,
+        lease.authorization_epoch,
+        lease.token_revision,
+        lease.descriptor_revision.len(),
+        lease.descriptor_revision,
+    ))
+}
+
+#[async_trait::async_trait]
+impl IdentityPropagation for VaultStrategy {
+    /// Unchanged behaviour for every existing consumer: [`Self::prepare`] with
+    /// the lease dropped. The MCP route's credential, headers, binding, expiry
+    /// and refusals are exactly what they were.
+    async fn propagate(
+        &self,
+        identity: &VerifiedIdentity,
+        backend: &BackendDescriptor,
+    ) -> Result<PropagatedCredential, PropagationError> {
+        let (credential, _lease) = self.prepare(identity, backend).await?;
+        Ok(credential)
     }
 }
 

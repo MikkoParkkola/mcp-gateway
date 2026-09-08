@@ -98,6 +98,8 @@ fn ctx() -> MetaMcpCallerContext<'static> {
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         task: None,
+        era: crate::protocol::meta::Era::Legacy,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
     }
 }
 

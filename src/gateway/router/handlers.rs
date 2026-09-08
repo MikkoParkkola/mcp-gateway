@@ -1514,6 +1514,14 @@ pub(super) async fn meta_mcp_handler(
                 is_admin: client.as_ref().is_some_and(|c| c.admin),
                 input_capabilities: declared_capabilities,
                 retry: &retry,
+                // Already derived at the top of this handler from the
+                // same classification `initialize` advertises against;
+                // re-deriving it here is the drift `classify_request`
+                // exists to prevent.
+                era,
+                // HTTP holds the multiplexer, so this caller really can
+                // be sent a request of the gateway's own.
+                channel: state.proxy_manager.as_ref(),
                 // Always `Elicit`, including when no session was
                 // presented. HTTP can carry an asker; whether one
                 // answered is what `policy` decides. Mapping a
@@ -1589,14 +1597,42 @@ pub(super) async fn meta_mcp_handler(
             };
             execution = owned_execution;
             caller.execution = execution.as_ref();
-            if let Some(response) = replay {
+            let mut call_response = if let Some(response) = replay {
                 response
             } else {
                 state
                     .meta_mcp
                     .handle_tools_call(id, tool_name, arguments, Some(session_id.as_str()), caller)
                     .await
+            };
+
+            // Firewall: post-invocation response scan + credential redaction.
+            #[cfg(feature = "firewall")]
+            if let Some(ref fw) = state.firewall
+                && let Some(ref mut result_val) = call_response.result
+            {
+                let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
+                for target in &backend_targets {
+                    let target = target.as_target();
+                    let verdict = fw.check_response(
+                        &session_id,
+                        target.server,
+                        target.tool,
+                        result_val,
+                        caller_name,
+                    );
+                    if verdict.action == FirewallAction::Warn {
+                        warn!(
+                            server = target.server,
+                            tool = target.tool,
+                            findings = verdict.findings.len(),
+                            "Firewall: response warning"
+                        );
+                    }
+                }
             }
+
+            call_response
         }
         // Resources
         "resources/list" => {

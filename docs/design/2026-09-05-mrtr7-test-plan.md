@@ -26,7 +26,7 @@ here, and they are the three stdio rows carried, `#[ignore]`d, by
 | 317 | `ac_mrtr_7b_content_violating_the_requested_schema_is_forwarded_unchanged` |
 | 318 | `ac_mrtr_7b_the_retry_bound_cuts_off_after_three_retries` |
 | 319 | `ac_mrtr_7b_the_request_budget_is_checked_before_a_batch_is_sent` |
-| 320 | `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call` |
+| 320 | `ac_mrtr_7b_an_unanswered_prompt_fails_the_call_naming_the_entry` — name PENDING: the tree still holds this row under its pre-ruling name `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call`, and renaming it is part of the inversion below, not a separate edit |
 | 321 | `ac_mrtr_7b_answered_rounds_are_ended_by_the_aggregate_deadline` |
 | 322 | `ac_mrtr_7b_a_batch_of_three_answers_arrives_in_one_retry` |
 | 325 | `ac_mrtr_7a_a_session_declared_capability_is_asked_with_no_slice` |
@@ -64,7 +64,9 @@ So the delta below is entirely at the **call site**, and one row is end-to-end.
 | `MIK-7212.WIRE.8` | The whole path composes over real HTTP | one test: `initialize` declaring a capability, a **legacy-shaped** tool call (a modern one would be served a continuation and never exercise the bridge at all), a backend that asks, delivery over live SSE, the answer POSTed back and correlated, the backend retried with it, then session cleanup | system | end-to-end | every fake in rows 1-7 is replaced by the production transport; this is the only row that can fail because an adapter was never constructed |
 | `MIK-7212.WIRE.9` | A successful bridge retry is judged on its own result | a backend that asks once and then succeeds; assert the idempotency key is settled as completed, the response is returned, and the settled result is cached — an equivalent follow-up call carrying a *different* idempotency key and the same response-cache key is served without a further backend invocation, since the cache gate at `src/gateway/meta_mcp/invoke.rs:1769` is the second consumer of the same verdict. The two assertions are separate on purpose: a follow-up reusing the settled key would be answered by the idempotency entry and would pass without the cache gate running at all | integration | regression | `src/gateway/meta_mcp/invoke.rs:1475` computes `stopped_to_ask` from the *first* result, so a passing test here proves the verdict is re-derived after the retry — against today's tree the key stays unsettled and the row fails |
 | `MIK-7212.WIRE.10` | An initialized stdio caller is still refused | stdio session declares elicitation at `initialize`, backend asks; assert the MRTR.9 refusal returns **inside a 2-second `tokio::time::timeout` wrapping the call** — an order of magnitude under the bridge's 30-second prompt timeout, so a regression that reaches the prompt path fails the deadline rather than eventually returning the right answer — no client request is sent, and no retry occurs | integration | regression | this row is not `#[ignore]`d: the refusal is stdio's behaviour until MIK-7387 lands, and a transport-scope regression would turn it into a 30–120s stall |
-| `MIK-7212.WIRE.11` (also satisfies `MIK-7388.BRIDGE.2`) | The production `ClientChannel` strands no pending entry when the prompt's outer timeout cancels the send | spawn `send_request` against a **live** peer that accepts the frame and never answers — a `NoSession` or an inner timeout would empty the map on its own and pass this row vacuously; wait until the pending map holds the id (precondition asserted under a 5s deadline, not slept for), `abort()` the task, **await the `JoinHandle` until it reports cancelled**, then assert the map is empty for that id |  integration | negative | an impl that inserts into the map and awaits without an RAII guard passes every other row here and fails only this one — neither the success nor the error path runs on cancellation, so the entry leaks for the life of the connection. Mirrors `cancelled_request_does_not_strand_pending_entry` (`src/transport/stdio.rs:815`), including its live-peer staging and its join-after-abort — inspecting the map while the aborted task is still unwinding is how correct cancellation-safe code fails in CI |
+| `MIK-7212.WIRE.11` (also satisfies `MIK-7388.BRIDGE.2`) | The production `ClientChannel` strands no pending entry when the prompt's outer timeout cancels the send | spawn `send_request` against a **live** peer that accepts the frame and never answers — a `NoSession` or an inner timeout would empty the map on its own and pass this row vacuously; wait until the pending map holds the id (precondition asserted under a 5s deadline, not slept for), `abort()` the task, **await the `JoinHandle` until it reports cancelled**, then assert the map is empty for that id | unit | negative | an impl that inserts into the map and awaits without an RAII guard passes every other row here and fails only this one — neither the success nor the error path runs on cancellation, so the entry leaks for the life of the connection. Mirrors `cancelled_request_does_not_strand_pending_entry` (`src/transport/stdio.rs:815`), including its live-peer staging and its join-after-abort — inspecting the map while the aborted task is still unwinding is how correct cancellation-safe code fails in CI. **The staging is SHARED, not copied** — one helper carrying the live-peer setup, the deadline-bounded wait for the id to appear, and the abort-then-join sequence, called by both this row and the stdio test. It cannot live in `tests/common/`: `stdio.rs:815` sits inside the crate's own `#[cfg(test)] mod tests` (`src/transport/stdio.rs:578`) and cannot see an integration-test module, so the helper is a `#[cfg(test)]` item in the crate and this row is written in-crate beside it, generic over the pending map it drains. That location is also why the level column reads `unit`: after `8efa02c8` this row drives ONE production type against a fake peer from inside the crate, which is the shape `ROOTS.5` carries at that level, not the two-component staging `ROOTS.4` calls integration. Two copies of a cancellation harness drift, and the copy that drifts is the one whose transport nobody touched that quarter -- it keeps passing while asserting something weaker than it reads |
+| `MIK-7212.WIRE.12` | A retry round whose dispatch FAILS surfaces the failure; it is not flattened into a result | production invoker over `accounted_dispatch` (`src/gateway/meta_mcp/invoke.rs:2464`, already `Result<Value>`); backend asks once, client answers, the second dispatch returns `Err` (backend down mid-exchange). Assert the call returns an **error** to the caller and that **no continuation is minted** | integration | error path | today `BackendInvoker::invoke` returns a bare `Value` (`src/gateway/input_bridge.rs:332-334`), so an `Err` from the dispatch beneath it can only be unwrapped, panicked on, or serialised into a success-shaped `Value` -- and `InputRequired::from_result` would then read that shape as "no further input required" and return it as the answer. A row asserting only "the call returned" passes against every one of those. The assertions that bite are on the error REACHING the caller and on no continuation being minted. **This row deliberately asserts NOTHING about `PendingSampleGuard`**, and the reason is structural rather than an omission: the guard is an RAII value scoped to the ask (`src/gateway/proxy.rs:533`), released by its `Drop` when `forward_*_with_response` returns (`:103-107`). The fixture's client ANSWERS, so the guard is already gone before the retry dispatch is made, let alone fails -- an assertion that it was released would pass against a loop with no error handling at all, which is Q2's second survivor. Guard behaviour under a peer that never answers is `WIRE.11`'s subject, where a guard is actually alive at the moment under test. **Widening the trait is an explicit PREREQUISITE of this row, not a consequence of it**: until R2 changes `BackendInvoker::invoke` to return `Result<Value>` (`src/gateway/input_bridge.rs:332-334`) the fixture has no `Err` to hand the loop, so the row is UNWRITABLE rather than red -- and an unwritable row is the one failure mode a plan cannot observe later. It is therefore written in the same change as the widening, after `WIRE.5` and before `WIRE.10` |
+| `MIK-7212.WIRE.13` | The round cap is FOUR paid dispatches, and every one of them is metered | `BridgeBounds::DEFAULT` (`rounds: 3`, `src/gateway/input_bridge.rs:241-246`) and a backend that asks for **exactly one** prompt on every round; assert **exactly four** backend invocations -- one gated first dispatch plus three retries, the `rounds + 1` the trait doc claims (`:220`) -- **exactly four** `record_spend` entries, and that the exchange ends as `BridgeError::RoundsExhausted` (`:405`) rather than as a budget refusal or a silent success | integration | boundary | `for _ in 0..self.bounds.rounds` (`:387`) is three retries on top of a dispatch that already happened, so reading `rounds` as the total asserts three and passes against a loop that ran four -- the off-by-one is invisible to any assertion that does not name the number. Asserting the SPEND count as well as the invocation count is what separates "four calls happened" from "four calls were paid for": the design's overspend ceiling of 3 x `cost_for(tool)` is a claim about the second, and the metering is `record_spend` inside `accounted_dispatch`, which makes the overspend VISIBLE rather than preventing it. **The two numbers count from different origins and both are right**: 4 x is the TOTAL an exchange meters, counted from zero; 3 x is what accrues BEYOND the one dispatch governance already approved (`2026-09-05-mrtr7-bridge-wiring.md`, D-D: three dispatches beyond the gated one, four paid calls worst case). The row asserts the total, because the accumulator it reads starts at zero. A design carrying a number that no row asserts is a number that drifts. **One prompt per round is load-bearing, not fixture convenience**: `spent` counts PROMPTS, not dispatches (`spent = spent.saturating_add(prompts.len())`, `:393`), and `spent > self.bounds.requests` returns `RequestBudgetExhausted` BEFORE that round's `invoke`. `DEFAULT.requests` is 8, so a backend asking three entries per round reaches 9 on the third iteration and the exchange ends at dispatch three with the wrong error -- the row fails, for a reason the row never named. With one prompt per round `spent` runs 1/2/3 and the loop exhausts as the criterion claims. **The spend assertion needs an installed enforcer, not just the feature.** `cost-governance` being in `Cargo.toml` `default` is NECESSARY and NOT SUFFICIENT: `record_spend` also requires `self.budget_enforcer` to be `Some` (`src/gateway/meta_mcp/invoke.rs:2544`), so a default fixture that installs none records nothing and the count assertion reads zero against a correct loop. The row installs an isolated `BudgetEnforcer` with a KNOWN NONZERO `cost_for(tool)` and asserts the tool and global accumulators each rose by **four times that cost** -- not four entries. Four recordings of the wrong value satisfy a count and violate the ceiling the design names. And because an interim `input_required` reply is an `Ok(Value)` like any other -- `record_spend` is gated on `dispatch_result.is_ok()`, not on the reply being final (`src/gateway/meta_mcp/invoke.rs:2542-2548`), so all four dispatches meter. A build with the feature off asserts the invocation count only, and says so. **Two staging conditions the row depends on, stated so a failure is read as a failure and not as this row.** (a) The asked capability is one the caller ADMITS -- declared and present in the gate's input -- so the exchange passes the governance gate once and reaches the loop at all; a refused first dispatch asserts zero of the four. (b) Every ask is answered well inside `per_prompt` (30s) and the whole exchange inside `aggregate` (120s), so neither deadline fires ahead of the round cap and the exit is `RoundsExhausted` for the reason the row names. Routing the retries through `accounted_dispatch` is deliberately NOT on that list: it is not staging, it is what the spend assertion TESTS. `record_spend` lives nowhere else and `accounted_dispatch` has exactly one call site today (`src/gateway/meta_mcp/invoke.rs:1413`, the gated first dispatch), so a bridge whose backend impl dispatches by some other path meters once, the accumulator assertion goes red, and that is the row working rather than the row misconfigured |
 
 `WIRE.8` is the row the reviewers asked for, and the only one that proves the
 *composed production HTTP round*. It is not the only row that needs the call site
@@ -89,12 +91,45 @@ cheapest to falsify, so it goes first.
 1. `WIRE.11` — cancellation contract, direct against the new type, no HTTP fixture.
    Fails or compiles; either answer is bought in minutes.
 2. `WIRE.1`-`WIRE.4` — call-site shape and declaration gate, fakes only.
-3. `WIRE.5`-`WIRE.7`, `WIRE.9` — accounting, bound, budget, lifecycle.
-4. `WIRE.10` — stdio refusal, bounded.
-5. `WIRE.8` — full HTTP composition, the most expensive fixture in the set, last.
+3. `WIRE.5`-`WIRE.7`, `WIRE.9`, `WIRE.13` — accounting, bound, budget, lifecycle.
+   `WIRE.13` sits here because it shares `WIRE.5`'s fixture: both count dispatches
+   and spend records against a backend that keeps asking, and writing them apart
+   would build the same harness twice.
+4. `WIRE.12` — the failed retry round. After `WIRE.5` because it asserts on the
+   metering `WIRE.5` establishes, and before `WIRE.10` because the invoker's
+   signature is decided here: a row written against the bare-`Value` signature
+   cannot be made to fail for the right reason.
+5. `WIRE.10` — stdio refusal, bounded.
+6. `WIRE.8` — full HTTP composition, the most expensive fixture in the set, last.
 
 Running `WIRE.8` first would spend the largest fixture on the assumption that is
 already assumed by every row above it.
+
+**R1 -- the era ruling -- is pinned by rows that already existed, and this is where
+they are named.** The ruling is that era changes the gate's INPUT, never the refusal
+semantics: a Modern request reads only its own `_meta` and is still refused when that
+`_meta` omits the asked capability (`WIRE.1`); a Modern request reads its own `_meta`
+and not the session's (`WIRE.4`); a Legacy request reads the SESSION's declaration
+instead -- present, the client is asked (`WIRE.2`); absent, the request is refused
+(`WIRE.3`); and `Some(&[])` is not `None` -- an undeclared variant under an EMPTY
+slice is not asked (shipped row 311), while a session-declared capability under NO
+slice is (shipped row 325). Four rows and two shipped cases, no new machinery.
+Stated here because both plan reviewers, reading the R1 paragraph beside `WIRE.11`-`13`,
+independently reported the rule as pinned by nothing -- a mapping a reader has to
+reconstruct is a mapping that is missing.
+
+**`WIRE.12` and `WIRE.13` come from the two rulings the plan predates.** Neither
+is a MIK-7212 acceptance criterion; both are criteria the design acquired after
+this table was first written, and a criterion with no row is the finding this
+section exists to prevent. `WIRE.12` is the test for the requester's ruling that
+`BackendInvoker::invoke` widens to `Result` — the widening is pointless if
+nothing ever asserts the `Err` arm is reachable and honoured. `WIRE.13` is the
+test for the round-cap figure the design now states in prose: four paid
+dispatches worst case -- three of them beyond the dispatch governance approved,
+so an overspend ceiling of three times the tool's cost on top of an approved
+one, metered rather than prevented. The row asserts the four-times TOTAL
+because it reads an accumulator starting at zero; the ceiling and the total are
+the same bound counted from different origins.
 
 ## The two questions a plan review answers
 
@@ -154,18 +189,78 @@ its diagnosis cost is the price of that proof.
   that ticket rather than to this plan. The two findings once counted alongside
   it (`:433`, `:409`) died at requirement rows 320 and 308; the design says
   where.
-- **`MIK-7388.BRIDGE.4`** — the one condition of that ticket this change owns:
-  an abandoned prompt must reach the backend as a **non-answer**, distinguishable
-  from an accepted empty answer and from a decline. It is not a criterion without
-  a case; row 320 above is its case, and the assertion that pins it is
-  `tests/mik_7212_mrtr7_bridge_acs.rs:1173-1182` — the retry after the abandoned
-  round carries **no `/inputResponses/k1` key at all**. Absence is the whole
-  property: `ask()` skips the prompt on timeout (`src/gateway/input_bridge.rs:453`)
-  and `retry_params` files only collected keys (`src/protocol/mrtr.rs:482-488`),
-  so an accepted `{}` is a different retry and a decline is not a retry at all
-  (`project()` returns `DeliveryError::Declined`, which fails the call). Every
-  other assertion on row 320 is satisfied by a bridge that files a placeholder,
-  which is why the row needed one more.
+- **`MIK-7388.BRIDGE.4`** — RULED by the release owner on 2026-09-08, and the
+  ruling reverses what this bullet previously said. An unanswered prompt **fails
+  the call, naming the entry**. It does not reach the backend as a non-answer:
+  that was one of the two rejected alternatives (re-invoke with what arrived;
+  re-invoke plus a wire field marking the gap), and the second is precisely the
+  property this plan used to pin.
+  Row 320 is still its case, inverted rather than replaced. The assertion becomes
+  `Err(BridgeError::Delivery { key: "k1", error: DeliveryError::TimedOut })` where
+  `tests/mik_7212_mrtr7_bridge_acs.rs:1148` asserts `outcome.is_ok()`.
+  What the inversion must not lose is the row's two elapsed assertions at
+  `:1152-1163`. They pin that the wait ended at the per-prompt bound rather than
+  sooner or at a multiple of it, and that stays load-bearing under the ruling: a
+  call that fails on the first silent prompt still has to fail *at that bound*.
+  A row asserting only the error variant would pass against a bridge that never
+  waited at all, which is the failure this row was built to exclude.
+  The retry-absence assertion at `:1173-1182` goes with the reading it belonged
+  to — under the ruling there is no retry after an abandoned round to inspect.
+
+  **Correction, 2026-09-08, from a second sweep of the siblings.** The repair
+  this row now specifies does not stop at row 320, and the first sweep said it
+  did. The wait being inverted is
+  `tokio::time::timeout(self.bounds.per_prompt.min(left), sent)`
+  (`src/gateway/input_bridge.rs:484`), and `left` is the **aggregate**
+  remainder, `self.bounds.aggregate.saturating_sub(started.elapsed())`
+  (`:481`). One arm, two causes. The bare `continue` at `:486` discarded both,
+  which is exactly why the asymmetry was invisible: a skip does not have to say
+  why it skipped.
+  Row 321 is where it surfaces. Its fixture answers every prompt after 50ms
+  against `aggregate: 500ms`, one prompt per round
+  (`tests/mik_7212_mrtr7_bridge_acs.rs:1195-1208`), so by the tenth round
+  `left` has fallen below the reply's own latency and the clamp — not the
+  per-prompt bound — takes the prompt. Today's `continue` lets that round end,
+  and the next round's top-of-loop check at `:388-390` returns
+  `BridgeError::Deadline`, which is what `:1223` asserts. Under the repair as
+  first written the same prompt returns `Delivery { TimedOut }` and row 321
+  fails.
+  The row is the cheap part. `BridgeError::Deadline` becomes unreachable from
+  `ask` altogether: elapsed time can only cross the aggregate *inside* a wait,
+  so the clamp fires first every time, and the variant the ruling never touched
+  is swallowed by the variant it did. That is a §P3 design event, named as one
+  in the design document rather than settled here.
+  What it costs this plan: the repair owes a distinction the code does not draw
+  today — an exhausted aggregate is `Deadline`, a silent client inside a live
+  budget is `Delivery { TimedOut }`, and the arm has to report which fired. Row
+  321 keeps its assertion **unchanged** and is now also the row that pins that
+  distinction. It may not be quietly rewritten to expect the new variant; a
+  plan that rewrote it would be recording the collapse rather than catching it.
+  One last thing row 320's own fixture owes its reader, corrected here rather
+  than in test code, because a plan that leaves it costs a round. Under the
+  ruling the call fails on the first silent prompt, so everything scripted
+  after it is unreachable staging, and dead staging is not evidence of
+  anything. The earlier revision of this paragraph named the second client
+  reply and the backend's `completed()`; that understated it by one entry. The
+  backend script is consumed only when a round COMPLETES and the bridge
+  re-invokes — the first round's asking arrives as the `interim` parameter, not
+  from the script — so a call that returns inside the first round reaches
+  neither backend entry. Corrected staging, all of it:
+  `FakeClient::new(vec![Reply::Silent])` and an empty backend script, against
+  `tests/mik_7212_mrtr7_bridge_acs.rs:1124-1125`, which today scripts
+  `[Reply::Silent, accepted(&content)]` and `[asking(&[("k2", …)]), completed()]`.
+
+  The bounds are the half that decides whether this row proves what it names,
+  and they must NOT change: `aggregate: 400ms` against `per_prompt: 60ms`
+  (`:1119-1120`). Both bounds meet the same wait through
+  `per_prompt.min(left)`, so R21's discriminator (`left <= per_prompt` resolves
+  to `Deadline`) is what picks the error this row asserts. At the first prompt
+  `left` is the full 400ms, over six times the per-prompt bound, so the clamp
+  cannot be what fires and `Delivery { key: "k1", error: TimedOut }` is the only
+  reachable answer. A fixture that narrowed the aggregate toward 60ms would
+  still fail today and still go green after the repair, while asserting the
+  wrong cause — the §P2 Q2 failure mode of a case that cannot fail for its own
+  reason.
 - **MIK-7388's stranded-pending-entry defect** (`:430`) — *not* absent from this
   plan. It was filed against `input_bridge.rs`, which holds no pending state; the
   obligation belongs to the `ClientChannel` implementor this change creates, per

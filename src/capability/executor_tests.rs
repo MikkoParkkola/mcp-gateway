@@ -1334,6 +1334,7 @@ async fn a_typed_429_reports_a_backend_fault_rpc_code() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn a_capability_429_is_a_typed_http_error_at_every_protocol_site() {
     use crate::capability::{ExecutionContext, GraphqlConfig, JsonRpcConfig, ProtocolConfig};
     use rest::ProtocolExecutor;

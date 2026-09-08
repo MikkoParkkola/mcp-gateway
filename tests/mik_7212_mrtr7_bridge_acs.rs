@@ -81,7 +81,7 @@ use serde_json::{Value, json};
 
 use mcp_gateway::gateway::input_bridge::{
     BackendInvoker, BridgeBounds, BridgeError, BridgeObserver, BridgeRecord, ClientChannel,
-    DeliveryError, InputBridge,
+    DeliveryError, InputBridge, NoClientChannel,
 };
 use mcp_gateway::protocol::meta::{Declared, classify_request};
 use mcp_gateway::protocol::mrtr::{InputRequired, Refusal};
@@ -1583,6 +1583,29 @@ fn ac_mrtr_7a_the_capability_fixture_declares_what_it_names() {
             all.has(capability),
             "the fixture claiming every capability must declare {capability}, \
              or every capability row gates on a client that declared nothing"
+        );
+    }
+}
+
+/// The null channel refuses every admitted method, and says why in one way.
+///
+/// `NoClientChannel` is what a transport with no server-to-client path carries
+/// on the caller context, and a null object that answered anything other than
+/// `NoSession` — or answered it for only some of the closed method set — would
+/// be a fail-open dressed as a default. The loop runs over `ServerRequestKind::ALL`
+/// so a fourth kind cannot arrive unrefused.
+#[tokio::test]
+async fn ac_mrtr_7a_the_null_channel_refuses_every_admitted_method() {
+    for kind in ServerRequestKind::ALL {
+        let refusal = NoClientChannel
+            .send_request("session-1", "bridge-1", kind.method(), Some(json!({})))
+            .await;
+
+        assert_eq!(
+            refusal,
+            Err(DeliveryError::NoSession),
+            "the null channel must refuse {} with NoSession, not answer it",
+            kind.method()
         );
     }
 }

@@ -30,6 +30,12 @@ use crate::gateway::meta_mcp::MetaMcpCallerContext;
 /// The suffixes are the ADR-008 INV-3 binding. They stay part of the key so one
 /// caller's stored result is never served to another under the same client key.
 ///
+/// The client key is LENGTH-PREFIXED because it is the one attacker-chosen
+/// segment: appended raw, a caller could simply spell another caller's suffix
+/// inside its own key and derive that caller's entry (MIK-7408). The length
+/// says where the client's bytes stop, so no choice of key can reach across
+/// the boundary into a segment the gateway derives.
+///
 /// Returns `None` when no idempotency cache is configured, or when the client
 /// sent no key.
 pub(super) fn idempotency_key_for(
@@ -40,7 +46,37 @@ pub(super) fn idempotency_key_for(
 ) -> Option<String> {
     idem_cache?;
     let key = client_key?;
-    Some(format!("{key}{projection_key_suffix}{identity_suffix}"))
+    let len = key.len();
+    Some(format!(
+        "{len}:{key}{projection_key_suffix}{identity_suffix}"
+    ))
+}
+
+/// The retry de-duplication suffix: WHO a stored idempotency entry belongs to.
+///
+/// The propagated `cache_binding` when identity propagation is minting
+/// per-user credentials, otherwise the verified subject — which is still the
+/// identity the backend's answer depended on. Keying on the binding alone left
+/// the suffix empty for EVERY caller whenever propagation was off, which is the
+/// shipped default, so two authenticated callers sharing one client key shared
+/// one entry.
+///
+/// The two arms are tagged differently (`idp:` vs `sub:`) so a binding can
+/// never collide with an actor id that happens to read the same.
+///
+/// Empty for a caller with neither: two such callers are pooled by the
+/// operator's own decision to run without authentication, the same pooling
+/// `handlers.rs`'s `unattributed` already expresses. This mints no rule of its
+/// own about empty keys.
+pub(super) fn retry_identity_suffix(
+    cache_binding: Option<&str>,
+    verified_subject: Option<&str>,
+) -> String {
+    match (cache_binding, verified_subject) {
+        (Some(binding), _) => format!("|idp:{binding}"),
+        (None, Some(subject)) => format!("|sub:{subject}"),
+        (None, None) => String::new(),
+    }
 }
 
 /// Build the response-cache key for a `gateway_invoke` call.
@@ -438,6 +474,82 @@ mod tests {
     use super::internal_invoke_args;
     use super::strip_backend_provenance;
     use serde_json::json;
+
+    /// MIK-7408. Identity propagation ON: the retry entry is tagged with the
+    /// propagated binding, which already distinguishes user AND audience.
+    #[test]
+    fn retry_identity_suffix_uses_the_binding_when_propagation_is_on() {
+        let suffix = super::retry_identity_suffix(Some("idp:1:a:3:mem"), Some("oidc:3:idp:1:b"));
+
+        assert_eq!(suffix, "|idp:idp:1:a:3:mem");
+    }
+
+    /// MIK-7408. Identity propagation OFF — the shipped default. The suffix
+    /// falls back to the verified subject rather than staying empty, so two
+    /// authenticated callers sending the same client key do not share one
+    /// stored result. The fallback carries its OWN tag, so a binding and an
+    /// actor id that read alike cannot collide either.
+    #[test]
+    fn retry_identity_suffix_falls_back_to_the_verified_subject() {
+        let unbound = super::retry_identity_suffix(None, Some("oidc:3:idp:1:b"));
+
+        assert_eq!(unbound, "|sub:oidc:3:idp:1:b");
+        assert_ne!(
+            unbound,
+            super::retry_identity_suffix(Some("oidc:3:idp:1:b"), None),
+            "a binding and an actor id with identical text must stay distinct"
+        );
+    }
+
+    /// MIK-7408. A caller with neither a binding nor a verified identity gets
+    /// an EMPTY suffix, so two such callers share one entry. That pooling is
+    /// the operator's own decision to run without authentication — the same
+    /// decision `handlers.rs` already spells `unattributed`. This asserts the
+    /// pooling deliberately rather than inventing a rule about empty keys.
+    #[test]
+    fn retry_identity_suffix_pools_callers_the_operator_left_unattributed() {
+        assert_eq!(super::retry_identity_suffix(None, None), "");
+    }
+
+    /// MIK-7408. Two callers, one client key each, on a backend where identity
+    /// propagation is off for the forger. The victim is bound and gets the
+    /// suffix `|idp:V` appended; the forger is unbound and simply SPELLS that
+    /// suffix inside the client key it chose. Concatenation without a boundary
+    /// makes both derive the same string, so the forger's call is admitted
+    /// against — and can replay — the victim's stored result. The two keys MUST
+    /// differ whatever the client key contains.
+    #[test]
+    fn a_forged_client_key_cannot_spell_another_callers_identity_suffix() {
+        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+
+        let victim = super::idempotency_key_for(Some("X"), "", "|idp:V", Some(&cache));
+        let forger = super::idempotency_key_for(Some("X|idp:V"), "", "", Some(&cache));
+
+        assert_ne!(
+            victim, forger,
+            "a client key that spells the victim's identity suffix must not \
+             collide with the victim's key"
+        );
+    }
+
+    /// MIK-7408, the arm that is live on the shipped default. With identity
+    /// propagation off nobody has a binding, so every authenticated caller is
+    /// keyed on `|sub:<actor id>` instead. The forgery is the same shape and
+    /// the fix must hold in both arms, or the defect merely moved to the arm
+    /// almost every deployment runs.
+    #[test]
+    fn a_forged_client_key_cannot_spell_another_callers_verified_subject() {
+        let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+
+        let victim = super::idempotency_key_for(Some("X"), "", "|sub:V", Some(&cache));
+        let forger = super::idempotency_key_for(Some("X|sub:V"), "", "", Some(&cache));
+
+        assert_ne!(
+            victim, forger,
+            "a client key that spells the victim's verified subject must not \
+             collide with the victim's key"
+        );
+    }
 
     /// A backend-forged `_meta.provenance` block MUST be removed on the
     /// stamping-off path so a naive reader cannot trust a receipt the gateway

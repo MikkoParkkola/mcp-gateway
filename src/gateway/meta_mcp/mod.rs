@@ -184,6 +184,33 @@ pub struct MetaMcpCallerContext<'a> {
     /// Background-task intent, taken after the destructive confirmation gate.
     /// `None` on every synchronous call and on the worker's rebuilt context.
     pub task: Option<crate::gateway::task_service::TaskIntent>,
+    /// Which protocol era this caller declared on **this** request.
+    ///
+    /// Carried rather than re-derived: both production sites already hold the
+    /// `RequestShape` classification that `initialize` advertises against, and
+    /// a second era predicate computed downstream is exactly the drift
+    /// [`crate::protocol::meta::classify_request`] exists to prevent.
+    ///
+    /// No `Default`, for the same reason the authorizer has none — a defaulted
+    /// era is a site that silently claims an era it never saw.
+    ///
+    /// SCAFFOLD as of this commit: the reader is the MRTR.9 gate at
+    /// `meta_mcp::invoke` (`interim.undeclared(caller.input_capabilities)`),
+    /// which must merge the session declaration for `Legacy` and read only the
+    /// request's own `_meta` for `Modern`. That merge is `MIK-7212.WIRE.1`
+    /// through `WIRE.4` and lands next; until it does, nothing on the
+    /// production path reads this field.
+    pub era: crate::protocol::meta::Era,
+    /// How this caller can be sent a request of the gateway's own — a bridged
+    /// `sampling/createMessage` or `elicitation/create`.
+    ///
+    /// Distinct from `confirmation`, which answers a narrower question and
+    /// would become a general client-request pipe if reused for this. A
+    /// transport with nowhere to send carries
+    /// [`crate::gateway::input_bridge::NoClientChannel`], so "cannot ask" is a
+    /// channel that refuses rather than an absent one every read site must
+    /// remember to check.
+    pub channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
 }
 
 // ============================================================================
@@ -201,7 +228,14 @@ pub struct MetaMcpCallerContext<'a> {
 /// branches emit the generic `-32600`, and `-32003` already means something
 /// else elsewhere.
 fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> JsonRpcResponse {
-    let mut response = JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string());
+    let mut response = match error {
+        crate::Error::ResponseFirewallRefused => JsonRpcResponse::delivery_refusal_error(
+            Some(id),
+            error.to_rpc_code(),
+            &error.to_string(),
+        ),
+        _ => JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string()),
+    };
     if let Some(ref mut rpc_error) = response.error {
         // Written unconditionally, so this function is the sole authority on
         // the field. `JsonRpcResponse::error` starts it at `None` and nothing
@@ -295,6 +329,14 @@ pub struct MetaMcp {
             Arc<dyn crate::identity_propagation::IdentityPropagation>,
         >,
     >,
+    /// Per-DESCRIPTOR account strategies, shared with the capability executor.
+    ///
+    /// The map above is keyed by backend name, which a REST capability does not
+    /// have: it names an `accounts.descriptors` map key directly and may be
+    /// that account's only consumer. The shared installer writes ONE strategy
+    /// per descriptor here and hands the same `Arc` to the per-backend map, so
+    /// both consumers of one account hold one instance.
+    pub(super) account_strategies: Arc<crate::identity_propagation::AccountStrategyRegistry>,
     pub(super) code_mode_enabled: bool,
     /// Whether this gateway serves more than one principal (ADR-008 INV-2).
     ///
@@ -512,6 +554,9 @@ impl MetaMcp {
             reload_context: RwLock::new(None),
             identity_propagation: RwLock::new(None),
             backend_identity_propagation: RwLock::new(std::collections::HashMap::new()),
+            account_strategies: Arc::new(
+                crate::identity_propagation::AccountStrategyRegistry::default(),
+            ),
             code_mode_enabled: false,
             multi_user: std::sync::atomic::AtomicBool::new(false),
             projection_mode: crate::projection::ProjectionMode::default(),
@@ -745,7 +790,9 @@ impl MetaMcp {
     }
 
     /// Enable idempotency support with a background cleanup task.
-    #[allow(dead_code)]
+    ///
+    /// Called unconditionally from the boot path; while the cache is `None`
+    /// every client-supplied idempotency key is inert.
     pub fn enable_idempotency(&mut self, cache: Arc<IdempotencyCache>, cleanup_interval: Duration) {
         spawn_cleanup_task(Arc::clone(&cache), cleanup_interval);
         self.idempotency_cache = Some(cache);
@@ -800,6 +847,12 @@ impl MetaMcp {
     /// writes into the same tamper-evident chain from the direct backend
     /// route, which does not go through `MetaMcp`.
     pub fn enable_transparency_log(&mut self, logger: Arc<crate::security::TransparencyLogger>) {
+        // The account registry mints credentials for REST capabilities under
+        // the same "no mint without a durable audit record" rule as the
+        // Meta-MCP route, and it is reached through the capability executor
+        // rather than through `self`, so it needs its own handle on the sink.
+        self.account_strategies
+            .set_audit_logger(Arc::clone(&logger));
         self.transparency_logger = Some(logger);
     }
 
@@ -906,6 +959,17 @@ impl MetaMcp {
             .read()
             .get(backend)
             .map(Arc::clone)
+    }
+
+    /// The per-descriptor account strategies.
+    ///
+    /// Handed out rather than consulted here: the REST consumer reaches it
+    /// through `CapabilityExecutor`, which has no view of `MetaMcp`. The same
+    /// `Arc` on both sides is what makes it ONE registry rather than two.
+    pub(crate) fn account_strategies(
+        &self,
+    ) -> Arc<crate::identity_propagation::AccountStrategyRegistry> {
+        Arc::clone(&self.account_strategies)
     }
 
     /// Declare whether this gateway serves more than one principal (ADR-008
@@ -2104,6 +2168,10 @@ mod account_resolver_fixture;
 mod account_resolver_gate;
 #[cfg(test)]
 mod account_resolver_tests;
+#[cfg(test)]
+mod account_rest_fixture;
+#[cfg(test)]
+mod account_rest_tests;
 
 #[cfg(test)]
 #[path = "tests.rs"]
