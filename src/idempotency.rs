@@ -345,22 +345,37 @@ impl IdempotencyCache {
     /// belongs to the cache: nothing non-final should ever be servable from it,
     /// including from call sites not yet written.
     pub fn mark_completed(&self, key: &str, result: Value) -> bool {
+        // The fingerprint survives the state transition: the completed result
+        // belongs to the request that was admitted, not to whatever asks next.
+        // A caller holding a reservation knows that fingerprint and passes it
+        // to `mark_completed_bound`; this entry point can only recover it from
+        // the entry, which is why it must not be used once the entry may be
+        // gone.
+        let fingerprint = self
+            .entries
+            .get(key)
+            .map_or_else(String::new, |e| e.fingerprint.clone());
+        self.mark_completed_bound(key, result, &fingerprint)
+    }
+
+    /// [`mark_completed`](Self::mark_completed) with the admitting request's
+    /// fingerprint supplied rather than looked up.
+    ///
+    /// The lookup cannot recover it once the entry is gone — released by a
+    /// failed dispatch, or swept after [`IN_FLIGHT_TIMEOUT`] — and an empty
+    /// fingerprint matches every later request, so a result stored that way
+    /// would answer any call reusing the key.
+    pub(crate) fn mark_completed_bound(&self, key: &str, result: Value, fingerprint: &str) -> bool {
         if !crate::protocol::cacheable::is_final(&result) {
             self.entries.remove(key);
             debug!(key, "Refused to cache a non-final result");
             return false;
         }
-        // The fingerprint survives the state transition: the completed result
-        // belongs to the request that was admitted, not to whatever asks next.
-        let fingerprint = self
-            .entries
-            .get(key)
-            .map_or_else(String::new, |e| e.fingerprint.clone());
         self.entries.insert(
             key.to_string(),
             Entry::new(
                 IdempotencyState::Completed(result, Instant::now()),
-                &fingerprint,
+                fingerprint,
             ),
         );
         true
@@ -478,6 +493,9 @@ pub fn derive_key(tool_name: &str, arguments: &Value) -> String {
 pub struct IdempotencyReservation {
     cache: Arc<IdempotencyCache>,
     key: String,
+    /// The fingerprint the key was admitted for, so a result stored after the
+    /// entry is gone stays bound to this request instead of matching any.
+    fingerprint: String,
     settled: bool,
     on_drop: OnDrop,
 }
@@ -493,10 +511,11 @@ enum OnDrop {
 }
 
 impl IdempotencyReservation {
-    fn new(cache: Arc<IdempotencyCache>, key: &str) -> Self {
+    fn new(cache: Arc<IdempotencyCache>, key: &str, fingerprint: &str) -> Self {
         Self {
             cache,
             key: key.to_string(),
+            fingerprint: fingerprint.to_string(),
             settled: false,
             on_drop: OnDrop::Release,
         }
@@ -517,7 +536,8 @@ impl IdempotencyReservation {
     /// is the behaviour the invoke path already relied on.
     pub fn complete(&mut self, result: &Value) -> bool {
         self.settled = true;
-        self.cache.mark_completed(&self.key, result.clone())
+        self.cache
+            .mark_completed_bound(&self.key, result.clone(), &self.fingerprint)
     }
 
     /// Record that the protected side effect has committed.
@@ -550,7 +570,10 @@ impl Drop for IdempotencyReservation {
                 debug!(key = %self.key, "Released abandoned idempotency reservation");
             }
             OnDrop::Complete(result) => {
-                if self.cache.mark_completed(&self.key, result) {
+                if self
+                    .cache
+                    .mark_completed_bound(&self.key, result, &self.fingerprint)
+                {
                     debug!(key = %self.key, "Settled abandoned idempotency reservation");
                 } else {
                     // A non-final result is refused by `mark_completed`. Leaving
@@ -595,6 +618,7 @@ pub fn enforce(
         AdmitOutcome::Proceed => Ok(GuardOutcome::Proceed(IdempotencyReservation::new(
             Arc::clone(cache),
             key,
+            fingerprint,
         ))),
         AdmitOutcome::InFlight => Err(Error::json_rpc(
             409,
@@ -1039,5 +1063,36 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         assert_eq!(cache.len(), 0, "stale entry should have been evicted");
+    }
+
+    #[test]
+    fn released_then_completed_entry_stays_bound_to_its_own_request() {
+        // GIVEN: a key admitted for request A, whose dispatch failed — the
+        // invoke path releases the reservation and then still stores the
+        // structured error result (`src/gateway/meta_mcp/invoke.rs:1480`,
+        // `:1836`), which `complete` documents as deliberate.
+        let cache = Arc::new(IdempotencyCache::new());
+        let GuardOutcome::Proceed(mut reservation) = enforce(&cache, "k", "fp-A").unwrap() else {
+            panic!("a fresh key is admitted");
+        };
+        reservation.release();
+        assert!(reservation.complete(&json!({"isError": true})));
+
+        // WHEN: a *different* request reuses the same client-supplied key
+        let outcome = enforce(&cache, "k", "fp-B");
+
+        // THEN: it is refused, not answered with request A's error. A stored
+        // result carries the fingerprint it was admitted for; an entry that
+        // binds nothing answers every later request for the whole TTL.
+        let Err(err) = outcome else {
+            panic!("key bound to fp-A must not serve fp-B");
+        };
+        // Named, not merely `is_err`: the in-flight and at-capacity refusals
+        // are errors too, and neither would prove the binding held.
+        let message = err.to_string();
+        assert!(
+            message.contains("already in use for a different request"),
+            "expected the fingerprint-mismatch refusal, got: {message}"
+        );
     }
 }
