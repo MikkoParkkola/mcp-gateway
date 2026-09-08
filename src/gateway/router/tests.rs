@@ -3537,3 +3537,5 @@ async fn ac_order_2_a_modern_caller_is_refused_gateway_set_profile() {
          cannot help: {message}"
     );
 }
+
+mod openwebui_adapter;

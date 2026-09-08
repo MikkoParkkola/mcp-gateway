@@ -262,6 +262,33 @@ pub(crate) fn resolve_secrets(
     overlay: &dyn super::SecretOverlay,
     store_keys: &std::collections::BTreeMap<String, Vec<u8>>,
 ) -> Result<Vec<String>, AccountsConfigError> {
+    Ok(resolve_material(adapters, overlay, store_keys)?.0)
+}
+
+/// The same resolution, keeping the MATERIAL for a runtime that must verify
+/// signatures with it.
+///
+/// A separate entry point rather than a widened [`resolve_secrets`]: the config
+/// load wants only the variable NAMES it read, and handing it signing bytes it
+/// has no use for would put adapter material on the startup path for nothing.
+/// Every rule [`resolve_secrets`] enforces — minimum length, no reuse with a
+/// store key or another adapter — is enforced here, because it is the same
+/// function; a runtime cannot obtain material without passing them.
+pub(crate) fn resolve_runtime_secrets(
+    adapters: &[AdapterConfig],
+    overlay: &dyn super::SecretOverlay,
+    store_keys: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> Result<Vec<Vec<u8>>, AccountsConfigError> {
+    Ok(resolve_material(adapters, overlay, store_keys)?.1)
+}
+
+/// Resolve every adapter secret once, returning both the names read and the
+/// bytes read, in list order.
+fn resolve_material(
+    adapters: &[AdapterConfig],
+    overlay: &dyn super::SecretOverlay,
+    store_keys: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> Result<(Vec<String>, Vec<Vec<u8>>), AccountsConfigError> {
     let mut read = Vec::new();
     let mut adapter_secrets: Vec<Vec<u8>> = Vec::new();
 
@@ -307,7 +334,7 @@ pub(crate) fn resolve_secrets(
         }
         adapter_secrets.push(material);
     }
-    Ok(read)
+    Ok((read, adapter_secrets))
 }
 
 /// One gateway authentication credential AS CONFIGURED — the literal text of
