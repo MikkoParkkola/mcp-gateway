@@ -25,13 +25,16 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::StoreConfig;
+use serde::{Deserialize, Serialize};
 
 /// The `accounts` block as configured. Unknown fields reject startup.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AccountsConfig {
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountsConfig {
     /// Required literal `accounts.v1`.
     pub(crate) schema_version: String,
     /// Default false; required true for any `personal_managed` descriptor.
+    #[serde(default)]
     pub(crate) enabled: bool,
     /// Literal `single_process` for managed custody, explicitly set.
     pub(crate) deployment: String,
@@ -42,6 +45,7 @@ pub(crate) struct AccountsConfig {
     pub(crate) current_key_id: String,
     /// key id -> `env:VARIABLE` reference resolving to base64 of exactly 32 bytes.
     pub(crate) keys: BTreeMap<String, String>,
+    #[serde(default)]
     pub(crate) limits: AccountsLimits,
 }
 
@@ -55,13 +59,23 @@ pub(crate) struct AccountsConfig {
 /// `max_authority_bytes.checked_add(16).and_then(|size| size.checked_mul(4))`
 /// overflows, so the largest accepted `authority_bytes` is `(usize::MAX/4)-16`.
 /// The numbers named on each field below are the approved DEFAULTS, not bounds.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AccountsLimits {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AccountsLimits {
     /// Default 10000 -> `StoreConfig::max_entries`. Zero and overflow reject.
     pub(crate) store_entries: usize,
     /// Default 16777216 -> `StoreConfig::max_authority_bytes`. Zero rejects, and
     /// so does any value the storage sealing arithmetic above cannot carry.
     pub(crate) authority_bytes: usize,
+}
+
+impl Default for AccountsLimits {
+    fn default() -> Self {
+        Self {
+            store_entries: 10000,
+            authority_bytes: 16777216,
+        }
+    }
 }
 
 /// Why a configuration is refused. Carries no secret material: a variant that

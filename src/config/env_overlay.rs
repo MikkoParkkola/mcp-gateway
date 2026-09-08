@@ -75,7 +75,7 @@ impl HomeResolver for SystemHome {
 
 /// Environment as the gateway sees it: env-file assignments layered over the
 /// process environment, without touching the process environment.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct EnvOverlay {
     /// Assignments made by this overlay's own env files.
     vars: HashMap<String, String>,
@@ -89,6 +89,22 @@ pub struct EnvOverlay {
     /// triggered by a watcher on exactly these paths, so a rewrite between the
     /// two reads is the expected interleaving rather than an exotic one.
     sources: Vec<(PathBuf, String)>,
+}
+
+impl std::fmt::Debug for EnvOverlay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EnvOverlay")
+            .field("owned_keys", &self.owned)
+            .field("var_count", &self.vars.len())
+            .field("source_count", &self.sources.len())
+            .finish()
+    }
+}
+
+impl crate::personal_accounts::config::SecretOverlay for EnvOverlay {
+    fn resolve(&self, name: &str) -> Option<String> {
+        EnvOverlay::resolve(self, name)
+    }
 }
 
 /// The 1-based line number where the parser's buffer begins in `text`.

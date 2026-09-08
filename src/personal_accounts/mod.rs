@@ -6,7 +6,7 @@
 //! fallback to legacy operator tokens. Filesystem operations are synchronous;
 //! async callers must execute custody work on a blocking worker.
 
-mod config;
+pub(crate) mod config;
 mod consent;
 mod identity;
 mod service;

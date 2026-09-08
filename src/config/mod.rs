@@ -42,6 +42,9 @@ pub use features::{
     StreamingConfig, ToolContractConfig, WebhookConfig,
 };
 
+// Personal-account custody DTO only — not the rest of `personal_accounts`.
+pub use crate::personal_accounts::config::{AccountsConfig, AccountsLimits};
+
 // ── Root config ───────────────────────────────────────────────────────────────
 
 /// Top-level gateway configuration.
@@ -108,6 +111,9 @@ pub struct Config {
     #[cfg(feature = "cost-governance")]
     #[serde(default)]
     pub cost_governance: crate::cost_accounting::config::CostGovernanceConfig,
+    /// Optional managed personal-account custody. Omitted enables none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounts: Option<AccountsConfig>,
 }
 
 fn default_routing_profile() -> String {
@@ -672,6 +678,15 @@ impl Config {
         if let Some(token) = self.key_server.admin_token.as_mut() {
             subst(token);
         }
+        // Record names only. Leave `env:` spellings in place so a rewrite cannot
+        // persist decoded account key material.
+        if let Some(accounts) = &self.accounts {
+            for reference in accounts.keys.values() {
+                if let Some(name) = reference.strip_prefix("env:") {
+                    seen.insert(name.to_string());
+                }
+            }
+        }
         seen
     }
 
@@ -734,6 +749,10 @@ impl Config {
         self.validate_agent_key_material(overlay)?;
         self.key_server.validate()?;
         self.error_budget.validate()?;
+        match crate::personal_accounts::config::resolve(self.accounts.as_ref(), overlay) {
+            Ok(_) | Err(crate::personal_accounts::config::AccountsConfigError::NotEnabled) => {}
+            Err(error) => return Err(Error::ConfigValidation(error.to_string())),
+        }
         Ok(())
     }
 
@@ -2097,3 +2116,7 @@ mod cleartext_credential_guard {
         assert!(validate(with_oauth(a2a(&format!("https://{REMOTE}")))).is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "account_custody_tests.rs"]
+mod account_custody_tests;
