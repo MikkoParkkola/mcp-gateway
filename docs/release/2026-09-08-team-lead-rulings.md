@@ -304,3 +304,34 @@ Caution attached to the grant: the row reads MET, and R13 amended what MET has t
 `src/idempotency.rs:881` fails `cargo fmt --check` and reproduces with no working-tree change, tracing to `04daba2d` on the SUB.4 lane. Two other lanes correctly reported it instead of fixing it. That is the right instinct and it is now the rule: in this shared tree, a repo-wide `cargo fmt` sweeps a peer's file into your commit. Format the file you broke; report the one you did not.
 
 Same for the ten `cargo clippy --all-targets` warnings, which sit in `src/capability/executor/executor_tests.rs`, `src/gateway/meta_mcp/tests.rs` and `tests/common/mod.rs` — none in the reporting lane's files. Red signals you did not cause are a report, not a project.
+
+## R18 — package F is off the release critical path, and knowing that changes what a bad run means
+
+`perf-baseline` reported Package F as the work that closes `NFR.PERF.1`. It is not, and the row itself says so. `NFR.PERF.1` in `docs/requirements/RELEASE-4.0.0-criteria-status.md:364` carries a **release owner's ruling dated 2026-09-05: 4.0.0 ships on the headroom argument** — worst shared case +6.07% against a 10% P99 bound — with the blocking flag lifted the same day and the grade deliberately left at PARTIAL, because "rewriting a criterion to match the evidence you happen to have is what makes the rest of a ledger worth less".
+
+So the end-to-end run is not what unblocks the release. Two things it can still win, both real:
+
+- the row closes **at its own wording** instead of by exception, which is strictly better than a headroom argument even when the headroom argument is sound;
+- the residual attached to that ruling — *no P50 or P99 for this release may be quoted publicly until an end-to-end run produces one* — is lifted. That residual otherwise binds every release note and every public claim indefinitely.
+
+And one thing it can lose, declared **before any number is seen**, because that is the whole discipline of the contract this package is executing: a run showing a P99 regression past the bound is evidence against a decision already made on headroom. It gets reported as that, not buried and not re-framed. A **void** run is neutral and costs a re-run; a **failing** run is §11 stop-the-line and reopens a closed ruling. Those are different outcomes and the lane may not collapse them.
+
+Consequence for scheduling: Package F does not gate the release, and the release does not wait on it.
+
+## R19 — pin the candidate at execution, and rehearse before the scored run
+
+The contract (`docs/requirements/RELEASE-4.0.0-performance-contract.md:28`) pins the candidate at `6218b857`. HEAD is now `79352d15` and six lanes are committing to this branch every few minutes; any commit named in advance is stale before the build starts.
+
+Ruled: **the candidate is the HEAD of `fix/mrtr2-continuation-handle` at the moment the first scored rep starts, recorded then, not chosen in advance.** A pin whose only property is that someone typed it earlier buys nothing; a pin recorded at execution is what makes the number attributable.
+
+Ruled with it: **one rehearsal now on current HEAD, explicitly non-evidence, then one scored run at the R14 trigger.** The rehearsal exists to trip the six declared void conditions — above all the `tools[0].name` hazard the contract names in advance — while tripping them is free. The failure this avoids is specific: a single scored shot that discovers a void condition at the moment the release is trying to go out. The rehearsal's numbers are discarded and may not be cited, including if they look good.
+
+## R20 — a toolchain newer than the pinned one is not a void
+
+Spark has rustc 1.98.1; the contract's environment table pins 1.98.0. `perf-baseline` flagged it as drift it would record rather than paper over — right instinct, wrong severity.
+
+Void condition 5 is **arm-to-arm**: "the two builds do not use the same feature list and toolchain". It says nothing about matching the environment table. The table's own gloss states why 1.98.0 is written there — "above the `rust-version = "1.95"` both arms require" — and 1.98.1 is also above it. Both arms building on 1.98.1 satisfies the condition exactly.
+
+Ruled: **not a void.** Record the actual `rustc -vV` string with the results and correct the environment row in the same commit as the re-pin. Do not stall the run on it.
+
+The general form, since this will recur: a pinned environment value serves a stated purpose, and drift is judged against that purpose, not against the string. Read what the pin is *for* before declaring a mismatch fatal — and read the void conditions, which are the only things entitled to void a run.
