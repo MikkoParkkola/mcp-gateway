@@ -1,8 +1,10 @@
 # PR #473 unreviewed-slice review — `src/gateway/meta_mcp/` shard
 
 Shard: the eleven `src/gateway/meta_mcp/` files of the PR #473 unreviewed slice,
-plus the two source files their findings reach (`src/idempotency.rs`,
-`src/protocol/mrtr.rs`, both read as evidence, neither in the payload).
+plus the source files those findings' evidence chains reach outside it, read
+as evidence and none of them in the payload: `src/idempotency.rs` (BLOCK-4),
+`src/gateway/meta_mcp_helpers.rs` (BLOCK-1), and `src/gateway/router/handlers.rs`,
+`src/gateway/router/helpers.rs`, `src/gateway/meta_mcp_tool_defs.rs` (BLOCK-3).
 
 Pinned revision: `BASE=c3626cf8`, `HEAD=60b138bb10a869703254eae2fe500f055d96f8d7`.
 
@@ -69,8 +71,14 @@ what this PR adds; delivering it through a wrapper that hides it is the defect
 that makes the feature unusable rather than merely imperfect.
 
 ### BLOCK-2 — every chain and playbook step shares one idempotency key
-`src/gateway/meta_mcp/invoke.rs:1227-1231`, `src/gateway/meta_mcp/mod.rs:1585`
-(gpt half A). CONFIRMED. The client-supplied key is inherited unchanged by each
+`src/gateway/meta_mcp/invoke.rs:1227-1231`, `src/gateway/meta_mcp/search.rs:524`,
+`src/gateway/meta_mcp/support.rs:299-321`
+(gpt half A). CONFIRMED. Both orchestrators pass the caller whole: `execute_chain`
+hands the same `caller` to `invoke_tool` on every iteration (`search.rs:524`), and
+`MetaMcpInvoker` holds it by reference for every playbook step (`support.rs:308`,
+used at `:321`) — deliberately, so each step faces the caller's own authorizer.
+`idempotency_key_for` then reads `caller.retry.idempotency_key` unchanged at each
+step (`invoke.rs:1227-1231`), so the client-supplied key is inherited by every
 step, so distinct steps collide on one key and identical steps replay a cached
 result instead of executing. A multi-step protected operation therefore stops
 partway or silently skips an action — the exact failure idempotency exists to
@@ -83,7 +91,8 @@ prevent.
 not a governed meta-tool name (`meta_mcp_tool_defs.rs:870`), so
 `exposes_meta_tool` answers true for backend tool names too, and
 `merge_client_meta` then inserts the client's `_meta` object into a surfaced
-backend tool's arguments (`helpers.rs:239-250`). Two consequences:
+backend tool's arguments — the deciding line is the
+`_meta` entry insert at `helpers.rs:249`. Two consequences:
 strict backend schemas reject the call, and — worse — the added field can shift
 the continuation digest, so a legitimate continuation fails its own integrity
 check.
@@ -126,6 +135,13 @@ separately: for any schema-bearing tool whose result has a single non-JSON text
 item, `apply_validated_output` overwrites that human-readable text with a
 pretty-printed JSON dump — a plain-text regression surface with the same
 pre-existing caveat.
+
+One confirmed finding is CRITICAL and is **not** on this list. C1
+(`invoke.rs:1421`, cancellation releasing a reservation after the backend may
+already have acted) carries the highest severity in this report and is listed
+below rather than here only because the cancellation path's reachability could
+not be established from a read-only pass. A single runtime observation flips it
+into this section.
 
 ## Confirmed, not blocking
 
