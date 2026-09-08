@@ -1325,15 +1325,22 @@ scraped from any output file. The round-6 recorded verdict reviewed the
 **unamended** design and does not carry to this amendment; both legs re-run
 against the material above, submitted on stdin.
 
-That sentence binds the PACKAGE, not just the intent: round 7 cannot carry
-round 1's PART A verbatim. `dc102441` (the F1 escalation stated in full),
-`ffcb46a9` (its finder-unavailable closure path) and `479d955c` (the `WIRE.11`
-level column, corrected to `unit` after `8efa02c8` moved the row in-crate)
-all landed after that package was assembled. A leg handed the round-1 copy
-returns a verdict on a revision that no longer exists, which is an absence of
-review wearing a verdict line. PART A is the design and plan AS THEY STAND at
-submission; if a diff-shaped part is wanted, those three commits ride as their
-own verbatim section and the header says so.
+That sentence binds the PACKAGE, not just the intent: no round may carry an
+earlier round's PART A verbatim. PART A is the design and plan **as they stand
+at submission**, read from the working tree when the package is assembled and
+never copied forward from a previous one. A leg handed a stale copy returns a
+verdict on a revision that no longer exists, which is an absence of review
+wearing a verdict line.
+
+An earlier version of this paragraph listed the three commits that had landed
+since round 1 by hash. That list was already wrong by the time anyone read it,
+and it could not have been otherwise: this branch is shared, so a commit from
+another session goes into the enumeration's blind spot without touching the
+enumeration. The rule needs a BASELINE, not an inventory. Round 1's package was
+assembled at `7cfc16bd`; everything after it postdates that package. If a
+diff-shaped section is wanted alongside PART A, it is
+`git diff 7cfc16bd..HEAD -- <the two documents>` and the header says which
+range it is, so the section stays accurate without anyone maintaining it.
 
 ## Round 8 — two rulings recorded, and the roots defect is worse than round 7 said
 
