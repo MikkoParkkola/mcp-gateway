@@ -1342,6 +1342,14 @@ diff-shaped section is wanted alongside PART A, it is
 `git diff 7cfc16bd..HEAD -- <the two documents>` and the header says which
 range it is, so the section stays accurate without anyone maintaining it.
 
+An off-by-one on that baseline is possible in principle — a commit whose subject
+records a round's OUTCOME postdates that round's submission, so the package may
+have been assembled at its parent rather than at it — and here it is inert:
+`7cfc16bd` touches only `docs/design/2026-08-31-sub-4-idempotency-wiring.md`, a
+different change's document (`git show --stat 7cfc16bd`). Either endpoint yields
+the same content for the two documents this range is filtered to, so the range
+stands as written.
+
 ## Round 8 — two rulings recorded, and the roots defect is worse than round 7 said
 
 Round 7 named five decisions. Two were the requester's and have been ruled.
@@ -1476,21 +1484,64 @@ touch would be swallowed by the variant it did. The requirement carrying it
 (`the aggregate budget ends a call whose rounds each answer in time`, plan row
 321) would still be stated and no longer reachable.
 
-**The decision:** the branch reports which bound expired. An exhausted aggregate
-is `BridgeError::Deadline`; a silent client inside a live budget is
+**Recommended reading:** the branch reports which bound expired. An exhausted
+aggregate is `BridgeError::Deadline`; a silent client inside a live budget is
 `BridgeError::Delivery { key, error: DeliveryError::TimedOut }`. No new variant,
-no new type, no wire change — both already exist and both are already
-constructed elsewhere. What changes is that the wait's two causes stop sharing
-one exit.
+no new type, no wire change. An earlier revision of this paragraph reassured the
+reader that "both are already constructed elsewhere" — half true, and the false
+half is the interesting one. `DeliveryError::TimedOut` is constructed at
+`src/gateway/proxy.rs:557-558` as `rx.await.map_err(|_| DeliveryError::TimedOut)`,
+a DROPPED CHANNEL rather than an elapsed clock, under a comment that defines
+itself as "what the bridge's own timeout arm means by `TimedOut`". That comment
+points at an arm which has never constructed the value. The repair makes it true
+for the first time; until then it is a §P4a casualty riding with this change,
+recorded here so a reviewer who greps the reassurance meets the asymmetry
+instead of rediscovering it.
 
-**Who decides this?** Nobody had, which is the tell. The ruling settled what
-happens to a silent client and said nothing about the aggregate, because from
-outside the loop they do not look like the same code path. They are.
+Tie at the boundary, settled here so the implementation need not guess: when
+`left == per_prompt` both bounds expire on the same instant and both readings
+fit. The aggregate wins — the discriminator is `left <= per_prompt` ->
+`Deadline`. At that instant the call has no budget left to start another wait,
+so naming an entry would name one the call was never going to hear from.
 
-**What it does not authorise.** This does not move what row 321 asserts. That
-row keeps `Err(BridgeError::Deadline)` exactly as written, and under this
-decision it becomes the case that pins the distinction rather than merely
-exercising the deadline. Rewriting it to expect the new variant would be
-recording the collapse instead of preventing it. Nothing here narrows §P0's FOR
-or drops an acceptance criterion; the plan correction sits beside row 320's
-inversion in `2026-09-05-mrtr7-test-plan.md`.
+**Who decides this?** Not the author. The ruling settled what happens to a
+silent client and said nothing about the aggregate, because from outside the
+loop the two do not look like the same code path. They are. And the error shape
+on `ask()`'s failure path is the release owner's call in this lane — established
+2026-09-08 by the ruling this section builds on, `R8a — BRIDGE.4: the lane's
+error shape beats the one this document specified`. Deciding it here would take
+back the authority that ruling asserted, one document later.
+
+The ruling is genuinely silent, and two readings survive it:
+
+- **recommended** — the aggregate expiring is `Deadline`, because the client was
+  not silent, it was answering. Row 321 keeps its assertion unchanged and starts
+  PINNING the distinction rather than merely exercising the deadline;
+  `BridgeError::Deadline` stays reachable from `ask()`.
+- **the other** — "fail the call, naming the entry" covers any entry the call
+  abandons, including one the clamp cut short. The arm then always returns
+  `Delivery { TimedOut }`, `Deadline` genuinely leaves `ask()`, and **row 321's
+  assertion moves** — the same churn row 320's inversion has already cost.
+
+**Question, scheduled per §P1 (askable, not checkable)**: when the aggregate
+budget expires *inside* a prompt's wait, does the call fail with
+`BridgeError::Deadline`, or with
+`BridgeError::Delivery { key, error: DeliveryError::TimedOut }` naming the
+prompt the clamp cut short?
+
+- asked of: the release owner, via team-lead
+- what would resolve it: a recorded choice between the two readings above
+- when: before the BRIDGE.4 inversion is written. The answer decides whether row
+  321 keeps its assertion or changes it, and a test written first against the
+  wrong reading is exactly the churn §P2's ordering exists to prevent
+- if it resolves the other way: `BridgeError::Deadline` becomes unreachable from
+  `ask()` by design rather than by accident, row 321 is rewritten to expect the
+  `Delivery` variant, and the requirement it carries (`the aggregate budget ends
+  a call whose rounds each answer in time`) needs either a new reachable case or
+  an explicit retirement — a §P0 disposal, not a test edit
+
+**What this section does not authorise.** It does not move what row 321 asserts:
+that row keeps `Err(BridgeError::Deadline)` until the question above is
+answered. Nothing here narrows §P0's FOR or drops an acceptance criterion. The
+plan correction sits beside row 320's inversion in
+`2026-09-05-mrtr7-test-plan.md`, and the inversion waits on the answer.
