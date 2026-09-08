@@ -30,7 +30,7 @@ What I've shipped is four loosely coupled repos that share one thesis — **the 
 
 The MCP ecosystem treats "connect N servers" as a feature. It's also the entire attack surface: Invariant Labs demonstrated tool-poisoning, rug-pulls, shadowing, and a working WhatsApp exfiltration through hidden `<IMPORTANT>` blocks in tool descriptions (citations below). `mcp-gateway` is a single Rust binary that sits between the agent and every backend, and:
 
-- Exposes a **compact Meta-MCP surface** (14 tools minimum; 16 in the README scenario) instead of the raw N-server fanout. The 89% figure is a schema-only first-request model; completed-task math also counts discovery turns and responses.
+- Exposes a **compact Meta-MCP surface** (14 tools minimum; 17 in the README scenario) instead of the raw N-server fanout. The 89% figure is a schema-only first-request model; completed-task math also counts discovery turns and responses.
 - Runs every backend tool description through a validator before it hits the agent's context. Rule **AX-010** (`src/validator/rules/tool_poisoning.rs`, 19 tests) catches the Invariant patterns: `<IMPORTANT>` tags, `~/.ssh`/`id_rsa`/`.env`/`/etc/passwd` paths, "sidenote" exfiltration, curl-to-HTTP, base64 in exfil context, zero-width and bidi-override Unicode.
 - Can hash-pin capability YAMLs by SHA-256. A changed pinned file fails closed with `RUG-PULL DETECTED`; unpinned files still load.
 - Imports a full OpenAPI spec into validated capability YAMLs with one command (Petstore: 19 operations end-to-end).

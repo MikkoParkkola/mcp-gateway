@@ -6,7 +6,7 @@
 //!
 //! # Features
 //!
-//! - **Meta-MCP Mode**: 14 tools minimum; 16 in the README benchmark scenario
+//! - **Meta-MCP Mode**: 14 tools minimum; 17 in the README benchmark scenario
 //! - **Streaming**: Real-time notifications via SSE (MCP 2025-03-26 Streamable HTTP)
 //! - **Notification Multiplexer**: Routes backend notifications to connected clients
 //! - **Multi-Transport**: stdio, Streamable HTTP, SSE support

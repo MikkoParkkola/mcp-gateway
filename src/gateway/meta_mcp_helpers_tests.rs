@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
+use crate::gateway::meta_mcp_tool_defs::MetaToolGates;
 use crate::ranking::SearchResult;
 
 #[path = "meta_mcp_helpers_tests/response.rs"]
@@ -501,7 +502,16 @@ fn routing_instructions_uses_general_for_empty_category() {
 
 #[test]
 fn build_meta_tools_returns_base_plus_playbook_and_kill_tools_without_stats_or_webhooks() {
-    let tools = build_meta_tools(false, false, false, 0, 0);
+    let tools = build_meta_tools(
+        MetaToolGates {
+            stats: false,
+            reload: false,
+            cost_report: false,
+            webhook_status: false,
+        },
+        0,
+        0,
+    );
     // 4 base + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 set-state + 1 reload-capabilities = 13
     assert_eq!(tools.len(), 13);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -520,14 +530,23 @@ fn build_meta_tools_returns_base_plus_playbook_and_kill_tools_without_stats_or_w
     assert!(!names.contains(&"gateway_reload_config"));
 }
 
-/// The stats-enabled surface, which `NFR.PERF.4` keeps webhook status off.
+/// The stats-enabled surface with no webhook registry attached.
 ///
-/// This once expected an enumerated `gateway_webhook_status` and a count of
-/// 15. The tool is still dispatchable by name; the band counts what a model is
-/// SHOWN, so it left the enumeration and took the fifteenth slot with it.
+/// This is the stdio shape: `run_stdio` never calls `set_webhook_registry`, so
+/// the tool is absent from the listing there however `webhooks.enabled` is set.
+/// The attached case is swept in `meta_mcp_tool_defs_tests.rs`.
 #[test]
 fn build_meta_tools_with_stats_enumerates_everything_but_webhook_status() {
-    let tools = build_meta_tools(true, false, false, 0, 0);
+    let tools = build_meta_tools(
+        MetaToolGates {
+            stats: true,
+            reload: false,
+            cost_report: false,
+            webhook_status: false,
+        },
+        0,
+        0,
+    );
     // 4 base + 1 stats + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 set-state + 1 reload-capabilities = 14
     assert_eq!(tools.len(), 14);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -548,7 +567,16 @@ fn build_meta_tools_with_stats_enumerates_everything_but_webhook_status() {
 #[test]
 fn build_meta_tools_includes_reload_when_enabled() {
     // GIVEN: reload context enabled
-    let tools = build_meta_tools(false, true, false, 0, 0);
+    let tools = build_meta_tools(
+        MetaToolGates {
+            stats: false,
+            reload: true,
+            cost_report: false,
+            webhook_status: false,
+        },
+        0,
+        0,
+    );
     // 4 base + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 reload + 1 set-state + 1 reload-capabilities = 14
     assert_eq!(tools.len(), 14);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -562,7 +590,16 @@ fn build_meta_tools_includes_reload_when_enabled() {
 #[test]
 fn build_meta_tools_all_enabled_includes_reload() {
     // GIVEN: stats and reload enabled
-    let tools = build_meta_tools(true, true, false, 0, 0);
+    let tools = build_meta_tools(
+        MetaToolGates {
+            stats: true,
+            reload: true,
+            cost_report: false,
+            webhook_status: false,
+        },
+        0,
+        0,
+    );
     // 4 base + 1 stats + 1 playbook + 2 kill-switch + 2 profile (set/get) + 1 disabled-caps + 1 list-profiles + 1 reload + 1 set-state + 1 reload-capabilities = 15
     assert_eq!(tools.len(), 15);
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();

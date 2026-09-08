@@ -526,12 +526,15 @@ fn record_continuation_mint(reason: &'static str) {
 fn record_continuation_rejection(reason: &'static str) {
     telemetry_metrics::counter!("continuation_rejection_total", "reason" => reason).increment(1);
     if reason == "expired" {
-        // A client presenting a stale envelope. Distinct from the in-flight
-        // table's own silent eviction of an exchange nobody came back for
-        // (`reclaim_abandoned`, instrumented separately in `continuation.rs`
-        // under NFR.OBS.4): one caller came back too late, the other never
-        // came back at all. Same top-level "expiry" fact, two operational
-        // causes — kept apart by `reason`, not by a second counter.
+        // A client presenting a stale envelope. Counted apart from the
+        // in-flight table's own eviction of an aged-out exchange
+        // (`reclaim_abandoned`, `continuation.rs`, `reason="hold_evicted"`
+        // under NFR.OBS.4) by `reason`, not by a second counter.
+        //
+        // The two are observation points, not disjoint causes: a client that
+        // returns too late is refused here AND has its hold evicted by the
+        // next reader, so one continuation can raise both. Neither count is a
+        // population of continuations, and summing them double-counts.
         telemetry_metrics::counter!("continuation_expiry_total", "reason" => "deadline_passed")
             .increment(1);
     }

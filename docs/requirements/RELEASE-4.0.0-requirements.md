@@ -289,7 +289,7 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 | NFR.PERF.1 | Tool-call latency through the gateway MUST NOT regress by more than 5% at P50 or 10% at P99 against 3.5.0 on the same workload. | M |
 | NFR.PERF.2 | Header-first routing MUST be justified by measurement against the current full-parse path, or MUST NOT ship. A performance change without a number is not a performance change. | M |
 | NFR.PERF.3 | Memory MUST NOT grow unboundedly with abandoned continuations; a soak with abandonment MUST show reclamation. | M |
-| NFR.PERF.4 | The Meta-MCP surface **enumerated to a model** MUST remain 14–16 tools. `server/discover` is a protocol RPC, never enumerated to a model, and does not count against it. The cap governs what `tools/list` advertises, not what is dispatchable: a name absent from the listing is not thereby uncallable, and list and call are not required to agree. | T |
+| NFR.PERF.4 | The Meta-MCP surface **enumerated to a model** MUST remain 14–17 tools. The ceiling was 14–16 until 2026-09-08, when the operator ruled that the 2026-09-02 decision — which held the ceiling and removed `gateway_webhook_status` from the listing — had made a documented number true by deleting a feature's only diagnostic. The seventeenth is served where a webhook registry is attached, so stdio deployments stay at 14–16 (`docs/design/2026-09-08-perf4-webhook-status-restoration.md`). `server/discover` is a protocol RPC, never enumerated to a model, and does not count against it. The cap governs what `tools/list` advertises, not what is dispatchable: a name absent from the listing is not thereby uncallable, and list and call are not required to agree. | T |
 
 ### 4.4 Observability and operability
 

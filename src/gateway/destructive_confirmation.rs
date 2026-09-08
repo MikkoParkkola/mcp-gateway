@@ -45,9 +45,7 @@ use std::time::Duration;
 
 use tracing::warn;
 
-use crate::gateway::meta_mcp_tool_defs::{
-    build_code_mode_tools, build_meta_tools, build_webhook_status_tool,
-};
+use crate::gateway::meta_mcp_tool_defs::{MetaToolGates, build_code_mode_tools, build_meta_tools};
 use crate::gateway::proxy::{ProxyManager, SamplingError};
 use crate::protocol::ElicitationCreateParams;
 
@@ -201,11 +199,19 @@ const FLOOR_TOOL_NAME: &str = "gateway_kill_server";
 /// unconditional refusal — governing them here would refuse a large slice of
 /// the tool surface with no confirmation path. See the module docs.
 static DESTRUCTIVE_META_TOOLS: LazyLock<HashSet<String>> = LazyLock::new(|| {
-    let mut tools = build_meta_tools(true, true, true, 0, 0);
+    // Every flag on, webhook status included: this set governs what is
+    // *dispatchable*, which is wider than what any one deployment lists.
+    let mut tools = build_meta_tools(
+        MetaToolGates {
+            stats: true,
+            reload: true,
+            cost_report: true,
+            webhook_status: true,
+        },
+        0,
+        0,
+    );
     tools.extend(build_code_mode_tools());
-    // Callable but never enumerated, so the builder does not produce it — and a
-    // gate over what is *listed* would leave a dispatchable tool ungoverned.
-    tools.push(build_webhook_status_tool());
     let json = serde_json::to_value(&tools).unwrap_or(serde_json::Value::Null);
     let mut governed = destructive_tools_from_annotations(&json);
     governed.insert(FLOOR_TOOL_NAME.to_string());
@@ -385,9 +391,20 @@ mod tests {
         // GIVEN: the REAL compile-time meta-tool definitions, built with every
         // feature flag on (so a flag-gated destructive tool is still covered),
         // plus the Code Mode tool set.
-        use crate::gateway::meta_mcp_tool_defs::{build_code_mode_tools, build_meta_tools};
+        use crate::gateway::meta_mcp_tool_defs::{
+            MetaToolGates, build_code_mode_tools, build_meta_tools,
+        };
 
-        let mut tools = build_meta_tools(true, true, true, 0, 0);
+        let mut tools = build_meta_tools(
+            MetaToolGates {
+                stats: true,
+                reload: true,
+                cost_report: true,
+                webhook_status: true,
+            },
+            0,
+            0,
+        );
         tools.extend(build_code_mode_tools());
 
         // WHEN/THEN: every tool whose annotations carry `destructiveHint: true`
@@ -426,9 +443,20 @@ mod tests {
         // fails to compile until that static exists — the RED before
         // `is_destructive_meta_tool` stops being a hardcoded match arm) rather
         // than a second, hand-maintained copy of the same predicate.
-        use crate::gateway::meta_mcp_tool_defs::{build_code_mode_tools, build_meta_tools};
+        use crate::gateway::meta_mcp_tool_defs::{
+            MetaToolGates, build_code_mode_tools, build_meta_tools,
+        };
 
-        let mut tools = build_meta_tools(true, true, true, 0, 0);
+        let mut tools = build_meta_tools(
+            MetaToolGates {
+                stats: true,
+                reload: true,
+                cost_report: true,
+                webhook_status: true,
+            },
+            0,
+            0,
+        );
         tools.extend(build_code_mode_tools());
         let json = serde_json::to_value(&tools).expect("tool defs must serialize");
         let mut expected = destructive_tools_from_annotations(&json);

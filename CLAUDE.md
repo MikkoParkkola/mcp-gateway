@@ -108,7 +108,7 @@ Universal MCP Gateway | Rust 1.88+ | Edition 2024 | ~101K LOC | PolyForm Noncomm
 
 ## Product Vision
 
-mcp-gateway sits between any AI client and any set of MCP tools. Instead of loading hundreds of tool definitions into every request, the AI sees a compact **Meta-MCP surface** (14 tools minimum, 16 in the README benchmark) and discovers the right backend tool on demand. This cuts schema-only first-request context on a 100-tool stack (the 89% README model ignores extra discovery turns; `honest_task_tokens` can lose), removes the "pick which tools to connect" tradeoff, and makes `Unlimited` a practical answer to `how many tools`.
+mcp-gateway sits between any AI client and any set of MCP tools. Instead of loading hundreds of tool definitions into every request, the AI sees a compact **Meta-MCP surface** (14 tools minimum, 17 in the README benchmark) and discovers the right backend tool on demand. This cuts schema-only first-request context on a 100-tool stack (the 89% README model ignores extra discovery turns; `honest_task_tokens` can lose), removes the "pick which tools to connect" tradeoff, and makes `Unlimited` a practical answer to `how many tools`.
 
 The gateway is a **tool + capability router**, not a general chat-completions / embeddings gateway. When a backend asks for `sampling/createMessage`, the connected client still performs the model call. OpenAI-compatible prompt-cache helpers exist only so `gateway_invoke` can preserve `prompt_cache_key` behavior for backends that call LLM APIs internally.
 
@@ -118,7 +118,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 
 - **v4.0.0** · Rust 1.95+ · Edition 2024 · ~101K LOC · MIT core + PolyForm Noncommercial EE
 - Published on crates.io + Homebrew + npm + ghcr.io container images + Glama + VS Code + Cursor one-click install
-- **Meta-MCP surface**: 14-16 tools in production scenarios (README benchmark scenario)
+- **Meta-MCP surface**: 14-17 tools in production scenarios (README benchmark scenario)
 - **Capability backends**: 110+ REST capabilities + MCP backends routed via the same surface
 - **Security**: unsafe denied (`#![deny(unsafe_code)]`); dependency-status badge; scoped OWASP Agentic AI self-assessment at `docs/OWASP_AGENTIC_AI_COMPLIANCE.md`
 - **Benchmarks**: machine-readable claims in `benchmarks/public_claims.json` with CI drift check
@@ -136,7 +136,7 @@ The gateway is a **tool + capability router**, not a general chat-completions / 
 
 | Decision | Rationale | Do not |
 |---|---|---|
-| **Meta-MCP surface is compact** (14-16 tools target) | Catalog capacity and on-demand routing are the value proposition | Add meta-tools that could be dynamic-discovery tools |
+| **Meta-MCP surface is compact** (14-17 tools target) | Catalog capacity and on-demand routing are the value proposition | Add meta-tools that could be dynamic-discovery tools |
 | **mcp-gateway is NOT a chat / embeddings gateway** | Scope boundary; model calls stay with the connected client | Add OpenAI chat-completion proxying as a first-class feature |
 | **`#![deny(unsafe_code)]`** | Gateway sits on the trust path for every tool call | Introduce unsafe to chase performance |
 | **Optional SHA-256 capability pinning** | Pinned capability tampering must be detectable and fail closed | Accept a mismatched pin |
@@ -190,7 +190,7 @@ cargo fmt                            # auto-format
 
 ## Architecture
 
-Single-binary gateway: AI client -> compact Meta-MCP surface (14 tools minimum; 16 in the README scenario) -> dynamic discovery of backend tools.
+Single-binary gateway: AI client -> compact Meta-MCP surface (14 tools minimum; 17 in the README scenario) -> dynamic discovery of backend tools.
 The 89% figure is a schema-only first-request model; completed-task math also counts discovery turns and response history and can report a loss.
 OWASP Agentic AI Top 10: scoped in-tree self-assessment, not certification. MCP + A2A dual-protocol.
 
