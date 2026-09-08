@@ -573,3 +573,42 @@ Three things the lane established that the board should carry:
   falsifier probe rather than a free failure. Nobody should estimate it as a
   ten-minute test.
 - All three rows stay PARTIAL and blocking. The count in R27 does not move.
+
+## R30 — 525 evidence anchors, none of which names when it was read
+
+`confirm-gate` found eight anchors in the `CONFIRM.1a` cell sitting twelve lines
+low. The cell had been rewritten fifteen minutes after `5182b3fc` added seventeen
+lines of doc comment to the file it cites, and its headline said its citations had
+been re-verified at source. They had been read — just not after the commit that
+moved them. The lane found five more of the same in its own seam note. Both are
+fixed (`56ca3fd1`, `33efb4aa`).
+
+The lane's generalisation is right and it is not confined to that lane: on a branch
+where six sessions commit within the hour, **"re-verified today" is not a freshness
+claim.** Measured across the whole ledger: 525 `path:line` anchors, 129 distinct
+files, 161 rows. Zero of them name a commit.
+
+That is the release gate's own evidence. An anchor that has silently drifted does
+not read as wrong — it reads as a citation, and a reviewer who spot-checks one that
+happens to be stale learns nothing about the other 524.
+
+**Two rules, from now.**
+
+1. A cell citing `path:line` names the symbol it expects to find there, and the
+   commit it was read at: `` `src/gateway/x.rs:99 for_modern` @ 9ceaeb54 ``. The
+   symbol is what makes the anchor checkable by something other than a person; the
+   sha is what makes staleness detectable without re-reading.
+2. No row is quoted as release evidence until its anchors have been re-read against
+   the revision being released, or verified mechanically under rule 1.
+
+**Rule 1 is worth nothing without the checker, so the checker is the deliverable.**
+`perf-baseline` owns it: extract every `path:line` plus its named symbol from the
+ledger, assert the file has that line and that the line's neighbourhood contains
+the symbol, report every anchor that fails. That lane spent this cycle building an
+evidence apparatus designed to be ungameable and is parked until R14 fires; this is
+the same problem one level up, and it is the difference between a ledger a reader
+can trust and one a reader can only sample.
+
+Backfilling 525 anchors by hand is not ordered and would not be done. The checker
+reports which are stale; only those get re-read. Anchors written from now carry
+their sha, so the backlog is bounded and shrinking rather than growing.
