@@ -225,3 +225,33 @@ stream is a real remaining gap, verified at source this turn.
 valid kimi leg logs and records its verdict under a `synthetic-review:` prefix. Two lanes
 have now read that prefix as a foreign or disqualified vendor, and one was about to discard
 a passing dual-vendor review over it. It is the wrapper's own name.
+
+## R12 — `control4`: reaper wiring may edit `src/gateway/streaming.rs` (U3 granted)
+
+`control4-lifecycle` asked whether wiring the session reaper could touch
+`src/gateway/streaming.rs`, a file outside the lane's declared surface. Granted, bounded three
+ways: shape (a) from its own design, reaper wiring only, and nothing else in that file. The
+grant is recorded here rather than left in the lane's mailbox because the next lane to touch
+streaming needs to know a peer holds an authorised edit there, and a mailbox reaches one agent.
+
+Bound is the surface, not the lane: an edit to `streaming.rs` for any other purpose is a §P0
+scope move and needs its own ruling.
+
+## R13 — MIK-7414's `$ref` criteria were mis-stated by the team lead, and are amended
+
+`ext1-otel1` pushed back that two acceptance criteria I wrote onto MIK-7414 described a
+mechanism its design does not build: they said the walk *rejects* what exceeds the bound, and
+that composition (`allOf`/`anyOf`/`oneOf`/`not`/`if`) is bounded alongside `$ref`. Verified at
+source against R6 and the lane's design: the mechanism stamps an advisory verdict on the trust
+card and refuses nothing, and composition is legal 2020-12 that is deliberately observed, never
+constrained. Both were transcription errors in the ticket, not gaps in the work.
+
+Amended in Linear this turn, with the reason recorded on the issue. Correcting a criterion that
+mis-states the design it describes is not a scope cut and needs no separate agreement — the
+repair protocol's bar (a requirement may not be dropped without the requester's recorded
+agreement) guards against silently removing work, and this removes none. Ordering rejection, or
+bounding composition, would be new design stacked on R6 and is explicitly not ordered.
+
+The general form, for every lane: a criterion is a claim about the design, and a lane that
+reads one as wrong should say so rather than build to it. This one was caught because the lane
+argued back.
