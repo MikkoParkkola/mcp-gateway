@@ -236,11 +236,31 @@ its diagnosis cost is the price of that proof.
   321 keeps its assertion **unchanged** and is now also the row that pins that
   distinction. It may not be quietly rewritten to expect the new variant; a
   plan that rewrote it would be recording the collapse rather than catching it.
-  One last thing row 320's own fixture owes its reader. Under the ruling the
-  call fails on the first silent prompt, so the second scripted client reply and
-  the backend's `completed()` are unreachable staging. The row asserts on what
-  the first prompt does; the tail of both scripts is dead, and dead staging is
-  not evidence of anything.
+  One last thing row 320's own fixture owes its reader, corrected here rather
+  than in test code, because a plan that leaves it costs a round. Under the
+  ruling the call fails on the first silent prompt, so everything scripted
+  after it is unreachable staging, and dead staging is not evidence of
+  anything. The earlier revision of this paragraph named the second client
+  reply and the backend's `completed()`; that understated it by one entry. The
+  backend script is consumed only when a round COMPLETES and the bridge
+  re-invokes — the first round's asking arrives as the `interim` parameter, not
+  from the script — so a call that returns inside the first round reaches
+  neither backend entry. Corrected staging, all of it:
+  `FakeClient::new(vec![Reply::Silent])` and an empty backend script, against
+  `tests/mik_7212_mrtr7_bridge_acs.rs:1124-1125`, which today scripts
+  `[Reply::Silent, accepted(&content)]` and `[asking(&[("k2", …)]), completed()]`.
+
+  The bounds are the half that decides whether this row proves what it names,
+  and they must NOT change: `aggregate: 400ms` against `per_prompt: 60ms`
+  (`:1119-1120`). Both bounds meet the same wait through
+  `per_prompt.min(left)`, so R21's discriminator (`left <= per_prompt` resolves
+  to `Deadline`) is what picks the error this row asserts. At the first prompt
+  `left` is the full 400ms, over six times the per-prompt bound, so the clamp
+  cannot be what fires and `Delivery { key: "k1", error: TimedOut }` is the only
+  reachable answer. A fixture that narrowed the aggregate toward 60ms would
+  still fail today and still go green after the repair, while asserting the
+  wrong cause — the §P2 Q2 failure mode of a case that cannot fail for its own
+  reason.
 - **MIK-7388's stranded-pending-entry defect** (`:430`) — *not* absent from this
   plan. It was filed against `input_bridge.rs`, which holds no pending state; the
   obligation belongs to the `ClientChannel` implementor this change creates, per
