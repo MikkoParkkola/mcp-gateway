@@ -512,3 +512,99 @@ Dispositions, fixed now rather than at reduction time:
 
 `INCONCLUSIVE` remains what A3 defined it as — a spread the pooled margin cannot survive — and
 is not a landing place for a result somebody dislikes.
+
+## Amendment 5 — 2026-09-08, the rehearsal record: VOID by harness defect, four defects named
+
+Legality, in the same checkable form as Amendments 1-3: the rehearsal's eight reps ran and
+finished before this amendment was written, and **no scored rep has started**. A4.1 already
+discarded the rehearsal's numbers as evidence, so nothing this amendment touches has been
+measured by anything that counts. That ordering is the entire authority for editing a contract
+after a machine has produced output, and it is stated as a fact a reader can order from the
+commit times rather than as an assurance.
+
+### A5.1 — the rehearsal's outcome is `VOID`, and the cause is the harness
+
+Under R18 a void is neutral: the run measured nothing, no claim moves in either direction, and
+the remedy is machine time. That is what happened. The evaluator could not read the runner's
+output, and the workload asked a question the product answers correctly with a "no". Neither
+fact is a latency, so both are reportable; the numbers on the disk are not, and are not
+repeated here, above, or anywhere else.
+
+The rehearsal has now paid for itself twice. Amendment 3 recorded the first: two pinned ports
+held by strangers' processes, which would have measured someone else's gateway. This amendment
+records the second, third, fourth and fifth.
+
+### A5.2 — the four defects
+
+| # | defect | where | consequence had the scored run gone first |
+|---|---|---|---|
+| D1 | k6's JSON-lines stream shared stdout with its own end-of-test text summary, and `--summary-export=/dev/stderr` shared stderr with the progress log | `run-reps.sh` rep() | `.raw.json` and `.summary.json` both unparseable; the frozen evaluator reports a missing rep and the run voids on plumbing |
+| D2 | `handleSummary` called `.every` on `m.thresholds`, which k6 hands over as an object keyed by threshold expression | `tests/load/k6_gateway.js` | TypeError kills handleSummary; the run's summary is lost |
+| D3 | the check `dashboard: 200 or 404` never allowed 403 | `tests/load/k6_gateway.js` | 0 of ~5,428 passes per rep, **in both arms**; aggregate checks rate far below 99%, so **void condition 3 fires on every measured rep** |
+| D4 | A7's launch argv and per-arm checkout SHA were specified but never actually written by the runner | `run-reps.sh` | the results package cannot show which commit each arm was built from — the exact thing A4.2 now depends on |
+
+D3 is the one that mattered, and it is worth being precise about what it is not. `/dashboard`
+is **admin-only by design**: `dashboard_handler` gates on `is_admin` and returns 403 with an
+HTML explainer, deliberately, so the page cannot serve as a way around the redaction
+`/ui/api/status` applies to a non-admin caller. The gateway under test runs with authentication
+disabled, so every caller is anonymous, so 403 is the correct answer — in both arms, identically.
+The sibling check one group down already accepts 403 for `/ui/api/status`, which is gated by the
+same rule. The dashboard check simply never had it. **This is a wrong question, not a wrong
+answer, and it is not a candidate regression.**
+
+Correcting a check expectation after watching it fail is the move A4.3 forbids — choosing a rule
+after seeing numbers, whichever direction it points. It is legal here for two reasons, both
+stated so a reader can refuse them: the rehearsal is explicitly non-evidence under A4.1, and this
+correction lands before the first scored rep. What settles it beyond the timing is that the
+correction is **checkable against the product's source rather than against the run's output**:
+the handler's own documentation says it is admin-only, and the adjacent check for the endpoint
+under the same gate already reads the way this one now does.
+
+### A5.3 — both fixes, and the runner's re-freeze
+
+Repo fix, committed as `7a6d752b`: D2 and D3 in `tests/load/k6_gateway.js`.
+
+Runner fix, on Spark: D1 and D4. k6 now writes the JSON-lines stream and the JSON summary to
+separate files on a mounted results directory, and its human console output to
+`<tag>.console.txt`; nothing shares a stream with anything. The runner also writes
+`launch-argv.txt` and `checkout-sha.txt` (per-arm `HEAD` plus a dirty-file count, so a modified
+tree is visible rather than implied), and — closing the A2 residual, which had likewise been
+specified and not implemented — `<tag>.failing-checks.txt`, naming and counting every check that
+failed in a rep whose checks rate is below 100%.
+
+```
+run-reps.sh   sha256 817e23fdb67856f3c92f5dc89c922265978ba9901387af38b9654224819ca491
+              (supersedes b65e2331…, the Amendment 3 freeze)
+eval-nfr1.sh  sha256 7b3d6225a34d0aab8229b417edb686ead80ffbd109f2f7a1d460831fe4c49d09
+              UNCHANGED, re-hashed after the patch
+```
+
+The evaluator is the script that decides `PASS`/`FAIL`, and it has not been edited since it was
+frozen. Every defect above was repaired in the thing that **produces** the evidence, never in the
+thing that **judges** it. Filtering the rehearsal's unparseable files into something the
+evaluator would accept was available and was refused: it would have fed the evaluator something
+the runner never emitted, which hides D1 instead of fixing it.
+
+A 10-second smoke rep against the patched harness returns 0 non-JSON lines in the raw stream,
+2,090 parseable records, a summary that parses, no failing checks, and a completed
+`handleSummary`. Reported as plumbing verification, not as a measurement: the smoke scenario is
+1 VU and appears in no arm.
+
+### A5.4 — an observation the rehearsal produced, recorded rather than acted on
+
+The candidate emits three INFO log lines per iteration from `mcp_gateway::observed` — protocol
+revision on `initialize`, `tools/list` and `tools/call`, plus a surface-inputs line — which the
+baseline does not. Over one rep that is roughly 16,000 lines and a gateway log about 2.7x the
+baseline's. This is the product's own behaviour on the measured path, not a harness defect, so it
+is **part of what the scored run measures** and is not touched. It is recorded here because a
+reader comparing the two arms' logs will notice the asymmetry and should not have to re-derive
+its cause.
+
+### What Amendment 5 does not change
+
+No threshold, arm, workload shape, metric or rep schedule. One check expectation was widened to
+match documented product behaviour, four recording obligations that were already specified are
+now actually implemented, and one broken stream split into three. **No number from the rehearsal
+is carried forward into this contract, the criteria-status row, or any release document.** The
+NFR.PERF.1 row stays exactly as it reads today, because a void run moves no claim — rewriting it
+now would be the first citation of numbers this amendment exists to discard.
