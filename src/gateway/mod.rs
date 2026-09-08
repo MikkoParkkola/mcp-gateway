@@ -4,6 +4,7 @@
 
 pub mod auth;
 pub(crate) mod authz;
+mod browser_identity;
 pub mod destructive_confirmation;
 mod differential;
 mod http_error;

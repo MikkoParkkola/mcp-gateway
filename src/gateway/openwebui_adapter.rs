@@ -438,7 +438,7 @@ fn verify(
 /// matching issuer plus a chosen subject IS another provider's user. The
 /// installation id is length-prefixed for the same collision reason
 /// `stable_actor_id` length-prefixes its parts.
-fn namespaced_issuer(installation_id: &str) -> String {
+pub(super) fn namespaced_issuer(installation_id: &str) -> String {
     format!(
         "openwebui-adapter:{}:{}",
         installation_id.len(),
