@@ -1434,3 +1434,56 @@ ledger row left by the kill carries a nonzero exit and is read as `ERROR`, never
 as a verdict. Round 7 and round 8 are both `MISSING` by design, and the dual
 review runs against the wiring — where the decisions are settled and the code
 exists to argue about.
+
+## Design event — the timeout arm has two causes and reports only one
+
+Found while sweeping BRIDGE.4's repair across its sibling rows, and named here
+because §P3 says a decision made during implementation gets named at the moment
+it is made rather than discovered in review.
+
+The ruling of 2026-09-08 says an unanswered prompt **fails the call, naming the
+entry**. The obvious repair is to replace the bare `continue` at
+`src/gateway/input_bridge.rs:486` with
+`Err(BridgeError::Delivery { key, error: DeliveryError::TimedOut })`. That is
+still the right shape. It is not the whole decision, because the branch it sits
+in does not fire for one reason:
+
+```rust
+let left = self.bounds.aggregate.saturating_sub(started.elapsed());   // :481
+let Ok(reply) = tokio::time::timeout(self.bounds.per_prompt.min(left), sent).await
+else { continue };                                                     // :484-486
+```
+
+`left` is the **aggregate** remainder. The wait is therefore whichever bound
+runs out first, and the branch cannot distinguish *this client went silent* from
+*the call ran out of time while this client was answering*. A `continue`
+discards both without comment, which is precisely why the ambiguity has been
+invisible: the code never had to say which one happened.
+
+Naming the failure removes that cover. Unrepaired, the aggregate's own
+exhaustion would be reported as a named silent client — and worse,
+`BridgeError::Deadline` would become unreachable from `ask`. Elapsed time can
+only cross the aggregate *inside* a wait, so the clamp fires before the
+top-of-round check at `:388-390` can ever see it. The variant the ruling did not
+touch would be swallowed by the variant it did. The requirement carrying it
+(`the aggregate budget ends a call whose rounds each answer in time`, plan row
+321) would still be stated and no longer reachable.
+
+**The decision:** the branch reports which bound expired. An exhausted aggregate
+is `BridgeError::Deadline`; a silent client inside a live budget is
+`BridgeError::Delivery { key, error: DeliveryError::TimedOut }`. No new variant,
+no new type, no wire change — both already exist and both are already
+constructed elsewhere. What changes is that the wait's two causes stop sharing
+one exit.
+
+**Who decides this?** Nobody had, which is the tell. The ruling settled what
+happens to a silent client and said nothing about the aggregate, because from
+outside the loop they do not look like the same code path. They are.
+
+**What it does not authorise.** This does not move what row 321 asserts. That
+row keeps `Err(BridgeError::Deadline)` exactly as written, and under this
+decision it becomes the case that pins the distinction rather than merely
+exercising the deadline. Rewriting it to expect the new variant would be
+recording the collapse instead of preventing it. Nothing here narrows §P0's FOR
+or drops an acceptance criterion; the plan correction sits beside row 320's
+inversion in `2026-09-05-mrtr7-test-plan.md`.
