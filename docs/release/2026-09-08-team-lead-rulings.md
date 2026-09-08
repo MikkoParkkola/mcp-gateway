@@ -255,3 +255,32 @@ bounding composition, would be new design stacked on R6 and is explicitly not or
 The general form, for every lane: a criterion is a claim about the design, and a lane that
 reads one as wrong should say so rather than build to it. This one was caught because the lane
 argued back.
+
+## R14 — the DoD functional pass is scheduled, with an owner and a trigger
+
+The plan records "live acceptance: NOT RUN" as a gap and leaves it there. A gap with no owner
+is rediscovered rather than closed, and this one blocks DONE however many criteria rows go MET,
+so leaving it as prose would let a row count report a release that cannot ship.
+
+It is not startable today and that is not an excuse: the pass drives the running thing **built
+from the revision under review**, and the revision under review does not exist yet — four lanes
+hold unlanded wiring and strict CI is red on a compilation failure another session owns.
+Driving a half-wired tree would produce evidence about a revision nobody ships.
+
+Deferral fields, since a deferral without them is an open question with better manners:
+
+- **owner** — team lead, this session. Not a lane: the driver may not be the author, and every
+  lane is an author of the thing it would drive.
+- **what resolves it** — one isolated driver, handed the acceptance criteria and how to launch
+  and nothing else, exercising the gateway the way its users do. Command-line surfaces are
+  driven by running the command; the HTTP path by firing the request. Same model family is
+  permitted, one round.
+- **when** — the trigger is package G's `MRTR.7a`/`MRTR.7b` reaching MET with strict CI green,
+  not a date. That is the first moment a revision exists that is worth driving.
+- **if it resolves badly** — a FAIL or an unresolved INVESTIGATE is a §11 stop-the-line, not a
+  row annotation. The release does not ship over it, and the finding enters the repair protocol
+  and the round budget like any other review finding.
+
+Until the trigger fires, nothing may be closed whose evidence depends on it. Note what that
+rules out: any row claiming a user-visible behaviour holds. Rows pinned by a test and a source
+anchor are unaffected, which is why the lanes proceed.
