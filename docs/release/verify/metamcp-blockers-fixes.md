@@ -13,10 +13,10 @@ explicitly.
 | finding | verdict | commit |
 |---|---|---|
 | BLOCK-1 | pending | |
-| BLOCK-2 | pending | |
-| BLOCK-3 | fixed, independently verified SOUND, uncommittable (shared file) | |
+| BLOCK-2 | fixed | `1e8d6967` |
+| BLOCK-3 | fixed, independently verified SOUND | `73cf8117` |
 | BLOCK-4 | fixed, independently verified SOUND | `7abb3514` |
-| BLOCK-5 | fixed | |
+| BLOCK-5 | fixed | `c169bfc7` |
 
 ---
 ## BLOCK-3 — `_meta` injected into direct-route backend payloads
@@ -297,3 +297,39 @@ So "clippy clean" is not provable for this branch as a whole by anyone right
 now, and a claim of it should be read as scoped to a target. For BLOCK-3 the
 lib target is proven clean; `router/tests.rs` compiles (105 tests ran) but was
 never linted. `cargo fmt --check` returns 0.
+
+## BLOCK-2 — every step of a chain shared one idempotency key
+
+Root cause: `idempotency_key_for` derived its key from the caller's own
+`client_key` and the projection/identity suffixes alone. `execute_chain` calls
+`invoke_tool` once per step under a single caller context, so all steps of a
+chain hashed to the same key. The second step then matched the first step's
+cached entry and returned its result — a chain of N tools could answer with the
+first tool's output N times.
+
+Fix: `idempotency_key_for` takes a trailing `step: Option<usize>` and appends
+`|step:{idx}` **after** `identity_suffix`. Placement is the whole decision. The
+alternative — folding the index into the client segment — would have falsified
+the length-prefix comment the MIK-7408 fix relies on, because `{len}:{key}` is
+reserved for bytes the client supplied. Appending outside that segment keeps the
+prefix honest, and a client key that itself contains `|step:1` cannot forge a
+step suffix, since its own length prefix still counts its real bytes.
+
+`execute_chain` passes `Some(idx)`; `code_mode_execute` and every single
+invocation pass `None`, so a single invocation's key is byte-identical to the
+one this branch already shipped and no cached entry is stranded.
+
+`MetaMcpInvoker` implements `ToolInvoker` and cannot take an extra parameter, so
+it counts steps itself through an `AtomicUsize`. That is sound because the
+invoker is constructed once per playbook run (`invoke.rs:3105`), not shared
+across runs.
+
+Tests, written first and failing on the intended assertions:
+`block2_two_chain_steps_under_one_client_key_derive_distinct_keys`,
+`block2_a_client_key_cannot_forge_a_step_suffix`, and
+`block2_a_single_invocation_key_is_unchanged`. The third pins the
+no-stranded-entry property to a literal key, so a future change to the suffix
+order fails rather than silently re-keying every stored single invocation.
+
+Evidence: `test result: ok. 3 passed; 0 failed` (filter `block2_`, exit 0).
+`cargo fmt --check` returns 0. Commit `1e8d6967`.
