@@ -13,12 +13,15 @@ async fn confirmation_purpose_cannot_redeem_backend_input_or_spend_its_hold() {
     let (state, _store) = fixture(&mock).await;
     // A surfaced tool preserves the backend's native interim envelope; the
     // gateway_invoke meta-tool wraps its payload as text for discovery clients.
-    let original = declaring_elicitation(modern(
-        10,
-        "tools/call",
-        json!({"name": TOOL, "arguments": {"record": "fixture"}}),
-        true,
-    ));
+    let original = keyed(
+        declaring_elicitation(modern(
+            10,
+            "tools/call",
+            json!({"name": TOOL, "arguments": {"record": "fixture"}}),
+            true,
+        )),
+        "backend-domain-control",
+    );
     let first = post(&state, "key-a", original.clone()).await;
     std::assert_eq!(
         first.pointer("/result/resultType"),

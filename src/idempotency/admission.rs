@@ -219,7 +219,31 @@ impl ExecutionAdmission {
     /// and sanitized operation/representation descriptors. No backend work occurs
     /// here. A Task lease is only a reservation, never a durable acknowledgement.
     pub(crate) fn admit(self: &Arc<Self>, request: Request<'_>) -> Result<Admission, Refusal> {
+        self.admit_round(request, "")
+    }
+
+    /// Partition a continuation by its trusted round discriminator, without
+    /// changing the caller's key or the identity of fresh requests. A separate
+    /// typed hash domain prevents a caller-supplied key from impersonating a
+    /// round. Operation and representation checks still apply within the round.
+    pub(crate) fn admit_round(
+        self: &Arc<Self>,
+        request: Request<'_>,
+        round: &str,
+    ) -> Result<Admission, Refusal> {
+        if round.len() > METADATA_LIMIT {
+            return Err(Refusal::MetadataTooLarge);
+        }
         let (identity, mut candidate) = request.prepare()?;
+        let identity = if round.is_empty() {
+            identity
+        } else {
+            canonical_json_sha256(&json!([
+                "mcp-gateway.execution-admission.round.v1",
+                identity,
+                round
+            ]))
+        };
         let now = (self.clock)();
         let mut state = self.state.lock();
         if state

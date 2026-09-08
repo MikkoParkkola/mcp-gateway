@@ -63,10 +63,14 @@ fn as_result_object(result: Value) -> Value {
 }
 
 pub(super) fn strip_http_status(mut error: JsonRpcError) -> JsonRpcError {
-    let Some(Value::Object(mut data)) = error.data.take() else {
-        return error;
-    };
-    data.remove(HTTP_STATUS_DATA_KEY);
-    error.data = (!data.is_empty()).then_some(Value::Object(data));
+    if let Some(Value::Object(data)) = error.data.as_mut() {
+        data.remove(HTTP_STATUS_DATA_KEY);
+        if data.is_empty() {
+            error.data = None;
+        }
+    }
     error
 }
+
+#[cfg(test)]
+mod tests;

@@ -191,6 +191,10 @@ fn run_playbook_params() -> Value {
 /// refusal never carried the key in the first place, and no assertion can tell
 /// those apart. If this control fails, X8 below is measuring nothing and the
 /// producer — not the filter — is what needs fixing.
+///
+/// This producer control uses a legacy unkeyed request, whose authorization
+/// occurs at the inner dispatch. Modern keyed orchestration preflights the
+/// plan and refuses earlier; X8 below continues to exercise the modern task.
 #[tokio::test]
 async fn fixture_control_a_synchronous_refusal_carries_the_internal_http_status_key() {
     let mock = MockBackend::answering(Answer::ok());
@@ -198,12 +202,56 @@ async fn fixture_control_a_synchronous_refusal_carries_the_internal_http_status_
     let forbidden = register_forbidden(&state);
     state.meta_mcp.set_playbook_engine(forbidden_playbook());
 
-    let body = post(
-        &state,
-        "key-a",
-        modern(80, "tools/call", run_playbook_params(), true),
+    let router = create_router(Arc::clone(&state));
+    let initialize = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer key-a")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0", "id": 79, "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25", "capabilities": {},
+                    "clientInfo": {"name": "LegacyProducerControl", "version": "1"}
+                }
+            })
+            .to_string(),
+        ))
+        .expect("legacy initialize request");
+    let initialized = router
+        .clone()
+        .oneshot(initialize)
+        .await
+        .expect("initialize response");
+    std::assert_eq!(initialized.status(), StatusCode::OK);
+    let session = initialized
+        .headers()
+        .get("mcp-session-id")
+        .expect("legacy initialize issues a session")
+        .clone();
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer key-a")
+        .header("mcp-protocol-version", "2025-11-25")
+        .header("mcp-session-id", session)
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0", "id": 80, "method": "tools/call",
+                "params": run_playbook_params()
+            })
+            .to_string(),
+        ))
+        .expect("legacy unkeyed producer request");
+    let response = router.oneshot(request).await.expect("producer response");
+    let body: Value = serde_json::from_slice(
+        &to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("producer body"),
     )
-    .await;
+    .expect("producer JSON");
 
     assert!(
         body.get("error").is_some(),

@@ -84,6 +84,10 @@ fn counted_backend(name: &str) -> (Arc<BackendRegistry>, Arc<AtomicUsize>) {
 /// chokepoint is reached.
 fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
     MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
         authorizer,
         api_key_name: Some("test-caller"),
         agent_id: None,

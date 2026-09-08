@@ -12,3 +12,30 @@ groups:
           severity: warning
         annotations:
           summary: "Backend {{ $labels.backend }} did not stop cleanly when idle"
+
+      # Signing nonce store capacity (SIGNING.5). Two alerts, different in kind
+      # on purpose: occupancy near the bound is a trend worth waiting out, a
+      # refusal has already denied replay protection to a real caller.
+      - alert: McpSigningNonceCapacity
+        expr: mcp_message_signing_nonce_entries > 80000
+        for: 5m
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "Signing nonce store is above its capacity watermark"
+
+      # `sum` collapses the two capacity reasons into one series, so one
+      # condition pages once instead of once per reason, and the alert carries
+      # no `reason` label to republish. Increments are non-negative, so the sum
+      # is positive exactly when at least one reason increased — aggregating
+      # cannot hide a refusal.
+      - alert: McpSigningNonceCapacityRefusal
+        expr: >-
+          sum(increase(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}[5m]))
+          > 0
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "Signing nonce admissions are being refused for capacity"

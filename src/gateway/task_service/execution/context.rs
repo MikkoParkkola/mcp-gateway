@@ -24,6 +24,13 @@ pub(crate) struct OwnedCallerContext {
     agent_id: Option<String>,
     grant_subject: Option<GrantSubject>,
     verified_identity: Option<VerifiedIdentity>,
+    /// The owner the durable task was admitted under, owned because the rebuilt
+    /// context borrows it and a `String` computed at dispatch could not be.
+    /// Taken as a parameter rather than derived: with authentication off there
+    /// is no verified identity to derive it from, and re-deriving it here from
+    /// a second source is how the worker's caller and the durable record
+    /// disagree about who owns the task.
+    credential_principal: String,
     is_admin: bool,
     input_capabilities: Declared,
     session_id: Option<String>,
@@ -38,10 +45,14 @@ impl OwnedCallerContext {
         agent_id: Option<String>,
         grant_subject: Option<GrantSubject>,
         verified_identity: Option<VerifiedIdentity>,
+        credential_principal: String,
         is_admin: bool,
         input_capabilities: Declared,
         session_id: Option<String>,
     ) -> Self {
+        // The very string the admission request is keyed on, passed in from the
+        // one construction site: it is the durable task's owner, not a display
+        // name, and with authentication off no identity renders it.
         Self {
             state,
             authorizer,
@@ -49,6 +60,7 @@ impl OwnedCallerContext {
             agent_id,
             grant_subject,
             verified_identity,
+            credential_principal,
             is_admin,
             input_capabilities,
             session_id,
@@ -77,6 +89,29 @@ impl OwnedCallerContext {
     ) -> MetaMcpCallerContext<'a> {
         let authorizer: &'a (dyn ToolAuthorizer + Sync) = authorizer;
         MetaMcpCallerContext {
+            // A task is only ever built for a modern request — the intent
+            // builder returns `None` for every other era — so this is a fact
+            // about the request that created the task, not a default.
+            is_modern: true,
+            // The owner the durable record was admitted under. Read as the
+            // admission fallback for an identity-less caller, which a task has
+            // whenever authentication is off; carried so the worker's caller
+            // cannot be a weaker principal than the request's.
+            credential_principal: Some(self.credential_principal.as_str()),
+            // No second lease. The worker's execution is admitted durably in
+            // `Mode::Task`, and a `Mode::Sync` lease on the same principal and
+            // key would refuse the very task it was taken for; there is also no
+            // request future here to own one.
+            execution: None,
+            // Signing admission belongs to the request that prepared it: the
+            // nonce is checked and registered once, before the handoff, and a
+            // cloned prepared context here would tell the invoke funnel to skip
+            // its policy recheck (it would consume no second nonce — the nonce
+            // is already spent — but the skip is the harm). `None` keeps
+            // `check_invocation_policy` — current authorization, tool name,
+            // attestation and active profile — running on this dispatch, which
+            // is what the worker needs, and it consumes no nonce.
+            signing: None,
             authorizer,
             api_key_name: self.api_key_name.as_deref(),
             agent_id: self.agent_id.as_deref(),

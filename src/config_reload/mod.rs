@@ -1595,6 +1595,25 @@ impl ReloadContext {
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
         let evaluated = load_config_patch(&self.config_path, &self.live_config, &self.env)?;
+        if let Some(field) = self
+            .live_config
+            .running()
+            .security
+            .message_signing
+            .restart_changed_field(
+                &evaluated.config.security.message_signing,
+                self.env.startup(),
+                &evaluated.overlay,
+            )
+            .map_err(|error| error.to_string())?
+        {
+            // Before even the empty-patch path: equal effective key bytes can
+            // conceal a configured-reference edit, and env-only reloads publish
+            // there too. This refusal changes no live state or backend object.
+            return Err(format!(
+                "config reload refused: security.message_signing.{field} requires restart"
+            ));
+        }
         // Measured against the overlay startup captured, so a requirement stays
         // reported on every reload until the process actually restarts.
         let env_restart_keys = changed_startup_env_keys(&self.env, &evaluated);

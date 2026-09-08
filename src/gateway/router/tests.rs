@@ -48,19 +48,25 @@ mod task_execution_adapter;
 /// a substitute store would leave every ownership assertion below testing the
 /// substitute. Nothing here names a fixed path or reads a process-wide
 /// variable, so tests stay independent of each other and of the environment.
+/// The admission authority is the fixture's OWN Meta-MCP, not a second one: a
+/// task admitted through the route and a synchronous call carrying the same
+/// owner and idempotency key have to meet at one index, which is exactly what
+/// the deployed gateway wires.
 async fn test_task_runtime(
     subscriptions: &Arc<crate::gateway::subscription_registry::SubscriptionRegistry>,
+    meta_mcp: &Arc<MetaMcp>,
 ) -> (
     Arc<crate::gateway::task_service::TaskService>,
     Arc<crate::gateway::task_service::TaskExecutor>,
     tempfile::TempDir,
 ) {
     let store_dir = tempfile::tempdir().expect("a private task-store directory");
-    let (service, executor) = crate::gateway::task_service::open_runtime(
+    let (service, executor) = crate::gateway::task_service::open_runtime_with_admission(
         &store_dir.path().join("tasks"),
         crate::config::TasksConfig::default().max_workers,
         crate::gateway::task_service::StoreLimits::default(),
         Arc::clone(subscriptions),
+        Arc::clone(meta_mcp.execution_admission()),
     )
     .await
     .expect("the fixture task store opens");
@@ -102,7 +108,8 @@ async fn test_router_app_state_with(
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     let subscriptions = test_subscriptions();
-    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+    let (task_service, task_executor, store_dir) =
+        test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
@@ -158,7 +165,8 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, temp
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     let subscriptions = test_subscriptions();
-    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+    let (task_service, task_executor, store_dir) =
+        test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
@@ -212,7 +220,8 @@ async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, 
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     let subscriptions = test_subscriptions();
-    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+    let (task_service, task_executor, store_dir) =
+        test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
@@ -289,7 +298,8 @@ async fn test_router_app_state_with_provenance_backend(
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     let subscriptions = test_subscriptions();
-    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+    let (task_service, task_executor, store_dir) =
+        test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
@@ -376,7 +386,8 @@ async fn test_router_app_state_minting_without_route_audit(
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     let subscriptions = test_subscriptions();
-    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+    let (task_service, task_executor, store_dir) =
+        test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
@@ -433,7 +444,8 @@ async fn test_router_app_state_with_ssrf(
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     let subscriptions = test_subscriptions();
-    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+    let (task_service, task_executor, store_dir) =
+        test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
@@ -504,7 +516,8 @@ async fn test_router_app_state_with_auth(auth: &AuthConfig) -> (Arc<AppState>, t
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     let subscriptions = test_subscriptions();
-    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+    let (task_service, task_executor, store_dir) =
+        test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
@@ -563,11 +576,12 @@ async fn test_router_app_state_with_auth_and_config(
 
     let subscriptions = test_subscriptions();
     let store_dir = tempfile::tempdir().expect("a private configured task-store directory");
-    let (task_service, task_executor) = crate::gateway::task_service::open_runtime(
+    let (task_service, task_executor) = crate::gateway::task_service::open_runtime_with_admission(
         &store_dir.path().join("tasks"),
         config.tasks.max_workers,
         crate::gateway::task_service::StoreLimits::default(),
         Arc::clone(&subscriptions),
+        Arc::clone(meta_mcp.execution_admission()),
     )
     .await
     .expect("the configured fixture task store opens");
@@ -1722,6 +1736,7 @@ async fn meta_mcp_management_tool_requires_admin_client() {
 async fn authorize_tool_target_enforces_agent_scope() {
     let (state, _store) = test_router_app_state().await;
     let identity = OAuthAgentIdentity {
+        quota_principal: None,
         client_id: "agent-a".to_string(),
         agent_name: "Agent A".to_string(),
         scopes: vec![
@@ -2566,6 +2581,7 @@ fn scoped_client(
     allowed_tools: Option<Vec<String>>,
 ) -> AuthenticatedClient {
     AuthenticatedClient {
+        quota_principal: None,
         name: name.to_string(),
         rate_limit: 0,
         backends,
@@ -2611,6 +2627,10 @@ async fn run_step_with_identity(
     };
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         task: None,
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
@@ -2820,6 +2840,10 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
     };
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         task: None,
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
@@ -3007,6 +3031,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
     );
 
     let agent = AgentIdentity {
+        quota_principal: None,
         client_id: "cid".to_string(),
         agent_name: "runner".to_string(),
         scopes: Vec::new(),
@@ -3029,6 +3054,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
     );
 
     let anonymous = AuthenticatedClient {
+        quota_principal: None,
         authenticated: false,
         ..scoped_client("public", vec![], None)
     };
@@ -3076,6 +3102,7 @@ async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
     }
     let client = scoped_client("scoped", vec![], None);
     let cert = CertIdentity {
+        quota_principal: None,
         common_name: Some("trusted-machine".to_string()),
         display_name: "trusted-machine".to_string(),
         ..CertIdentity::default()
@@ -3122,6 +3149,7 @@ async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
 
     // Scoped to one tool on one backend.
     let agent = AgentIdentity {
+        quota_principal: None,
         client_id: "agent-1".to_string(),
         agent_name: "runner".to_string(),
         scopes: vec![Scope::parse("tools:alpha:permitted:*").expect("scope must parse")],
@@ -3180,6 +3208,10 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
     };
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         task: None,
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,

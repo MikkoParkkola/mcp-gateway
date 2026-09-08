@@ -34,7 +34,12 @@ async fn fixture_control_an_ordinary_call_reaches_the_mock_backend() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = state_with(&mock).await;
 
-    let body = post(&state, "key-a", sync_invoke(1, json!({ "q": "control" }))).await;
+    let body = post(
+        &state,
+        "key-a",
+        keyed(sync_invoke(1, json!({ "q": "control" })), "x1-sync-control"),
+    )
+    .await;
 
     std::assert_eq!(
         mock.calls(),

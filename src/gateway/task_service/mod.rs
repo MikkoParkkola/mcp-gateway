@@ -73,6 +73,25 @@ pub async fn open_runtime(
             .map(|elapsed| elapsed.as_secs())
             .unwrap_or(0)
     }));
+    open_runtime_with_admission(store_dir, max_workers, limits, subscriptions, admission).await
+}
+
+/// Same open, but over an admission authority the caller already owns.
+///
+/// The gateway's meta-MCP surface admits synchronous calls against one
+/// [`ExecutionAdmission`]; handing that same `Arc` here is what makes a task and
+/// a later sync call with the same owner and key one admission rather than two.
+/// The provided authority is passed straight to [`TaskService::open`], which
+/// imports restored bindings into it atomically, and the executor is built only
+/// after that open succeeded — a failed open returns, and never leaves a
+/// half-built runtime behind.
+pub(crate) async fn open_runtime_with_admission(
+    store_dir: &Path,
+    max_workers: usize,
+    limits: StoreLimits,
+    subscriptions: Arc<SubscriptionRegistry>,
+    admission: Arc<ExecutionAdmission>,
+) -> Result<(Arc<TaskService>, Arc<TaskExecutor>), ServiceError> {
     let service = Arc::new(TaskService::open(store_dir, limits, admission).await?);
     let executor = TaskExecutor::new(Arc::clone(&service), subscriptions, max_workers);
     Ok((service, executor))

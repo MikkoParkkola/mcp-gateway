@@ -59,7 +59,15 @@ async fn the_selector_wraps_the_synchronous_reply_and_settles_a_task_natively() 
     let (state, _store) = state_with(&mock).await;
 
     // ---- the ordinary path: `Wrapped`, exactly as it is today ----
-    let sync = post(&state, "key-a", sync_invoke(20, json!({ "q": "ordinary" }))).await;
+    let sync = post(
+        &state,
+        "key-a",
+        keyed(
+            sync_invoke(20, json!({ "q": "ordinary" })),
+            "shape-sync-control",
+        ),
+    )
+    .await;
 
     assert!(
         sync.pointer("/result/taskId").is_none(),

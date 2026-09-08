@@ -26,7 +26,8 @@ use crate::security::firewall::Firewall;
 
 mod authorization;
 pub(crate) use authorization::{
-    ADMIN_META_TOOLS, OwnedRouterAuthorizer, RouterAuthorizer, is_admin_meta_tool,
+    ADMIN_META_TOOLS, OwnedRouterAuthorizer, RouterAuthorizer, backend_tool_targets_for_call,
+    is_admin_meta_tool,
 };
 mod backend_handlers;
 mod handlers;
