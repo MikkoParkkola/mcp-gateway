@@ -103,6 +103,7 @@ fn valid(root: &std::path::Path) -> AccountsConfig {
             ("current".into(), format!("env:{KEY_VAR}")),
             ("retired".into(), format!("env:{RETIRED_VAR}")),
         ]),
+        descriptors: Default::default(),
         limits: AccountsLimits {
             store_entries: 10_000,
             authority_bytes: 16_777_216,

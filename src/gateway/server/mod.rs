@@ -307,6 +307,13 @@ pub struct Gateway {
     /// file watcher — resolves through this rather than the process
     /// environment, which no env file is written to.
     env: Arc<crate::config::LiveEnv>,
+    /// Managed personal-account custody, present only when the config carries an
+    /// `accounts` block. `None` is the ordinary gateway: no store, no locks.
+    ///
+    /// Holding the handle rather than the store is deliberate: an explicit
+    /// account shutdown releases the store and its two file locks while this
+    /// handle stays here to refuse everything that arrives afterwards.
+    custody: Option<Arc<crate::personal_accounts::GatewayCustody>>,
 }
 
 /// Shared components produced by [`Gateway::build_meta_mcp`].
@@ -402,13 +409,55 @@ impl Gateway {
     ///
     /// # Errors
     ///
-    /// Returns an error if backend registration fails.
-    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future initialization needs
+    /// Returns an error if the config is invalid, or if backend registration
+    /// fails.
     pub async fn new_with_path(
         config: Config,
         config_path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
-        config.validate()?;
+        // The process environment and nothing else, which is what this
+        // constructor has always validated against: `LiveEnv::default` is
+        // `EnvOverlay::none`, and `Config::validate` is `validate_with_env`
+        // against exactly that. A caller building a `Config` in memory has no
+        // env files, so nothing here changes for it.
+        Self::new_with_env(
+            config,
+            Arc::new(crate::config::LiveEnv::default()),
+            config_path,
+        )
+        .await
+    }
+
+    /// Build an ordinary gateway that resolves through `env` — the one place
+    /// normal construction happens.
+    ///
+    /// The config is validated against the overlay it will ACTUALLY resolve
+    /// against, and the same `LiveEnv` is the one the gateway keeps. Validating
+    /// against the process environment and attaching the overlay afterwards is
+    /// not equivalent: an `env:` reference an env file supplies is a value here
+    /// and nothing at all there, so a valid deployment was refused at the
+    /// validation it never reached its own environment for.
+    ///
+    /// Validation happens before any backend is built, so a refused config
+    /// costs nothing, and the overlay snapshot is scoped to that step rather
+    /// than held across the await this returns through.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config is invalid against `env`, or if backend
+    /// registration fails.
+    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future initialization needs
+    async fn new_with_env(
+        config: Config,
+        env: Arc<crate::config::LiveEnv>,
+        config_path: Option<std::path::PathBuf>,
+    ) -> Result<Self> {
+        {
+            // A cheap snapshot, dropped here: nothing environmental is held
+            // while the gateway is built or awaited on.
+            let overlay = env.get();
+            config.validate_with_env(&overlay)?;
+        }
 
         let backends = Arc::new(BackendRegistry::new());
 
@@ -437,7 +486,13 @@ impl Gateway {
             config_path,
             backends,
             shutdown_tx: None,
-            env: Arc::new(crate::config::LiveEnv::default()),
+            // The environment the config was just validated against, retained:
+            // every later resolution answers from the same overlay the decision
+            // to start was made on.
+            env,
+            // Attached by `start_account_custody`, so this constructor stays
+            // exactly what it was for a caller building a Config in memory.
+            custody: None,
         })
     }
 
@@ -450,6 +505,223 @@ impl Gateway {
     pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
         self.env = env;
         self
+    }
+
+    /// Create a gateway from an already evaluated config and the environment it
+    /// was evaluated against, bringing up managed account custody if the config
+    /// asks for one.
+    ///
+    /// The constructor a deployment uses: the ordinary construction every
+    /// caller gets, against THIS environment rather than the process
+    /// environment, plus one further step. `new_with_path` stays as it was for
+    /// callers that build a `Config` in memory and want no custody — it is the
+    /// same construction with an empty overlay. The further step is what makes a
+    /// gateway READY: it returns only after every managed descriptor's issuer
+    /// metadata has been validated and pinned AND the custody store's two
+    /// exclusive locks are held.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if backend registration fails, if the `accounts` block
+    /// is invalid, if a managed descriptor's issuer metadata is unacceptable, or
+    /// if custody cannot be brought up — a store another owner holds is a
+    /// startup failure, never a degraded start.
+    pub async fn new_evaluated(
+        config: Config,
+        env: Arc<crate::config::LiveEnv>,
+        config_path: Option<std::path::PathBuf>,
+    ) -> Result<Self> {
+        Self::new_evaluated_inner(
+            config,
+            env,
+            config_path,
+            #[cfg(test)]
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::new_evaluated`] with the account transport supplied.
+    ///
+    /// Not a second constructor: it calls the SAME body with `Some(http)` where
+    /// `new_evaluated` passes `None`. Exists so a wire test can point a real
+    /// startup at a real loopback endpoint; there is no fake provider type it
+    /// could accept.
+    #[cfg(test)]
+    pub(crate) async fn new_evaluated_with_account_http(
+        config: Config,
+        env: Arc<crate::config::LiveEnv>,
+        config_path: Option<std::path::PathBuf>,
+        http: crate::personal_accounts::GatewayProviderHttp,
+    ) -> Result<Self> {
+        Self::new_evaluated_inner(config, env, config_path, Some(http)).await
+    }
+
+    /// THE evaluated construction. One body: validation through the overlay,
+    /// custody start, one error mapping. The `http` parameter does not exist
+    /// outside `cfg(test)`, so production neither names nor carries it.
+    ///
+    /// Constructed WITH the environment, never validated without it and
+    /// handed the overlay afterwards: the account key is an env-file
+    /// assignment, so a validation against the process environment refuses
+    /// the very config this constructor exists to accept.
+    async fn new_evaluated_inner(
+        config: Config,
+        env: Arc<crate::config::LiveEnv>,
+        config_path: Option<std::path::PathBuf>,
+        #[cfg(test)] http: Option<crate::personal_accounts::GatewayProviderHttp>,
+    ) -> Result<Self> {
+        let mut gateway = Self::new_with_env(config, env, config_path).await?;
+        gateway
+            .start_account_custody_inner(
+                #[cfg(test)]
+                http,
+            )
+            .await
+            .map_err(|e| Error::Config(format!("personal account custody could not start: {e}")))?;
+        Ok(gateway)
+    }
+
+    /// Resolve the `accounts` block and bring custody up, or do nothing.
+    ///
+    /// Both halves are real: the block is resolved through the overlay, then the
+    /// refresh provider is bootstrapped and the store is opened on a blocking
+    /// thread. Exactly one custody handle is attached, and only on success.
+    ///
+    /// Separate from [`Self::new_evaluated`] because the typed outcome is the
+    /// difference between "this deployment is misconfigured" and "another owner
+    /// holds the store", and the crate `Error` cannot carry that distinction.
+    ///
+    /// The key resolves through the env overlay, never the process environment:
+    /// an env file assigns it and no process ever sees it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the configuration layer's refusal, or the store's own.
+    pub(crate) async fn start_account_custody(
+        &mut self,
+    ) -> std::result::Result<(), crate::personal_accounts::CustodyBootstrapError> {
+        self.start_account_custody_inner(
+            #[cfg(test)]
+            None,
+        )
+        .await
+    }
+
+    /// The body of [`Self::start_account_custody`]. The transport parameter
+    /// exists only under `cfg(test)`; the production path is unchanged and
+    /// builds its client exactly where it always did, inside `start_custody`.
+    async fn start_account_custody_inner(
+        &mut self,
+        #[cfg(test)] http: Option<crate::personal_accounts::GatewayProviderHttp>,
+    ) -> std::result::Result<(), crate::personal_accounts::CustodyBootstrapError> {
+        let resolved = {
+            // Scoped, so no environment read is held across the await below.
+            let overlay = self.env.get();
+            match crate::personal_accounts::config::resolve(
+                self.config.accounts.as_ref(),
+                &*overlay,
+            ) {
+                Ok(resolved) => resolved,
+                // `enabled: false` is an operator's decision, not a fault:
+                // schema and deployment are validated ABOVE this refusal, so a
+                // disabled block has been checked and declined. It is the second
+                // producer of `None` here, alongside an omitted block, and means
+                // the same thing: ordinary startup, no store, no lock, nothing
+                // created on disk.
+                //
+                // INVARIANT RELIED ON, and it is now enforced rather than
+                // structural: `personal_managed` descriptors ARE representable,
+                // and `config::validate_descriptors` — run inside
+                // `Config::validate_with_env`, before any gateway exists —
+                // refuses a managed descriptor under `enabled: false`. So a
+                // block reaching this arm has no managed descriptor to lose.
+                // This arm still cannot make that distinction and must not be
+                // taught to.
+                //
+                // Only the gateway's own start softens `NotEnabled`. Config
+                // resolution keeps refusing it, because every later descriptor
+                // caller needs that refusal.
+                Err(crate::personal_accounts::config::AccountsConfigError::NotEnabled) => None,
+                Err(error) => {
+                    return Err(crate::personal_accounts::CustodyBootstrapError::Config(
+                        error,
+                    ));
+                }
+            }
+        };
+        // Omitted `accounts` preserves ordinary construction: no store, no lock,
+        // and no default custody invented on the operator's behalf.
+        let Some(resolved) = resolved else {
+            return Ok(());
+        };
+        // The descriptors as configured. Absent means a store-only deployment:
+        // custody still starts, with nothing to discover.
+        let descriptors = self
+            .config
+            .accounts
+            .as_ref()
+            .and_then(|accounts| accounts.descriptors.clone())
+            .unwrap_or_default();
+        // The SAME `LiveEnv` this gateway was validated against and keeps: the
+        // client secret an env file assigns is resolved from that overlay at
+        // refresh time and never from the process environment.
+        #[cfg(not(test))]
+        let custody = crate::personal_accounts::start_custody(
+            resolved.store,
+            descriptors,
+            Arc::clone(&self.env),
+        )
+        .await?;
+        // Test-only dispatch. `None` runs the identical production call; the
+        // supplied arm differs by the transport instance and nothing else, and
+        // both arms end in the same `start_custody_with_http` body.
+        #[cfg(test)]
+        let custody = match http {
+            Some(http) => {
+                crate::personal_accounts::start_custody_with_http(
+                    http,
+                    resolved.store,
+                    descriptors,
+                    Arc::clone(&self.env),
+                )
+                .await?
+            }
+            None => {
+                crate::personal_accounts::start_custody(
+                    resolved.store,
+                    descriptors,
+                    Arc::clone(&self.env),
+                )
+                .await?
+            }
+        };
+        self.custody = Some(Arc::new(custody));
+        Ok(())
+    }
+
+    /// The managed custody this gateway owns, if any.
+    #[must_use]
+    pub(crate) fn account_custody(&self) -> Option<&Arc<crate::personal_accounts::GatewayCustody>> {
+        self.custody.as_ref()
+    }
+
+    /// Drain account work and release the custody store, keeping the gateway.
+    ///
+    /// Takes `&self`, like the handle it delegates to: both file locks are freed
+    /// while this gateway — and the handle that now refuses — stay alive.
+    /// Idempotent, and a no-op when no `accounts` block was configured.
+    ///
+    /// # Errors
+    ///
+    /// Returns the custody handle's own refusal if the drain cannot complete.
+    pub(crate) async fn shutdown_account_custody(
+        &self,
+    ) -> std::result::Result<(), crate::personal_accounts::CustodyError> {
+        match self.account_custody() {
+            Some(custody) => custody.shutdown().await,
+            None => Ok(()),
+        }
     }
 
     /// Build [`MetaMcp`] and all supporting components shared between HTTP and
@@ -1504,6 +1776,13 @@ impl Gateway {
             }
         }
 
+        // Release the custody store before the backends go: the drain above is
+        // what guarantees no in-flight request is still holding a credential.
+        // Not covered by gateway_bootstrap_tests — no test drives `run`.
+        if let Err(e) = self.shutdown_account_custody().await {
+            warn!(error = %e, "Personal account custody shutdown failed");
+        }
+
         // Stop all backends
         info!("Shutting down backends...");
         self.backends.stop_all().await;
@@ -1679,6 +1958,12 @@ impl Gateway {
         // starts for a gateway that is on its way out. The guard remains the
         // backstop for every path that does not reach this line.
         warm_start_tasks.cancel().await;
+        // Release the custody store before the backends go. Reached on the EOF
+        // path only: a cancelled `run_stdio` releases it by dropping the Gateway.
+        // Not covered by gateway_bootstrap_tests — no test drives `run_stdio`.
+        if let Err(e) = self.shutdown_account_custody().await {
+            warn!(error = %e, "Personal account custody shutdown failed");
+        }
         self.backends.stop_all().await;
         Ok(())
     }
@@ -2181,6 +2466,9 @@ fn spawn_idle_reaper(
         }
     })
 }
+
+#[cfg(test)]
+mod gateway_bootstrap_tests;
 
 #[cfg(test)]
 mod tests {

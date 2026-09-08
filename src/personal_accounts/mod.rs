@@ -9,6 +9,7 @@
 pub(crate) mod config;
 mod consent;
 mod identity;
+mod provider;
 mod service;
 mod storage;
 mod worker;
@@ -515,6 +516,145 @@ impl PersonalAccountStore {
             descriptor_revision,
         )
     }
+}
+
+// ── Gateway-facing custody bootstrap ─────────────────────────────────────────
+//
+// The live path. `start_custody` builds the real refresh provider, awaits its
+// EAGER bootstrap, and only then opens the store and claims its two exclusive
+// locks. A gateway that reaches Serving therefore holds a provider whose issuer
+// metadata is already validated and pinned; there is no later discovery for a
+// refresh to perform, and no half-started custody to observe.
+//
+// ORDER IS THE CONTRACT. Provider first, store second. A store opened before a
+// descriptor was rejected would hold both file locks for a deployment that is
+// about to refuse startup, and the operator's next attempt would fail on the
+// locks rather than on the configuration that is actually wrong.
+//
+// Names are fully qualified through `service::` on purpose: `worker.rs` already
+// imports the same six, and an import here would be one more chance to collide.
+
+pub(crate) use worker::{CustodyError, CustodyStartError};
+
+/// The one refresh provider a gateway runs: the real policy over the real
+/// transport, the system clock, and the gateway's own environment overlay.
+pub(crate) type GatewayRefreshProvider = provider::PersonalOAuthRefresh<
+    provider::GatewayProviderHttp,
+    provider::SystemClock,
+    provider::EnvSecrets,
+>;
+
+/// The production transport type, nameable by tests that must hand a
+/// configured instance to a real startup. Test-gated: no production caller
+/// constructs one anywhere but `start_custody`.
+#[cfg(test)]
+pub(crate) use provider::GatewayProviderHttp;
+
+/// Non-secret record that a credential passed the release recheck.
+///
+/// Names the backend and the resource and nothing else: no principal subject,
+/// no authority, no token. WHERE this ultimately belongs (a metric, the
+/// transparency log, neither) is an open runtime decision, named in the handoff
+/// rather than settled here.
+pub(crate) struct AccountReleaseAudit;
+
+impl service::CredentialReleaseObserver for AccountReleaseAudit {
+    fn on_release(
+        &self,
+        account: &AccountKey,
+        lease: &service::CredentialLease,
+        _credentials: &service::ReleasedCredentials,
+    ) {
+        tracing::debug!(
+            backend = %account.backend_id,
+            resource = %account.resource,
+            token_revision = lease.token_revision,
+            "personal account credential released"
+        );
+    }
+}
+
+/// The one custody type a gateway holds.
+pub(crate) type GatewayCustody = worker::CustodyHandle<GatewayRefreshProvider, AccountReleaseAudit>;
+
+/// Why managed custody could not be brought up.
+///
+/// Three failures a caller must not confuse: a deployment that is
+/// misconfigured, a descriptor whose issuer metadata was not acceptable, and a
+/// store another owner already holds.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub(crate) enum CustodyBootstrapError {
+    #[error(transparent)]
+    Config(#[from] config::AccountsConfigError),
+    #[error(transparent)]
+    Provider(#[from] provider::ProviderBuildError),
+    #[error(transparent)]
+    Start(#[from] CustodyStartError),
+}
+
+/// Bring managed custody up: real provider, then exactly one custody handle.
+///
+/// Reached only after the Gateway has resolved a real `accounts` block, so a
+/// misconfigured deployment still fails as a configuration error first.
+///
+/// `descriptors` are the configured ones as written, keyed by logical account
+/// id. An empty map is ordinary: a store-only deployment brings custody up with
+/// no HTTP and no secret read.
+///
+/// The store open is synchronous filesystem work that takes two exclusive file
+/// locks, so it runs on a blocking thread rather than on the event loop — the
+/// same rule every other store call in this module already follows.
+pub(crate) async fn start_custody(
+    store: StoreConfig,
+    descriptors: BTreeMap<String, config::AccountDescriptor>,
+    env: std::sync::Arc<crate::config::LiveEnv>,
+) -> Result<GatewayCustody, CustodyBootstrapError> {
+    // The production transport, built here and nowhere else.
+    start_custody_with_http(
+        provider::GatewayProviderHttp::new()?,
+        store,
+        descriptors,
+        env,
+    )
+    .await
+}
+
+/// [`start_custody`] with the transport supplied rather than built.
+///
+/// SAME type, SAME order, SAME body: this is the function `start_custody` now
+/// is, with one argument lifted. It exists so a test can drive the REAL startup
+/// against a real loopback endpoint, and deliberately not as a provider seam —
+/// there is no trait here, no factory and no way to pass anything that is not
+/// the production client.
+pub(crate) async fn start_custody_with_http(
+    http: provider::GatewayProviderHttp,
+    store: StoreConfig,
+    descriptors: BTreeMap<String, config::AccountDescriptor>,
+    env: std::sync::Arc<crate::config::LiveEnv>,
+) -> Result<GatewayCustody, CustodyBootstrapError> {
+    // Awaited HERE, before the store is touched: every managed descriptor's
+    // issuer metadata is fetched, validated and pinned, or nothing starts.
+    let refresh = provider::PersonalOAuthRefresh::bootstrap(
+        descriptors,
+        http,
+        provider::SystemClock,
+        provider::EnvSecrets::new(env),
+    )
+    .await?;
+    let handle = tokio::task::spawn_blocking(move || {
+        worker::CustodyHandle::start(
+            store,
+            refresh,
+            AccountReleaseAudit,
+            worker::DEFAULT_CAPACITY,
+        )
+    })
+    .await
+    // A panic opening the store is a bug, not a domain outcome; re-raising is
+    // the honest answer, and matches how the worker treats its own blocking
+    // failures.
+    .expect("custody start blocking worker")?;
+    Ok(handle)
 }
 
 #[cfg(test)]

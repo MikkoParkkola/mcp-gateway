@@ -21,7 +21,7 @@
 //! Omitted `accounts` preserves existing behaviour and enables no managed
 //! custody -- `resolve` answers `Ok(None)`, never a default store.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use super::StoreConfig;
@@ -45,8 +45,74 @@ pub struct AccountsConfig {
     pub(crate) current_key_id: String,
     /// key id -> `env:VARIABLE` reference resolving to base64 of exactly 32 bytes.
     pub(crate) keys: BTreeMap<String, String>,
+    /// Configured account id -> descriptor. The map key is the logical
+    /// `backend_id` of the account key (approved table, row 422).
+    ///
+    /// Absent stays absent through a rewrite: an explicitly disabled store-only
+    /// block must not grow a `descriptors: null` line it never carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) descriptors: Option<BTreeMap<String, AccountDescriptor>>,
     #[serde(default)]
     pub(crate) limits: AccountsLimits,
+}
+
+/// Exactly the three declared spellings (approved table, row 423). A mode is
+/// never inferred from exposure, user count or which other fields are present.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DescriptorMode {
+    Shared,
+    External,
+    PersonalManaged,
+}
+
+/// One configured account descriptor, as written.
+///
+/// STRINGS STAY STRINGS. Endpoint, issuer and resource values are carried
+/// byte-for-byte: parsing them into a URL type would normalise
+/// `https://accounts.google.com` into `https://accounts.google.com/`, and the
+/// later authenticated-metadata check compares the CONFIGURED string with the
+/// metadata field exactly (approved table, rows 425-426). A value silently
+/// rewritten here cannot be compared honestly there.
+///
+/// Only `mode` and `provider` are structurally required. Everything else is
+/// optional at the schema and required by MODE, because the fields a
+/// `personal_managed` descriptor must carry are not the fields a `shared` or
+/// `external` one must. `send_resource_parameter` is `Option<bool>` for the
+/// same reason a plain `bool` would be wrong: `false` is a real answer for
+/// Google REST, and a defaulted `false` would make "declared false" and "not
+/// declared" indistinguishable.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AccountDescriptor {
+    pub(crate) mode: DescriptorMode,
+    /// Logical OAuth provider id. Does not itself select a token: two
+    /// descriptors may share `google` and remain distinct accounts.
+    pub(crate) provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) resource: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) issuer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) authorization_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) token_endpoint: Option<String>,
+    /// Optional only when unused, never caller-supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) revocation_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) client_id: Option<String>,
+    /// `env:VARIABLE` only, resolved nowhere near `Config`: the reference stays
+    /// a reference so no client secret is materialised into a serialized or
+    /// `Debug`-rendered configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) client_secret_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) redirect_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) scopes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) send_resource_parameter: Option<bool>,
 }
 
 /// Only the two bounds this slice maps onto `StoreConfig`. The other limit
@@ -109,6 +175,15 @@ pub(crate) enum AccountsConfigError {
     Limit { field: &'static str },
     #[error("accounts contains unknown field {field}")]
     UnknownField { field: String },
+    /// Named by account id and by what is wrong with it. `problem` is a fixed
+    /// phrase, never a configured value: an echoed `client_secret_ref` would
+    /// put a secret reference — and one day a mistyped literal secret — into
+    /// the log line reporting the refusal.
+    #[error("accounts.descriptors[{account_id}]: {problem}")]
+    Descriptor {
+        account_id: String,
+        problem: &'static str,
+    },
 }
 
 /// `StoreConfig` itself carries raw key bytes and deliberately has no `Debug`,
@@ -237,8 +312,167 @@ pub(crate) fn resolve(
     }))
 }
 
+/// Validate the STATIC shape of `accounts.descriptors`, reading nothing.
+///
+/// Separate from [`resolve`] on purpose, and called before it. Two reasons,
+/// both load-bearing:
+///
+/// - A `personal_managed` descriptor under `enabled: false` must REFUSE. The
+///   caller deliberately swallows [`AccountsConfigError::NotEnabled`] from
+///   `resolve`, because an explicitly disabled store-only block is an ordinary
+///   configuration; routing the descriptor check through the same call would
+///   let the refusal be swallowed with it.
+/// - Structure is checked before any account secret is read, so a malformed
+///   descriptor never causes an environment lookup.
+///
+/// Schema version and deployment keep their existing authority: they are
+/// checked first here too, so a block that is wrong about both its schema and
+/// its descriptors still reports the schema first.
+///
+/// NO NETWORK, NO CUSTODY. Endpoint strings are checked for shape only.
+/// Authenticated issuer-metadata retrieval and the exact endpoint-equality
+/// comparison against that metadata are a later increment; an endpoint that
+/// merely SPELLS `https://` is not thereby a trusted endpoint.
+pub(crate) fn validate_descriptors(
+    accounts: Option<&AccountsConfig>,
+) -> Result<(), AccountsConfigError> {
+    let Some(accounts) = accounts else {
+        return Ok(());
+    };
+    if accounts.schema_version != SCHEMA_VERSION {
+        return Err(AccountsConfigError::SchemaVersion);
+    }
+    if accounts.deployment != DEPLOYMENT {
+        return Err(AccountsConfigError::Deployment);
+    }
+    let Some(descriptors) = accounts.descriptors.as_ref() else {
+        return Ok(());
+    };
+
+    for (account_id, descriptor) in descriptors {
+        if account_id.is_empty() {
+            return Err(AccountsConfigError::Descriptor {
+                account_id: account_id.clone(),
+                problem: "account id must be nonempty",
+            });
+        }
+        if descriptor.provider.is_empty() {
+            return Err(AccountsConfigError::Descriptor {
+                account_id: account_id.clone(),
+                problem: "provider must be nonempty",
+            });
+        }
+        match descriptor.mode {
+            DescriptorMode::PersonalManaged => {
+                if !accounts.enabled {
+                    return Err(AccountsConfigError::NotEnabled);
+                }
+                validate_managed(account_id, descriptor)?;
+            }
+            // Shared and external acceptance — including `external_strategy`
+            // and its existing `IdentityPropagationConfig` validation — arrive
+            // with their own increment. Nothing is inferred for them here.
+            DescriptorMode::Shared | DescriptorMode::External => {}
+        }
+    }
+    Ok(())
+}
+
+/// The fields a `personal_managed` descriptor must carry (approved table, rows
+/// 424-428). Every check is on the configured value as written.
+fn validate_managed(
+    account_id: &str,
+    descriptor: &AccountDescriptor,
+) -> Result<(), AccountsConfigError> {
+    let fail = |problem: &'static str| AccountsConfigError::Descriptor {
+        account_id: account_id.to_string(),
+        problem,
+    };
+
+    // Parsed, never rewritten: the configured String is what gets sent. A
+    // prefix test accepts "https://", which has no host to reach.
+    let https_host = |value: &Option<String>| {
+        value.as_ref().is_some_and(|value| {
+            Url::parse(value).is_ok_and(|url| url.scheme() == "https" && url.has_host())
+        })
+    };
+
+    // RFC 8707 resource is an absolute URI, not necessarily https: a urn: is
+    // a legitimate resource identifier.
+    if !descriptor
+        .resource
+        .as_ref()
+        .is_some_and(|value| Url::parse(value).is_ok())
+    {
+        return Err(fail("resource must be present and nonempty"));
+    }
+    if !https_host(&descriptor.issuer) {
+        return Err(fail("issuer must be present and nonempty"));
+    }
+    if !descriptor
+        .client_id
+        .as_ref()
+        .is_some_and(|value| !value.is_empty())
+    {
+        return Err(fail("client_id must be present and nonempty"));
+    }
+
+    for (value, problem) in [
+        (
+            &descriptor.authorization_endpoint,
+            "authorization_endpoint must be present and https",
+        ),
+        (
+            &descriptor.token_endpoint,
+            "token_endpoint must be present and https",
+        ),
+        (
+            &descriptor.redirect_uri,
+            "redirect_uri must be present and an https callback",
+        ),
+    ] {
+        if !https_host(value) {
+            return Err(fail(problem));
+        }
+    }
+
+    // Optional, per the table — but a configured one is still an endpoint.
+    if descriptor.revocation_endpoint.is_some() && !https_host(&descriptor.revocation_endpoint) {
+        return Err(fail("revocation_endpoint must be https when configured"));
+    }
+    // Optional, and a reference or nothing. A literal here is a client secret
+    // in a file that gets copied, diffed and pasted.
+    if descriptor
+        .client_secret_ref
+        .as_ref()
+        .is_some_and(|value| !value.starts_with("env:"))
+    {
+        return Err(fail("client_secret_ref must be an env: reference"));
+    }
+    // Absence is the failure; `false` is a valid declaration (Google REST takes
+    // no RFC 8707 resource parameter) and must not be reachable by omission.
+    if descriptor.send_resource_parameter.is_none() {
+        return Err(fail("send_resource_parameter must be declared explicitly"));
+    }
+
+    let scopes = descriptor
+        .scopes
+        .as_ref()
+        .ok_or_else(|| fail("scopes must be present"))?;
+    if scopes.is_empty() || scopes.iter().any(String::is_empty) {
+        return Err(fail("scopes must be a nonempty list of nonempty scopes"));
+    }
+    // Refused, not silently deduplicated: a repeated scope is a configuration
+    // the operator did not mean, and quietly fixing it hides the typo.
+    if scopes.iter().collect::<BTreeSet<_>>().len() != scopes.len() {
+        return Err(fail("scopes must not repeat"));
+    }
+    Ok(())
+}
+
 const SCHEMA_VERSION: &str = "accounts.v1";
 const DEPLOYMENT: &str = "single_process";
+use url::Url;
 const KEY_BYTES: usize = 32;
 
 fn validate_directory(

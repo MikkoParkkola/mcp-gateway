@@ -749,6 +749,14 @@ impl Config {
         self.validate_agent_key_material(overlay)?;
         self.key_server.validate()?;
         self.error_budget.validate()?;
+        // Descriptor structure first, and separately: a `personal_managed`
+        // descriptor under `enabled: false` must refuse, and the arm below
+        // deliberately accepts `NotEnabled` from `resolve` so that an
+        // explicitly disabled store-only block stays an ordinary
+        // configuration. Checking structure here also means a malformed
+        // descriptor never causes an account secret to be read.
+        crate::personal_accounts::config::validate_descriptors(self.accounts.as_ref())
+            .map_err(|error| Error::ConfigValidation(error.to_string()))?;
         match crate::personal_accounts::config::resolve(self.accounts.as_ref(), overlay) {
             Ok(_) | Err(crate::personal_accounts::config::AccountsConfigError::NotEnabled) => {}
             Err(error) => return Err(Error::ConfigValidation(error.to_string())),
@@ -2120,3 +2128,7 @@ mod cleartext_credential_guard {
 #[cfg(test)]
 #[path = "account_custody_tests.rs"]
 mod account_custody_tests;
+
+#[cfg(test)]
+#[path = "descriptor_config_tests.rs"]
+mod descriptor_config_tests;
