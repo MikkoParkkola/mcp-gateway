@@ -201,7 +201,14 @@ pub struct MetaMcpCallerContext<'a> {
 /// branches emit the generic `-32600`, and `-32003` already means something
 /// else elsewhere.
 fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> JsonRpcResponse {
-    let mut response = JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string());
+    let mut response = match error {
+        crate::Error::ResponseFirewallRefused => JsonRpcResponse::delivery_refusal_error(
+            Some(id),
+            error.to_rpc_code(),
+            &error.to_string(),
+        ),
+        _ => JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string()),
+    };
     if let Some(ref mut rpc_error) = response.error {
         // Written unconditionally, so this function is the sole authority on
         // the field. `JsonRpcResponse::error` starts it at `None` and nothing
