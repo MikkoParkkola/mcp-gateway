@@ -14,7 +14,7 @@ explicitly.
 |---|---|---|
 | BLOCK-1 | pending | |
 | BLOCK-2 | pending | |
-| BLOCK-3 | fixed, uncommittable (shared file) | |
+| BLOCK-3 | fixed, independently verified SOUND, uncommittable (shared file) | |
 | BLOCK-4 | fixed, independently verified SOUND | `7abb3514` |
 | BLOCK-5 | pending | |
 
@@ -180,3 +180,43 @@ test was written to drive.
 Recording the exit code separately mattered here. The background task reported
 `exited with code 0` — that is the trailing `echo`, not the compiler.
 `CLIPPY_EXIT=101` came from capturing `$?` before anything else ran.
+
+## BLOCK-3 — independent verification
+
+A second session re-checked the repair against source. Verdict: **SOUND**.
+
+The defect reaches the wire, which the fixing session inferred and the verifier
+proved: pre-fix, `merge_client_meta` (`src/gateway/router/helpers.rs:236`)
+injected the client's `params._meta` into `arguments`, and `arguments.clone()`
+(`src/gateway/meta_mcp/mod.rs:1503`) hands that to the backend. Consumption,
+not just construction.
+
+Falsifier probe: the pre-fix predicate restored behaviourally, the new test
+re-run, failing on the intended assertion — `_meta` present against
+`{"city":"Oslo"}` — rather than on a compile error. Restore verified by
+re-running the test. The verifier stated a fidelity limit rather than burying
+it: the probe carried one extra `let _ = …is_governed_meta_tool;` statement, so
+it was behaviourally the pre-fix predicate and not a byte-level revert.
+
+Consumer analysis found the one place where narrowing a predicate could have
+removed a security check — the admin pre-check at
+`src/gateway/router/handlers.rs:1242` — and showed it is a no-op: all four
+`ADMIN_META_TOOLS` names are built under all-true gates, so
+`is_governed_meta_tool` already answers true for each.
+
+`cargo test --lib`: 4091 passed, 3 failed. None attributable. One is a
+base-branch red under `src/capability/` with no working-tree diff; the other
+two are another session's RED-phase tests driving `promote_interim_envelope`,
+the stub named earlier in this document. Triaging those as regressions would be
+a mistake, and the verifier said so explicitly.
+
+### Residual — the stdio entry point has no test of its own
+
+`src/gateway/server/mod.rs:1856` carries the identical merge and is repaired
+only because the predicate is shared. Nothing drives it end-to-end, and nothing
+drives `handlers.rs:1186` end-to-end either; the new test pins the
+predicate-plus-merge composition. That is a coverage gap rather than a defect
+in this fix, and it is the strongest thing standing against the repair.
+
+Also unexercised: the allow-list arm of `is_exposed`, `Some(allowed)` with
+`|| !governed.contains(name)`.
