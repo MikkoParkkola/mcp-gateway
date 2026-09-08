@@ -166,8 +166,22 @@ derived from the fixture (A) deletes.
 
 An earlier ruling named `BridgeError::Unanswered`. The lane read the site and found the
 outer `Delivery` variant already covers a timeout by its own doc text, so the missing thing
-is the inner reason: `DeliveryError::Unanswered { key }`, returned where the bare `continue`
-sits at `src/gateway/input_bridge.rs:484-486`. Take the lane's. What survives from the
+is the inner reason, returned where the bare `continue` sits at
+`src/gateway/input_bridge.rs:484-486`. Take the lane's.
+
+**Amended 2026-09-08, on the lane's correction.** This ruling first spelled that inner reason
+`DeliveryError::Unanswered { key }`. No such variant exists: `enum DeliveryError`
+(`src/gateway/input_bridge.rs:158-186`) carries `Declined`, `UnknownAction`, `ClientRefused`,
+`Malformed`, `NoReplyMember`, `NoSession`, `TimedOut` and nothing else, and `rg -n 'Unanswered'
+src/ tests/` returns zero hits in the whole tree. It was doubly unconstructible: an absent
+variant, and a `key` field that lives one level up on `BridgeError::Delivery`. The constructible
+form, and the one R21 assumes, is
+`Err(BridgeError::Delivery { key: prompt.key, error: DeliveryError::TimedOut })` — whose own doc
+line already reads "Nothing came back inside the per-prompt wait", which is exactly the condition
+that `continue` sits on. Read with R21: the aggregate arm stays `BridgeError::Deadline`, the
+silent-client arm inside a live budget takes the `TimedOut` shape above, discriminator
+`left <= per_prompt` → `Deadline`. R21's "no new variant" is now spelled for both arms rather
+than for only one, so a reader of R8a alone cannot implement the collapse. What survives from the
 ruling is the cancellation-safe hold on the pending entry — the `PendingSampleGuard`
 construction at `src/gateway/proxy.rs:98-103` — and that
 `tests/mik_7212_mrtr7_bridge_acs.rs:1117` inverts rather than gets annotated.
