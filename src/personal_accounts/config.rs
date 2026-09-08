@@ -28,7 +28,52 @@ use super::StoreConfig;
 use crate::identity_propagation::{IdentityPropagationConfig, PropagationStrategyKind};
 use serde::{Deserialize, Serialize};
 
+mod adapters;
 mod descriptor_debug;
+
+// Nameable from the rest of the crate without exposing the module: the type is
+// part of `AccountsConfig`'s shape, the module layout is not.
+pub(crate) use adapters::AdapterConfig;
+// The gateway-credential view the separation checks below take. Nameable from
+// `config::Config`, which is the only place that can see `auth`.
+pub(crate) use adapters::GatewayCredential;
+
+/// Structural gateway separation for the whole block: no adapter names the same
+/// environment variable as a gateway credential.
+///
+/// Runs for EVERY configuration, enabled or not, and reads nothing — a disabled
+/// store still causes no environment lookup, which is what keeps the
+/// secret-free parser tests secret-free.
+pub(crate) fn validate_adapter_gateway_reference_separation(
+    accounts: Option<&AccountsConfig>,
+    credentials: &[GatewayCredential<'_>],
+) -> Result<(), AccountsConfigError> {
+    let Some(accounts) = accounts else {
+        return Ok(());
+    };
+    adapters::validate_no_gateway_reference_alias(&accounts.adapters, credentials)
+}
+
+/// Material gateway separation: no adapter secret resolves to a gateway
+/// credential's bytes.
+///
+/// Deliberately gated on `enabled`, mirroring [`resolve`]: material is compared
+/// only where material is being resolved anyway. A disabled store is left with
+/// the structural check alone, so nothing downstream may read a passing
+/// DISABLED configuration as a validated adapter trust boundary.
+pub(crate) fn validate_adapter_gateway_material_separation(
+    accounts: Option<&AccountsConfig>,
+    overlay: &dyn SecretOverlay,
+    credentials: &[GatewayCredential<'_>],
+) -> Result<(), AccountsConfigError> {
+    let Some(accounts) = accounts else {
+        return Ok(());
+    };
+    if !accounts.enabled {
+        return Ok(());
+    }
+    adapters::validate_no_gateway_material_reuse(&accounts.adapters, overlay, credentials)
+}
 
 /// The `accounts` block as configured. Unknown fields reject startup.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -57,6 +102,15 @@ pub struct AccountsConfig {
     pub(crate) descriptors: Option<BTreeMap<String, AccountDescriptor>>,
     #[serde(default)]
     pub(crate) limits: AccountsLimits,
+    /// Explicit adapter list, default empty (approved table, `accounts.adapters`).
+    ///
+    /// Always serialized, unlike `descriptors`: an operator who wrote
+    /// `adapters: []` and one who omitted the line are running the SAME
+    /// configuration — no adapter — and a rewrite may state that plainly. What a
+    /// rewrite must never do is drop a configured entry, which is why this is a
+    /// carried `Vec` rather than a parsed-and-forgotten field.
+    #[serde(default)]
+    pub(crate) adapters: Vec<AdapterConfig>,
 }
 
 /// Exactly the three declared spellings (approved table, row 423). A mode is
@@ -202,6 +256,42 @@ pub(crate) enum AccountsConfigError {
     /// Its messages name configuration shapes, never configured values.
     #[error("accounts.descriptors[{account_id}]: external_strategy is invalid: {problem}")]
     DescriptorStrategy { account_id: String, problem: String },
+    /// One adapter entry, named by list position and by a FIXED phrase. The
+    /// phrase is `&'static str` for the same reason `Descriptor::problem` is: a
+    /// message that echoed the configured value would one day print an
+    /// `hmac_secret_ref` that an operator mistyped as a literal secret.
+    #[error("accounts.adapters[{index}]: {problem}")]
+    Adapter { index: usize, problem: &'static str },
+    /// The installation id IS echoed here, and only here: it is an operator
+    /// label rather than credential material, and a duplicate is unactionable
+    /// without knowing which one collided.
+    #[error(
+        "accounts.adapters: duplicate installation_id {installation_id}; each adapter \
+         installation_id must be unique"
+    )]
+    AdapterDuplicateInstallation { installation_id: String },
+    /// Names the variable, never its value — the same shape as
+    /// `KeyReferenceUnresolved`.
+    #[error("accounts.adapters[{index}] hmac_secret_ref reference {variable} is unresolved")]
+    AdapterSecretUnresolved { index: usize, variable: String },
+    #[error("accounts.adapters[{index}]: hmac_secret_ref must resolve to at least 32 secret bytes")]
+    AdapterSecretTooShort { index: usize },
+    #[error(
+        "accounts.adapters[{index}]: hmac_secret_ref must not reuse another adapter's secret or \
+         an accounts.keys store key"
+    )]
+    AdapterSecretReuse { index: usize },
+    /// The other half of the approved reuse rule. `credential` is built from a
+    /// FIXED field path plus, at most, the operator's own `name` label for an
+    /// api key: a configuration coordinate, so that a refusal is actionable
+    /// without a value ever being rendered. No resolved byte, no variable value
+    /// and no literal credential reaches this message.
+    #[error(
+        "accounts.adapters[{index}]: hmac_secret_ref must not reuse gateway authentication \
+         material ({credential}); adapter signing and gateway authentication are separate trust \
+         domains"
+    )]
+    AdapterSecretReusesGatewayAuth { index: usize, credential: String },
 }
 
 /// `StoreConfig` itself carries raw key bytes and deliberately has no `Debug`,
@@ -282,6 +372,11 @@ pub(crate) fn resolve(
         });
     }
 
+    // Structure before material, here too: `resolve` is also reached directly
+    // from custody bootstrap, which does not go through `validate_adapters`.
+    // Re-checking is cheap and reads nothing.
+    adapters::validate(&accounts.adapters)?;
+
     if !accounts.keys.contains_key(&accounts.current_key_id) {
         return Err(AccountsConfigError::CurrentKeyMissing);
     }
@@ -314,7 +409,13 @@ pub(crate) fn resolve(
         let material = decode_key(key_id, &encoded)?;
         keys.insert(key_id.clone(), material);
     }
+    secret_refs_read.extend(adapters::resolve_secrets(
+        &accounts.adapters,
+        overlay,
+        &keys,
+    )?);
     secret_refs_read.sort();
+    secret_refs_read.dedup();
 
     Ok(Some(ResolvedAccounts {
         store: StoreConfig {
@@ -363,6 +464,7 @@ pub(crate) fn validate_descriptors(
     if accounts.deployment != DEPLOYMENT {
         return Err(AccountsConfigError::Deployment);
     }
+    adapters::validate(&accounts.adapters)?;
     let Some(descriptors) = accounts.descriptors.as_ref() else {
         return Ok(());
     };

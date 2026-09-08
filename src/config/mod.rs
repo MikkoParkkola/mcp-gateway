@@ -772,6 +772,16 @@ impl Config {
         // descriptor never causes an account secret to be read.
         crate::personal_accounts::config::validate_descriptors(self.accounts.as_ref())
             .map_err(|error| Error::ConfigValidation(error.to_string()))?;
+        // Structural half of the approved "no reuse with gateway authentication
+        // secrets" rule: one variable wired into both an adapter and a gateway
+        // credential is one secret whatever it holds, so this is decided from
+        // the text and reads nothing, disabled store included.
+        let gateway_credentials = self.gateway_credentials();
+        crate::personal_accounts::config::validate_adapter_gateway_reference_separation(
+            self.accounts.as_ref(),
+            &gateway_credentials,
+        )
+        .map_err(|error| Error::ConfigValidation(error.to_string()))?;
         // Consumer side of the same contract: every `backends[*].account`
         // reference resolves to a declared descriptor key, and a managed
         // consumer carries no second answer to "how is this backend
@@ -782,7 +792,41 @@ impl Config {
             Ok(_) | Err(crate::personal_accounts::config::AccountsConfigError::NotEnabled) => {}
             Err(error) => return Err(Error::ConfigValidation(error.to_string())),
         }
+        // Material half of the same rule, and only where material is resolved:
+        // two differently NAMED variables holding one value, or a literal
+        // gateway credential, are invisible to the reference check above.
+        crate::personal_accounts::config::validate_adapter_gateway_material_separation(
+            self.accounts.as_ref(),
+            overlay,
+            &gateway_credentials,
+        )
+        .map_err(|error| Error::ConfigValidation(error.to_string()))?;
         Ok(())
+    }
+
+    /// The gateway authentication credentials AS CONFIGURED, for the adapter
+    /// separation checks.
+    ///
+    /// Borrowed spec text, never a resolved value: `resolve_bearer_token` and
+    /// `resolve_key` read `std::env` directly rather than the overlay this load
+    /// was evaluated against, and the `auto` bearer mints a fresh random token
+    /// per call. Handing over the configured text lets the checks resolve
+    /// through the overlay and skip `auto` deliberately.
+    fn gateway_credentials(&self) -> Vec<crate::personal_accounts::config::GatewayCredential<'_>> {
+        use crate::personal_accounts::config::GatewayCredential;
+
+        let mut credentials: Vec<GatewayCredential<'_>> = Vec::new();
+        if let Some(token) = self.auth.bearer_token.as_deref() {
+            credentials.push(GatewayCredential::BearerToken(token));
+        }
+        for (index, api_key) in self.auth.api_keys.iter().enumerate() {
+            credentials.push(GatewayCredential::ApiKey {
+                index,
+                name: api_key.name.as_str(),
+                spec: api_key.key.as_str(),
+            });
+        }
+        credentials
     }
 
     /// Refuse to start when an enabled agent's key material cannot reject
