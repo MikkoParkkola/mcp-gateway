@@ -36,8 +36,13 @@ is `1 file changed, 1 insertion(+), 1 deletion(-)`, and the changed line is the
 not as edits.
 `gpt-review`'s finding against `WIRE.5` versus the recorded gate-once policy was
 escalated by this round and is now RULED: `R8` takes per-round gating and
-refuses the narrowing, so the policy below is amended rather than the plan row.
-It is named in full further down, where the escalation was stated.
+refuses the narrowing. BOTH halves land, and both cost edits: the policy below
+is amended to per-round gating, the criterion stands unnarrowed, and `WIRE.5`
+and `WIRE.13` were each repaired in
+`docs/design/2026-09-05-mrtr7-test-plan.md` — the first to parameterize the
+refusal position and state its staging conditions, the second to drop an
+approval inference its spend count cannot support. It is named in full further
+down, where the escalation was stated.
 
 ## Problem
 
@@ -1323,14 +1328,17 @@ loop, the propagation the widening already owed, and the documentation delta.
 ### Round 6 escalation — `gpt-review` F1, `WIRE.5` versus gate-once — RULED (A), 2026-09-08
 
 Stated in full here, because the header says it is and because a team lead
-cannot rule on a summary of a finding.
+cannot rule on a summary of a finding. Everything below describes the policy
+AS IT THEN READ, before `R8`. The gate-once statements it quotes have since
+been amended above; they are preserved here in their pre-ruling form because a
+ruling that cannot be read against the text it ruled on is unauditable.
 
 - **the finding.** `WIRE.5`'s criterion reads "Every backend attempt is
   accounted exactly once, including bridge retries, **and governance is
   re-checked before each**", and its second fixture asserts a budget sized to
   admit the first attempt and reject the second, with the retry never reaching
   the backend (`docs/design/2026-09-05-mrtr7-test-plan.md:61`). The policy
-  section above says the opposite in this same design: the gate stays outside
+  section above THEN SAID the opposite in this same design: the gate stays outside
   `accounted_dispatch` deliberately, an exchange is gated ONCE, and the residual
   — "a bridged round may not be budget-refused" — is ACCEPTED as metered
   overspend bounded at `3 × cost_for(tool)`. A plan row and a design event
