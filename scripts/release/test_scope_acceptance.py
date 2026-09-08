@@ -488,4 +488,7 @@ class PublishCheckTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    # unittest discovers this imported TestCase when running the workflow entry point.
+    from test_scope_contract_interface import ContractInterfaceTests  # noqa: F401
+
     unittest.main()
