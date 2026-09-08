@@ -141,6 +141,14 @@ test had no way to fail. This marker is the completion acknowledgement that make
 empty sweep" a falsifiable claim. One line at `trace!`, off in every normal build, and it stays — not
 a test-only conditional, because a log line compiled out under test is a different program.
 
+**The marker is emitted LAST, after the conditional `info!`, and that ordering is part of the
+design event rather than an implementation detail.** A marker that could precede its own sweep's
+`info!` would be useless to the observer: an acknowledgement is only a boundary if everything the
+sweep had to say has already been said. With the order fixed, the markers partition the log into
+sweeps, an observer counts them, and "no `info!` between marker N and marker N+1" is a statement
+about exactly one sweep. Emit it first and that same wait catches the marker of the sweep that
+just logged a count, which is the false pass this event exists to close.
+
 ### Findings carried in from the v2 review
 
 **Reviewed baseline, disclosed.** Both v2 verdicts rendered on `55ee043d`. Everything folded in
