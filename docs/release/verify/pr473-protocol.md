@@ -25,7 +25,7 @@ each half reviewed separately.
 | A | gpt | 2026-09-08T16:25:27Z | SHIP-WITH-FIXES | `93e2f6f81ec0980be583a86a2a903ca57da2a053313d4d88c9366d36659994f6` | 110,212 | ok |
 | B | gpt | 2026-09-08T16:29:17Z | SHIP-WITH-FIXES | `3bc5f9b5c4e76d029de92fa3b656648b75e764e282ffb20e6dc677f73bf71ea3` | 105,465 | ok |
 | A | grok | 2026-09-08T16:33:29Z | SHIP | `93e2f6f81ec0980be583a86a2a903ca57da2a053313d4d88c9366d36659994f6` | 110,212 | ok |
-| B | grok | — | STILL RUNNING at time of writing | — | — | — |
+| B | grok | 2026-09-08T16:44:00Z | SHIP | `3bc5f9b5c4e76d029de92fa3b656648b75e764e282ffb20e6dc677f73bf71ea3` | 105,465 | ok |
 
 Binding, stated because it is not the identity the brief assumes: the ledger's
 `material_sha256` is not the payload sha256. The wrapper digests one NUL byte
@@ -43,9 +43,8 @@ reviewing other shards and are not claimed here.
 
 ## Coverage limits
 
-- The grok leg returned for half A only; half B was still running when this
-  report was written. The dual-vendor gate is therefore satisfied for half A and
-  NOT satisfied for half B. Grok's half-A verdict is SHIP, and it raised one
+- Both grok legs have now returned, so the dual-vendor gate is satisfied for
+  half A AND half B. Grok's half-A verdict is SHIP, and it raised one
   HIGH finding that is A1 below, reached independently — the two vendors agree on
   the leaked in-flight slot without agreeing on the verdict. Its five
   improvements overlap the gpt leg on the stale comment at
@@ -324,6 +323,57 @@ which specification is consulted.
 
 Severity: LOW.
 
+## Reviewer findings — half B (grok, SHIP)
+
+Ledger row `3bc5f9b5…`, `process_status` ok, completed 2026-09-08T16:44:00Z.
+Payload rebuilt from the pinned SHAs and re-verified before the run: 105,464
+bytes, sha256 `a36157cd…`, and `{ printf '\0'; cat pB.diff; } | shasum -a 256`
+reproducing the row's `material_sha256` exactly.
+
+One finding, raised at HIGH.
+
+### GB1 — the task store never reaps or refuses — CONFIRMED, duplicate of B3
+
+Grok reached `src/protocol/task_store.rs:48` independently of the gpt leg and
+states the same defect B3 records: `create` is a plain insert, and the store's
+whole surface is `new` (:39), `create` (:48), `get` (:71), `owns_all` (:85) and
+`update` (:95) — no capacity check, no expiry, no removal. Re-verified at the
+pinned revision from `git show 60b138bb:src/protocol/task_store.rs`; the file
+contains no `ttl`, `reap`, `evict` or `remove` in any form.
+
+Grok adds one half the gpt leg did not: the bound was already specified. The
+task-extension design at `docs/design/2026-08-31-task-1-tasks-extension.md:102`
+requires an "insert-if-absent, TTL-reaped" store, and its §11.2 amendment at
+`:117-121` states the store "needs a finite default TTL, a global cap and a
+per-principal cap, all enforced **before** the backend call starts — the
+extension is what makes an authenticated flood cheap". None of the three exists.
+That moves B3 from an unbounded-growth observation to an unimplemented design
+requirement, without changing what the code does.
+
+Reachability is unchanged from B1: `src/gateway/router/handlers.rs:1195` mints a
+record on any `tools/call` whose params carry a `task` member, so an
+authenticated caller adds one record per request and nothing removes it.
+
+Not counted again in the tally — it is B3 reached by a second vendor, and the two
+vendors agreeing on it is the useful fact.
+
+### Improvements — no defect claimed
+
+Five, none overlapping the half-A improvement list, all anchored at the pinned
+revision:
+
+- `src/protocol/meta.rs:438` — fold the tasks-extension declaration into
+  `Declared` so handlers stop re-parsing `_meta` with a second JSON pointer.
+- `src/protocol/meta.rs:77` — drop `RequestFields.log_level` and
+  `client_info_name` until something reads them; classification uses key presence.
+- `src/protocol/mrtr.rs:423` — `original_request_digest` builds its key as
+  `format!("{server}:{tool}")`, so the digest depends on colon-free names being
+  enforced elsewhere; a NUL or length prefix removes that dependency.
+- `src/protocol/subscriptions.rs:84` — `resource_uris: Vec<String>` is scanned per
+  notification; a `HashSet` keeps delivery O(1) in the URI list.
+- `src/protocol/task_store.rs:77` — `get` clones the whole `Task` including its
+  result on every poll.
+
 ## Tally
 
 - CONFIRMED (in whole or in part): 12 — CLAIM-1, CLAIM-2, A1, A2, A3, B1, B3,
@@ -333,8 +383,11 @@ Severity: LOW.
   strictness for version `00`. Each needs a specification fetch or a traced live
   path that this shard did not perform.
 - DEAD: 0. Unusually, every finding survived inspection; the customary quarter
-  that dies did not appear in this payload.
-- Improvements carrying no defect claim: 3.
+  that dies did not appear in this payload. Grok's half-B leg adds no new
+  confirmed finding: its single HIGH is GB1, which duplicates B3.
+- Improvements carrying no defect claim: 8 — the three listed for half A and the
+  five from grok's half-B leg. Grok's half-A improvements are summarised under
+  Coverage limits and are not counted again here.
 
 Recommended as 4.0.0 blockers, in order:
 
