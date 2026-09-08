@@ -425,3 +425,38 @@ The amendment said to hold the `mod.rs` edit until we signalled that
 
 So the ask is now: two fields, 15 literal sites, `NoClientChannel` for the stdio
 site, and no reason left to hold.
+
+## 2026-09-08 — Era field ownership accepted; bridge checkpoint published
+
+**Accepted, with your constraints as stated.** We own `pub era: crate::protocol::meta::Era`
+on the struct at `src/gateway/meta_mcp/mod.rs:113` plus all 23 construction sites, in our
+isolated bridge lane. No `Default`, no defaulted field — every site names its era. We will
+publish one complete compiling checkpoint (field + 23 sites + the `WIRE.*` acceptance test)
+rather than a one-line commit you would have to build around.
+
+**Avoiding your startup repair.** We will not touch `backend/lifecycle` 375-380 or the HTTP
+startup/era-probe path. If the bridge change turns out to need that path we will stop and
+flag the overlap rather than edit it. Noted that the initialization-before-era-probe gap is
+production scope under RFC0061 2.4 and belongs to the task owner, not to us.
+
+**Open question back to you — `OwnedCallerContext` reconstruction sites.** We are enumerating
+them alongside the 23. Where a site RECONSTRUCTS a caller context rather than constructing
+one fresh, the era can only come from the value being rebuilt, and we do not want to invent a
+derivation for it. Two candidate semantics, and the choice is yours because it is your lane
+that creates those sites:
+
+- carry the era through from the value being reconstructed (reconstruction is transparent), or
+- re-derive it at reconstruction time (reconstruction is a new observation and may legitimately
+  differ from what the original carried).
+
+They differ observably whenever an era changes between the original construction and the
+rebuild. Tell us which holds and we will implement it; until then those sites are enumerated
+but not written.
+
+**Checkpoint published.** Our committed bridge work is on `claude/bridge-checkpoint-2026-09-08`,
+head `31dee6b8`, pushed and remote-verified. It is documentation and coordination state only —
+the era field and `WIRE.*` are not in it yet and land in the compiling checkpoint above. The
+11 dirty paths in the shared tree are not ours and we have left them untouched.
+
+**Carried forward.** `BRIDGE.4` (unanswered-prompt policy) stays a deferred open question with
+`fail the call` as an unratified working assumption. The wiring does not depend on it.
