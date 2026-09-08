@@ -372,3 +372,61 @@ No threshold, no arm, no workload, no metric, no rep schedule. It adds one recor
 obligation (failing-check names), one release-gate rule (R1), and the second reviewer's
 verdict. Both reviewers now stand at `SHIP-WITH-FIXES`, with every confirmed finding either
 repaired or recorded with its reason.
+
+## Amendment 3 — 2026-09-08, before any measured rep: the run would have measured a stranger's gateway
+
+A pre-flight check of the two ports the runner uses, made minutes before launch, returned:
+
+```
+LISTEN 127.0.0.1:39401  users:(("mcp-gateway",pid=3481483))
+LISTEN 127.0.0.1:39400  users:(("hebb-serve",pid=704930))
+```
+
+Both ports the contract pinned were **already occupied on the shared box** — 39401 by another
+session's `mcp-gateway` of unknown provenance, 39400 by an unrelated service. The runner
+starts a gateway, waits for `/health` to answer, and proceeds. Nothing in it checked *which*
+process answered.
+
+Had the run launched: arm A would have driven `hebb-serve`, failed every check and voided
+loudly. Arm B would have driven **a stranger's mcp-gateway** — a live process, answering
+`/health`, serving `tools/list`, returning plausible latencies for a binary nobody pinned. It
+would have produced a full set of numbers, passed every void condition, and measured the
+wrong thing. That is the precise failure this contract exists to prevent, and no void
+condition written before today would have caught it.
+
+### A3.1 — ports moved
+
+`PORT_A` 39400 -> **39410**, `PORT_B` 39401 -> **39411**, both verified free at patch time.
+Moving a port changes no threshold, arm, workload or metric.
+
+### A3.2 — the runner now proves it is talking to the process it launched
+
+A free port is a fact with a shelf life; the next check is what makes it durable. After each
+gateway start the runner reads back the listening socket's owning PID and compares it with the
+PID it launched:
+
+```
+pid=$(cat "$R/gw-$tag.pid"); own=$(ss -ltnp | grep ":$p " | grep -c "pid=$pid,")
+[ "$own" = "1" ] || { echo "VOID: port $p is not owned by the process we launched"; exit 4; }
+```
+
+`VOID`, never a number. The ownership line for every start is written to
+`results/port-ownership.txt`, so the claim "each arm was driven against its own binary" is
+checkable by someone who was not there, rather than assumed from a port number.
+
+This fires in the pre-flight `tools/list` step, before any measured rep, so a false positive
+(a gateway that re-execs into a different PID) costs about forty seconds and is visible
+immediately — it cannot silently consume the run.
+
+### Re-freeze
+
+`run-reps.sh` sha256 is now `b65e2331085e86d26bbf0ba4425708e8d9512e6aa315644d9ae334f8a4fb56db`,
+superseding the pre-patch value. `eval-nfr1.sh` is **untouched** and still
+`7b3d6225a34d0aab8229b417edb686ead80ffbd109f2f7a1d460831fe4c49d09`, verified by re-hashing it
+on Spark after the patch: the script that decides `PASS`/`FAIL` has not been edited since it
+was frozen, which is the only freeze that guards against choosing a rule after seeing numbers.
+
+### What Amendment 3 does not change
+
+No threshold, arm, workload, metric or rep schedule. Two port numbers moved and one way for
+the run to fail was added — the only direction an amendment may move a gate in.
