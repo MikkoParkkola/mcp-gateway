@@ -596,7 +596,9 @@ A 10-second smoke rep against the patched harness returns 0 non-JSON lines in th
 The candidate emits three INFO log lines per iteration from `mcp_gateway::observed` — protocol
 revision on `initialize`, `tools/list` and `tools/call`, plus a surface-inputs line — which the
 baseline does not. Over one rep that is roughly 16,000 lines and a gateway log about 2.7x the
-baseline's. This is the product's own behaviour on the measured path, not a harness defect, so it
+baseline's — log-volume facts about what the two arms *emit*, not latency measurements, and
+so within what A4.1 lets a void rehearsal carry forward. No rehearsal timing is quoted here,
+or anywhere else. This is the product's own behaviour on the measured path, not a harness defect, so it
 is **part of what the scored run measures** and is not touched. It is recorded here because a
 reader comparing the two arms' logs will notice the asymmetry and should not have to re-derive
 its cause.
