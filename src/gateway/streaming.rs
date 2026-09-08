@@ -27,6 +27,7 @@ use uuid::Uuid;
 use crate::Result;
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
+use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 
 /// A tagged notification event from a backend
 #[derive(Debug, Clone, Serialize)]
@@ -100,9 +101,15 @@ impl NotificationMultiplexer {
     /// Start the background session-reaper task.
     ///
     /// Must be called once after the multiplexer has been placed in an `Arc`.
-    /// All call sites in `server.rs`, `webhooks.rs`, and `proxy.rs` do this
+    /// The single call site is `server::build_app`, which does this
     /// immediately, so the reaper always runs in production.
-    pub fn spawn_reaper_on(self: &Arc<Self>) {
+    ///
+    /// The same tick drives two reclaims that must not diverge: the stream
+    /// sessions owned by this multiplexer, and the lifecycle deadlines that
+    /// fire registered cleanup callbacks. A second timer would let one sweep
+    /// run while the other is wedged, and the divergence is invisible —
+    /// nothing errors when a callback is simply never called.
+    pub fn spawn_reaper_on(self: &Arc<Self>, lifecycle: Arc<SessionLifecycle>) {
         let weak = Arc::downgrade(self);
         let ttl = self.config.session_ttl;
         let interval = self.config.session_reaper_interval;
@@ -120,6 +127,11 @@ impl NotificationMultiplexer {
                 };
 
                 mux.reap_expired_sessions(ttl);
+
+                let reclaimed = lifecycle.reap(now_unix());
+                if reclaimed > 0 {
+                    info!(reclaimed, "Session lifecycle reaper completed");
+                }
             }
         });
     }
@@ -756,7 +768,7 @@ mod tests {
         };
 
         let multiplexer = Arc::new(NotificationMultiplexer::new(backends, config));
-        multiplexer.spawn_reaper_on();
+        multiplexer.spawn_reaper_on(Arc::new(SessionLifecycle::new()));
 
         let (id, rx) = multiplexer.get_or_create_session(Some("auto-reap-session"));
         drop(rx); // Drop receiver immediately
@@ -775,6 +787,39 @@ mod tests {
         assert!(!multiplexer.has_session(&id));
     }
 
+    /// T8 of the `MIK-7215.CONTROL.4` test plan.
+    ///
+    /// GIVEN a lifecycle holding a key whose deadline has already passed
+    /// WHEN the host reaper tick runs
+    /// THEN the key is reclaimed — the tick sweeps the lifecycle, not just the
+    /// session map. Reaping is unconditional (D5): nothing here tells the tick
+    /// whether a request for that key is still in flight.
+    #[tokio::test]
+    async fn spawn_reaper_on_sweeps_the_session_lifecycle() {
+        // GIVEN: a key whose deadline is the Unix epoch, i.e. long past.
+        let lifecycle = Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
+        lifecycle.track("stale-identity", 0);
+        assert_eq!(lifecycle.tracked_count(), 1);
+
+        let backends = Arc::new(BackendRegistry::new());
+        let config = StreamingConfig {
+            session_reaper_interval: Duration::from_millis(20),
+            ..StreamingConfig::default()
+        };
+        let multiplexer = Arc::new(NotificationMultiplexer::new(backends, config));
+
+        // WHEN: the host tick runs.
+        multiplexer.spawn_reaper_on(Arc::clone(&lifecycle));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // THEN: the tick reclaimed it.
+        assert_eq!(
+            lifecycle.tracked_count(),
+            0,
+            "the reaper tick must sweep the lifecycle, not only the session map"
+        );
+    }
+
     /// GIVEN the multiplexer dropped while reaper task is running
     /// WHEN the Arc is dropped
     /// THEN the reaper task exits cleanly (no panic, no leak)
@@ -788,7 +833,7 @@ mod tests {
         };
 
         let multiplexer = Arc::new(NotificationMultiplexer::new(backends, config));
-        multiplexer.spawn_reaper_on();
+        multiplexer.spawn_reaper_on(Arc::new(SessionLifecycle::new()));
 
         // WHEN: drop the only strong reference
         drop(multiplexer);
