@@ -47,6 +47,10 @@ pub struct Fixture {
     /// the falsifier for the block below.
     #[cfg(feature = "firewall")]
     pub firewall: Option<Arc<mcp_gateway::security::firewall::Firewall>>,
+    /// The lifecycle registry the handler renews deadlines in
+    /// (`MIK-7215.CONTROL.4`). `None` is the shipped router-test state, in
+    /// which tracking is a no-op.
+    pub session_lifecycle: Option<Arc<mcp_gateway::gateway::session_lifecycle::SessionLifecycle>>,
 }
 
 impl Default for Fixture {
@@ -65,6 +69,7 @@ impl Default for Fixture {
             modern_protocol: true,
             #[cfg(feature = "firewall")]
             firewall: None,
+            session_lifecycle: None,
         }
     }
 }
@@ -80,6 +85,7 @@ pub fn state(f: Fixture) -> Arc<AppState> {
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
     Arc::new(AppState {
+        session_lifecycle: f.session_lifecycle,
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         env: None,
         meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
