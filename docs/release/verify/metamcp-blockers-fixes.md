@@ -348,3 +348,20 @@ is not claimed. It exits 101 on `tests/mik_7215_control4_reap_count_acs.rs`
 change it specifies. That is another session's test-first step doing its job,
 not a lint regression. It is absent from the base revision and from all seven
 files this fix touches, so it is reported, not repaired.
+
+## A local clippy pass over `tests/common/mod.rs` does not mean CI has one
+
+Measured 2026-09-08. `RELEASE-4.0.0-CLOSE-PLAN.md` records the branch clippy red
+as three errors in `tests/common/mod.rs`. A clippy run in this worktree no longer
+reports them, and it would be easy to read that as the red having been closed. It
+has not been. The repair exists only as an uncommitted working-tree edit: the
+committed file at `HEAD` carries `#![allow(dead_code)]` alone (line 8), while the
+worktree carries `#![allow(dead_code, unused_imports)]` and
+`#[allow(clippy::struct_excessive_bools)]` on `Fixture`. CI builds the committed
+tree, so `-D warnings` still fails there on exactly the errors the plan names.
+
+Two consequences worth separating. The red is real and still blocks the release
+until that edit is committed by whoever owns it — it is another session's file and
+not this one's to commit. And any local clippy result read off this worktree is
+evidence about the worktree, not about the branch; the same caveat applies to the
+green reported above.
