@@ -33,8 +33,11 @@ Both built from source on the same machine, in the same session, with the same t
 cargo build --release --locked --features a2a,webui,config-export,cost-governance,firewall,discovery,semantic-search,tool-profiles,metrics
 ```
 
-The feature list is stated explicitly rather than left to `default` because a feature that is
-absent in one arm compiles some benchmarked paths away entirely. Verified before writing this:
+The feature list is stated explicitly as a **pin**, not as a divergence from `default`: at both
+refs `default` names exactly these nine features, and no `--no-default-features` is passed, so
+both arms build the same set either way (A6.1). Writing it out means the build line does not move
+if `default` moves under one arm — which matters because a feature absent in one arm compiles
+some benchmarked paths away entirely. Verified before writing this:
 the `[features]` tables at the two refs are identical, so the same explicit list is achievable
 at both (`git show v3.5.0:Cargo.toml` vs `Cargo.toml`). Each arm uses **its own** `Cargo.lock`
 (`--locked`), because the dependency set is part of what the release is.
@@ -507,7 +510,7 @@ Dispositions, fixed now rather than at reduction time:
 | outcome | what it means | what happens |
 |---|---|---|
 | `VOID` | neutral. The run measured nothing; no claim moves in either direction | re-run, cost is machine time |
-| `PASS` | the row closes at its own wording, and the public-quotation residual lifts | results section + row rewrite |
+| `PASS` | the row closes at its own wording, and the public-quotation residual lifts **across the three surfaces its check covers** — `README.md`, `benchmarks/public_claims.json`, `docs/BENCHMARKS.md`. Release notes and published issue text are not checked by it and stay open, named as such at closure (A6.2) | results section + row rewrite |
 | `FAIL` — P99 past the bound | **evidence against a decision already made on headroom** | §11 stop-the-line, reported as exactly that: not buried, not softened, and not re-framed as `INCONCLUSIVE` |
 
 `INCONCLUSIVE` remains what A3 defined it as — a spread the pooled margin cannot survive — and
@@ -651,3 +654,54 @@ now actually implemented, and one broken stream split into three. **No number fr
 is carried forward into this contract, the criteria-status row, or any release document.** The
 NFR.PERF.1 row stays exactly as it reads today, because a void run moves no claim — rewriting it
 now would be the first citation of numbers this amendment exists to discard.
+
+## Amendment 6 — 2026-09-08, after the void and before the scored run: two sentences of this contract were wrong about their own reasons
+
+Neither correction moves a threshold, an arm, a workload, a metric or a void condition. Both fix
+a sentence that a later reader would have believed.
+
+### A6.1 — `firewall` is a DEFAULT feature, and the explicit list is identical to `default` at both refs
+
+The release owner flagged that `firewall` is a default feature and warned the comparison might
+have been modelled against a lighter binary than the one actually built. Checked at source
+rather than reasoned about: at **both** refs the `default` line names the same nine features as
+this contract's build line, in the same order.
+
+```
+default = ["a2a", "webui", "config-export", "cost-governance", "firewall", "discovery", "semantic-search", "tool-profiles", "metrics"]
+```
+
+(`git show v3.5.0:Cargo.toml` vs `Cargo.toml`, second line of each `[features]` table.) No
+`--no-default-features` is passed, so each arm builds `default ∪ explicit list` — the same nine,
+identically, on both sides. The warning does not land in the direction it was given: nothing was
+modelled lighter, because the two spellings name one set.
+
+It does land one line over. The rationale at the build line says the list "is stated explicitly
+rather than left to `default`", which reads as a deliberate **divergence** from `default`. There
+is none, and a reader chasing that difference would find nothing and mistrust the rest. What the
+explicit list actually buys: the sets coincide **today, at these two refs**, and the list is a
+**pin** — if `default` moves under either arm before the scored run, the build line does not move
+with it. Worth keeping, and not what the sentence claimed.
+
+Void condition 5 — "the two builds do not use the same feature list and toolchain" — is now
+satisfied by verification on both halves rather than by assumption: same nine features both arms
+(here), same toolchain both arms (A4.3).
+
+### A6.2 — A4.4's `PASS` row promised more than the residual's own check covers
+
+The residual attached to the 2026-09-05 ruling is about how widely the latency claim is
+**quoted**, and the check in the criteria row's evidence cell covers three surfaces: `README.md`,
+`benchmarks/public_claims.json`, `docs/BENCHMARKS.md`. Release notes and published issue text are
+outside it (release owner, 2026-09-08).
+
+A4.4's `PASS` row said the residual "lifts", unqualified — an overclaim living in the row a
+reader will actually read at reduction time. Corrected **in the row itself**, the way A5.5
+corrected A5.3 rather than annexing a note further down: a `PASS` lifts the residual across the
+three surfaces its check covers, and the unchecked half is named at closure instead of closing
+silently with it. A row that reads as fully closed while two public surfaces were never inspected
+is the same collapse A4.4 exists to forbid, one category over.
+
+### What Amendment 6 does not change
+
+No threshold, arm, workload, metric, rep schedule, void condition, or disposition. The scored
+run's trigger is unmoved and still unfired.
