@@ -394,10 +394,19 @@ not before.
   with the response cache OFF — see the fixture invariant below.
 - TTLs already exist: `COMPLETED_TTL` 24h and `IN_FLIGHT_TIMEOUT` 5m (`src/idempotency.rs:44` and `:50`).
   Copying `config.cache.default_ttl` instead would shrink protection to a minute.
-  The 24h itself remains a STATED ASSUMPTION flagged to the team lead, not a settled decision:
-  `COMPLETED_TTL` is a module constant (`src/idempotency.rs:44`, with its rationale in the doc
-  comment at `:31-43`), not a config field, and "there is no config field" is not "there is no
-  assumption to record". Whoever rules on the config gate rules on this number too.
+  The 24h itself is a DEFERRED UNKNOWN, not a settled decision — `COMPLETED_TTL` is a module
+  constant (`src/idempotency.rs:44`, rationale in the doc comment at `:31-43`), not a config
+  field, and "there is no config field" is not "there is no assumption to record". §P1's
+  four fields, so it is deferred rather than merely regretted:
+  - **owner**: the team lead, folded into the same ruling that decides the (a)/(b) config gate.
+  - **what would resolve it**: that ruling — asked of the team lead, not checkable by running
+    anything, since it is a policy choice about what an operator may tune.
+  - **when**: at that ruling, which blocks routes 2 and 3; not after they land.
+  - **what if it resolves badly**: if 24h is wrong for a real deployment, the constant becomes a
+    config field with 24h as its default — additive, no behaviour change at the shipped
+    default, and no stored entry is invalidated by widening the window.
+  NOTHING IN THIS CHANGE DEPENDS ON THE ANSWER: route 1 is correct at any TTL, and the cases
+  above assert replay and refusal, never a duration.
 - ADR-008 INV-3 requires the `cache_binding` (user + audience) in both cache keys, and it is — but
   the two keys get it in opposite ways. The RESPONSE key takes the principal as a PARAMETER of its
   derivation: `ResponseCache::response_key` (`src/cache.rs:279-294`) receives `principal` and mixes
@@ -524,6 +533,10 @@ reviewer verdict; the `SHIP-WITH-FIXES` at the top is a verdict on revision 2. C
 landed ahead of that review (`7851736d`). Nothing here is unknown — a reviewer has simply not
 looked yet. The team lead ruled the repair is review-now rather than deletion of the landed code,
 so this is tracked as an outstanding review, not as a deferred question.
+ROUTES 2 AND 3 DO NOT LAND BEFORE THIS REVISION HAS A VERDICT. Route 1 outran the gate once;
+saying "the gate applies from here" is the only thing that stops that from being a precedent,
+and it is cheap to say and checkable afterwards — the remaining two routes have no commit
+until a verdict on revision 6 exists.
 
 **(b) MIK-7408 — genuinely deferred, four fields.**
 
@@ -554,6 +567,7 @@ an invariant is what stops the defect returning row by row.
 | `_full` protection (P4) | the meta-route case again with `_full` requested | GREEN TODAY — regression coverage. The suppression was removed and `invoke.rs:1144-1147` records why; the row is what makes putting it back go red |
 | key/request binding (P5) | one key reused for a different `(server, tool, arguments)`; the second call must be refused, not replayed | GREEN ONCE WIRED — the binding is derived today but unreachable, so this row goes red only against a build that delivers a key without it. Re-stated 2026-09-08: `7851736d` closed the `None` half — the cache is `Some` — and the carrier of Axis 3 is what still holds the key away from the binding |
 | reservation release (P6) | a call that trips the contract gate after dispatch; a later same-key call must not be locked out | the entry stays `InFlight` until timeout |
+| backend timeout vs in-flight lease (P7) | config load with a backend `timeout` >= `IN_FLIGHT_TIMEOUT` must be REJECTED at load time, and one below it accepted | GREEN ONCE THE VALIDATION LANDS — today the config loads either value silently, so a backend can outlive its own reservation. Asserted at CONFIG LOAD, not through an invoke fixture: a fixture that builds the config in memory can be made to pass without the check existing, a load-time case cannot |
 | bound (P3) | fill to 10_000, assert a new protected side effect is refused rather than admitted | unbounded map admits it |
 | bound is per-principal (P3, rev-5 amendment) | principal A fills its share; principal B's first protected call must still be admitted | a global bound refuses B, so B's protection is denied by A's traffic for the full 24-hour TTL — the row goes red against exactly the shape P3 originally specified |
 | direct-route replay is route-neutral (Axis 3) | a call made through `POST /mcp/{name}`, then reissued with a DIFFERENT JSON-RPC id; the replay must carry the new id and the direct route's own envelope, not the first call's id or the meta route's projected shape | nothing stores a route-neutral result, so a replay would hand back whatever the first caller's envelope happened to be, and a retrying client cannot correlate it |
@@ -590,4 +604,4 @@ constraints on *this* plan because this is the change that activates the cache.
 | criterion | case | how it fails today |
 |---|---|---|
 | cross-principal binding (P8/P9) | two *different* authenticated callers issue the same tool, same arguments and the same key string, with identity propagation OFF; the second must execute rather than receive the first's stored response | **CLOSED 2026-09-08 by `3403a53b`.** It failed exactly as described: `identity_suffix` was empty at that default, so both callers derived the same *key*, `admit` found the entry by key (`idempotency.rs:256`) and `matches` (`:130-131`) compared fingerprints that are identical because the two calls genuinely are the same `(server, tool, arguments)` — `AdmitOutcome::Completed`, replayed. `retry_identity_suffix` now falls back to the verified subject, tagged `sub:`, so the suffix is empty only for a caller the operator left unattributed. Same commit closes a second defect this row never saw: the client key was concatenated RAW and FIRST, so a caller could spell another caller's suffix inside its own key and derive that caller's entry outright (MIK-7408). It is now length-prefixed |
-| unresolvable principal under a client key (R5 / Axis 4) | on a non-`required` propagation backend, a caller with neither a `cache_binding` nor a stable actor id sends a client key for a `destructiveHint` tool; the call must be REFUSED — neither executed unprotected nor admitted under an unbound key | **CORRECTED 2026-09-08 against source.** This cell read "no key is derived at all (`idempotency_cache` is `None`)", which stopped being true at `7851736d`: `enable_idempotency` (`src/gateway/server/mod.rs:742`) is the only production construction site and every route through `run`/`run_stdio` passes it, so route 1 derives a key today. The row still FAILS, for a different reason: such a caller now derives a key with an EMPTY identity suffix (`retry_identity_suffix`, both arms `None`) and is admitted under it, which is the second of the two states the criterion forbids rather than the first. The refusal itself is still unbuilt |
+| unresolvable principal under a client key (R5 / Axis 4) | on a non-`required` propagation backend, a caller with neither a `cache_binding` nor a stable actor id sends a client key for a `destructiveHint` tool; the call must be REFUSED — neither executed unprotected nor admitted under an unbound key | **STILL FAILS — NOT closed. Cause corrected 2026-09-08 against source; the criterion itself is open.** This cell read "no key is derived at all (`idempotency_cache` is `None`)", which stopped being true at `7851736d`: `enable_idempotency` (`src/gateway/server/mod.rs:742`) is the only production construction site and every route through `run`/`run_stdio` passes it, so route 1 derives a key today. The row still FAILS, for a different reason: such a caller now derives a key with an EMPTY identity suffix (`retry_identity_suffix`, both arms `None`) and is admitted under it, which is the second of the two states the criterion forbids rather than the first. The refusal itself is still unbuilt |
