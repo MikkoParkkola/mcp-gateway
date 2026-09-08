@@ -142,8 +142,12 @@ its disposal, so neither ages into a ticket by default.
 - **Hoist the inspection to the backend cache insert** (cost SMALL): compute the
   verdict once per tool when the backend cache is populated, instead of walking
   the schema in `ToolDescriptorTrustCard::from_tool` on every emission.
-  DISPOSAL: **recorded as an observation.** It is pure cost — no behaviour
-  changes — so there is no decision for a human to make, and the walk is cheap
+  DISPOSAL: **recorded as an observation on `MIK-7415`** (ruling `R23`), not as a
+  ticket of its own — anyone working the anchor code is already inside this
+  function and can hoist while there, and two tickets for two edits in one
+  function is the expensive default §P0 exists to stop. It is pure cost — no
+  behaviour changes — so there is no decision for a human to make, and the walk
+  is cheap
   on realistically sized schemas. It is not free either: the closed row's
   `by construction` claim rests on `project_tool_descriptor_trust_card` being the
   single choke point every `tools/list` route crosses. Moving the computation
@@ -152,7 +156,9 @@ its disposal, so neither ages into a ticket by default.
   path; re-establish the choke-point argument in the same change.
 - **Teach `resolves` plain-name `$anchor` fragments and `$id`-relative bases**
   (cost MEDIUM): closes the disclosed false-alarm class, where a legal 2020-12
-  backend using anchors is reported unresolved. DISPOSAL: **handed to the team
-  lead**, because closing a disclosed limit for 4.0.0 changes what the shipped
-  verdict claims, and that is a release decision rather than an engineering one.
-  The limit is stated in the row and in the module until it is answered.
+  backend using anchors is reported unresolved. DISPOSAL: **filed as `MIK-7415`**
+  under ruling `R23`, and explicitly NOT for 4.0.0. A ticket rather than an
+  observation because a human decides whether 4.1 closes it; not 4.0.0 because
+  new code on the trust path this late, to close a documented class that
+  over-reports and never silently passes, is the worse trade. The limit stays
+  stated in the row and in the module until that decision is made.
