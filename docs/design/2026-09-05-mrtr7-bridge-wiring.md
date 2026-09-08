@@ -25,6 +25,19 @@ counted twice. `gpt-review` is unavailable for this round (Codex usage-limited
 until 2026-09-12; its ledger rows read `process_status=error, exit_code=1` since
 2026-09-06T05:41Z) — an availability gap, recorded as such and never as a pass.
 
+Round 6 (2026-09-08) is the closure re-check, per the repair protocol's rule that
+a finding returns to the vendor that raised it. The open-weights leg (`kimi-k3`)
+returned SHIP-WITH-FIXES and confirmed all four round-5 dispositions as RIGHT,
+including the source-refutation of the `SessionProfileStore` finding. Its single
+residual fix — that commit `8efa02c8` did not disclose edits it made to `WIRE.12`
+and `WIRE.13` — is FALSIFIED AT SOURCE and closed without a repair: that commit
+is `1 file changed, 1 insertion(+), 1 deletion(-)`, and the changed line is the
+`WIRE.11` row. `WIRE.12` and `WIRE.13` appear in the submitted diff as context,
+not as edits. `gpt-review`'s finding against `WIRE.5` versus the recorded
+gate-once policy is NOT closed by this round; it is escalated to the team-lead
+and named in full below, because it turns on which document moves and that is
+not this lane's decision.
+
 ## Problem
 
 `src/gateway/input_bridge.rs` implements `InputBridge::run` and 18 acceptance
