@@ -33,9 +33,51 @@ use tower::ServiceExt;
 use super::authorization::{ToolTarget, authorize_tool_target, backend_tool_targets_for_call};
 
 mod order2_fsm;
+mod task_execution_adapter;
 
-fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Arc<AppState> {
-    test_router_app_state_with(streaming_config, crate::config::Config::default())
+/// The durable task runtime every fixture in this file is built on.
+///
+/// A fresh `TempDir` per fixture, handed back to the caller and bound for the
+/// lifetime of the test. Both halves of that are load-bearing: the store takes
+/// an exclusive lease on its directory, so a shared path would make one test's
+/// open refuse another's, and a `TempDir` dropped at the end of the fixture
+/// would delete the records out from under a service that is still serving.
+///
+/// Real, not a stand-in. `open_runtime` is the production entry point, and the
+/// admission index it imports into is the one the route reads ownership from —
+/// a substitute store would leave every ownership assertion below testing the
+/// substitute. Nothing here names a fixed path or reads a process-wide
+/// variable, so tests stay independent of each other and of the environment.
+async fn test_task_runtime(
+    subscriptions: &Arc<crate::gateway::subscription_registry::SubscriptionRegistry>,
+) -> (
+    Arc<crate::gateway::task_service::TaskService>,
+    Arc<crate::gateway::task_service::TaskExecutor>,
+    tempfile::TempDir,
+) {
+    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let (service, executor) = crate::gateway::task_service::open_runtime(
+        &store_dir.path().join("tasks"),
+        crate::config::TasksConfig::default().max_workers,
+        crate::gateway::task_service::StoreLimits::default(),
+        Arc::clone(subscriptions),
+    )
+    .await
+    .expect("the fixture task store opens");
+    (service, executor, store_dir)
+}
+
+/// The subscription registry a fixture shares between `AppState` and the
+/// executor's publication seam. Two registries would publish a task's
+/// notifications to a listener set no client is on.
+fn test_subscriptions() -> Arc<crate::gateway::subscription_registry::SubscriptionRegistry> {
+    Arc::new(crate::gateway::subscription_registry::SubscriptionRegistry::new(64))
+}
+
+async fn test_router_app_state_with_streaming(
+    streaming_config: StreamingConfig,
+) -> (Arc<AppState>, tempfile::TempDir) {
+    test_router_app_state_with(streaming_config, crate::config::Config::default()).await
 }
 
 /// The fixture, with the configuration left to the caller.
@@ -44,10 +86,10 @@ fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Ar
 /// modern path has to be able to turn it on, and one that reaches it through
 /// the default config is not testing the modern path at all — it is reading an
 /// `unsupported protocol version` refusal and finding it agreeable.
-fn test_router_app_state_with(
+async fn test_router_app_state_with(
     streaming_config: StreamingConfig,
     config: crate::config::Config,
-) -> Arc<AppState> {
+) -> (Arc<AppState>, tempfile::TempDir) {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -59,7 +101,10 @@ fn test_router_app_state_with(
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    Arc::new(AppState {
+    let subscriptions = test_subscriptions();
+    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+
+    let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -88,18 +133,18 @@ fn test_router_app_state_with(
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(crate::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
-    })
+        tasks: task_service,
+        task_executor,
+        subscriptions,
+    });
+    (state, store_dir)
 }
 
-fn test_router_app_state() -> Arc<AppState> {
-    test_router_app_state_with_streaming(StreamingConfig::default())
+async fn test_router_app_state() -> (Arc<AppState>, tempfile::TempDir) {
+    test_router_app_state_with_streaming(StreamingConfig::default()).await
 }
 
-fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
+async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, tempfile::TempDir) {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let streaming_config = StreamingConfig::default();
@@ -112,7 +157,10 @@ fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
     let agent_auth = AgentAuthState::new(true, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    Arc::new(AppState {
+    let subscriptions = test_subscriptions();
+    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+
+    let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -143,14 +191,14 @@ fn test_router_app_state_with_agent_auth_enabled() -> Arc<AppState> {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(crate::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
-    })
+        tasks: task_service,
+        task_executor,
+        subscriptions,
+    });
+    (state, store_dir)
 }
 
-fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
+async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, tempfile::TempDir) {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)).with_code_mode(enabled));
     let streaming_config = StreamingConfig::default();
@@ -163,7 +211,10 @@ fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    Arc::new(AppState {
+    let subscriptions = test_subscriptions();
+    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+
+    let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -194,23 +245,27 @@ fn test_router_app_state_with_code_mode(enabled: bool) -> Arc<AppState> {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(crate::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
-    })
+        tasks: task_service,
+        task_executor,
+        subscriptions,
+    });
+    (state, store_dir)
 }
 
-fn test_router_app_state_with_backend(backend: Arc<Backend>) -> Arc<AppState> {
-    let state = test_router_app_state();
+async fn test_router_app_state_with_backend(
+    backend: Arc<Backend>,
+) -> (Arc<AppState>, tempfile::TempDir) {
+    let (state, store_dir) = test_router_app_state().await;
     let _ = state.backends.register(backend);
-    state
+    (state, store_dir)
 }
 
 /// `AppState` whose shared Meta-MCP has provenance stamping enabled, for
 /// exercising the direct `/mcp/{name}` route's rung-3 stamping (MIK-6905).
 /// Uses a fixed signer key so a twin validator can verify the receipt.
-fn test_router_app_state_with_provenance_backend(backend: Arc<Backend>) -> Arc<AppState> {
+async fn test_router_app_state_with_provenance_backend(
+    backend: Arc<Backend>,
+) -> (Arc<AppState>, tempfile::TempDir) {
     let backends = Arc::new(BackendRegistry::new());
     let _ = backends.register(backend);
     let mut meta = MetaMcp::new(Arc::clone(&backends));
@@ -233,7 +288,10 @@ fn test_router_app_state_with_provenance_backend(backend: Arc<Backend>) -> Arc<A
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    Arc::new(AppState {
+    let subscriptions = test_subscriptions();
+    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+
+    let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -264,11 +322,11 @@ fn test_router_app_state_with_provenance_backend(backend: Arc<Backend>) -> Arc<A
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(crate::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
-    })
+        tasks: task_service,
+        task_executor,
+        subscriptions,
+    });
+    (state, store_dir)
 }
 
 /// `AppState` whose Meta-MCP has an identity-propagation strategy wired (so a
@@ -279,7 +337,9 @@ fn test_router_app_state_with_provenance_backend(backend: Arc<Backend>) -> Arc<A
 /// the Meta-MCP mint + audit succeed, then the direct route finds no
 /// `state.transparency_log` and must fail closed (500) rather than ship the
 /// per-user credential without recording it on this route.
-fn test_router_app_state_minting_without_route_audit(backend: Arc<Backend>) -> Arc<AppState> {
+async fn test_router_app_state_minting_without_route_audit(
+    backend: Arc<Backend>,
+) -> (Arc<AppState>, tempfile::TempDir) {
     use crate::identity_propagation::SignedAssertionStrategy;
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
@@ -315,7 +375,10 @@ fn test_router_app_state_minting_without_route_audit(backend: Arc<Backend>) -> A
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    Arc::new(AppState {
+    let subscriptions = test_subscriptions();
+    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+
+    let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -346,17 +409,17 @@ fn test_router_app_state_minting_without_route_audit(backend: Arc<Backend>) -> A
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(crate::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
-    })
+        tasks: task_service,
+        task_executor,
+        subscriptions,
+    });
+    (state, store_dir)
 }
 
-fn test_router_app_state_with_ssrf(
+async fn test_router_app_state_with_ssrf(
     ssrf_protection: bool,
     trust_configured_backends: bool,
-) -> Arc<AppState> {
+) -> (Arc<AppState>, tempfile::TempDir) {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let streaming_config = StreamingConfig::default();
@@ -369,7 +432,10 @@ fn test_router_app_state_with_ssrf(
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    Arc::new(AppState {
+    let subscriptions = test_subscriptions();
+    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+
+    let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -400,11 +466,11 @@ fn test_router_app_state_with_ssrf(
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(crate::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
-    })
+        tasks: task_service,
+        task_executor,
+        subscriptions,
+    });
+    (state, store_dir)
 }
 
 fn http_backend_at(name: &str, http_url: &str) -> Arc<Backend> {
@@ -424,7 +490,7 @@ fn http_backend_at(name: &str, http_url: &str) -> Arc<Backend> {
     ))
 }
 
-fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
+async fn test_router_app_state_with_auth(auth: &AuthConfig) -> (Arc<AppState>, tempfile::TempDir) {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let streaming_config = StreamingConfig::default();
@@ -437,7 +503,10 @@ fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    Arc::new(AppState {
+    let subscriptions = test_subscriptions();
+    let (task_service, task_executor, store_dir) = test_task_runtime(&subscriptions).await;
+
+    let state = Arc::new(AppState {
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -468,11 +537,75 @@ fn test_router_app_state_with_auth(auth: &AuthConfig) -> Arc<AppState> {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(crate::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            crate::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
-    })
+        tasks: task_service,
+        task_executor,
+        subscriptions,
+    });
+    (state, store_dir)
+}
+
+/// Authenticated fixture whose executor capacity comes from the supplied config.
+async fn test_router_app_state_with_auth_and_config(
+    auth: &AuthConfig,
+    config: crate::config::Config,
+) -> (Arc<AppState>, tempfile::TempDir) {
+    let backends = Arc::new(BackendRegistry::new());
+    let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
+    let streaming_config = StreamingConfig::default();
+    let multiplexer = Arc::new(NotificationMultiplexer::new(
+        Arc::clone(&backends),
+        streaming_config.clone(),
+    ));
+    let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
+    let auth_config = Arc::new(ResolvedAuthConfig::from_config(auth));
+    let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
+    let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
+
+    let subscriptions = test_subscriptions();
+    let store_dir = tempfile::tempdir().expect("a private configured task-store directory");
+    let (task_service, task_executor) = crate::gateway::task_service::open_runtime(
+        &store_dir.path().join("tasks"),
+        config.tasks.max_workers,
+        crate::gateway::task_service::StoreLimits::default(),
+        Arc::clone(&subscriptions),
+    )
+    .await
+    .expect("the configured fixture task store opens");
+
+    let state = Arc::new(AppState {
+        continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
+        env: None,
+        backends,
+        meta_mcp,
+        meta_mcp_enabled: true,
+        multiplexer,
+        proxy_manager,
+        streaming_config,
+        auth_config,
+        key_server: None,
+        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
+        mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
+        sanitize_input: false,
+        ssrf_protection: false,
+        trust_configured_backends: false,
+        inflight: Arc::new(tokio::sync::Semaphore::new(8)),
+        agent_auth,
+        gateway_key_pair,
+        capability_dirs: Vec::new(),
+        config_path: None,
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        agent_identity_config: crate::config::AgentIdentityConfig::default(),
+        control_plane_store: None,
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(config)),
+        export_status: None,
+        transparency_log: None,
+        dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
+        tasks: task_service,
+        task_executor,
+        subscriptions,
+    });
+    (state, store_dir)
 }
 
 fn scoped_auth_config(admin: bool) -> AuthConfig {
@@ -1032,7 +1165,8 @@ async fn parse_elicitation_params_invalid_returns_bad_request_with_context() {
 
 #[tokio::test]
 async fn backend_handler_invalid_json_returns_jsonrpc_parse_error() {
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp/demo")
@@ -1059,7 +1193,8 @@ async fn backend_handler_invalid_json_returns_jsonrpc_parse_error() {
 
 #[tokio::test]
 async fn backend_handler_missing_backend_returns_jsonrpc_not_found() {
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp/missing-backend")
@@ -1100,7 +1235,8 @@ async fn backend_handler_preserves_callers_jsonrpc_id_on_success() {
     let transport: Arc<dyn Transport> = Arc::new(RouterNotificationTestTransport::success());
     backend.set_transport_for_test(transport);
 
-    let router = create_router(test_router_app_state_with_backend(backend));
+    let (state, _store) = test_router_app_state_with_backend(backend).await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp/demo")
@@ -1159,7 +1295,8 @@ async fn backend_handler_discovery_method_fails_closed_for_required_propagation(
         Duration::from_secs(60),
     ));
 
-    let router = create_router(test_router_app_state_with_backend(backend));
+    let (state, _store) = test_router_app_state_with_backend(backend).await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp/demo")
@@ -1226,7 +1363,8 @@ async fn backend_handler_required_mint_without_route_audit_fails_closed_generica
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
-    let router = create_router(test_router_app_state_minting_without_route_audit(backend));
+    let (state, _store) = test_router_app_state_minting_without_route_audit(backend).await;
+    let router = create_router(state);
 
     let mut request = axum::http::Request::builder()
         .method("POST")
@@ -1281,7 +1419,8 @@ async fn backend_handler_notification_uses_notify_and_returns_accepted() {
     let transport_dyn: Arc<dyn Transport> = transport.clone();
     backend.set_transport_for_test(transport_dyn);
 
-    let router = create_router(test_router_app_state_with_backend(backend));
+    let (state, _store) = test_router_app_state_with_backend(backend).await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp/demo")
@@ -1321,7 +1460,8 @@ async fn backend_handler_notification_failure_surfaces_error() {
     let transport_dyn: Arc<dyn Transport> = transport.clone();
     backend.set_transport_for_test(transport_dyn);
 
-    let router = create_router(test_router_app_state_with_backend(backend));
+    let (state, _store) = test_router_app_state_with_backend(backend).await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp/demo")
@@ -1364,7 +1504,7 @@ async fn backend_handler_tools_call_enforces_api_key_tool_scope() {
     let transport_dyn: Arc<dyn Transport> = transport.clone();
     backend.set_transport_for_test(transport_dyn);
 
-    let state = test_router_app_state_with_auth(&scoped_auth_config(false));
+    let (state, _store) = test_router_app_state_with_auth(&scoped_auth_config(false)).await;
     let _ = state.backends.register(backend);
     let router = create_router(state);
     let request = axum::http::Request::builder()
@@ -1416,7 +1556,7 @@ async fn backend_handler_direct_route_stamps_bypass_provenance() {
     let transport: Arc<dyn Transport> = Arc::new(RouterNotificationTestTransport::success());
     backend.set_transport_for_test(transport);
 
-    let state = test_router_app_state_with_provenance_backend(backend);
+    let (state, _store) = test_router_app_state_with_provenance_backend(backend).await;
     let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
@@ -1474,7 +1614,8 @@ async fn backend_handler_direct_route_no_provenance_when_disabled() {
     let transport: Arc<dyn Transport> = Arc::new(RouterNotificationTestTransport::success());
     backend.set_transport_for_test(transport);
 
-    let router = create_router(test_router_app_state_with_backend(backend));
+    let (state, _store) = test_router_app_state_with_backend(backend).await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp/demo")
@@ -1503,7 +1644,8 @@ async fn backend_handler_direct_route_no_provenance_when_disabled() {
 
 #[tokio::test]
 async fn meta_mcp_gateway_execute_enforces_api_key_tool_scope() {
-    let router = create_router(test_router_app_state_with_auth(&scoped_auth_config(false)));
+    let (state, _store) = test_router_app_state_with_auth(&scoped_auth_config(false)).await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -1541,7 +1683,8 @@ async fn meta_mcp_gateway_execute_enforces_api_key_tool_scope() {
 
 #[tokio::test]
 async fn meta_mcp_management_tool_requires_admin_client() {
-    let router = create_router(test_router_app_state_with_auth(&scoped_auth_config(false)));
+    let (state, _store) = test_router_app_state_with_auth(&scoped_auth_config(false)).await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -1573,9 +1716,11 @@ async fn meta_mcp_management_tool_requires_admin_client() {
     );
 }
 
-#[test]
-fn authorize_tool_target_enforces_agent_scope() {
-    let state = test_router_app_state();
+// Async only because the fixture opens a real durable task store, which is an
+// async open. The assertions below are unchanged.
+#[tokio::test]
+async fn authorize_tool_target_enforces_agent_scope() {
+    let (state, _store) = test_router_app_state().await;
     let identity = OAuthAgentIdentity {
         client_id: "agent-a".to_string(),
         agent_name: "Agent A".to_string(),
@@ -1603,7 +1748,7 @@ fn authorize_tool_target_enforces_agent_scope() {
         "agent auth disabled should not enforce scopes"
     );
 
-    let enabled_state = test_router_app_state_with_agent_auth_enabled();
+    let (enabled_state, _enabled_store) = test_router_app_state_with_agent_auth_enabled().await;
     let result = authorize_tool_target(
         enabled_state.as_ref(),
         None,
@@ -1635,9 +1780,9 @@ fn surfaced_tool_calls_resolve_to_backend_authorization_target() {
     assert_eq!(targets[0].tool, "pinned_tool");
 }
 
-#[test]
-fn authorize_tool_target_blocks_ssrf_when_protection_enabled() {
-    let state = test_router_app_state_with_ssrf(true, false);
+#[tokio::test]
+async fn authorize_tool_target_blocks_ssrf_when_protection_enabled() {
+    let (state, _store) = test_router_app_state_with_ssrf(true, false).await;
     let _ = state
         .backends
         .register(http_backend_at("loopback", "http://127.0.0.1:9000/mcp"));
@@ -1663,9 +1808,9 @@ fn authorize_tool_target_blocks_ssrf_when_protection_enabled() {
     );
 }
 
-#[test]
-fn authorize_tool_target_allows_public_host_when_ssrf_protection_enabled() {
-    let state = test_router_app_state_with_ssrf(true, false);
+#[tokio::test]
+async fn authorize_tool_target_allows_public_host_when_ssrf_protection_enabled() {
+    let (state, _store) = test_router_app_state_with_ssrf(true, false).await;
     let _ = state
         .backends
         .register(http_backend_at("public", "https://gateway-public.test/mcp"));
@@ -1690,9 +1835,9 @@ fn authorize_tool_target_allows_public_host_when_ssrf_protection_enabled() {
     );
 }
 
-#[test]
-fn authorize_tool_target_skips_ssrf_when_trust_configured_backends_enabled() {
-    let state = test_router_app_state_with_ssrf(true, true);
+#[tokio::test]
+async fn authorize_tool_target_skips_ssrf_when_trust_configured_backends_enabled() {
+    let (state, _store) = test_router_app_state_with_ssrf(true, true).await;
     let _ = state
         .backends
         .register(http_backend_at("loopback", "http://127.0.0.1:9000/mcp"));
@@ -1719,7 +1864,8 @@ fn authorize_tool_target_skips_ssrf_when_trust_configured_backends_enabled() {
 
 #[tokio::test]
 async fn sse_handler_rejects_non_sse_accept_with_jsonrpc_error_shape() {
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("GET")
         .uri("/mcp")
@@ -1749,7 +1895,8 @@ async fn sse_handler_streaming_disabled_returns_jsonrpc_internal_shape() {
         ..StreamingConfig::default()
     };
 
-    let router = create_router(test_router_app_state_with_streaming(streaming_config));
+    let (state, _store) = test_router_app_state_with_streaming(streaming_config).await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("GET")
         .uri("/mcp")
@@ -1776,7 +1923,8 @@ async fn sse_handler_streaming_disabled_returns_jsonrpc_internal_shape() {
 
 #[tokio::test]
 async fn sse_deprecated_endpoint_returns_jsonrpc_error_with_migration_data() {
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("GET")
         .uri("/sse")
@@ -1815,7 +1963,8 @@ async fn sse_deprecated_endpoint_returns_jsonrpc_error_with_migration_data() {
 #[cfg(feature = "metrics")]
 #[tokio::test]
 async fn metrics_endpoint_returns_200() {
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("GET")
         .uri("/metrics")
@@ -1834,7 +1983,8 @@ async fn metrics_endpoint_returns_200() {
 async fn metrics_endpoint_includes_jsonrpc_request_counter() {
     crate::metrics::install();
 
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -1877,7 +2027,8 @@ async fn metrics_endpoint_includes_jsonrpc_request_counter() {
 #[tokio::test]
 async fn tools_list_without_codemode_param_returns_standard_meta_tools() {
     // GIVEN: Code Mode disabled in config, no URL param
-    let router = create_router(test_router_app_state_with_code_mode(false));
+    let (state, _store) = test_router_app_state_with_code_mode(false).await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -1916,7 +2067,8 @@ async fn tools_list_without_codemode_param_returns_standard_meta_tools() {
 #[tokio::test]
 async fn tools_list_with_codemode_param_activates_code_mode_per_connection() {
     // GIVEN: Code Mode disabled in config, but ?codemode=search_and_execute in URL
-    let router = create_router(test_router_app_state_with_code_mode(false));
+    let (state, _store) = test_router_app_state_with_code_mode(false).await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp?codemode=search_and_execute")
@@ -1959,7 +2111,8 @@ async fn tools_list_with_codemode_param_activates_code_mode_per_connection() {
 #[tokio::test]
 async fn tools_list_with_wrong_codemode_value_ignores_param() {
     // GIVEN: Code Mode disabled, URL has ?codemode=wrong_value
-    let router = create_router(test_router_app_state_with_code_mode(false));
+    let (state, _store) = test_router_app_state_with_code_mode(false).await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp?codemode=wrong_value")
@@ -1995,7 +2148,8 @@ async fn tools_list_with_wrong_codemode_value_ignores_param() {
 #[tokio::test]
 async fn tools_list_static_code_mode_unaffected_by_absent_param() {
     // GIVEN: Code Mode enabled in static config, no URL param
-    let router = create_router(test_router_app_state_with_code_mode(true));
+    let (state, _store) = test_router_app_state_with_code_mode(true).await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -2052,7 +2206,8 @@ fn mcp_request_with(header: Option<(&str, &str)>) -> axum::http::Request<axum::b
 
 #[tokio::test]
 async fn mcp_rejects_foreign_origin() {
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     let response = router
         .oneshot(mcp_request_with(Some((
             "origin",
@@ -2066,7 +2221,8 @@ async fn mcp_rejects_foreign_origin() {
 
 #[tokio::test]
 async fn mcp_allows_absent_origin() {
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     let response = router.oneshot(mcp_request_with(None)).await.unwrap();
     assert_ne!(
         response.status(),
@@ -2077,7 +2233,8 @@ async fn mcp_allows_absent_origin() {
 
 #[tokio::test]
 async fn mcp_allows_bind_origin() {
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     let response = router
         .oneshot(mcp_request_with(Some(("origin", "http://127.0.0.1:39400"))))
         .await
@@ -2087,7 +2244,8 @@ async fn mcp_allows_bind_origin() {
 
 #[tokio::test]
 async fn mcp_rejects_foreign_host() {
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     // No Origin at all: this is the rebinding shape, where the browser's own
     // Origin may be suppressed but Host carries the attacker's name.
     let response = router
@@ -2102,7 +2260,8 @@ async fn health_is_reachable_by_a_probe_and_refused_cross_site() {
     // No exemption. A monitoring probe sends no Origin and passes on the
     // general rules; a web page sends one and is refused like anywhere else,
     // so the boundary is the whole port with no special cases to audit.
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
 
     let probe = axum::http::Request::builder()
         .method("GET")
@@ -2187,7 +2346,8 @@ fn deployment_guide_matches_the_admin_tool_set() {
 async fn mcp_rejects_no_cors_get_from_a_page() {
     // The Fetch standard omits `Origin` from a no-CORS GET, so the
     // absent-Origin allowance would admit it. Fetch Metadata is what catches it.
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("GET")
         .uri("/mcp")
@@ -2201,7 +2361,8 @@ async fn mcp_rejects_no_cors_get_from_a_page() {
 #[tokio::test]
 async fn mcp_rejects_opaque_origin() {
     // A sandboxed iframe and a cross-site redirect both send `Origin: null`.
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     let response = router
         .oneshot(mcp_request_with(Some(("origin", "null"))))
         .await
@@ -2211,7 +2372,8 @@ async fn mcp_rejects_opaque_origin() {
 
 #[tokio::test]
 async fn mcp_allows_same_origin_browser_request() {
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -2231,7 +2393,8 @@ async fn mcp_rejects_foreign_authority_without_host_header() {
     // HTTP/2 carries the target in the `:authority` pseudo-header, not `Host`,
     // so a gate that reads only `Host` is inert over HTTP/2 and the rebinding
     // refusal disappears on exactly the protocol browsers prefer.
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("http://attacker.example/mcp")
@@ -2249,12 +2412,12 @@ async fn mcp_rejects_foreign_authority_without_host_header() {
 }
 
 /// Build router state whose live config binds a wildcard address.
-fn wildcard_bind_app_state() -> Arc<AppState> {
-    let state = test_router_app_state();
+async fn wildcard_bind_app_state() -> (Arc<AppState>, tempfile::TempDir) {
+    let (state, store_dir) = test_router_app_state().await;
     let mut config = crate::config::Config::default();
     config.server.host = "0.0.0.0".to_string();
     state.live_config.set(config);
-    state
+    (state, store_dir)
 }
 
 #[tokio::test]
@@ -2262,7 +2425,8 @@ async fn wildcard_bind_refuses_a_rebound_name_through_the_middleware() {
     // The policy unit tests assert the rule; this asserts the middleware
     // actually applies it on the real route, so the wildcard allowance cannot
     // widen back into a rebinding path during a refactor.
-    let router = create_router(wildcard_bind_app_state());
+    let (state, _store) = wildcard_bind_app_state().await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -2278,7 +2442,8 @@ async fn wildcard_bind_refuses_a_rebound_name_through_the_middleware() {
 
 #[tokio::test]
 async fn wildcard_bind_admits_a_numeric_host_through_the_middleware() {
-    let router = create_router(wildcard_bind_app_state());
+    let (state, _store) = wildcard_bind_app_state().await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -2297,7 +2462,8 @@ async fn merged_routes_are_behind_the_origin_gate() {
     // Routes merged after the layer stack would skip the gate entirely. That
     // set includes the key server's token exchange and revocation endpoints,
     // JWKS, the protected-resource metadata, /metrics and the UI HTML.
-    let router = create_router(test_router_app_state());
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router(state);
     for uri in [
         "/.well-known/jwks.json",
         "/.well-known/oauth-protected-resource",
@@ -2327,7 +2493,8 @@ async fn a_route_merged_after_create_router_is_still_gated() {
         "/webhooks/test",
         axum::routing::post(|| async { axum::http::StatusCode::OK }),
     );
-    let router = create_router_with(test_router_app_state(), Some(extra));
+    let (state, _store) = test_router_app_state().await;
+    let router = create_router_with(state, Some(extra));
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/webhooks/test")
@@ -2345,7 +2512,8 @@ async fn a_numeric_origin_must_match_the_request_authority() {
     // cannot claim one. An attacker can: host the page on a public IP and the
     // browser sends that address as the Origin. It is only safe when it names
     // the gateway the request is actually addressed to.
-    let router = create_router(wildcard_bind_app_state());
+    let (state, _store) = wildcard_bind_app_state().await;
+    let router = create_router(state);
 
     let attacker = axum::http::Request::builder()
         .method("POST")
@@ -2442,6 +2610,7 @@ async fn run_step_with_identity(
         ),
     };
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        task: None,
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
@@ -2498,7 +2667,8 @@ fn response_text(response: &JsonRpcResponse) -> String {
 
 #[tokio::test]
 async fn authz_1_playbook_step_outside_client_backend_scope_is_refused() {
-    let state = test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/"));
+    let (state, _store) =
+        test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/")).await;
     let client = scoped_client("scoped", vec!["alpha".to_string()], None);
 
     let response = run_step_as(&state, &client, "beta", "read").await;
@@ -2520,7 +2690,8 @@ async fn authz_1_playbook_step_outside_client_backend_scope_is_refused() {
 
 #[tokio::test]
 async fn authz_1a_playbook_step_inside_client_backend_scope_is_not_refused() {
-    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let (state, _store) =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     let client = scoped_client("scoped", vec!["alpha".to_string()], None);
 
     let response = run_step_as(&state, &client, "alpha", "read").await;
@@ -2538,7 +2709,8 @@ async fn authz_1a_playbook_step_inside_client_backend_scope_is_not_refused() {
 
 #[tokio::test]
 async fn authz_2_playbook_step_outside_client_tool_scope_is_refused() {
-    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let (state, _store) =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     let client = scoped_client(
         "scoped",
         vec!["alpha".to_string()],
@@ -2560,7 +2732,8 @@ async fn authz_2_playbook_step_outside_client_tool_scope_is_refused() {
 
 #[tokio::test]
 async fn authz_2a_playbook_step_inside_client_tool_scope_is_not_refused() {
-    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let (state, _store) =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     let client = scoped_client(
         "scoped",
         vec!["alpha".to_string()],
@@ -2594,7 +2767,8 @@ async fn authz_2a_playbook_step_inside_client_tool_scope_is_not_refused() {
 /// test name.
 #[tokio::test]
 async fn authz_playbook_denial_maps_to_forbidden() {
-    let state = test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/"));
+    let (state, _store) =
+        test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/")).await;
     let client = scoped_client("scoped", vec!["alpha".to_string()], None);
 
     let response = run_step_as(&state, &client, "beta", "read").await;
@@ -2633,7 +2807,8 @@ async fn authz_playbook_denial_maps_to_forbidden() {
 /// ever applied to every error rather than to refusals alone.
 #[tokio::test]
 async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
-    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let (state, _store) =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     let client = scoped_client("scoped", vec![], None);
 
     let authorizer = super::authorization::RouterAuthorizer {
@@ -2644,6 +2819,7 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         principal: super::authorization::refusal_principal(Some(&client), None, None),
     };
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        task: None,
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
@@ -2689,8 +2865,8 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
 /// case, and the name says four rather than "every" so that gap is visible.
 #[tokio::test]
 async fn authz_four_refusal_branches_carry_the_status() {
-    let scoped_state =
-        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let (scoped_state, _scoped_store) =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
 
     let tool_scoped = scoped_client(
         "scoped",
@@ -2706,8 +2882,8 @@ async fn authz_four_refusal_branches_carry_the_status() {
     );
 
     let backend_scoped = scoped_client("scoped", vec!["alpha".to_string()], None);
-    let backend_state =
-        test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/"));
+    let (backend_state, _backend_store) =
+        test_router_app_state_with_backend(http_backend_at("beta", "http://127.0.0.1:1/")).await;
     let backend_refusal = run_step_as(&backend_state, &backend_scoped, "beta", "read").await;
     assert_eq!(
         super::handlers::refusal_status(&backend_refusal),
@@ -2718,8 +2894,8 @@ async fn authz_four_refusal_branches_carry_the_status() {
 
     // Global policy is minted in a third place, and an invalid tool name in a
     // fourth. The test's name claims EVERY branch, so it has to mean it.
-    let mut policy_state =
-        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let (mut policy_state, _policy_store) =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     {
         let state_mut = Arc::get_mut(&mut policy_state).expect("sole owner during setup");
         state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
@@ -2758,8 +2934,8 @@ async fn authz_four_refusal_branches_carry_the_status() {
 /// identity into the chokepoint passes those two and fails this one.
 #[tokio::test]
 async fn authz_3_playbook_step_denied_by_global_tool_policy_is_refused() {
-    let mut state =
-        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let (mut state, _store) =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     {
         let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
         state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
@@ -2788,8 +2964,8 @@ async fn authz_3_playbook_step_denied_by_global_tool_policy_is_refused() {
 /// AUTHZ.3a — the same policy must not refuse a permitted tool.
 #[tokio::test]
 async fn authz_3a_global_policy_does_not_refuse_a_permitted_tool() {
-    let mut state =
-        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let (mut state, _store) =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     {
         let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
         state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
@@ -2892,8 +3068,8 @@ async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
         ..MtlsConfig::default()
     }));
 
-    let mut state =
-        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let (mut state, _store) =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     {
         let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
         state_mut.mtls_policy = Arc::clone(&policy);
@@ -2935,7 +3111,7 @@ async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
 async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
     use crate::gateway::oauth::{AgentIdentity, Scope};
 
-    let mut state = test_router_app_state_with_agent_auth_enabled();
+    let (mut state, _store) = test_router_app_state_with_agent_auth_enabled().await;
     {
         let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
         let _ = state_mut
@@ -2991,7 +3167,8 @@ async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
 /// arms, and this pins that: a non-refusal comes back with no `data` at all.
 #[tokio::test]
 async fn authz_ordinary_error_carries_no_status_stamp() {
-    let state = test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/"));
+    let (state, _store) =
+        test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     let client = scoped_client("scoped", vec![], None);
 
     let authorizer = super::authorization::RouterAuthorizer {
@@ -3002,6 +3179,7 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         principal: super::authorization::refusal_principal(Some(&client), None, None),
     };
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        task: None,
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
@@ -3069,7 +3247,8 @@ fn admin_gate_covers_global_tools_and_not_session_local_ones() {
 /// reading `set_profile` as "administrative" and adding it back to the gate.
 #[tokio::test]
 async fn non_admin_may_set_its_own_routing_profile() {
-    let router = create_router(test_router_app_state_with_auth(&scoped_auth_config(false)));
+    let (state, _store) = test_router_app_state_with_auth(&scoped_auth_config(false)).await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -3115,7 +3294,7 @@ async fn non_admin_may_set_its_own_routing_profile() {
 #[tokio::test]
 async fn sampling_prompt_is_delivered_to_the_requesting_session() {
     // GIVEN: a live session listening on its own notification stream
-    let state = test_router_app_state();
+    let (state, _store) = test_router_app_state().await;
     let (session_id, mut rx) = state
         .multiplexer
         .get_or_create_session_for(Some("gw-caller"), "unauthenticated:anonymous");
@@ -3155,7 +3334,7 @@ async fn sampling_prompt_is_delivered_to_the_requesting_session() {
 #[tokio::test]
 async fn sampling_without_a_live_stream_fails_instead_of_hanging() {
     // GIVEN: a caller that only POSTs — it never opened a notification stream
-    let state = test_router_app_state();
+    let (state, _store) = test_router_app_state().await;
     let router = create_router(Arc::clone(&state));
 
     // WHEN: it asks the gateway for a sampling round trip
@@ -3202,10 +3381,10 @@ async fn sampling_without_a_live_stream_fails_instead_of_hanging() {
 /// Without it every modern request stops at `unsupported protocol version`,
 /// and a test asserting an absence — no session header, no profile switch —
 /// passes on the refusal rather than on the behaviour it names.
-fn modern_router_app_state() -> Arc<AppState> {
+async fn modern_router_app_state() -> (Arc<AppState>, tempfile::TempDir) {
     let mut config = crate::config::Config::default();
     config.server.modern_protocol = true;
-    test_router_app_state_with(StreamingConfig::default(), config)
+    test_router_app_state_with(StreamingConfig::default(), config).await
 }
 
 /// A modern request gets no session, even when it offers one.
@@ -3219,7 +3398,8 @@ fn modern_router_app_state() -> Arc<AppState> {
 /// empty id, so a minted session would show up here as a header.
 #[tokio::test]
 async fn ac_order_2_a_modern_request_is_given_no_session_even_when_it_offers_one() {
-    let router = create_router(modern_router_app_state());
+    let (state, _store) = modern_router_app_state().await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -3277,7 +3457,8 @@ async fn ac_order_2_a_modern_request_is_given_no_session_even_when_it_offers_one
 /// the refusal tells the two apart.
 #[tokio::test]
 async fn ac_order_2_a_modern_caller_is_refused_gateway_set_profile() {
-    let router = create_router(modern_router_app_state());
+    let (state, _store) = modern_router_app_state().await;
+    let router = create_router(state);
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")

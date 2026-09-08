@@ -13,7 +13,8 @@ use std::{
 
 use serde_json::{Value, json};
 
-use super::{model::*, record::PreparedTask, store::*};
+use super::{record::PreparedTask, store::*};
+use crate::protocol::tasks::*;
 use crate::protocol::{JsonRpcError, mrtr::InputRequired};
 
 const OWNER: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -21,6 +22,7 @@ const OTHER: &str = "22222222222222222222222222222222222222222222222222222222222
 /// A well-formed task name that belongs to no fixture task.
 const FOREIGN_NAME: &str = "task-00000000-0000-4000-8000-000000000000";
 
+mod adapter_marker;
 mod admission;
 mod durability;
 mod qualification;

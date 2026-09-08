@@ -1200,6 +1200,56 @@ impl Gateway {
         let control_plane_store =
             build_control_plane_store(&self.config, self.config_path.as_deref());
 
+        // The durable task runtime, opened before any listener exists.
+        //
+        // Fail-closed, with no volatile fallback. Two things are at stake and
+        // both survive a restart: a `tools/call` answered with a handle has
+        // promised a record that a later `tasks/get` can read, and `open_runtime`
+        // imports the store's committed ownership bindings into admission. A
+        // store that will not open is therefore also a store whose owners are
+        // unknown — serving past that point would answer a returning caller's
+        // own task as absent, which is the one answer the ownership rule uses
+        // for a task that is not theirs.
+        //
+        // Built here rather than inside the `AppState` literal because the
+        // subscription registry is shared with the executor's publication seam:
+        // two registries would leave a task's notifications going to a listener
+        // set no client is on.
+        self.config.tasks.validate()?;
+        let task_store_dir = expand_home_path(&self.config.tasks.store_dir);
+        let subscriptions = Arc::new(
+            crate::gateway::subscription_registry::SubscriptionRegistry::new(
+                crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
+            ),
+        );
+        let (task_service, task_executor) = crate::gateway::task_service::open_runtime(
+            &task_store_dir,
+            self.config.tasks.max_workers,
+            crate::gateway::task_service::StoreLimits {
+                records: self.config.tasks.max_records,
+                per_principal: self.config.tasks.max_per_principal,
+                record_bytes: self.config.tasks.max_record_bytes,
+                logical_bytes: self.config.tasks.logical_budget_bytes,
+            },
+            Arc::clone(&subscriptions),
+        )
+        .await
+        .map_err(|error| {
+            Error::Config(format!(
+                "task store at '{}' could not be opened: {error}",
+                task_store_dir.display()
+            ))
+        })?;
+        info!(
+            path = %task_store_dir.display(),
+            max_workers = self.config.tasks.max_workers,
+            "Durable task store opened"
+        );
+        // Cloned before the state takes them: shutdown drains the SAME executor
+        // that served the traffic, not a second one built to stand in for it.
+        let task_service_for_shutdown = Arc::clone(&task_service);
+        let task_executor_for_shutdown = Arc::clone(&task_executor);
+
         let state = Arc::new(AppState {
             // Shared, not minted: the invoke path mints continuations against
             // `meta_mcp`'s keyring, so a second one here would be a keyring
@@ -1232,12 +1282,9 @@ impl Gateway {
             firewall: firewall_arc,
             agent_identity_config: self.config.security.agent_identity.clone(),
             control_plane_store,
-            tasks: Arc::new(crate::protocol::task_store::TaskStore::new()),
-            subscriptions: Arc::new(
-                crate::gateway::subscription_registry::SubscriptionRegistry::new(
-                    crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
-                ),
-            ),
+            tasks: task_service,
+            task_executor,
+            subscriptions,
             live_config: Arc::clone(&live_config),
             export_status,
             transparency_log,
@@ -1502,6 +1549,30 @@ impl Gateway {
                     "Drain timeout reached, proceeding with shutdown"
                 );
             }
+        }
+
+        // Task workers hold no inflight permit — the request that created one
+        // was answered with a handle and released its permit long before the
+        // work finished — so the drain above cannot see them and a second wait
+        // is what makes shutdown graceful for them too.
+        //
+        // Ahead of `stop_all`, because a worker's dispatch IS a backend call:
+        // stopping the pool first would fail the very work this wait exists to
+        // let finish. The store closes afterwards, which joins any writer still
+        // in flight and gives the directory lease back — a lease this process
+        // kept would refuse the next start its own store.
+        info!(timeout = ?drain_timeout, "Draining in-flight tasks...");
+        let task_drain = task_executor_for_shutdown.drain(drain_timeout).await;
+        if task_drain.timed_out {
+            warn!(
+                acquired_workers = task_drain.acquired,
+                "Task drain timeout reached, proceeding with shutdown"
+            );
+        } else {
+            info!("All in-flight tasks completed");
+        }
+        if let Err(error) = task_service_for_shutdown.shutdown().await {
+            warn!(%error, "Task store did not release its lease cleanly");
         }
 
         // Stop all backends
@@ -1855,6 +1926,7 @@ impl Gateway {
                         arguments,
                         Some(session_id),
                         MetaMcpCallerContext {
+                            task: None,
                             authorizer: &stdio_authorizer,
                             // Stdio has no port and no network surface: the
                             // client SPAWNED this process, so it already holds
@@ -2659,6 +2731,7 @@ mod tests {
                 json!({ "server": "row19-sentinel" }),
                 Some("stdio-session"),
                 crate::gateway::meta_mcp::MetaMcpCallerContext {
+                    task: None,
                     authorizer: &authorizer,
                     api_key_name: None,
                     agent_id: None,

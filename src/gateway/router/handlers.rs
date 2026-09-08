@@ -20,9 +20,9 @@ use super::authorization::{
 };
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
-    build_error_response_with_data, build_http_error_response, build_http_response,
-    build_json_response, build_response, extract_tools_call_params, merge_client_meta,
-    parse_elicitation_params, parse_request, parse_sampling_params,
+    build_error_response_with_data, build_http_error_response, build_http_response, build_response,
+    extract_tools_call_params, merge_client_meta, parse_elicitation_params, parse_request,
+    parse_sampling_params,
 };
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
@@ -35,6 +35,8 @@ use crate::protocol::JsonRpcResponse;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
 use crate::security::{extract_agent_identity, sanitize_json_value, validate_agent_identity};
+
+mod tasks;
 
 const HEADER_GATEWAY_IDENTITY: &str = "x-gateway-identity";
 const HEADER_GATEWAY_IDENTITY_AUTHORITY: &str = "x-gateway-identity-authority";
@@ -199,40 +201,6 @@ fn listened_task_ids(params: Option<&Value>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// The wire view of a task, shared by the handle `tools/call` hands out and by
-/// every `tasks/get` that resolves it.
-///
-/// One producer on purpose: two spellings of this object are two contracts, and
-/// a client polling the second cannot tell it is reading a different one.
-fn task_view(task: &crate::protocol::tasks::Task) -> Value {
-    use crate::protocol::tasks::TaskStatus;
-    let mut view = json!({
-        "resultType": "task",
-        "taskId": task.id(),
-        "status": match task.status() {
-            TaskStatus::Working => "working",
-            TaskStatus::Completed => "completed",
-            TaskStatus::Failed => "failed",
-        },
-        // Present and nullable: the specification's `ttlMs: number | null`. A
-        // 4.0.0 task has no deadline, and omitting the field would report an
-        // undetermined deadline where the answer is "none".
-        "ttlMs": Value::Null,
-    });
-    if let Some(map) = view.as_object_mut() {
-        if let Some(result) = task.result() {
-            map.insert("result".into(), result.clone());
-        }
-        if let Some(error) = task.error() {
-            map.insert(
-                "error".into(),
-                serde_json::from_str(error).unwrap_or_else(|_| Value::String(error.into())),
-            );
-        }
-    }
-    view
 }
 
 /// The `taskId` a task method names, if it names one.
@@ -995,7 +963,10 @@ pub(super) async fn meta_mcp_handler(
         );
     }
 
-    let owner = session_owner_key(client.as_ref());
+    let owner = tasks::task_principal(
+        verified_identity.as_ref(),
+        &session_owner_key(client.as_ref()),
+    );
 
     // An empty owner key is not an identity — `session_owner_key` says so in
     // its own doc comment, and the firewall arm refuses on it. Only the task
@@ -1186,24 +1157,16 @@ pub(super) async fn meta_mcp_handler(
                 state.meta_mcp.exposes_meta_tool(tool_name),
             );
 
-            // A task-augmented call is answered with a handle, not a result.
-            // The record is created before anything is dispatched: a handle the
-            // client cannot resolve on its very next request is worse than a
-            // refusal, because the client has no way to tell it apart from one
-            // that will resolve a moment later.
-            if params.as_ref().is_some_and(|p| p.get("task").is_some()) {
-                let task_id = state.tasks.create(&owner, tool_name);
-                let view = state
-                    .tasks
-                    .get(&owner, &task_id)
-                    .map_or_else(|| json!({}), |task| task_view(&task));
-                return build_json_response(
-                    serde_json::to_value(JsonRpcResponse::success(id.clone(), view))
-                        .unwrap_or_else(|_| json!({})),
-                    &session_id,
-                    StatusCode::OK,
-                );
-            }
+            // A task-augmented call used to be answered HERE, with a handle
+            // minted from a volatile store before anything was authorized. That
+            // return is gone. A handle is a promise that work is under way, and
+            // this site is upstream of every gate that decides whether the work
+            // may happen at all — so it promised dispatch to callers the
+            // authorization loop, the firewall and the destructive-confirmation
+            // gate were about to refuse, and it did so without a durable record
+            // behind the handle. The intent is built below, after those gates,
+            // and travels on the caller context that the dispatch chokepoint
+            // takes once the call is cleared to run.
 
             // A multi-round-trip retry carries `inputResponses` and
             // `requestState` as siblings of `name` and `arguments` (MIK-7212).
@@ -1355,6 +1318,47 @@ pub(super) async fn meta_mcp_handler(
                 oauth_agent_identity.as_ref(),
             );
 
+            // The modern destructive gate (X14). Every authorization, admin and
+            // firewall check above has already run, and nothing below has yet
+            // acted: a challenge mints no task, reserves no idempotency key and
+            // reaches no backend, and neither does a refusal.
+            //
+            // Awaited into its own binding before the match, so the borrow of
+            // `retry` ends with the statement and the `NotRequired` arm can hand
+            // the same fields straight back.
+            let confirmation = state
+                .meta_mcp
+                .confirm_destructive_task(&crate::gateway::meta_mcp::TaskConfirmationRequest {
+                    id: id.clone(),
+                    // The outer name the client called, never a wrapper's
+                    // target, and the same `arguments` binding that reaches
+                    // `task_intent_for_call` — that value is both the admission
+                    // operation's `arguments` and its representation, so the
+                    // grant must digest what admission will key on.
+                    tool_name,
+                    arguments: &arguments,
+                    task: params.as_ref().and_then(|p| p.get("task")),
+                    retry: &retry,
+                    verified_identity: verified_identity.as_ref(),
+                    input_capabilities: declared_capabilities,
+                    is_modern,
+                    admission: state.task_executor.service.admission(),
+                })
+                .await;
+            let retry = match confirmation {
+                crate::gateway::meta_mcp::TaskConfirmation::NotRequired => retry,
+                // Confirmed: dispatch the original call, with the confirmation
+                // metadata removed.
+                crate::gateway::meta_mcp::TaskConfirmation::Granted(granted) => granted,
+                // The challenge, or the refusal of a grant that does not
+                // authorise this call. Answered here because there is nothing
+                // below to run.
+                crate::gateway::meta_mcp::TaskConfirmation::Answer(answer) => {
+                    let status = refusal_status(&answer).unwrap_or(StatusCode::OK);
+                    return build_modern_response(*answer, status, &method);
+                }
+            };
+
             // Destructive-action confirmation is decided at the dispatcher,
             // for every transport. What this edge owns is the one fact the
             // dispatcher cannot see: which era the request was written
@@ -1383,6 +1387,44 @@ pub(super) async fn meta_mcp_handler(
                 ),
             };
 
+            // The background-task intent, or a refusal, or nothing at all.
+            //
+            // Built here — after the authorization loop, the firewall scan and
+            // the admin pre-check, and before the dispatch chokepoint that owns
+            // the destructive-confirmation gate — because a handle must not be
+            // minted for a call that is about to be refused. Only a request that
+            // actually carries a `task` member is offered to the builder: an
+            // ordinary `tools/call` must reach the synchronous path unchanged,
+            // and the builder's own refusals (no verified owner, no idempotency
+            // key) are conditions on asking for a task, not on calling a tool.
+            let task_intent = if params.as_ref().is_some_and(|p| p.get("task").is_some()) {
+                match tasks::task_intent_for_call(
+                    &state,
+                    id.clone(),
+                    tool_name,
+                    &arguments,
+                    is_modern,
+                    &retry,
+                    verified_identity.as_ref(),
+                    client.as_ref(),
+                    oauth_agent_identity.as_ref(),
+                    cert_identity.as_ref(),
+                    api_key_name,
+                    agent_id,
+                    grant_subject.clone(),
+                    client.as_ref().is_some_and(|c| c.admin),
+                    declared_capabilities,
+                    Some(session_id.as_str()),
+                ) {
+                    Ok(intent) => intent,
+                    Err(refusal) => {
+                        return build_response(refusal, &session_id, StatusCode::BAD_REQUEST);
+                    }
+                }
+            } else {
+                None
+            };
+
             let mut call_response = state
                 .meta_mcp
                 .handle_tools_call(
@@ -1391,6 +1433,7 @@ pub(super) async fn meta_mcp_handler(
                     arguments,
                     Some(session_id.as_str()),
                     MetaMcpCallerContext {
+                        task: task_intent,
                         authorizer: &router_authorizer,
                         api_key_name,
                         agent_id,
@@ -1538,33 +1581,17 @@ pub(super) async fn meta_mcp_handler(
                 .await
         }
 
-        "tasks/get" => task_id_param(params.as_ref())
-            .and_then(|task_id| state.tasks.get(&owner, task_id))
-            .map_or_else(
-                || missing_task_error(id.clone()),
-                |task| JsonRpcResponse::success(id.clone(), task_view(&task)),
-            ),
-        // `tasks/update` and `tasks/cancel` differ only in what they do to the
-        // record; both acknowledge with the bare completion the specification
-        // asks for, and neither echoes the task back.
-        "tasks/update" | "tasks/cancel" => {
-            let cancel = method == "tasks/cancel";
-            let changed = task_id_param(params.as_ref()).is_some_and(|task_id| {
-                state.tasks.update(&owner, task_id, |task| {
-                    if cancel {
-                        task.fail_with_code(
-                            crate::protocol::tasks::REQUEST_CANCELLED,
-                            "cancelled by the client",
-                        );
-                    }
-                })
-            });
-            if changed {
-                JsonRpcResponse::success(id.clone(), json!({}))
-            } else {
-                missing_task_error(id.clone())
-            }
-        }
+        // The owner is `task_principal`'s answer, not the raw session key: it is
+        // what admission was keyed on when the record was created, and reading
+        // with anything else would miss a task the caller does own.
+        "tasks/get" => tasks::tasks_get(&state, &owner, id.clone(), params.as_ref()),
+        // `tasks/update` and `tasks/cancel` differ in what they do to the
+        // record — one acknowledges without writing, the other commits a
+        // durable terminal transition — but both answer with the bare
+        // completion the specification asks for, and neither echoes the task
+        // back. Separate arms because they no longer share an implementation.
+        "tasks/update" => tasks::tasks_update(&state, &owner, id.clone(), params.as_ref()).await,
+        "tasks/cancel" => tasks::tasks_cancel(&state, &owner, id.clone(), params.as_ref()).await,
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
     };
 

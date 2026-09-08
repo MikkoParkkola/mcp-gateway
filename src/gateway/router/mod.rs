@@ -25,7 +25,9 @@ use crate::security::ToolPolicy;
 use crate::security::firewall::Firewall;
 
 mod authorization;
-pub(crate) use authorization::{ADMIN_META_TOOLS, is_admin_meta_tool};
+pub(crate) use authorization::{
+    ADMIN_META_TOOLS, OwnedRouterAuthorizer, RouterAuthorizer, is_admin_meta_tool,
+};
 mod backend_handlers;
 mod handlers;
 pub(crate) mod helpers;
@@ -70,8 +72,10 @@ pub struct AppState {
     /// deleted sessions, so there is nothing to key on. Kept beside it rather
     /// than inside it so the two lifetimes stay distinguishable.
     pub subscriptions: Arc<crate::gateway::subscription_registry::SubscriptionRegistry>,
-    /// In-flight tasks, scoped to the principal that created them.
-    pub tasks: Arc<crate::protocol::task_store::TaskStore>,
+    /// Durable tasks, scoped to the principal that created them.
+    pub tasks: Arc<crate::gateway::task_service::TaskService>,
+    /// Worker pool and publication seam for in-flight tasks.
+    pub task_executor: Arc<crate::gateway::task_service::TaskExecutor>,
     /// Key server for OIDC-issued temporary tokens (optional)
     pub key_server: Option<Arc<KeyServer>>,
     /// Tool access policy

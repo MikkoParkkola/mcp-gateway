@@ -848,6 +848,43 @@ impl ExecutionAdmission {
         }
     }
 
+    /// The task this exact request has ALREADY published, or `None`.
+    ///
+    /// Read-only in the strongest sense available here: it takes the same lock
+    /// every admission takes, reads one entry, and writes nothing — no slot, no
+    /// lease, no generation, no reclaim. So a caller may ask "has this already
+    /// been admitted" without that question becoming an admission, which is the
+    /// difference between answering a repeat with the handle it already owns and
+    /// quietly reserving the key for a call that is about to be refused.
+    ///
+    /// Exact-bound, and deliberately narrower than `admit_task`'s own match: a
+    /// differing operation, representation or mode answers `None` rather than
+    /// `Mismatch`, because this is not the authority on refusal — `admit_task`
+    /// is, and it will say so in its own words when the caller reaches it. What
+    /// this must never do is answer `Some` for a request that would not have
+    /// been admitted onto that same task.
+    pub(crate) fn published_task_for(&self, request: Request<'_>) -> Option<String> {
+        if request.mode != Mode::Task {
+            return None;
+        }
+        let (identity, candidate) = request.prepare().ok()?;
+        let state = self.state.lock();
+        let entry = state.entries.get(&identity)?;
+        if entry.operation != candidate.operation
+            || entry.representation != candidate.representation
+            || entry.mode != candidate.mode
+        {
+            return None;
+        }
+        match &entry.status {
+            // Published entries are never `expired` (see `Entry::expired`):
+            // their lifetime belongs to the store, so there is no deadline to
+            // re-decide here.
+            Status::Published { task, .. } => Some(task.clone()),
+            _ => None,
+        }
+    }
+
     fn publish_task(&self, identity: &str, generation: u64, task_id: &str, binding: TaskBinding) {
         let mut state = self.state.lock();
         if let Some(entry) = state.entries.get_mut(identity)

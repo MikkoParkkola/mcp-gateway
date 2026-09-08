@@ -2,8 +2,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Private durable record; never returned as the public Task wire projection.
 
-use crate::gateway::task_service::model::{Task, TaskSnapshot};
+use crate::protocol::tasks::{Task, TaskSnapshot};
 use serde::{Deserialize, Serialize};
+
+/// Current on-disk record format. The loader accepts `1..=RECORD_VERSION` and
+/// never rewrites a supported legacy row.
+pub(super) const RECORD_VERSION: u32 = 2;
 
 /// Persisted values supplied by the sole admission authority. Production
 /// conversion from its opaque `TaskBinding` is deliberately not installed yet.
@@ -21,6 +25,12 @@ pub(super) struct AdmissionRecord {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Record {
     pub(super) version: u32,
+    /// Gateway-internal dispatch marker. Serialized even when false so a current
+    /// never-dispatched row is distinguishable from a legacy row that could not
+    /// record the fact. Absent on v1; `#[serde(default)]` loads that as false
+    /// without inventing a field on disk.
+    #[serde(default)]
+    pub(super) dispatched: bool,
     pub(super) admission: AdmissionRecord,
     pub(super) backend: String,
     pub(super) revision: u64,
@@ -49,7 +59,8 @@ impl PreparedTask {
     ) -> Self {
         Self {
             record: Record {
-                version: 1,
+                version: RECORD_VERSION,
+                dispatched: false,
                 admission: AdmissionRecord {
                     identity_digest: binding.identity().to_owned(),
                     principal_digest: binding.principal_digest().to_owned(),
@@ -70,7 +81,8 @@ impl PreparedTask {
         Self {
             publication: None,
             record: Record {
-                version: 1,
+                version: RECORD_VERSION,
+                dispatched: false,
                 admission: AdmissionRecord {
                     identity_digest: format!("{identity:064x}"),
                     principal_digest: owner.to_owned(),
@@ -88,7 +100,7 @@ impl PreparedTask {
 
 /// A committed view; the private admission and backend fields stay in Record.
 #[derive(Debug)]
-pub(super) struct CommittedTask {
-    pub(super) task: Task,
-    pub(super) revision: u64,
+pub(crate) struct CommittedTask {
+    pub(crate) task: Task,
+    pub(crate) revision: u64,
 }

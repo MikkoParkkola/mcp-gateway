@@ -608,6 +608,28 @@ async fn redeem_retry(
         rejected_continuation(&error)
     })?;
 
+    // Which domain the envelope was sealed for, before anything is read out of
+    // it and before the hold or the ledger is touched.
+    //
+    // One keyring and one ledger serve two domains — this one, and the
+    // destructive confirmation a task-augmented call is admitted through. An
+    // envelope minted for the other one is *authentic*, so authentication
+    // cannot refuse it; only its purpose can. Checked first so a wrong-domain
+    // envelope cannot spend the hold or the redemption belonging to the
+    // exchange whose `jti` and `hold_key` it happens to carry: a refusal that
+    // arrived after either would leave the caller's own honest retry with
+    // nothing left to redeem.
+    payload
+        .require_purpose(crate::protocol::continuation::Purpose::BackendInput)
+        .map_err(|error| {
+            warn!(
+                server,
+                tool, "Continuation from another domain presented as a backend retry"
+            );
+            record_continuation_rejection("wrong_purpose");
+            rejected_continuation(&error)
+        })?;
+
     // The same fingerprint the mint bound to, derived the same way. A caller the
     // gateway cannot name cannot match one it could: `principal_fingerprint`
     // returns `None` for exactly the credential schemes no continuation is ever
@@ -4082,6 +4104,7 @@ mod identity_propagation_enforcement_tests {
         let (m, captured) = meta_with_capturing_backend();
         let id = identity();
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            task: None,
             authorizer: &ALLOW_ALL_INVOKE,
             verified_identity: Some(&id),
             api_key_name: None,
@@ -4112,6 +4135,7 @@ mod identity_propagation_enforcement_tests {
     async fn code_mode_execute_fails_closed_without_identity() {
         let (m, _captured) = meta_with_capturing_backend();
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            task: None,
             authorizer: &ALLOW_ALL_INVOKE,
             api_key_name: None,
             agent_id: None,
@@ -4147,6 +4171,7 @@ mod identity_propagation_enforcement_tests {
         let (m, captured) = meta_with_capturing_backend_no_log();
         let id = identity();
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            task: None,
             authorizer: &ALLOW_ALL_INVOKE,
             verified_identity: Some(&id),
             api_key_name: None,

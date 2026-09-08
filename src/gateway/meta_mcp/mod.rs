@@ -69,9 +69,13 @@ mod search;
 mod spec_preview;
 mod support;
 mod surfaced;
+mod task_confirmation;
 
 pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
 pub use support::prune_constant_signals;
+pub(crate) use task_confirmation::{
+    TaskConfirmation, TaskConfirmationRequest, task_admission_request,
+};
 
 // ============================================================================
 // Constants
@@ -154,6 +158,9 @@ pub struct MetaMcpCallerContext<'a> {
     /// gateway opens it as one of its own sealed envelopes. Nothing downstream
     /// may forward this field to a backend verbatim.
     pub retry: &'a crate::protocol::mrtr::RetryFields,
+    /// Background-task intent, taken after the destructive confirmation gate.
+    /// `None` on every synchronous call and on the worker's rebuilt context.
+    pub task: Option<crate::gateway::task_service::TaskIntent>,
 }
 
 // ============================================================================
@@ -1570,7 +1577,7 @@ impl MetaMcp {
         tool_name: &str,
         arguments: Value,
         session_id: Option<&str>,
-        caller: MetaMcpCallerContext<'_>,
+        mut caller: MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
         // Operator exposure allow-list. Enforced ahead of the admin gate, not
         // beside it: a meta-tool hidden from `tools/list` but still executable is
@@ -1628,11 +1635,109 @@ impl MetaMcp {
             return response;
         }
 
+        if let Some(intent) = caller.task.take() {
+            return self.begin_task(id, tool_name, arguments, intent).await;
+        }
+
+        self.dispatch_below_gate(id, tool_name, arguments, session_id, &caller)
+            .await
+    }
+
+    async fn begin_task(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: Value,
+        intent: crate::gateway::task_service::TaskIntent,
+    ) -> JsonRpcResponse {
+        let task = crate::gateway::task_service::Task::create_at(
+            tool_name,
+            chrono::Utc::now(),
+            intent.options,
+        );
+        let backend = task_backend_name(self, tool_name, &arguments);
+        let executor = Arc::clone(&intent.executor);
+        let call = crate::gateway::task_service::TaskCall {
+            tool: tool_name.to_owned(),
+            arguments,
+        };
+        match executor.begin(intent, task, backend, call).await {
+            Ok(outcome) => outcome.into_response(id),
+            Err(_) => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
+        }
+    }
+
+    /// The dispatch tail below the confirmation gate. The request thread and
+    /// the task worker call the same function; there is no parallel handler.
+    pub(crate) async fn dispatch_below_gate(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> JsonRpcResponse {
+        self.dispatch_below_gate_shaped(
+            id,
+            tool_name,
+            arguments,
+            session_id,
+            caller,
+            ResultShape::Wrapped,
+        )
+        .await
+    }
+
+    /// The same dispatch, answered with the tool's own result verbatim.
+    ///
+    /// One caller: the task worker, because a task settles on what the backend
+    /// said and not on how a synchronous reply presents it (adapter design r3
+    /// §4 — "result verbatim **including `isError: true`**"). The meta-tool
+    /// wrapper below buries exactly that: it pretty-prints the result into a
+    /// single text block, drops `structuredContent` for every tool without an
+    /// output schema, and states `isError: false` over whatever the backend
+    /// reported. It also hides an interim round — `resultType:
+    /// "input_required"` inside a JSON string is not a claim the settlement
+    /// classifier can read, so a question would be committed as an answer.
+    ///
+    /// Only this last step differs. The routing above is the identical call:
+    /// the same direct-backend route, the same match arms, the same
+    /// authorization, firewall, destructive, capability and signing contexts,
+    /// and the same `error_response_preserving_status` on the error side.
+    /// Settlement strips the internal HTTP-status key from that error itself.
+    pub(crate) async fn dispatch_below_gate_native_result(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> JsonRpcResponse {
+        self.dispatch_below_gate_shaped(
+            id,
+            tool_name,
+            arguments,
+            session_id,
+            caller,
+            ResultShape::Native,
+        )
+        .await
+    }
+
+    async fn dispatch_below_gate_shaped(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+        shape: ResultShape,
+    ) -> JsonRpcResponse {
         // T2.4: a call naming a backend tool directly — because an operator
         // surfaced it, or because it is a retry of an exchange this gateway
         // opened — is routed BEFORE the meta-tool match.
         if let Some(response) = self
-            .route_direct_backend_call(id.clone(), tool_name, &arguments, session_id, &caller)
+            .route_direct_backend_call(id.clone(), tool_name, &arguments, session_id, caller)
             .await
         {
             return response;
@@ -1640,18 +1745,15 @@ impl MetaMcp {
 
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id).await,
-            "gateway_execute" => {
-                self.code_mode_execute(&arguments, session_id, &caller)
-                    .await
-            }
+            "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
             "gateway_list_servers" => self.list_servers().await,
             "gateway_list_tools" => self.list_tools(&arguments, session_id).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id).await,
-            "gateway_invoke" => self.invoke_tool(&arguments, session_id, &caller).await,
+            "gateway_invoke" => self.invoke_tool(&arguments, session_id, caller).await,
             "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
-            "gateway_cost_report" => self.get_cost_report(&arguments, session_id, &caller).await,
+            "gateway_cost_report" => self.get_cost_report(&arguments, session_id, caller).await,
             "gateway_webhook_status" => self.webhook_status(),
-            "gateway_run_playbook" => self.run_playbook(&arguments, &caller).await,
+            "gateway_run_playbook" => self.run_playbook(&arguments, caller).await,
             "gateway_kill_server" => self.kill_server(&arguments),
             "gateway_revive_server" => self.revive_server(&arguments),
             "gateway_list_disabled_capabilities" => self.list_disabled_capabilities(),
@@ -1706,12 +1808,47 @@ impl MetaMcp {
         };
 
         match result {
-            Ok(content) => {
-                let has_output_schema = tool_name == "gateway_search_tools";
-                wrap_tool_success(id, &content, has_output_schema)
-            }
+            Ok(content) => match shape {
+                ResultShape::Wrapped => {
+                    let has_output_schema = tool_name == "gateway_search_tools";
+                    wrap_tool_success(id, &content, has_output_schema)
+                }
+                ResultShape::Native => JsonRpcResponse::success(id, content),
+            },
             Err(e) => error_response_preserving_status(id, &e),
         }
+    }
+}
+
+/// How a dispatch's own result is presented, and the only thing the two
+/// entry points above disagree about. The routing, the checks and the error
+/// side are one code path.
+#[derive(Clone, Copy)]
+enum ResultShape {
+    /// The synchronous meta-tool reply: `wrap_tool_success`, unchanged.
+    Wrapped,
+    /// The tool's result as it came back, for a task to settle on.
+    Native,
+}
+
+fn task_backend_name(meta: &MetaMcp, tool_name: &str, arguments: &Value) -> String {
+    if let Some(server) = meta.surfaced_tools_map.get(tool_name) {
+        return server.clone();
+    }
+    match tool_name {
+        "gateway_invoke" => arguments
+            .get("server")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned(),
+        "gateway_execute" => arguments
+            .get("tool")
+            .and_then(Value::as_str)
+            .and_then(|tool_ref| tool_ref.split_once(':'))
+            .map(|(server, _)| server.to_owned())
+            .unwrap_or_else(|| "execute".to_owned()),
+        "gateway_run_playbook" => "playbook".to_owned(),
+        other => other.to_owned(),
     }
 }
 

@@ -43,7 +43,10 @@ use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+use mcp_gateway::gateway::test_helpers::{
+    AppState, MetaMcp, StoreLimits, TaskExecutor, TaskService, create_router, open_runtime,
+};
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 
@@ -69,7 +72,33 @@ fn admin_auth_config() -> AuthConfig {
 /// and the anonymous identity holds no admin. Requests here go through
 /// [`admin_request`], which presents that token. Auth-disabled callers are
 /// covered separately by `anonymous_is_refused_admin_endpoints`.
-fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>) -> Arc<AppState> {
+/// The durable task runtime the `AppState` fixtures in this file are built on.
+///
+/// One private `TempDir` per fixture, returned so the test binds it for its own
+/// lifetime. The store takes an exclusive lease on its directory, so a shared
+/// path would make one fixture's open refuse another's; and a `TempDir` dropped
+/// at the end of the fixture would delete the records under a live service.
+/// `open_runtime` is the production entry point — nothing here substitutes a
+/// store, names a fixed path, or reads a process-wide variable.
+async fn task_runtime(
+    subscriptions: &Arc<SubscriptionRegistry>,
+) -> (Arc<TaskService>, Arc<TaskExecutor>, TempDir) {
+    let store_dir = TempDir::new().expect("a private task-store directory");
+    let (service, executor) = open_runtime(
+        store_dir.path(),
+        mcp_gateway::config::DEFAULT_MAX_WORKERS,
+        StoreLimits::default(),
+        Arc::clone(subscriptions),
+    )
+    .await
+    .expect("the fixture task store opens");
+    (service, executor, store_dir)
+}
+
+async fn make_app_state(
+    cap_dir: Option<&str>,
+    config_path: Option<std::path::PathBuf>,
+) -> (Arc<AppState>, TempDir) {
     let config = Config::default();
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -92,7 +121,10 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
 
     let capability_dirs = cap_dir.map(|d| vec![d.to_string()]).unwrap_or_default();
 
-    Arc::new(AppState {
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let (task_service, task_executor, store_dir) = task_runtime(&subscriptions).await;
+
+    let state = Arc::new(AppState {
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         env: None,
         backends,
@@ -125,27 +157,27 @@ fn make_app_state(cap_dir: Option<&str>, config_path: Option<std::path::PathBuf>
         dashboard_bootstrap: std::sync::Arc::new(
             mcp_gateway::gateway::auth::DashboardBootstrap::new(),
         ),
-        tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
-    })
+        tasks: task_service,
+        task_executor,
+        subscriptions,
+    });
+    (state, store_dir)
 }
 
-fn make_app_state_with_auth_config(auth_config: &AuthConfig) -> Arc<AppState> {
-    let mut state = make_app_state(None, None);
+async fn make_app_state_with_auth_config(auth_config: &AuthConfig) -> (Arc<AppState>, TempDir) {
+    let (mut state, store_dir) = make_app_state(None, None).await;
     Arc::get_mut(&mut state)
         .expect("test AppState should be uniquely owned")
         .auth_config = Arc::new(ResolvedAuthConfig::from_config(auth_config));
-    state
+    (state, store_dir)
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn make_app_state_with_reload(
+async fn make_app_state_with_reload(
     config: Config,
     cap_dir: Option<&str>,
     config_path: std::path::PathBuf,
-) -> (Arc<AppState>, Arc<LiveConfig>) {
+) -> (Arc<AppState>, Arc<LiveConfig>, TempDir) {
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
         Arc::clone(&backends),
@@ -171,6 +203,9 @@ fn make_app_state_with_reload(
     meta_mcp.set_reload_context(reload_context);
 
     let capability_dirs = cap_dir.map(|d| vec![d.to_string()]).unwrap_or_default();
+
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let (task_service, task_executor, store_dir) = task_runtime(&subscriptions).await;
 
     (
         Arc::new(AppState {
@@ -206,12 +241,12 @@ fn make_app_state_with_reload(
             dashboard_bootstrap: std::sync::Arc::new(
                 mcp_gateway::gateway::auth::DashboardBootstrap::new(),
             ),
-            tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-            subscriptions: Arc::new(
-                mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-            ),
+            tasks: task_service,
+            task_executor,
+            subscriptions,
         }),
         live_config,
+        store_dir,
     )
 }
 
@@ -389,7 +424,7 @@ async fn mcp_tools_fixture_handler(Json(body): Json<Value>) -> Json<Value> {
 
 #[tokio::test]
 async fn test_webui_embeds_control_plane_read_only_page() {
-    let state = make_app_state(None, None);
+    let (state, _store) = make_app_state(None, None).await;
     let router = create_router(state);
     let request = Request::builder()
         .method(Method::GET)
@@ -424,7 +459,7 @@ async fn test_webui_embeds_control_plane_read_only_page() {
 
 #[tokio::test]
 async fn test_control_plane_endpoint_returns_read_only_runtime_projection() {
-    let state = make_app_state(None, None);
+    let (state, _store) = make_app_state(None, None).await;
     let (backend_url, server) = spawn_mcp_tools_fixture().await;
     let backend = register_http_backend_with_url(&state, "docs", backend_url);
     backend.get_tools_shared().await.unwrap();
@@ -580,7 +615,7 @@ async fn test_control_plane_endpoint_projects_non_admin_api_key_as_auditor() {
         client_circuit_breaker: None,
         single_user: false,
     };
-    let state = make_app_state_with_auth_config(&auth_config);
+    let (state, _store) = make_app_state_with_auth_config(&auth_config).await;
     register_http_backend(&state, "docs");
     let router = create_router(state);
     let request = Request::builder()
@@ -611,7 +646,7 @@ async fn test_control_plane_endpoint_projects_non_admin_api_key_as_auditor() {
 #[tokio::test]
 async fn test_registry_list_returns_entries() {
     // GIVEN: a running gateway with no config_path needed (registry is static)
-    let state = make_app_state(None, None);
+    let (state, _store) = make_app_state(None, None).await;
     let router = create_router(state);
 
     // WHEN: GET /ui/api/registry
@@ -632,7 +667,7 @@ async fn test_registry_list_returns_entries() {
 #[tokio::test]
 async fn test_registry_search_filters_results() {
     // GIVEN: a running gateway
-    let state = make_app_state(None, None);
+    let (state, _store) = make_app_state(None, None).await;
     let router = create_router(state);
 
     // WHEN: GET /ui/api/registry/search?q=tavily
@@ -667,7 +702,7 @@ async fn test_registry_search_filters_results() {
 #[tokio::test]
 async fn test_add_backend_without_config_path_returns_503() {
     // GIVEN: state WITHOUT config_path (no persistence available)
-    let state = make_app_state(None, None);
+    let (state, _store) = make_app_state(None, None).await;
     let router = create_router(state);
 
     // WHEN: POST /ui/api/backends with a stdio command
@@ -701,7 +736,7 @@ async fn test_add_backend_persists_and_duplicate_returns_409() {
     let yaml = serde_yaml::to_string(&cfg).unwrap();
     std::fs::write(&config_path, &yaml).unwrap();
 
-    let state = make_app_state(None, Some(config_path.clone()));
+    let (state, _store) = make_app_state(None, Some(config_path.clone())).await;
     let router = create_router(state);
 
     // WHEN: add a new backend
@@ -764,7 +799,7 @@ async fn test_remove_backend_not_found_returns_404() {
     let yaml = serde_yaml::to_string(&cfg).unwrap();
     std::fs::write(&config_path, &yaml).unwrap();
 
-    let state = make_app_state(None, Some(config_path));
+    let (state, _store) = make_app_state(None, Some(config_path)).await;
     let router = create_router(state);
 
     // WHEN: DELETE /ui/api/backends/nonexistent
@@ -793,7 +828,7 @@ async fn test_add_remove_backend_lifecycle() {
     let yaml = serde_yaml::to_string(&cfg).unwrap();
     std::fs::write(&config_path, &yaml).unwrap();
 
-    let state = make_app_state(None, Some(config_path.clone()));
+    let (state, _store) = make_app_state(None, Some(config_path.clone())).await;
     let router = create_router(state);
 
     // WHEN: add a backend
@@ -850,7 +885,7 @@ async fn test_patch_backend_updates_description() {
     let yaml = serde_yaml::to_string(&cfg).unwrap();
     std::fs::write(&config_path, &yaml).unwrap();
 
-    let state = make_app_state(None, Some(config_path.clone()));
+    let (state, _store) = make_app_state(None, Some(config_path.clone())).await;
     let router = create_router(state);
 
     // WHEN: PATCH /ui/api/backends/patch-me with a new description
@@ -888,7 +923,7 @@ async fn test_add_backend_returns_reload_outcome_when_context_available() {
     let cfg = Config::default();
     std::fs::write(&config_path, serde_yaml::to_string(&cfg).unwrap()).unwrap();
 
-    let (state, _) = make_app_state_with_reload(cfg, None, config_path.clone());
+    let (state, _, _store) = make_app_state_with_reload(cfg, None, config_path.clone()).await;
     let router = create_router(Arc::clone(&state));
 
     let (status, body) = send_json(
@@ -919,7 +954,7 @@ async fn test_add_backend_returns_reload_outcome_when_context_available() {
 
 #[tokio::test]
 async fn test_reload_endpoint_without_reload_context_returns_503() {
-    let state = make_app_state(None, None);
+    let (state, _store) = make_app_state(None, None).await;
     let router = create_router(state);
 
     let (status, body) = send_json(&router, Method::POST, "/ui/api/reload", None).await;
@@ -944,8 +979,8 @@ async fn test_reload_endpoint_returns_structured_outcome_for_profile_change() {
     let initial = Config::default();
     std::fs::write(&config_path, serde_yaml::to_string(&initial).unwrap()).unwrap();
 
-    let (state, live_config) =
-        make_app_state_with_reload(initial.clone(), None, config_path.clone());
+    let (state, live_config, _store) =
+        make_app_state_with_reload(initial.clone(), None, config_path.clone()).await;
     let router = create_router(state);
 
     let mut updated = initial;
@@ -990,7 +1025,8 @@ async fn test_reload_endpoint_reports_restart_required_for_server_change() {
     let initial = Config::default();
     std::fs::write(&config_path, serde_yaml::to_string(&initial).unwrap()).unwrap();
 
-    let (state, _) = make_app_state_with_reload(initial.clone(), None, config_path.clone());
+    let (state, _, _store) =
+        make_app_state_with_reload(initial.clone(), None, config_path.clone()).await;
     let router = create_router(state);
 
     let mut updated = initial;
@@ -1016,7 +1052,7 @@ async fn test_reload_endpoint_reports_restart_required_for_server_change() {
 #[tokio::test]
 async fn test_capabilities_list_returns_empty_without_dirs() {
     // GIVEN: no capability directories configured
-    let state = make_app_state(None, None);
+    let (state, _store) = make_app_state(None, None).await;
     let router = create_router(state);
 
     // WHEN: GET /ui/api/capabilities
@@ -1035,7 +1071,7 @@ async fn test_capability_create_read_delete_lifecycle() {
     let tmp = TempDir::new().unwrap();
     let cap_dir = tmp.path().to_str().unwrap().to_string();
 
-    let state = make_app_state(Some(&cap_dir), None);
+    let (state, _store) = make_app_state(Some(&cap_dir), None).await;
     let router = create_router(state);
 
     // WHEN: POST /ui/api/capabilities with YAML + name
@@ -1120,7 +1156,7 @@ async fn test_capability_put_updates_content() {
     let cap_file = tmp.path().join("updatable.yaml");
     std::fs::write(&cap_file, VALID_YAML).unwrap();
 
-    let state = make_app_state(Some(&cap_dir), None);
+    let (state, _store) = make_app_state(Some(&cap_dir), None).await;
     let router = create_router(state);
 
     // WHEN: PUT /ui/api/capabilities/updatable with updated YAML
@@ -1156,7 +1192,7 @@ async fn test_capability_put_updates_content() {
 #[tokio::test]
 async fn test_capability_path_traversal_rejected() {
     // GIVEN: any app state (no dirs needed — rejection is name-based)
-    let state = make_app_state(None, None);
+    let (state, _store) = make_app_state(None, None).await;
     let router = create_router(state);
 
     // WHEN: GET with names that contain characters not allowed by is_safe_name().
@@ -1195,7 +1231,7 @@ async fn test_capability_invalid_yaml_rejected_on_put() {
     let tmp = TempDir::new().unwrap();
     let cap_dir = tmp.path().to_str().unwrap().to_string();
 
-    let state = make_app_state(Some(&cap_dir), None);
+    let (state, _store) = make_app_state(Some(&cap_dir), None).await;
     let router = create_router(state);
 
     // WHEN: PUT with invalid YAML (unclosed bracket = parse error)
@@ -1223,7 +1259,7 @@ async fn test_capability_not_found_returns_404() {
     let tmp = TempDir::new().unwrap();
     let cap_dir = tmp.path().to_str().unwrap().to_string();
 
-    let state = make_app_state(Some(&cap_dir), None);
+    let (state, _store) = make_app_state(Some(&cap_dir), None).await;
     let router = create_router(state);
 
     // WHEN: GET /ui/api/capabilities/nonexistent
@@ -1286,7 +1322,7 @@ paths:
 #[tokio::test]
 async fn test_import_preview_with_inline_spec_returns_tools() {
     // GIVEN: a gateway (no config_path needed for preview)
-    let state = make_app_state(None, None);
+    let (state, _store) = make_app_state(None, None).await;
     let router = create_router(state);
 
     // WHEN: POST /ui/api/import/openapi/preview with inline spec
@@ -1321,7 +1357,7 @@ async fn test_import_inline_spec_creates_yaml_files() {
     let tmp = TempDir::new().unwrap();
     let cap_dir = tmp.path().to_str().unwrap().to_string();
 
-    let state = make_app_state(Some(&cap_dir), None);
+    let (state, _store) = make_app_state(Some(&cap_dir), None).await;
     let router = create_router(state);
 
     // WHEN: POST /ui/api/import/openapi (write)
@@ -1366,7 +1402,7 @@ async fn test_import_inline_spec_creates_yaml_files() {
 #[tokio::test]
 async fn test_import_preview_rejects_both_url_and_spec() {
     // GIVEN: a gateway
-    let state = make_app_state(None, None);
+    let (state, _store) = make_app_state(None, None).await;
     let router = create_router(state);
 
     // WHEN: both url and spec are provided simultaneously
@@ -1392,7 +1428,7 @@ async fn test_import_preview_rejects_both_url_and_spec() {
 #[tokio::test]
 async fn test_import_preview_rejects_neither_url_nor_spec() {
     // GIVEN: a gateway
-    let state = make_app_state(None, None);
+    let (state, _store) = make_app_state(None, None).await;
     let router = create_router(state);
 
     // WHEN: no url and no spec in the body
@@ -1425,7 +1461,7 @@ async fn anonymous_is_refused_admin_endpoints() {
         "this case is about the shipped default"
     );
 
-    let state = make_app_state_with_auth_config(&config.auth);
+    let (state, _store) = make_app_state_with_auth_config(&config.auth).await;
     let router = create_router(state);
 
     for uri in ["/ui/api/config", "/ui/api/registry", "/ui/api/capabilities"] {
@@ -1449,7 +1485,7 @@ async fn anonymous_is_refused_admin_endpoints() {
 #[tokio::test]
 async fn anonymous_is_refused_the_dashboard() {
     let config = Config::default();
-    let state = make_app_state_with_auth_config(&config.auth);
+    let (state, _store) = make_app_state_with_auth_config(&config.auth).await;
     let router = create_router(state);
 
     let req = Request::builder()
@@ -1485,7 +1521,7 @@ async fn anonymous_is_refused_the_dashboard() {
 #[tokio::test]
 async fn anonymous_still_reads_redacted_status() {
     let config = Config::default();
-    let state = make_app_state_with_auth_config(&config.auth);
+    let (state, _store) = make_app_state_with_auth_config(&config.auth).await;
     let router = create_router(state);
 
     let req = Request::builder()
@@ -1519,7 +1555,7 @@ async fn anonymous_still_reads_redacted_status() {
 #[tokio::test]
 async fn anonymous_is_refused_every_inventory_surface() {
     let config = Config::default();
-    let state = make_app_state_with_auth_config(&config.auth);
+    let (state, _store) = make_app_state_with_auth_config(&config.auth).await;
     let router = create_router(state);
 
     // /api/costs has no projection model: spend per session and per API key is
@@ -1588,7 +1624,7 @@ async fn a_non_admin_api_key_gets_the_redacted_health_view() {
         }],
         ..AuthConfig::default()
     };
-    let state = make_app_state_with_auth_config(&auth);
+    let (state, _store) = make_app_state_with_auth_config(&auth).await;
     let router = create_router(state);
 
     let req = Request::builder()
@@ -1631,7 +1667,7 @@ async fn a_non_admin_api_key_gets_the_redacted_health_view() {
 #[tokio::test]
 async fn the_dashboard_bootstrap_link_opens_the_dashboard() {
     let auth = admin_auth_config();
-    let state = make_app_state_with_auth_config(&auth);
+    let (state, _store) = make_app_state_with_auth_config(&auth).await;
     // The link carries a single-use value, NOT the admin token: a query string
     // reaches this gateway's own request log, which outlives the browser tab.
     let bootstrap = state
@@ -1722,7 +1758,7 @@ async fn the_starter_posture_keeps_tools_open_and_admin_closed() {
         public_paths: vec!["/health".to_string(), "/mcp".to_string()],
         ..AuthConfig::default()
     };
-    let state = make_app_state_with_auth_config(&auth);
+    let (state, _store) = make_app_state_with_auth_config(&auth).await;
     let router = create_router(state);
 
     // An MCP client with no credential still lists tools.
@@ -1788,7 +1824,7 @@ async fn a_credential_presented_on_a_public_path_still_counts() {
         public_paths: vec!["/health".to_string(), "/mcp".to_string()],
         ..AuthConfig::default()
     };
-    let state = make_app_state_with_auth_config(&auth);
+    let (state, _store) = make_app_state_with_auth_config(&auth).await;
     let router = create_router(state);
 
     let req = Request::builder()
@@ -1827,7 +1863,7 @@ async fn a_bootstrap_link_is_not_redeemable_through_a_published_host() {
         bearer_token: Some("admin-token".to_string()),
         ..AuthConfig::default()
     };
-    let state = make_app_state_with_auth_config(&auth);
+    let (state, _store) = make_app_state_with_auth_config(&auth).await;
     let bootstrap = state
         .dashboard_bootstrap
         .peek()
@@ -1893,7 +1929,7 @@ async fn a_reload_does_not_change_request_time_authentication() {
     .unwrap();
 
     let live_config = Arc::new(LiveConfig::new(startup.clone()));
-    let mut state = make_app_state(None, Some(config_path.clone()));
+    let (mut state, _store) = make_app_state(None, Some(config_path.clone())).await;
     {
         let s = Arc::get_mut(&mut state).expect("test AppState should be uniquely owned");
         s.auth_config = Arc::new(ResolvedAuthConfig::from_config(&startup.auth));
@@ -1969,7 +2005,7 @@ async fn a_forwarded_request_cannot_redeem_the_dashboard_link() {
         ("through a proxy on this machine", "127.0.0.1:52344", true),
     ] {
         let auth = admin_auth_config();
-        let state = make_app_state_with_auth_config(&auth);
+        let (state, _store) = make_app_state_with_auth_config(&auth).await;
         let bootstrap = state
             .dashboard_bootstrap
             .peek()

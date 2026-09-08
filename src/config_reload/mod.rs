@@ -630,6 +630,7 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
         "error_budget" => error_budget,
         "cache" => cache,
         "runtime" => runtime,
+        "tasks" => tasks,
         #[cfg(feature = "cost-governance")]
         "cost_governance" => cost_governance,
     ]
@@ -732,6 +733,7 @@ struct MetaFields {
     server_public_url: String,
     #[cfg(feature = "cost-governance")]
     cost_governance: String,
+    tasks: String,
 }
 
 impl MetaFields {
@@ -759,6 +761,7 @@ impl MetaFields {
             server_public_url: c.server.public_url.clone().unwrap_or_default(),
             #[cfg(feature = "cost-governance")]
             cost_governance: canonical_json(&c.cost_governance),
+            tasks: canonical_json(&c.tasks),
         }
     }
 }

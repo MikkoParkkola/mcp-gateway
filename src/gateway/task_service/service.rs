@@ -18,22 +18,39 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use tokio::sync::OwnedSemaphorePermit;
 
 use super::record::{CommittedTask, PreparedTask};
 use super::store::{StoreError, StoreLimits, TaskStore};
-use crate::gateway::task_service::model::{Task, TaskTransition};
-use crate::idempotency::admission::{ExecutionAdmission, Request, TaskAdmission, TaskOwner};
+use crate::idempotency::admission::{
+    ExecutionAdmission, Refusal, Request, TaskAdmission, TaskOwner,
+};
+use crate::protocol::tasks::{Task, TaskTransition};
+
+/// Internal create facade. Worker-cap excess is `Capacity`; every store failure
+/// is `Unavailable`. `Created` carries the reserved permit out to its consumer.
+pub(crate) enum CreateOutcome {
+    Created {
+        task: CommittedTask,
+        slot: OwnedSemaphorePermit,
+    },
+    Existing(CommittedTask),
+    Mismatch,
+    InFlight,
+    Capacity,
+    Unavailable,
+}
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(super) enum ServiceError {
+pub(crate) enum ServiceError {
     #[error("task store unavailable")]
     Unavailable,
     #[error("task not found")]
     NotFound,
 }
 
-pub(super) struct TaskService {
-    store: TaskStore,
+pub struct TaskService {
+    pub(crate) store: TaskStore,
     admission: Arc<ExecutionAdmission>,
 }
 
@@ -46,7 +63,7 @@ impl TaskService {
     /// exactly as it found it rather than half-populated. Custody follows the
     /// same rule — a service that never came up gives the directory lease back
     /// instead of holding it for the process's lifetime.
-    pub(super) async fn open(
+    pub(crate) async fn open(
         path: &Path,
         limits: StoreLimits,
         admission: Arc<ExecutionAdmission>,
@@ -61,54 +78,81 @@ impl TaskService {
         Ok(Self { store, admission })
     }
 
-    /// Admit, prepare and commit one task.
+    /// Admit, reserve a worker only for a new key, then prepare and commit.
     ///
-    /// The one-shot publication token travels INTO the store, so the durable
-    /// record and the dedupe entry that recovers it are resolved together inside
-    /// the store's cancellation-surviving section — after the record is readable
-    /// and before this call returns, which is before anything could dispatch.
-    pub(super) async fn create(
+    /// Admission remains the sole identity authority. Only `Owned` asks `reserve`;
+    /// `Existing` returns the original handle even when the pool is saturated. A
+    /// new-key worker-cap refusal writes nothing and drops the admission lease.
+    /// Every store failure is `Unavailable` and releases both the permit and the
+    /// unresolved publication. `Created` retains its permit for the consumer.
+    pub(crate) async fn create(
         &self,
         request: Request<'_>,
         task: &Task,
         backend: &str,
-    ) -> Result<CommittedTask, ServiceError> {
+        reserve: impl FnOnce() -> Option<OwnedSemaphorePermit> + Send,
+    ) -> Result<CreateOutcome, ServiceError> {
         match self.admission.admit_task(request) {
             Ok(TaskAdmission::Owned(lease)) => {
+                let Some(slot) = reserve() else {
+                    return Ok(CreateOutcome::Capacity);
+                };
                 let binding = lease.binding().clone();
                 let prepared =
                     PreparedTask::admitted(task, &binding, lease.into_publication(), backend);
                 // A failed commit drops the publication unresolved, which gives
-                // the reservation back rather than stranding the key.
-                self.store.create(prepared).await.map_err(refused)
+                // the reservation back rather than stranding the key. The permit
+                // is dropped with this arm so a store refusal cannot keep a worker.
+                match self.store.create(prepared).await {
+                    Ok(committed) => Ok(CreateOutcome::Created {
+                        task: committed,
+                        slot,
+                    }),
+                    Err(_) => Ok(CreateOutcome::Unavailable),
+                }
             }
             // The key already owns a committed task: the caller gets THAT task,
             // with the TTL and poll interval it was created with. The offered
-            // task value is not committed and never becomes visible.
-            Ok(TaskAdmission::Existing { task_id, binding }) => self
-                .store
-                .get(binding.principal_digest(), &task_id)
-                .map_err(refused),
-            // In flight, already settled as a synchronous execution, or refused —
-            // a changed fingerprint or a mode switch is a `Mismatch` here. None of
-            // them is a committed task, and this API has one answer for that.
-            // Splitting them into distinct outcomes would be wire policy, which
-            // is the route slice's to decide and not this one's to invent.
-            Ok(TaskAdmission::InFlight | TaskAdmission::Unavailable) | Err(_) => {
-                Err(ServiceError::Unavailable)
+            // task value is not committed and never becomes visible. No worker
+            // is reserved — a repeat must not compete with the running task.
+            Ok(TaskAdmission::Existing { task_id, binding }) => {
+                match self.store.get(binding.principal_digest(), &task_id) {
+                    Ok(committed) => Ok(CreateOutcome::Existing(committed)),
+                    Err(_) => Ok(CreateOutcome::Unavailable),
+                }
             }
+            Ok(TaskAdmission::InFlight) => Ok(CreateOutcome::InFlight),
+            Ok(TaskAdmission::Unavailable) => Ok(CreateOutcome::Unavailable),
+            Err(Refusal::Mismatch) => Ok(CreateOutcome::Mismatch),
+            Err(_) => Ok(CreateOutcome::Unavailable),
         }
     }
 
-    pub(super) fn get(&self, principal: &str, id: &str) -> Result<CommittedTask, ServiceError> {
+    pub(crate) fn get(&self, principal: &str, id: &str) -> Result<CommittedTask, ServiceError> {
         self.store
             .get(self.owner(principal)?.as_digest(), id)
             .map_err(refused)
     }
 
+    /// Whether `principal` owns every listed id.
+    ///
+    /// All-or-nothing: a partial yes would leak which of the listed ids exist.
+    #[must_use]
+    pub(crate) fn owns_all<'a>(
+        &self,
+        principal: &str,
+        ids: impl IntoIterator<Item = &'a str>,
+    ) -> bool {
+        let Ok(owner) = self.owner(principal) else {
+            return false;
+        };
+        ids.into_iter()
+            .all(|id| self.store.get(owner.as_digest(), id).is_ok())
+    }
+
     /// Cancel is a durable transition: the terminal view returned here is the one
     /// that was committed, and it is what every later read sees.
-    pub(super) async fn cancel(
+    pub(crate) async fn cancel(
         &self,
         principal: &str,
         id: &str,
@@ -130,7 +174,7 @@ impl TaskService {
     /// task — would be a lifecycle change wearing an acknowledgement. The payload
     /// belongs to the input-required round that will consume it; interpreting it
     /// here would be that round's AC row answered by the wrong increment.
-    pub(super) async fn update(
+    pub(crate) async fn update(
         &self,
         principal: &str,
         id: &str,
@@ -140,17 +184,37 @@ impl TaskService {
         self.get(principal, id)
     }
 
-    pub(super) async fn close(self) -> Result<(), ServiceError> {
+    pub(crate) async fn close(self) -> Result<(), ServiceError> {
         self.store
             .close()
             .await
             .map_err(|_| ServiceError::Unavailable)
     }
 
+    /// Join in-flight writers and release the directory lease without consuming
+    /// the `Arc` the executor still holds.
+    pub(crate) async fn shutdown(&self) -> Result<(), ServiceError> {
+        self.store
+            .clone()
+            .close()
+            .await
+            .map_err(|_| ServiceError::Unavailable)
+    }
+
+    /// The admission authority, for read-only questions.
+    ///
+    /// Handed out as a shared reference so a caller can ask what is already
+    /// admitted without being able to admit: `&ExecutionAdmission` exposes
+    /// `published_task_for` and the reclaim/settle paths this service already
+    /// drives, and no lease can be minted through it that is not minted here.
+    pub(crate) fn admission(&self) -> &ExecutionAdmission {
+        &self.admission
+    }
+
     /// The admission-owned digest for a principal. A principal admission refuses
     /// to hash owns nothing, so it is told what anyone naming a task they do not
     /// own is told.
-    fn owner(&self, principal: &str) -> Result<TaskOwner, ServiceError> {
+    pub(crate) fn owner(&self, principal: &str) -> Result<TaskOwner, ServiceError> {
         self.admission
             .owner(principal)
             .map_err(|_| ServiceError::NotFound)

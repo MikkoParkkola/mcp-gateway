@@ -15,10 +15,10 @@ use serde_json::{Value, json};
 use super::super::record::PreparedTask;
 use super::super::store::{CommitStage, StoreError, TaskStore};
 use super::support::*;
-use crate::gateway::task_service::model::{Task, TaskOptions, TaskStatus, TaskTransition};
 use crate::idempotency::admission::{
     ExecutionAdmission, Mode, RETENTION_SECS, Request, RestoredBinding, TaskAdmission, TaskBinding,
 };
+use crate::protocol::tasks::{Task, TaskOptions, TaskStatus, TaskTransition};
 
 static OPERATION: LazyLock<Value> =
     LazyLock::new(|| json!({"backend": "orders", "tool": "create"}));

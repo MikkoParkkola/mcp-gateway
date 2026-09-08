@@ -20,14 +20,13 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use chrono::{DateTime, Utc};
 
-use super::record::{CommittedTask, PreparedTask, Record};
+use super::record::{CommittedTask, PreparedTask, RECORD_VERSION, Record};
 use crate::fs_lock::ExclusiveFileLock;
-use crate::gateway::task_service::model::{Task, TaskStatus, TaskTransition};
+use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
 
 /// The one sidecar a fresh store creates. Deliberately not a `task-*.json` name,
 /// so the loader can never mistake custody state for a record.
 const LEASE: &str = "store.lease";
-const RECORD_VERSION: u32 = 1;
 const RECORD_MODE: u32 = 0o600;
 const STORE_MODE: u32 = 0o700;
 /// Attempts to find an unused temporary name before giving up, mirroring the
@@ -35,7 +34,7 @@ const STORE_MODE: u32 = 0o700;
 const TEMP_ATTEMPTS: u64 = 8;
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(super) enum StoreError {
+pub(crate) enum StoreError {
     #[error("task store unavailable")]
     Unavailable,
     #[error("unsafe task store")]
@@ -63,11 +62,11 @@ pub(super) enum StoreError {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct StoreLimits {
-    pub(super) records: usize,
-    pub(super) per_principal: usize,
-    pub(super) record_bytes: usize,
-    pub(super) logical_bytes: usize,
+pub struct StoreLimits {
+    pub(crate) records: usize,
+    pub(crate) per_principal: usize,
+    pub(crate) record_bytes: usize,
+    pub(crate) logical_bytes: usize,
 }
 
 impl Default for StoreLimits {
@@ -122,7 +121,7 @@ struct Shared {
 }
 
 #[derive(Clone)]
-pub(super) struct TaskStore(Arc<Shared>);
+pub(crate) struct TaskStore(Arc<Shared>);
 
 impl TaskStore {
     pub(super) async fn open(path: &Path, limits: StoreLimits) -> Result<Self, StoreError> {
@@ -153,7 +152,7 @@ impl TaskStore {
             .map_err(|_| StoreError::Storage)?
     }
 
-    pub(super) fn get(&self, owner: &str, id: &str) -> Result<CommittedTask, StoreError> {
+    pub(crate) fn get(&self, owner: &str, id: &str) -> Result<CommittedTask, StoreError> {
         let state = self.0.state();
         if !state.ready {
             return Err(StoreError::Unavailable);
@@ -165,7 +164,7 @@ impl TaskStore {
         })
     }
 
-    pub(super) async fn transition(
+    pub(crate) async fn transition(
         &self,
         owner: &str,
         id: &str,
@@ -177,6 +176,24 @@ impl TaskStore {
         let (owner, id) = (owner.to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || {
             shared.transition_blocking(&owner, &id, revision, event, at)
+        })
+        .await
+        .map_err(|_| StoreError::Storage)?
+    }
+
+    /// Durably set the dispatch marker at `expected_revision`. The public
+    /// revision, model and TTL are unchanged; a failed write does not claim
+    /// dispatch. Terminal records and moved revisions refuse without writing.
+    pub(crate) async fn mark_dispatched(
+        &self,
+        owner: &str,
+        id: &str,
+        expected_revision: u64,
+    ) -> Result<(), StoreError> {
+        let shared = Arc::clone(&self.0);
+        let (owner, id) = (owner.to_owned(), id.to_owned());
+        tokio::task::spawn_blocking(move || {
+            shared.mark_dispatched_blocking(&owner, &id, expected_revision)
         })
         .await
         .map_err(|_| StoreError::Storage)?
@@ -283,6 +300,40 @@ impl Shared {
         }
         self.commit(&record_name(task.id()), &bytes)?;
         Ok(self.publish(task, record))
+    }
+
+    fn mark_dispatched_blocking(
+        &self,
+        owner: &str,
+        id: &str,
+        expected_revision: u64,
+    ) -> Result<(), StoreError> {
+        let _order = self.order();
+        let (task, mut record) = {
+            let state = self.state();
+            if !state.ready {
+                return Err(StoreError::Unavailable);
+            }
+            let entry = owned(&state, owner, id)?;
+            if entry.record.revision != expected_revision {
+                return Err(StoreError::RevisionConflict);
+            }
+            if matches!(
+                entry.task.status(),
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+            ) {
+                return Err(StoreError::InvalidTransition);
+            }
+            (entry.task.clone(), entry.record.clone())
+        };
+        record.dispatched = true;
+        let bytes = serialize(&record)?;
+        if bytes.len() > self.limits.record_bytes {
+            return Err(StoreError::Capacity);
+        }
+        self.commit(&record_name(task.id()), &bytes)?;
+        self.publish(task, record);
+        Ok(())
     }
 
     fn close_blocking(&self) {
@@ -508,7 +559,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<BTreeMap<String, Entry>, Stor
             tracing::warn!(%error, path = %path.display(), "task record does not parse");
             StoreError::CorruptRecord
         })?;
-        if record.version != RECORD_VERSION {
+        if !(1..=RECORD_VERSION).contains(&record.version) {
             tracing::warn!(path = %path.display(), version = record.version, "unsupported task record version");
             return Err(StoreError::CorruptRecord);
         }

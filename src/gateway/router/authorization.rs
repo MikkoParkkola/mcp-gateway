@@ -277,7 +277,7 @@ pub(super) fn refusal_principal(
 /// through the caller context, so nothing here is ever stored — which is what
 /// keeps `AppState` (owner of `meta_mcp`) out of `MetaMcp` and avoids a
 /// reference cycle.
-pub(super) struct RouterAuthorizer<'a> {
+pub(crate) struct RouterAuthorizer<'a> {
     pub(super) state: &'a AppState,
     pub(super) client: Option<&'a AuthenticatedClient>,
     pub(super) oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
@@ -310,5 +310,40 @@ impl ToolAuthorizer for RouterAuthorizer<'_> {
 
     fn caller_name(&self) -> Option<&str> {
         self.principal.as_deref()
+    }
+}
+
+/// Owned twin of [`RouterAuthorizer`]: captured on the request thread so a
+/// background worker can rebuild the identical borrowed authorizer after the
+/// request future is gone.
+pub(crate) struct OwnedRouterAuthorizer {
+    client: Option<AuthenticatedClient>,
+    oauth_agent_identity: Option<OAuthAgentIdentity>,
+    cert_identity: Option<CertIdentity>,
+    principal: Option<String>,
+}
+
+impl OwnedRouterAuthorizer {
+    pub(crate) fn capture(
+        client: Option<&AuthenticatedClient>,
+        oauth: Option<&OAuthAgentIdentity>,
+        cert: Option<&CertIdentity>,
+    ) -> Self {
+        Self {
+            client: client.cloned(),
+            oauth_agent_identity: oauth.cloned(),
+            cert_identity: cert.cloned(),
+            principal: refusal_principal(client, oauth, cert),
+        }
+    }
+
+    pub(crate) fn borrow<'a>(&'a self, state: &'a AppState) -> RouterAuthorizer<'a> {
+        RouterAuthorizer {
+            state,
+            client: self.client.as_ref(),
+            oauth_agent_identity: self.oauth_agent_identity.as_ref(),
+            cert_identity: self.cert_identity.as_ref(),
+            principal: self.principal.clone(),
+        }
     }
 }

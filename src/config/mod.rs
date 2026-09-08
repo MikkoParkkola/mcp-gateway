@@ -34,12 +34,13 @@ pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvF
 pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
     CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
-    CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, ErrorBudgetSection,
-    FailsafeConfig, HealthCheckConfig, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
-    KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
-    PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
-    RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
-    StreamingConfig, ToolContractConfig, WebhookConfig,
+    CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS,
+    ErrorBudgetSection, FailsafeConfig, HealthCheckConfig, IdentityGrantsConfig, KeyServerConfig,
+    KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig,
+    PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig,
+    ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig,
+    RuntimeProfileConfig, SecurityConfig, StreamingConfig, TasksConfig, ToolContractConfig,
+    WebhookConfig,
 };
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -108,6 +109,9 @@ pub struct Config {
     #[cfg(feature = "cost-governance")]
     #[serde(default)]
     pub cost_governance: crate::cost_accounting::config::CostGovernanceConfig,
+    /// Durable tasks extension: store directory, worker cap, record limits.
+    #[serde(default)]
+    pub tasks: TasksConfig,
 }
 
 fn default_routing_profile() -> String {
@@ -734,6 +738,7 @@ impl Config {
         self.validate_agent_key_material(overlay)?;
         self.key_server.validate()?;
         self.error_budget.validate()?;
+        self.tasks.validate()?;
         Ok(())
     }
 

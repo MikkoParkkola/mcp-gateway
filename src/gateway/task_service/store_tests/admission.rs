@@ -21,10 +21,10 @@ use serde_json::{Value, json};
 use super::super::record::PreparedTask;
 use super::super::store::{CommitHook, CommitStage, StoreError, TaskStore};
 use super::support::*;
-use crate::gateway::task_service::model::TaskTransition;
 use crate::idempotency::admission::{
     ExecutionAdmission, Mode, Request, TaskAdmission, TaskBinding,
 };
+use crate::protocol::tasks::TaskTransition;
 
 /// Owned fixture values: a `Request` borrows these, so an inline `json!` would
 /// borrow a temporary that dies at the end of the statement (E0515).

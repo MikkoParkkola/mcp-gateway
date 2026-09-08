@@ -38,6 +38,7 @@ fn allow_all_ctx_named<'a>(
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
+        task: None,
     }
 }
 
@@ -58,6 +59,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
+        task: None,
     }
 }
 
@@ -748,6 +750,7 @@ providers:
             Some("session-1"),
             &{
                 crate::gateway::meta_mcp::MetaMcpCallerContext {
+                    task: None,
                     authorizer: &ALLOW_ALL,
                     api_key_name: Some("shared-api-key"),
                     agent_id: Some("agent-1"),
@@ -3391,6 +3394,7 @@ fn allow_all_ctx_declaring(
         input_capabilities: declared,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: ConfirmationChannel::Unavailable,
+        task: None,
     }
 }
 

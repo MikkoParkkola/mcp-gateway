@@ -57,4 +57,5 @@ pub mod test_helpers {
     pub use super::meta_mcp::prune_constant_signals;
     pub use super::meta_mcp::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
     pub use super::router::{AppState, create_router};
+    pub use super::task_service::{StoreLimits, TaskExecutor, TaskService, open_runtime};
 }

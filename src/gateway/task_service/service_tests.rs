@@ -31,11 +31,14 @@ use std::sync::{Arc, LazyLock};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use super::service::{ServiceError, TaskService};
+use super::service::{CreateOutcome, ServiceError, TaskService};
 use super::store::StoreLimits;
-use crate::gateway::task_service::model::{Task, TaskOptions, TaskStatus};
 use crate::idempotency::admission::{ExecutionAdmission, Mode, Request};
+use crate::protocol::tasks::{Task, TaskOptions, TaskStatus};
+
+mod adapter_facade;
 
 static OPERATION: LazyLock<Value> =
     LazyLock::new(|| json!({"backend": "orders", "tool": "create"}));
@@ -79,6 +82,12 @@ fn request<'a>(principal: &'a str, key: &'a str) -> Request<'a> {
     }
 }
 
+/// Existing rows do not exercise worker saturation; each call gets its own permit.
+fn allow_worker() -> impl FnOnce() -> Option<OwnedSemaphorePermit> + Send {
+    let workers = Arc::new(Semaphore::new(1));
+    move || workers.try_acquire_owned().ok()
+}
+
 /// Numeric lifetime on the public wire. Equality of two missing fields is not
 /// an oracle: the fixture plants `Some` values and the assertion demands them.
 fn lifetime(task: &Task) -> (u64, u64) {
@@ -117,10 +126,14 @@ async fn service_01_a_created_task_resolves_immediately_for_its_owner() {
     let task = task();
     assert_fixture_lifetime(&task);
 
-    let created = service
-        .create(request(ALICE, "k-1"), &task, BACKEND)
+    let created = match service
+        .create(request(ALICE, "k-1"), &task, BACKEND, allow_worker())
         .await
-        .expect("a fresh key creates a task");
+        .expect("a fresh key creates a task")
+    {
+        CreateOutcome::Created { task, slot: _ } => task,
+        _ => panic!("a fresh key must be Created"),
+    };
 
     assert_eq!(created.task.id(), task.id());
     assert_eq!(created.revision, 1);
@@ -142,10 +155,13 @@ async fn service_02_another_principal_cannot_tell_the_task_apart_from_absence() 
     let dir = tempfile::tempdir().unwrap();
     let service = service(dir.path()).await;
     let task = task();
-    service
-        .create(request(ALICE, "k-1"), &task, BACKEND)
-        .await
-        .unwrap();
+    assert!(matches!(
+        service
+            .create(request(ALICE, "k-1"), &task, BACKEND, allow_worker())
+            .await
+            .unwrap(),
+        CreateOutcome::Created { .. }
+    ));
 
     let foreign = service.get(MALLORY, task.id()).unwrap_err();
     let absent_to_foreign = service.get(MALLORY, ABSENT_ID).unwrap_err();
@@ -181,17 +197,25 @@ async fn service_03_an_identical_retry_recovers_the_one_task() {
     );
     assert_ne!(first.tool(), second.tool());
 
-    let created = service
-        .create(request(ALICE, "k-1"), &first, BACKEND)
+    let created = match service
+        .create(request(ALICE, "k-1"), &first, BACKEND, allow_worker())
         .await
-        .unwrap();
+        .unwrap()
+    {
+        CreateOutcome::Created { task, slot: _ } => task,
+        _ => panic!("a fresh key must be Created"),
+    };
 
     // A DIFFERENT task value under the same key: the service must return the
     // task the key already owns, not create this one.
-    let retried = service
-        .create(request(ALICE, "k-1"), &second, BACKEND)
+    let retried = match service
+        .create(request(ALICE, "k-1"), &second, BACKEND, allow_worker())
         .await
-        .expect("an identical retry is not a refusal");
+        .expect("an identical retry is not a refusal")
+    {
+        CreateOutcome::Existing(committed) => committed,
+        _ => panic!("an identical retry must recover Existing"),
+    };
 
     assert_eq!(retried.task.id(), created.task.id());
     assert_eq!(retried.task.id(), first.id());
@@ -216,10 +240,13 @@ async fn service_04_a_cancel_is_terminal_and_visible_to_its_owner() {
     let dir = tempfile::tempdir().unwrap();
     let service = service(dir.path()).await;
     let task = task();
-    service
-        .create(request(ALICE, "k-1"), &task, BACKEND)
-        .await
-        .unwrap();
+    assert!(matches!(
+        service
+            .create(request(ALICE, "k-1"), &task, BACKEND, allow_worker())
+            .await
+            .unwrap(),
+        CreateOutcome::Created { .. }
+    ));
 
     let cancelled = service
         .cancel(ALICE, task.id(), 1, at(1))
@@ -271,10 +298,13 @@ async fn service_05_an_update_acknowledges_without_moving_ttl_or_poll_interval()
     let service = service(dir.path()).await;
     let task = task();
     assert_fixture_lifetime(&task);
-    service
-        .create(request(ALICE, "k-1"), &task, BACKEND)
-        .await
-        .unwrap();
+    assert!(matches!(
+        service
+            .create(request(ALICE, "k-1"), &task, BACKEND, allow_worker())
+            .await
+            .unwrap(),
+        CreateOutcome::Created { .. }
+    ));
     let before = service.get(ALICE, task.id()).unwrap();
     assert_fixture_lifetime(&before.task);
     let before_life = lifetime(&before.task);
@@ -311,10 +341,13 @@ async fn service_06_a_foreign_update_is_refused_as_absence() {
     let dir = tempfile::tempdir().unwrap();
     let service = service(dir.path()).await;
     let task = task();
-    service
-        .create(request(ALICE, "k-1"), &task, BACKEND)
-        .await
-        .unwrap();
+    assert!(matches!(
+        service
+            .create(request(ALICE, "k-1"), &task, BACKEND, allow_worker())
+            .await
+            .unwrap(),
+        CreateOutcome::Created { .. }
+    ));
 
     let refused = service
         .update(MALLORY, task.id(), 1, json!({"status": "working"}))
@@ -338,5 +371,26 @@ async fn service_06_a_foreign_update_is_refused_as_absence() {
     assert_eq!(owned.revision, 1);
     assert_eq!(owned.task.status(), TaskStatus::Working);
     assert_fixture_lifetime(&owned.task);
+    service.close().await.unwrap();
+}
+
+/// Port of `protocol::task_store::owns_all_is_all_or_nothing`: a missing peer
+/// id refuses the whole set, so a subscription cannot learn which ids exist.
+#[tokio::test]
+async fn service_07_owns_all_is_all_or_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = service(dir.path()).await;
+    let task = task();
+    assert!(matches!(
+        service
+            .create(request(ALICE, "k-1"), &task, BACKEND, allow_worker())
+            .await
+            .unwrap(),
+        CreateOutcome::Created { .. }
+    ));
+    assert!(service.owns_all(ALICE, [task.id()]));
+    assert!(!service.owns_all(ALICE, [task.id(), ABSENT_ID]));
+    assert!(!service.owns_all(MALLORY, [task.id()]));
+    assert!(service.owns_all(ALICE, std::iter::empty::<&str>()));
     service.close().await.unwrap();
 }

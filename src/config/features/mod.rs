@@ -16,6 +16,7 @@ mod playbooks;
 mod runtime;
 mod security;
 mod streaming;
+mod tasks;
 mod webhooks;
 
 pub use auth::{AgentAuthConfig, AgentDefinitionConfig, ApiKeyConfig, AuthConfig};
@@ -38,4 +39,5 @@ pub use security::{
     ToolContractConfig,
 };
 pub use streaming::StreamingConfig;
+pub use tasks::{DEFAULT_MAX_WORKERS, TasksConfig};
 pub use webhooks::WebhookConfig;
