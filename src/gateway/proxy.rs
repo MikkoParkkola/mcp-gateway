@@ -31,6 +31,7 @@ use uuid::Uuid;
 
 use crate::protocol::{ElicitationCreateParams, Root, SamplingCreateMessageParams};
 
+use super::input_bridge::{ClientChannel, DeliveryError};
 use super::streaming::{NotificationMultiplexer, TaggedNotification};
 
 // ============================================================================
@@ -504,6 +505,59 @@ impl ProxyManager {
 // ============================================================================
 // Tests
 // ============================================================================
+
+/// The gateway's own client connection, as the input bridge's channel.
+///
+/// The bridge owns both the id and the deadline: `id` is its pending id
+/// (`input_bridge.rs:63`), and every call already runs inside its outer
+/// `tokio::time::timeout` (`input_bridge.rs:451`), so this adds neither. What
+/// it must add is the trait's cancellation contract, and it meets it with the
+/// same [`PendingSampleGuard`] the three `forward_*_with_response` methods
+/// hold: when that outer timeout drops this future part-way, no arm below
+/// runs, and dropping the guard is the only cleanup left.
+///
+/// Reusing `ProxyManager` rather than standing up a second channel keeps one
+/// pending map. A separate one would have to be reconciled with the POST-back
+/// path in `router/handlers.rs:754`, which resolves against this one.
+#[async_trait::async_trait]
+impl ClientChannel for ProxyManager {
+    async fn send_request(
+        &self,
+        session_id: &str,
+        id: &str,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, DeliveryError> {
+        let rx = self.register_pending(id.to_string(), session_id);
+        // Held across the await, for the reason on `PendingSampleGuard`.
+        let _cleanup = PendingSampleGuard { proxy: self, id };
+
+        let mut data = json!({ "jsonrpc": "2.0", "id": id, "method": method });
+        // Absent params stays absent: an empty object is a params member the
+        // bridge did not send, and the client cannot tell the two apart.
+        if let Some(params) = params {
+            data["params"] = params;
+        }
+
+        let notification = TaggedNotification {
+            source: "gateway".to_string(),
+            event_type: "message".to_string(),
+            data,
+            event_id: Some(self.multiplexer.next_event_id()),
+        };
+
+        // To the originating session only, for the same reason as sampling and
+        // elicitation: a prompt another client can answer is not a prompt.
+        if !self.multiplexer.send_to_session(session_id, notification) {
+            return Err(DeliveryError::NoSession);
+        }
+        debug!(%id, %session_id, %method, "Sent bridged request to the originating session");
+
+        // A dropped sender means the entry went away without an answer, which
+        // is what the bridge's own timeout arm means by `TimedOut`.
+        rx.await.map_err(|_| DeliveryError::TimedOut)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1168,6 +1222,87 @@ mod tests {
             proxy.pending_sampling.read().len(),
             0,
             "an externally timed-out elicitation call must not strand its pending entry"
+        );
+    }
+
+    /// MIK-7212 WIRE-11 (production `ClientChannel`): the bridge's own send is
+    /// held to the same cancellation contract as the proxy's three forwards.
+    ///
+    /// The bridge wraps every `send_request` in an outer timeout
+    /// (`input_bridge.rs:451`) and abandons the future on expiry, so an
+    /// implementation that registers a pending entry before awaiting and
+    /// releases it only on the success or error path leaks one per expired
+    /// prompt. This drives the implementor through the trait, not through
+    /// `forward_elicitation_with_response`, because it is the implementor that
+    /// chooses whether to hold a guard.
+    #[tokio::test]
+    async fn mik_7212_wire_11_cancelled_channel_send_does_not_strand_pending_entry() {
+        use crate::gateway::input_bridge::ClientChannel;
+
+        let mux = make_multiplexer();
+        let (session, mut rx_session) = mux.get_or_create_session(Some("sess-channel-cancel"));
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+        let channel: &dyn ClientChannel = &proxy;
+
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(50),
+            channel.send_request(
+                &session,
+                "bridge-elicit-1",
+                "elicitation/create",
+                Some(json!({"message": "which one?", "requestedSchema": {"type": "object"}})),
+            ),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "the outer timeout must fire first; nothing ever answers this prompt"
+        );
+
+        let delivered = rx_session
+            .try_recv()
+            .expect("the request must have reached the session");
+        assert_eq!(delivered.data["method"], "elicitation/create");
+        assert_eq!(
+            delivered.data["id"], "bridge-elicit-1",
+            "the bridge's own id must go on the wire, not a freshly minted one"
+        );
+
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "a cancelled bridge send must not strand its pending entry"
+        );
+    }
+
+    /// MIK-7212 WIRE-11 (undeliverable): no session to reach is `NoSession`,
+    /// and it leaves nothing behind either.
+    #[tokio::test]
+    async fn mik_7212_wire_11_undeliverable_channel_send_leaves_no_pending_entry() {
+        use crate::gateway::input_bridge::{ClientChannel, DeliveryError};
+
+        let mux = make_multiplexer();
+        let proxy = ProxyManager::new(Arc::clone(&mux));
+        let channel: &dyn ClientChannel = &proxy;
+
+        let err = channel
+            .send_request(
+                "sess-nobody-home",
+                "bridge-elicit-2",
+                "elicitation/create",
+                None,
+            )
+            .await
+            .expect_err("there is no such session to deliver to");
+
+        assert!(
+            matches!(err, DeliveryError::NoSession),
+            "an undeliverable prompt is NoSession, not a timeout: {err:?}"
+        );
+        assert_eq!(
+            proxy.pending_sampling.read().len(),
+            0,
+            "an undeliverable bridge send must not strand its pending entry"
         );
     }
 }
