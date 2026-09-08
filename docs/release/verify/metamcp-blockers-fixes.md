@@ -15,7 +15,7 @@ explicitly.
 | BLOCK-1 | pending | |
 | BLOCK-2 | pending | |
 | BLOCK-3 | fixed, uncommittable (shared file) | |
-| BLOCK-4 | fixed | `7abb3514` |
+| BLOCK-4 | fixed, independently verified SOUND | `7abb3514` |
 | BLOCK-5 | pending | |
 
 ---
@@ -92,3 +92,64 @@ and destined for `tests/mik_7214_header_9_acs.rs`. Committing the file would
 publish their in-flight work under this session's authorisation. The repair
 sits in the worktree, so whichever session commits that file next carries it
 and the gate goes green either way.
+
+## BLOCK-4 — independent verification
+
+A second session re-checked the commit against source rather than against the
+fixing session's report. Verdict: **SOUND**. Four questions, all answered from
+the tree.
+
+The defect is real and reaches production by two routes, not one. The error
+path releases at `src/gateway/meta_mcp/invoke.rs:1481` and still stores the
+structured error at `:1836`; the sweep route is live independently, since
+`evict_expired` (`src/idempotency.rs:385`) runs from `spawn_cleanup_task`,
+wired at `src/gateway/meta_mcp/mod.rs:691`. Either way the entry is gone by
+the time the result is written, `Entry::new(Completed, "")` is stored, and
+`Entry::matches` (`:150`) treats an empty fingerprint as matching everything.
+
+**The fixing session predicted the wrong assertion, and the verification is
+better for having said so.** Its recorded RED came from a superseded revision
+of the test, and the fingerprint-mismatch message check it named sits
+downstream of an `Err` — on the defect path `enforce` returns
+`Ok(CachedResult)`, so that assertion is unreachable by construction. The
+load-bearing assertion is the `let Err(err) = outcome else` panic at `:1065`.
+
+Because "failed, but not on the predicted assertion" is exactly how a bad
+falsifier probe hides, the verifier ran a second probe with a diagnostic test
+against the same pre-fix code, and named what the second request actually
+received:
+
+```
+LEAK: fp-B served A's body: {"isError":true,"who":"A"}
+```
+
+Not a re-admission and not a different error — a verbatim cross-request result
+leak. Restore was verified by re-running the test, and `git diff --stat HEAD`
+left empty; no `git status`, no `git checkout`.
+
+Regressions: `cargo test --lib idempotency` 28 passed. The reorder of the
+`is_final` check is exercised only by integration binaries `--lib` does not
+build, so those were run too — `idem_p1_p3_p6_acs` 5, `mik_7216_mrtr_10_acs`
+7, `mik_7272_result_2` 2, all passing.
+
+### Residual — the unbound entry point is the public one
+
+Confirmed at source, not taken on the verifier's word:
+
+- `pub fn mark_completed` — `src/idempotency.rs:347`
+- `pub(crate) fn mark_completed_bound` — `src/idempotency.rs:368`
+- `pub mod idempotency;` — `src/lib.rs:53`
+- `matches` still treats `""` as a wildcard — `src/idempotency.rs:150`
+
+The fix removed the internal path to the unbound primitive; it did not remove
+the primitive. Every in-tree production caller now goes through the bound
+form, so BLOCK-4 is closed for this binary. But the module is published API,
+and the only completion entry point an external consumer of the crate can
+reach is the unbound one — calling it mints exactly the wildcard entry this
+blocker was about.
+
+That is an API-surface question for 4.0.0 rather than a defect in this commit,
+and it is recorded here rather than filed: the decision is whether
+`mark_completed_bound` becomes public, `mark_completed` takes a fingerprint as
+a breaking change, or the wildcard in `matches` goes away entirely. All three
+are release-scope calls for the operator.
