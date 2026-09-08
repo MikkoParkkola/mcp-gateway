@@ -573,8 +573,9 @@ specified and not implemented — `<tag>.failing-checks.txt`, naming and countin
 failed in a rep whose checks rate is below 100%.
 
 ```
-run-reps.sh   sha256 817e23fdb67856f3c92f5dc89c922265978ba9901387af38b9654224819ca491
-              (supersedes b65e2331…, the Amendment 3 freeze)
+run-reps.sh   sha256 003571d72e8af744260fa57641bc4ec47735764b519e7729994cdce839f97c1c
+              (supersedes b65e2331…, the Amendment 3 freeze, and the intermediate
+               817e23fd… corrected by A5.5 below)
 eval-nfr1.sh  sha256 7b3d6225a34d0aab8229b417edb686ead80ffbd109f2f7a1d460831fe4c49d09
               UNCHANGED, re-hashed after the patch
 ```
@@ -600,9 +601,49 @@ is **part of what the scored run measures** and is not touched. It is recorded h
 reader comparing the two arms' logs will notice the asymmetry and should not have to re-derive
 its cause.
 
+### A5.5 — the first re-freeze put a hole in the thing it was freezing
+
+The patched runner briefly read the workload from the environment (`SCENARIO=${SCENARIO:-load}`)
+instead of the hardcoded `load` the frozen runner had. That is worse than it looks: `SCENARIO=smoke`
+would then produce a full results package at a 1-VU, ten-second workload while `run-reps.sh` hashed
+**identically** — and the hash is the entire reason a frozen runner is worth anything. A freeze that
+a caller can walk around is not a freeze.
+
+Re-pinned to `load` in the container invocation, and the sha256 in A5.3 is the post-correction value.
+The intermediate `817e23fd…` is recorded here rather than deleted, because a hash that appeared in a
+committed amendment and then changed is exactly the kind of thing a later reader must be able to
+account for. The smoke rep in A5.3 was run before this correction, via that variable; it produced no
+measurement, only the plumbing verification it is cited for.
+
+### A5.6 — the downgrade warning on arm A is not drift, and the shared data directory does not move
+
+Every arm-A gateway log opens with `Downgrade detected: running an older binary against a newer data
+directory installed=4.0.0 binary=3.5.0`. Both arms share one data directory and the reps alternate,
+so the question is real: if the 4.0.0 arm mutated that directory, arm A would stop measuring 3.5.0
+as shipped and `A0` would stop being comparable to `A1..A3`.
+
+It does not. Checked three ways, against the product source and the artifacts already on disk:
+
+- `check_upgrade` at `src/commands/upgrade.rs:501-508` takes the `Ordering::Greater` branch — a
+  single `tracing::warn!` and nothing else. No stamp write, no migration. The equal case (candidate
+  4.0.0 against a 4.0.0 stamp) is an empty arm.
+- the warning appears in **all four** arm-A logs, not only the first. A migration that ran once and
+  silenced itself would show as that asymmetry; there is none.
+- the four `health-A*.json` are byte-identical to each other, as are the four `health-B*.json`.
+
+Recorded as an observation, not a defect, and not a fifth harness fix. Had any of the three come
+back the other way, the runner would have needed a per-arm data directory before the scored run.
+
 ### What Amendment 5 does not change
 
-No threshold, arm, workload shape, metric or rep schedule. One check expectation was widened to
+No threshold, arm, workload shape, metric or rep schedule. One tension with Amendment 3 is named
+rather than left for a reader to raise: A3 closed by saying one way for the run to fail was added,
+“the only direction an amendment may move a gate in”, and A5.2's D3 repair moves a gate the other
+way — a check that was failing now passes. What makes that legal is not the direction but the
+CHECKABLE SOURCE: the widened expectation is verified against `dashboard_handler`'s own admin-only
+rule and the sibling `/ui/api/status` check that already admits 403, never against this run's output.
+An amendment that loosened a gate to fit a number would have no such source, and that is the
+distinction A3's sentence was reaching for. One check expectation was widened to
 match documented product behaviour, four recording obligations that were already specified are
 now actually implemented, and one broken stream split into three. **No number from the rehearsal
 is carried forward into this contract, the criteria-status row, or any release document.** The
