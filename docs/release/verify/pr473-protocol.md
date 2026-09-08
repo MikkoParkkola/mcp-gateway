@@ -246,9 +246,12 @@ A client that opts into the tasks extension therefore receives a handle for work
 that was never started and polls it until it gives up. The tool does not run at
 all — this is not a latency or ordering defect.
 
-Severity: HIGH, correctness. Worth treating as a release blocker for anyone who
-advertises the extension; it is listed second to A1 only because A1 also denies
-service to callers who never opted in.
+Severity: HIGH, correctness. The extension is advertised unconditionally to a
+2026 peer by `gateway_declares` (`src/protocol/extensions.rs:71-75`), and the
+disclosure above it (`:64-69`) speaks only to the task object's shape —
+`input_required` and the timestamps, with MIK-7311 named — never to a task that
+does not execute. Recommended as a release blocker; it is ordered after A1
+because A1 also denies service to callers who never opted in.
 
 ### B2 — duplicate of CLAIM-1 — CONFIRMED
 
@@ -339,7 +342,10 @@ Recommended as 4.0.0 blockers, in order:
    and `:1939` — CLAIM-1.
 2. `src/gateway/meta_mcp/invoke.rs:405-412` with
    `src/protocol/continuation.rs:891` — A1, the leaked in-flight slot.
-
-`src/gateway/router/handlers.rs:1194-1206` (B1) is a third candidate: it is a
-HIGH-severity correctness defect, bounded to clients that opt into the tasks
-extension the gateway already documents as incomplete.
+3. `src/gateway/router/handlers.rs:1194-1206` — B1, a task-augmented call that
+   returns a resolvable handle and never dispatches the tool. The extension is
+   advertised through `gateway_declares` (`src/protocol/extensions.rs:71-75`),
+   and the disclosure at `:64-69` covers only the shape of the task object —
+   `input_required` and the timestamp fields, with MIK-7311 to complete the
+   model. Nothing there states that a task never executes, so this is an
+   undisclosed correctness defect rather than a documented gap.
