@@ -37,6 +37,36 @@ pub(super) fn task_principal(
         .unwrap_or_else(|| owner_key.to_owned())
 }
 
+/// The owner a gateway with authentication switched off records tasks under.
+///
+/// A gateway-internal constant, never anything the request carried: an owner
+/// derived from request data would let a caller name its own bucket. It cannot
+/// collide with a verified identity (`stable_actor_id` always prefixes `oidc:`)
+/// nor with a session key (`credential:`), and it is non-empty because the
+/// admission request refuses an empty principal.
+pub(super) const AUTH_DISABLED_TASK_OWNER: &str = "local:auth-disabled:tasks:v1";
+
+/// The ONE owner every task-touching arm of a request uses.
+///
+/// Resolved once per request and then reused for create, get, update, cancel,
+/// idempotent replay and subscription ownership. Two renderings of one caller
+/// is how a task is created under one string and looked up under another.
+pub(super) fn route_task_owner(
+    state: &AppState,
+    verified_identity: Option<&VerifiedIdentity>,
+    owner_key: &str,
+) -> String {
+    match verified_identity {
+        Some(identity) => identity.stable_actor_id(),
+        // No identity exists to be kept apart when authentication is off, and
+        // pooling those callers is the operator's own configuration choice.
+        // With authentication ON the session key decides, and an empty one is
+        // refused upstream rather than pooled here.
+        None if !state.auth_config.enabled => AUTH_DISABLED_TASK_OWNER.to_owned(),
+        None => task_principal(None, owner_key),
+    }
+}
+
 /// `Task::wire()` plus the envelope discriminator the arm supplies.
 pub(super) fn task_envelope(task: &Task, result_type: &str) -> Value {
     let mut value = serde_json::to_value(task.wire()).unwrap_or(Value::Null);
@@ -63,6 +93,7 @@ pub(super) fn task_intent_for_call(
     is_modern: bool,
     retry: &RetryFields,
     verified_identity: Option<&VerifiedIdentity>,
+    owner: &str,
     client: Option<&AuthenticatedClient>,
     oauth_agent_identity: Option<&OAuthAgentIdentity>,
     cert_identity: Option<&CertIdentity>,
@@ -82,13 +113,18 @@ pub(super) fn task_intent_for_call(
     if !is_task_dispatchable(&state.meta_mcp, tool_name) {
         return Ok(None);
     }
-    let Some(identity) = verified_identity else {
+    // A gateway that HAS identities must not create a task for a caller that
+    // presented none: the record would answer to whatever key the unattributed
+    // path resolves, and every other unattributed caller reads it. With
+    // authentication off there are no identities to confuse, and the owner
+    // resolved for this request is the gateway's own constant.
+    if state.auth_config.enabled && verified_identity.is_none() {
         return Err(JsonRpcResponse::error(
             Some(id),
             -32600,
             "task creation requires a verified caller identity",
         ));
-    };
+    }
     let Some(key) = retry.idempotency_key.as_deref() else {
         return Err(JsonRpcResponse::error(
             Some(id),
@@ -110,16 +146,20 @@ pub(super) fn task_intent_for_call(
             api_key_name.map(str::to_owned),
             agent_id.map(str::to_owned),
             grant_subject,
-            Some(identity.clone()),
+            // No identity is invented for the auth-disabled caller: the owner
+            // is a routing decision, and a fake VerifiedIdentity here would
+            // reach every control that keys on a *verified* caller.
+            verified_identity.cloned(),
             is_admin,
             input_capabilities,
             session_id.filter(|id| !id.is_empty()).map(str::to_owned),
         ),
         // One builder, shared with the confirmation gate's read-only committed
-        // lookup. Two renderings of one identity is how an accepted retry's
-        // replay misses the task it already owns and starts a second one.
+        // lookup, and the SAME owner string the read arms use. Two renderings
+        // of one caller is how an accepted retry's replay misses the task it
+        // already owns and starts a second one.
         request: crate::gateway::meta_mcp::task_admission_request(
-            identity.stable_actor_id(),
+            owner.to_owned(),
             key.to_owned(),
             tool_name,
             arguments,

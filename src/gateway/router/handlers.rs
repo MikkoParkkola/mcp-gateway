@@ -963,7 +963,10 @@ pub(super) async fn meta_mcp_handler(
         );
     }
 
-    let owner = tasks::task_principal(
+    // Resolved ONCE, here, and reused by creation, retrieval, cancellation,
+    // idempotent replay and subscription ownership below.
+    let owner = tasks::route_task_owner(
+        &state,
         verified_identity.as_ref(),
         &session_owner_key(client.as_ref()),
     );
@@ -1406,6 +1409,7 @@ pub(super) async fn meta_mcp_handler(
                     is_modern,
                     &retry,
                     verified_identity.as_ref(),
+                    &owner,
                     client.as_ref(),
                     oauth_agent_identity.as_ref(),
                     cert_identity.as_ref(),
