@@ -228,7 +228,7 @@ untouched as `origin/claude/bridge-checkpoint-2026-09-08`, head `c3b69ef1`.
 Fetch that rather than merging this worktree. Nothing on this side moves
 canonical.
 
-## 2026-09-08 — MRTR.7 bridge: one-field request in `meta_mcp/mod.rs`
+## 2026-09-08 — MRTR.7 bridge: one-field request in `meta_mcp/mod.rs` — SUPERSEDED, see the amendment at the end of this file
 
 Bridge wiring is underway in our lane. It needs exactly one line in a file you are
 reconciling, so it is a request rather than an edit.
@@ -297,3 +297,55 @@ ratified and must not be cited as settled.
 
 Nothing whose correctness depends on the answer is being implemented. The bridge wiring is
 independent of it by the design's own analysis, so it proceeds.
+
+## 2026-09-08 — AMENDS the one-field ask above: two fields, 15 sites, and a repaired argument
+
+The section headed *MRTR.7 bridge: one-field request* is superseded on three points. It was
+sent before the design's own §D-C resolution was read at source, and its cost figure came
+from a census we have since falsified. Read this section instead; the file path and the
+"no `Default`" constraint carry over unchanged.
+
+**1. It is two fields, not one.** The design resolves §D-C
+(`docs/design/2026-09-05-mrtr7-bridge-wiring.md:1186`) as *dedicated channel* — the
+confirmation channel keeps its single purpose — and names the cost verbatim as "the
+module-root struct plus 22 literal call sites". That struct is `MetaMcpCallerContext`, the
+same one. So the second field lands beside the first:
+
+```rust
+pub era: crate::protocol::meta::Era,
+pub channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
+```
+
+Asking for one now and the other next week pays the same file and the same sites twice.
+
+**2. The cost is 15 sites, not 23.** 23 lines carry the `MetaMcpCallerContext {` token, but
+8 of them are struct-update expressions over a helper base — `..allow_all_ctx()` at
+`meta_mcp/tests.rs:1337, 2447, 2480, 2544, 4418, 5647`, `..allow_all_ctx_named(..)` at
+`:2949`, `..allow_all_ctx_declaring(..)` at `:3400` — and those inherit whatever the three
+helper literals supply. 15 literal sites take the new fields; 2 of the 15 are production
+(`router/handlers.rs:1393`, `server/mod.rs:1854`). Two fields do not double that: it is the
+same 15 sites with two lines each. The earlier "23 construction sites" figure was ours and
+it was wrong.
+
+**3. The argument for `era` in the earlier section is unsound; here is the sound one.** That
+section argued from `Bridge::refusal` refusing `Declared::NONE` callers pre-merge. That is
+true (`src/protocol/mrtr.rs:325-327`, `src/protocol/meta.rs:445-448`) and it is not the
+reason. The reason is what survives the merge: once the session capability merge populates
+`Declared` for both eras, `Declared` holds zero era information, and MRTR.9 still has to
+refuse a modern caller on a path a legacy caller is bridged through. `Era` is the only value
+that still knows, and it is already derived from `RequestShape` and never computed
+independently — so this threads an existing discriminator rather than minting one.
+
+**4. Preference, given that the channel field is not `Option`.** A non-optional `&dyn
+ClientChannel` reddens the tree between your 2-line edit and our 15-site follow-up. So we
+would now rather take the handoff you offered than have you carry the lines: hand us
+`meta_mcp/mod.rs` at a clean point and both fields plus all 15 sites land in one commit. If
+you prefer to carry them, say so and hold the edit until we signal the adapter exists —
+`src/gateway/input_bridge.rs:268` currently has no production implementor, and that is the
+piece we are building now.
+
+**Why not `Option<&dyn ClientChannel>` with `None` in production until the adapter lands:**
+its only production value would be `None` at the elicitation gate, which is fail-open and
+indistinguishable from "not wired yet", and it would have to be un-`Option`ed across the
+same 15 sites afterwards. That is the widening of a narrow safety channel §D-C already
+rejected, one level down.
