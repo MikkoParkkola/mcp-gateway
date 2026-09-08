@@ -1253,7 +1253,11 @@ impl Gateway {
         // when webhook route construction does not depend on them, populate the
         // backend in the background so health/MCP endpoints bind promptly.
         let _capability_watcher: Option<CapabilityWatcher> = if self.config.capabilities.enabled {
-            let executor = Arc::new(CapabilityExecutor::new().with_env(Arc::clone(&self.env)));
+            let executor = Arc::new(
+                CapabilityExecutor::new()
+                    .with_env(Arc::clone(&self.env))
+                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+            );
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
                 executor,
@@ -1364,7 +1368,10 @@ impl Gateway {
         // mapping through it, so a reload takes effect without restart —
         // MIK-6702). Created unconditionally; without a config path it simply
         // never changes.
-        let live_config = Arc::new(LiveConfig::new(self.config.clone()));
+        let live_config = Arc::new(
+            LiveConfig::new(self.config.clone())
+                .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+        );
 
         // SIEM evidence-export background task (MIK-6703). None when disabled.
         let export_status = spawn_export_task(
@@ -2085,7 +2092,10 @@ impl Gateway {
         } = self.build_meta_mcp().await?;
         // Give stdio the same explicit reload context as HTTP.
         if let Some(ref path) = self.config_path {
-            let live_config = Arc::new(LiveConfig::new(self.config.clone()));
+            let live_config = Arc::new(
+                LiveConfig::new(self.config.clone())
+                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+            );
             let reload_ctx = Arc::new(
                 ReloadContext::new(
                     path.clone(),
@@ -2112,7 +2122,11 @@ impl Gateway {
             };
 
         if self.config.capabilities.enabled {
-            let executor = Arc::new(CapabilityExecutor::new().with_env(Arc::clone(&self.env)));
+            let executor = Arc::new(
+                CapabilityExecutor::new()
+                    .with_env(Arc::clone(&self.env))
+                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+            );
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,
                 executor,
@@ -2596,6 +2610,15 @@ impl Gateway {
                     "Malformed protocol metadata",
                 );
             }
+            // Verified evidence only: stdio echoes no header, so the session's
+            // negotiated revision is the whole reading. The body is not
+            // consulted — `params.protocolVersion` is not a `tools/call` field.
+            let protocol_revision_owned = crate::protocol::meta::cache_protocol_revision(
+                request_shape,
+                None,
+                crate::protocol_revision_telemetry::session_negotiated_revision(Some(session_id)),
+            )
+            .map(str::to_owned);
             // The canonical merge, still ahead of everything that reads the
             // arguments — signing, policy, nonce, admission — and now below
             // the two things that need the request whole: the retry fields
@@ -2623,6 +2646,7 @@ impl Gateway {
                 execution: None,
                 signing: None,
                 is_modern,
+                protocol_revision: protocol_revision_owned.as_deref(),
                 credential_principal: None,
                 authorizer: &stdio_authorizer,
                 // Stdio has no port and no network surface: the
@@ -3466,6 +3490,7 @@ mod tests {
                     execution: None,
                     credential_principal: None,
                     is_modern: false,
+                    protocol_revision: None,
                     authorizer: &authorizer,
                     api_key_name: None,
                     agent_id: None,

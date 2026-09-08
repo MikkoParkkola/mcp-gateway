@@ -57,6 +57,43 @@ pub(super) fn idempotency_key_for(
 /// `context` is forwarded, not consumed here: the routing profile, protocol
 /// revision and policy generation belong to the key the cache layer derives,
 /// so this passes them down rather than mixing a discriminator of its own.
+/// Who the response cache keys on, namespaced by the evidence it came from.
+///
+/// One tagged, length-prefixed namespace per source, so two different kinds of
+/// principal cannot collide by spelling: an identity-propagation
+/// `cache_binding`, else the verified OIDC actor, else the caller's own
+/// `GrantSubject` (authority + subject). The `GrantSubject` arm is what
+/// separates two callers on a deployment that derives identity from trusted
+/// headers, mTLS or an OAuth agent and runs with identity propagation off and
+/// no OIDC — the shipped default, where every caller previously keyed as
+/// `None` and shared one entry.
+///
+/// The binding is copied opaquely, never re-hashed and never trimmed: it is
+/// already the resolver's digest, and the same string is what the capability
+/// executor copies into the inner key.
+pub(super) fn caller_cache_principal(
+    cache_binding: Option<&str>,
+    verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
+) -> Option<String> {
+    if let Some(binding) = cache_binding {
+        return Some(format!("idp:{}:{binding}", binding.len()));
+    }
+    if let Some(actor) =
+        verified_identity.map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
+    {
+        return Some(format!("oidc:{}:{actor}", actor.len()));
+    }
+    let subject = grant_subject?;
+    Some(format!(
+        "grant:{}:{}:{}:{}",
+        subject.authority.len(),
+        subject.authority,
+        subject.subject.len(),
+        subject.subject
+    ))
+}
+
 pub(super) fn response_cache_key_for(
     server: &str,
     tool: &str,

@@ -17,6 +17,27 @@ pub struct CapabilityExecutionContext {
     /// and exposed on `127.0.0.1`. General capability execution must keep the
     /// standard SSRF deny list.
     pub allow_loopback_egress: bool,
+    /// Pre-authorization policy epoch snapshot from the invoke path.
+    ///
+    /// Copied, never reloaded from the shared counter. `None` on isolated
+    /// executor tests that do not attach an epoch.
+    pub policy_epoch: Option<u64>,
+    /// Classified protocol revision this request is served under.
+    ///
+    /// Same snapshot the outer response cache keys on. `None` is unknown:
+    /// an attached executor must not cache.
+    pub protocol_revision: Option<String>,
+    /// Routing profile name this request was admitted under.
+    ///
+    /// Same snapshot the outer response cache keys on. `None` on isolated
+    /// executor tests that do not attach a profile.
+    pub routing_profile: Option<String>,
+    /// Already-resolved outer identity `cache_binding`.
+    ///
+    /// Produced once by the account credential resolver (or identity
+    /// propagation) before dispatch. Copied, never re-resolved, never
+    /// re-hashed. `None` is the public/anonymous namespace.
+    pub cache_binding: Option<String>,
 }
 
 impl CapabilityExecutionContext {
@@ -26,6 +47,10 @@ impl CapabilityExecutionContext {
         Self {
             caller_identity: Some(caller_identity),
             allow_loopback_egress: false,
+            policy_epoch: None,
+            protocol_revision: None,
+            routing_profile: None,
+            cache_binding: None,
         }
     }
 

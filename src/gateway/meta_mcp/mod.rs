@@ -126,6 +126,12 @@ impl CallerIdentityHeaderTrust {
 pub struct MetaMcpCallerContext<'a> {
     /// Explicit request era, classified by the transport from reserved metadata.
     pub is_modern: bool,
+    /// Validated protocol revision this request is served under.
+    ///
+    /// Classifier output, never the duplicate-header sentinel. `None` skips
+    /// outer response-cache get/set and, on an attached executor, inner cache.
+    /// Distinct from `is_modern` and from any peer `era` field on this struct.
+    pub protocol_revision: Option<&'a str>,
     /// Stable validated credential principal; display names are never authority.
     pub credential_principal: Option<&'a str>,
     /// Outer execution owner; an inner step can mark dispatch but cannot settle it.

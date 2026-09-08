@@ -128,17 +128,9 @@ async fn call_capability_tool_with_identity(
     cap: &crate::capability::CapabilityBackend,
     tool: &str,
     arguments: Value,
-    caller_identity: Option<&GrantSubject>,
+    context: crate::capability::CapabilityExecutionContext,
 ) -> Result<crate::protocol::ToolsCallResult> {
-    cap.call_tool_with_context(
-        tool,
-        arguments,
-        crate::capability::CapabilityExecutionContext {
-            caller_identity: caller_identity.cloned(),
-            allow_loopback_egress: false,
-        },
-    )
-    .await
+    cap.call_tool_with_context(tool, arguments, context).await
 }
 
 pub(super) fn enforce_output_schema(
@@ -1416,16 +1408,21 @@ impl MetaMcp {
             .as_deref()
             .map(|b| format!("|idp:{b}"))
             .unwrap_or_default();
-        // Who the response cache keys on. The binding when identity propagation
-        // is minting per-user credentials, otherwise the verified subject —
-        // which is still what the backend's answer depended on. Keying on the
-        // binding alone let two authenticated callers share one entry whenever
-        // propagation was off, which is the shipped default. Kept separate from
-        // `identity_suffix` above: that one keys retry de-duplication, a
-        // different contract with a different lifetime.
-        let caller_principal = caller_credential.cache_binding.clone().or_else(|| {
-            verified_identity.map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
-        });
+        // Who the response cache keys on, in one place and one namespace per
+        // source (`support::caller_cache_principal`). The binding when identity
+        // propagation is minting per-user credentials, then the verified OIDC
+        // subject, then the caller's own `GrantSubject` — which is the only
+        // principal a deployment that derives identity from trusted headers,
+        // mTLS or an OAuth agent (`router/handlers.rs`) has, and without it two
+        // distinct principals shared one entry whenever propagation was off and
+        // no OIDC identity was verified, which is the shipped default. Kept
+        // separate from `identity_suffix` above: that one keys retry
+        // de-duplication, a different contract with a different lifetime.
+        let caller_principal = super::support::caller_cache_principal(
+            caller_credential.cache_binding.as_deref(),
+            verified_identity,
+            caller.grant_subject.as_ref(),
+        );
 
         // `want_full` no longer suppresses the key. It selects the shape of the
         // *reply*, not whether the backend acts, and a directive that switches
@@ -1496,7 +1493,19 @@ impl MetaMcp {
             }
         }
 
-        if !want_full && let Some(ref cache) = self.cache {
+        // Defense in depth on an already-classified value: the exact set both
+        // layers accept, so a value that is not a revision this build serves —
+        // including a whitespace-padded spelling of one that is — bypasses the
+        // cache instead of naming a bucket of its own. Never trimmed onto a
+        // canonical revision.
+        let protocol_revision = caller
+            .protocol_revision
+            .and_then(crate::protocol::meta::served_revision);
+
+        if !want_full
+            && protocol_revision.is_some()
+            && let Some(ref cache) = self.cache
+        {
             let cache_key = response_cache_key_for(
                 server,
                 tool,
@@ -1506,9 +1515,7 @@ impl MetaMcp {
                 caller.retry,
                 crate::cache::KeyContext {
                     routing_profile: &profile.name,
-                    // Revision is still unplumbed. Passing `None` is the
-                    // approved seam, not a claim that CACHE.4e is closed.
-                    protocol_revision: None,
+                    protocol_revision,
                     policy_epoch,
                 },
             );
@@ -1641,6 +1648,9 @@ impl MetaMcp {
                 caller_credential.cache_binding.as_deref(),
                 api_key_name,
                 trace_id,
+                policy_epoch,
+                protocol_revision,
+                &profile.name,
             )
             .await;
 
@@ -1860,6 +1870,7 @@ impl MetaMcp {
         // not answers either.
         if !want_full
             && !stopped_to_ask
+            && protocol_revision.is_some()
             && let Some(ref cache) = self.cache
         {
             let cache_key = response_cache_key_for(
@@ -1871,9 +1882,7 @@ impl MetaMcp {
                 caller.retry,
                 crate::cache::KeyContext {
                     routing_profile: &profile.name,
-                    // Revision is still unplumbed. Passing `None` is the
-                    // approved seam, not a claim that CACHE.4e is closed.
-                    protocol_revision: None,
+                    protocol_revision,
                     policy_epoch,
                 },
             );
@@ -2580,6 +2589,9 @@ impl MetaMcp {
         cache_binding: Option<&str>,
         api_key_name: Option<&str>,
         trace_id: &str,
+        policy_epoch: u64,
+        protocol_revision: Option<&str>,
+        routing_profile: &str,
     ) -> Result<Value> {
         let dispatch_start = Instant::now();
         let dispatch_result = self
@@ -2595,6 +2607,9 @@ impl MetaMcp {
                 caller_identity,
                 propagated_headers,
                 cache_binding,
+                policy_epoch,
+                protocol_revision,
+                routing_profile,
             )
             .await;
         let dispatch_latency = dispatch_start.elapsed();
@@ -2685,10 +2700,14 @@ impl MetaMcp {
         // once in `invoke_tool_traced` so the cache key and this dispatch share
         // one credential (MIK-6734); dispatch never mints.
         propagated_headers: &[(String, String)],
-        // Caller's stable identity binding (MIK-6784), used by the transport to
-        // partition upstream `MCP-Session-Id` state per identity. `None` → the
-        // shared default bucket (single-tenant behavior unchanged).
+        // Caller's stable identity binding (MIK-6784). Transport uses it to
+        // partition upstream `MCP-Session-Id` state; the capability executor
+        // copies the same already-resolved string into the inner cache key.
+        // `None` → shared default bucket / public namespace.
         identity_key: Option<&str>,
+        policy_epoch: u64,
+        protocol_revision: Option<&str>,
+        routing_profile: &str,
     ) -> Result<Value> {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
         let arguments = injection.arguments;
@@ -2703,8 +2722,20 @@ impl MetaMcp {
             let cap_def = cap
                 .get(tool)
                 .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
-            let result =
-                call_capability_tool_with_identity(&cap, tool, arguments, caller_identity).await?;
+            let result = call_capability_tool_with_identity(
+                &cap,
+                tool,
+                arguments,
+                crate::capability::CapabilityExecutionContext {
+                    caller_identity: caller_identity.cloned(),
+                    allow_loopback_egress: false,
+                    policy_epoch: Some(policy_epoch),
+                    protocol_revision: protocol_revision.map(str::to_owned),
+                    routing_profile: Some(routing_profile.to_owned()),
+                    cache_binding: identity_key.map(str::to_owned),
+                },
+            )
+            .await?;
             let mut response = serde_json::to_value(result)?;
 
             // Apply per-capability response_transform when configured.
@@ -4236,6 +4267,7 @@ mod identity_propagation_enforcement_tests {
             execution: None,
             credential_principal: None,
             is_modern: false,
+            protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
             verified_identity: Some(&id),
             api_key_name: None,
@@ -4271,6 +4303,7 @@ mod identity_propagation_enforcement_tests {
             execution: None,
             credential_principal: None,
             is_modern: false,
+            protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
             api_key_name: None,
             agent_id: None,
@@ -4311,6 +4344,7 @@ mod identity_propagation_enforcement_tests {
             execution: None,
             credential_principal: None,
             is_modern: false,
+            protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
             verified_identity: Some(&id),
             api_key_name: None,

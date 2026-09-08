@@ -45,6 +45,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use notify::{
@@ -250,6 +251,8 @@ pub struct LiveConfig {
     /// never again. Comparing against what is RUNNING keeps it true until a
     /// restart makes the two agree.
     running: Arc<Config>,
+    /// Shared authorization-policy generation. `None` in isolated tests.
+    policy_epoch: Option<Arc<AtomicU64>>,
 }
 
 impl LiveConfig {
@@ -260,7 +263,15 @@ impl LiveConfig {
         Self {
             inner: RwLock::new(Arc::clone(&running)),
             running,
+            policy_epoch: None,
         }
+    }
+
+    /// Share the gateway policy epoch so a published reload can bump it.
+    #[must_use]
+    pub fn with_policy_epoch(mut self, epoch: Arc<AtomicU64>) -> Self {
+        self.policy_epoch = Some(epoch);
+        self
     }
 
     /// The configuration this process is actually running.
@@ -299,7 +310,15 @@ impl LiveConfig {
 
     /// Atomically replace the current config.
     pub fn set(&self, config: Config) {
-        *self.inner.write() = Arc::new(config);
+        let mut lock = self.inner.write();
+        *lock = Arc::new(config);
+        if let Some(epoch) = &self.policy_epoch {
+            let prev = epoch.fetch_add(1, Ordering::Release);
+            debug_assert!(
+                epoch.load(Ordering::Relaxed) > prev,
+                "policy epoch must be monotonic"
+            );
+        }
     }
 }
 

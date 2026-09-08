@@ -48,6 +48,7 @@ fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
         execution: None,
         signing: None,
         is_modern: false,
+        protocol_revision: None,
         credential_principal: None,
         authorizer,
         api_key_name: Some("test-caller"),

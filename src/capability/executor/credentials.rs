@@ -406,6 +406,7 @@ mod tests {
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("test"),
             env: Arc::new(crate::config::LiveEnv::default()),
+            policy_epoch: None,
         }
     }
 
@@ -418,6 +419,7 @@ mod tests {
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("test"),
             env: Arc::new(crate::config::LiveEnv::default()),
+            policy_epoch: None,
         }
     }
 

@@ -87,6 +87,7 @@ fn ctx() -> MetaMcpCallerContext<'static> {
         execution: None,
         credential_principal: None,
         is_modern: false,
+        protocol_revision: None,
         authorizer: &AllowAll,
         api_key_name: Some("test-caller"),
         agent_id: None,

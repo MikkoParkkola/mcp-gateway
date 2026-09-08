@@ -272,20 +272,89 @@ impl CapabilityExecutor {
     }
 
     /// Build a cache key for a capability + params combination.
+    ///
+    /// `None` means do not cache: personal exposure with no caller identity,
+    /// or an attached executor missing a known revision or the invoke snapshot.
+    /// Loopback is refused by the caller before this is asked.
+    ///
+    /// Inner and outer share `{revision, profile, epoch}` plus the already-
+    /// resolved outer `cache_binding`. The binding is copied, not re-hashed.
     #[allow(clippy::unused_self)]
     pub(super) fn build_cache_key(
         &self,
         capability: &super::super::CapabilityDefinition,
         params: &Value,
-    ) -> String {
+        context: &crate::capability::CapabilityExecutionContext,
+    ) -> Option<String> {
+        use crate::identity_grants::CapabilityExposure;
+        let principal = match (
+            capability.metadata.exposure,
+            context.caller_identity.as_ref(),
+        ) {
+            (CapabilityExposure::Personal, None) => return None,
+            (_, Some(identity)) => {
+                format!(
+                    "1:{}:{}|{}:{}",
+                    identity.authority.len(),
+                    identity.authority,
+                    identity.subject.len(),
+                    identity.subject
+                )
+            }
+            (_, None) => "0:".to_string(),
+        };
         let params_hash = {
             use sha2::{Digest, Sha256};
             let json = serde_json::to_string(params).unwrap_or_default();
             let digest = Sha256::digest(json.as_bytes());
-            // Use first 16 bytes (128 bits) — sufficient for a cache key.
             hex::encode(&digest[..16])
         };
-        format!("{}:{}", capability.name, params_hash)
+        // An attached production executor without a request snapshot must not
+        // key under epoch 0 after a reload. Unattached standalone tests have
+        // no shared counter and keep `unwrap_or(0)`.
+        let attached = self.policy_epoch.is_some();
+        let epoch = if attached {
+            context.policy_epoch?
+        } else {
+            context.policy_epoch.unwrap_or(0)
+        };
+        let revision = known_protocol_revision(context.protocol_revision.as_deref());
+        let revision = if attached {
+            revision?
+        } else {
+            revision.unwrap_or("")
+        };
+        let profile = context
+            .routing_profile
+            .as_deref()
+            .filter(|value| !value.is_empty());
+        let profile = if attached {
+            profile?
+        } else {
+            profile.unwrap_or("")
+        };
+        // Already-resolved outer binding. Empty is the public/anonymous
+        // namespace. The resolver digested it; this only length-prefixes.
+        let binding = context
+            .cache_binding
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or("");
+        Some(format!(
+            "v=1|e={epoch}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}",
+            revision.len(),
+            revision,
+            profile.len(),
+            profile,
+            binding.len(),
+            binding,
+            capability.name.len(),
+            capability.name,
+            principal.len(),
+            principal,
+            params_hash.len(),
+            params_hash
+        ))
     }
 
     // ── Private decomposition helpers ─────────────────────────────────────────
@@ -339,6 +408,21 @@ impl CapabilityExecutor {
 }
 
 // ── Free helpers ─────────────────────────────────────────────────────────────
+
+/// Classified revision the inner cache may key on: exactly the set the outer
+/// classifier can produce, which is `SUPPORTED_VERSIONS` **plus**
+/// `MODERN_VERSIONS`. Taking only the first excluded every modern-era caller —
+/// `2026-07-28` is deliberately absent from `SUPPORTED_VERSIONS`
+/// (`src/protocol/mod.rs`), so an attached executor took the `revision?`
+/// bypass on every modern request and the inner cache never stored or served,
+/// while the outer cache kept caching under that same revision.
+///
+/// Unknown, empty and whitespace-padded spellings stay `None`: the outer
+/// classifier matches exactly, so a padded value is one no request was served
+/// under and must not resolve onto a canonical bucket.
+fn known_protocol_revision(revision: Option<&str>) -> Option<&'static str> {
+    revision.and_then(crate::protocol::meta::served_revision)
+}
 
 /// Returns `true` when `s` is a single `{key}` placeholder (not a secret ref).
 fn is_pure_placeholder(s: &str) -> bool {

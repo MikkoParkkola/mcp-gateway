@@ -191,6 +191,13 @@ impl CapabilityBackend {
     /// Used by the file watcher when a rug-pull is detected so that the
     /// tampered capability is no longer callable until the operator
     /// explicitly re-pins it.
+    ///
+    /// A removal is a live-policy mutation, so it bumps the shared policy
+    /// epoch while the write lock is still held — exactly as `reload()` does.
+    /// Without that, outer and inner cache entries for the quarantined
+    /// capability stay servable under the unchanged epoch; the watcher happens
+    /// to call `reload()` immediately afterwards, but this method is `pub` and
+    /// no caller is obliged to.
     pub fn unload_capability(&self, name: &str) -> bool {
         let mut caps = self.capabilities.write();
         if let Some(&pos) = caps.index.get(name) {
@@ -203,6 +210,9 @@ impl CapabilityBackend {
                     *idx -= 1;
                 }
             }
+            // Published, and the lock still held: no reader can observe the
+            // removal under the old epoch.
+            self.executor.bump_policy_epoch();
             true
         } else {
             false
@@ -309,10 +319,12 @@ impl CapabilityBackend {
             }
         }
 
-        // Atomic swap: rebuild index and tool cache in one write lock.
+        // Atomic swap: rebuild index and tool cache in one write lock, then
+        // bump the shared policy epoch while that lock is still held.
         {
             let mut caps = self.capabilities.write();
             caps.replace_all(all_caps);
+            self.executor.bump_policy_epoch();
         }
 
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
@@ -940,6 +952,109 @@ providers:
         assert_eq!(reload_count, 1);
         assert!(backend.has_capability("alpha"));
         assert_eq!(backend.get_tools().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cache_4_capability_reload_bumps_attached_epoch() {
+        use std::io::Write as _;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("alpha.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r"
+name: alpha
+description: Alpha tool
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /alpha
+"
+        )
+        .unwrap();
+
+        let epoch = Arc::new(AtomicU64::new(0));
+        let backend = CapabilityBackend::new(
+            "test",
+            Arc::new(CapabilityExecutor::new().with_policy_epoch(Arc::clone(&epoch))),
+        );
+        backend
+            .load_from_directory(dir.path().to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            epoch.load(Ordering::SeqCst),
+            0,
+            "initial load is not a live-policy mutation"
+        );
+        backend.reload().await.unwrap();
+        assert_eq!(
+            epoch.load(Ordering::SeqCst),
+            1,
+            "reload must bump after replace_all"
+        );
+    }
+
+    /// CACHE.4 — unloading a quarantined capability is a live-policy mutation,
+    /// so entries keyed under the old epoch must be stranded. The watcher
+    /// follows an unload with `reload()`, but `unload_capability` is `pub` and
+    /// nothing obliges another caller to.
+    #[tokio::test]
+    async fn cache_4_capability_unload_bumps_attached_epoch() {
+        use std::io::Write as _;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("alpha.yaml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r"
+name: alpha
+description: Alpha tool
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /alpha
+"
+        )
+        .unwrap();
+
+        let epoch = Arc::new(AtomicU64::new(0));
+        let backend = CapabilityBackend::new(
+            "test",
+            Arc::new(CapabilityExecutor::new().with_policy_epoch(Arc::clone(&epoch))),
+        );
+        backend
+            .load_from_directory(dir.path().to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(epoch.load(Ordering::SeqCst), 0, "load is not a mutation");
+
+        assert!(backend.unload_capability("alpha"), "fixture must unload");
+        assert_eq!(
+            epoch.load(Ordering::SeqCst),
+            1,
+            "unload must invalidate the policy epoch"
+        );
+
+        assert!(
+            !backend.unload_capability("alpha"),
+            "second unload removes nothing"
+        );
+        assert_eq!(
+            epoch.load(Ordering::SeqCst),
+            1,
+            "a no-op unload must not bump"
+        );
     }
 
     #[test]

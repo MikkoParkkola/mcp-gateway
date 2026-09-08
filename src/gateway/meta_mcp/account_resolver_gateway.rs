@@ -240,6 +240,7 @@ fn caller<'a>(verified_identity: Option<&'a VerifiedIdentity>) -> MetaMcpCallerC
         execution: None,
         credential_principal: None,
         is_modern: false,
+        protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
         verified_identity,
         api_key_name: None,

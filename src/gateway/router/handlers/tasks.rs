@@ -103,6 +103,7 @@ pub(super) fn task_intent_for_call(
     is_admin: bool,
     input_capabilities: Declared,
     session_id: Option<&str>,
+    protocol_revision: Option<&str>,
 ) -> Result<Option<TaskIntent>, JsonRpcResponse> {
     if !is_modern {
         return Ok(None);
@@ -156,6 +157,7 @@ pub(super) fn task_intent_for_call(
             is_admin,
             input_capabilities,
             session_id.filter(|id| !id.is_empty()).map(str::to_owned),
+            protocol_revision.map(str::to_owned),
         ),
         // One builder, shared with the confirmation gate's read-only committed
         // lookup, and the SAME owner string the read arms use. Two renderings
@@ -256,6 +258,8 @@ async fn recover_from_upstream(
         let authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync) = &borrowed;
         let policy_caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
             is_modern: true,
+            // This context checks authorization only; it never accesses a cache.
+            protocol_revision: None,
             credential_principal: caller.client.map(|client| client.principal.as_str()),
             execution: None,
             // No saved prepared-signing context: `None` is what keeps
