@@ -138,7 +138,9 @@ async fn spawn_peer(peer: Peer) -> (String, Recorder) {
                     // (MIK-7215.STATELESS.3a), which makes "the legacy request
                     // is unchanged" a claim about a header that can now move.
                     let mut out = HeaderMap::new();
-                    if request.get("method").and_then(Value::as_str) == Some("initialize") {
+                    if matches!(peer, Peer::Modern)
+                        || request.get("method").and_then(Value::as_str) == Some("initialize")
+                    {
                         out.insert("Mcp-Session-Id", "s1".parse().expect("ascii"));
                     }
                     (out, axum::Json(answer(peer, &request)))
@@ -218,6 +220,8 @@ enum Path {
 
 /// One driven call and everything the fixture peer saw while it ran.
 struct Run {
+    peer: Peer,
+    call_start: usize,
     seen: Vec<Wire>,
     /// The JSON-RPC code the failure maps to, and its text. The code is
     /// captured here rather than re-derived later because `Error` does not
@@ -238,6 +242,17 @@ impl Run {
     ) -> Self {
         let (url, recorder) = spawn_peer(peer).await;
         let backend = backend_with(&url, statics);
+        // Give the modern transport a real peer-issued session on an ordinary
+        // response. Discover cannot seed it: startup deliberately ignores a
+        // probe's session header. Both request and notification tests therefore
+        // exercise stripping with a populated session bucket.
+        if matches!(peer, Peer::Modern) {
+            backend
+                .request("resources/list", None)
+                .await
+                .expect("the session-priming request succeeds");
+        }
+        let call_start = recorder.lock().expect("recorder poisoned").len();
         let extra: Vec<(String, String)> = extra
             .iter()
             .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
@@ -250,35 +265,46 @@ impl Run {
             Path::Notify => backend.notify_with_headers(method, params, None).await,
         };
         Self {
+            peer,
+            call_start,
             seen: recorder.lock().expect("recorder poisoned").clone(),
             outcome: outcome.map_err(|err| (err.to_rpc_code(), err.to_string())),
         }
     }
 
-    /// The captured call under test, with the handshake-ordering control.
-    ///
-    /// Positive control for every session-header pin. The peer issues
-    /// `Mcp-Session-Id` only on `initialize`, so a flow that never handshook
-    /// would satisfy "the modern shape carries no session header" for the
-    /// boring reason and never traverse the code that strips it. Ordered, not
-    /// merely present: a handshake landing after the call under test leaves
-    /// that call just as sessionless.
+    /// Check discovery and session-priming order before inspecting the call.
     fn under_test(&self, method: &str) -> &Wire {
-        let at = self
-            .seen
+        let relative = self.seen[self.call_start..]
             .iter()
             .position(|wire| wire.method == method)
             .unwrap_or_else(|| panic!("{method} never reached the peer; saw {}", self.methods()));
+        let at = self.call_start + relative;
+        let discovery = self
+            .seen
+            .iter()
+            .position(|wire| wire.method == "server/discover")
+            .expect("startup must probe before dispatch");
         let handshake = self
             .seen
             .iter()
             .position(|wire| wire.method == "initialize");
-        assert!(
-            handshake.is_some_and(|hs| hs < at),
-            "the fixture must handshake before the call under test, else the \
-             session-header assertions are vacuous; the peer saw {}",
-            self.methods()
-        );
+        match self.peer {
+            Peer::Modern => {
+                assert!(handshake.is_none(), "modern startup must not initialize");
+                let prime = self.seen[..self.call_start]
+                    .iter()
+                    .position(|wire| wire.method == "resources/list")
+                    .expect("a real ordinary response must mint the session first");
+                assert!(discovery < prime && prime < at);
+            }
+            Peer::Legacy | Peer::LegacyDiscovering => {
+                assert!(
+                    handshake.is_some_and(|hs| discovery < hs && hs < at),
+                    "legacy startup must discover, handshake, then dispatch; saw {}",
+                    self.methods()
+                );
+            }
+        }
         &self.seen[at]
     }
 
@@ -303,7 +329,9 @@ impl Run {
              backend failure; got {error}"
         );
         assert!(
-            !self.seen.iter().any(|wire| wire.method == method),
+            !self.seen[self.call_start..]
+                .iter()
+                .any(|wire| wire.method == method),
             "the rejected call must never reach the peer; it saw {}",
             self.methods()
         );
@@ -460,13 +488,13 @@ async fn a_discovery_document_naming_no_modern_revision_stays_legacy() {
 async fn spawn_expiring_peer() -> (String, Recorder) {
     let recorder: Recorder = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&recorder);
-    let expired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let app = axum::Router::new().route(
         "/",
         axum::routing::post(
             move |headers: HeaderMap, axum::Json(request): axum::Json<Value>| {
                 let sink = Arc::clone(&sink);
-                let expired = Arc::clone(&expired);
+                let calls = Arc::clone(&calls);
                 async move {
                     let method = request
                         .get("method")
@@ -479,13 +507,13 @@ async fn spawn_expiring_peer() -> (String, Recorder) {
                         body: request.clone(),
                     });
                     let mut out = HeaderMap::new();
-                    if method == "initialize" {
+                    if method != "server/discover" {
                         out.insert("Mcp-Session-Id", "s1".parse().expect("ascii"));
                     }
-                    // The first ordinary request expires the session; the
-                    // retry after the fresh handshake succeeds.
+                    // The first ordinary response mints a session. The second
+                    // request expires it; the retry after reinitialization succeeds.
                     if method == "tools/list"
-                        && !expired.swap(true, std::sync::atomic::Ordering::SeqCst)
+                        && calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1
                     {
                         let id = request.get("id").cloned().unwrap_or(Value::Null);
                         return (
@@ -527,6 +555,10 @@ async fn a_reinitialize_keeps_the_initialized_notification_legacy_shaped() {
     backend
         .request("tools/list", None)
         .await
+        .expect("the initial modern response mints a session");
+    backend
+        .request("tools/list", None)
+        .await
         .expect("the retry after the fresh handshake succeeds");
     let seen = recorder.lock().expect("recorder poisoned").clone();
 
@@ -534,10 +566,24 @@ async fn a_reinitialize_keeps_the_initialized_notification_legacy_shaped() {
         .iter()
         .filter(|wire| wire.method == "notifications/initialized")
         .collect();
-    assert!(
-        handshakes.len() >= 2,
+    assert_eq!(
+        handshakes.len(),
+        1,
         "the session-expiry retry must have re-run the handshake; saw {:?}",
         seen.iter().map(|w| &w.method).collect::<Vec<_>>()
+    );
+    let methods: Vec<&str> = seen.iter().map(|wire| wire.method.as_str()).collect();
+    assert_eq!(
+        methods,
+        vec![
+            "server/discover",
+            "tools/list",
+            "tools/list",
+            "initialize",
+            "notifications/initialized",
+            "tools/list"
+        ],
+        "a real minted-session expiry must cause exactly one handshake and retry"
     );
     let modern_request = seen
         .iter()
@@ -843,8 +889,8 @@ async fn this_designs_headers_outrank_operator_configuration_at_both_merge_sites
 ///
 /// The prohibition is on emission, not on minting: a fixture with an empty
 /// session map passes an absence assertion without the removal existing, which
-/// is why the peer mints one on `initialize` and `under_test` proves the
-/// handshake ran first. The custom static value is the second half — an
+/// is why a priming ordinary response mints one and `under_test` proves that
+/// response preceded the call under test. The custom static value is the second half — an
 /// implementation that only skips the mint still forwards the operator's.
 #[tokio::test]
 async fn a_modern_call_sends_neither_the_minted_nor_the_configured_session() {
