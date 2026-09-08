@@ -11,6 +11,7 @@ mod capability;
 mod code_mode;
 mod error_budget;
 mod failsafe;
+mod idempotency;
 mod key_server;
 mod playbooks;
 mod runtime;
@@ -26,6 +27,7 @@ pub use error_budget::{CapabilityErrorBudgetSection, ErrorBudgetSection};
 pub use failsafe::{
     CircuitBreakerConfig, FailsafeConfig, HealthCheckConfig, RateLimitConfig, RetryConfig,
 };
+pub use idempotency::{IdempotencyConfig, IdempotencyReadOnlyTool};
 pub use key_server::{
     KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
     PolicyMatchConfig, PolicyScopesConfig,

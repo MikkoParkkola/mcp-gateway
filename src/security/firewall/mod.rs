@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! Pre-invocation:  InputScanner → AnomalyDetector → TenantGuard → resolve_action → AuditLogger
-//! Post-invocation: ResponseScanner → Redactor     → resolve_action → AuditLogger
+//! Post-invocation: ResponseScanner → Redactor → per-target policy reduction → AuditLogger
 //! ```
 //!
 //! # Feature gate
@@ -34,7 +34,13 @@ pub mod input_scanner;
 pub mod memory_scanner;
 pub mod principal_window;
 pub mod redactor;
+mod response;
 pub mod tenant_guard;
+
+#[cfg(test)]
+mod response_observer;
+#[cfg(test)]
+pub(crate) mod response_tests;
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -225,6 +231,8 @@ pub struct Firewall {
     budget: Option<budget_guard::BudgetGuard>,
     /// Structured audit logger.
     audit: Option<audit::AuditLogger>,
+    #[cfg(test)]
+    response_observer: response_observer::ResponseObserver,
 }
 
 /// A compiled firewall rule with a pre-processed glob pattern.
@@ -342,6 +350,8 @@ impl Firewall {
             tenant_guard,
             budget,
             audit,
+            #[cfg(test)]
+            response_observer: response_observer::ResponseObserver::default(),
         }
     }
 
@@ -615,52 +625,34 @@ impl Firewall {
         response: &mut Value,
         caller: &str,
     ) -> FirewallVerdict {
-        if !self.config.enabled || !self.config.scan_responses {
-            return FirewallVerdict::allow();
-        }
-
-        let mut findings = Vec::new();
-
-        // 1. Prompt injection detection (reuse ResponseScanner).
-        //    Immutable borrow must complete before the mutable borrow in step 2.
-        if self.config.prompt_injection_detection {
-            let pi_matches = self
-                .response_scanner
-                .scan_response(server, tool, &*response);
-            for m in pi_matches {
-                findings.push(Finding {
-                    scan_type: ScanType::PromptInjection,
-                    severity: Severity::Medium,
-                    description: m.pattern_description,
-                    matched: m.matched_fragment,
-                    location: FindingLocation::ResponseContent,
-                });
-            }
-        }
-
-        // 2. Credential detection + redaction (takes `&mut Value` for in-place replacement).
-        if self.config.credential_redaction {
-            let cred_findings = self.redactor.scan_and_redact(response);
-            findings.extend(cred_findings);
-        }
-
-        // 3. Determine action.
-        let action = self.resolve_action(tool, &findings);
-        let allowed = action != FirewallAction::Block;
-
-        let verdict = FirewallVerdict {
-            allowed,
-            action,
-            findings,
-            anomaly_score: None,
+        use crate::security::response_policy::{
+            ResponseArtifactKind, ResponseCorrelation, ResponseMutationPolicy, ResponsePolicyTarget,
         };
-
-        // 4. Audit log.
-        if let Some(ref audit) = self.audit {
-            audit.log_response(session_id, server, tool, caller, &verdict);
-        }
-
-        verdict
+        let targets = [ResponsePolicyTarget {
+            server: server.into(),
+            tool: tool.into(),
+        }];
+        let correlation = ResponseCorrelation {
+            session_id,
+            caller,
+            external_server: server,
+            external_tool: tool,
+        };
+        // The compatibility API always supplies one target. Keep the defensive
+        // error branch fail-closed rather than panicking at an inspection boundary.
+        self.check_response_artifact(
+            response,
+            &targets,
+            &correlation,
+            ResponseArtifactKind::FinalResponse,
+            ResponseMutationPolicy::Redact,
+        )
+        .unwrap_or_else(|_| FirewallVerdict {
+            allowed: false,
+            action: FirewallAction::Block,
+            findings: Vec::new(),
+            anomaly_score: None,
+        })
     }
 
     /// Match tool name against rules; fall back to severity-based default action.
@@ -683,6 +675,13 @@ impl Firewall {
         if let Some(ref a) = self.anomaly {
             a.remove_session(session_id);
         }
+    }
+}
+
+#[cfg(test)]
+impl Firewall {
+    pub(crate) fn response_inspection_counts(&self) -> response_observer::ResponseInspectionCounts {
+        self.response_observer.snapshot()
     }
 }
 

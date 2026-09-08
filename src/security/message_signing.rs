@@ -11,8 +11,8 @@
 //! - **Response signing**: every `gateway_invoke` response gains a `_signature` block
 //!   containing `alg`, `sig`, `nonce`, `ts`, and `key_id`. The MAC covers
 //!   `canonical_json(response_without_signature)`.
-//! - **Nonce replay protection**: request nonces are checked against a
-//!   `DashMap<String, Instant>` with TTL-based eviction, mirroring `src/idempotency.rs`.
+//! - **Nonce replay protection**: bounded nonce entries, per-principal counts,
+//!   and a monotonic expiry queue share one lock for registration and cleanup.
 //! - **Opt-in**: the whole subsystem is gated by `SecurityConfig::message_signing.enabled`.
 //!   When disabled, zero extra allocations occur on the hot path.
 //! - **Key rotation**: up to two active secrets (`shared_secret` + `previous_secret`).
@@ -25,17 +25,21 @@
 //! 2. **Message tampering** — MAC covers the entire canonical response body.
 //! 3. **Replay attacks** — monotonic nonces rejected within the replay window.
 
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use dashmap::DashMap;
 use hmac::{Hmac, KeyInit, Mac};
+use parking_lot::Mutex;
 use serde_json::{Value, json};
 use sha2::Sha256;
 use tracing::debug;
 
 use crate::hashing::canonical_json;
 use crate::{Error, Result};
+
+#[path = "message_signing_v2.rs"]
+mod v2;
 
 // ── Type alias ───────────────────────────────────────────────────────────────
 
@@ -141,20 +145,87 @@ impl MessageSigner {
 /// window are evicted by [`NonceStore::evict_expired`], which should be called
 /// from a background task (see [`spawn_nonce_cleanup_task`]).
 ///
-/// Memory bound: ~2.4 MB at 100 req/s with a 5-minute window (30 K entries × ~80 B).
-#[derive(Debug)]
+/// At most 100,000 live entries globally and 10,000 per principal. A nonce is
+/// at most 256 UTF-8 bytes. Capacity never evicts live replay protection.
 pub struct NonceStore {
-    seen: DashMap<String, Instant>,
+    state: Mutex<NonceState>,
     replay_window: Duration,
+    global_limit: usize,
+    principal_limit: usize,
+    #[cfg(test)]
+    admission_pause: Option<nonce_tests::AdmissionPause>,
+    #[cfg(test)]
+    cleanup_pause: Option<nonce_tests::CleanupPause>,
+    #[cfg(test)]
+    test_clock: Option<nonce_tests::TestClock>,
 }
+
+#[derive(Default)]
+struct NonceState {
+    seen: HashMap<String, NonceEntry>,
+    principal_counts: HashMap<String, usize>,
+    // Admission obtains its monotonic timestamp under the same lock, so the
+    // queue is ordered without a sort or a scan of live replay entries.
+    expiries: VecDeque<(Instant, String)>,
+}
+
+struct NonceEntry {
+    admitted_at: Instant,
+    principal: String,
+}
+
+impl std::fmt::Debug for NonceStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NonceStore")
+            .field("live_entries", &self.len())
+            .field("replay_window", &self.replay_window)
+            .field("global_limit", &self.global_limit)
+            .field("principal_limit", &self.principal_limit)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Bounded refusal reasons. Closed set: a new one is a deliberate cardinality
+/// decision, not something a caller can introduce.
+pub(crate) const NONCE_REASON_INVALID: &str = "invalid";
+const NONCE_REASON_REPLAY: &str = "replay";
+const NONCE_REASON_PRINCIPAL_CAPACITY: &str = "principal_capacity";
+const NONCE_REASON_GLOBAL_CAPACITY: &str = "global_capacity";
+
+/// Count one refused admission.
+///
+/// Crate-visible because the `gateway_invoke` boundary refuses a malformed raw
+/// nonce before this store ever sees it, and that refusal belongs in the same
+/// series — an operator watching two counters for one condition watches neither.
+#[cfg(feature = "metrics")]
+pub(crate) fn record_nonce_rejection(reason: &'static str) {
+    telemetry_metrics::counter!("mcp_message_signing_nonce_rejections_total", "reason" => reason)
+        .increment(1);
+}
+
+#[cfg(not(feature = "metrics"))]
+#[inline]
+pub(crate) fn record_nonce_rejection(_reason: &'static str) {}
 
 impl NonceStore {
     /// Create a new nonce store with the given replay window.
     #[must_use]
     pub fn new(replay_window: Duration) -> Self {
+        Self::with_limits(replay_window, 100_000, 10_000)
+    }
+
+    fn with_limits(replay_window: Duration, global_limit: usize, principal_limit: usize) -> Self {
         Self {
-            seen: DashMap::new(),
+            state: Mutex::new(NonceState::default()),
             replay_window,
+            global_limit,
+            principal_limit,
+            #[cfg(test)]
+            admission_pause: None,
+            #[cfg(test)]
+            cleanup_pause: None,
+            #[cfg(test)]
+            test_clock: None,
         }
     }
 
@@ -165,53 +236,124 @@ impl NonceStore {
     /// Returns [`Error::json_rpc`] with code `-32001` when the nonce was
     /// already seen within the replay window (replay attack detected).
     pub fn check_and_register(&self, nonce: &str) -> Result<()> {
-        // Check for an existing live entry atomically via DashMap entry API.
-        use dashmap::mapref::entry::Entry;
-        match self.seen.entry(nonce.to_string()) {
-            Entry::Occupied(e) => {
-                if e.get().elapsed() <= self.replay_window {
-                    return Err(Error::json_rpc(-32001, "Nonce replay detected"));
-                }
-                // Stale — overwrite with fresh timestamp.
-                e.replace_entry(Instant::now());
-                Ok(())
-            }
-            Entry::Vacant(e) => {
-                e.insert(Instant::now());
-                Ok(())
-            }
+        self.check_and_register_for_principal(nonce, "anonymous")
+    }
+
+    /// The principal must come from the authenticated transport, never request
+    /// arguments or display labels. Nonce uniqueness is global across callers.
+    pub(crate) fn check_and_register_for_principal(
+        &self,
+        nonce: &str,
+        principal: &str,
+    ) -> Result<()> {
+        if nonce.is_empty() || nonce.len() > 256 {
+            return Err(Error::json_rpc(-32602, "Invalid signing nonce"));
         }
+        let mut state = self.state.lock();
+        #[cfg(test)]
+        self.pause_inside_admission_for_test(nonce);
+        #[cfg(test)]
+        let now = self.now();
+        #[cfg(not(test))]
+        let now = Instant::now();
+        self.reclaim_expired(&mut state, now);
+        if state.seen.contains_key(nonce) {
+            return Err(Error::json_rpc(-32001, "Nonce replay detected"));
+        }
+        // The combined condition is split so the two capacity refusals stay
+        // separately observable. Order and error are unchanged: global is
+        // tested first, and both refuse with the same message.
+        if state.seen.len() >= self.global_limit {
+            return Err(Error::json_rpc(-32001, "Signing nonce capacity exceeded"));
+        }
+        if state.principal_counts.get(principal).copied().unwrap_or(0) >= self.principal_limit {
+            return Err(Error::json_rpc(-32001, "Signing nonce capacity exceeded"));
+        }
+        state.seen.insert(
+            nonce.to_owned(),
+            NonceEntry {
+                admitted_at: now,
+                principal: principal.to_owned(),
+            },
+        );
+        *state
+            .principal_counts
+            .entry(principal.to_owned())
+            .or_default() += 1;
+        state.expiries.push_back((now, nonce.to_owned()));
+        Ok(())
     }
 
     /// Evict nonces older than the replay window.
     ///
     /// Called periodically by [`spawn_nonce_cleanup_task`] to bound memory.
     pub fn evict_expired(&self) {
-        let stale: Vec<String> = self
-            .seen
-            .iter()
-            .filter_map(|e| (e.value().elapsed() > self.replay_window).then(|| e.key().clone()))
-            .collect();
-
-        let count = stale.len();
-        for key in stale {
-            self.seen.remove(&key);
+        let mut state = self.state.lock();
+        #[cfg(test)]
+        let now = self.now();
+        #[cfg(not(test))]
+        let now = Instant::now();
+        #[cfg(test)]
+        if state
+            .expiries
+            .front()
+            .is_some_and(|(at, _)| now.saturating_duration_since(*at) > self.replay_window)
+        {
+            self.pause_cleanup_after_selection_for_test();
         }
+        let before = state.seen.len();
+        self.reclaim_expired(&mut state, now);
+        let count = before - state.seen.len();
         if count > 0 {
             debug!(count, "Evicted expired nonce entries");
         }
     }
 
+    fn reclaim_expired(&self, state: &mut NonceState, now: Instant) {
+        while state
+            .expiries
+            .front()
+            .is_some_and(|(at, _)| now.saturating_duration_since(*at) > self.replay_window)
+        {
+            let (at, nonce) = state.expiries.pop_front().expect("elapsed queue head");
+            if state
+                .seen
+                .get(&nonce)
+                .is_none_or(|entry| entry.admitted_at != at)
+            {
+                continue;
+            }
+            let entry = state
+                .seen
+                .remove(&nonce)
+                .expect("matching live nonce entry");
+            if let Some(count) = state.principal_counts.get_mut(&entry.principal) {
+                *count -= 1;
+                if *count == 0 {
+                    state.principal_counts.remove(&entry.principal);
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn now(&self) -> Instant {
+        if let Some(clock) = &self.test_clock {
+            return clock.now();
+        }
+        Instant::now()
+    }
+
     /// Current number of tracked nonces.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.seen.len()
+        self.state.lock().seen.len()
     }
 
     /// Return `true` when the store is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.seen.is_empty()
+        self.state.lock().seen.is_empty()
     }
 }
 
@@ -278,6 +420,14 @@ fn build_signature_block(sig: &str, nonce: Option<&str>, ts: u64, key_id: &str) 
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[path = "message_signing_v2_tests.rs"]
+mod v2_tests;
+
+#[cfg(test)]
+#[path = "message_signing_nonce_tests.rs"]
+mod nonce_tests;
 
 #[cfg(test)]
 mod tests {
@@ -473,17 +623,20 @@ mod tests {
 
     #[test]
     fn nonce_store_evict_expired_removes_old_entries() {
-        // GIVEN: a store with a zero-duration window (all entries expire instantly)
-        let store = NonceStore::new(Duration::ZERO);
+        // GIVEN: two real live entries admitted under a frozen monotonic clock.
+        // Admission now reclaims elapsed entries immediately, so a zero-window
+        // fixture cannot retain both until the explicit eviction under test.
+        let store = NonceStore::with_clock_for_test(2, 2);
         store.check_and_register("old-1").unwrap();
         store.check_and_register("old-2").unwrap();
         assert_eq!(store.len(), 2);
 
-        // WHEN: evict_expired is called
+        // WHEN: both entries expire and explicit eviction runs.
+        store.advance_for_test(301);
         store.evict_expired();
 
         // THEN: all entries removed
-        assert_eq!(store.len(), 0, "all zero-window entries must be evicted");
+        assert_eq!(store.len(), 0, "all elapsed entries must be evicted");
     }
 
     #[test]
@@ -568,3 +721,7 @@ mod tests {
         assert_eq!(store.len(), 0, "cleanup task must evict expired nonces");
     }
 }
+
+#[cfg(all(test, feature = "metrics"))]
+#[path = "message_signing_nonce_metrics_support.rs"]
+pub(crate) mod nonce_metrics_support;

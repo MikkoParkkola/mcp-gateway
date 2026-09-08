@@ -42,6 +42,7 @@ use axum::{
 };
 use tracing::{debug, warn};
 
+use crate::gateway::auth::QuotaPrincipal;
 use crate::gateway::middleware::{bearer_unauthorized_response, forbidden_response};
 
 pub use agents::{AgentDefinition, AgentRegistry};
@@ -64,6 +65,13 @@ pub struct AgentIdentity {
     pub scopes: Vec<Scope>,
     /// Raw scope strings for audit/logging.
     pub raw_scopes: Vec<String>,
+    /// Nonce-quota bucket, present only when a token was actually validated.
+    ///
+    /// `None` on any identity built by hand — a fixture cannot mint quota.
+    /// Populated by [`agent_auth_middleware`] from the *registered* client id,
+    /// so successive JWTs issued to one client share a bucket and two clients
+    /// sharing a display name do not.
+    pub quota_principal: Option<QuotaPrincipal>,
 }
 
 /// Shared state for the agent auth middleware.
@@ -123,11 +131,15 @@ pub async fn agent_auth_middleware(
                 "Agent JWT validated"
             );
             let raw_scopes = validated.agent.scopes.clone();
+            // Authority follows the registration, not the token bytes or the
+            // operator-chosen display name.
+            let quota_principal = QuotaPrincipal::oauth_client(&validated.agent.client_id);
             let identity = AgentIdentity {
                 client_id: validated.claims.sub.clone(),
                 agent_name: validated.agent.name.clone(),
                 scopes: validated.scopes,
                 raw_scopes,
+                quota_principal: Some(quota_principal),
             };
             request.extensions_mut().insert(identity);
             next.run(request).await
@@ -239,6 +251,7 @@ mod tests {
             agent_name: "Test Agent".to_string(),
             scopes: parsed,
             raw_scopes: raw,
+            quota_principal: None,
         }
     }
 

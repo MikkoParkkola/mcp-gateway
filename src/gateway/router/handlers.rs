@@ -638,7 +638,7 @@ pub(super) async fn meta_mcp_handler(
         }
     };
 
-    let request: Value = match serde_json::from_slice(&body_bytes) {
+    let mut request: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
         Err(e) => {
             return build_http_error_response(
@@ -722,8 +722,11 @@ pub(super) async fn meta_mcp_handler(
     // nobody to ask.
     drop(session_rx);
 
+    let mut signing_context = state.meta_mcp.signing_enabled().then(|| {
+        crate::gateway::meta_mcp::signing::SigningInvocationContext::capture(&mut request)
+    });
     // Optionally sanitize input
-    let request = if state.sanitize_input {
+    let mut request = if state.sanitize_input {
         match sanitize_json_value(&request) {
             Ok(sanitized) => sanitized,
             Err(e) => {
@@ -739,6 +742,18 @@ pub(super) async fn meta_mcp_handler(
     } else {
         request
     };
+
+    if let Some(context) = signing_context.as_mut()
+        && let Err(error) = context.restore(&mut request)
+    {
+        return build_error_response(
+            None,
+            error.to_rpc_code(),
+            crate::gateway::meta_mcp::signing::wire_error_message(&error),
+            &session_id,
+            StatusCode::BAD_REQUEST,
+        );
+    }
 
     // Detect client POST-back responses (has "result" or "error" but no "method").
     // These are replies to server-to-client requests such as `sampling/createMessage`.
@@ -1056,8 +1071,17 @@ pub(super) async fn meta_mcp_handler(
         }
     }
 
+    let external_tool = if method == "tools/call" {
+        extract_tools_call_params(params.as_ref()).0.to_owned()
+    } else {
+        method.clone()
+    };
+    let mut response_targets =
+        crate::gateway::meta_mcp::response_security::meta_response_targets(&external_tool, &[]);
+    let mut execution = None;
+
     // Route to appropriate handler
-    let response = match method.as_str() {
+    let mut response = match method.as_str() {
         "subscriptions/listen" => {
             // The single long-lived stream that replaces the GET endpoint.
             //
@@ -1248,6 +1272,10 @@ pub(super) async fn meta_mcp_handler(
 
             let backend_targets =
                 backend_tool_targets_for_call(&state.meta_mcp, tool_name, &arguments);
+            response_targets = crate::gateway::meta_mcp::response_security::meta_response_targets(
+                tool_name,
+                &backend_targets,
+            );
             for target in &backend_targets {
                 if let Err(e) = authorize_tool_target(
                     state.as_ref(),
@@ -1383,63 +1411,92 @@ pub(super) async fn meta_mcp_handler(
                 ),
             };
 
-            let mut call_response = state
-                .meta_mcp
-                .handle_tools_call(
-                    id,
-                    tool_name,
-                    arguments,
-                    Some(session_id.as_str()),
-                    MetaMcpCallerContext {
-                        authorizer: &router_authorizer,
-                        api_key_name,
-                        agent_id,
-                        grant_subject,
-                        verified_identity: verified_identity.as_ref(),
-                        is_admin: client.as_ref().is_some_and(|c| c.admin),
-                        input_capabilities: declared_capabilities,
-                        retry: &retry,
-                        // Always `Elicit`, including when no session was
-                        // presented. HTTP can carry an asker; whether one
-                        // answered is what `policy` decides. Mapping a
-                        // sessionless request to `Unavailable` would refuse the
-                        // legacy caller this path deliberately still warns.
-                        confirmation:
-                            crate::gateway::destructive_confirmation::ConfirmationChannel::Elicit {
-                                proxy: &state.proxy_manager,
-                                policy: confirmation_policy,
-                            },
+            // One request owns admission through dispatch and secured delivery.
+            // A route change may conflict on representation, never create a
+            // second owner for the same verified principal and explicit key.
+            let mut caller = MetaMcpCallerContext {
+                execution: None,
+                signing: None,
+                is_modern,
+                credential_principal: client.as_ref().map(|client| client.principal.as_str()),
+                authorizer: &router_authorizer,
+                api_key_name,
+                agent_id,
+                grant_subject,
+                verified_identity: verified_identity.as_ref(),
+                is_admin: client.as_ref().is_some_and(|c| c.admin),
+                input_capabilities: declared_capabilities,
+                retry: &retry,
+                // Always `Elicit`, including when no session was
+                // presented. HTTP can carry an asker; whether one
+                // answered is what `policy` decides. Mapping a
+                // sessionless request to `Unavailable` would refuse the
+                // legacy caller this path deliberately still warns.
+                confirmation:
+                    crate::gateway::destructive_confirmation::ConfirmationChannel::Elicit {
+                        proxy: &state.proxy_manager,
+                        policy: confirmation_policy,
                     },
+            };
+            if let Some(context) = signing_context.as_mut()
+                && let Err(error) = state.meta_mcp.prepare_signing_invocation(
+                    context,
+                    &arguments,
+                    Some(&session_id),
+                    &caller,
                 )
-                .await;
-
-            // Firewall: post-invocation response scan + credential redaction.
-            #[cfg(feature = "firewall")]
-            if let Some(ref fw) = state.firewall
-                && let Some(ref mut result_val) = call_response.result
             {
-                let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
-                for target in &backend_targets {
-                    let target = target.as_target();
-                    let verdict = fw.check_response(
-                        &session_id,
-                        target.server,
-                        target.tool,
-                        result_val,
-                        caller_name,
-                    );
-                    if verdict.action == FirewallAction::Warn {
-                        warn!(
-                            server = target.server,
-                            tool = target.tool,
-                            findings = verdict.findings.len(),
-                            "Firewall: response warning"
-                        );
-                    }
-                }
+                return build_error_response(
+                    Some(id),
+                    error.to_rpc_code(),
+                    crate::gateway::meta_mcp::signing::wire_error_message(&error),
+                    &session_id,
+                    StatusCode::BAD_REQUEST,
+                );
             }
-
-            call_response
+            caller.signing = signing_context.as_ref();
+            let admission = state.meta_mcp.admit_meta_sync(
+                &caller,
+                tool_name,
+                &arguments,
+                Some(&session_id),
+                &id,
+            );
+            let (owned_execution, replay) = match admission {
+                Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) => {
+                    (Some(lease), None)
+                }
+                Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(response)) => {
+                    (None, Some(response))
+                }
+                Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => (None, None),
+                Err(error) => {
+                    let status = match &error {
+                        crate::Error::Forbidden { status, .. } => {
+                            StatusCode::from_u16(*status).unwrap_or(StatusCode::FORBIDDEN)
+                        }
+                        _ if error.to_rpc_code() == 409 => StatusCode::CONFLICT,
+                        _ => StatusCode::BAD_REQUEST,
+                    };
+                    return build_error_response(
+                        Some(id),
+                        error.to_rpc_code(),
+                        error.to_string(),
+                        &session_id,
+                        status,
+                    );
+                }
+            };
+            execution = owned_execution;
+            caller.execution = execution.as_ref();
+            if let Some(response) = replay {
+                response
+            } else {
+                state
+                    .meta_mcp
+                    .handle_tools_call(id, tool_name, arguments, Some(session_id.as_str()), caller)
+                    .await
+            }
         }
         // Resources
         "resources/list" => {
@@ -1568,6 +1625,31 @@ pub(super) async fn meta_mcp_handler(
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
     };
 
+    if is_modern {
+        shape_modern_response(&mut response, &method);
+    }
+    response = state.meta_mcp.finalize_response_for_delivery(
+        response,
+        &crate::gateway::meta_mcp::response_security::ResponseDeliveryContext {
+            method: &method,
+            targets: &response_targets,
+            correlation: crate::security::response_policy::ResponseCorrelation {
+                session_id: &session_id,
+                caller: client
+                    .as_ref()
+                    .map_or("anonymous", |client| client.name.as_str()),
+                external_server: "gateway",
+                external_tool: &external_tool,
+            },
+            mutation:
+                crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
+            signing: signing_context.as_ref(),
+        },
+    );
+    if let Some(execution) = execution {
+        execution.complete_delivery(&response, signing_context.as_ref());
+    }
+
     telemetry_metrics::counter!(
         "mcp_jsonrpc_requests_total",
         "method" => method.clone(),
@@ -1575,13 +1657,13 @@ pub(super) async fn meta_mcp_handler(
     )
     .increment(1);
 
-    // A confirmation refusal is the gate working, not the client
+    // A confirmation or delivery refusal is the gate working, not the client
     // misbehaving. It is excluded from BOTH arms, not just the failure one:
     // `record_client_success` resets the consecutive-failure count, so
     // treating a refusal as a success would clear a breaker the caller had
     // genuinely tripped.
     if let Some(ref client) = client
-        && !response.confirmation_refusal
+        && !response.excludes_client_accounting()
     {
         if response.error.is_some() {
             state.auth_config.record_client_failure(&client.name);
@@ -1614,7 +1696,7 @@ pub(super) async fn meta_mcp_handler(
         // A stateless client has no handshake in which to learn who answered,
         // so every result says. And it holds no session, so it is sent no
         // session header — the legacy path below keeps both unchanged.
-        return build_modern_response(response, status, &method);
+        return (status, axum::Json(response)).into_response();
     }
     build_response(response, &session_id, status)
 }
@@ -1643,11 +1725,20 @@ const CACHEABLE_METHODS: &[&str] = &[
 /// this only stops a client re-listing on every turn.
 const LIST_TTL_MS: u64 = 60_000;
 
+// Unit-test adapter only: production must shape before security finalization
+// and serialize afterward without mutating the signed response.
+#[cfg(test)]
 fn build_modern_response(
     mut response: crate::protocol::JsonRpcResponse,
     status: StatusCode,
     method: &str,
 ) -> axum::response::Response {
+    shape_modern_response(&mut response, method);
+    (status, axum::Json(response)).into_response()
+}
+
+/// Shape modern metadata before security finalization and signing.
+fn shape_modern_response(response: &mut crate::protocol::JsonRpcResponse, method: &str) {
     if let Some(ref mut result) = response.result
         && let Some(object) = result.as_object_mut()
     {
@@ -1691,7 +1782,6 @@ fn build_modern_response(
             );
         }
     }
-    (status, axum::Json(response)).into_response()
 }
 
 /// The HTTP status a response deserves when it carries an authorization

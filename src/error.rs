@@ -41,6 +41,11 @@ pub enum Error {
         message: String,
     },
 
+    /// A response or bridge question was refused by the gateway's Firewall.
+    /// This server-owned provenance must survive internal error propagation.
+    #[error("Response blocked by security firewall")]
+    ResponseFirewallRefused,
+
     /// Configuration validation failure — semantically invalid config.
     ///
     /// Use this instead of `Internal` when a config value fails a semantic
@@ -195,6 +200,7 @@ impl Error {
             Self::JsonRpc { code, .. } | Self::Forbidden { code, .. } => *code,
             Self::Json(_) => -32700,     // Parse error
             Self::Protocol(_) => -32600, // Invalid request
+            Self::ResponseFirewallRefused => -32600,
             Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
             Self::BackendUnavailable(_)
             | Self::CircuitOpen(_)

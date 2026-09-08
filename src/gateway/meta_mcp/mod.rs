@@ -57,14 +57,21 @@ use super::meta_mcp_helpers::{
     build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
     wrap_tool_success,
 };
-use super::meta_mcp_tool_defs::{MetaToolExposure, build_meta_tools_filtered};
+use super::meta_mcp_tool_defs::{
+    MetaToolExposure, build_meta_tools_filtered, require_gateway_invoke_nonce,
+};
 use super::webhooks::WebhookRegistry;
 
+pub(crate) mod admission;
 mod invoke;
 mod prompt_cache;
 mod protocol;
 mod resources;
+pub(crate) mod response_security;
+#[cfg(test)]
+mod response_security_tests;
 mod search;
+pub(crate) mod signing;
 #[cfg(feature = "spec-preview")]
 mod spec_preview;
 mod support;
@@ -111,6 +118,14 @@ impl CallerIdentityHeaderTrust {
 /// site names the authorizer it means, which in tests makes a permissive one
 /// visible in the test source rather than hidden in a struct default.
 pub struct MetaMcpCallerContext<'a> {
+    /// Explicit request era, classified by the transport from reserved metadata.
+    pub is_modern: bool,
+    /// Stable validated credential principal; display names are never authority.
+    pub credential_principal: Option<&'a str>,
+    /// Outer execution owner; an inner step can mark dispatch but cannot settle it.
+    pub(crate) execution: Option<&'a admission::SyncLease>,
+    /// Private external origin and completed signing admission, never backend metadata.
+    pub(crate) signing: Option<&'a signing::SigningInvocationContext>,
     /// Decides whether this caller may invoke a given backend tool.
     ///
     /// Borrowed, never stored: `AppState` owns `meta_mcp`, so holding an
@@ -219,6 +234,9 @@ pub struct MetaMcp {
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
     pub(super) idempotency_cache: Option<Arc<IdempotencyCache>>,
+    /// One bounded execution owner shared by the meta and direct transports.
+    pub(super) execution_admission: Arc<crate::idempotency::admission::ExecutionAdmission>,
+    pub(super) idempotency_config: RwLock<crate::config::IdempotencyConfig>,
     /// Continuation keys, spent-ledger and held legacy exchanges.
     ///
     /// Here rather than on `AppState` because of lifetime: this struct is built
@@ -428,6 +446,7 @@ impl MetaMcp {
         stats: Option<Arc<UsageStats>>,
         ranker: Option<Arc<SearchRanker>>,
         default_cache_ttl: Duration,
+        clock: Arc<dyn Fn() -> u64 + Send + Sync>,
     ) -> Self {
         Self {
             backends,
@@ -435,6 +454,8 @@ impl MetaMcp {
             cache,
             default_cache_ttl,
             idempotency_cache: None,
+            execution_admission: crate::idempotency::admission::ExecutionAdmission::new(clock),
+            idempotency_config: RwLock::new(crate::config::IdempotencyConfig::default()),
             continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
             stats,
             ranker,
@@ -486,7 +507,7 @@ impl MetaMcp {
 
     /// Create a new Meta-MCP handler.
     pub fn new(backends: Arc<BackendRegistry>) -> Self {
-        Self::build(backends, None, None, None, Duration::from_secs(60))
+        Self::with_features(backends, None, None, None, Duration::from_secs(60))
     }
 
     /// Create a new Meta-MCP handler with cache, stats, and ranking support.
@@ -497,7 +518,26 @@ impl MetaMcp {
         ranker: Option<Arc<SearchRanker>>,
         default_ttl: Duration,
     ) -> Self {
-        Self::build(backends, cache, stats, ranker, default_ttl)
+        Self::with_features_and_clock(
+            backends,
+            cache,
+            stats,
+            ranker,
+            default_ttl,
+            Arc::new(crate::protocol::continuation::now_unix_secs),
+        )
+    }
+
+    /// Build the real handler with its serving runtime's trusted epoch source.
+    pub(crate) fn with_features_and_clock(
+        backends: Arc<BackendRegistry>,
+        cache: Option<Arc<ResponseCache>>,
+        stats: Option<Arc<UsageStats>>,
+        ranker: Option<Arc<SearchRanker>>,
+        default_ttl: Duration,
+        clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> Self {
+        Self::build(backends, cache, stats, ranker, default_ttl, clock)
     }
 
     /// The continuation state this run mints and redeems with.
@@ -507,6 +547,16 @@ impl MetaMcp {
     #[must_use]
     pub fn continuation(&self) -> Arc<crate::protocol::continuation::ContinuationState> {
         Arc::clone(&self.continuation)
+    }
+
+    pub(crate) fn execution_admission(
+        &self,
+    ) -> &Arc<crate::idempotency::admission::ExecutionAdmission> {
+        &self.execution_admission
+    }
+
+    pub(crate) fn set_idempotency_config(&self, config: crate::config::IdempotencyConfig) {
+        *self.idempotency_config.write() = config;
     }
 
     /// Expose the cost tracker for external use (budget configuration, REST handler).
@@ -1327,7 +1377,7 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> JsonRpcResponse {
         self.shadow_tools_list_assembly(session_id, false);
-        let tools = if self.code_mode_enabled {
+        let mut tools = if self.code_mode_enabled {
             self.meta_tool_exposure.filter(build_code_mode_tools())
         } else {
             let (tool_count, server_count) = self.backend_counts();
@@ -1340,6 +1390,9 @@ impl MetaMcp {
                 &self.meta_tool_exposure,
             )
         };
+        if self.signing_enabled() && self.require_nonce {
+            require_gateway_invoke_nonce(&mut tools);
+        }
         let mut tool_descriptors =
             project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
 
@@ -1636,6 +1689,13 @@ impl MetaMcp {
             .await
         {
             return response;
+        }
+
+        if let Some(execution) = caller.execution
+            && let Err(error) =
+                self.mark_management_dispatch(tool_name, &arguments, session_id, execution)
+        {
+            return error_response_preserving_status(id, &error);
         }
 
         let result = match tool_name {

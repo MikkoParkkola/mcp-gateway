@@ -29,6 +29,10 @@ fn allow_all_ctx_named<'a>(
     agent_id: Option<&'a str>,
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'a> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
         authorizer: &ALLOW_ALL,
         api_key_name,
         agent_id,
@@ -49,6 +53,10 @@ fn allow_all_ctx_named<'a>(
 /// `#[cfg(test)]`, so no release build can reach this path.
 fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
         authorizer: &ALLOW_ALL,
         api_key_name: None,
         agent_id: None,
@@ -748,6 +756,10 @@ providers:
             Some("session-1"),
             &{
                 crate::gateway::meta_mcp::MetaMcpCallerContext {
+                    signing: None,
+                    execution: None,
+                    credential_principal: None,
+                    is_modern: false,
                     authorizer: &ALLOW_ALL,
                     api_key_name: Some("shared-api-key"),
                     agent_id: Some("agent-1"),
@@ -3382,6 +3394,10 @@ fn allow_all_ctx_declaring(
     declared: crate::protocol::meta::Declared,
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
         authorizer: &ALLOW_ALL,
         api_key_name: None,
         agent_id: None,

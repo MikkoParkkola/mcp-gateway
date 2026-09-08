@@ -35,10 +35,11 @@ pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
     CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
     CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, ErrorBudgetSection,
-    FailsafeConfig, HealthCheckConfig, IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig,
-    KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig,
-    PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig,
-    RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
+    FailsafeConfig, HealthCheckConfig, IdempotencyConfig, IdempotencyReadOnlyTool,
+    IdentityGrantsConfig, KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig,
+    KeyServerProviderConfig, PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig,
+    RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig,
+    RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
     StreamingConfig, ToolContractConfig, WebhookConfig,
 };
 
@@ -71,6 +72,8 @@ pub struct Config {
     pub capabilities: CapabilityConfig,
     /// Cache configuration.
     pub cache: CacheConfig,
+    /// Operator-owned read-only exceptions to execution admission.
+    pub idempotency: IdempotencyConfig,
     /// Playbook configuration.
     pub playbooks: PlaybooksConfig,
     /// Security policy configuration.
@@ -527,7 +530,12 @@ impl Config {
             .extract()
             .map_err(|e| Error::Config(e.to_string()))?;
         let secret_refs = match expansion {
-            Expansion::Resolve => config.expand_env_vars(&overlay),
+            Expansion::Resolve => {
+                let refs = config.expand_env_vars(&overlay);
+                config.security.message_signing =
+                    config.security.message_signing.resolve_with_env(&overlay)?;
+                refs
+            }
             Expansion::Literal => BTreeSet::new(),
         };
         config.validate_with_env(&overlay)?;
@@ -727,11 +735,13 @@ impl Config {
         self.validate_remote_backend_provenance()?;
         self.validate_required_env_references(overlay)?;
         self.runtime.validate()?;
+        self.idempotency.validate()?;
         self.validate_backend_runtime_profiles()?;
         self.validate_stop_when_idle_ownership()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
         self.validate_agent_key_material(overlay)?;
+        self.security.message_signing.resolve_with_env(overlay)?;
         self.key_server.validate()?;
         self.error_budget.validate()?;
         Ok(())

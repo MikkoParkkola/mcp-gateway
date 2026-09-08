@@ -1577,6 +1577,7 @@ async fn meta_mcp_management_tool_requires_admin_client() {
 fn authorize_tool_target_enforces_agent_scope() {
     let state = test_router_app_state();
     let identity = OAuthAgentIdentity {
+        quota_principal: None,
         client_id: "agent-a".to_string(),
         agent_name: "Agent A".to_string(),
         scopes: vec![
@@ -2398,6 +2399,7 @@ fn scoped_client(
     allowed_tools: Option<Vec<String>>,
 ) -> AuthenticatedClient {
     AuthenticatedClient {
+        quota_principal: None,
         name: name.to_string(),
         rate_limit: 0,
         backends,
@@ -2442,6 +2444,10 @@ async fn run_step_with_identity(
         ),
     };
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
@@ -2644,6 +2650,10 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         principal: super::authorization::refusal_principal(Some(&client), None, None),
     };
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
@@ -2831,6 +2841,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
     );
 
     let agent = AgentIdentity {
+        quota_principal: None,
         client_id: "cid".to_string(),
         agent_name: "runner".to_string(),
         scopes: Vec::new(),
@@ -2853,6 +2864,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
     );
 
     let anonymous = AuthenticatedClient {
+        quota_principal: None,
         authenticated: false,
         ..scoped_client("public", vec![], None)
     };
@@ -2900,6 +2912,7 @@ async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
     }
     let client = scoped_client("scoped", vec![], None);
     let cert = CertIdentity {
+        quota_principal: None,
         common_name: Some("trusted-machine".to_string()),
         display_name: "trusted-machine".to_string(),
         ..CertIdentity::default()
@@ -2946,6 +2959,7 @@ async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
 
     // Scoped to one tool on one backend.
     let agent = AgentIdentity {
+        quota_principal: None,
         client_id: "agent-1".to_string(),
         agent_name: "runner".to_string(),
         scopes: vec![Scope::parse("tools:alpha:permitted:*").expect("scope must parse")],
@@ -3002,6 +3016,10 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         principal: super::authorization::refusal_principal(Some(&client), None, None),
     };
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        is_modern: false,
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
