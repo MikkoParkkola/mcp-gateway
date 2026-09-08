@@ -679,7 +679,9 @@ impl MetaMcp {
     }
 
     /// Enable idempotency support with a background cleanup task.
-    #[allow(dead_code)]
+    ///
+    /// Called unconditionally from the boot path; while the cache is `None`
+    /// every client-supplied idempotency key is inert.
     pub fn enable_idempotency(&mut self, cache: Arc<IdempotencyCache>, cleanup_interval: Duration) {
         spawn_cleanup_task(Arc::clone(&cache), cleanup_interval);
         self.idempotency_cache = Some(cache);

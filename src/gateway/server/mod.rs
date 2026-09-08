@@ -724,6 +724,21 @@ impl Gateway {
             info!(action, "Response contract gate enabled");
         }
 
+        // ── Idempotency (MIK-7272.SUB.4) ─────────────────────────────────────
+        // Unconditional and unconfigurable. A client-supplied idempotency key
+        // is a correctness mechanism, not a preference: the only thing an
+        // operator toggle would buy is the ability to switch duplicated side
+        // effects back on. Bounds are the constants in `crate::idempotency`.
+        // Reaches HTTP callers only until the stdio seam lands — stdio still
+        // discards the retry fields before dispatch, see
+        // `docs/design/2026-09-08-sub4-idempotency-wiring.md`.
+        Arc::get_mut(&mut meta_mcp)
+            .expect("no other Arc references at this point")
+            .enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                crate::idempotency::CLEANUP_INTERVAL,
+            );
+
         // ── Local identity grants (MIK-6553 free/core) ───────────────────────
         if let Some((path, grants)) =
             load_configured_identity_grants(&self.config.security.identity_grants).await?
