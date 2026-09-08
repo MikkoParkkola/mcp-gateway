@@ -28,8 +28,6 @@ pub(crate) mod execution;
 #[cfg(test)]
 mod runtime_tests;
 
-pub(crate) use crate::protocol::tasks::TaskSnapshot;
-pub use crate::protocol::tasks::{Task, TaskOptions, TaskStatus, TaskTransition};
 /// Re-exported at crate-public visibility, not `pub(crate)`.
 ///
 /// `AppState.task_executor` is a public field of a type the integration-test
@@ -46,19 +44,23 @@ pub use execution::TaskExecutor;
 /// constructor — so the only thing an outside caller can write is `task: None`.
 pub use execution::TaskIntent;
 pub(crate) use execution::{
-    BeginOutcome, CommitObserver, CommitStage, DrainOutcome, OwnedAdmissionRequest,
-    OwnedCallerContext, RecoveredRead, RecoveryRefusal, TaskCall, TaskWrite, UpstreamAnswer,
-    UpstreamCapture, UpstreamHandle, UpstreamRecovery, WriteOutcome,
+    OwnedAdmissionRequest, OwnedCallerContext, TaskCall, UpstreamAnswer, UpstreamHandle,
+    UpstreamRecovery,
 };
-pub(crate) use record::{CommittedTask, UpstreamRecord};
-pub(crate) use service::CreateOutcome;
 /// Re-exported at crate-public visibility for the same reason as
 /// [`TaskExecutor`]: [`open_runtime`] is `pub` and returns this error, so its
 /// name has to be reachable from outside the crate.
 pub use service::ServiceError;
 pub use service::TaskService;
 pub use store::StoreLimits;
-pub(crate) use store::{StoreError, TaskStore};
+
+pub use crate::protocol::tasks::Task;
+#[cfg(test)]
+pub use crate::protocol::tasks::{TaskOptions, TaskStatus, TaskTransition};
+#[cfg(test)]
+pub(crate) use execution::{CommitObserver, CommitStage};
+#[cfg(test)]
+pub(crate) use service::CreateOutcome;
 
 /// Open the durable store, import restored bindings, build the executor, and
 /// settle whatever a previous process left mid-flight.

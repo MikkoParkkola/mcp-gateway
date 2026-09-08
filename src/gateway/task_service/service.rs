@@ -16,7 +16,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use serde_json::Value;
 use tokio::sync::OwnedSemaphorePermit;
 
@@ -25,7 +24,12 @@ use super::store::{StoreError, StoreLimits, TaskStore};
 use crate::idempotency::admission::{
     ExecutionAdmission, Refusal, Request, TaskAdmission, TaskOwner,
 };
-use crate::protocol::tasks::{Task, TaskTransition};
+use crate::protocol::tasks::Task;
+
+#[cfg(test)]
+use crate::protocol::tasks::TaskTransition;
+#[cfg(test)]
+use chrono::{DateTime, Utc};
 
 /// Internal create facade. Worker-cap excess is `Capacity`; every store failure
 /// is `Unavailable`. `Created` carries the reserved permit out to its consumer.
@@ -164,6 +168,11 @@ impl TaskService {
 
     /// Cancel is a durable transition: the terminal view returned here is the one
     /// that was committed, and it is what every later read sees.
+    ///
+    /// Request-path cancel goes through [`super::execution::TaskExecutor::cancel`],
+    /// which also signals the owning worker. This method is the isolated facade
+    /// the service tests drive.
+    #[cfg(test)]
     pub(crate) async fn cancel(
         &self,
         principal: &str,
@@ -196,6 +205,9 @@ impl TaskService {
         self.get(principal, id)
     }
 
+    /// Tests own a by-value service. Production holds `Arc<TaskService>` and
+    /// releases custody through [`Self::shutdown`].
+    #[cfg(test)]
     pub(crate) async fn close(self) -> Result<(), ServiceError> {
         self.store
             .close()

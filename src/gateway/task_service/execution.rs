@@ -22,10 +22,9 @@ pub(crate) use context::{OwnedAdmissionRequest, OwnedCallerContext};
 pub(crate) use expiry::ExpirySweep;
 pub(crate) use observe::{
     CommitObserver, CommitStage, DrainOutcome, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
-    remaining_implementation,
 };
 use observe::{Handoff, HandoffRegistry};
-pub(crate) use upstream::{RecoveredRead, RecoveryRefusal, UpstreamCapture};
+pub(crate) use upstream::UpstreamCapture;
 /// Reachable at the visibility of [`TaskExecutor::commit`], which returns it.
 pub(crate) use worker::CommitFailure;
 use worker::commit_and_run;
@@ -35,9 +34,6 @@ use super::service::{CreateOutcome, ServiceError, TaskService};
 use crate::gateway::subscription_registry::SubscriptionRegistry;
 use crate::protocol::tasks::{Task, TaskOptions, TaskStatus, TaskTransition};
 use crate::protocol::{JsonRpcResponse, RequestId};
-
-/// Default worker cap when config has not yet been wired (lane 3).
-pub(crate) const DEFAULT_MAX_WORKERS: usize = 16;
 
 pub(crate) struct TaskCall {
     pub tool: String,
@@ -184,6 +180,7 @@ impl TaskExecutor {
         self.recovery.set(adapter).is_ok()
     }
 
+    #[cfg(test)]
     pub(crate) fn observe_commits(&self, observer: Arc<dyn CommitObserver>) {
         *self.observer.lock() = Some(observer);
     }
@@ -315,17 +312,6 @@ impl TaskExecutor {
         id: &str,
     ) -> Option<super::record::UpstreamRecord> {
         self.service.store.upstream_for_test(id)
-    }
-
-    pub(crate) async fn settle(
-        &self,
-        id: &str,
-        outcome: TaskTransition,
-        principal: &str,
-        revision: u64,
-    ) -> Result<(), ServiceError> {
-        self.settle_cas(principal, id, revision, outcome).await;
-        Ok(())
     }
 
     /// Join every owner, then every worker permit, inside one timeout budget.
