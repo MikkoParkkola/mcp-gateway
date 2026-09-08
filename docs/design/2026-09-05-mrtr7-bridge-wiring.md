@@ -191,7 +191,12 @@ era downstream, which is the drift this design argued for avoiding. The store
 did NOT. `router/handlers.rs:835` still calls `shape.declared_capabilities()`
 and passes that value straight into `input_capabilities` at `:1400`, so
 production puts the per-request SLICE into the field rows 311 and 325 require to
-hold the SESSION value, and `handle_initialize` writes nothing. Consequence 1 —
+hold the SESSION value. `handle_initialize` does write session-keyed state --
+a negotiated-revision binding (`src/gateway/meta_mcp/mod.rs:1236`) and a routing
+profile (`:1249`) -- but nothing about capabilities, so no declaration survives
+the handshake. (`SessionProfileStore::remove_session`,
+`src/routing_profile/mod.rs:462`, has no production caller either: the same
+leak that disqualified `SessionLifecycle` for this job.) Consequence 1 --
 a legacy client declares nothing, so the bridge can never fire for the only
 client class it exists for — therefore still holds in the tree today.
 
@@ -203,8 +208,15 @@ once at `initialize` and has no per-request channel at all, so the session store
 is its only truth and the slice is silence, not denial — `Some(&[])` and `None`
 are different claims, which is why `InputBridge::run` takes `declared` and
 `slice` as two arguments rather than one merged value
-(`src/gateway/input_bridge.rs:361-365`). Refusal semantics are untouched in both
-directions; only the input to `undeclared()` moves.
+(`src/gateway/input_bridge.rs:361-365`). The refusal PREDICATE is untouched in
+both directions -- only the input to `undeclared()` moves -- but the two
+directions are not symmetric in what that input may do, and flattening them is
+the fail-open bug the section below warns about. For `Modern` the permitted set
+must not move at all: a caller that declared at `initialize` and sent no
+per-request `_meta` is refused today and must stay refused. For `Legacy` the
+permitted set WIDENS, and that widening is the feature -- a legacy caller
+refused today is bridged tomorrow, which is what consequence 1 above says the
+bridge exists for.
 
 ## Options for the missing store
 
