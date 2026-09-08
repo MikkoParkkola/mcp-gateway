@@ -82,7 +82,7 @@ async fn negotiated(state: &Arc<AppState>, requested: &str) -> String {
 #[tokio::test]
 async fn compat_2025_06_18_is_negotiated_not_downgraded() {
     // GIVEN: a gateway with the shipped supported-version set
-    let state = state(Fixture::default());
+    let (state, _store_dir) = state(Fixture::default()).await;
 
     // WHEN: a legacy client asks for 2025-06-18
     let settled = negotiated(&state, "2025-06-18").await;
@@ -95,7 +95,7 @@ async fn compat_2025_06_18_is_negotiated_not_downgraded() {
 #[tokio::test]
 async fn compat_2025_03_26_is_negotiated_not_downgraded() {
     // GIVEN: a gateway with the shipped supported-version set
-    let state = state(Fixture::default());
+    let (state, _store_dir) = state(Fixture::default()).await;
 
     // WHEN: a legacy client asks for 2025-03-26
     let settled = negotiated(&state, "2025-03-26").await;
@@ -108,7 +108,7 @@ async fn compat_2025_03_26_is_negotiated_not_downgraded() {
 #[tokio::test]
 async fn compat_2024_11_05_is_negotiated_not_downgraded() {
     // GIVEN: a gateway with the shipped supported-version set
-    let state = state(Fixture::default());
+    let (state, _store_dir) = state(Fixture::default()).await;
 
     // WHEN: a legacy client asks for 2024-11-05
     let settled = negotiated(&state, "2024-11-05").await;
@@ -124,7 +124,7 @@ async fn compat_2024_11_05_is_negotiated_not_downgraded() {
 #[tokio::test]
 async fn compat_an_unknown_revision_is_downgraded_to_the_fallback() {
     // GIVEN: a gateway with the shipped supported-version set
-    let state = state(Fixture::default());
+    let (state, _store_dir) = state(Fixture::default()).await;
 
     // WHEN: a legacy client asks for a revision that does not exist
     let settled = negotiated(&state, "1999-01-01").await;
@@ -142,7 +142,7 @@ async fn compat_an_unknown_revision_is_downgraded_to_the_fallback() {
 #[tokio::test]
 async fn compat_2025_11_25_is_published_by_discovery() {
     // GIVEN: a gateway serving discovery
-    let state = state(Fixture::default());
+    let (state, _store_dir) = state(Fixture::default()).await;
 
     // WHEN: a caller asks what revisions are served
     let (status, body) = post(&state, modern("server/discover", json!({})), &[]).await;
@@ -168,7 +168,7 @@ async fn compat_2025_11_25_is_published_by_discovery() {
 #[tokio::test]
 async fn compat_2026_07_28_is_served_on_the_stateless_path() {
     // GIVEN: a gateway with the stateless path enabled, as shipped
-    let state = state(Fixture::default());
+    let (state, _store_dir) = state(Fixture::default()).await;
 
     // WHEN: a modern caller sends a 2026-07-28 frame, header and `_meta` both
     let (status, body) = post(&state, modern("server/discover", json!({})), &[]).await;
@@ -186,10 +186,11 @@ async fn compat_2026_07_28_is_served_on_the_stateless_path() {
 #[tokio::test]
 async fn compat_2026_07_28_is_refused_when_the_stateless_path_is_off() {
     // GIVEN: a gateway with the stateless path disabled
-    let state = state(Fixture {
+    let (state, _store_dir) = state(Fixture {
         modern_protocol: false,
         ..Default::default()
-    });
+    })
+    .await;
 
     // WHEN: the same 2026-07-28 frame arrives
     let (status, body) = post(&state, modern("server/discover", json!({})), &[]).await;

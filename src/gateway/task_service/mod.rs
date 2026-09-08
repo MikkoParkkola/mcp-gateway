@@ -43,8 +43,12 @@ pub(crate) use execution::{
     OwnedCallerContext, TaskCall, TaskIntent, TaskWrite, UpstreamRecovery, WriteOutcome,
 };
 pub(crate) use record::CommittedTask;
+pub(crate) use service::CreateOutcome;
+/// Re-exported at crate-public visibility for the same reason as
+/// [`TaskExecutor`]: [`open_runtime`] is `pub` and returns this error, so its
+/// name has to be reachable from outside the crate.
+pub use service::ServiceError;
 pub use service::TaskService;
-pub(crate) use service::{CreateOutcome, ServiceError};
 pub use store::StoreLimits;
 pub(crate) use store::{StoreError, TaskStore};
 

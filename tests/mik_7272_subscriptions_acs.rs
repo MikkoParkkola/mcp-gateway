@@ -270,13 +270,21 @@ mod http {
     use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
     use mcp_gateway::gateway::proxy::ProxyManager;
     use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-    use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+    use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+    use mcp_gateway::gateway::test_helpers::{
+        AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+    };
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
     use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
-    fn state(modern: bool) -> Arc<AppState> {
+    /// The gateway state, plus the directory its task store leases.
+    ///
+    /// The store holds that directory for as long as the service lives, and the
+    /// cases here keep listen streams open across several steps, so the caller
+    /// binds the `TempDir` for the whole test rather than dropping it here.
+    async fn state(modern: bool) -> (Arc<AppState>, tempfile::TempDir) {
         let mut config = Config::default();
         config.server.modern_protocol = modern;
         let backends = Arc::new(BackendRegistry::new());
@@ -286,7 +294,22 @@ mod http {
         ));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let agent_registry = Arc::new(AgentRegistry::new());
-        Arc::new(AppState {
+
+        // One registry, shared between the state the router reads and the
+        // executor that publishes: these cases assert on what a listener sees,
+        // and two registries would strand every task notification.
+        let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+        let store_dir = tempfile::tempdir().expect("a private task-store directory");
+        let (tasks, task_executor) = open_runtime(
+            &store_dir.path().join("tasks"),
+            config.tasks.max_workers,
+            StoreLimits::default(),
+            Arc::clone(&subscriptions),
+        )
+        .await
+        .expect("the fixture task store opens");
+
+        let state = Arc::new(AppState {
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
             env: None,
             meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
@@ -315,11 +338,11 @@ mod http {
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-            tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-            subscriptions: Arc::new(
-                mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-            ),
-        })
+            tasks,
+            task_executor,
+            subscriptions,
+        });
+        (state, store_dir)
     }
 
     async fn post(modern: bool, body: Value, headers: &[(&str, &str)]) -> (StatusCode, Value) {
@@ -330,7 +353,10 @@ mod http {
         for (name, value) in headers {
             builder = builder.header(*name, *value);
         }
-        let response = create_router(state(modern))
+        // `_store_dir` stays bound until this helper returns, which is after the
+        // response body has been read: the store's directory outlives the request.
+        let (app, _store_dir) = state(modern).await;
+        let response = create_router(app)
             .oneshot(
                 builder
                     .body(Body::from(serde_json::to_vec(&body).expect("body")))
@@ -436,7 +462,7 @@ mod http {
 
     #[tokio::test]
     async fn ac_sub_1_the_gateway_serves_subscriptions_listen() {
-        let state = state(true);
+        let (state, _store_dir) = state(true).await;
         let (status, content_type, mut stream) = open_listen(
             &state,
             json!({ "notifications": { "toolsListChanged": true } }),
@@ -464,7 +490,7 @@ mod http {
 
     #[tokio::test]
     async fn ac_sub_1_a_notification_reaches_a_listener_tagged_with_its_subscription() {
-        let state = state(true);
+        let (state, _store_dir) = state(true).await;
         let (status, _, mut stream) = open_listen(
             &state,
             json!({ "notifications": { "toolsListChanged": true } }),
@@ -493,7 +519,7 @@ mod http {
 
     #[tokio::test]
     async fn ac_sub_1_a_listener_is_not_sent_what_it_did_not_ask_for() {
-        let state = state(true);
+        let (state, _store_dir) = state(true).await;
         // An empty filter is a valid request and opens a quiet stream.
         let (status, _, mut stream) = open_listen(&state, json!({ "notifications": {} })).await;
         assert_eq!(status, StatusCode::OK);
@@ -514,7 +540,7 @@ mod http {
     async fn ac_sub_1_the_open_stream_count_has_a_ceiling() {
         // A client may open a stream and walk away, so the ceiling is what
         // makes an abandoned stream cost something finite.
-        let state = state(true);
+        let (state, _store_dir) = state(true).await;
         let mut held = Vec::new();
         for _ in 0..64 {
             held.push(
@@ -661,7 +687,7 @@ mod http {
     /// declaring that era is refused and told which method replaced it.
     #[tokio::test]
     async fn ac_sub_1_1_modern_get_is_refused_and_names_the_replacement() {
-        let state = state(true);
+        let (state, _store_dir) = state(true).await;
         let (status, content_type, allow, body) =
             get_mcp(&state, &[("mcp-protocol-version", "2026-07-28")]).await;
         assert_eq!(
@@ -694,7 +720,7 @@ mod http {
     /// gets the unsupported-version answer the POST path already gives it.
     #[tokio::test]
     async fn ac_sub_1_2_modern_get_is_unsupported_when_modern_is_off() {
-        let state = state(false);
+        let (state, _store_dir) = state(false).await;
         let (status, _, _, body) = get_mcp(&state, &[("mcp-protocol-version", "2026-07-28")]).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         let body = body.expect("a refusal carries a JSON-RPC body");
@@ -711,7 +737,7 @@ mod http {
     /// send it to a method that refuses that same version.
     #[tokio::test]
     async fn ac_sub_1_2b_unserved_2026_revision_is_not_told_to_use_listen() {
-        let state = state(true);
+        let (state, _store_dir) = state(true).await;
         let (status, _, _, body) = get_mcp(&state, &[("mcp-protocol-version", "2026-11-01")]).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         let body = body.expect("a refusal carries a JSON-RPC body");
@@ -735,7 +761,7 @@ mod http {
     /// "refuse every GET" would satisfy every other row here.
     #[tokio::test]
     async fn ac_sub_1_3_legacy_get_still_opens_the_stream() {
-        let state = state(true);
+        let (state, _store_dir) = state(true).await;
         for headers in [
             &[][..],
             &[("mcp-protocol-version", "2025-06-18")][..],
@@ -759,7 +785,7 @@ mod http {
     /// the owner is resuming from.
     #[tokio::test]
     async fn ac_sub_3_1_refused_modern_get_leaves_resumption_state_alone() {
-        let state = state(true);
+        let (state, _store_dir) = state(true).await;
 
         // Seeded through the real legacy path, not a fixture: the same handler
         // under test is what stores the id.
@@ -839,7 +865,7 @@ mod http {
     /// Wherever it sits, it decides.
     #[tokio::test]
     async fn ac_sub_1_4_a_modern_token_decides_wherever_it_sits() {
-        let state = state(true);
+        let (state, _store_dir) = state(true).await;
         for headers in [
             &[
                 ("mcp-protocol-version", "2025-06-18"),
@@ -872,7 +898,7 @@ mod http {
     /// this change does not own.
     #[tokio::test]
     async fn ac_sub_1_4_a_repeated_legacy_version_still_streams() {
-        let state = state(true);
+        let (state, _store_dir) = state(true).await;
         for headers in [
             &[
                 ("mcp-protocol-version", "2025-06-18"),
@@ -919,8 +945,9 @@ mod http {
             )
             .body(Body::empty())
             .expect("request");
+        let (state, _store_dir) = state(true).await;
         assert_eq!(
-            get_mcp_raw(&state(true), request).await,
+            get_mcp_raw(&state, request).await,
             StatusCode::METHOD_NOT_ALLOWED,
             "an undecodable neighbouring token must not save a modern caller"
         );
@@ -937,8 +964,9 @@ mod http {
             .header("mcp-protocol-version", "2026-07-28")
             .body(Body::empty())
             .expect("request");
+        let (state, _store_dir) = state(true).await;
         assert_eq!(
-            get_mcp_raw(&state(true), request).await,
+            get_mcp_raw(&state, request).await,
             StatusCode::METHOD_NOT_ALLOWED,
             "the era refusal must not depend on what the caller accepts"
         );

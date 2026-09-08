@@ -42,7 +42,10 @@ use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+use mcp_gateway::gateway::test_helpers::{
+    AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+};
 use mcp_gateway::key_server::oidc::VerifiedIdentity;
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 use mcp_gateway::protocol::continuation::{ContinuationError, ContinuationState, Payload};
@@ -73,7 +76,12 @@ const CALLER_B: &str = "bob";
 /// `continuation` comes from `ContinuationState::new()` — the production
 /// constructor — so handles minted here are minted under the key material the
 /// running gateway would use, not bytes a test chose.
-fn app_state() -> Arc<AppState> {
+///
+/// The `TempDir` is handed back with the state: the task store leases its
+/// directory for as long as the service lives, so a directory dropped here
+/// would be deleted under a gateway still answering. A fresh one per call keeps
+/// the two-replica cases below two processes rather than one.
+async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
     let config = Config::default();
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -89,7 +97,20 @@ fn app_state() -> Arc<AppState> {
     // forgery.
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let continuation = meta_mcp.continuation();
-    Arc::new(AppState {
+
+    // One registry, shared with the executor that publishes through it.
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let (tasks, task_executor) = open_runtime(
+        &store_dir.path().join("tasks"),
+        config.tasks.max_workers,
+        StoreLimits::default(),
+        Arc::clone(&subscriptions),
+    )
+    .await
+    .expect("the fixture task store opens");
+
+    let state = Arc::new(AppState {
         env: None,
         meta_mcp,
         backends,
@@ -117,12 +138,12 @@ fn app_state() -> Arc<AppState> {
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-        tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-        subscriptions: Arc::new(
-            mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
+        tasks,
+        task_executor,
+        subscriptions,
         continuation,
-    })
+    });
+    (state, store_dir)
 }
 
 /// The arguments the original call carried, and the retry repeats.
@@ -199,11 +220,11 @@ async fn mint_for(
 /// Every case that needs a minted handle needs a backend to mint against, now
 /// that the handle comes from the production path rather than a hand-built
 /// payload.
-async fn state_with_fixture() -> (Arc<AppState>, Received) {
-    let state = app_state();
+async fn state_with_fixture() -> (Arc<AppState>, Received, tempfile::TempDir) {
+    let (state, store_dir) = app_state().await;
     let (url, received) = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);
-    (state, received)
+    (state, received, store_dir)
 }
 
 /// A retry presented on the wire: `requestState` and `inputResponses` are
@@ -336,7 +357,7 @@ fn assert_not_refused_by_the_continuation_guard(response: &Value, case: &str) {
 /// THEN the continuation guard refuses it.
 #[tokio::test]
 async fn ac_mrtr_4_a_handle_minted_for_one_principal_is_refused_for_another() {
-    let (state, received) = state_with_fixture().await;
+    let (state, received, _store_dir) = state_with_fixture().await;
     let handle = mint_for(&state, &received, CALLER_B, TOOL_INTERIM, &arguments()).await;
 
     let (_status, response) =
@@ -349,7 +370,7 @@ async fn ac_mrtr_4_a_handle_minted_for_one_principal_is_refused_for_another() {
 /// THEN the continuation guard refuses it.
 #[tokio::test]
 async fn ac_mrtr_4_a_handle_minted_for_one_tool_is_refused_for_another() {
-    let (state, received) = state_with_fixture().await;
+    let (state, received, _store_dir) = state_with_fixture().await;
     let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &arguments()).await;
 
     let (_status, response) =
@@ -366,7 +387,7 @@ async fn ac_mrtr_4_a_handle_minted_for_one_tool_is_refused_for_another() {
 /// is provisional.
 #[tokio::test]
 async fn ac_mrtr_4_the_handle_it_was_minted_for_is_not_refused() {
-    let (state, received) = state_with_fixture().await;
+    let (state, received, _store_dir) = state_with_fixture().await;
     let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &arguments()).await;
 
     let (_status, response) =
@@ -387,7 +408,7 @@ async fn ac_mrtr_4_the_handle_it_was_minted_for_is_not_refused() {
 /// redemption was *not* refused.
 #[tokio::test]
 async fn ac_mrtr_5a_a_handle_is_refused_on_its_second_redemption() {
-    let (state, received) = state_with_fixture().await;
+    let (state, received, _store_dir) = state_with_fixture().await;
     let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &arguments()).await;
     let body = retry_body(1, TOOL_INTERIM, &arguments(), &handle);
 
@@ -432,7 +453,7 @@ async fn ac_mrtr_5a_a_handle_is_refused_on_its_second_redemption() {
 /// distinction survives.
 #[tokio::test]
 async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
-    let (state, received) = state_with_fixture().await;
+    let (state, received, _store_dir) = state_with_fixture().await;
     let args = arguments();
     let live = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &args).await;
     let now = now_secs();
@@ -486,7 +507,7 @@ async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
 /// would take.
 #[tokio::test]
 async fn ac_mrtr_8b_a_handle_outliving_the_ceiling_cannot_be_redeemed() {
-    let (state, received) = state_with_fixture().await;
+    let (state, received, _store_dir) = state_with_fixture().await;
     let args = arguments();
     let live = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &args).await;
     let now = now_secs();
@@ -544,7 +565,7 @@ async fn ac_mrtr_8b_a_handle_outliving_the_ceiling_cannot_be_redeemed() {
 /// may order the two either way.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ac_mrtr_5c_two_racing_redemptions_yield_exactly_one_success() {
-    let (state, received) = state_with_fixture().await;
+    let (state, received, _store_dir) = state_with_fixture().await;
     let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &arguments()).await;
     let body = retry_body(1, TOOL_INTERIM, &arguments(), &handle);
 
@@ -701,7 +722,7 @@ fn fresh_body(id: u64, tool: &str, args: &Value) -> Value {
 /// this file is measuring the fixture rather than the gateway.
 #[tokio::test]
 async fn fixture_control_a_fresh_call_reaches_the_backend() {
-    let state = app_state();
+    let (state, _store_dir) = app_state().await;
     let (url, received) = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);
 
@@ -733,7 +754,7 @@ async fn fixture_control_a_fresh_call_reaches_the_backend() {
 /// regression here silently empties the others of meaning.
 #[tokio::test]
 async fn fixture_control_a_valid_retry_reaches_the_backend() {
-    let (state, received) = state_with_fixture().await;
+    let (state, received, _store_dir) = state_with_fixture().await;
     let args = arguments();
     let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &args).await;
 
@@ -799,7 +820,7 @@ async fn ac_mrtr_1_a_retry_reaches_the_backend_carrying_what_it_continued() {
     ];
 
     for (index, (case, with_state, responses)) in cases.into_iter().enumerate() {
-        let state = app_state();
+        let (state, _store_dir) = app_state().await;
         let (url, received) = spawn_fixture_backend().await;
         register_fixture_backend(&state, &url);
         let handle = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &arguments()).await;
@@ -884,7 +905,7 @@ fn handle_the_client_received(state: &Arc<AppState>, value: &Value) -> Option<St
 /// half start discriminating a correct gateway from a silent one.
 #[tokio::test]
 async fn ac_mrtr_2_the_backends_own_state_is_never_relayed_to_the_client() {
-    let state = app_state();
+    let (state, _store_dir) = app_state().await;
     let (url, _received) = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);
 
@@ -977,7 +998,7 @@ fn tamper(handle: &str) -> String {
 #[tokio::test]
 async fn ac_mrtr_3_every_forged_presentation_is_refused_by_the_continuation_guard() {
     // GIVEN: a genuine handle, and four ways a client can present something else.
-    let (state, received) = state_with_fixture().await;
+    let (state, received, _store_dir) = state_with_fixture().await;
     let args = arguments();
     let genuine = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &args).await;
 
@@ -1029,7 +1050,7 @@ async fn ac_mrtr_3_every_forged_presentation_is_refused_by_the_continuation_guar
 #[tokio::test]
 async fn ac_mrtr_3_a_genuine_handle_is_still_accepted() {
     // GIVEN: the handle this gateway minted, for this principal and this call.
-    let (state, received) = state_with_fixture().await;
+    let (state, received, _store_dir) = state_with_fixture().await;
     let args = arguments();
     let genuine = mint_for(&state, &received, CALLER_A, TOOL_INTERIM, &args).await;
 
@@ -1061,7 +1082,7 @@ async fn ac_mrtr_3_a_genuine_handle_is_still_accepted() {
 #[tokio::test]
 async fn ac_mrtr_5d_a_handle_minted_by_another_process_is_refused() {
     // GIVEN: a handle minted under key material this process never held.
-    let state = app_state();
+    let (state, _store_dir) = app_state().await;
     let args = arguments();
     let foreign = mint_on_a_foreign_process(TOOL, &args);
 
@@ -1098,7 +1119,7 @@ async fn ac_mrtr_5d_a_handle_minted_by_another_process_is_refused() {
 /// future reader does not read this green as proof of that.
 #[tokio::test]
 async fn ac_mrtr_8_an_exchange_the_gateway_opened_occupies_a_slot() {
-    let state = app_state();
+    let (state, _store_dir) = app_state().await;
     let (url, _received) = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);
 
@@ -1122,7 +1143,7 @@ async fn ac_mrtr_8_an_exchange_the_gateway_opened_occupies_a_slot() {
 /// the bound exists to prevent.
 #[tokio::test]
 async fn ac_mrtr_8_a_call_that_finished_holds_no_slot() {
-    let state = app_state();
+    let (state, _store_dir) = app_state().await;
     let (url, _received) = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);
 
@@ -1177,8 +1198,8 @@ async fn ac_mrtr_8_a_call_that_finished_holds_no_slot() {
 #[tokio::test]
 async fn ac_mrtr_6_a_retry_at_another_replica_is_refused_and_opens_no_exchange() {
     // GIVEN: replica A minted the handle; replica B has a backend to dispatch to.
-    let origin = app_state();
-    let neighbour = app_state();
+    let (origin, _origin_store_dir) = app_state().await;
+    let (neighbour, _neighbour_store_dir) = app_state().await;
     let (url, received) = spawn_fixture_backend().await;
     register_fixture_backend(&origin, &url);
     register_fixture_backend(&neighbour, &url);
@@ -1273,7 +1294,7 @@ async fn ac_mrtr_6_a_retry_at_another_replica_is_refused_and_opens_no_exchange()
 #[tokio::test]
 async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused() {
     // GIVEN: a handle this replica minted, and no exchange open for it.
-    let state = app_state();
+    let (state, _store_dir) = app_state().await;
     let (url, received) = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);
     let args = arguments();
@@ -1350,8 +1371,8 @@ async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused(
 /// which replica wins is not a property — only that the pair yields one.
 #[tokio::test]
 async fn ac_mrtr_5d_one_handle_retried_at_two_replicas_yields_one_backend_call() {
-    let origin = app_state();
-    let neighbour = app_state();
+    let (origin, _origin_store_dir) = app_state().await;
+    let (neighbour, _neighbour_store_dir) = app_state().await;
     let (origin_url, origin_calls) = spawn_fixture_backend().await;
     let (neighbour_url, neighbour_calls) = spawn_fixture_backend().await;
     register_fixture_backend(&origin, &origin_url);

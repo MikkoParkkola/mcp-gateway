@@ -25,6 +25,7 @@
 //! The settled half (`ttlMs: number | null` present-and-nullable,
 //! `pollIntervalMs?: number`) is in scope and is asserted below.
 
+use mcp_gateway::protocol::JsonRpcError;
 use mcp_gateway::protocol::cacheable::is_final;
 use mcp_gateway::protocol::headers::mcp_name_body_field;
 use mcp_gateway::protocol::meta::ADDED_IN_2026_07_28;
@@ -55,23 +56,27 @@ fn ac_task_1_5_tasks_cancel_is_gated_as_a_2026_07_28_method() {
 // tool result with `isError: true` is `completed`, never `failed`.
 // ===========================================================================
 
-/// This case is REWRITTEN, not repaired, when `Task::error()` stops returning
-/// `Option<&str>` — §3.1 mandates that signature change, so the breakage is the
-/// change working rather than a regression. Asserting over the *value's* shape
-/// keeps it compiling against today's type while still failing on the defect.
+/// The canonical model carries a typed JSON-RPC error; its serialized payload
+/// must preserve the backend code, message and optional data as an object.
 #[test]
 fn ac_task_1_6_a_failed_task_carries_an_error_object_not_a_string() {
     let mut task = Task::create("weather.get");
-    task.fail("upstream refused");
+    task.fail(JsonRpcError {
+        code: -32001,
+        message: "upstream refused".to_string(),
+        data: Some(json!({ "reason": "backend-policy" })),
+    });
 
-    let raw = task.error().expect("a failed task reports why it failed");
-    let parsed: Option<Value> = serde_json::from_str(raw).ok();
-    assert!(
-        parsed
-            .as_ref()
-            .is_some_and(|v| v.get("code").is_some() && v.get("message").is_some()),
-        "the specification requires a JSON-RPC error object with `code` and \
-         `message`; a bare string cannot carry either, and got {raw:?}"
+    let error = task.error().expect("a failed task reports why it failed");
+    let encoded = serde_json::to_value(error).expect("the task error serializes");
+    assert_eq!(
+        encoded,
+        json!({
+            "code": -32001,
+            "message": "upstream refused",
+            "data": { "reason": "backend-policy" }
+        }),
+        "a failed task preserves the full JSON-RPC error object, never an encoded string"
     );
 }
 
@@ -119,14 +124,10 @@ fn ac_task_1_7_mcp_name_mirrors_task_id_on_the_task_methods() {
 // MIK-7272.TASK.1.2 — `tasks/get` returns the per-status shape.
 // ===========================================================================
 
-/// PARTIAL, and the missing half is stated rather than skipped: `input_required`
-/// and `cancelled` are not variants of `TaskStatus` today, so a case naming them
-/// would not compile — and a test file that does not compile reports no failure
-/// text for any case in it. What is asserted here is the three variants that
-/// exist and the shape rule that separates them.
-///
-/// DEFERRED: `input_required` + `inputRequests`, and `cancelled`, land with the
-/// enum. Until then this case says nothing about them.
+/// The working/completed/failed payload rules remain covered here. The
+/// canonical five-status model's input-required and cancelled transitions and
+/// payload projection are covered by `protocol/tasks/lifecycle_tests.rs` and
+/// `protocol/tasks/snapshot_tests.rs`; this case makes no real-route claim.
 #[test]
 fn ac_task_1_2_each_status_carries_its_own_payload_and_no_other() {
     let working = Task::create("weather.get");
@@ -145,7 +146,11 @@ fn ac_task_1_2_each_status_carries_its_own_payload_and_no_other() {
     );
 
     let mut failed = Task::create("weather.get");
-    failed.fail("upstream refused");
+    failed.fail(JsonRpcError {
+        code: -32001,
+        message: "upstream refused".to_string(),
+        data: None,
+    });
     assert_eq!(failed.status(), TaskStatus::Failed);
     assert!(
         failed.error().is_some() && failed.result().is_none(),
@@ -363,7 +368,10 @@ mod http {
     use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
     use mcp_gateway::gateway::proxy::ProxyManager;
     use mcp_gateway::gateway::streaming::NotificationMultiplexer;
-    use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+    use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+    use mcp_gateway::gateway::test_helpers::{
+        AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+    };
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
     use mcp_gateway::protocol::headers::mcp_name_body_field;
     use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
@@ -396,8 +404,11 @@ mod http {
         }
     }
 
-    pub(super) fn state() -> Arc<AppState> {
-        state_from(two_principal_auth())
+    /// Every state constructor here returns the directory its task store
+    /// leases: the store holds it while the service lives, so the caller keeps
+    /// it bound for the whole test rather than letting it drop.
+    pub(super) async fn state() -> (Arc<AppState>, tempfile::TempDir) {
+        state_from(two_principal_auth()).await
     }
 
     /// The shape in which an unauthenticated caller REACHES `/mcp`:
@@ -421,11 +432,11 @@ mod http {
         auth
     }
 
-    pub(super) fn state_public_mcp() -> Arc<AppState> {
-        state_from(public_mcp_auth())
+    pub(super) async fn state_public_mcp() -> (Arc<AppState>, tempfile::TempDir) {
+        state_from(public_mcp_auth()).await
     }
 
-    pub(super) fn state_from(auth: AuthConfig) -> Arc<AppState> {
+    pub(super) async fn state_from(auth: AuthConfig) -> (Arc<AppState>, tempfile::TempDir) {
         let mut config = Config::default();
         config.server.modern_protocol = true;
         config.auth = auth;
@@ -435,7 +446,21 @@ mod http {
             config.streaming.clone(),
         ));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-        Arc::new(AppState {
+
+        // One registry, shared between the state the router reads and the
+        // executor that publishes through it.
+        let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+        let store_dir = tempfile::tempdir().expect("a private task-store directory");
+        let (tasks, task_executor) = open_runtime(
+            &store_dir.path().join("tasks"),
+            config.tasks.max_workers,
+            StoreLimits::default(),
+            Arc::clone(&subscriptions),
+        )
+        .await
+        .expect("the fixture task store opens");
+
+        let state = Arc::new(AppState {
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
             env: None,
             meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
@@ -464,11 +489,11 @@ mod http {
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-            tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
-            subscriptions: Arc::new(
-                mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-            ),
-        })
+            tasks,
+            task_executor,
+            subscriptions,
+        });
+        (state, store_dir)
     }
 
     /// A modern request. `declares_tasks` is per request on purpose: the whole
@@ -495,7 +520,10 @@ mod http {
     /// requires once `.7` lands. That is not circular: `.7` asserts the rule
     /// directly as a unit case, and nothing here asserts the header.
     pub(super) async fn post(principal: &str, body: Value) -> (StatusCode, Value) {
-        post_against(state(), principal, body).await
+        // Bound until this helper returns, which is after the response body has
+        // been read: the store's directory outlives the request made on it.
+        let (state, _store_dir) = state().await;
+        post_against(state, principal, body).await
     }
 
     pub(super) async fn post_against(
@@ -694,7 +722,7 @@ mod dispatch {
     /// before any status change — is the criterion's own wording.
     #[tokio::test]
     async fn ac_task_1_1_a_created_task_id_resolves_immediately() {
-        let state = state();
+        let (state, _store_dir) = state().await;
         let (_, created) = post_against(state.clone(), "key-a", task_call(10)).await;
 
         assert_eq!(
@@ -758,7 +786,7 @@ mod dispatch {
     /// VACUOUS with the case above, and for the same reason.
     #[tokio::test]
     async fn ac_task_1_3_an_accepted_update_acknowledges_with_an_empty_result() {
-        let state = state();
+        let (state, _store_dir) = state().await;
         let (_, created) = post_against(state.clone(), "key-a", task_call(13)).await;
         let task_id = created
             .pointer("/result/taskId")
@@ -847,7 +875,7 @@ mod ownership {
     /// one, so this case is GREEN today — green for the reason stated here.
     #[tokio::test]
     async fn ac_task_1_11_another_principals_task_is_indistinguishable_from_no_task() {
-        let state = state();
+        let (state, _store_dir) = state().await;
         let (_, created) = post_against(state.clone(), "key-a", task_call(20)).await;
         let task_id = created
             .pointer("/result/taskId")
@@ -890,7 +918,7 @@ mod ownership {
     /// assertion rather than a comment so it cannot quietly stop being true.
     #[tokio::test]
     async fn ac_task_1_12_subscription_admission_hides_another_principals_task() {
-        let state = state();
+        let (state, _store_dir) = state().await;
         let (_, created) = post_against(state.clone(), "key-a", task_call(23)).await;
         let task_id = created
             .pointer("/result/taskId")
@@ -957,7 +985,7 @@ mod ownership {
     /// no producer for, which fails as an absent name rather than a defect.
     #[tokio::test]
     async fn ac_task_1_9_a_task_subscription_is_admitted_for_its_owner() {
-        let state = state();
+        let (state, _store_dir) = state().await;
         let (_, created) = post_against(state.clone(), "key-a", task_call(27)).await;
         let task_id = created
             .pointer("/result/taskId")
@@ -1002,7 +1030,7 @@ mod ownership {
     /// agreeing for an unrelated reason.
     #[tokio::test]
     async fn ac_task_1_18_an_unattributed_caller_owns_no_task() {
-        let state = state_public_mcp();
+        let (state, _store_dir) = state_public_mcp().await;
 
         let (_, created) = post_against(state.clone(), "key-a", task_call(30)).await;
         let owned_id = created
@@ -1088,7 +1116,7 @@ mod ownership {
     /// case's.
     #[tokio::test]
     async fn ac_task_1_19_unattributed_subscription_is_quiet_not_refused() {
-        let state = state_public_mcp();
+        let (state, _store_dir) = state_public_mcp().await;
         let (_, created) = post_against(state.clone(), "key-a", task_call(36)).await;
         let owned_id = created
             .pointer("/result/taskId")
@@ -1148,7 +1176,8 @@ mod ownership {
     /// field nothing writes is a case that can never go green.
     #[tokio::test]
     async fn ac_task_1_20_auth_disabled_admits_the_unattributed_caller() {
-        let (_, refused) = post_unattributed(state_public_mcp(), task_call(40)).await;
+        let (public_state, _public_store_dir) = state_public_mcp().await;
+        let (_, refused) = post_unattributed(public_state, task_call(40)).await;
         assert_eq!(
             refused.pointer("/error/message").and_then(Value::as_str),
             Some("no such task"),
@@ -1158,7 +1187,8 @@ mod ownership {
 
         let mut disabled = public_mcp_auth();
         disabled.enabled = false;
-        let (_, admitted) = post_unattributed(state_from(disabled), task_call(41)).await;
+        let (disabled_state, _disabled_store_dir) = state_from(disabled).await;
+        let (_, admitted) = post_unattributed(disabled_state, task_call(41)).await;
         assert!(
             admitted.get("error").is_none() && admitted.get("result").is_some(),
             "with auth DISABLED there are no principals to keep apart, so the \

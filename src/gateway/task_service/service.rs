@@ -41,10 +41,20 @@ pub(crate) enum CreateOutcome {
     Unavailable,
 }
 
+/// Why a task-service operation could not be carried out.
+///
+/// Public because [`super::open_runtime`] is the crate's startup entry point and
+/// returns it; a private error type there would be a private type escaping
+/// through a public signature, and no caller outside the crate could name what
+/// an open failed with.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum ServiceError {
+pub enum ServiceError {
+    /// The durable store could not be opened, read, or written. Never swapped
+    /// for a volatile store: an unavailable store stays unavailable.
     #[error("task store unavailable")]
     Unavailable,
+    /// No task with that id is visible to the asking owner. A foreign owner and
+    /// an absent task are answered identically.
     #[error("task not found")]
     NotFound,
 }

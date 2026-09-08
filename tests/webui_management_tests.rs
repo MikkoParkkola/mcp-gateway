@@ -85,7 +85,7 @@ async fn task_runtime(
 ) -> (Arc<TaskService>, Arc<TaskExecutor>, TempDir) {
     let store_dir = TempDir::new().expect("a private task-store directory");
     let (service, executor) = open_runtime(
-        store_dir.path(),
+        &store_dir.path().join("tasks"),
         mcp_gateway::config::DEFAULT_MAX_WORKERS,
         StoreLimits::default(),
         Arc::clone(subscriptions),

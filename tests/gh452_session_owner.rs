@@ -16,7 +16,10 @@ use mcp_gateway::gateway::auth::{DashboardBootstrap, ResolvedAuthConfig};
 use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 use mcp_gateway::gateway::proxy::ProxyManager;
 use mcp_gateway::gateway::streaming::{NotificationMultiplexer, TaggedNotification};
-use mcp_gateway::gateway::test_helpers::{AppState, MetaMcp, create_router};
+use mcp_gateway::gateway::subscription_registry::SubscriptionRegistry;
+use mcp_gateway::gateway::test_helpers::{
+    AppState, MetaMcp, StoreLimits, create_router, open_runtime,
+};
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 use serde_json::{Value, json};
@@ -25,7 +28,17 @@ use tower::ServiceExt;
 const ALICE_KEY: &str = "gh452-alice-test-credential";
 const BOB_KEY: &str = "gh452-bob-test-credential";
 
-fn state(auth_enabled: bool, public_mcp: bool, names: [&str; 2]) -> Arc<AppState> {
+/// The gateway under test, plus the directory its task store leases.
+///
+/// The `TempDir` comes back because the store holds its directory for as long
+/// as the service lives, and these cases keep streams open across several
+/// requests: a directory dropped here would be deleted under a gateway still
+/// answering. Every call gets its own, so no two cases share a lease.
+async fn state(
+    auth_enabled: bool,
+    public_mcp: bool,
+    names: [&str; 2],
+) -> (Arc<AppState>, tempfile::TempDir) {
     let mut config = Config {
         auth: AuthConfig {
             enabled: auth_enabled,
@@ -58,9 +71,23 @@ fn state(auth_enabled: bool, public_mcp: bool, names: [&str; 2]) -> Arc<AppState
         Arc::clone(&backends),
         config.streaming.clone(),
     ));
-    Arc::new(AppState {
+    // One registry for both the state the router reads and the executor that
+    // publishes through it: two would strand a task's notifications.
+    let subscriptions = Arc::new(SubscriptionRegistry::new(64));
+    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let (tasks, task_executor) = open_runtime(
+        &store_dir.path().join("tasks"),
+        config.tasks.max_workers,
+        StoreLimits::default(),
+        Arc::clone(&subscriptions),
+    )
+    .await
+    .expect("the fixture task store opens");
+
+    let state = Arc::new(AppState {
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
-        tasks: Arc::new(mcp_gateway::protocol::task_store::TaskStore::new()),
+        tasks,
+        task_executor,
         env: None,
         meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
         backends,
@@ -88,10 +115,9 @@ fn state(auth_enabled: bool, public_mcp: bool, names: [&str; 2]) -> Arc<AppState
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
-        subscriptions: Arc::new(
-            mcp_gateway::gateway::subscription_registry::SubscriptionRegistry::new(64),
-        ),
-    })
+        subscriptions,
+    });
+    (state, store_dir)
 }
 
 fn request(method: Method, key: Option<&str>) -> axum::http::request::Builder {
@@ -221,7 +247,7 @@ async fn prove_ping(state: &Arc<AppState>, key: &str, session: &Session) {
 /// GH452.SESSION.1: refusal must preserve the actual live stream, not recreate it.
 #[tokio::test]
 async fn gh452_session_1_foreign_delete_preserves_original_stream_and_calls() {
-    let state = state(true, false, ["alice", "bob"]);
+    let (state, _store_dir) = state(true, false, ["alice", "bob"]).await;
     let mut alice = open_session(&state, Some(ALICE_KEY), None).await;
     let mut bob = open_session(&state, Some(BOB_KEY), None).await;
     assert_ne!(alice.id, bob.id);
@@ -239,7 +265,7 @@ async fn gh452_session_1_foreign_delete_preserves_original_stream_and_calls() {
 /// GH452.SESSION.2: POST creation, GET resumption and DELETE use the same owner.
 #[tokio::test]
 async fn gh452_session_2_owner_deletes_post_created_session_once() {
-    let state = state(true, false, ["alice", "bob"]);
+    let (state, _store_dir) = state(true, false, ["alice", "bob"]).await;
     let initialized = post(
         &state,
         ALICE_KEY,
@@ -279,7 +305,7 @@ async fn gh452_session_2_owner_deletes_post_created_session_once() {
 /// GH452.SESSION.3: exact response comparison catches an existence oracle.
 #[tokio::test]
 async fn gh452_session_3_foreign_and_unknown_are_indistinguishable() {
-    let state = state(true, false, ["alice", "bob"]);
+    let (state, _store_dir) = state(true, false, ["alice", "bob"]).await;
     let mut alice = open_session(&state, Some(ALICE_KEY), None).await;
     let unknown =
         response_parts(delete(&state, Some(BOB_KEY), Some("gh452-never-created")).await).await;
@@ -294,7 +320,7 @@ async fn gh452_session_3_foreign_and_unknown_are_indistinguishable() {
 /// GH452.SESSION.4: malformed/missing IDs are tested after valid authentication.
 #[tokio::test]
 async fn gh452_session_4_session_header_boundaries_after_authentication() {
-    let state = state(true, false, ["alice", "bob"]);
+    let (state, _store_dir) = state(true, false, ["alice", "bob"]).await;
     let mut alice = open_session(&state, Some(ALICE_KEY), None).await;
     assert_eq!(
         delete(&state, Some(ALICE_KEY), None).await.status(),
@@ -322,7 +348,7 @@ async fn gh452_session_4_session_header_boundaries_after_authentication() {
 /// GH452.SESSION.4: the compatibility promise applies only with auth disabled.
 #[tokio::test]
 async fn gh452_session_4_auth_disabled_anonymous_owner_can_delete() {
-    let state = state(false, false, ["alice", "bob"]);
+    let (state, _store_dir) = state(false, false, ["alice", "bob"]).await;
     let session = open_session(&state, None, None).await;
     assert_eq!(
         delete(&state, None, Some(&session.id)).await.status(),
@@ -335,7 +361,7 @@ async fn gh452_session_4_auth_disabled_anonymous_owner_can_delete() {
 /// GH452.SESSION.4: ordinary authenticated routes still reject missing credentials.
 #[tokio::test]
 async fn gh452_session_4_authenticated_route_refuses_missing_credentials() {
-    let state = state(true, false, ["alice", "bob"]);
+    let (state, _store_dir) = state(true, false, ["alice", "bob"]).await;
     let mut alice = open_session(&state, Some(ALICE_KEY), None).await;
     let response = delete(&state, None, Some(&alice.id)).await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -347,7 +373,7 @@ async fn gh452_session_4_authenticated_route_refuses_missing_credentials() {
 #[tokio::test]
 async fn gh452_session_5_same_display_name_is_not_the_same_credential() {
     for name in ["shared", "anonymous"] {
-        let state = state(true, false, [name, name]);
+        let (state, _store_dir) = state(true, false, [name, name]).await;
         let mut alice = open_session(&state, Some(ALICE_KEY), None).await;
         let mut bob = open_session(&state, Some(BOB_KEY), None).await;
         assert_ne!(alice.id, bob.id);
@@ -376,7 +402,7 @@ async fn gh452_session_5_same_display_name_is_not_the_same_credential() {
 /// GH452.SESSION.6: competing requests supplement the single-write-guard review.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn gh452_session_6_only_one_competing_owner_delete_succeeds() {
-    let state = state(true, false, ["alice", "bob"]);
+    let (state, _store_dir) = state(true, false, ["alice", "bob"]).await;
     let alice = open_session(&state, Some(ALICE_KEY), None).await;
     let mut bob = open_session(&state, Some(BOB_KEY), None).await;
     let barrier = Arc::new(tokio::sync::Barrier::new(4));
@@ -411,7 +437,7 @@ async fn gh452_session_6_only_one_competing_owner_delete_succeeds() {
 /// GH452.SESSION.7: public-path middleware fallback is not a DELETE owner identity.
 #[tokio::test]
 async fn gh452_session_7_public_anonymous_delete_requires_a_validated_principal() {
-    let state = state(true, true, ["alice", "bob"]);
+    let (state, _store_dir) = state(true, true, ["alice", "bob"]).await;
     let mut public = open_session(&state, None, None).await;
     let expected = response_parts(delete(&state, None, Some("gh452-unknown-public")).await).await;
     assert_eq!(expected.0, StatusCode::UNAUTHORIZED);
@@ -431,7 +457,7 @@ async fn gh452_session_7_public_anonymous_delete_requires_a_validated_principal(
 /// GH452.SESSION.7: public paths validate supplied keys before public fallback.
 #[tokio::test]
 async fn gh452_session_7_public_valid_credential_owner_can_delete() {
-    let state = state(true, true, ["alice", "bob"]);
+    let (state, _store_dir) = state(true, true, ["alice", "bob"]).await;
     let mut public = open_session(&state, None, None).await;
     let alice = open_session(&state, Some(ALICE_KEY), None).await;
     assert_eq!(
@@ -448,7 +474,7 @@ async fn gh452_session_7_public_valid_credential_owner_can_delete() {
 /// GH452.SESSION.7: a valid credential does not own an anonymous public session.
 #[tokio::test]
 async fn gh452_session_7_public_session_rejects_authenticated_nonowner() {
-    let state = state(true, true, ["alice", "bob"]);
+    let (state, _store_dir) = state(true, true, ["alice", "bob"]).await;
     let mut public = open_session(&state, None, None).await;
     let mut alice = open_session(&state, Some(ALICE_KEY), None).await;
     assert_ne!(public.id, alice.id);
