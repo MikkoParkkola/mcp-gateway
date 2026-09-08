@@ -144,8 +144,9 @@ its disposal, so neither ages into a ticket by default.
   the schema in `ToolDescriptorTrustCard::from_tool` on every emission.
   DISPOSAL: **recorded as an observation on `MIK-7415`** (ruling `R23`), not as a
   ticket of its own. The two edits are not in one function — the anchor fix is in
-  `SchemaBounds::resolves` (`src/trust/schema_bounds.rs`) and the hoist moves its
-  caller `SchemaBounds::inspect_descriptor` out of
+  the module-private free function `resolves` (`src/trust/schema_bounds.rs:136`,
+  reached from `SchemaBounds` only through `unresolved_refs`), and the hoist moves
+  the entry point `SchemaBounds::inspect_descriptor` (`:87`) out of
   `ToolDescriptorTrustCard::from_tool` (`src/trust/descriptor.rs:58`) — but they
   are one slice of the same walker, and filing a second ticket for the second
   edit of one slice is the expensive default §P0 exists to stop. It is pure cost
