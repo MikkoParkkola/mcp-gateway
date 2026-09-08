@@ -27,6 +27,8 @@ use std::path::PathBuf;
 use super::StoreConfig;
 use serde::{Deserialize, Serialize};
 
+mod descriptor_debug;
+
 /// The `accounts` block as configured. Unknown fields reject startup.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -82,7 +84,7 @@ pub(crate) enum DescriptorMode {
 /// same reason a plain `bool` would be wrong: `false` is a real answer for
 /// Google REST, and a defaulted `false` would make "declared false" and "not
 /// declared" indistinguishable.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountDescriptor {
     pub(crate) mode: DescriptorMode,

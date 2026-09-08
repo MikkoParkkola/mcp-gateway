@@ -565,6 +565,7 @@ impl service::CredentialReleaseObserver for AccountReleaseAudit {
         lease: &service::CredentialLease,
         _credentials: &service::ReleasedCredentials,
     ) {
+        // ci-allow-secret-log: token_revision is a nonsecret u64 monotonic revision counter copied from GrantRecord.token_revision and advanced with checked_add(1); it carries no token bytes.
         tracing::debug!(
             backend = %account.backend_id,
             resource = %account.resource,
