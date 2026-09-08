@@ -1300,7 +1300,8 @@ above are properties of a struct nothing constructs.
 acceptance criterion asserts, so §P0 reopened where Scope is stated — one added
 line, above — and §P2 reopens at the `WIRE.5` and `WIRE.13` rows of
 `docs/design/2026-09-05-mrtr7-test-plan.md`. The round count does NOT reset: the
-spec moves, the history does not (R8, and R22 on the same point). The repair
+spec moves, the history does not — `R8` and `R22` of
+`docs/release/2026-09-08-team-lead-rulings.md` (2026-09-08) both rule so. The repair
 takes no new `BridgeError` variant and no wire change — a call moved inside a
 loop, the propagation the widening already owed, and the documentation delta.
 
