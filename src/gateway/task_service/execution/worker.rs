@@ -11,6 +11,7 @@ use super::settlement::{
     DispatchSettlement, classify_dispatch, interrupted_before_dispatch, interrupted_result,
     strip_http_status,
 };
+use super::upstream::QueryLease;
 use super::{
     BeginOutcome, Handoff, TaskCall, TaskExecutor, TaskIntent, TaskWrite, UpstreamAnswer,
     UpstreamCapture, UpstreamHandle, WriteOutcome,
@@ -270,14 +271,50 @@ async fn follow_upstream_job(
     let Some(adapter) = executor.recovery() else {
         return;
     };
+    // The digest the record is owned by, for the durable recheck each query
+    // makes under the record's slot. A principal admission cannot hash is a
+    // principal nothing here can re-read, so the job is left to a later
+    // authenticated read rather than followed blind.
+    let Ok(owner) = executor.service.owner(principal) else {
+        return;
+    };
+    let owner_digest = owner.as_digest();
     let upstream = UpstreamHandle {
         backend: job.server.clone(),
         handle,
     };
-    let answer = tokio::select! {
+    let followed = tokio::select! {
         biased;
         _ = cancel_rx.changed() => return,
-        answer = poll_to_terminal(adapter, &upstream) => answer,
+        followed = poll_to_terminal(executor, owner_digest, id, adapter, &upstream) => followed,
+    };
+    // The lease is still held for a terminal answer, and released only after
+    // the settlement below: a read that queued behind this query must find the
+    // committed outcome, not a working row it would query all over again.
+    let (answer, lease) = match followed {
+        Followed::Terminal(answer, lease) => (answer, lease),
+        // Still live, or unreachable, when this worker's budget ran out. The
+        // record stays `working` with its handle; the owner's next authenticated
+        // read continues from exactly here. Nothing is faked terminal.
+        Followed::Retained => {
+            tracing::info!(
+                task_id = %id,
+                captured,
+                "upstream task left live; retained for the owner's next read"
+            );
+            return;
+        }
+        // An authorized read settled this row while this worker queued for the
+        // record's slot. Its committed outcome is the answer; asking the peer
+        // again would be a second query for one already-settled job.
+        Followed::Overtaken => {
+            tracing::info!(
+                task_id = %id,
+                captured,
+                "upstream task settled by an owner read; this worker asks nothing further"
+            );
+            return;
+        }
     };
     match answer {
         UpstreamAnswer::Completed(result) => {
@@ -311,17 +348,23 @@ async fn follow_upstream_job(
                 .settle_cas(principal, id, revision, TaskTransition::Fail(screened))
                 .await;
         }
-        // Still live, or unreachable, when this worker's budget ran out. The
-        // record stays `working` with its handle; the owner's next authenticated
-        // read continues from exactly here. Nothing is faked terminal.
-        UpstreamAnswer::Live | UpstreamAnswer::Unavailable => {
-            tracing::info!(
-                task_id = %id,
-                captured,
-                "upstream task left live; retained for the owner's next read"
-            );
-        }
+        // [`poll_to_terminal`] hands back a lease only with a terminal answer.
+        UpstreamAnswer::Live | UpstreamAnswer::Unavailable => {}
     }
+    lease.release(executor, id).await;
+}
+
+/// What following one handle within the worker's budget produced.
+enum Followed {
+    /// A terminal answer, with the record's query slot still held so the
+    /// settlement it justifies cannot be overtaken by a queued reader.
+    Terminal(UpstreamAnswer, QueryLease),
+    /// Live at the end of the budget, or unreachable. Nothing to commit, and no
+    /// slot retained.
+    Retained,
+    /// The record was already settled when this worker reached the front of the
+    /// slot queue. Nothing was asked and nothing is committed.
+    Overtaken,
 }
 
 /// How long one worker will follow its own upstream job before handing it back
@@ -339,21 +382,40 @@ const WORKER_POLL_GAP: std::time::Duration = std::time::Duration::from_secs(1);
 ///
 /// `Live` is retried until the budget runs out; `Unavailable` returns at once —
 /// an unreachable peer is retained for a later read rather than hammered here.
+///
+/// One lease per individual query, never across the gap or the budget: this
+/// worker's follow is one of the queries of this record, so it takes the
+/// record's own slot exactly as an authenticated read does, and a worker that
+/// held it for its whole budget would block every owner read of the row. Under
+/// each lease the durable state is re-read first, so a job a predecessor
+/// already settled is not queried a second time.
 async fn poll_to_terminal(
+    executor: &Arc<TaskExecutor>,
+    owner_digest: &str,
+    id: &str,
     adapter: &Arc<dyn super::UpstreamRecovery>,
     handle: &UpstreamHandle,
-) -> UpstreamAnswer {
+) -> Followed {
     let deadline = tokio::time::Instant::now() + WORKER_POLL_BUDGET;
     loop {
+        let lease = executor.acquire_query_lease(id).await;
+        if !executor.handle_still_live(owner_digest, id, handle) {
+            lease.release(executor, id).await;
+            return Followed::Overtaken;
+        }
         match adapter
             .query(handle, crate::gateway::meta_mcp::upstream::QUERY_DEADLINE)
             .await
         {
-            UpstreamAnswer::Live => {}
-            other => return other,
+            UpstreamAnswer::Live => lease.release(executor, id).await,
+            UpstreamAnswer::Unavailable => {
+                lease.release(executor, id).await;
+                return Followed::Retained;
+            }
+            terminal => return Followed::Terminal(terminal, lease),
         }
         if tokio::time::Instant::now() >= deadline {
-            return UpstreamAnswer::Live;
+            return Followed::Retained;
         }
         tokio::time::sleep(WORKER_POLL_GAP).await;
     }

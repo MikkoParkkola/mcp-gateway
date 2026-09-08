@@ -62,6 +62,9 @@ mod dedupe;
 mod drain;
 mod interlock;
 mod lifecycle;
+/// I5's during-the-wire half: one query per record at a time, worker and
+/// authenticated reader alike.
+mod query_serialization;
 mod refusals;
 mod result_shapes;
 mod settlement;

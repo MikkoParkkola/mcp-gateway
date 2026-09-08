@@ -64,6 +64,34 @@ pub(crate) enum RecoveredRead {
     Retained,
 }
 
+/// Exclusive use of one record's upstream query slot, held across a query and
+/// the settlement that query justifies.
+///
+/// The same gate [`TaskExecutor::recover_upstream_read`] takes, handed out as a
+/// value so the live worker — which settles outside the reader's guarded block —
+/// can take it too instead of acquiring a second lock authority over the same
+/// record. Ownership is weak on purpose: it is the guard inside that releases
+/// the slot, so a holder cancelled or timed out mid-query frees the queued
+/// waiter by being dropped. The directory entry such a holder leaves behind is
+/// reclaimed by the next holder that finishes normally, which is the same
+/// bookkeeping [`TaskExecutor::release_query_slot`] already did.
+pub(super) struct QueryLease {
+    slot: Arc<Mutex<()>>,
+    held: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl QueryLease {
+    /// Release the slot, then drop its directory entry if nobody else holds one.
+    ///
+    /// In this order: releasing the guard first is what lets the `<= 2` count
+    /// below be about the directory and this lease alone.
+    pub(super) async fn release(self, executor: &TaskExecutor, id: &str) {
+        let Self { slot, held } = self;
+        drop(held);
+        executor.release_query_slot(id, slot).await;
+    }
+}
+
 #[cfg(test)]
 #[path = "upstream/failed_policy_tests.rs"]
 mod failed_policy_tests;
@@ -273,6 +301,40 @@ impl TaskExecutor {
             }
             Err(_) => Err(RecoveryRefusal::Unavailable),
         }
+    }
+
+    /// Take the record's query slot for a caller that owns its own settlement.
+    ///
+    /// The worker's follow of a live handle is the other query of the same
+    /// record, so it queues here rather than beside this gate.
+    pub(super) async fn acquire_query_lease(&self, id: &str) -> QueryLease {
+        let slot = self.query_slot(id).await;
+        let held = Arc::clone(&slot).lock_owned().await;
+        QueryLease { slot, held }
+    }
+
+    /// Whether `handle` is still the live upstream job of a working record.
+    ///
+    /// Asked under a lease, so a predecessor that settled this row while the
+    /// caller queued is seen before the peer is asked anything. A working row
+    /// whose descriptor is absent is still followed: `capture_upstream` may
+    /// have been refused, and that does not stop the job the worker is
+    /// following. An unreadable store answers `false` — a store that cannot say
+    /// the row is unsettled cannot authorize a query against it, and the record
+    /// stays recoverable by a later read either way.
+    pub(super) fn handle_still_live(
+        &self,
+        owner_digest: &str,
+        id: &str,
+        handle: &UpstreamHandle,
+    ) -> bool {
+        let Ok((descriptor, _, status)) = self.service.store.upstream_of(owner_digest, id) else {
+            return false;
+        };
+        status == TaskStatus::Working
+            && descriptor.is_none_or(|durable| {
+                durable.handle == handle.handle && durable.backend == handle.backend
+            })
     }
 
     /// The per-record serialization slot, created on first use.
