@@ -28,6 +28,7 @@
 //! walker the day that surface is decided to need a verdict.
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -105,10 +106,16 @@ impl SchemaBounds {
 /// One walker decides for both the emit path and the observing tests, so a
 /// schema the tests call bounded cannot be a schema the gateway publishes
 /// unbounded.
+///
+/// Each distinct pointer is reported ONCE, in the order first seen. A schema
+/// that names one absent `$defs` entry from forty properties has one defect,
+/// not forty, and the verdict travels on the wire.
 #[must_use]
 pub fn unresolved_refs(schema: &Value) -> Vec<String> {
     let mut found = Vec::new();
     walk(schema, schema, &mut found);
+    let mut seen = HashSet::new();
+    found.retain(|pointer| seen.insert(pointer.clone()));
     found
 }
 
@@ -525,6 +532,27 @@ mod tests {
         assert_eq!(
             SchemaBounds::inspect_descriptor(&input, None),
             SchemaBounds::Within
+        );
+    }
+
+    #[test]
+    fn one_absent_target_named_from_many_properties_is_reported_once() {
+        // GIVEN three properties all pointing at the same missing definition
+        let schema = json!({
+            "properties": {
+                "a": { "$ref": "#/$defs/Absent" },
+                "b": { "$ref": "#/$defs/Absent" },
+                "c": { "$ref": "#/$defs/Absent" }
+            }
+        });
+
+        // WHEN the schema is inspected
+        // THEN the verdict names the one defect once
+        assert_eq!(
+            SchemaBounds::inspect(&schema),
+            SchemaBounds::OutOfBounds {
+                unresolved_refs: vec!["#/$defs/Absent".to_string()]
+            }
         );
     }
 }
