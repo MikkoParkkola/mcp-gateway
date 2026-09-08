@@ -497,3 +497,79 @@ cells, one of them swallowing a status field. Rewritten as `-e` arguments in
 `91b2b07b`; every row now holds seven fields (main table) or eight (NFR table,
 which carries the extra `T` column, so its status is field five and the main
 table's is field four).
+
+## R28 — the hunk was not envelope-meta's, and `commit -o` was the wrong tool
+
+I told `envelope-meta` to land the uncommitted `SPEC_ENCODING_TABLE` addition in
+`tests/common/mod.rs` so `ext1-otel1` could commit three clippy fixes in the same
+file. That instruction was wrong twice over, and the lane refused it with evidence
+rather than following it. The refusal was correct and the instruction is retracted.
+
+**Wrong owner.** The uncommitted work is one coherent three-file change, not a
+stray hunk: `tests/common/mod.rs` gains the `pub const`, `tests/mik_7214_acs.rs`
+deletes its private copy for a `use common::SPEC_ENCODING_TABLE`, and
+`tests/mik_7214_header_9_acs.rs` gains
+`a_modern_named_call_encodes_a_name_a_header_cannot_carry_raw`. That is a fixture
+being promoted to shared so a HEADER.4a encoding case can consume it — the case
+row 113 of the criteria ledger already names as a sibling session's then-uncommitted
+work. `envelope-meta`'s five commits this cycle are all one docs file and it has run
+no cargo command. Committing it would have put one lane's signature on another's
+unreviewed work: precisely the harm R26 exists to prevent, with the names swapped.
+
+**Wrong tool, so the sequencing was never needed.** `git commit -o <path>` commits
+the whole working-tree content of that path, foreign hunks included, which is why
+the instruction reached for an ordering between lanes. Hunks are separable. The
+addition sits at `+210`; the three clippy errors are at `:13`, `:23` and `:38`, so
+under `git diff -U0` they are disjoint and each lane can stage its own.
+
+**Standing mechanism for this shared worktree.** Six sessions share one index, so
+staging into it and committing has a race whose failure mode is publishing a peer's
+work. Use a private index instead, and refuse the commit if the branch moved:
+
+```sh
+idx=$(mktemp -u); export GIT_INDEX_FILE=$idx
+git read-tree HEAD
+git diff -U0 -- <your paths> > /tmp/mine.patch   # edit down to YOUR hunks
+git apply --cached --unidiff-zero /tmp/mine.patch
+git diff --cached --stat                          # must match your edited-line count
+tree=$(git write-tree); unset GIT_INDEX_FILE; rm -f "$idx"
+c=$(git commit-tree "$tree" -p HEAD -m "type(scope): summary")
+git update-ref refs/heads/$(git branch --show-current) "$c" HEAD
+```
+
+`update-ref` with an expected old value refuses rather than clobbering if a peer
+committed in the interval. `commit -o` stays correct for a file a lane owns whole,
+which is every docs commit this release has made; this is for a file two lanes are
+inside at once.
+
+**The hunk itself.** It stays uncommitted until its author claims it. Nobody's
+lints wait on it. If no lane claims it within the hour, `envelope-meta` may adopt
+it as material for HEADER.4a — reading it as a test before trusting it, per §P2 —
+and the commit body must say it was adopted from the working tree with the author
+unidentified, so the record does not imply authorship it cannot support.
+
+## R29 — package B's remaining slices belong to envelope-meta
+
+`envelope-meta` asked whether the SSE GET era re-assert and the HEADER.4a outbound
+encoding are its work at all, having opened no design or test plan for either: its
+§P0 scope this cycle was the docs catch-up.
+
+They are its work. A cycle's §P0 scope bounds one change; it does not reassign a
+package. Package B is `HEADER.9a`, `HEADER.9b` and `CONTROL.3b`, and it has been
+`envelope-meta`'s since the gap plan was written. Start at the design step, as
+asked — the two gaps sit at *design done, no failing test*, which is where §P2
+begins, not where it ends.
+
+Three things the lane established that the board should carry:
+
+- The SSE GET gap is verified at source: `establish_sse_connection`
+  (`src/transport/http/mod.rs:924`) calls `build_mcp_headers(HeaderMode::Sse, None)`
+  at `:927` and never reaches `finalise_modern_headers`, so a modern peer
+  reconnecting the stream is handed the handshake version. `HeaderMode::Close` is
+  not a third gap — the design decided it legacy.
+- `CONTROL.3b` is *past* implementation (`044896aa` wires `merge_client_meta`) with
+  one test missing: no case drives a real client `params._meta` through
+  `handle_request` to `invoke.rs:1865`. That is a retrofit, so it owes the §P2
+  falsifier probe rather than a free failure. Nobody should estimate it as a
+  ten-minute test.
+- All three rows stay PARTIAL and blocking. The count in R27 does not move.
