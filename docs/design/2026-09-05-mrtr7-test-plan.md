@@ -109,10 +109,11 @@ already assumed by every row above it.
 they are named.** The ruling is that era changes the gate's INPUT, never the refusal
 semantics: a Modern request reads only its own `_meta` and is still refused when that
 `_meta` omits the asked capability (`WIRE.1`); a Modern request reads its own `_meta`
-and not the session's (`WIRE.4`); Legacy widens from the declaration made once at
-`initialize` (`WIRE.2`-`WIRE.3`); and `Some(&[])` is not `None` -- an undeclared variant
-under an EMPTY slice is not asked (shipped row 311), while a session-declared capability
-under NO slice is (shipped row 325). Two rows and two shipped cases, no new machinery.
+and not the session's (`WIRE.4`); a Legacy request reads the SESSION's declaration
+instead -- present, the client is asked (`WIRE.2`); absent, the request is refused
+(`WIRE.3`); and `Some(&[])` is not `None` -- an undeclared variant under an EMPTY
+slice is not asked (shipped row 311), while a session-declared capability under NO
+slice is (shipped row 325). Four rows and two shipped cases, no new machinery.
 Stated here because both plan reviewers, reading the R1 paragraph beside `WIRE.11`-`13`,
 independently reported the rule as pinned by nothing -- a mapping a reader has to
 reconstruct is a mapping that is missing.
