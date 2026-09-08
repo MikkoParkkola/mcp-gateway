@@ -1516,7 +1516,8 @@ on `ask()`'s failure path is the release owner's call in this lane — establish
 error shape beats the one this document specified`. Deciding it here would take
 back the authority that ruling asserted, one document later.
 
-The ruling is genuinely silent, and two readings survive it:
+R8a is genuinely silent, and two readings survived it — the record below says
+which was ruled:
 
 - **recommended** — the aggregate expiring is `Deadline`, because the client was
   not silent, it was answering. Row 321 keeps its assertion unchanged and starts
@@ -1527,25 +1528,45 @@ The ruling is genuinely silent, and two readings survive it:
   `Delivery { TimedOut }`, `Deadline` genuinely leaves `ask()`, and **row 321's
   assertion moves** — the same churn row 320's inversion has already cost.
 
-**Question, scheduled per §P1 (askable, not checkable)**: when the aggregate
-budget expires *inside* a prompt's wait, does the call fail with
-`BridgeError::Deadline`, or with
+**Question, scheduled per §P1 (askable, not checkable) — RESOLVED 2026-09-08**:
+when the aggregate budget expires *inside* a prompt's wait, does the call fail
+with `BridgeError::Deadline`, or with
 `BridgeError::Delivery { key, error: DeliveryError::TimedOut }` naming the
 prompt the clamp cut short?
 
 - asked of: the release owner, via team-lead
-- what would resolve it: a recorded choice between the two readings above
-- when: before the BRIDGE.4 inversion is written. The answer decides whether row
-  321 keeps its assertion or changes it, and a test written first against the
-  wrong reading is exactly the churn §P2's ordering exists to prevent
-- if it resolves the other way: `BridgeError::Deadline` becomes unreachable from
-  `ask()` by design rather than by accident, row 321 is rewritten to expect the
-  `Delivery` variant, and the requirement it carries (`the aggregate budget ends
-  a call whose rounds each answer in time`) needs either a new reachable case or
-  an explicit retirement — a §P0 disposal, not a test edit
+- the answer: `BridgeError::Deadline`, ruled at `R21 — BRIDGE.4: aggregate
+  expiry is Deadline, and the reason is attribution`
+  (`docs/release/2026-09-08-team-lead-rulings.md`). The tie-break above stands
+  as written: `left <= per_prompt` resolves to `Deadline`
+- what it changed: nothing in this document's recommendation, and one thing in
+  its REASON, which is the half worth keeping. The ruling does not rest on
+  reachability. `Delivery { key, error }` names a key, and naming a key
+  attributes the failure to that key's owner — a client that answered every
+  prompt inside its own budget did not time out, the call did. Reporting that
+  as a delivery timeout against the client's entry is a false statement about
+  which party failed, and it is read later by someone deciding whether a
+  backend is flaky. Reachability and row 321's unchanged assertion are
+  consequences, not arguments: had attribution pointed the other way, row 321
+  would have moved
 
-**What this section does not authorise.** It does not move what row 321 asserts:
-that row keeps `Err(BridgeError::Deadline)` until the question above is
-answered. Nothing here narrows §P0's FOR or drops an acceptance criterion. The
-plan correction sits beside row 320's inversion in
-`2026-09-05-mrtr7-test-plan.md`, and the inversion waits on the answer.
+Two riders the ruling carries, recorded here because they bind this change and
+not the ruling's file: the `proxy.rs:557-558` comment becomes true for the
+first time under the repair and ships with it per §P4a, and the arm takes no
+new variant and no wire change — one branch and the documentation delta.
+
+**What this section settles, and what it still does not.** Row 321 keeps
+`Err(BridgeError::Deadline)` — now by ruling rather than by default, and it is
+the row that pins the distinction. Nothing here narrows §P0's FOR or drops an
+acceptance criterion. The plan correction sits beside row 320's inversion in
+`2026-09-05-mrtr7-test-plan.md`, and that inversion is now unblocked.
+
+One open item is not this lane's to close: R8a at
+`docs/release/2026-09-08-team-lead-rulings.md:169` still spells the
+silent-client shape `DeliveryError::Unanswered { key }`, and no such variant
+exists — `enum DeliveryError` at `src/gateway/input_bridge.rs:158-186` carries
+no `Unanswered`, and no inner variant carries `key` (it sits on the outer
+`BridgeError::Delivery`). R21 says "no new variant", which is consistent with
+`TimedOut` and never names it for that arm. This document implements
+`DeliveryError::TimedOut`; the correction to the rulings file belongs to its
+owner and has been reported.
