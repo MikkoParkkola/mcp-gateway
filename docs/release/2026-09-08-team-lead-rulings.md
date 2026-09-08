@@ -690,3 +690,48 @@ packages is not something commit scopes settle, and this ruling does not claim i
 This ruling binds SUB.4 only. It is not a general licence to stop designing: the
 other open criteria have not reached revision 6 with two passing legs, and for
 most of them the design is still the cheapest place to be wrong.
+
+## R33 — a design that has passed two adversarial legs is frozen; findings move to the code
+
+R32 froze one design. Writing a separate ruling for each lane would make me the
+bottleneck and would arrive one lane too late every time, so this is the general
+form. R32 stands as its first application.
+
+RULING: once a design document has returned a passing verdict from both review
+legs, it is frozen. Not finished, not perfect — frozen, meaning further findings
+about it are routed rather than absorbed.
+
+| the finding says | where it goes |
+|---|---|
+| the document explains this badly | nowhere; it is not a defect in what gets built |
+| this mechanism has a defect | the implementing change, as a code finding with a test |
+| routes/clauses must do something DIFFERENT | back to me; §P0 scope move, not a revision |
+| this is worth remembering, nobody must act | the ledger row, as residual risk, non-blocking |
+
+The first row is the one that matters. Both legs return `SHIP-WITH-FIXES` on
+almost every round, and a `SHIP-WITH-FIXES` whose fixes are doc-level is a passing
+verdict wearing a to-do list. Absorbing it produces another revision, another pair
+of legs, and no change to what gets built.
+
+SECOND APPLICATION — MIK-7212.MRTR.7a/7b. `docs/design/2026-09-05-mrtr7-bridge-wiring.md`
+is 1,637 lines describing how to wire `InputBridge::run` into the production path,
+its header still reads `Status: design, not implemented`, and it took 23 of the last
+three hours' commits. It has been reviewed three times; round 2 returned
+SHIP-WITH-FIXES from both legs, each naming a doc-level fix INSIDE THE DESIGN. It is
+frozen. Build it.
+
+One carve-out, because that design's third round earned it: `gpt-review` named three
+defects the wiring would ACTIVATE rather than inherit. Those are mechanism findings,
+not document findings, and they are in scope for the implementing change — they do
+not reopen the design.
+
+WHAT THIS IS NOT: a claim that designs are wasteful here. The design-first order has
+been paying — it converged SUB.4's hard questions in six revisions and caught defects
+that would have shipped. The failure this rules on is narrower and only appears at
+the end: a design that has already passed keeps attracting rounds, because a reviewer
+asked to review will always find something, and a document is always improvable. The
+gate for stopping is not "is it perfect" but "would another round change what gets
+built". After two passing legs, the answer is almost always no.
+
+Lanes hold this themselves. Nobody needs my sign-off to stop revising a design that
+has passed; you need it only to change what the design requires.
