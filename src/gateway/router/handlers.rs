@@ -1607,28 +1607,53 @@ pub(super) async fn meta_mcp_handler(
             };
 
             // Firewall: post-invocation response scan + credential redaction.
+            // A refusing verdict must stop the scan and replace the result here:
+            // this pass mutates the artifact under `Redact`, so letting a refused
+            // response continue would launder it past the delivery chokepoint.
             #[cfg(feature = "firewall")]
-            if let Some(ref fw) = state.firewall
-                && let Some(ref mut result_val) = call_response.result
             {
-                let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
-                for target in &backend_targets {
-                    let target = target.as_target();
-                    let verdict = fw.check_response(
-                        &session_id,
-                        target.server,
-                        target.tool,
-                        result_val,
-                        caller_name,
-                    );
-                    if verdict.action == FirewallAction::Warn {
-                        warn!(
-                            server = target.server,
-                            tool = target.tool,
-                            findings = verdict.findings.len(),
-                            "Firewall: response warning"
+                let mut refused = false;
+                if let Some(ref fw) = state.firewall
+                    && let Some(ref mut result_val) = call_response.result
+                {
+                    let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
+                    for target in &backend_targets {
+                        let target = target.as_target();
+                        let verdict = fw.check_response(
+                            &session_id,
+                            target.server,
+                            target.tool,
+                            result_val,
+                            caller_name,
                         );
+                        if !verdict.allowed || verdict.action == FirewallAction::Block {
+                            warn!(
+                                server = target.server,
+                                tool = target.tool,
+                                findings = verdict.findings.len(),
+                                "Firewall: response blocked"
+                            );
+                            refused = true;
+                            break;
+                        }
+                        if verdict.action == FirewallAction::Warn {
+                            warn!(
+                                server = target.server,
+                                tool = target.tool,
+                                findings = verdict.findings.len(),
+                                "Firewall: response warning"
+                            );
+                        }
                     }
+                }
+                if refused {
+                    // Not an early HTTP return: the shared owned-execution
+                    // finalization below still runs on this response.
+                    call_response = JsonRpcResponse::delivery_refusal_error(
+                        call_response.id.take(),
+                        -32600,
+                        "Response blocked by security firewall",
+                    );
                 }
             }
 
