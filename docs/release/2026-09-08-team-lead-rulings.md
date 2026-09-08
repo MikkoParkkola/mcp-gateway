@@ -407,3 +407,69 @@ If something in the lane's escalation survives R1 and R8, the lane states **that
 - **Hoisting `SchemaBounds::inspect` out of `from_tool` to the backend cache insert (SMALL) — record as an observation on that same ticket.** Not its own ticket: anyone working the anchor code is already inside this function and can hoist while there. Two tickets for two edits in one function is the expensive default the §P0 table exists to stop.
 
 The row stays closed. Neither of these reopens a reviewed row.
+
+### R24 — `NFR.SEC.3`: `rotatable` is per-replica. Branch (c). `test-plan.md:301` stands
+
+Asked by lane `ext1-otel1`, deferred to the team lead by
+`docs/design/2026-09-06-nfr-sec3-key-rotation.md` with the trigger *before any
+implementation begins*. No prior ruling covered it.
+
+**(c) — per-replica lazy rotation inside `mint`.** The criterion reads
+"continuation envelope versioned, key rotatable, verification keys retained for
+the max lifetime" (`RELEASE-4.0.0-criteria-status.md:366`). It says nothing about
+where the key material comes from, and per-replica rotation meets it as written:
+an age check off the `now` already injected, retire and mint a fresh kid, drop
+retained keys older than `CONTINUATION_LIFETIME_SECS` in the same pass.
+
+**(b) is refused, and not on preference.** Operator-supplied shared key material
+would make the `MRTR.5` row at `RELEASE-4.0.0-test-plan.md:301` *unsatisfiable* --
+that row asserts a token minted by one `AppState` is `NotAuthentic` on a second
+built through the production constructor **from the same configuration**, decided
+before any ledger lookup. Shared configured keys make that refusal impossible. The
+row is the one the cross-replica claim rests on, so (b) does not add a feature; it
+withdraws an accepted criterion and re-opens `MRTR.5` mid-release. Branch (b)'s
+substance -- durable ledger, reload-driven rotation, in-flight continuity -- is
+already MIK-7312, sequenced after this release.
+
+`test-plan.md:301` stands as written. `MRTR.5` is untouched. The design's decision
+to decline three of the four pieces of branch (b) is ruled correct by the same
+answer, so it needs no separate §P3 event.
+
+The design's §P4a citation of a criteria cell reading "Branch (b) is the one taken"
+is **stale** -- that string does not exist in the ledger, and the live row frames the
+gap as (c) does. Correcting another lane's artefact is not `ext1-otel1`'s work;
+recording it here is enough.
+
+Acceptance-criterion identifiers for this criterion are the lane's to author with
+the §P2 test plan (`MIK-7417.SEC3.<n>`), reviewed with the plan. Not a question.
+
+### R25 — `CONTROL.4` T6: the negative half stays, and it may not generate another round
+
+`control4-lifecycle` is right that T6's no-idle-log half is D7's design preference
+rather than a `CONTROL.4` acceptance criterion, and right that three rounds each
+finding a defect in the previous round's repair is the shape the repair protocol
+answers with DELETE.
+
+It is now green and correct. Deleting a correct mechanism costs a change and a
+review round to remove work already paid for, so it stays -- but the signal is not
+discarded: **one more finding against T6's negative half, its marker, or the
+marker-ordering constraint, and the response is deletion, not repair.** No fourth
+patch round on that mechanism. The positive count assertion was never in dispute
+and survives either way.
+
+### R26 — nobody pushes; the diverged branch is reconciled once, by the team lead
+
+`fix/mrtr2-continuation-handle` is DIVERGED, not behind: 19 remote commits no
+session here holds, 166 local. Reported by `sub4-idempotency`, whose refusal to
+rebase unilaterally is correct -- a rebase rewrites six sessions' commits.
+
+No lane pushes. Reconciliation is one team-lead **merge**, never a rebase, at
+release-candidate time, and the ratification gate requires an operator-minted stamp
+in a terminal regardless. Lanes keep committing locally with `git commit -o <paths>`.
+
+Clippy on `tests/common/mod.rs` (three errors at `:13`, `:23`, `:38`, from
+`fe06e167` and `46adb8cd`) belongs to `ext1-otel1` -- they are its own COMPAT.1
+commits. It may not commit that file yet: the envelope-meta lane holds an
+uncommitted `SPEC_ENCODING_TABLE` hunk there, and `commit -o` on the path would
+publish another lane's unreviewed work. Sequence: envelope-meta lands its hunk
+first, then `ext1-otel1` fixes its own three lints.
