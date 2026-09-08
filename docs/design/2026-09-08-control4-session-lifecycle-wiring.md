@@ -1,0 +1,196 @@
+# CONTROL.4 — wiring `SessionLifecycle` on the 2026 path (design v2, §P1)
+
+Rulings: `docs/release/2026-09-08-team-lead-rulings.md` §R3 (`8bbca3eb`, wire it, do not delete
+it) and §R3a (`a445cf92`, which names the host, the key and the precondition). v1 of this
+document predates R3a and is superseded in four places; the deltas are recorded inline, not
+silently reinterpreted. NO CODE EXISTS YET.
+
+## Problem
+
+MCP 2026-07-28 removed protocol sessions. `SessionLifecycle::on_disconnect` fired on a transport
+close the 2026 path no longer has (`src/gateway/session_lifecycle.rs:26-31`), so every registered
+cleanup handler would never run and everything it reclaimed would leak, silently — nothing errors
+when a callback is not called. The module already carries the replacement mechanism (`track`
+:107-109, `untrack` :115-117, `reap(now)` :124-142) and it is reached from tests only (:80-81).
+
+## Measured constraints
+
+| fact | evidence |
+|---|---|
+| the state a reaper must reclaim is `last_tool`, keyed per identity | `last_tool: DashMap<String,String>` `src/security/firewall/anomaly.rs:50`, written at `:153` |
+| the write happens inside `score_transition`, called one frame up by `observe` | `observe` `anomaly.rs:95`, `Observation::Scored(self.score_transition(...))` `:99` |
+| an empty identity never reaches the write | `observe` returns `Observation::Unobservable` at `:97` before scoring |
+| `observe` is called from the firewall's request check | `src/security/firewall/mod.rs:398`, inside `pub fn check_request(` `:352` |
+| the key is `control_identity`, computed by the caller | `let anomaly_identity = (!control_identity.is_empty()).then_some(control_identity);` `mod.rs:395`, with a 15-line rationale `:380-394` |
+| on the 2026 path that value IS the owner key | `handlers.rs:1298-1302`: `session_id` is empty there, so `control_identity = session_owner_key(client)` |
+| the second caller passes a synthetic, bounded key | `backend_handlers.rs:97`: `format!("direct:{backend_name}")`, one per configured backend |
+| a live TTL loop already exists and is the named host | `spawn_reaper_on` `src/gateway/streaming.rs:113-125`, tests `:647-737` |
+| the firewall is already shared by `Arc` | `pub firewall: Option<Arc<Firewall>>` `src/gateway/router/mod.rs:112` |
+| a comparable per-user TTL already ships | `PER_USER_IDLE_TTL = 300s`, `SWEEP_INTERVAL = 60s`, `src/gateway/server/mod.rs:2127-2128` |
+
+**F1 — "the gateway's existing maintenance tick" has a referent after all.** §R3 and
+`RELEASE-4.0.0-blocking-rollup.md:596` name a tick that `rg` finds nowhere; v1 concluded the
+phrase had to be read as a shape. R3a resolves it by naming `streaming.rs:122`. F1 stands as a
+correction to the rollup's wording, not as a design freedom.
+
+**F2 — both write sites are gated twice, and R3a does not name this.** The `check_request` calls
+sit under `#[cfg(feature = "firewall")]` (`handlers.rs:1284`, `backend_handlers.rs:95`) *and*
+under `if let Some(ref fw) = state.firewall` (`:1285`, `:96`). `firewall` is in `default`
+features, so a stock build populates the map. A `--no-default-features` build, or firewall
+disabled by config, writes nothing to `last_tool` — and therefore nothing needs reaping. The map
+being empty there is correct, not a leak; what it is not is evidence. §P2 must enable the feature
+to observe anything, and no test may read an empty map as a pass.
+
+## Decisions
+
+**D1 — host: the existing streaming reaper loop. v1's `spawn_lifecycle_reaper` is DEAD.**
+R3a forbids a second maintenance loop, so `spawn_reaper_on` (`streaming.rs:113`) gains one more
+line inside its tick: `lifecycle.reap(now_unix())` beside `mux.reap_expired_sessions(ttl)`. The
+loop already survives multiplexer death by `weak.upgrade()`, already skips missed ticks, and is
+already tested at `:647-737`. Nothing new is spawned.
+
+**D1a — how the loop reaches a `SessionLifecycle` (a decision R3a did not make; named per §P3).**
+`spawn_reaper_on(self: &Arc<Self>)` takes no collaborators today and the multiplexer owns none.
+Two shapes:
+(a) a parameter — `spawn_reaper_on(&self, lifecycle: Arc<SessionLifecycle>)`, captured by the
+spawned task. Every call site (`server.rs`, `webhooks.rs`, `proxy.rs`) must supply it, so the
+compiler enforces that no caller silently gets a reaper-less loop.
+(b) a field on the multiplexer, set at construction.
+**Chosen: (a).** It adds no state to a type whose state is its session map, and the enforcement
+is free. Not an `Option`: a `SessionLifecycle` with no tracked keys already reaps nothing, so the
+null object costs one uncontended read per tick and removes a branch that could be wrong.
+The single instance is created at gateway startup and stored beside `firewall` on the router
+state, which is what lets the write site reach it (D4).
+
+**D2 — clock: `u64` seconds since the Unix epoch, stated in the API doc, produced by one helper.**
+`track(_, expires_at: u64)` / `reap(now: u64)` document no epoch or unit today, and three ACs pass
+bare literals (1_000/5_000/2_000/6_000). Rejected: `Instant`/`Duration` — it changes a public
+signature three ACs bind to, and cannot be logged, persisted or compared across a restart. The
+unit seam against streaming's `Instant` is contained to one `SystemTime::now()` inside the tick.
+Wall-clock jump is the accepted cost: backwards delays a reclaim, forwards reclaims early; both
+touch derived state only (D5).
+
+**D3 — key: `control_identity`, re-derived at the write site, NOT `session_owner_key` asserted
+directly.** R3a's rule is "key on whatever `last_tool` is keyed by". That is the `session_id`
+parameter of `score_transition`, which is `anomaly_identity`, which is `control_identity`
+(`firewall/mod.rs:395`). On the 2026 path `session_id` is empty so `control_identity` resolves to
+`session_owner_key(client)` — v1's conclusion, reached by the wrong route. Taking the value from
+`control_identity` keeps the two keys equal by construction if that chain ever changes.
+
+**D3a — DELETED. The empty-identity rule is already owned one layer down.**
+v1 proposed reusing `unattributed` (`handlers.rs:1013`) to refuse tracking anonymous callers.
+`observe` returns `Unobservable` for an empty identity and never writes (`anomaly.rs:95-99`), so
+tracking exactly where the write happens inherits that rule. Reusing `unattributed` would create a
+second rule about empty keys that can disagree with the first. Elimination, not a patch: after
+this cut the finding "two components can disagree about which callers are trackable" cannot be
+stated.
+
+**D4 — write site: adjacent to `check_request` in `handlers.rs`, guarded on the same emptiness
+test. v1's `handlers.rs:1013` is SUPERSEDED.** `control_identity` is computed at `:1298-1302`,
+285 lines away from v1's site and inside the firewall gate; `:1013` is neither the same value nor
+the same gate. One `track(control_identity, now + IDLE_TTL)` next to the `check_request` call
+(`:1303`), under `!control_identity.is_empty()`, mirrors `observe`'s own guard.
+Rejected: tracking inside `AnomalyDetector` at the literal `DashMap` insert. It covers both
+callers by construction, but injects `SessionLifecycle` into an EE-licensed security module and
+changes its constructor. R3a's contrast is *write site vs session open*, not *inside the insert*;
+the handler site is the same request, the same key, adjacent to the write.
+`backend_handlers.rs:102` is deliberately NOT a track site: its key is `direct:{backend_name}`,
+one per configured backend, so the set is bounded and there is nothing to reclaim — and reaping it
+would make the next direct call score as a first call, which is the signal the detector exists to
+notice.
+
+**D5 — reap is unconditional; the constraint moves onto what a handler may reclaim.** Streaming
+guards with `receiver_count() == 0` (`:135`); an identity key has concurrent in-flight requests,
+so no analogue exists. A handler registered here MUST be safe to fire while a request for the same
+key is in flight — it reclaims derived, rebuildable state, never state a live request depends on.
+`remove_session` (`anomaly.rs:189`) qualifies: it drops one `last_tool` entry, and the next call
+for that identity scores as a first call, exactly as it does after the `MAX_TRACKED_IDENTITIES`
+ceiling evicts it (`:138-149`). Rejected: a lock or an in-flight counter — new machinery to
+protect a class of handler being declared out of bounds anyway.
+
+**D6 — TTL: `IDLE_TTL` 300s, `SWEEP_INTERVAL` 60s, module constants, carried as a STATED
+ASSUMPTION.** Matches the shipped `PER_USER_IDLE_TTL`/`SWEEP_INTERVAL` (`server/mod.rs:2127-2128`).
+Streaming's loop carries its own `session_ttl` and `session_reaper_interval` from config; those are
+NOT collapsed into these — the loop's cadence stays the streaming knob, and `IDLE_TTL` governs only
+what `track` writes as a deadline. Thirty seconds would hold less abandoned state under churn; an
+hour would never lose a long human-in-the-loop elicitation. Nobody has ruled.
+
+**D7 — observability: one `info!` per sweep that reclaimed anything, carrying the count.** Matches
+streaming (`:138`, `:145-149`). Per-key `debug!` already exists (`session_lifecycle.rs:87-95`). No
+new metric until an operator asks a question the log cannot answer.
+
+### Findings carried in from the v1 review (both legs returned SHIP)
+
+**Monotonic seconds, rejected (GPT, IMPROVEMENT).** "Monotonic seconds can retain the existing
+`u64` signatures" and would remove the wall-clock hazard. It also needs a process-start `Instant`
+reachable from both the write site and the tick — a new shared origin, i.e. a global — and it
+makes the logged deadline meaningless to an operator comparing it against anything else. The
+hazard it removes moves a reclaim by the size of the jump, and by D5 a reclaim touches only
+rebuildable state. D2 stands; the trade is recorded rather than re-litigated.
+
+**The re-track race is now REACHABLE, and it is closed by argument, not by machinery (Kimi,
+MEDIUM).** `reap` collects expired keys under the write lock, removes them, then fires handlers
+outside it (`session_lifecycle.rs:124-142`), so a live request can re-`track` a key between its
+removal and its handler firing. Kimi's SHIP rested on "not reachable until a handler registers" —
+U1 now registers one, so the premise is gone and the finding is live.
+It is not a defect **for this handler class**. `Firewall::on_session_end` drops one `last_tool`
+entry; the identity's next call then scores as a first call. That is bit-for-bit what already
+happens whenever `MAX_TRACKED_IDENTITIES` evicts an identity (`anomaly.rs:138-149`) — a routine
+production event the detector is built to absorb. D5's rule is exactly what makes the race
+harmless: a handler may only reclaim state whose loss is indistinguishable from an eviction.
+Rejected: a per-key generation counter re-checked before firing. It buys nothing for a handler
+class that is already eviction-tolerant, and it would be the second mechanism claiming to decide
+when a key is live. Recorded as a NAMED RESIDUAL: the first handler that is *not* eviction-tolerant
+re-opens D5 (U2), and D5 is the gate that must refuse it.
+
+## Scope (§P0)
+
+FOR: the mechanism reaches production on the 2026 path — the existing streaming tick reaps,
+one write site tracks, one real consumer is registered, the clock and TTL are documented.
+
+**Receipt — the surface moved on 2026-09-08 (§P0 freeze).** v1 put "registering the four named
+consumers' handlers" entirely OUT. R3a answered U1 with option (b): at least one real consumer
+must be registered, and named it — `Firewall::on_session_end` (`src/security/firewall/mod.rs:682`,
+whose only caller today is a test at `:1062`). That one consumer moves IN. The other three (cost
+governance, tool profiles, semantic-search feedback) stay OUT. Reason: a reaper over a map no
+production path reads is the fourth unreachable mechanism this plan exists to avoid, and R3a made
+that a precondition on the design rather than a follow-up.
+
+OUT: the other three named consumers; deleting `SessionStore`; `CostTracker::evict_old_records`
+(`src/cost_accounting/mod.rs:572` — also dead, also unhosted, adjacent but not this change);
+tracking at `backend_handlers.rs:102` (D4); and everything inside the keep-out fence
+(`src/backend/lifecycle.rs` ~375-380, the HTTP startup and era-probe path, `src/backend/era.rs:99`).
+
+**`on_disconnect` stays unreached, deliberately.** With this change `register`, `track` and `reap`
+gain production callers; `on_disconnect` (`:62-67`) does not, because the 2026 path has no
+disconnect to fire it — that is the whole premise of R3a. It remains a deletion candidate under
+MIK-7291, named here so the WIRED trail does not quietly claim every symbol in the module.
+
+**Loop lifetime, answered by the chosen host.** The reaper task ends when the multiplexer is
+dropped — `weak.upgrade()` returns `None` and the loop breaks (`streaming.rs:118-124`). No
+shutdown channel is added, and the lifecycle reap inherits that termination unchanged. (Raised
+against v1's rejected host; it re-attaches to any host and is answered here.)
+
+## Scheduled open questions (§P1)
+
+**U1 — does CONTROL.4 close with zero handlers registered? — ASKABLE. RESOLVED.**
+Asked of: the team lead. Answer (§R3a): no — at least one real consumer must be registered, and
+the ruling names `Firewall::on_session_end`. What it changed: one consumer moved from OUT to FOR
+(receipt above), D4 acquired a second obligation (the registered closure captures a
+`Weak<Firewall>`; `firewall` is already `Option<Arc<Firewall>>` at `router/mod.rs:112`, so no
+state restructuring is needed), and the §P2 plan must assert that the registered handler actually
+fires — not merely that `tracked_count` fell.
+
+**U2 — what a registered handler may safely reclaim — CHECKABLE, DEFERRED, and now load-bearing.**
+Owner: whichever lane registers the SECOND handler (the first is `on_session_end`, checked against
+D5 in this document — it is eviction-tolerant). What resolves it: reading that handler against D5
+at its review, specifically against the re-track residual above. When: at that registration.
+If it resolves badly: the handler needs an in-flight guard, D5 re-opens, and the generation
+counter rejected above comes back into play. Blocks: any registration beyond `on_session_end`.
+
+**U3 — may this change edit `src/gateway/streaming.rs`, and in which of D1a's two shapes? —
+ASKABLE, ASKED, OPEN.** R3a: "streaming.rs is not another lane's file, but tell me before you edit
+it." Owner: team lead. What resolves it: the answer to the message sent with this document.
+When: before any code. If it resolves badly (no edit permitted): D1 has no host, R3a's ban on a
+second loop stands, and the design returns for a third host — implementation does not proceed on a
+guess. Blocks: D1, D1a. Does not block: D2-D7, or the test plan for the write site.
