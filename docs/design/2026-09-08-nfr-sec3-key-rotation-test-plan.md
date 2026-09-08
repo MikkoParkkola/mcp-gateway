@@ -57,6 +57,17 @@ Mined from the clause text and the design's invariant list (`:447-466`), per rul
   (`tests/mik_7312_continuation_state.rs:145`), When rotation lands, Then it still passes AND
   the first `AppState` is shown to have rotated at least once inside the case — a regression
   that stays green because rotation never fired proves isolation, not rotation.
+- `MIK-7417.SEC3.15` — Given a key whose retention window has passed and where NO mint has
+  run to evict it, When an envelope sealed under it is opened, Then it is refused as
+  EXPIRED and the key is still present in the ring — design invariant 2 is a property of
+  the deadline check, and eviction is memory hygiene with no invariant riding on it.
+- `MIK-7417.SEC3.16` — Given a minting kid of 255, When rotation runs, Then the successor
+  is kid 0 — the only input on which `wrapping_add(1)` and a plain `+ 1` disagree.
+- `MIK-7417.SEC3.17` — Given a minting key with exactly one slot left within `budget`, When
+  several mints run concurrently, Then exactly one succeeds, every other fails with the
+  budget error, and no rotation occurs — the slot draw is atomic, so the per-key sealing
+  limit is a limit and not an average.
+
 
 ## Coverage matrix
 
@@ -76,8 +87,11 @@ Mined from the clause text and the design's invariant list (`:447-466`), per rul
 | `.12` | N threads mint at the boundary instant; assert kid advanced by exactly 1 | integration | concurrency | *(none — to be written)* |
 | `.13` | `const` assertion on the two constants | unit | static | *(none — to be written)* |
 | `.14` | existing cross-`AppState` refusal case re-run after rotation lands, with a rotation forced inside it | system | regression | `tests/mik_7312_continuation_state.rs:145` (exists; must still pass) |
+| `.15` | seal, retire, advance past retention WITHOUT minting, open → `Expired`; assert the key is still in the ring | unit | negative | *(none — to be written)* |
+| `.16` | drive the ring to minting kid 255, rotate, assert the successor is 0 | unit | boundary | *(none — to be written)* |
+| `.17` | N concurrent mints against one remaining slot; assert one `Ok`, N-1 budget errors, kid unmoved | integration | concurrency | *(none — to be written)* |
 
-Thirteen empty cells, one filled. That ratio IS the plan's finding: the multi-key rings
+Sixteen empty cells, one filled. That ratio IS the plan's finding: the multi-key rings
 that already exist at `tests/mik_7212_acs.rs:195-245` are hand-built, so they observe
 `open`'s kid selection and nothing about rotation, retention or the counter discipline.
 
@@ -102,6 +116,10 @@ coverage check ever devised.
 | `.12` | threads serialised by the harness, so no race exists | the assertion is on the OUTCOME (`+1`), correct under serialisation too; the case earns its keep by going red when the second age check under the write guard is removed — that mutation is its falsifier |
 | `.13` | none — a `const` assertion cannot be staged | it goes red the moment either constant is edited past the bound; that is its whole job |
 | `.14` | the existing case passing because rotation never touched it | rotation changes the ring's shape on the minting side; the case is re-run, not re-asserted, and its failure mode is a token that starts being ACCEPTED cross-state |
+| `.15` | asserting "refused", which the no-such-kid path also delivers | the assertion is `Expired` AND the key still being in the ring; an implementation that evicted eagerly fails the second half, one that skips the deadline check fails the first |
+| `.16` | folding the wrap into `.2`, where `prev + 1` and `wrapping_add` agree | 255 is the only input on which the two rules differ, and a plain `+ 1` panics there in debug — the case goes red loudly, not subtly |
+| `.17` | a harness that serialises the callers, where no two draws ever share a slot | the assertion counts OUTCOMES, not schedules, so it is correct under serialisation and red whenever a read-then-write interleaving lands; its named falsifier is splitting the counter's read and increment across the guard boundary |
+
 
 Row `.12` is the honest weak one and is marked as such: a concurrency assertion is proved
 by mutation, not by observation. Its falsifier is named rather than assumed.
