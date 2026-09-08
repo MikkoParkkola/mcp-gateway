@@ -343,7 +343,16 @@ fn resolve_material(
 ///
 /// A borrowed view rather than an owned copy so that constructing the list
 /// cannot itself duplicate secret material into a longer-lived allocation.
-#[derive(Clone, Copy, Debug)]
+///
+/// NO `Debug`, DELIBERATELY. `spec` is the credential AS CONFIGURED, which for
+/// a literal `auth.bearer_token` or api key IS the secret; a derived formatter
+/// would print it into any log line, panic message or `{:?}` of a containing
+/// structure that ever reached one. Nothing formats this type today, so the
+/// derive is removed rather than replaced: a hand-written redacting formatter
+/// would be an unused surface, and the only honest way to keep material out of
+/// a log is for there to be no way to print it at all. Errors already carry
+/// [`GatewayCredential::label`], which is configuration coordinates only.
+#[derive(Clone, Copy)]
 pub(crate) enum GatewayCredential<'a> {
     /// `auth.bearer_token`, including the sentinel `auto`.
     BearerToken(&'a str),
@@ -393,6 +402,15 @@ impl<'a> GatewayCredential<'a> {
 
 /// Structural half of gateway separation: no adapter may name the SAME
 /// environment variable as a gateway credential.
+///
+/// CALL IT BEFORE ANY CREDENTIAL IS INLINED. This compares REFERENCE TEXT on
+/// both sides, so a caller that has already substituted `auth.bearer_token` or
+/// an api key with the value its variable held is handing over plaintext, and
+/// plaintext equals no `env:` name: the check then passes vacuously. With a
+/// disabled store the material half does not run either, so that ordering
+/// mistake is silent acceptance rather than a weaker diagnostic. The gateway's
+/// own load path resolves secrets partway through, which is why it runs this
+/// against the as-parsed configuration rather than leaving it to validation.
 ///
 /// Decidable from the text, so it runs for every configuration including a
 /// disabled store, and it reads nothing — a config with `accounts.enabled:

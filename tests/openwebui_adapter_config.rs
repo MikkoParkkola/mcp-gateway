@@ -11,7 +11,14 @@
 //!   * `serde` parsing of the public `mcp_gateway::config::Config`, whose
 //!     `accounts: Option<AccountsConfig>` field and `AccountsConfig` type are
 //!     both public re-exports;
-//!   * `Config::validate_with_env` with the config's own `Config::env_overlay`.
+//!   * `Config::validate_with_env` with the config's own `Config::env_overlay`;
+//!   * `Config::load_evaluated`, the SHIPPED load path, for the two cases at the
+//!     end of this file. Those are there because parse-then-validate is not what
+//!     a gateway runs: the load path resolves `env:` secrets INTO the config
+//!     first, and a check that compares reference text has to run before it. A
+//!     test that only drove `validate_with_env` could not have seen that, and
+//!     nothing in this file should be read as covering the load path except
+//!     those two.
 //!
 //! CONTRACT SOURCE — VERBATIM. The approved design excerpt supplied with this
 //! task states, for `accounts.adapters`:
@@ -1148,5 +1155,166 @@ auth:
     assert!(
         lower.contains("adapters[0]") && lower.contains("auth.bearer_token"),
         "refusal must name both sides of the alias: {error}"
+    );
+}
+
+// ── The SHIPPED load path, not just the validation entry point ────────────────
+//
+// The three cases above drive `serde_yaml::from_str` + `validate_with_env`
+// directly. That composition is NOT what a gateway runs: `Config::load_evaluated`
+// resolves `env:` secret references INTO the config — inlining
+// `auth.bearer_token` and `auth.api_keys[].key` — and only then validates. On
+// that path the structural alias check was handed a gateway credential that no
+// longer said `env:` anything, so it matched nothing; and with the store
+// disabled the material half is skipped by design. One variable named by both an
+// adapter and a gateway credential was therefore accepted in silence by the only
+// entry point that actually loads a gateway.
+//
+// The tests below go through `Config::load_evaluated` against a real file, which
+// is the only way to exercise that ordering. Neither of them mutates the process
+// environment: material arrives through an `env_files` overlay in a temporary
+// directory, and every value is obvious filler.
+
+/// Write a config file and the env file it declares, returning the config path.
+///
+/// `store_dir`/`authority_dir` are deliberately never created: this is still
+/// configuration only, and nothing here opens custody.
+fn write_load_fixture(
+    dir: &std::path::Path,
+    bearer_ref: &str,
+    adapter_ref: &str,
+    env_body: &str,
+) -> std::path::PathBuf {
+    let env_path = dir.join("adapter-load.env");
+    std::fs::write(&env_path, env_body).expect("fixture env file must be writable");
+
+    let config_path = dir.join("config.yaml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "\
+env_files:
+  - {}
+server:
+  port: 18779
+auth:
+  enabled: true
+  bearer_token: {bearer_ref}
+accounts:
+  schema_version: accounts.v1
+  enabled: false
+  deployment: single_process
+  instance_id: openwebui-adapter-load-order
+  store_dir: /var/lib/mcp-gateway/accounts/store
+  authority_dir: /var/lib/mcp-gateway/accounts/authority
+  current_key_id: primary
+  keys:
+    primary: env:OWUI_LOAD_STORE_KEY
+  adapters:
+    - kind: openwebui_signed_header
+      installation_id: owui-prod-1
+      header: X-OpenWebUI-Assertion
+      issuer: open-webui
+      hmac_secret_ref: {adapter_ref}
+      allowed_api_key_names:
+        - owui-gateway-key
+",
+            env_path.display(),
+        ),
+    )
+    .expect("fixture config must be writable");
+    config_path
+}
+
+/// THE REGRESSION. One variable named by both the adapter and the bearer token
+/// must be refused by `Config::load_evaluated` even with the store disabled.
+///
+/// This fails on a load path that inlines the bearer token before running the
+/// structural separation check, because by then `auth.bearer_token` holds
+/// filler text rather than `env:OWUI_LOAD_ALIASED` and the two references
+/// cannot be compared as references. The disabled store means the material
+/// comparison — the only other thing that could catch it — does not run, so
+/// nothing else stands behind this.
+#[test]
+fn load_evaluated_refuses_one_variable_shared_by_an_adapter_and_the_bearer_token() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let aliased = filler_32('z');
+    let config_path = write_load_fixture(
+        dir.path(),
+        "env:OWUI_LOAD_ALIASED",
+        "env:OWUI_LOAD_ALIASED",
+        &format!(
+            "OWUI_LOAD_STORE_KEY={}\nOWUI_LOAD_ALIASED={aliased}\n",
+            store_key_b64(0x41),
+        ),
+    );
+
+    let error = Config::load_evaluated(Some(&config_path))
+        .expect_err("one variable named by both an adapter and gateway auth is one secret");
+
+    let rendered = error.to_string();
+    let lower = rendered.to_lowercase();
+    assert!(
+        lower.contains("adapters[0]") && lower.contains("auth.bearer_token"),
+        "refusal must name both sides of the alias: {rendered}"
+    );
+    assert!(
+        !rendered.contains(&aliased),
+        "refusal must name configuration coordinates, never secret material: {rendered}"
+    );
+}
+
+/// The positive control for the case above, through the SAME load path: two
+/// DISTINCT references are accepted, the adapter reference survives as a
+/// reference, and the variable it names is reported among the secret references.
+///
+/// Without this, the refusal above could be caused by anything the load path
+/// does with an `accounts` block rather than by the alias it claims to be about.
+/// The `secret_refs` assertion is the second half: an adapter secret is a
+/// startup-only secret exactly like an account key, so a reload comparing those
+/// names across overlays must be able to see it rotate.
+#[test]
+fn load_evaluated_accepts_distinct_references_and_reports_the_adapter_variable() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let config_path = write_load_fixture(
+        dir.path(),
+        "env:OWUI_LOAD_BEARER",
+        "env:OWUI_LOAD_ADAPTER_HMAC",
+        &format!(
+            "OWUI_LOAD_STORE_KEY={}\nOWUI_LOAD_BEARER={}\nOWUI_LOAD_ADAPTER_HMAC={}\n",
+            store_key_b64(0x41),
+            filler_32('b'),
+            filler_32('a'),
+        ),
+    );
+
+    let evaluated = Config::load_evaluated(Some(&config_path))
+        .unwrap_or_else(|error| panic!("separated references must load: {error}"));
+
+    assert!(
+        evaluated.secret_refs.contains("OWUI_LOAD_ADAPTER_HMAC"),
+        "the adapter signing variable must be reported as a secret reference: {:?}",
+        evaluated.secret_refs
+    );
+    assert!(
+        evaluated.secret_refs.contains("OWUI_LOAD_BEARER"),
+        "the existing gateway reference must still be reported: {:?}",
+        evaluated.secret_refs
+    );
+
+    let dumped: serde_yaml::Value =
+        serde_yaml::to_value(&evaluated.config).expect("loaded config must re-serialize");
+    let hmac_ref = dumped["accounts"]["adapters"][0]["hmac_secret_ref"]
+        .as_str()
+        .expect("adapter reference must survive the load");
+    assert_eq!(
+        hmac_ref, "env:OWUI_LOAD_ADAPTER_HMAC",
+        "an adapter secret reference must stay a reference, never be inlined"
+    );
+    assert!(
+        !serde_yaml::to_string(&dumped)
+            .expect("re-serialize")
+            .contains(&filler_32('a')),
+        "a rewrite must not carry adapter signing material"
     );
 }
