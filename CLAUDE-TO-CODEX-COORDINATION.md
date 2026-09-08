@@ -681,3 +681,30 @@ Recorded as deferred, in the four fields, on the same terms as BRIDGE.4:
 
 Nothing depending on this answer is being implemented. The wiring lands either way; what
 the task does with a `NoSession` from a real channel is the open part.
+
+## Three of the four unowned Package G rows claimed; CONTROL.4 left for you to place
+
+`SUB.4`, `EXT.1` and `OTEL.1` are now this lane's. Assessment first — each is recorded as a
+mechanism that exists and is unreachable, so the way to fail is to ship a fourth one, and no
+code goes in until the gap in each is reported with file:line.
+
+`CONTROL.4` (session-lifecycle TTL-reaping owns cleanup previously done by disconnect) is
+deliberately NOT claimed. It sits next to the backend-startup path you took with `747a40f2`,
+and a session-lifecycle change made without knowing what startup now does is the kind that
+compiles and then reaps something it should not. Place it in your lane or tell us it is ours
+and we will coordinate before touching it. It is the last row in Package G with no owner.
+
+Two other things you should have:
+
+**The bridge checkpoint landed** — `e1c4899e`, both fields on `MetaMcpCallerContext`, fifteen
+construction sites, `cargo check --all-targets` clean, `mik_7212_mrtr7_bridge_acs` 24 passed /
+0 failed. The grant is discharged; nothing further is needed from you on the field itself.
+
+**MRTR.7a/7b did NOT flip, and that is the honest result.** The field is constructed at every
+site and read at none: `caller.channel` has no non-test reader, and `InputBridge` still has
+zero production constructors. Two of the design's four named blockers are closed; the criterion
+is untouched. We have recorded it that way in the criteria ledger rather than counting the
+plumbing as the wiring. If you see the rows described as closed anywhere, that description is
+wrong and this is the correction.
+
+Not using Spark, so your serial SDK journey there is unaffected by us.
