@@ -50,13 +50,13 @@ six supports and one compile-time obligation.
 | ID | what it proves | level | type | how it can fail (Q2) |
 |---|---|---|---|---|
 | T1 | a request reaching `check_request` with a non-empty `control_identity` leaves a tracked entry keyed on that identity, whose deadline is `now + IDLE_TTL` | integration (handler) | positive / functional | the write site does not exist yet, so this fails by absence today — the free failure §P2 is built on. The fixture sets `control_identity` and `session_owner_key` to DELIBERATELY DIFFERENT values; without that discriminator the D3 key-provenance half of this row cannot fail, and a write site keyed on the wrong one ships green. After wiring, it also fails if the guard is inverted or the deadline is computed from the wrong base |
-| T2 | an empty `control_identity` leaves NO entry | integration (handler) | negative | fails if the D4 guard is dropped. Cannot self-pass: the assertion is on an EMPTY map, so a fixture that accidentally tracks makes it red, not green |
+| T2 | an empty `control_identity` leaves NO entry | integration (handler) | negative | fails if the D4 guard is dropped. Cannot self-pass: the assertion is on an EMPTY map, so a fixture that accidentally tracks makes it red, not green. **Green today, and labelled below** — the map is empty before the write site exists too |
 | T3 | `reap` returns the number of keys it removed | unit | contract change | `reap` returns `()` today. The test cannot compile against the current signature — a compile failure IS the red, and it is honest because the signature change is the point. NOT a re-test of reap's removal logic, which is already covered |
 | T4 | after a sweep, the reclaimed thing is GONE: the predecessor `last_tool` entry for the reaped identity is ABSENT from the anomaly detector | integration | functional — THE criterion | **this is the row the whole plan is for.** It fails if `on_session_end` was never registered, if the registered closure captured a `Weak` that is already dead, or if reap removed the key without firing handlers. It CANNOT be satisfied by an empty map: see the fixture rule below |
 | T5 | the two constants the latency bound rests on are read where the design says: the write site reads `IDLE_TTL` (300s, D6) and the host tick reads `session_reaper_interval` from config (`streaming.rs:108`) | unit | boundary / constants | a wrong-by-10x constant passes every other row in this table while silently breaking the stated reclaim latency, because no other row reads either value. Fails if the write site hard-codes a literal, if it reaches for the unrelated shipped `PER_USER_IDLE_TTL` (`server/mod.rs:2131`) instead of D6's module constant, or if the tick uses a fixed interval rather than the configured one — which is what makes the streaming tests' 10-20 ms overrides work at all |
 | T6 | the sweep log (D7) carries the COUNT of what it reclaimed, and is absent on an empty sweep | integration | observability / negative | two identities are reclaimed in ONE sweep; the case asserts exactly one event carrying the count 2, then drives a further tick over an empty map and asserts no event at all. Captured with a test-only `tracing` subscriber installed for the case — named here because a negative assertion with no stated capture mechanism cannot fail: it is green when nothing is captured, which is also green when nothing is emitted. Fails if the `info!` is unconditional (the per-tick-per-idle-gateway line D7 exists to prevent) and equally if it fires once per key, which a bare presence check would pass |
 | T7 | every `spawn_reaper_on` call site supplies a lifecycle | — | **NO TEST, BY CONSTRUCTION** | D1a chose the parameter shape precisely so the COMPILER enforces this. A test asserting the compiler's own rule would be a test that cannot fail. Stated reason, per Q1 — not an empty cell |
-| T8 | reap is unconditional: a key whose request is still in flight is still reaped | integration (host) | documented-behaviour pin | D5 deliberately has no in-flight guard; the tolerance is pushed onto what a handler may reclaim. **This case passes today and cannot go red now** — it pins existing behaviour, and it is the one row in this table with no red-first proof. It would fail against a future in-flight guard, and that guard would be added at the HOST call site, which is why the level is integration: a unit test on `reap` cannot see a guard placed in `streaming.rs` |
+| T8 | reap is unconditional: a key whose request is still in flight is still reaped | integration (host) | documented-behaviour pin | D5 deliberately has no in-flight guard; the tolerance is pushed onto what a handler may reclaim. It would fail against a future in-flight guard, and that guard would be added at the HOST call site, which is why the level is integration: a unit test on `reap` cannot see a guard placed in `streaming.rs`. At that level it is RED today — the host tick does not call `reap` yet, so nothing is reaped and the assertion fails |
 
 ## The fixture rule T4 turns on (Q2, and the reason this plan was written before the tests)
 
@@ -131,16 +131,28 @@ design's happy path.
 
 Per row, because one row breaks the blanket claim the first draft made.
 
-T1, T2, T4, T5 and T6 test wiring that does not exist yet, so each fails by absence today — the free failure
+T1, T4, T5 and T6 test wiring that does not exist yet, so each fails by absence today — the free failure
 §P2 is built on. T3 is the closest call, since `reap` exists, but its assertion is on a return value the
 current signature cannot produce, so it fails to COMPILE rather than passing hollowly. T7 has no test at all,
 by construction.
 
-**T8 is the exception, stated rather than hidden.** It pins behaviour that is already correct, so it is green
-the moment it is written and stays green until someone adds the in-flight guard it exists to catch. That makes
-it one of the two survivors `test-plan-honesty` names — a case that can never go red NOW — and the honest
-handling is to label it. The falsifier probe (§P2's recovery mechanism for tests written after the code) would
-not help: there is no pre-fix revision to restore, because nothing is being fixed.
+**T2 is the exception, stated rather than hidden.** Its assertion is that the map holds NO entry for an empty
+`control_identity`. Today the map holds no entry for ANY identity, because nothing tracks yet — so T2 is green
+the moment it is written, for a reason that has nothing to do with the D4 guard it exists to pin. It goes red
+only against a future write site that tracks the empty key, which is exactly what it is for. That makes it one
+of the two survivors `test-plan-honesty` names — a case that can never go red NOW — and the honest handling is
+to label it. The falsifier probe (§P2's recovery mechanism for tests written after the code) would not help:
+there is no pre-fix revision to restore, because nothing is being fixed. T2 is still worth writing: it is the
+negative polarity of a guard whose positive polarity (T1) is red-first, and a guard tested in one direction only
+is a guard that passes when it is inverted.
+
+**T8 is red-first, and only because its level moved.** An earlier revision of this plan carried T8 as a unit
+case on `reap` and labelled it green-today; that label did not survive the level change to integration (host).
+At the host level the case drives the PRODUCTION tick, and the production tick does not call `reap` — `reap`
+has no production caller at all today: its three call sites are all inside its own `#[cfg(test)]` module
+(`session_lifecycle.rs:180`, `:188`, `:209`). So a key whose request is in flight is not reaped, and T8 fails
+on its own assertion. The classification follows the level; changing one without re-deriving the other is how
+a table ends up claiming a red that no revision can produce.
 
 ## Coverage bar and the one risk (DoD §4)
 
