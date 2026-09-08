@@ -290,3 +290,10 @@ already reaps nothing, so the `Option` buys a second way to spell the same empti
 What it changed: D1 has its host and D1a is settled as written — nothing in the design moved. The
 answer UNBLOCKS rather than redirects, which is the cheapest kind and worth saying plainly: had it
 come back "no edit", D1 would have had no host at all. Shape (b)'s pre-evaluation is spent unused.
+
+Amended after §R11. R9 supplied the SHAPE half and this entry recorded it; the PERMISSION half —
+R3a's "tell me before you edit it" — was still outstanding when the entry first read RESOLVED, and
+saying so is the point of the four fields. R11 grants it in words: the keep-out on
+`src/gateway/streaming.rs` is lifted for this change, for the reaper wiring only. Not the file in
+general, and not for a second lane. Both halves are now on the record, so nothing about this
+question is carried as implied.
