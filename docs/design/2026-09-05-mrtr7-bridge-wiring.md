@@ -1376,12 +1376,22 @@ ruling that cannot be read against the text it ruled on is unauditable.
 
 ### Review provenance for this round
 
-The `gpt-review` ledger holds **no row** for this material. The most recent row
-is a different repo, run and ticket (`mcp-v4-delivery`, MIK-7212 component
-tests, 2026-09-06). The round-7 verdict is therefore `MISSING`, never a verdict
-scraped from any output file. The round-6 recorded verdict reviewed the
-**unamended** design and does not carry to this amendment; both legs re-run
-against the material above, submitted on stdin.
+Round 7 ran on 2026-09-08 against the amended material, both legs fed on
+stdin: `~/.claude/bin/gpt-review` (Codex, availability restored) and
+`~/.grok/bin/claude-review` (Claude Opus 5, `--safe-mode`). Both processes
+exited 0 and both returned SHIP-WITH-FIXES — verdict taken from the ledger row
+and the exit status, never scraped from the body (§PA). `gpt-review` raised two
+findings and one improvement; `claude-review` raised six and four. Every one is
+either a repair commit above or is recorded as falsified at source in the
+commit that closes it, and those repairs ARE the confirmation pass this round
+owes rather than a round of their own.
+
+The unreviewed baseline is disclosed rather than assumed away. The package both
+legs read was assembled at `63de240c`; every repair commit postdates both
+verdicts and has been read by neither leg. Under the repair protocol the
+closure re-check returns to the vendor that raised each finding. The round-6
+recorded verdict reviewed the **unamended** design and does not carry to this
+amendment.
 
 That sentence binds the PACKAGE, not just the intent: no round may carry an
 earlier round's PART A verbatim. PART A is the design and plan **as they stand
