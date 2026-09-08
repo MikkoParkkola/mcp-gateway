@@ -160,8 +160,20 @@ fn enforce_output_schema(
         return result;
     }
 
-    let validation_target =
-        extract_output_validation_target(&result).unwrap_or_else(|| result.clone());
+    // No inner payload, no validation. The schema describes the tool's output,
+    // not the MCP envelope carrying it, so falling back to the envelope
+    // validates the wrong document and then republishes it under
+    // `structuredContent` — carrying the backend's own `requestState` past the
+    // mint that exists to replace it, and overwriting a single plain-text item
+    // with a dump of its own wrapper. `apply_capability_projection` refuses
+    // this same case as bug #167; the schema path refuses it here.
+    let validation_target = match extract_output_validation_target(&result) {
+        Some(target) => target,
+        // A bare payload is its own validation target: no envelope to unwrap,
+        // and `apply_validated_output` returns the coerced value directly.
+        None if !is_mcp_envelope(&result) => result.clone(),
+        None => return result,
+    };
     let validation = validate_output(&validation_target, schema);
     if validation.is_valid() {
         apply_validated_output(&result, validation.coerced)
@@ -210,6 +222,18 @@ fn extract_output_validation_target(result: &Value) -> Option<Value> {
     }
     let text = content[0].get("text")?.as_str()?;
     serde_json::from_str::<Value>(text).ok()
+}
+
+/// Whether a value is an MCP tool-result envelope rather than a bare payload.
+///
+/// The two are validated differently: an envelope's schema describes what it
+/// CARRIES, so an envelope with nothing extractable has nothing to validate,
+/// while a bare payload is its own target. `apply_validated_output` keys its
+/// re-wrap on the same two fields, so the answer stays consistent across both.
+fn is_mcp_envelope(result: &Value) -> bool {
+    result
+        .as_object()
+        .is_some_and(|obj| obj.contains_key("content") || obj.contains_key("structuredContent"))
 }
 
 fn apply_validated_output(result: &Value, validated: Value) -> Value {
@@ -3731,6 +3755,63 @@ mod response_transform_tests {
 
         assert_eq!(result["isError"], json!(true));
         assert_eq!(result["content"][0]["text"], json!("bad input"));
+    }
+
+    #[test]
+    fn block5_an_unextractable_result_is_not_republished_as_structured_content() {
+        // When no inner payload can be extracted, there is nothing the output
+        // schema describes. Validating the MCP envelope against a payload
+        // schema is a category error, and publishing the envelope under
+        // `structuredContent` leaks the backend's own `requestState` past the
+        // mint that is supposed to replace it. `apply_capability_projection`
+        // already refuses this case as bug #167; this asserts the schema path
+        // refuses it too.
+        let schema = json!({
+            "type": "object",
+            "properties": { "issue": { "type": "object" } }
+        });
+
+        let result = enforce_output_schema(
+            "fulcrum",
+            "linear_get_issue",
+            json!({
+                "content": [
+                    { "type": "text", "text": "first" },
+                    { "type": "text", "text": "second" }
+                ],
+                "requestState": "backend-owned-state"
+            }),
+            Some(&schema),
+        );
+
+        assert!(
+            result.get("structuredContent").is_none(),
+            "envelope republished as structuredContent: {result}"
+        );
+        assert_eq!(result["content"][0]["text"], json!("first"));
+    }
+
+    #[test]
+    fn block5_a_single_non_json_text_item_keeps_its_human_readable_text() {
+        // The same defect's other face: a schema-bearing tool returning one
+        // plain-text item had that text overwritten with a pretty-printed dump
+        // of the whole envelope.
+        let schema = json!({
+            "type": "object",
+            "properties": { "issue": { "type": "object" } }
+        });
+
+        let result = enforce_output_schema(
+            "fulcrum",
+            "linear_get_issue",
+            json!({
+                "content": [{ "type": "text", "text": "no such issue" }]
+            }),
+            Some(&schema),
+        );
+
+        assert_eq!(result["content"][0]["text"], json!("no such issue"));
+        assert!(result.get("structuredContent").is_none());
     }
 
     #[tokio::test]
