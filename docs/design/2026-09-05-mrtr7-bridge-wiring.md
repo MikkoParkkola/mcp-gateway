@@ -1270,6 +1270,17 @@ cannot rule on a summary of a finding.
   is not.
 - **blocked until ruled.** `WIRE.5` and `WIRE.13` are frozen in their current
   form; neither is repaired, and no test is written against either.
+- **who re-checks the repair, when there is one.** The repair protocol returns a
+  finding to the vendor that RAISED it, and that vendor is `gpt-review`, which is
+  usage-limited until 2026-09-12 with `process_status=error` rows since
+  2026-09-06. So the closure path is the finder-unavailable one, planned here
+  rather than improvised on the day: a 12h clock from the closure request,
+  extended to the end of any verdict-bearing round in flight at expiry, then the
+  re-check falls to the other vendor or a human under a NARROWER mandate —
+  confirm or refuse F1's own text, answer `CANNOT VERIFY` rather than
+  substituting its own materiality judgment — with the row marked
+  `closure_recheck: delegated`. Never a silent reassignment to whichever leg
+  happens to be up.
 
 ### Review provenance for this round
 
