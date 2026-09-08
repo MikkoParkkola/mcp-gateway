@@ -305,10 +305,12 @@ pub trait ClientChannel: Send + Sync {
 /// scope — that type is HTTP-only — so there is no session to put a request on
 /// and [`DeliveryError::NoSession`] is the literal truth, not a stand-in for
 /// one. Refusing here is also what MIK-7387 will change: until it lands, an
-/// initialized stdio caller stays refused. What is pinned today is the refusal
-/// itself, over the whole admitted method set, in
-/// `tests/mik_7212_mrtr7_bridge_acs.rs`; the end-to-end stdio row is written in
-/// the MRTR.7 test plan and lands with the bridge's integration tests.
+/// initialized stdio caller stays refused. Two halves, proven separately: the
+/// stdio caller context sets this channel (grep `NoClientChannel` under
+/// `src/gateway/server/`), and the refusal it then yields is pinned over the
+/// whole admitted method set in `tests/mik_7212_mrtr7_bridge_acs.rs`. No test
+/// joins the two end to end yet; that row is `MIK-7212.WIRE.10` in the MRTR.7
+/// test plan and lands with the bridge's integration tests.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoClientChannel;
 
