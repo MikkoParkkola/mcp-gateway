@@ -19,6 +19,11 @@ Two failure modes this table exists to stop, both of which have happened:
 A ruling absent from this table is not thereby invented — it may have been given
 in an ordinary message. It does mean the provenance has to be shown some other way.
 
+The [2026-09-06 ordinary-message scope approvals](RELEASE-4.0.0-scope-decisions-2026-09-06.md)
+record additional decisions with their verbatim user messages. They supplement
+this generated question-tool table and must not be regenerated as selections
+that the question tool never received.
+
 18 decisions.
 
 | # | date | question put to the operator | answer |

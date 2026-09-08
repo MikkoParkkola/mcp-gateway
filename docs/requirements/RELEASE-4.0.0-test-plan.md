@@ -4,6 +4,12 @@
 **Requirements**: `docs/requirements/RELEASE-4.0.0-requirements.md`
 **Design**: `docs/design/RFC-0061-protocol-2026-07-28-release-scope.md`
 
+**Approved scope expansion**: the
+[supplemental test plan](RELEASE-4.0.0-scope-tests.md) adds real stdio bridging,
+task recovery, personal accounts, discovery outcomes and the accepted safety
+work. Those requirements supplement this plan; their unverified cases are not
+implicitly covered by a passing baseline suite.
+
 A test plan exists so the tests inherit the *requirements'* coverage instead of the design's happy
 path. One row per acceptance criterion. **An empty evidence cell is the finding**, not an oversight
 to be filled in later.
