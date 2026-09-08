@@ -2188,11 +2188,26 @@ impl Gateway {
                 }
             };
 
+        // Account strategies must exist before stdio can admit a request, just
+        // as they do before the HTTP listener starts serving.
+        if self.config.accounts.is_some() {
+            let gateway_key_pair = Arc::new(GatewayKeyPair::generate().map_err(|error| {
+                crate::Error::Config(format!(
+                    "stdio account signing key generation failed: {error}"
+                ))
+            })?);
+            let account_custody = self.custody.as_ref().map(|custody| {
+                Arc::clone(custody) as Arc<dyn crate::personal_accounts::AccountCustody>
+            });
+            account_bindings::install_account_strategies(
+                &self.config,
+                account_custody.as_ref(),
+                &gateway_key_pair,
+                &meta_mcp,
+            )?;
+        }
+
         if self.config.capabilities.enabled {
-            // The stdio path installs no account strategies (it never called
-            // the installer, and this slice does not change that), so a managed
-            // reference is DECLARED here and refuses at dispatch rather than
-            // silently resolving the gateway-held token.
             let account_strategies = meta_mcp.account_strategies();
             account_bindings::declare_account_descriptors(&self.config, &account_strategies);
             let executor = Arc::new(
@@ -2205,10 +2220,23 @@ impl Gateway {
                 &self.config.capabilities.name,
                 executor,
             ));
+            let mut refused = Vec::new();
             for dir in &self.config.capabilities.directories {
-                if let Ok(count) = cap_backend.load_from_directory(dir).await {
-                    debug!(directory = %dir, count, "Loaded capabilities (stdio)");
+                match cap_backend.load_from_directory_reporting(dir).await {
+                    Ok(report) => {
+                        debug!(directory = %dir, count = report.admitted, "Loaded capabilities (stdio)");
+                        refused.extend(report.rejected);
+                    }
+                    Err(error) => {
+                        debug!(directory = %dir, %error, "Failed to load optional capabilities (stdio)");
+                    }
                 }
+            }
+            if !refused.is_empty() {
+                return Err(crate::Error::Config(format!(
+                    "capabilities rejected by the account admission gate: {}",
+                    refused.join("; ")
+                )));
             }
             meta_mcp.set_capabilities(cap_backend);
         }
