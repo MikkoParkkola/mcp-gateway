@@ -444,14 +444,7 @@ impl UpgradeContext<'_> {
 
 /// Data directory for the gateway (`~/.mcp-gateway/` or `$MCP_GATEWAY_CONFIG_DIR`).
 pub fn data_dir() -> PathBuf {
-    std::env::var("MCP_GATEWAY_CONFIG_DIR").map_or_else(
-        |_| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".mcp-gateway")
-        },
-        PathBuf::from,
-    )
+    mcp_gateway::config_persistence::gateway_data_dir()
 }
 
 /// Called early in `serve` startup to apply any pending migrations silently.

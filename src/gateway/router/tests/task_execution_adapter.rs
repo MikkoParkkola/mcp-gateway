@@ -67,3 +67,5 @@ mod result_shapes;
 mod settlement;
 mod signing_joint;
 mod x1_dispatch;
+
+mod notifications;

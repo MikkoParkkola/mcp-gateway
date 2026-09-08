@@ -428,21 +428,29 @@ impl TaskExecutor {
             .await
     }
 
+    /// The one publication seam, reached only after a durable write that
+    /// changed something: a dedupe, a no-op or a failed commit never gets here,
+    /// so a listener never learns of a transition that did not happen.
     fn published(&self, outcome: &WriteOutcome, task_id: &str) {
-        let _ = &self.subscriptions;
         let status = match outcome {
-            WriteOutcome::Create(CreateOutcome::Created { task, .. }) => {
-                format!("{:?}", task.task.status())
-            }
-            WriteOutcome::Transitioned(task) => format!("{:?}", task.task.status()),
+            WriteOutcome::Create(CreateOutcome::Created { task, .. })
+            | WriteOutcome::Transitioned(task) => task.task.status(),
             WriteOutcome::Create(_) => return,
         };
         tracing::debug!(
             task_id,
             kind = "durable",
-            status = %status,
+            status = ?status,
             "task transition committed"
         );
+        // The status travels as the model serialises it, never as a debug
+        // string: a client reading `Completed` here and `completed` from
+        // `tasks/get` would be reading two vocabularies for one record.
+        self.subscriptions.publish(json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/tasks",
+            "params": { "taskId": task_id, "status": status },
+        }));
     }
 
     pub(super) async fn notify_observer(&self, stage: CommitStage, task_id: &str) {

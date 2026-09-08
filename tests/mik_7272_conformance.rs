@@ -121,17 +121,15 @@ const MAJOR: &[Row] = &[
         ],
     },
     Row {
-        // The extension ships NOT implemented and NOT advertised, which is a
-        // conformance position rather than a gap in the matrix: no client
-        // negotiates a capability the gateway does not offer. The evidence is
-        // the refusal, not an implementation. MIK-7311 owns the extension.
+        // Task polling belongs to the declared modern extension. An unknown
+        // handle receives an error; legacy clients cannot reach this surface.
         statement: "6. Move tasks into an official extension, polled via tasks/get",
         requirement: "MIK-7272.TASK.1",
         role: Role::Server,
         transport: Transport::Http,
         evidence: &[
             "mik_7272_exploit_acs::tasks::ac_task_1_a_task_is_polled_not_awaited",
-            "mik_7272_subscriptions_acs::http::ac_task_1_tasks_get_reports_that_it_is_not_implemented",
+            "mik_7272_subscriptions_acs::http::ac_task_1_tasks_get_reports_an_unknown_handle",
             "mik_7272_subscriptions_acs::http::ac_task_1_tasks_get_is_not_reachable_on_the_legacy_path",
         ],
     },

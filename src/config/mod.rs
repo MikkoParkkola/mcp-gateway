@@ -1748,12 +1748,24 @@ pub mod humantime_serde {
     ///
     /// # Errors
     ///
-    /// Returns a serialization error if the serializer fails.
+    /// Returns a serialization error if the serializer fails, the duration has
+    /// sub-millisecond precision, or its millisecond total exceeds `u64` when
+    /// fractional seconds require the millisecond encoding.
     pub fn serialize<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_str(&format!("{}s", duration.as_secs()))
+        if duration.subsec_nanos() == 0 {
+            return serializer.serialize_str(&format!("{}s", duration.as_secs()));
+        }
+        if !duration.subsec_nanos().is_multiple_of(1_000_000) {
+            return Err(serde::ser::Error::custom(
+                "duration has sub-millisecond precision",
+            ));
+        }
+        let millis = u64::try_from(duration.as_millis())
+            .map_err(|_| serde::ser::Error::custom("duration millisecond total exceeds u64"))?;
+        serializer.serialize_str(&format!("{millis}ms"))
     }
 
     /// Deserialize a human-readable duration string.

@@ -274,13 +274,18 @@ pub const REMOVED_IN_2026_07_28: &[&str] = &[
 /// previously answered every handle with a `not_found` **success**, which is
 /// not in the protocol's task model and told a client its handle had been
 /// looked up and missed. Both now reach the ordinary method-not-found answer,
-/// which is true. The specification page for the tasks extension returns 404 at
-/// the path its own index links, so there is no shape to implement against yet.
+/// which is true.
+///
+/// `notifications/tasks` is listed for the same reason as the methods: a durable
+/// task transition is published on `subscriptions/listen`, and a 2025 peer that
+/// could reach it would be told this gateway speaks a revision it never
+/// negotiated.
 pub const ADDED_IN_2026_07_28: &[&str] = &[
     "subscriptions/listen",
     "tasks/get",
     "tasks/update",
     "tasks/cancel",
+    "notifications/tasks",
 ];
 
 /// The client capability a method needs, if it needs one.

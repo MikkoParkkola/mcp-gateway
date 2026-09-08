@@ -6,9 +6,7 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 pub(super) fn standard_data_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".mcp-gateway")
+    crate::config_persistence::gateway_data_dir()
 }
 
 pub(super) fn ensure_data_dir(path: &Path) {
@@ -58,12 +56,15 @@ mod tests {
 
     #[test]
     fn standard_data_dir_uses_gateway_subdir() {
-        assert_eq!(
-            standard_data_dir()
-                .file_name()
-                .and_then(|name| name.to_str()),
-            Some(".mcp-gateway")
-        );
+        match std::env::var("MCP_GATEWAY_CONFIG_DIR") {
+            Ok(path) => assert_eq!(standard_data_dir(), PathBuf::from(path)),
+            Err(_) => assert_eq!(
+                standard_data_dir()
+                    .file_name()
+                    .and_then(|name| name.to_str()),
+                Some(".mcp-gateway")
+            ),
+        }
     }
 
     #[test]

@@ -554,3 +554,31 @@ async fn signing_delivery_firewall_block_skips_invalid_context_and_signing_failu
         (1, 1, 1)
     );
 }
+
+#[tokio::test]
+async fn signing_boundary_nonobject_returns_jsonrpc_internal_error() {
+    let meta = meta(true, true);
+    let mut original = response();
+    original.result = Some(json!([BODY]));
+    let expected_id = original.id.clone();
+    let expected_result = original.result.clone();
+    let err = meta
+        .finalize_gateway_invoke_response(&mut original, Some(NONCE))
+        .expect_err("non-object result must refuse at the signing boundary");
+    assert_eq!(err.to_rpc_code(), -32603);
+    assert_eq!(original.id, expected_id);
+    assert_eq!(original.result, expected_result);
+    assert!(original.result.as_ref().and_then(Value::as_array).is_some());
+    assert!(
+        original
+            .result
+            .as_ref()
+            .and_then(|value| value.get("_signature"))
+            .is_none()
+    );
+
+    let mut control = response();
+    meta.finalize_gateway_invoke_response(&mut control, Some(NONCE))
+        .expect("object result with valid nonce must sign");
+    verify(&control, Some(NONCE)).expect("independent Node MAC must accept the signed control");
+}
