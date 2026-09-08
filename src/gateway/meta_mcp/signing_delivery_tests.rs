@@ -582,3 +582,119 @@ async fn signing_boundary_nonobject_returns_jsonrpc_internal_error() {
         .expect("object result with valid nonce must sign");
     verify(&control, Some(NONCE)).expect("independent Node MAC must accept the signed control");
 }
+
+#[test]
+fn signing_capture_restore_rejects_changed_external_origin() {
+    let mut raw = json!({
+        "jsonrpc": "2.0", "id": "origin-id", "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments": {
+            "server": "actual-backend", "tool": "echo", "nonce": NONCE
+        }}
+    });
+    let mut context = SigningInvocationContext::capture(&mut raw);
+    raw["params"]["name"] = json!("not_gateway_invoke");
+    let err = context.restore(&mut raw).expect_err("origin change");
+    match err {
+        crate::Error::JsonRpc { code, message, .. } => {
+            assert_eq!(code, -32600);
+            assert_eq!(message, "Invalid signing request origin");
+        }
+        other => panic!("expected json-rpc origin refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn signing_capture_restore_rejects_malformed_id_and_preserves_valid_control() {
+    let mut object_id = json!({
+        "jsonrpc": "2.0", "id": {"kind": "object"}, "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments": {
+            "server": "actual-backend", "tool": "echo", "nonce": NONCE, "keep": true
+        }}
+    });
+    let mut object_ctx = SigningInvocationContext::capture(&mut object_id);
+    let object_err = object_ctx.restore(&mut object_id).expect_err("object id");
+    match object_err {
+        crate::Error::JsonRpc { code, message, .. } => {
+            assert_eq!(code, -32600);
+            assert_eq!(message, "Invalid signing request ID");
+        }
+        other => panic!("expected json-rpc id refusal, got {other:?}"),
+    }
+
+    let mut bool_id = json!({
+        "jsonrpc": "2.0", "id": true, "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments": {
+            "server": "actual-backend", "tool": "echo", "nonce": NONCE
+        }}
+    });
+    let mut bool_ctx = SigningInvocationContext::capture(&mut bool_id);
+    let bool_err = bool_ctx.restore(&mut bool_id).expect_err("boolean id");
+    match bool_err {
+        crate::Error::JsonRpc { code, message, .. } => {
+            assert_eq!(code, -32600);
+            assert_eq!(message, "Invalid signing request ID");
+        }
+        other => panic!("expected json-rpc id refusal, got {other:?}"),
+    }
+
+    let mut string_id = json!({
+        "jsonrpc": "2.0", "id": "valid-string-id", "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments": {
+            "server": "actual-backend", "tool": "echo", "nonce": NONCE, "keep": true
+        }}
+    });
+    let mut string_ctx = SigningInvocationContext::capture(&mut string_id);
+    string_ctx.restore(&mut string_id).expect("valid string id");
+    assert_eq!(string_id["id"], "valid-string-id");
+    assert!(string_id.pointer("/params/arguments/nonce").is_none());
+    assert_eq!(string_id["params"]["arguments"]["keep"], true);
+
+    let mut int_id = json!({
+        "jsonrpc": "2.0", "id": -7, "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments": {
+            "server": "actual-backend", "tool": "echo", "nonce": NONCE
+        }}
+    });
+    let mut int_ctx = SigningInvocationContext::capture(&mut int_id);
+    int_ctx.restore(&mut int_id).expect("valid integer id");
+    assert_eq!(int_id["id"], -7);
+    assert!(int_id.pointer("/params/arguments/nonce").is_none());
+}
+
+#[tokio::test]
+async fn finalize_gateway_invoke_response_preserves_defensive_bypasses() {
+    let disabled = meta(false, true);
+    let enabled = meta(true, true);
+    let mut existing_error = JsonRpcResponse::error_with_data(
+        Some(RequestId::Number(-41)),
+        -32602,
+        "Invalid signing nonce",
+        json!({"diagnostic":"original-safe-detail"}),
+    );
+    let error_before = serde_json::to_vec(&existing_error).unwrap();
+    enabled
+        .finalize_gateway_invoke_response(&mut existing_error, Some(NONCE))
+        .expect("enabled signer preserves existing error");
+    assert_eq!(serde_json::to_vec(&existing_error).unwrap(), error_before);
+
+    let mut no_result = response();
+    no_result.result = None;
+    let no_result_before = serde_json::to_vec(&no_result).unwrap();
+    enabled
+        .finalize_gateway_invoke_response(&mut no_result, Some(NONCE))
+        .expect("enabled signer preserves absent result");
+    assert_eq!(serde_json::to_vec(&no_result).unwrap(), no_result_before);
+
+    let mut success = response();
+    let success_before = serde_json::to_value(&success).unwrap();
+    disabled
+        .finalize_gateway_invoke_response(&mut success, Some(NONCE))
+        .expect("disabled success path");
+    assert_eq!(serde_json::to_value(&success).unwrap(), success_before);
+
+    let mut signed = response();
+    enabled
+        .finalize_gateway_invoke_response(&mut signed, Some(NONCE))
+        .expect("enabled positive control");
+    verify(&signed, Some(NONCE)).expect("independent MAC of enabled control");
+}
