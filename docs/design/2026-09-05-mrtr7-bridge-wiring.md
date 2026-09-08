@@ -1291,6 +1291,16 @@ scraped from any output file. The round-6 recorded verdict reviewed the
 **unamended** design and does not carry to this amendment; both legs re-run
 against the material above, submitted on stdin.
 
+That sentence binds the PACKAGE, not just the intent: round 7 cannot carry
+round 1's PART A verbatim. `dc102441` (the F1 escalation stated in full),
+`ffcb46a9` (its finder-unavailable closure path) and `479d955c` (the `WIRE.11`
+level column, corrected to `unit` after `8efa02c8` moved the row in-crate)
+all landed after that package was assembled. A leg handed the round-1 copy
+returns a verdict on a revision that no longer exists, which is an absence of
+review wearing a verdict line. PART A is the design and plan AS THEY STAND at
+submission; if a diff-shaped part is wanted, those three commits ride as their
+own verbatim section and the header says so.
+
 ## Round 8 — two rulings recorded, and the roots defect is worse than round 7 said
 
 Round 7 named five decisions. Two were the requester's and have been ruled.
