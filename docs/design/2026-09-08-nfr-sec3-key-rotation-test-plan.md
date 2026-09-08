@@ -6,7 +6,7 @@
 Status: plan, for review. Design: `2026-09-06-nfr-sec3-key-rotation.md`.
 Criterion: *continuation envelope versioned, key rotatable, verification keys
 retained for the max lifetime*. VERSIONED is already met (`const VERSION: u8 = 1`,
-`src/gateway/meta_mcp/continuation.rs:36`); this plan covers ROTATABLE and RETAINED.
+`src/protocol/continuation.rs:36`); this plan covers ROTATABLE and RETAINED.
 
 Written per §P2: one row per acceptance criterion, its V-model level, its type, and
 its evidence. **An empty evidence cell is the finding, not an omission** — every such
@@ -52,10 +52,11 @@ Mined from the clause text and the design's invariant list (`:447-466`), per rul
 - `MIK-7417.SEC3.13` — Given the shipped constants, When
   `256 * CONTINUATION_ROTATION_SECS > CONTINUATION_LIFETIME_SECS` is evaluated, Then it
   holds — the bound that keeps a returning kid outside the live window.
-- `MIK-7417.SEC3.14` — Given the MRTR.5 regression already recorded at
-  `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md:301`, When
-  rotation lands, Then a token minted by one `AppState` is still refused by a second one
-  built through the production path.
+- `MIK-7417.SEC3.14` — Given the cross-`AppState` MRTR.5 regression that already exists as
+  `a_token_minted_by_one_app_state_is_refused_by_another`
+  (`tests/mik_7312_continuation_state.rs:145`), When rotation lands, Then it still passes AND
+  the first `AppState` is shown to have rotated at least once inside the case — a regression
+  that stays green because rotation never fired proves isolation, not rotation.
 
 ## Coverage matrix
 
@@ -74,7 +75,7 @@ Mined from the clause text and the design's invariant list (`:447-466`), per rul
 | `.11` | property test: arbitrary interleaving of mints/opens, assert membership after each | unit | property | *(none — to be written)* |
 | `.12` | N threads mint at the boundary instant; assert kid advanced by exactly 1 | integration | concurrency | *(none — to be written)* |
 | `.13` | `const` assertion on the two constants | unit | static | *(none — to be written)* |
-| `.14` | existing cross-`AppState` refusal case re-run after rotation lands | system | regression | `docs/design/2026-08-31-cluster-b-capability-and-trace-metadata-test-plan.md:301` (exists; must still pass) |
+| `.14` | existing cross-`AppState` refusal case re-run after rotation lands, with a rotation forced inside it | system | regression | `tests/mik_7312_continuation_state.rs:145` (exists; must still pass) |
 
 Thirteen empty cells, one filled. That ratio IS the plan's finding: the multi-key rings
 that already exist at `tests/mik_7212_acs.rs:195-245` are hand-built, so they observe
