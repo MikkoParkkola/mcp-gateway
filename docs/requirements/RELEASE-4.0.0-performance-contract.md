@@ -132,7 +132,7 @@ numbers would be exactly the kind of post-hoc rule this contract exists to preve
 |---|---|
 | host | `spark` (all benchmarking; a Mac number would be rejected, correctly) |
 | cores | 20 |
-| rustc | `1.98.0 (88d9e12ae 2026-08-18)` — above the `rust-version = "1.95"` both arms require |
+| rustc | `1.98.1 (48a229cea 2026-09-01)`, aarch64-unknown-linux-gnu, LLVM 22.1.8 — corrected from the pre-run pin of 1.98.0 per A4.3; both arms build with it, and it is above the `rust-version = "1.95"` both arms require |
 | k6 | `grafana/k6` container image, one image for both arms; exact digest recorded with results |
 | shared? | yes — other sessions' jobs run concurrently. Load recorded per rep; arms interleaved. |
 | transport | both arms delivered to Spark as one git bundle, built in an isolated directory, not in the shared checkout |
@@ -430,3 +430,85 @@ was frozen, which is the only freeze that guards against choosing a rule after s
 
 No threshold, arm, workload, metric or rep schedule. Two port numbers moved and one way for
 the run to fail was added — the only direction an amendment may move a gate in.
+
+## Amendment 4 — 2026-09-08, on release-owner rulings R18-R20
+
+Three rulings landed while the run was in flight (`21bf7566`,
+`docs/release/2026-09-08-team-lead-rulings.md`). Two of them change what this contract
+measures and one changes what a result *means*. All three are recorded before any number
+exists, which is the only time a reclassification rule is worth anything.
+
+### A4.1 — the run now in flight is the REHEARSAL, and its numbers are not evidence
+
+R19 splits the measurement in two: one rehearsal now, one scored run when `MRTR.7a`/`MRTR.7b`
+are MET with strict CI green. Strict CI is red on a compilation failure another lane owns, so
+the scored trigger has not fired and this run is the rehearsal.
+
+**Its numbers are discarded and may not be cited — including if they look good.** That
+sentence is written here, before the reducer has run, precisely so it cannot be revisited
+afterwards by anyone who liked what came back. The rehearsal's whole job is to trip void
+conditions while tripping them is free, and it has already earned its cost by tripping one
+that was not among the six: both pinned ports were held by other processes, and the scored
+run would have measured a stranger's gateway (Amendment 3).
+
+What carries forward from the rehearsal is not a latency but a list of facts: that the arms
+build, that `tools[0].name` matches, that the port-ownership check passes, that the reducer
+consumes what the runner emits, and the wall-clock cost of a full eight-rep cycle.
+
+### A4.2 — the candidate is a RULE, not a string
+
+A1 pinned `79352d15`. R19 retires fixed pins for this branch: six lanes commit here every few
+minutes, so any SHA typed in advance is stale before the build starts.
+
+**The scored candidate is the HEAD of `fix/mrtr2-continuation-handle` at the moment the first
+scored rep starts, recorded then** — checkout SHA, binary sha256 and launch argv, per A7. A
+pin whose only property is that someone typed it earlier buys nothing.
+
+`79352d15` remains recorded as the *rehearsal's* candidate, which is what it always was.
+
+**R1 moves with it.** Amendment 2's expiry rule read against `79352d15`; it now reads against
+the SHA recorded at the first scored rep. The rule is unchanged in substance — the evidence
+stands only if the shipped release commit equals the measured one or diffs empty against it
+over `src/`, `Cargo.toml` and `Cargo.lock` — but a contract that names two different
+candidates in two amendments is a contract that will be read wrongly by whoever gets here
+next.
+
+### A4.3 — 1.98.1 against a pinned 1.98.0 is not a void (R20)
+
+Recorded as drift in A2; the ruling settles the severity. Void condition 5 is **arm-to-arm** —
+"the two builds do not use the same feature list and toolchain" — and says nothing about
+matching the environment table. The table's own gloss explains why 1.98.0 sits there: above
+the `rust-version = "1.95"` both arms require. 1.98.1 is also above it. Both arms on 1.98.1
+satisfies condition 5 exactly.
+
+Environment row corrected to the toolchain actually used, recorded from the candidate
+checkout on Spark:
+
+```
+rustc 1.98.1 (48a229cea 2026-09-01)  host: aarch64-unknown-linux-gnu  LLVM 22.1.8
+```
+
+The general form, because it will recur: **a pinned environment value serves a stated purpose;
+judge drift against the purpose, not the string.** And only the declared void conditions may
+void a run — an author who invents a seventh at reduction time is choosing a rule after seeing
+numbers, whichever direction it points.
+
+### A4.4 — a void run and a failing run are different outcomes and may not be collapsed (R18)
+
+The row at `RELEASE-4.0.0-criteria-status.md` already carries a release-owner ruling dated
+2026-09-05: **4.0.0 ships on the headroom argument**, blocking flag lifted the same day, grade
+left at PARTIAL deliberately. This measurement does not gate the release and the release does
+not wait on it. What it can do is let the row close **at its own wording** rather than by
+exception, and lift the residual attached to that ruling — that no P50 or P99 may be quoted
+publicly until an end-to-end run produces one.
+
+Dispositions, fixed now rather than at reduction time:
+
+| outcome | what it means | what happens |
+|---|---|---|
+| `VOID` | neutral. The run measured nothing; no claim moves in either direction | re-run, cost is machine time |
+| `PASS` | the row closes at its own wording, and the public-quotation residual lifts | results section + row rewrite |
+| `FAIL` — P99 past the bound | **evidence against a decision already made on headroom** | §11 stop-the-line, reported as exactly that: not buried, not softened, and not re-framed as `INCONCLUSIVE` |
+
+`INCONCLUSIVE` remains what A3 defined it as — a spread the pooled margin cannot survive — and
+is not a landing place for a result somebody dislikes.
