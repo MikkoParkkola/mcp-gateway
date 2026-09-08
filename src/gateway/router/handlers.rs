@@ -1607,28 +1607,71 @@ pub(super) async fn meta_mcp_handler(
             };
 
             // Firewall: post-invocation response scan + credential redaction.
+            // A refusing verdict must stop the scan and replace the result here:
+            // this pass mutates the artifact under `Redact`, so letting a refused
+            // response continue would launder it past the delivery chokepoint.
+            //
+            // ONE inspection for the whole artifact, then the strongest action
+            // over EVERY authenticated target. Scanning per target in a loop was
+            // order-dependent under `Redact`: the first target's pass redacts the
+            // credential in place, so a later target whose policy blocks on that
+            // finding inspects an already-cleaned artifact and returns Allow —
+            // the block silently depended on which target sorted first.
             #[cfg(feature = "firewall")]
-            if let Some(ref fw) = state.firewall
-                && let Some(ref mut result_val) = call_response.result
             {
-                let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
-                for target in &backend_targets {
-                    let target = target.as_target();
-                    let verdict = fw.check_response(
-                        &session_id,
-                        target.server,
-                        target.tool,
+                let mut refused = false;
+                if let Some(ref fw) = state.firewall
+                    && let Some(ref mut result_val) = call_response.result
+                {
+                    let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
+                    let correlation = crate::security::response_policy::ResponseCorrelation {
+                        session_id: &session_id,
+                        caller: caller_name,
+                        external_server: "gateway",
+                        external_tool: &external_tool,
+                    };
+                    match fw.check_response_artifact(
                         result_val,
-                        caller_name,
-                    );
-                    if verdict.action == FirewallAction::Warn {
-                        warn!(
-                            server = target.server,
-                            tool = target.tool,
-                            findings = verdict.findings.len(),
-                            "Firewall: response warning"
-                        );
+                        &response_targets,
+                        &correlation,
+                        crate::security::response_policy::ResponseArtifactKind::FinalResponse,
+                        crate::security::response_policy::ResponseMutationPolicy::Redact,
+                    ) {
+                        Ok(verdict) => {
+                            if !verdict.allowed || verdict.action == FirewallAction::Block {
+                                warn!(
+                                    targets = response_targets.len(),
+                                    findings = verdict.findings.len(),
+                                    "Firewall: response blocked"
+                                );
+                                refused = true;
+                            } else if verdict.action == FirewallAction::Warn {
+                                warn!(
+                                    targets = response_targets.len(),
+                                    findings = verdict.findings.len(),
+                                    "Firewall: response warning"
+                                );
+                            }
+                        }
+                        // No authenticated target means nothing can admit this
+                        // artifact; fail closed exactly as a Block would.
+                        Err(_) => {
+                            warn!(
+                                targets = response_targets.len(),
+                                "Firewall: response inspection lacked a policy target"
+                            );
+                            refused = true;
+                        }
                     }
+                }
+                if refused {
+                    // Not an early HTTP return: the shared owned-execution
+                    // finalization below still runs on this response.
+                    call_response = JsonRpcResponse::delivery_refusal_error(
+                        call_response.id.take(),
+                        -32600,
+                        "Response blocked by security firewall",
+                    );
                 }
             }
 

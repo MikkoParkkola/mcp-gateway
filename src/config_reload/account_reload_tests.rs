@@ -71,6 +71,7 @@ fn descriptor(issuer: &str) -> AccountDescriptor {
 /// `descriptors` map only.
 fn accounts(issuer: &str) -> AccountsConfig {
     AccountsConfig {
+        adapters: Vec::new(),
         schema_version: "accounts.v1".to_string(),
         enabled: true,
         deployment: "single_process".to_string(),
