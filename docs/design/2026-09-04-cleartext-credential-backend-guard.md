@@ -372,8 +372,17 @@ credential-bearing URL. They do not. `crate::security::sanitize::redact_url_for_
 (`src/security/sanitize.rs:599`) returns `scheme://host[:port]` and drops userinfo, query,
 path and fragment — pinned by its own tests at `:617-636`, including the unparseable input
 that would otherwise become the leak. The address it yields is not itself a credential, so
-both rules hold. The transport guard already uses this helper for exactly this reason
-(`src/transport/http/mod.rs:43`).
+both rules hold. The transport guard already uses this helper for exactly this reason, through a one-line
+local alias — `fn sanitize_url_for_diagnostics` at `src/transport/http/mod.rs:43` whose whole
+body is a call to `redact_url_for_diagnostics`. Named precisely because a review read the
+alias as a SECOND sanitizer and the drift hazard the helper's own doc comment warns about.
+There is one implementation, at `src/security/sanitize.rs:599`, and no other.
+
+What the message still discloses is the ORIGIN: scheme, host and port. That is what R35
+asks for, and it is named here rather than left implicit, because a hostname can itself
+carry meaning an operator would not choose to paste into a support thread — an internal
+project or customer label. The trade is deliberate: an origin the operator can act on,
+against an error that names nothing and cannot be acted on at all.
 
 The error text becomes:
 
@@ -452,16 +461,109 @@ dressed up as new coverage.
 | 6 | `https` + credentials | accept | no — regression guard |
 | 7 | `http` + credentials on `localhost` / `127.0.0.1` / `[::1]`, flag unset | accept | no — regression guard |
 | 8 | `http`, no credentials, non-loopback | accept | no — regression guard |
+| 9 | `http` + a `headers` credential (no userinfo), non-loopback, flag `true` | accept | no — regression guard: pins the carve-out as userinfo-ONLY |
+| 10 | `http://user:pw@2130706433/` accept; `http://user:pw@127.evil.com/` refuse | as stated | no — pins the exemption's two edges |
 
 Rows 3, 4 and 5 are run and shown red before the implementation exists.
 
-`src/config/tests.rs:1948` sets the flag `true` and asserts acceptance of a case R35 now
-refuses. It asserts the behaviour being removed, so it is rewritten rather than deleted —
-a deleted test leaves no record that the behaviour changed.
+Which existing test moves, corrected after design review. The first reading of this was
+wrong. `explicit_opt_in_permits_cleartext_credentials` (`src/config/mod.rs:1946`) sets the
+flag `true` on an **OAuth** backend carrying no userinfo, so a userinfo-only carve-out
+leaves it untouched. It is KEPT unchanged, and it is the regression guard proving the flag
+still governs the five arms it keeps.
+
+The test R35 actually contradicts is `refusal_message_names_the_backend_and_leaks_nothing`
+(`src/config/mod.rs:2063`). It builds `http://user:pw@internal-host` and asserts the
+message contains neither the host nor the scheme — the exact assertion R35 inverts. It
+splits rather than being deleted: the userinfo case asserts the message NAMES
+`http://internal-host` while still withholding `user:pw`; a second case, built on a
+`headers` or `secrets` credential, keeps MIK-7221's original assertion for the five arms
+that name no address. Deleting it would leave no record that the rule changed.
 
 ## Documents this makes untrue
 
 Updated inside this change: `README.md:331`, `docs/REMOTE_BACKENDS.md:188` and `:192`,
 this document's "The opt-in" and "What the error says" sections (superseded above for the
-userinfo case), `CHANGELOG.md:64`, and a new `CHANGELOG` entry under a BREAKING heading
-carrying the migration note R35 requires.
+userinfo case), `CHANGELOG.md:64`, the rustdoc on `reject_cleartext_credentials`
+(`src/config/mod.rs:995-999`, whose "unless the operator has said otherwise in
+`allow_cleartext_credentials`" stops being true for userinfo), and a new `CHANGELOG` entry
+under a BREAKING heading carrying the migration note R35 requires.
+
+
+## Findings from the design review, and their disposal
+
+Leg 1 (`gpt-review`, ledger verdict SHIP-WITH-FIXES) raised three. Each was verified at
+source before being accepted or refused; a finding is a lead, not a fact.
+
+**1. A proxy defeats the loopback exemption. CONFIRMED, out of scope, escalated.**
+`Client::builder()` at `src/transport/http/mod.rs:501` sets no `.no_proxy()`, and neither
+does `src/a2a/client.rs`. `reqwest` honours `HTTP_PROXY` from the environment, and does not
+exempt loopback of its own accord. So with `HTTP_PROXY` set and no matching `NO_PROXY`
+entry, a request to `http://user:pw@127.0.0.1` is handed to the proxy — and R35's premise
+for the exemption, "there is no network segment to observe", is false in that environment.
+
+This is not a defect in the guard; it is a defect in what the guard is entitled to assume.
+It is squarely OUTSIDE this change's scope (a transport-client change across two
+transports, needing its own tests, not URL validation), so it is not repaired here. It is
+recorded here and escalated, because it makes the operator's exemption cost more than the
+ruling states. The repair, when someone owns it: `.no_proxy()` on clients whose target was
+exempted as loopback, verified by asserting a configured proxy receives no request.
+
+**2. Refusing DNS aliases does not meet R35's "addresses resolving to the local machine".
+ACKNOWLEDGED, DECISION HELD.** The reviewer is reading R35's text correctly: a hostname
+that resolves to loopback is refused here. Three reasons the decision stands. It is not a
+regression — the shipped guard already classifies on the literal host, so nothing that
+starts today stops starting. The operator's own instruction was not to resolve, on the
+ground that a resolver result at startup is not a security boundary, and the TOCTOU and
+attacker-influence arguments above are why. And the reviewer's own remedy — resolve with a
+timeout, then pin the connection to the verified address — is a new mechanism spanning both
+transports, which is a larger change than the one R35 authorised and would need its own
+ruling. `localhost`, `127.0.0.1` and `::1` are covered literally, which is the shape almost
+every local backend is written in. Recorded as a stated residual, not a silent one.
+
+**3. The wrong test was named for rewriting. CONFIRMED and corrected** in the test-plan
+section above.
+
+Two improvements were taken: the CodeQL paragraph is already framed as a checkable
+prediction, and the origin-disclosure paragraph was added above. One is refused for now:
+extending row 5 to path, query and fragment duplicates
+`strips_every_credential_bearing_part` (`src/security/sanitize.rs:618`), which already pins
+exactly that on the helper this design delegates to. Testing a dependency's contract twice
+is how the second copy comes to disagree with the first.
+
+
+Leg 2 (`synthetic-review`, GLM-5.3-Flash, ledger verdict SHIP-WITH-FIXES, `process_status:
+ok`, material sha256 `4f9e16ee`) raised three findings and four improvements.
+
+**1. The no-echo precedent cites a helper the code does not corroborate. DIED AT SOURCE.**
+`src/transport/http/mod.rs:43` is `fn sanitize_url_for_diagnostics(raw: &str) -> String {
+crate::security::sanitize::redact_url_for_diagnostics(raw) }` — a one-line alias, not a
+second implementation. `rg` finds exactly one definition of the redactor, in
+`src/security/sanitize.rs:599`. No drift hazard, no repair. The design text now names the
+alias so the next reviewer does not spend a round on the same reading; that clarification
+is the whole response.
+
+**2. The test plan cannot catch a scope-violating implementation. CONFIRMED, repaired.**
+Correct: eight rows all concerned userinfo, so deleting `allow_cleartext_credentials`
+outright passed every one of them while making a break far larger than R35 declared. Row 9
+pins the flag still governing a non-userinfo arm. The kept `explicit_opt_in_permits_
+cleartext_credentials` covers the OAuth arm the same way; row 9 makes the guard explicit
+rather than incidental.
+
+**3. The function's own rustdoc becomes untrue. CONFIRMED, added** to the update list above.
+
+Improvements: the classifier-edge rows are taken as row 10, narrowed from three cases to
+two — `2130706433` and `0x7f.0.0.1` exercise one mechanism (WHATWG host normalization), and
+a second row testing the same mechanism twice buys nothing. `0.0.0.0` is answered here
+rather than in a row: `Ipv4Addr::UNSPECIFIED.is_loopback()` is false, so it is REFUSED, which
+is over-strict on Linux and fail-closed everywhere; unchanged by this amendment, and named
+so nobody "fixes" it in one of three call sites. Quoting MIK-7221 verbatim is refused for a
+mundane reason — the ticket is not in this repo, and pasting a paraphrase in quotation marks
+is worse than the paraphrase.
+
+The remaining improvement is NOT the author's to take: recorded operator sign-off on the two
+places this design reads R35's letter loosely — loopback as literal hosts rather than
+"addresses resolving to the local machine", and username-without-password refused where R35
+says "username and password". Both fail closed. Both are deviations from the text of a
+ruling, and a ruling is reinterpreted by the person who made it, not by the person
+implementing it. Escalated with the proxy finding.
