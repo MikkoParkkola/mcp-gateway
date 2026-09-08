@@ -881,7 +881,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn evict_expired_removes_only_stale_entries() {
         // GIVEN: one fresh and one stale completed entry
