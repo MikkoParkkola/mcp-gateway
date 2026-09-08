@@ -16,7 +16,7 @@ explicitly.
 | BLOCK-2 | pending | |
 | BLOCK-3 | fixed, independently verified SOUND, uncommittable (shared file) | |
 | BLOCK-4 | fixed, independently verified SOUND | `7abb3514` |
-| BLOCK-5 | pending | |
+| BLOCK-5 | fixed | |
 
 ---
 ## BLOCK-3 — `_meta` injected into direct-route backend payloads
@@ -220,3 +220,80 @@ in this fix, and it is the strongest thing standing against the repair.
 
 Also unexercised: the allow-list arm of `is_exposed`, `Some(allowed)` with
 `|| !governed.contains(name)`.
+
+---
+## BLOCK-5 — the backend's raw `requestState` leaked in `structuredContent`
+
+Root cause: `enforce_output_schema` fell back to the whole MCP envelope when
+`extract_output_validation_target` found no inner payload
+(`unwrap_or_else(|| result.clone())`). The envelope then failed validation
+against a schema that describes the tool's *payload*, took the advisory
+pass-through branch, and `apply_validated_output` republished the entire
+envelope under `structuredContent` — backend `requestState`, `resultType` and
+`inputRequests` included. The mint at `invoke.rs:1602` replaces only the
+top-level field, so the copy inside `structuredContent` kept the backend's own
+string, breaking the invariant the PR states for itself at `:1574-1580`.
+
+The same fallback had a second face: for a schema-bearing tool returning one
+plain-text item, `apply_validated_output` overwrote that human-readable text
+with a pretty-printed dump of its own wrapper.
+
+Fix: an envelope with nothing extractable has nothing the schema describes, so
+`enforce_output_schema` returns it untouched. Not a new judgement — the
+projection path next door already refuses this exact case as bug #167, with the
+note that "re-wrapping it would clobber a non-JSON `content` text". The schema
+path now agrees with its sibling.
+
+The refusal is narrowed to envelopes. A **bare payload** — a result carrying
+neither `content` nor `structuredContent` — legitimately reached the fallback
+and was validated and coerced in place, and an unconditional early return would
+have silently dropped that coercion. `is_mcp_envelope` keys on the same two
+fields `apply_validated_output` keys its re-wrap on, so both functions answer
+the question the same way.
+
+Tests, written first and failing on the intended assertions:
+`block5_an_unextractable_result_is_not_republished_as_structured_content` and
+`block5_a_single_non_json_text_item_keeps_its_human_readable_text`. The second
+RED is the defect stated in one line:
+
+```
+left:  "{\n  \"content\": [\n    {\n      \"text\": \"no such issue\", …
+right: "no such issue"
+```
+
+Ownership nuance from the source report, unchanged by this repair: the three
+functions involved produce zero changed lines in the PR. This is pre-existing
+behaviour that the PR's new interim path made reachable.
+
+### BLOCK-3 addendum — the fixing session's own report
+
+Two things it recorded that the verification did not, both worth keeping.
+
+A second test ships alongside the red-to-green one:
+`block3_a_governed_meta_tool_still_takes_the_clients_meta`. It has **no RED by
+design** — pre-fix it passed too, because `is_exposed` answered true for
+everything — and it exists to prove the narrowing did not overshoot and strip
+`_meta` from `gateway_invoke` or the admin `gateway_kill_server`. A guard
+against the fix, not against the defect. `--lib gateway::router::tests`: 105
+passed.
+
+**The finding's severity claim is unverified.** The source report said the
+injected field "can shift the continuation digest, so a legitimate continuation
+fails its own integrity check". The injection is proven; that consequence was
+never traced. The fix stands on the proven half — a backend receiving a field
+the client never addressed to it — and the digest claim should not be repeated
+as established.
+
+### The tree cannot currently produce a complete clippy run
+
+Both routes die on peer-owned files, neither modified by these fixes:
+
+| invocation | dies on |
+|---|---|
+| `--all-targets` | `tests/mik_7214_acs.rs` |
+| `--lib --tests` | `tests/mik_7215_control4_reap_count_acs.rs` |
+
+So "clippy clean" is not provable for this branch as a whole by anyone right
+now, and a claim of it should be read as scoped to a target. For BLOCK-3 the
+lib target is proven clean; `router/tests.rs` compiles (105 tests ran) but was
+never linted. `cargo fmt --check` returns 0.
