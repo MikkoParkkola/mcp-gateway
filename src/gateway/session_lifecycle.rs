@@ -35,6 +35,20 @@ pub struct SessionLifecycle {
     tracked: RwLock<std::collections::HashMap<String, u64>>,
 }
 
+/// Seconds since the Unix epoch, the unit every deadline in this module uses.
+///
+/// One helper so the seam between this module's `u64` seconds and callers that
+/// think in `Instant` is crossed in exactly one place. A clock set backwards
+/// delays a reclaim and one set forwards reclaims early; both touch derived
+/// state only, which is why wall-clock is acceptable here and a monotonic
+/// `Instant` — unloggable, unpersistable, uncomparable across a restart — is
+/// not.
+pub fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 impl SessionLifecycle {
     /// Create a new empty lifecycle registry.
     pub fn new() -> Self {

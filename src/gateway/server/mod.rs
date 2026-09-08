@@ -989,7 +989,11 @@ impl Gateway {
             Arc::clone(&self.backends),
             self.config.streaming.clone(),
         ));
-        multiplexer.spawn_reaper_on();
+        // One lifecycle registry, swept by the same tick that reaps stream
+        // sessions. Constructed here so the reaper has an owner; the write
+        // side that populates it is wired separately.
+        let session_lifecycle = Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
+        multiplexer.spawn_reaper_on(Arc::clone(&session_lifecycle));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let auth_config = Arc::new(ResolvedAuthConfig::try_from_config(&self.config.auth)?);
 
