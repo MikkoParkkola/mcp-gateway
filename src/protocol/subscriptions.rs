@@ -34,6 +34,11 @@ pub enum NotificationKind {
     ResourcesListChanged,
     /// A subscribed resource changed.
     ResourceSubscriptions,
+    /// A subscribed task committed a durable transition.
+    ///
+    /// Named tasks only, like [`Self::ResourceSubscriptions`]: the opt-in is a
+    /// list of ids, so "subscribed to tasks" is never true in general.
+    Tasks,
 }
 
 impl NotificationKind {
@@ -46,6 +51,7 @@ impl NotificationKind {
             "notifications/prompts/list_changed" => Some(Self::PromptsListChanged),
             "notifications/resources/list_changed" => Some(Self::ResourcesListChanged),
             "notifications/resources/updated" => Some(Self::ResourceSubscriptions),
+            "notifications/tasks" => Some(Self::Tasks),
             _ => None,
         }
     }
@@ -58,17 +64,21 @@ impl NotificationKind {
             Self::PromptsListChanged => "promptsListChanged",
             Self::ResourcesListChanged => "resourcesListChanged",
             Self::ResourceSubscriptions => "resourceSubscriptions",
+            // Read from the params ROOT, not from the `notifications` object:
+            // the ownership narrowing writes `params.taskIds`.
+            Self::Tasks => "taskIds",
         }
     }
 
     /// Every subscribable kind.
     #[must_use]
-    pub const fn all() -> [Self; 4] {
+    pub const fn all() -> [Self; 5] {
         [
             Self::ToolsListChanged,
             Self::PromptsListChanged,
             Self::ResourcesListChanged,
             Self::ResourceSubscriptions,
+            Self::Tasks,
         ]
     }
 }
@@ -82,6 +92,7 @@ impl NotificationKind {
 pub struct ListenRequest {
     wanted: Vec<NotificationKind>,
     resource_uris: Vec<String>,
+    task_ids: Vec<String>,
 }
 
 impl ListenRequest {
@@ -98,11 +109,29 @@ impl ListenRequest {
     /// type a breaking change.
     #[must_use]
     pub fn from_params(params: Option<&Value>) -> Option<Self> {
-        let filter = params?.get("notifications")?.as_object()?;
+        let params = params?;
+        let filter = params.get("notifications")?.as_object()?;
+
+        // The task ids sit at the params ROOT, because that is where the
+        // ownership narrowing writes them: a copy found under `notifications`
+        // was never the one that narrowing rewrote, so it opts into nothing.
+        // Non-string entries are dropped like resource URIs are.
+        let task_ids: Vec<String> = params
+            .get(NotificationKind::Tasks.opt_in_field())
+            .and_then(Value::as_array)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let wanted: Vec<NotificationKind> = NotificationKind::all()
             .into_iter()
             .filter(|kind| match kind {
+                // Named tasks only, and named at the root.
+                NotificationKind::Tasks => !task_ids.is_empty(),
                 // Three are booleans. The fourth is not, and treating it as one
                 // silently dropped every resource a client named.
                 NotificationKind::ResourceSubscriptions => filter
@@ -133,6 +162,7 @@ impl ListenRequest {
         Some(Self {
             wanted,
             resource_uris,
+            task_ids,
         })
     }
 
@@ -148,10 +178,16 @@ impl ListenRequest {
         &self.resource_uris
     }
 
+    /// The task ids the client subscribed to, after ownership narrowing.
+    #[must_use]
+    pub fn task_ids(&self) -> &[String] {
+        &self.task_ids
+    }
+
     /// Whether the client asked for nothing at all.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.wanted.is_empty() && self.resource_uris.is_empty()
+        self.wanted.is_empty() && self.resource_uris.is_empty() && self.task_ids.is_empty()
     }
 }
 

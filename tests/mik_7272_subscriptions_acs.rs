@@ -604,19 +604,25 @@ mod http {
     }
 
     #[tokio::test]
-    async fn ac_task_1_tasks_get_reports_that_it_is_not_implemented() {
-        // It answered every handle with a `not_found` **success**. That status
-        // is not in the protocol's task model, and as a success it told a client
-        // its handle had been looked up and missed — a lookup that never
-        // happened, against a store that does not exist.
-        //
-        // The specification page for the tasks extension returns 404 at the path
-        // its own index links, so there is no shape to build against. Answering
-        // method-not-found is the true statement, and a client discovers that on
-        // its first call rather than after polling a fiction.
-        let (status, body) = post_modern("tasks/get", json!({ "taskId": "task-unknown" })).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
-        assert_eq!(body["error"]["code"], -32601, "{body}");
+    async fn ac_task_1_tasks_get_reports_an_unknown_handle() {
+        let (mut request, mut headers) =
+            modern_call("tasks/get", json!({ "taskId": "task-unknown" }));
+        request["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+            json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } });
+        headers.push(("mcp-name", "task-unknown".to_string()));
+        let borrowed: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(name, value)| (*name, value.as_str()))
+            .collect();
+        let (status, body) = post(true, request, &borrowed).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["error"]["code"], -32602, "{body}");
+        assert_eq!(body["error"]["message"], "no such task", "{body}");
+        assert!(
+            body.get("result").is_none(),
+            "a missing task is not success: {body}"
+        );
+        assert!(body["error"].get("data").is_none(), "{body}");
     }
 
     #[tokio::test]
