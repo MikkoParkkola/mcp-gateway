@@ -104,17 +104,23 @@ list previously described `:430` as a defect inside `input_bridge.rs` while the
 findings table recorded that it is not, and those two lines disagreed.
 
 Two further findings were carried here as defects and **died at the
-requirements**, which is why the count fell from four. A timed-out prompt
-retrying the backend without an answer (`:433`) is what requirement row 320
-specifies — "abandoned at `min(remaining, 30s)`, and the rounds still remaining
-are unaffected" — and `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call`
-pins `frames == 2, calls == 2` to prove the call does **not** end. Deserializing
-prompt params into a typed `ServerRequest` (`:409`) is what row 308 forbids:
-params must reach the client whole, "nothing dropped and nothing invented", and
-a round-trip through a typed struct drops what the struct does not name. The
-reviewer's underlying worry — a backend continuing without input a person never
-gave — is real and unaddressed; changing either row is the **requester's** call,
-not a repair, and it is raised as an open question rather than made here.
+requirements**, which is why the count fell from four. **One of the two has since
+come back.** A timed-out prompt retrying the backend without an answer (`:433`)
+was what requirement row 320 specified — "abandoned at `min(remaining, 30s)`, and
+the rounds still remaining are unaffected" — and its acceptance test pinned
+`frames == 2, calls == 2` to prove the call does **not** end. On 2026-09-08 the
+release owner ruled the other way: an unanswered prompt fails the call, naming
+the entry. The requirement moves and the finding stands. GPT was right about the
+behaviour and wrong only about where the defect lived, which was in the row
+rather than in the code — scheduled question 4 records the ruling and what it
+costs. Deserializing prompt params into a typed `ServerRequest` (`:409`) is what
+row 308 forbids: params must reach the client whole, "nothing dropped and nothing
+invented", and a round-trip through a typed struct drops what the struct does not
+name. That one is still dead.
+
+The reviewer's underlying worry — a backend continuing without input a person
+never gave — was real, was raised here as the requester's call rather than
+repaired, and has now been answered in the reviewer's favour.
 
 **The merge-before-wiring wait is DELETED.** An earlier revision made this
 change wait for MIK-7388 to land first, on the ground that wiring is what makes
@@ -126,15 +132,15 @@ left to wait for.
 | the defect the wait named | where it went |
 |---|---|
 | `:430`, cancellation safety in the awaited send | RE-BOUND to this change six paragraphs above. It is a correctness property of code this change WRITES, mandated by the trait it implements — not a repair of an existing defect, and the OUT list now says so |
-| `:433`, a timed-out prompt retrying the backend without an answer | DIED AT THE REQUIREMENTS. Row 320 specifies exactly that behaviour, and `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call` pins it |
+| `:433`, a timed-out prompt retrying the backend without an answer | DIED AT THE REQUIREMENTS, THEN RESURRECTED BY THE RULING of 2026-09-08. Row 320 did specify that behaviour and its test did pin it; the release owner has since ruled the other way, so the row and the test move and the finding stands. Scheduled question 4 |
 | `:454`, a reply projection that is not kind-aware | ALREADY IN THE TREE, fixed in `60a28464` and checked off as `MIK-7388.BRIDGE.5`. `project()` takes `kind` and branches on it (`input_bridge.rs:476-495`): everything but `Elicitation` returns the result whole, and the doc comment states the reason — reading an `action` member on a roots or sampling reply would drop the rest of the answer |
 
 A blocking edge whose three grounds are one re-binding, one requirement and one
 shipped function is not a schedule; it is a sentence nobody re-read after the
-document around it moved. Deleting it is the repair. What survives is the ASK,
-unchanged and still the requester's: whether row 320's "abandoned at
-`min(remaining, 30s)`, rounds unaffected" is the behaviour they want, given that
-it lets a backend continue without input a person never gave.
+document around it moved. Deleting it is the repair. The ASK it left behind — whether row 320's
+"abandoned at `min(remaining, 30s)`, rounds unaffected" is the behaviour the
+requester wants, given that it lets a backend continue without input a person
+never gave — has since been answered, and the answer is no. Scheduled question 4.
 
 The ticket was read too, not only the tree, because a wait is drawn against a
 ticket. MIK-7388 today carries one retired identifier, one met, and three live:
@@ -322,7 +328,7 @@ test code is written.
 | bridge retries invoke the backend outside cost accounting (GPT, HIGH, LIKELY) | confirmed at source: `invoke.rs:1246,1369,1394` each fire once around the single dispatch at :1327. In scope — this change creates the second invocation. One dispatch helper, change surface above |
 | the merge widens MRTR.9 for modern callers while the table says it does not (synthetic, MEDIUM, CERTAIN) | confirmed at source: the gate `interim.undeclared(caller.input_capabilities)` is shape-blind. Merge scoped to `Legacy` only, option C above |
 | construction-site census says five and lists seven (synthetic, LOW) | confirmed. Count was wrong, list was right; re-enumerated by role |
-| timed-out client prompt discarded, backend retried without the answer (GPT, HIGH, LIKELY) | out of this scope — a defect inside `input_bridge.rs`, not fixed by a wiring change. **Filed as MIK-7388** with the pending-map growth, blocking MIK-7212. Both halves of that row are now superseded: the ticket WITHDREW this criterion (`BRIDGE.1`, retired) once row 320 was read at source, and round 6 deleted the blocking edge |
+| timed-out client prompt discarded, backend retried without the answer (GPT, HIGH, LIKELY) | out of this scope — a defect inside `input_bridge.rs`, not fixed by a wiring change. **Filed as MIK-7388** with the pending-map growth, blocking MIK-7212. Both halves of that row are now superseded: the ticket WITHDREW this criterion (`BRIDGE.1`, retired) once row 320 was read at source, and round 6 deleted the blocking edge. Superseded once more on 2026-09-08: the ruling upholds the behaviour this finding asked for, so the withdrawal of `BRIDGE.1` rested on a row that has now moved |
 | pending-response map grows if the outer timeout cancels after registration (GPT, HIGH) | out of this scope. **Filed as MIK-7388**, which blocks MIK-7212: neither defect is reachable until this wiring gives the bridge a caller. Recorded here as being in the same file as the row above, which it is not — `input_bridge.rs` holds no pending state, and `rg 'impl .*ClientChannel for' src/` returns nothing, so the map this names belongs to an implementor the UNWIRED decision means nobody has written. Re-bound on MIK-7388 to the production `ClientChannel` impl on 2026-09-05 — which is the impl THIS change writes, so `BRIDGE.2` is satisfied here and is not something to wait for |
 | production-path HTTP test beyond trait fakes (GPT, MEDIUM) | accepted. The acceptance rows are fake-driven; one end-to-end HTTP test is the honest evidence and belongs in the test plan |
 | compact legacy-or-modern discriminator instead of full `RequestShape` (GPT, both passes) | accepted. Recorded as the field's intended shape; `RequestShape` was shorthand, not a requirement |
