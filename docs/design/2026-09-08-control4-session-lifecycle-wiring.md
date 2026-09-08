@@ -114,7 +114,10 @@ shipped `PER_USER_IDLE_TTL` (`server/mod.rs:2127`). There is deliberately no lif
 streaming's `session_reaper_interval` config knob and a second constant beside it would have no
 reader — a dead value that reads as a scheduling authority. (v2 GPT improvement, confirmed by
 construction: with D1 as the host, nothing could ever read it.) Streaming's `session_ttl` is
-likewise NOT collapsed in — `IDLE_TTL` governs only what `track` writes as a deadline. Thirty seconds would hold less abandoned state under churn; an
+likewise NOT collapsed in — `IDLE_TTL` governs only what `track` writes as a deadline.
+**Effective reclaim latency is therefore `IDLE_TTL + session_reaper_interval`, not 60 seconds**, and
+that is the figure §P2 asserts against. Writing 60s anywhere would promise a sweep cadence this
+design does not own. (v2 kimi FINDING, MEDIUM/LIKELY/NOW — the same defect GPT raised independently.) Thirty seconds would hold less abandoned state under churn; an
 hour would never lose a long human-in-the-loop elicitation. Nobody has ruled.
 
 **D7 — observability: one `info!` per sweep that reclaimed anything, carrying the count — and
@@ -158,6 +161,37 @@ entry the handler exists to remove. The guard stays `!control_identity.is_empty(
 The residual GPT was reaching for is real and is already stated: when anomaly detection is off, the
 map holds keys whose handler reclaims nothing. That is a no-op, not a leak, and the accepted
 improvement above is what stops it being mistaken for a passing test.
+
+**Kimi returned SHIP-WITH-FIXES** (`~/.claude/data/reviews/runs/synthetic-20260908T133850Z-53762.md`;
+the `synthetic-` prefix is expected — `bin/kimi-review` is a shim that execs `synthetic-review
+--model kimi-k3`). Its one gating finding is the SAME dead `SWEEP_INTERVAL` GPT raised, arrived at
+independently. Both legs converging on one defect is why it is fixed above rather than argued with.
+
+**No cardinality bound on the tracked set (kimi FINDING, LOW/POSSIBLE/BEFORE-PRODUCTION).
+ACCEPTED AS A STATED BOUND, NOT A MECHANISM.** `SessionLifecycle`'s map is written at the same site,
+from the same unbounded identity keyspace, that motivated `MAX_TRACKED_IDENTITIES` in the anomaly
+detector (`anomaly.rs:138-149`) — but it is not the same map and does not get a second ceiling. A
+ceiling here would be a second eviction rule that can disagree with the anomaly one, which is exactly
+why D3a was deleted. The bound is TEMPORAL and is stated instead: **the map holds at most the
+distinct control identities seen in one `IDLE_TTL` window**, because every key carries a deadline and
+`reap` removes it unconditionally (D5). If that window's cardinality is ever measured to be the
+problem the anomaly ceiling was built for, a ceiling becomes a design event then, with a number.
+
+**Name the observable the §P2 test asserts on (kimi IMPROVEMENT, converging with GPT's).** The plan's
+case asserts the reclaimed thing is GONE — the predecessor `last_tool` entry absent after the sweep —
+never that `tracked_count` fell. `tracked_count` falls whether or not a handler ran, which is the
+vacuous pass F2 warns about.
+
+**Put D5's handler-safety rule at the API surface (kimi IMPROVEMENT, accepted).** One doc-comment
+precondition on `SessionLifecycle::register`: a handler may only reclaim state whose loss is
+indistinguishable from an eviction. U2 defers the rule's enforcement to the second registration; a
+line on `register` is what the next handler's author will actually read.
+
+**Pre-evaluate D1a shape (b) so U3 cannot force a third round (kimi IMPROVEMENT, accepted).** If the
+answer to U3 is "do not edit the loop signature", shape (b) — the `Arc<SessionLifecycle>` held as a
+multiplexer field, set at its construction — is the fallback, and it needs no new call sites because
+the multiplexer is already constructed once per server. Recording it here means either answer
+resolves straight to code.
 
 ### Findings carried in from the v1 review (both legs returned SHIP)
 
