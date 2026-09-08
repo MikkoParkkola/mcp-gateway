@@ -96,9 +96,14 @@ hit them and should not have to guess whether they were missed.
 | 14 | Destructive-action confirmation | `require_destructive_confirmation` — `handlers.rs:1112` | someone to ask | `tests/mik_7215_acs.rs:630` |
 
 Firewall / anomaly detection (`handlers.rs:1068`, `-32002` / `-32600`) is a
-15th gate in the sequence. **BLOCKED**: every test of it needs
-`src/security/firewall/**`, which another session owns and is editing now.
-Not tested here, not edited here, recorded so the set is not silently short.
+15th gate in the sequence. **NO LONGER BLOCKED** (2026-09-08): the sentence
+above described a concurrent edit of `src/security/firewall/**` that has since
+landed, and the row now has its refusal test --
+`control_15_a_modern_tools_call_the_firewall_blocks_is_refused`
+(`tests/nfr_sec1_controls.rs`). `firewall` is a default feature
+(`Cargo.toml:179`), so a plain `cargo test` runs it; the explicit form
+`cargo test --test nfr_sec1_controls --features firewall` reports
+12 passed, 0 failed.
 
 ## The fourth miscitation — row 5 was never open
 
