@@ -394,6 +394,48 @@ def test_the_live_documents_agree_with_the_ledger():
     assert counter.rollup_membership(criteria, counter.ROLLUP.read_text()) == []
 
 
+CLAUSE_QUALIFIED = "\n".join(
+    [
+        "| MIK-7272.EXT.1 (clause: declare) | declare | T | MET | held | no |",
+        "| MIK-7272.EXT.1 (clause: honour) | honour | T | PARTIAL | open | yes |",
+    ]
+)
+
+
+def test_a_clause_qualified_id_is_read_as_a_criterion():
+    # The ledger splits one criterion into named clauses by suffixing the id
+    # with ` (clause: <word>)`. An anchored id pattern rejects that spelling,
+    # so both rows fell to the malformed branch and the blocking enumeration
+    # could not be produced at all.
+    criteria, malformed = counter.rows(CLAUSE_QUALIFIED)
+    assert malformed == []
+    assert criteria == [
+        ("MIK-7272.EXT.1", "no", "MIK-7272.EXT.1 (clause: declare)"),
+        ("MIK-7272.EXT.1", "yes", "MIK-7272.EXT.1 (clause: honour)"),
+    ]
+
+
+def test_a_malformed_clause_qualifier_is_reported_rather_than_read_loosely():
+    # Only the ledger's own spelling is a clause. A parenthesised word without
+    # the `clause:` key is a typo, and a row that claims to be a criterion and
+    # is not readable as one is malformed, never absent.
+    table = "| MIK-7272.EXT.1 (declare) | declare | T | MET | held | no |"
+    assert counter.rows(table) == ([], ["MIK-7272.EXT.1 (declare)"])
+
+
+def test_a_clause_row_covers_the_requirement_it_splits():
+    # The requirement declares the unsuffixed id; only clause rows exist for it.
+    assert counter.CLAUSE.sub("", "MIK-7272.EXT.1 (clause: honour)") == (
+        "MIK-7272.EXT.1"
+    )
+
+
+def test_a_letter_split_is_not_stripped_like_a_clause():
+    # `.1a` and `.1b` are two criteria, so neither may stand in for a declared
+    # `.1`; stripping them is what made every split invisible to the coverage.
+    assert counter.CLAUSE.sub("", "MIK-7213.CACHE.4a") == "MIK-7213.CACHE.4a"
+
+
 if __name__ == "__main__":
     # CI runs this file as a script, not under pytest. Without this the module
     # defines its tests, exits 0, and the gate reports a pass having asserted

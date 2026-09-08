@@ -28,11 +28,20 @@ BOARD = ROOT / "docs/requirements/RELEASE-4.0.0-readiness-board.md"
 # Anchored at BOTH ends. Unanchored, a typo carries: `MRTR.1abc` matches as
 # far as `MRTR.1a` and is counted as that criterion, so a mistyped row is
 # silently attributed to a real one rather than reported.
-ID = re.compile(r"^((?:MIK-\d+|NFR|GH\d+)\.[A-Z0-9]+\.\d+)([a-z]?)$")
+# The ledger also splits one criterion into named clauses, suffixing the id
+# with ` (clause: <word>)`. That suffix is part of the row's identity and
+# stays in group(0), so two clauses of one criterion remain distinct rows.
+ID = re.compile(
+    r"^((?:MIK-\d+|NFR|GH\d+)\.[A-Z0-9]+\.\d+)([a-z]?)(?: \(clause: [a-z]+\))?$"
+)
 
 # The claim, separate from the parse. Anything opening like a criterion id
 # is one for the purpose of being counted or reported.
 ID_PREFIX = re.compile(r"^(?:MIK-\d+|NFR|GH\d+)\.")
+
+# The clause qualifier a ledger row may carry, stripped when matching a row
+# against the requirement it belongs to.
+CLAUSE = re.compile(r" \(clause: [a-z]+\)$")
 # The verification-method vocabulary: test, measurement, inspection, demonstration.
 METHOD = re.compile(r"^[TMID](, ?[TMID])*$")
 # The headline sentence this script owns. Nothing else in the file may state totals.
@@ -464,7 +473,10 @@ def main():
         return 1
     criteria, malformed = rows(text)
     if malformed:
-        print(f"malformed blocking column on: {', '.join(malformed)}", file=sys.stderr)
+        # Two branches reach here -- an unreadable id and an unreadable blocking
+        # cell -- so the message names the ROW, not one of its columns. Naming
+        # the blocking column sent a reader to a cell that was well formed.
+        print(f"malformed criterion row: {', '.join(malformed)}", file=sys.stderr)
         return 1
 
     blocking = sum(1 for _, b, _s in criteria if b == "yes")
@@ -481,6 +493,12 @@ def main():
     # gives a verdict on a different clause of it -- the substitution this
     # whole exercise exists to stop.
     ids = {s for _i, _b, s in criteria}
+    # A clause row is a named PART of one declared criterion: the ledger splits
+    # `MIK-7272.EXT.1` into `(clause: declare)` and `(clause: honour)` while the
+    # requirement declares the unsuffixed id, which would otherwise read as
+    # having no row at all. Only that qualifier is stripped -- the `.1a`/`.1b`
+    # letter split stays, because those are two criteria and not two clauses.
+    ids |= {CLAUSE.sub("", i) for i in ids}
     requirements = REQUIREMENTS.read_text()
     # The suffix is part of the identifier here, unlike in `ID`, which folds
     # `MRTR.9a` onto `MRTR.9` so a ledger sub-row counts against its parent.
