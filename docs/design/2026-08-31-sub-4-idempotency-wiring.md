@@ -5,6 +5,23 @@ Revisions 1 and 2 were reviewed by GPT-5.x and Grok; both returned `SHIP-WITH-FI
 Revision 3 was the repair. Revision 4 settles the last question a check could settle, and records
 what happens to the two that need a person.
 
+§P4 REVIEW OF REVISION 6 (2026-09-08) — ONE LEG BACK, GATE STILL OPEN. `gpt-review` returned
+`SHIP-WITH-FIXES` (rc=0), headline: *the design mistakes an already reachable idempotency guard for
+dormant machinery*. That one is confirmed at source and the dormancy paragraph is retracted above.
+`kimi-review` produced zero bytes and had not exited when this was written: recorded PENDING, never
+scraped, because a verdict is a process exit plus a trailer and this has neither (§PA). The gate the
+paragraph below describes therefore does NOT close yet — it closes when the second leg returns or is
+recorded MISSING.
+
+Two of that review's findings DIED AT SOURCE and produce no repair, recorded here so the next round
+does not re-raise them. Both leaned on an acceptance criterion `MIK-7272.SUB4.STDIO.OWNER.1/3/5`
+(cited in the Axis 3 CRITICAL and the Axis 4 HIGH). No `.OWNER.` criterion exists anywhere in
+`docs/`; the `MIK-7272.SUB` family stops at `SUB.4` with no such children; and `gpt-review` reads
+the tree, not Linear, so it had nowhere to read one. The reviewer invented the authority it faulted
+the design against. The underlying question — should a keyless write execute? — is answered
+deliberately at Axis 3 and is the trade the review was explicitly asked to attack; attacking it by
+inventing a criterion that forbids it is not an attack on the trade.
+
 Revision 5 is NOT reviewed. It is P8, P9, the "Risks that fire on activation" section and the
 test-plan transfer, which arrived 2026-09-06 from the MRTR.8b/10a design when that change withdrew
 its Change B, plus the reference corrections of the same date. No reviewer has seen any of it: the
