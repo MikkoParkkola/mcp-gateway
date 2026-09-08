@@ -182,6 +182,30 @@ MCP's `initialize` handshake is where a legacy client declares `elicitation`,
 `"capabilities"` across the router and server finds one test assertion and no
 store.
 
+**Status, 2026-09-08 — half of the recommendation below has since shipped, and
+the present tense above no longer separates the halves.** Option C is two
+pieces: a shape discriminator on `CallerContext`, and the per-session store.
+The discriminator LANDED, under the name `era`
+(`src/gateway/meta_mcp/mod.rs:173`); its own doc comment forbids re-deriving the
+era downstream, which is the drift this design argued for avoiding. The store
+did NOT. `router/handlers.rs:835` still calls `shape.declared_capabilities()`
+and passes that value straight into `input_capabilities` at `:1400`, so
+production puts the per-request SLICE into the field rows 311 and 325 require to
+hold the SESSION value, and `handle_initialize` writes nothing. Consequence 1 —
+a legacy client declares nothing, so the bridge can never fire for the only
+client class it exists for — therefore still holds in the tree today.
+
+The gate is where the two halves meet, and it is the edit this design implies
+without ever saying so plainly: `era` does not change what the MRTR.9 gate
+REFUSES, it changes what the gate is HANDED. A `Modern` caller declares per
+request, so the slice is the whole truth about it. A `Legacy` caller declares
+once at `initialize` and has no per-request channel at all, so the session store
+is its only truth and the slice is silence, not denial — `Some(&[])` and `None`
+are different claims, which is why `InputBridge::run` takes `declared` and
+`slice` as two arguments rather than one merged value
+(`src/gateway/input_bridge.rs:361-365`). Refusal semantics are untouched in both
+directions; only the input to `undeclared()` moves.
+
 ## Options for the missing store
 
 **A. Capture `initialize` client capabilities per session; pass as `declared`.**
@@ -1121,8 +1145,17 @@ narrow safety channel is a design decision wearing a convenience edit costume.
 Committed at `aa601f58` in the meta-MCP invoke module. Behaviour-identical
 extraction: the governance **gate is excluded**, six emissions plus a single
 `dispatch_to_backend` are inside, and the helper is shared by the opening round
-and every bridge retry. `BackendInvoker::invoke` returns `Result<Value, Error>`.
-This is the one piece of the wiring that exists.
+and every bridge retry.
+
+**Correction, 2026-09-08.** This section also claimed
+`BackendInvoker::invoke` returns `Result<Value, Error>`, and that half is
+FALSE in the tree. `src/gateway/input_bridge.rs:334` still reads `async fn
+invoke(&self, retry_params: Value) -> Value;` — a bare `Value`, with nowhere for
+a dispatch or transport error to go. `aa601f58` touched exactly one file,
+`src/gateway/meta_mcp/invoke.rs` (+105/-56); it never opened `input_bridge.rs`.
+The widening was DECIDED at the round-3 design event above and recorded here as
+if deciding it had shipped it. It remains this change's work. `accounted_dispatch`
+(`invoke.rs:2464`) is real, so what exists is the metering, not the contract.
 
 ### D-E `cost_warnings` on first vs last round — OPEN (was D8)
 
@@ -1139,6 +1172,34 @@ no path to resolution. Accounting still accrues per round — `record_spend`
 writes both the `global_daily` and `tool_daily` accumulators on every dispatch —
 so the exposure is bounded to overspend within a single call, not to an
 unmetered retry loop. That bound is what makes gating once affordable.
+
+**The bound has a number, 2026-09-08.** `BridgeBounds::DEFAULT`
+(`src/gateway/input_bridge.rs:241-246`) is `rounds: 3`, and `run` loops `for _ in
+0..self.bounds.rounds` with exactly one `self.backend.invoke(..)` per iteration
+(`:387`). So an exchange makes at most **three dispatches beyond the one the
+budget approved — four paid backend calls, worst case**, and the overspend
+ceiling is `3 × cost_for(tool)` past the gated round. Every one of them is
+metered, because `record_spend` sits inside `accounted_dispatch`: the exposure is
+VISIBLE after the fact, not PREVENTED. That is the deliberate trade, and naming
+the number is what stops "bounded" being read as "small".
+
+Capping rounds does not cap the asking, and the struct's own doc says why
+(`:213-217`): one interim result may carry an arbitrary number of entries, so a
+single round reaches the same abuse with a larger array. Three further ceilings
+are on the original call rather than on a round — `requests: 8`, `aggregate:
+120s`, `per_prompt: 30s`. The per-prompt value is deliberately NOT the 120s
+elicitation constant in `destructive_confirmation`; reusing that would let one
+unanswered prompt consume the whole aggregate budget.
+
+The residual this leaves, stated rather than mitigated: a bridged round may not
+be budget-refused, so an exchange CAN overspend by its rounds. Creating that
+refusal was considered and rejected — see the gate-once rationale above; a
+mid-exchange refusal strands a `PendingSampleGuard`.
+
+Today every `BridgeBounds` construction site is a test
+(`tests/mik_7212_mrtr7_bridge_acs.rs:306,430-450,1118,1195`). The production
+wiring is what puts `DEFAULT` on the live path, and until it does, the ceiling
+above is a property of a struct nothing constructs.
 
 ### Review provenance for this round
 
