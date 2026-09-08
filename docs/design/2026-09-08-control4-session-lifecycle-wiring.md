@@ -187,8 +187,12 @@ and nothing else. An operator who sets it to an hour widens this map's window to
 code in this change can refuse that. So the claim is `IDLE_TTL + <an interval the gateway operator
 owns>`, not a number. It is still refused a ceiling for the reason above — a second eviction rule
 that can disagree with the anomaly one — and the residual is now stated at its true size rather than
-understated by a sweep. If that window's cardinality is ever measured to be the problem the anomaly
-ceiling was built for, a ceiling becomes a design event then, with a number.
+understated by a sweep — and that stated bound is the whole resolution. An earlier draft closed this
+paragraph by saying a ceiling "becomes a design event if the cardinality is ever measured to be the
+problem"; the kimi closure pass killed it as the exact non-state §P1 forbids — a named risk with
+nobody scheduled to take the measurement that would trigger it. Deleted rather than converted to a
+deferral, because a deferral needs an owner, a trigger and a fallback and this had none of the
+three: no one is watching this number, and implying someone was is what made the sentence a defect.
 
 **Name the observable the §P2 test asserts on (kimi IMPROVEMENT, converging with GPT's).** The plan's
 case asserts the reclaimed thing is GONE — the predecessor `last_tool` entry absent after the sweep —
