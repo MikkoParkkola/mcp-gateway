@@ -5,13 +5,32 @@ Revisions 1 and 2 were reviewed by GPT-5.x and Grok; both returned `SHIP-WITH-FI
 Revision 3 was the repair. Revision 4 settles the last question a check could settle, and records
 what happens to the two that need a person.
 
-§P4 REVIEW OF REVISION 6 (2026-09-08) — ONE LEG BACK, GATE STILL OPEN. `gpt-review` returned
-`SHIP-WITH-FIXES` (rc=0), headline: *the design mistakes an already reachable idempotency guard for
-dormant machinery*. That one is confirmed at source and the dormancy paragraph is retracted above.
-`kimi-review` produced zero bytes and had not exited when this was written: recorded PENDING, never
-scraped, because a verdict is a process exit plus a trailer and this has neither (§PA). The gate the
-paragraph below describes therefore does NOT close yet — it closes when the second leg returns or is
-recorded MISSING.
+§P4 REVIEW OF REVISION 6 (2026-09-08) — BOTH LEGS BACK, BOTH `SHIP-WITH-FIXES` (rc=0 each, verdict
+read from the ledger trailer, never scraped from the body — §PA). `gpt-review`'s headline: *the
+design mistakes an already reachable idempotency guard for dormant machinery*; confirmed at source,
+and the dormancy paragraph is retracted above. `kimi-review` named P7's decided fix having no
+test-plan row and the TTL assumption deferred without §P1's four fields. Both are repaired in
+`8e1cd764` together with the route-1-outran-the-gate precedent, and none of the three moved a
+decision. An earlier draft of this paragraph recorded kimi PENDING: that leg had produced zero bytes
+and had not exited when the sentence was written. True then, false now — corrected here rather than
+left to be read as the current state.
+
+GATE OUTPUT FOR THIS ROUND, pinned to commits, so the verdicts above rest on evidence a reader can
+re-run rather than on the assertion that they were run.
+
+- Code: `3549d7d9` (the retry key carries the caller), `b8ded618`, `7f836088` (the first commit's own
+  fmt debris), `4645998b` (`CallerIdentity::select` — one spelling of which identity a key belongs
+  to). Documents: `8e1cd764`, `9ceaeb54`, and this commit.
+- `cargo test --lib`: 4083 passed, 0 failed, 4 ignored, 30.02s.
+- `cargo fmt --check`: clean.
+- `cargo clippy --all-targets -- -D warnings`: RED, and NOT on this change. The single error is
+  `more than 3 bools in a struct` in `tests/nfr_sec1_controls`, whose owner is `ext1-otel1` per R26.
+  Recorded as inherited rather than reported as green: `tests/nfr_sec1_controls.rs` was last
+  written by `1b0393c8`, which is an ancestor of `3549d7d9`, so the error stands without any of
+  these commits.
+- Mutation evidence is two hand-run falsifier probes, not a mutation tool: removing the length prefix
+  from the key turns three forgery tests red, and unwiring the verified identity at the production
+  call site turns the production-path test red on *bob was served alice's stored result*.
 
 Two of that review's findings DIED AT SOURCE and produce no repair, recorded here so the next round
 does not re-raise them. Both leaned on an acceptance criterion `MIK-7272.SUB4.STDIO.OWNER.1/3/5`
