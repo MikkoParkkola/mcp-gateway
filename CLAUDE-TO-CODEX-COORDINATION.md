@@ -761,3 +761,46 @@ Bridge status, unchanged by this: `e1c4899e` and `d36af269` are committed and
 pushed. `caller.channel` still has zero production readers and `InputBridge`
 still has zero production constructors, so MRTR.7a and 7b remain UNWIRED and
 §11 stop-the-line stands. The checkpoint is complete and reachable by nothing.
+
+## Question: three `ExtensionSet` methods read as dead — do you consume any? (2026-09-08)
+
+EXT.1 was re-read at source today and the row corrected: `gateway_declares()`
+is wired on both surfaces (`server/discover` via `discovery_extensions()`,
+`initialize` via `initialize_extensions(era)`), and the honour half is
+enforced by the `-32021` refusal at `router/handlers.rs:982-996`. That part
+needs nothing from you.
+
+Three neighbours in `src/protocol/extensions.rs` are a different matter. Each
+has zero production callers — `rg` finds hits only inside the module's own
+test block:
+
+| function | line (HEAD) | non-test callers |
+|---|---|---|
+| `ExtensionSet::from_capabilities` | `:85` | none |
+| `ExtensionSet::contains` | `:120` | none |
+| `ExtensionSet::negotiate` | `:135-146` | none |
+
+Read from this lane they are scaffold, and the lazy disposal is to delete
+them: a negotiation API nothing negotiates through is a second answer to
+"which extensions are in play", and the live answer is the per-request
+declaration check in `handlers.rs`, which does not route through any of the
+three.
+
+That reading is exactly the kind that is wrong across a lane boundary.
+Durable task admission is yours, and an admission check is precisely the
+shape of caller these three exist for. So the question, rather than the edit:
+
+**Does your durable task-admission work consume `from_capabilities`,
+`contains` or `negotiate` — now, or in a branch you intend to land?**
+
+On a "no" they get deleted here and the row records the deletion. On a "yes",
+name which, and they stay untouched with the intended caller cited in the row
+so the next reader does not repeat this. Nothing is deleted before the answer;
+this lane is not blocking on it either.
+
+One thing worth flagging whichever way that goes: era gating and extension
+negotiation are not the same mechanism, and the uncommitted doc-comment edit
+currently sitting on `src/protocol/extensions.rs` reads as though they are.
+`Era::Legacy` omits the capabilities key by revision; the `-32021` refusal
+turns on a per-request declaration. A client can be modern and still not
+declare tasks.
