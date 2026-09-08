@@ -20,6 +20,17 @@ Two things must be settled before this document is either folded in or dropped
    section below says the opposite (unconditional, module constants, no config
    surface). The 2026-09-08 acceptance recorded above was for the two-change
    split; whether it also superseded the config gate is not established.
+
+   **Checked since (2026-09-08):** the reviewed design agrees with this one, not
+   with the ruling. `2026-08-31-sub-4-idempotency-wiring.md:375` asks "May an
+   operator disable protection a criterion states as MUST?" and answers *"DECIDED
+   on the requirement rather than asked: no. A switch makes the criterion
+   unverifiable wherever the running configuration differs from the shipped
+   default. Recorded so it can be overruled, not so it can be confirmed."* So the
+   question is no longer which of two documents is right — both say unconditional
+   — but whether the 2026-09-07 ruling IS the overrule that row invited. It reads
+   like one. Nobody but the team lead can say so, and the code as committed
+   follows the design, not the ruling.
 2. **Which document survives**, and whether revision 5's outstanding dual review
    gates the code.
 
@@ -35,6 +46,13 @@ Change one of two.
 `#[allow(dead_code)]`, and has exactly one caller anywhere in the tree — a test
 (`src/gateway/meta_mcp/tests.rs:3565`). `MetaMcp::idempotency_cache` is
 initialised `None` at `mod.rs:464` and nothing in the boot path ever populates it.
+
+`Gateway::build_meta_mcp` is the ONLY production construction site: every other
+`MetaMcp::new` in the tree sits inside `mod tests` (`server/mod.rs:2216`), and
+both entry points route through it — `run` (`:836`, HTTP) and `run_stdio`
+(`:1553`). So populating it there covers both transports, and "inert in every
+deployment" is falsified for both. stdio stays unprotected for a *different*
+reason, below: its client's key never reaches the funnel.
 
 With the field `None`, `idempotency_key_for` short-circuits on `idem_cache?`
 (`support.rs:35`), so both the key and the fingerprint are `None`, the
@@ -120,7 +138,13 @@ alone.
 | SUB.4 — what the wiring buys: a re-issued key is not re-dispatched | `a_reissued_idempotency_key_is_served_from_the_stored_result`: counting backend, **no response cache**, two invokes under one key, backend asked once, both replies carry the backend's body | unit (invoke path) | behavioural |
 
 The first case fails before the change (the field is `None` on every boot) and is
-the RED test. The second is honestly a characterization test for an existing
+the RED test. **Verified, not asserted (2026-09-08):** the test was written first
+(`359293e2`) but its red was never observed, so it was recovered with the §P2
+falsifier probe — `git show 7851736d^:src/gateway/server/mod.rs` restored under a
+trap, one run, then the repair copied back and re-run. Pre-fix: FAILED at
+`server/mod.rs:3104`, *"the boot path must populate the idempotency cache; an
+unpopulated one makes every client-supplied idempotency key inert"* — the
+intended assertion, not a compile error. Restored: ok, 1 passed. The second is honestly a characterization test for an existing
 mechanism, not a free failure: the guard is already written, and before this
 change it was reachable only from tests. It earns its place by pinning the
 behaviour the wiring turns on — and it can fail, because the response cache is
