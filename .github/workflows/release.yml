@@ -86,6 +86,13 @@ jobs:
         run: python3 scripts/release/test_count_release_criteria.py
       - name: Check the release-criteria ledger header against its rows
         run: python3 scripts/release/count-release-criteria.py --check
+      - name: Test supplemental acceptance checks
+        run: python3 scripts/release/test_scope_acceptance.py
+      - name: Validate supplemental scope (pending work is reported)
+        run: python3 scripts/release/check_scope_acceptance.py --check
+      - name: Require completed acceptance for the 4.0 release
+        if: startsWith(github.ref, 'refs/tags/v4.0.0') || startsWith(inputs.tag, 'v4.0.0')
+        run: python3 scripts/release/check_scope_acceptance.py --release
 
   verify:
     needs: [security-gate, secret-leak-lint, release-criteria]
@@ -93,6 +100,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install signing verifier runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6.0.0
+        with:
+          node-version: '22.23.2'
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable

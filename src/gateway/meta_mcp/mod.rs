@@ -57,14 +57,23 @@ use super::meta_mcp_helpers::{
     build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
     wrap_tool_success,
 };
-use super::meta_mcp_tool_defs::{MetaToolExposure, build_meta_tools_filtered};
+use super::meta_mcp_tool_defs::{
+    MetaToolExposure, build_meta_tools_filtered, require_gateway_invoke_nonce,
+};
 use super::webhooks::WebhookRegistry;
 
+pub(crate) mod admission;
+#[cfg(test)]
+mod continuation_rotation_tests;
 mod invoke;
 mod prompt_cache;
 mod protocol;
 mod resources;
+pub(crate) mod response_security;
+#[cfg(test)]
+mod response_security_tests;
 mod search;
+pub(crate) mod signing;
 #[cfg(feature = "spec-preview")]
 mod spec_preview;
 mod support;
@@ -111,6 +120,14 @@ impl CallerIdentityHeaderTrust {
 /// site names the authorizer it means, which in tests makes a permissive one
 /// visible in the test source rather than hidden in a struct default.
 pub struct MetaMcpCallerContext<'a> {
+    /// Explicit request era, classified by the transport from reserved metadata.
+    pub is_modern: bool,
+    /// Stable validated credential principal; display names are never authority.
+    pub credential_principal: Option<&'a str>,
+    /// Outer execution owner; an inner step can mark dispatch but cannot settle it.
+    pub(crate) execution: Option<&'a admission::SyncLease>,
+    /// Private external origin and completed signing admission, never backend metadata.
+    pub(crate) signing: Option<&'a signing::SigningInvocationContext>,
     /// Decides whether this caller may invoke a given backend tool.
     ///
     /// Borrowed, never stored: `AppState` owns `meta_mcp`, so holding an
@@ -171,6 +188,13 @@ pub struct MetaMcpCallerContext<'a> {
 /// branches emit the generic `-32600`, and `-32003` already means something
 /// else elsewhere.
 fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> JsonRpcResponse {
+    if matches!(error, crate::Error::ResponseFirewallRefused) {
+        return JsonRpcResponse::delivery_refusal_error(
+            Some(id),
+            error.to_rpc_code(),
+            &error.to_string(),
+        );
+    }
     let mut response = JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string());
     if let Some(ref mut rpc_error) = response.error {
         // Written unconditionally, so this function is the sole authority on
@@ -219,6 +243,9 @@ pub struct MetaMcp {
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
     pub(super) idempotency_cache: Option<Arc<IdempotencyCache>>,
+    /// One bounded execution owner shared by the meta and direct transports.
+    pub(super) execution_admission: Arc<crate::idempotency::admission::ExecutionAdmission>,
+    pub(super) idempotency_config: RwLock<crate::config::IdempotencyConfig>,
     /// Continuation keys, spent-ledger and held legacy exchanges.
     ///
     /// Here rather than on `AppState` because of lifetime: this struct is built
@@ -428,6 +455,7 @@ impl MetaMcp {
         stats: Option<Arc<UsageStats>>,
         ranker: Option<Arc<SearchRanker>>,
         default_cache_ttl: Duration,
+        clock: Arc<dyn Fn() -> u64 + Send + Sync>,
     ) -> Self {
         Self {
             backends,
@@ -435,7 +463,13 @@ impl MetaMcp {
             cache,
             default_cache_ttl,
             idempotency_cache: None,
-            continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
+            execution_admission: crate::idempotency::admission::ExecutionAdmission::new(
+                Arc::clone(&clock),
+            ),
+            idempotency_config: RwLock::new(crate::config::IdempotencyConfig::default()),
+            continuation: Arc::new(
+                crate::protocol::continuation::ContinuationState::with_clock(clock),
+            ),
             stats,
             ranker,
             transition_tracker: RwLock::new(None),
@@ -486,7 +520,7 @@ impl MetaMcp {
 
     /// Create a new Meta-MCP handler.
     pub fn new(backends: Arc<BackendRegistry>) -> Self {
-        Self::build(backends, None, None, None, Duration::from_secs(60))
+        Self::with_features(backends, None, None, None, Duration::from_secs(60))
     }
 
     /// Create a new Meta-MCP handler with cache, stats, and ranking support.
@@ -497,7 +531,26 @@ impl MetaMcp {
         ranker: Option<Arc<SearchRanker>>,
         default_ttl: Duration,
     ) -> Self {
-        Self::build(backends, cache, stats, ranker, default_ttl)
+        Self::with_features_and_clock(
+            backends,
+            cache,
+            stats,
+            ranker,
+            default_ttl,
+            Arc::new(crate::protocol::continuation::now_unix_secs),
+        )
+    }
+
+    /// Build the real handler with its serving runtime's trusted epoch source.
+    pub(crate) fn with_features_and_clock(
+        backends: Arc<BackendRegistry>,
+        cache: Option<Arc<ResponseCache>>,
+        stats: Option<Arc<UsageStats>>,
+        ranker: Option<Arc<SearchRanker>>,
+        default_ttl: Duration,
+        clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> Self {
+        Self::build(backends, cache, stats, ranker, default_ttl, clock)
     }
 
     /// The continuation state this run mints and redeems with.
@@ -507,6 +560,16 @@ impl MetaMcp {
     #[must_use]
     pub fn continuation(&self) -> Arc<crate::protocol::continuation::ContinuationState> {
         Arc::clone(&self.continuation)
+    }
+
+    pub(crate) fn execution_admission(
+        &self,
+    ) -> &Arc<crate::idempotency::admission::ExecutionAdmission> {
+        &self.execution_admission
+    }
+
+    pub(crate) fn set_idempotency_config(&self, config: crate::config::IdempotencyConfig) {
+        *self.idempotency_config.write() = config;
     }
 
     /// Expose the cost tracker for external use (budget configuration, REST handler).
@@ -741,6 +804,12 @@ impl MetaMcp {
         self.firewall = firewall;
     }
 
+    /// Share the configured engine between request and final response checks.
+    #[cfg(feature = "firewall")]
+    pub(crate) fn response_firewall(&self) -> Option<Arc<crate::security::firewall::Firewall>> {
+        self.firewall.clone()
+    }
+
     /// Firewall-scan an aggregated tool-list / search response value in place
     /// (OWASP ASI01 tool-poisoning). Backend-supplied `description` strings are
     /// scanned for prompt injection and have embedded credentials redacted
@@ -749,7 +818,7 @@ impl MetaMcp {
     /// No-op when the firewall is absent or response scanning is disabled — the
     /// same gate the `tools/call` path uses ([`Firewall::check_response`]
     /// short-circuits), so behavior is unchanged when the feature/config is off.
-    #[cfg(feature = "firewall")]
+    #[cfg(all(test, feature = "firewall"))]
     pub(super) fn scan_tool_list_value(&self, value: &mut serde_json::Value) {
         let Some(ref fw) = self.firewall else {
             return;
@@ -770,7 +839,7 @@ impl MetaMcp {
     }
 
     /// No-op tool-list scan when the `firewall` feature is disabled.
-    #[cfg(not(feature = "firewall"))]
+    #[cfg(all(test, not(feature = "firewall")))]
     pub(super) fn scan_tool_list_value(&self, _value: &mut serde_json::Value) {}
 
     /// Attach a [`ReloadContext`] to enable the `gateway_reload_config` meta-tool.
@@ -1104,6 +1173,13 @@ const NO_SESSION_FOR_PROFILE: &str = "Routing profiles are per-session, and this
      MCP 2026-07-28 removed protocol-level sessions; the tool set is decided \
      by the authorization presented on each request.";
 
+/// The same refusal for the FSM workflow state, and for the same reason: the
+/// state is stored per session, and a connection with no session would be
+/// storing it under a key every other sessionless connection also reads.
+const NO_SESSION_FOR_STATE: &str = "The workflow state is per-session, and this connection has no session. \
+     MCP 2026-07-28 removed protocol-level sessions; capability visibility is \
+     decided by the authorization presented on each request.";
+
 // ============================================================================
 // MCP protocol handlers — initialize + tools
 // ============================================================================
@@ -1294,7 +1370,7 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> JsonRpcResponse {
         self.shadow_tools_list_assembly(session_id, false);
-        let tools = if self.code_mode_enabled {
+        let mut tools = if self.code_mode_enabled {
             self.meta_tool_exposure.filter(build_code_mode_tools())
         } else {
             let (tool_count, server_count) = self.backend_counts();
@@ -1308,6 +1384,9 @@ impl MetaMcp {
                 &self.meta_tool_exposure,
             )
         };
+        if self.signing_enabled() && self.require_nonce {
+            require_gateway_invoke_nonce(&mut tools);
+        }
         let mut tool_descriptors =
             project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
 
@@ -1606,6 +1685,13 @@ impl MetaMcp {
             return response;
         }
 
+        if let Some(execution) = caller.execution
+            && let Err(error) =
+                self.mark_management_dispatch(tool_name, &arguments, session_id, execution)
+        {
+            return error_response_preserving_status(id, &error);
+        }
+
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id).await,
             "gateway_execute" => {
@@ -1693,10 +1779,14 @@ impl MetaMcp {
     /// Returns the previous state, the new state, and the number of capability
     /// tools visible in the new state (across all capability backends).
     fn set_state(&self, args: &Value, session_id: Option<&str>) -> Result<Value> {
-        let Some(sid) = session_id else {
-            return Err(Error::Protocol(
-                "gateway_set_state requires a session (send Mcp-Session-Id header)".to_string(),
-            ));
+        // Refused rather than filtered, and refused HERE rather than inside
+        // `SessionStateStore`: the write is the whole point of this call, so a
+        // store that quietly dropped it would turn a refusal the caller can see
+        // into a silent no-op — a worse defect than the one being fixed. The
+        // read side is guarded in the store's readers instead (`ORDER.2` Q4,
+        // ratified 2026-09-06).
+        let Some(sid) = session_key(session_id) else {
+            return Err(Error::Protocol(NO_SESSION_FOR_STATE.to_string()));
         };
 
         let new_state = extract_required_str(args, "state")?;

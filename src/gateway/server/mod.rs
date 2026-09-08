@@ -2,8 +2,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Gateway server
 
+mod continuation_cleanup;
+#[cfg(test)]
+mod http_lifecycle_tests;
 mod persistence;
+pub(in crate::gateway) mod serving_context;
 mod support;
+#[cfg(test)]
+mod test_support;
 // Two questions leave this module, both to `config_reload`, and each is
 // exported under the question it answers. A reload asks about the config that
 // would be IN FORCE, so it goes through the overlay. A restart-only edit asks
@@ -47,6 +53,8 @@ use crate::security::firewall::Firewall;
 use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
+use continuation_cleanup::CleanupRuntime;
+use serving_context::{HttpServeContext, OwnedMetaMcp};
 use warmstart::{WarmStartMode, build_warm_start_list, spawn_warm_start_task};
 
 #[cfg(feature = "cost-governance")]
@@ -313,7 +321,7 @@ pub struct Gateway {
 /// struct carries the results so callers can destructure exactly what they need
 /// without duplicating the construction logic.
 struct BuiltMetaMcp {
-    meta_mcp: Arc<MetaMcp>,
+    owner: OwnedMetaMcp,
     tool_policy: Arc<ToolPolicy>,
     mtls_policy: Arc<MtlsPolicy>,
     /// Ranker handle retained for graceful-shutdown persistence (HTTP mode).
@@ -332,6 +340,19 @@ struct BuiltMetaMcp {
     /// `MetaMcp`, can also write identity-propagation audit events into the
     /// same tamper-evident chain (MIK-6740).
     transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
+}
+
+/// Exercise the production builder with a trusted test clock and its real owner.
+#[cfg(test)]
+pub(in crate::gateway) async fn build_meta_mcp_for_test(
+    config: Config,
+    clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+) -> Result<OwnedMetaMcp> {
+    let gateway = Gateway::new(config).await?;
+    let built = gateway
+        .build_meta_mcp(CleanupRuntime::with_clock(clock))
+        .await?;
+    Ok(built.owner)
 }
 
 /// The provenance signing key and its key id.
@@ -458,9 +479,14 @@ impl Gateway {
     ///
     /// # Errors
     ///
-    /// Currently infallible; returns `Result` for forward-compatibility.
+    /// Rejects invalid effective signing configuration before shared setup.
     #[allow(clippy::too_many_lines)]
-    async fn build_meta_mcp(&self) -> Result<BuiltMetaMcp> {
+    async fn build_meta_mcp(&self, cleanup_runtime: CleanupRuntime) -> Result<BuiltMetaMcp> {
+        let signing = self
+            .config
+            .security
+            .message_signing
+            .resolve_with_env(&self.env.get())?;
         // ── Response cache ───────────────────────────────────────────────────
         let cache = if self.config.cache.enabled {
             let cache = if self.config.cache.max_entries > 0 {
@@ -536,12 +562,13 @@ impl Gateway {
 
         // ── MetaMcp builder ──────────────────────────────────────────────────
         #[allow(unused_mut)]
-        let mut meta_mcp_builder = MetaMcp::with_features(
+        let mut meta_mcp_builder = MetaMcp::with_features_and_clock(
             Arc::clone(&self.backends),
             cache,
             usage_stats,
             Some(Arc::clone(&ranker)),
             self.config.cache.default_ttl,
+            Arc::clone(&cleanup_runtime.epoch),
         )
         .with_profile_registry(profile_registry)
         .with_code_mode(self.config.code_mode.enabled)
@@ -577,6 +604,20 @@ impl Gateway {
             meta_mcp_builder = meta_mcp_builder.with_attestation(validator, mode);
         }
 
+        meta_mcp_builder.set_idempotency_config(self.config.idempotency.clone());
+        if signing.enabled {
+            let previous =
+                (!signing.previous_secret.is_empty()).then(|| signing.previous_secret.into_bytes());
+            meta_mcp_builder.enable_message_signing(
+                crate::security::message_signing::MessageSigner::new(
+                    signing.shared_secret.into_bytes(),
+                    previous,
+                    signing.key_id,
+                ),
+                std::time::Duration::from_secs(signing.replay_window),
+                signing.require_nonce,
+            );
+        }
         let mut meta_mcp = Arc::new(meta_mcp_builder);
         meta_mcp.set_context_integrity_kernel(
             crate::context_integrity::ContextIntegrityKernel::new(
@@ -740,10 +781,8 @@ impl Gateway {
         }
 
         // ── Security firewall (RFC-0071) ──────────────────────────────────────
-        // Wire a firewall into `MetaMcp` so the aggregated discovery surface
-        // (`gateway_list_tools` / `gateway_search_tools`) is scanned. The direct
-        // `tools/call` + `tools/list` path builds its own firewall in `run()`
-        // (see `AppState`); each keeps its own `TransitionTracker`.
+        // Build one configured engine for request checks and final response
+        // enforcement; `run()` shares this Arc with the HTTP router.
         #[cfg(feature = "firewall")]
         {
             let fw_cfg = self.config.security.firewall.clone();
@@ -762,8 +801,12 @@ impl Gateway {
                 .set_firewall(Some(fw));
         }
 
+        let continuation = meta_mcp.continuation();
+        let cleanup =
+            continuation_cleanup::spawn_cleanup(Arc::downgrade(&continuation), cleanup_runtime);
+        let owner = OwnedMetaMcp::new(meta_mcp, AbortOnDrop::new(cleanup));
         Ok(BuiltMetaMcp {
-            meta_mcp,
+            owner,
             tool_policy,
             mtls_policy,
             ranker,
@@ -785,8 +828,29 @@ impl Gateway {
     /// # Panics
     ///
     /// Panics if RSA key pair generation fails on all retry attempts.
+    pub async fn run(self) -> Result<()> {
+        self.run_with_runtime(
+            CleanupRuntime::default(),
+            shutdown_signal,
+            #[cfg(test)]
+            None,
+        )
+        .await
+    }
+
     #[allow(clippy::too_many_lines)]
-    pub async fn run(mut self) -> Result<()> {
+    async fn run_with_runtime<F, S>(
+        mut self,
+        cleanup_runtime: CleanupRuntime,
+        shutdown: S,
+        #[cfg(test)] lifecycle_events: Option<
+            tokio::sync::mpsc::UnboundedSender<http_lifecycle_tests::HttpLifecycleEvent>,
+        >,
+    ) -> Result<()>
+    where
+        S: FnOnce(tokio::sync::broadcast::Sender<()>) -> F + Send + 'static,
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
         let addr = SocketAddr::new(
             self.config
                 .server
@@ -809,7 +873,7 @@ impl Gateway {
 
         // ── Shared MetaMcp initialisation ────────────────────────────────────
         let BuiltMetaMcp {
-            meta_mcp,
+            owner,
             tool_policy,
             mtls_policy,
             ranker,
@@ -818,7 +882,15 @@ impl Gateway {
             transition_path,
             data_dir,
             transparency_log,
-        } = self.build_meta_mcp().await?;
+        } = self.build_meta_mcp(cleanup_runtime).await?;
+        let serve_context = HttpServeContext { owner };
+        let meta_mcp = Arc::clone(serve_context.owner.meta());
+        #[cfg(test)]
+        if let Some(events) = &lifecycle_events {
+            let _ = events.send(http_lifecycle_tests::HttpLifecycleEvent::Built(
+                meta_mcp.continuation(),
+            ));
+        }
 
         // Log policy and feature states now that the shared builder has run.
         if self.config.security.tool_policy.enabled {
@@ -1172,23 +1244,9 @@ impl Gateway {
             }
         }
 
-        // The transition tracker is only used when anomaly_detection=true; pass
-        // a fresh tracker so the firewall has its own dedicated state.
+        // Request and response checks share the evaluated engine and audit writer.
         #[cfg(feature = "firewall")]
-        let firewall_arc: Option<Arc<Firewall>> = {
-            let fw_cfg = self.config.security.firewall.clone();
-            let fw_enabled = fw_cfg.enabled;
-            let tt = if fw_cfg.anomaly_detection {
-                Some(Arc::new(TransitionTracker::new()))
-            } else {
-                None
-            };
-            let fw = Arc::new(Firewall::from_config(fw_cfg, tt).with_env(Arc::clone(&self.env)));
-            if fw_enabled {
-                info!("Security firewall enabled (RFC-0071)");
-            }
-            Some(fw)
-        };
+        let firewall_arc = meta_mcp.response_firewall();
 
         // Keep a clone of meta_mcp for post-shutdown operations (periodic
         // persistence and graceful shutdown cost saves use this handle).
@@ -1353,6 +1411,12 @@ impl Gateway {
         //
         // One bind, before the banner, shared by both paths, has neither.
         let listener = TcpListener::bind(addr).await?;
+        #[cfg(test)]
+        if let Some(events) = &lifecycle_events {
+            let _ = events.send(http_lifecycle_tests::HttpLifecycleEvent::Bound(
+                listener.local_addr()?,
+            ));
+        }
 
         log_startup_banner(
             &self.config,
@@ -1421,6 +1485,19 @@ impl Gateway {
             });
         }
 
+        // Own the signal independently of the serving framework's bridge task.
+        // On cancellation, aborting this owner also closes the oneshot so that
+        // an internally spawned HTTP/TLS shutdown waiter can finish.
+        let (shutdown_complete_tx, shutdown_complete_rx) = tokio::sync::oneshot::channel();
+        let shutdown_future = shutdown(shutdown_tx);
+        let _shutdown_owner = AbortOnDrop::new(tokio::spawn(async move {
+            shutdown_future.await;
+            let _ = shutdown_complete_tx.send(());
+        }));
+        let shutdown_complete = async move {
+            let _ = shutdown_complete_rx.await;
+        };
+
         // Run server — plain HTTP or mTLS depending on config
         if self.config.mtls.enabled {
             // `axum_server` needs a std listener; the socket is the same one.
@@ -1432,7 +1509,7 @@ impl Gateway {
                 std_listener,
                 addr,
                 &self.config.mtls,
-                shutdown_signal(shutdown_tx),
+                shutdown_complete,
             )
             .await?;
         } else {
@@ -1440,7 +1517,7 @@ impl Gateway {
                 listener,
                 app.into_make_service_with_connect_info::<SocketAddr>(),
             )
-            .with_graceful_shutdown(shutdown_signal(shutdown_tx))
+            .with_graceful_shutdown(shutdown_complete)
             .await
             .map_err(|e| Error::Tls(e.to_string()))?;
         }
@@ -1529,12 +1606,33 @@ impl Gateway {
 
         // ── Shared MetaMcp initialisation ────────────────────────────────────
         let BuiltMetaMcp {
-            meta_mcp,
+            owner,
             tool_policy,
             mtls_policy,
             data_dir,
             ..
-        } = self.build_meta_mcp().await?;
+        } = self.build_meta_mcp(CleanupRuntime::default()).await?;
+        // Retain until the production stdio context extraction is complete.
+        let stdio_owner = owner;
+        let meta_mcp = Arc::clone(stdio_owner.meta());
+
+        // Wire ReloadContext so stdio gateway_reload_config matches HTTP.
+        // Same constructor; no file watcher. Attach only with a config path.
+        if let Some(ref path) = self.config_path {
+            let live_config = Arc::new(LiveConfig::new(self.config.clone()));
+            let reload_ctx = Arc::new(
+                ReloadContext::new(
+                    path.clone(),
+                    Arc::clone(&live_config),
+                    Arc::clone(&self.backends),
+                    self.config.failsafe.clone(),
+                    self.config.meta_mcp.cache_ttl,
+                )
+                .with_env(Arc::clone(&self.env)),
+            );
+            meta_mcp.set_reload_context(reload_ctx);
+        }
+
         let mut protocol_telemetry_sink =
             match crate::protocol_revision_telemetry::DurableTelemetrySink::open(&data_dir) {
                 Ok(sink) => Some(sink),
@@ -1648,7 +1746,7 @@ impl Gateway {
                 &meta_mcp,
                 &tool_policy,
                 &mtls_policy,
-                &request,
+                request,
                 session_id,
                 protocol_telemetry_sink.as_mut(),
             )
@@ -1730,7 +1828,7 @@ impl Gateway {
             meta_mcp,
             tool_policy,
             mtls_policy,
-            request,
+            request.clone(),
             session_id,
             None,
         )
@@ -1743,7 +1841,7 @@ impl Gateway {
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
         _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
-        request: &serde_json::Value,
+        mut request: serde_json::Value,
         session_id: &str,
         protocol_telemetry_sink: Option<
             &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
@@ -1752,7 +1850,22 @@ impl Gateway {
         use super::router::helpers::{extract_tools_call_params, parse_request};
         use crate::protocol::JsonRpcResponse;
 
-        let (id, method, params) = match parse_request(request) {
+        let mut signing_context = meta_mcp
+            .signing_enabled()
+            .then(|| super::meta_mcp::signing::SigningInvocationContext::capture(&mut request));
+        if let Some(context) = signing_context.as_mut()
+            && let Err(error) = context.restore(&mut request)
+        {
+            return Some(
+                JsonRpcResponse::error(
+                    None,
+                    error.to_rpc_code(),
+                    super::meta_mcp::signing::wire_error_message(&error),
+                )
+                .to_value_lossy(),
+            );
+        }
+        let (id, method, params) = match parse_request(&request) {
             Ok(parsed) => parsed,
             Err(response) => return Some(response.to_value_lossy()),
         };
@@ -1762,10 +1875,8 @@ impl Gateway {
         // carries no headers, so the transport declares no revision and a
         // modern request can only have sourced its own from `_meta`.
         //
-        // The shape is not consumed yet: stdio's method dispatch predates the
-        // revision split and this change does not move it. Recording is what
-        // was missing, and recording is what this adds.
-        crate::protocol::meta::classify_and_observe(
+        // The same classification also controls modern explicit-key admission.
+        let request_shape = crate::protocol::meta::classify_and_observe(
             &method,
             params.as_ref(),
             None,
@@ -1776,7 +1887,7 @@ impl Gateway {
             crate::protocol_revision_telemetry::session_negotiated_revision(Some(session_id)),
         );
         crate::protocol_revision_telemetry::observe_inbound_request(
-            request,
+            &request,
             params.as_ref(),
             &method,
             None,
@@ -1804,6 +1915,20 @@ impl Gateway {
             return Some(resp.to_value_lossy());
         };
 
+        let (external_tool, backend_targets) = if method == "tools/call" {
+            let (tool, arguments) = extract_tools_call_params(params.as_ref());
+            (
+                tool.to_string(),
+                super::router::backend_tool_targets_for_call(meta_mcp, tool, &arguments),
+            )
+        } else {
+            (method.clone(), Vec::new())
+        };
+        let response_targets = super::meta_mcp::response_security::meta_response_targets(
+            &external_tool,
+            &backend_targets,
+        );
+        let mut execution = None;
         let response = match method.as_str() {
             // 2026-07-28 MUST. Answered before anything else and without a
             // handshake, because on stdio this is also the backward-compatibility
@@ -1823,7 +1948,7 @@ impl Gateway {
             "tools/list" => {
                 meta_mcp.handle_tools_list_with_params(id, params.as_ref(), Some(session_id))
             }
-            "tools/call" => {
+            "tools/call" => 'tool_call: {
                 let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
                 let tool_name = tool_name.to_string();
 
@@ -1835,45 +1960,98 @@ impl Gateway {
                     tool_policy: tool_policy.as_ref(),
                 };
 
-                meta_mcp
-                    .handle_tools_call(
-                        id,
-                        &tool_name,
-                        arguments,
+                let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
+                let is_modern = matches!(
+                    request_shape,
+                    crate::protocol::meta::RequestShape::Modern(_)
+                );
+                if matches!(
+                    request_shape,
+                    crate::protocol::meta::RequestShape::Malformed { .. }
+                ) {
+                    break 'tool_call JsonRpcResponse::error(
+                        Some(id),
+                        -32602,
+                        "Malformed protocol metadata",
+                    );
+                }
+                let mut caller = MetaMcpCallerContext {
+                    execution: None,
+                    signing: None,
+                    is_modern,
+                    credential_principal: None,
+                    authorizer: &stdio_authorizer,
+                    // Stdio has no port and no network surface: the
+                    // client SPAWNED this process, so it already holds
+                    // whatever the operator holds — it could edit the
+                    // config file just as easily. Withholding admin
+                    // here would take the management tools away from
+                    // exactly the single-user setup the origin gate
+                    // exists to protect, and protect nothing.
+                    //
+                    // Explicit since the admin gate moved to the
+                    // dispatcher: it previously lived on the HTTP path
+                    // alone, so stdio was never checked and the default
+                    // non-admin context went unnoticed.
+                    is_admin: true,
+                    // stdio carries no per-request capability
+                    // declaration to read, and absent means absent.
+                    input_capabilities: crate::protocol::meta::Declared::NONE,
+                    retry: &retry,
+                    api_key_name: None,
+                    agent_id: None,
+                    grant_subject: None,
+                    verified_identity: None,
+                    // stdio speaks to one process over two pipes and
+                    // has no elicitation channel: there is no operator
+                    // this transport can reach, so a destructive call
+                    // it cannot confirm is refused rather than asked
+                    // about. Not "found no session" -- no asker can
+                    // exist here at all.
+                    confirmation:
+                        crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+                };
+                if let Some(context) = signing_context.as_mut()
+                    && let Err(error) = meta_mcp.prepare_signing_invocation(
+                        context,
+                        &arguments,
                         Some(session_id),
-                        MetaMcpCallerContext {
-                            authorizer: &stdio_authorizer,
-                            // Stdio has no port and no network surface: the
-                            // client SPAWNED this process, so it already holds
-                            // whatever the operator holds — it could edit the
-                            // config file just as easily. Withholding admin
-                            // here would take the management tools away from
-                            // exactly the single-user setup the origin gate
-                            // exists to protect, and protect nothing.
-                            //
-                            // Explicit since the admin gate moved to the
-                            // dispatcher: it previously lived on the HTTP path
-                            // alone, so stdio was never checked and the default
-                            // non-admin context went unnoticed.
-                            is_admin: true,
-                            // stdio carries no per-request capability
-                            // declaration to read, and absent means absent.
-                            input_capabilities: crate::protocol::meta::Declared::NONE,
-                            retry: &crate::protocol::mrtr::NO_RETRY,
-                            api_key_name: None,
-                            agent_id: None,
-                            grant_subject: None,
-                            verified_identity: None,
-                            // stdio speaks to one process over two pipes and
-                            // has no elicitation channel: there is no operator
-                            // this transport can reach, so a destructive call
-                            // it cannot confirm is refused rather than asked
-                            // about. Not "found no session" -- no asker can
-                            // exist here at all.
-                            confirmation:
-                                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
-                        },
+                        &caller,
                     )
+                {
+                    break 'tool_call JsonRpcResponse::error(
+                        Some(id),
+                        error.to_rpc_code(),
+                        super::meta_mcp::signing::wire_error_message(&error),
+                    );
+                }
+                caller.signing = signing_context.as_ref();
+                let admission = meta_mcp.admit_meta_sync(
+                    &caller,
+                    &tool_name,
+                    &arguments,
+                    Some(session_id),
+                    &id,
+                );
+                execution = match admission {
+                    Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => None,
+                    Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) => {
+                        Some(lease)
+                    }
+                    Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(response)) => {
+                        break 'tool_call response;
+                    }
+                    Err(error) => {
+                        break 'tool_call JsonRpcResponse::error(
+                            Some(id),
+                            error.to_rpc_code(),
+                            error.to_string(),
+                        );
+                    }
+                };
+                caller.execution = execution.as_ref();
+                meta_mcp
+                    .handle_tools_call(id, &tool_name, arguments, Some(session_id), caller)
                     .await
             }
             "prompts/list" => meta_mcp.handle_prompts_list(id, params.as_ref()).await,
@@ -1893,6 +2071,25 @@ impl Gateway {
             }
         };
 
+        let response = meta_mcp.finalize_response_for_delivery(
+            response,
+            &super::meta_mcp::response_security::ResponseDeliveryContext {
+                method: &method,
+                targets: &response_targets,
+                correlation: super::meta_mcp::response_security::ResponseCorrelation {
+                    session_id,
+                    caller: "stdio",
+                    external_server: "gateway",
+                    external_tool: &external_tool,
+                },
+                mutation:
+                    crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
+                signing: signing_context.as_ref(),
+            },
+        );
+        if let Some(execution) = execution {
+            execution.complete_delivery(&response, signing_context.as_ref());
+        }
         Some(response.to_value_lossy())
     }
 
@@ -1927,7 +2124,7 @@ impl Gateway {
             crate::protocol_revision_telemetry::DurableTelemetrySink,
         >,
     ) -> Vec<serde_json::Value> {
-        let Some(requests) = batch.as_array() else {
+        let serde_json::Value::Array(requests) = batch else {
             return vec![
                 crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
                     .to_value_lossy(),
@@ -2177,7 +2374,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        Gateway, load_configured_identity_grants, provenance_key, resolve_provenance_signer,
+        CleanupRuntime, Gateway, load_configured_identity_grants, provenance_key,
+        resolve_provenance_signer,
     };
     use crate::{
         backend::BackendRegistry,
@@ -2569,7 +2767,7 @@ mod tests {
             &test_meta_mcp(),
             &test_tool_policy(),
             &test_mtls_policy(),
-            &json!({
+            json!({
                 "jsonrpc": "2.0",
                 "id": 7219,
                 "method": "initialize",
@@ -2644,6 +2842,10 @@ mod tests {
                 json!({ "server": "row19-sentinel" }),
                 Some("stdio-session"),
                 crate::gateway::meta_mcp::MetaMcpCallerContext {
+                    execution: None,
+                    signing: None,
+                    is_modern: false,
+                    credential_principal: None,
                     authorizer: &authorizer,
                     api_key_name: None,
                     agent_id: None,
@@ -3067,8 +3269,11 @@ mod tests {
         config.error_budget.capability.cooldown = Some(std::time::Duration::from_secs(90));
 
         let gateway = Gateway::new(config).await.unwrap();
-        let built = gateway.build_meta_mcp().await.unwrap();
-        let (backend, capability) = built.meta_mcp.budget_configs();
+        let built = gateway
+            .build_meta_mcp(CleanupRuntime::default())
+            .await
+            .unwrap();
+        let (backend, capability) = built.owner.meta().budget_configs();
 
         assert!(
             (backend.threshold - 0.42).abs() < f64::EPSILON,
@@ -3114,9 +3319,12 @@ mod tests {
             }),
         }));
 
-        let built = gateway.build_meta_mcp().await.unwrap();
+        let built = gateway
+            .build_meta_mcp(CleanupRuntime::default())
+            .await
+            .unwrap();
         let response = Gateway::dispatch_single(
-            &built.meta_mcp,
+            built.owner.meta(),
             &built.tool_policy,
             &built.mtls_policy,
             &json!({
@@ -3630,9 +3838,12 @@ mod tests {
         let config = Config::load(Some(&path)).expect("configured error_budget must load");
 
         let gateway = Gateway::new(config).await.unwrap();
-        let built = gateway.build_meta_mcp().await.unwrap();
+        let built = gateway
+            .build_meta_mcp(CleanupRuntime::default())
+            .await
+            .unwrap();
 
-        let backend = built.meta_mcp.error_budget_config.read().clone();
+        let backend = built.owner.meta().error_budget_config.read().clone();
         assert!(
             (backend.threshold - 0.25).abs() < f64::EPSILON,
             "backend threshold must come from the config, got {}",
@@ -3642,7 +3853,7 @@ mod tests {
         assert_eq!(backend.window_duration, std::time::Duration::from_secs(30));
         assert_eq!(backend.min_samples, 4);
 
-        let capability = built.meta_mcp.capability_budget_config.read().clone();
+        let capability = built.owner.meta().capability_budget_config.read().clone();
         assert!(
             (capability.threshold - 0.35).abs() < f64::EPSILON,
             "capability threshold must come from the config, got {}",

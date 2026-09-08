@@ -182,7 +182,7 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
         );
 
         let timeout = Duration::from_secs(ctx.timeout_secs);
-        let response = super::send_with_retry(
+        let mut response = super::send_with_retry(
             self.executor
                 .client
                 .post(&jsonrpc_config.endpoint)
@@ -197,6 +197,9 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
 
         let status = response.status();
         if !status.is_success() {
+            if let Some(error) = super::rate_limited_response_error(&mut response, "jsonrpc") {
+                return Err(error);
+            }
             let error_text = response
                 .text()
                 .await

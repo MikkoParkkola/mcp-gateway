@@ -2,7 +2,14 @@
 
 Design note. No code. §P1 of `rules-source/workflows/development-process.md`.
 
-Every `file:line` below is read at commit `112a392c3cc66c2b8fa00d71dd39c9972f351705`
+**Current scope, 2026-09-06 delivery takeover:** §13 is the amendment for the
+operator-approved full lifecycle and restart contract. It supersedes the old
+exclusions of `input_required` and restart persistence and the old unmatched-input
+refusal rule. **This delta requires design and test-plan review; earlier SHIP
+receipts apply only to their original material.** Historical measurements and
+reviews below remain evidence of that material, not current implementation status.
+
+The original `file:line` measurements below were read at commit `112a392c3cc66c2b8fa00d71dd39c9972f351705`
 ("docs(mcp): design extension declaration and trace metadata"). Line numbers move; the commit
 does not, so a reader who finds a citation off by a few lines has a way to check rather than a
 reason to distrust the note.
@@ -107,12 +114,9 @@ Five pieces, in dependency order.
    exist before the store does, or whoever builds it rediscovers it. A read-then-delete reaper
    reaps a task extended between its two steps — and it reaches further than this piece, because
    the release's open CONTROL.4 decision assumes the reaper rides the gateway's existing
-   maintenance tick, which is exactly the interval in which that extension can land. It is the *same defect class* as the consumed-continuation ledger recorded open in
-   `dod-check.md` finding #1: process-local today, needs a shared atomic insert-if-absent store
-   before production, and `tasks/get` reaching the replica that owns the task is the same
-   replica-affinity problem cluster A is solving in `src/protocol/continuation.rs`. It inherits
-   that gate rather than inventing a second one. A new store designed independently of cluster
-   A's would be two mechanisms deciding the same thing.
+   maintenance tick. The active §13 contract keeps record TTL immutable and uses
+   one durable local store under a nonblocking process lease. A shared continuation
+   ledger or replica affinity is not a prerequisite for this approved topology.
 
    *Amended by §11.2 (gpt, HIGH): this piece states no admission bound, and the schema permits
    `ttlMs: null`. The store needs a finite default TTL, a global cap and a
@@ -203,8 +207,10 @@ Five pieces, in dependency order.
 
    *Amended by §11.2 (grok, MEDIUM; stamped here in the confirmation pass because the handler is
    written from this piece and AC `.3` is only reached when the tests are): the `tasks/update`
-   arm MUST refuse an `inputResponses` key that matches no outstanding input request rather than
-   ignore it, MUST define the empty `resultType: "complete"` acknowledgement it returns, and MUST
+   arm was originally specified to refuse unmatched input keys. **Corrected by
+   §13.2:** the pinned prose recommends ignoring them; the server accepts the valid
+   subset and ignores unknown or already-satisfied keys. The arm MUST define the
+   empty `resultType: "complete"` acknowledgement it returns, and MUST
    say that `tasks/cancel` is cooperative — it marks the task cancelled and does not abort a
    backend call already in flight. Do not implement from this paragraph alone.*
 
@@ -315,10 +321,11 @@ its answer.
 - Backend-originated tasks (gateway relaying a backend's `CreateTaskResult`).
 - Task augmentation on anything but `tools/call`. The spec says only `tools/call` supports it
   today and to design for more later; designing for more *now* is the speculative half.
-- `input_required` task flows end-to-end. The status and its `inputRequests` shape are modelled
-  so `tasks/get` can return them, but the elicitation round-trip belongs to cluster A (MRTR) and
-  cluster H, and building a second continuation mechanism here is the mistake §P0 exists to stop.
-- Persisting tasks across gateway restarts.
+- Transparent recovery across multiple replicas or replacement of the gateway's
+  continuation ledger with a distributed store. §13 specifies one process owning
+  one durable local task directory, with recovery on that same directory.
+- Replaying an original side-effecting call after process loss. A persisted
+  task handle is not evidence that the backend did or did not perform the call.
 - The `dod-check.md` edit (§0) and the `server/discover` call site (EXT.1) — both scheduled, both
   owned elsewhere.
 
@@ -333,49 +340,14 @@ unassessed-rows sweep and `:110-112` is `NFR.COMPAT.1`; neither carries this cla
 confirmation pass caught that §11.4 retargeted the same wrong pointer everywhere except here. The question is therefore not
 which wins but **who owns re-issue safety when both are available**.
 
-The failure mode is concrete, and *narrower than an earlier revision of this section claimed*
-(corrected 2026-09-06, §11). There is no `resolve_idempotency_key` in the tree and no automatic
-derivation: `idempotency_key_for` (`src/gateway/meta_mcp/support.rs:35-44`) returns `None` unless
-the client supplied a key — **client key or nothing**. A keyless call is therefore never deduped
-at all, which is what `MIK-7272.SUB.4` decided it wanted: two deliberate identical side-effecting
-calls must both run.
-
-The collision that remains is real but conditional: a request carrying **both** a client-supplied
-idempotency key **and** a task-augmented `tools/call`. There, two mechanisms would independently
-decide the same call is a duplicate — and they can disagree, because the idempotency entry can
-never be marked completed (`is_final` is false for `resultType: "task"`), so it would sit
-in-flight until TTL while the task itself finished.
-
-**Rule: when the tasks extension is negotiated on a request, the task store owns re-issue
-safety. The idempotency cache is neither consulted nor written for that call.** The task store
-carries a secondary index on the *same* derived key `(server, tool, arguments)`, so a retried
-identical call resolves to the same `taskId` and the backend runs once. One structure decides;
-the second cannot disagree with it because it is not asked. This is elimination, not a check
-that detects the disagreement.
-
-*Amended by §11.2 (gpt, CRITICAL): the secondary index as written above has no principal term
-and no client-key condition, so two tenants issuing the same call would share a handle and a
-deliberate keyless repeat would be silently collapsed. The key is
-`(authenticated principal, client idempotency key)` and it applies **only** when the client
-supplied one; a keyless repeat gets a new task. The request fingerprint is *stored beside* the
-entry, not keyed on: a second call carrying the same key and a different body is **rejected**, not
-served the first task. Keying on the fingerprint instead — as the §11.2 stamp first said, and the
-paragraph above still implies — collapses two deliberate mutations that differ only by their
-idempotency keys into one, and silently skips the second backend call (gpt, confirmation pass,
-HIGH). Do not implement from the paragraph above alone.*
-
-The existing guards need no change, and that is a verified result rather than a hope:
-`ResponseCache::set` and `IdempotencyCache::mark_completed` both gate on `is_final`, and
-`result_type_of` returns `"task"`, so a `CreateTaskResult` cannot enter either. The change is
-the *skip on the way in*, not a new guard on the way out.
-
-**Scheduled** — SUB.4's note currently declares TASK.1 out of scope and says it "neither builds
-it nor depends on it". That sentence is now wrong in one direction: SUB.4 does not depend on
-TASK.1, but TASK.1 changes when SUB.4's auto-derivation runs. Owner: the sibling session
-implementing SUB.4. What resolves it: one paragraph in that note recording the skip condition.
-When: before SUB.4's implementation merges. If it resolves badly: SUB.4 ships auto-derivation
-unconditionally, and the first task-augmented call leaves a permanent in-flight idempotency
-entry — a duplicate-suppression deadlock for that exact `(server, tool, arguments)` until TTL.
+The historical independent-cache rule is superseded by §13.3 and SUB.4's
+Current TASKS/SUB.4 admission contract. A shared principal/key admission owner
+selects one settlement kind atomically; task eligibility may not bypass an
+existing synchronous guard, and a missing tasks declaration may not bypass a
+durable task record. Task handles remain excluded from synchronous completed
+response caches. Keyless read-only repeats stay independent; potentially mutating modern-protocol tools/call operations
+require an explicit key and stable verified owner before dispatch. No key is
+invented from a body. See SUB4.MODE.1 and SUB4.REPR.1 for real-route falsifiers.
 
 ## 5. Coexistence with SUB.2 — the listen stream
 
@@ -447,7 +419,7 @@ decision without being scheduled, which is an assumption with better manners. Sc
 | open question | owner | what would resolve it | when | if it resolves badly |
 |---|---|---|---|---|
 | Whether `ServerTasksCapability` and `ClientTasksCapability` are retired. Kept for now: no readers, so they cost nothing, and deleting a public wire type is an API break this release has no reason to take | team lead | an operator answer on whether clients speaking the 2025-11-25 `tasks` shape are still served | when NFR.COMPAT.1 is audited. `docs/requirements/RELEASE-4.0.0-requirements.md:261` (NFR.COMPAT.1) already requires that 2025-11-25 be served, which settles that such clients exist but not that these two structs serve them, since nothing reads either | deletion becomes a separate API-break change carrying its own migration note, not a line in this one. Nothing here waits on it: TASK.1 reads neither type, so this design is correct under either answer |
-| Where the task store lives when the gateway runs multi-replica. | cluster A (MIK-7212), via the shared insert-if-absent store `dod-check.md` finding #1 already gates BEFORE-PRODUCTION | cluster A landing a shared ledger this can reuse | before production, not before merge | single-replica-only tasks: a `tasks/get` routed to another replica reports the task as missing while it is running. Same failure the continuation ledger has, same gate, deliberately not a second design |
+| Multi-replica transparent task recovery. | release lead | a future topology/store design with cross-replica fault evidence | before claiming that topology; outside the approved 4.0 recovery contract | 4.0 requires affinity to the process owning the task directory; same-directory restart is required now, not deferred. §13 replaces the earlier shared-ledger dependency. |
 
 ## 7. MIK-7311 — reconciled, not routed around
 
@@ -505,12 +477,10 @@ against whatever the dispatcher turns out to do.
 2026-09-06, recorded in §11.6). They are separate criteria on purpose: folding a distinct
 authorisation surface into `.11` is what produced RL.5's "MET (narrowed)".
 
-**Open question, owned elsewhere:** whether `.2` asserts a status shape 4.0.0 does not ship —
-`input_required` is out of scope per §11.2, and the plan's `.2d` row is red for a reason no
-implementation of the agreed scope can clear. The question, its two readings and a
-recommendation are the test plan's §8 Q1; it is not restated here. It is for the requester,
-because narrowing an acceptance criterion needs their recorded agreement, and it must be
-answered before the `TaskStatus` variant list is written — that list is the decision.
+**Resolved scope question:** all five statuses, including an end-to-end
+`input_required` flow, ship in 4.0. The operator-approved expansion is recorded in
+`docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md`; §13 supplies the
+implementation contract and the test plan §10 maps its acceptance evidence.
 
 ## 8a. The existing `ac_task_1_*` cases do not cover the criterion
 
@@ -786,7 +756,7 @@ either way, because no reader of the old text can now miss it.
 - **Dedupe must be principal-bound** (gpt, CRITICAL). Independently corroborated by the tree:
   `idempotency_key_for` already refuses to invent a key. The design's secondary index takes
   `(authenticated principal, request fingerprint)` and applies only when the client supplied a
-  key. Two tenants issuing the same call must never share a handle; a keyless repeat gets a new
+  key. Two tenants issuing the same call must never share a handle; under §13 a keyless repeat gets no
   task.
 - **`ttlMs: null` with no admission bound** (gpt, HIGH). A finite default TTL, a global active-task
   cap and a per-principal cap, all enforced **before** the backend call starts. The extension is
@@ -795,7 +765,9 @@ either way, because no reader of the old text can now miss it.
   recorded the spec MUST and then called the silence harmless. It is not: AC `.3` as written ships
   a timestamp bump that accepts unmatched keys, which the pinned schema forbids, and with
   `input_required` out of scope there are never outstanding keys to match — so any non-empty map is
-  refused until elicitation is in scope. AC `.3` also gains the empty `resultType: "complete"`
+  refused until elicitation is in scope. **Historical conclusion superseded by
+  §13.2:** input is included and unmatched keys are ignored per pinned server prose.
+  AC `.3` also gains the empty `resultType: "complete"`
   acknowledgement shape and the cooperative, eventually-consistent cancel licence.
 - **`ttlMs` and `pollIntervalMs` are both mutable** (grok improvement; already half-applied in the
   preceding commit). One rule for both: the store must not treat either as write-once, and a reaper
@@ -812,6 +784,8 @@ either way, because no reader of the old text can now miss it.
 - **Restart persistence excluded** (gpt, HIGH, BEFORE-PRODUCTION). Already the second deferred row
   in §6 with all four fields and the same gate the reviewer assigns. Deferred, not missed — which
   is why the reviewer's own gate is not `NOW`.
+  **Historical disposition superseded by §13:** same-directory restart persistence
+  is now required; transparent multi-replica recovery remains out.
 
 ### 11.4 Citation repairs — applied in this commit
 
@@ -911,7 +885,7 @@ materiality on its own line and re-opens what it never raised.
 | subscription admission is unauthorised (CRITICAL) | gpt | **CLOSED** | §3 ¶6 and §5 now authorise the `subscriptions/listen` stream on the same principal check as retrieval |
 | `-32021` gate is per method-family, must be per request (MEDIUM) | gpt | **CLOSED** | the gate is stated per request, so `subscriptions/listen` carrying `taskId`s is gated |
 | `ttlMs` has no admission bound (HIGH) | gpt | **NOT CLOSED** | the stamp said "global active-task cap". A terminal record is retained until its TTL expires, so a flood of fast-finishing tasks exhausts memory while an active-only counter reads zero. Repaired: caps count every **unreaped** record, released on deletion or expiry |
-| dedupe key is not principal-bound (CRITICAL) | gpt | **NOT CLOSED** | principal-binding landed, but the stamp keyed on `(principal, request fingerprint)`. That collapses two deliberate mutations differing only by idempotency key into one task and skips the second backend call. Repaired: key is `(principal, client idempotency key)`, fingerprint stored beside the entry, same-key/different-body **rejected**. AC `.8` inherits it |
+| dedupe key is not principal-bound (CRITICAL) | gpt | **NOT CLOSED** | principal-binding landed, but the stamp keyed on `(principal, request fingerprint)`. That collapses two deliberate mutations differing only by idempotency key into one task and skips the second backend call. Repaired: key is `(principal, hash(client idempotency key))`, fingerprint stored beside the entry, same-key/different-body **rejected**. AC `.8` inherits it |
 | `tasks/update` under-specified (MEDIUM) | grok | **NOT CLOSED** | the three MUSTs were stamped on AC `.3` only. An implementer writes the handler from piece 4 and reaches the criterion only when writing tests. Repaired: piece 4 carries them |
 | citations land on passages that do not carry the claim | grok | **PARTIAL** | §0, §7, §9 and §10.4 verified at source and correct. §4 and §9 still cited `plan.md:48-50,110-112` for "both ship"; the claim is at `:605-606`. Repaired — §11.4 had retargeted this same pointer everywhere except here |
 
@@ -929,7 +903,7 @@ clause) rather than reassigned silently; grok re-checked its own two directly, n
 | finding | re-checked by | verdict |
 |---|---|---|
 | `ttlMs` has no admission bound (HIGH) | kimi, delegate for gpt (SLA expired) | **CLOSED** — caps count every unreaped record, released on deletion or expiry, not just active tasks |
-| dedupe key is not principal-bound (CRITICAL) | kimi, delegate for gpt (SLA expired) | **CLOSED** — key is `(principal, client idempotency key)`; same key with a different body is rejected, not collapsed into the first call |
+| dedupe key is not principal-bound (CRITICAL) | kimi, delegate for gpt (SLA expired) | **CLOSED** — key is `(principal, hash(client idempotency key))`; same key with a different body is rejected, not collapsed into the first call |
 | `tasks/update` under-specified (MEDIUM) | grok (self) | **CLOSED** — the three MUSTs sit on piece 4 itself, where the handler is written from |
 | citations land on passages that do not carry the claim | grok (self) | **CLOSED** — §4 and §9 now cite `plan.md:605-606`, with a note on why `:48-50`/`:110-112` don't carry it |
 
@@ -968,3 +942,372 @@ the ledger is a criterion nobody checks. The blocking total is whatever
 `scripts/release/count-release-criteria.py --check` derives and was not hand-typed; the ruling's
 own earlier figure of 37 was withdrawn by its author, and the file's `:11` line said 36 before
 this edit and says whatever the script recounts after it.
+
+## 13. Full-lifecycle amendment — 2026-09-06, review required
+
+### 13.1 Scope receipt and Definition of Ready
+
+**FOR:** unblock delivery of MIK-7311 by making accepted tasks useful through
+disconnect, input collection, cancellation and gateway restart, while preventing
+cross-principal access and automatic replay of an uncertain side effect.
+
+**OUT:** transparent multi-replica recovery; a distributed scheduler; adding
+`tasks/list`; task augmentation of methods other than `tools/call`; proxying a
+backend's native `CreateTaskResult`; replaying an original mutation after restart.
+Recovering a known upstream job by its existing handle is distinct from originating
+a second job or exposing the backend's task as the gateway task.
+
+This updates the existing receipt, not the change identity or review history.
+The scope moved because the operator approved full tasks with the recovery contract
+in [the scope decision record](../requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md).
+The five `MIK-7311.LIFECYCLE.*` rows in
+[the scope requirements](../requirements/RELEASE-4.0.0-scope-update.md) remain
+release-blocking. This amendment does not mark them implemented.
+
+Value: a caller can retrieve an accepted job instead of guessing whether retrying
+will repeat a write. Acceptance is measured as one backend effect across injected
+response loss/restart, retained owner access, zero cross-owner disclosure, and a
+completed input round trip through both public HTTP routes. The original code at
+`0d4df3c0` has no task store or production task dispatch, so a percentage improvement
+over its in-process `Task` unit tests would be a false product baseline.
+
+**Owned documents:** this design and its existing test plan. Implementation areas
+are enumerated in §13.7; no runtime edit is part of this amendment. Parallel work
+already touches `MetaMcp`, continuation handling and release docs. The delivery lead
+must assign source ownership after review instead of having a second agent patch
+those seams concurrently. Existing SUB.2 streams and MRTR parsers are reused.
+
+Principal theft, acknowledgement before durable storage, and a lost backend response
+are the three critical risks. Fail-fast validation is the pinned-spec/source check
+in §13.8, then reviewed failing tests for create-before-ack, input completion and
+restart effect counts. Storage and route tests precede expensive full-suite gates.
+
+### 13.2 Wire contract and corrections to earlier reviews
+
+The r1 review corrections are incorporated here: explicit keyed eligibility,
+consistent durable hashed-key index, nonblocking lease, authorization on every
+control surface and delivery-time capability checks. The paired plan adds lost-ack
+crash, path-security and secured-execution parity cases. No implementation is graded.
+
+The [pinned tasks text](https://raw.githubusercontent.com/modelcontextprotocol/ext-tasks/0d0a6bd4c258b35caa3c810a1dd506cf105b1501/specification/2026-07-28/tasks.md)
+was fetched again: 34,148 bytes, Git blob
+`5d6a202eacbaab3444f9d0727ce6587598e7e077`. The published
+[2026-07-28 page](https://tasks.extensions.modelcontextprotocol.io/specification/2026-07-28/tasks)
+also resolves. The earlier base-path 404 is historical, not missing specification.
+
+Preserve the reviewed flat task shape, five statuses, nullable-but-present `ttlMs`,
+JSON-RPC error versus tool-result distinction, random task IDs, per-request
+extension declaration, `Mcp-Name: <taskId>` mirroring and owner checks on every task
+method and subscription. No new wire status called `interrupted` or `unknown` is
+introduced; §13.5 uses a standard completed tool-error result for that outcome.
+
+Two previous conclusions need correction before implementation:
+
+- The input key MUST in the request schema constrains the client's map. The server
+  prose at pinned line 379 recommends ignoring unknown/already-satisfied keys and
+  permits partial updates. Follow that server behavior: ignore those keys, accept
+  the valid subset atomically, and return the empty complete acknowledgement.
+  Invalid `inputResponses` types still return invalid-params before any mutation.
+  Ignoring a key never starts work or changes a terminal task. This supersedes the
+  refusal claims in §3, §10.3, §11.2, §12 and test clause `.3b`.
+- Input request keys must be unique for the task's entire life (pinned line 350).
+  A backend may reuse its own key between rounds. Allocate gateway keys containing
+  a monotonically increasing durable round number plus an opaque local identifier;
+  retain the mapping to backend keys privately. Polls preserve the same outstanding
+  keys; accepted keys disappear; later rounds never recycle them.
+
+Cancellation remains cooperative. On a cancel request, an atomic transition may
+settle a live task as cancelled immediately and signal its worker; completion that
+already committed wins. Late completion never rewrites cancellation. A cancelled
+status promises no further gateway continuation, not reversal or prevention of an
+already-dispatched backend effect. Return an empty complete ack for an owned
+terminal task too, without altering its outcome or timestamp.
+
+### 13.3 Store: one durable record, one owner
+
+Introduce one gateway-owned `TaskService` and a file-backed task store, shared by
+the meta and direct routes. The wire model stays in `src/protocol/tasks.rs`.
+Production uses the durable store; an in-memory store is a test fixture only.
+
+The smallest persistence unit is one versioned JSON file per random task ID.
+Each record contains owner binding, original backend/tool and canonical request
+fingerprint, required client retry-key digest, creation time, effective TTL/poll
+interval, monotonically increasing revision and input round, detailed wire state,
+and private execution checkpoint. It never serializes a caller bearer token,
+refresh token, session ID, `Arc<AppState>`, process-local continuation envelope or
+legacy stream sender. Input/results can contain user data: files are owner-only
+and the directory is private, under a configured persistent task-state path.
+Proposed config owner is the root `tasks` section: `store_dir` defaults beneath
+`dirs::data_local_dir()/mcp-gateway/tasks`; an unavailable data directory is a
+startup error, not a temporary-directory fallback. Limit/TTL keys map to the
+bounds below, validate positive finite values and checked arithmetic at load,
+and have no switch that silently converts production tasks to volatile state.
+
+The primary record also holds dedupe metadata. Startup rebuilds Task ownership
+in the shared ExecutionAdmission index from durable records before serving.
+Identity is SHA256 of the domain-separated structured principal/key tuple;
+operation and representation fingerprints are stored beside it. Same-mode,
+same-fingerprint retries recover one task, including after restart. Different
+body/representation or a switch between Sync and Task refuses without dispatch.
+Different keys create fresh tasks. Task creation first reserves one shared owner,
+then durably commits before publishing/dispatch; it never takes an independent
+synchronous reservation. The complete atomic admission and byte-budget contract
+is fixed in SUB.4's current section and applies on BOTH public routes.
+
+Keyless calls are not promoted to tasks. On the modern protocol, only gateway-policy-classified read-only
+operations can keep keyless synchronous execution; other tools/call operations
+require an explicit key and verified principal before dispatch. Legacy 3.5-compatible
+requests preserve existing unkeyed synchronous behavior and identity requirements
+(NFR.COMPAT.2). Legacy calls explicitly opting into the reserved retry key use
+the same shared admission; modern missing-key calls never fall back to legacy. Deliberate repeated
+writes use different keys. Do not silently deduplicate identical unkeyed bodies.
+
+**Accepted SUB.4 transfer, integration owner = release lead.** The transfer in
+`2026-09-06-mrtr-8b-10a-lifetime-and-idempotency-wiring.md` (section "The transfer is
+a request, not a note") and SUB.4 revision 5 remain the authority for mandatory
+non-task protection on both routes. Carry P8's nonempty authenticated-caller
+fallback and P9's relocation into the derivation together; one does not imply the
+other. Use a structured/length-delimited or hashed binding so a caller cannot
+spell another principal's suffix (R6). A stable owner is independent of a rotating
+credential secret; a replacement token for the same verified issuer/subject does
+not create a second owner, and a different issuer does not inherit the first.
+
+The transfer's exact risk labels are **R4** (same-key/different-request now returns
+409/Mismatch, requiring a release note) and **R5** (unverifiable identity must not
+leave an unbound replay key). R5 refuses protected admission for both tasks and synchronous calls whenever stable verified identity is unavailable; no unbound fallback exists. Production-builder
+construction and cross-principal tests with identity propagation disabled are
+required for both protections. There is no absent-section/optional
+`idempotency.enabled` negative test: protection is mandatory, not an unused
+`enable_idempotency` method waiting for a caller. Keep MRTR continuation data in
+SUB.4 fingerprints and retain `_full` protection. The agreed carrier is
+`params._meta["io.mcp-gateway/idempotency-key"]` on both public routes; a conflicting HTTP header never overrides this payload carrier.
+Final delivery signing and rotating signing-key policy remain owned by the
+release lead/security workstream; task persistence stores the result, never a
+credential or a permanently reusable response signature.
+
+One process holds a nonblocking exclusive directory lease for its entire service lifetime;
+a second process must fail startup promptly instead of opening the same task state. This
+is local single-owner persistence, not an NFS or replica claim. Use existing `rustix::fs::flock` with `NonBlockingLockExclusive` on a dedicated
+store lease sidecar; map `WouldBlock` to a prompt readiness error. The existing
+`ExclusiveFileLock::acquire` blocks and must not be reused for this lifetime lease; never accept the existing non-Unix
+no-op lock as proof of exclusivity. Unsupported store platforms fail explicitly
+until an equivalent locking/durability path is tested. Linux and macOS are the
+initial validation targets. Existing runtime module licensing remains unchanged.
+
+Under a service mutation lock, check owner, current revision/state, TTL, dedupe
+and capacity; serialize the proposed record; write a unique same-directory temp
+file with mode 0600; flush and sync it; rename; sync the parent directory; then
+publish the committed revision to readers/indexes. Reuse the reviewed atomic-write
+pattern in `control_plane::store::write_atomic`; factor a shared helper only if
+that does not change the existing control-plane contract. Do not copy a private
+EE implementation into the MIT wire module or add a new database dependency.
+Blocking file operations run outside Tokio worker threads; one ordered store
+worker owns mutations. Reads use only committed snapshots.
+Validate the task ID before deriving its filename and refuse symlink/non-regular
+record files; neither an inbound ID nor an orphan temp file becomes a path to load.
+
+Creation commits the task and dedupe information before returning a handle or
+starting backend execution. Every worker dispatch first commits an execution
+checkpoint saying a dispatch may occur. A crash between that marker and network
+send is conservatively indistinguishable from a lost response: recovery does not
+replay it. A crash before acknowledgement can leave an unacknowledged task; an
+explicit retry key recovers it, and the durable key is mandatory for task eligibility. Keyless requests are
+never acknowledged with a task handle. This does not claim exactly-once behavior
+for ordinary unkeyed synchronous invocations.
+
+Defaults proposed for review: 24-hour finite TTL (also the default maximum),
+1-second suggested poll interval,
+256 retained records globally, 32 per principal, 16 executing workers, 512 KiB
+maximum serialized record, 64 KiB aggregate outstanding-input payload, 32 input
+rounds with at most 128 keys in a round, and a
+128 MiB logical record budget. Admission reserves the maximum record allowance
+until deletion/expiry; terminal records still occupy it. Reject oversize initial
+requests and count/worker-cap excess before backend dispatch. Bound accumulated
+answers, input rounds/keys and completed results within the same record budget.
+An oversized backend result becomes an explicit completed tool-error result; it
+is never silently truncated into an apparent successful answer. Filesystem free
+space failure remains a storage failure, not a successful acceptance.
+
+Configuration supplies defaults for new records only. Existing record TTL and
+poll interval stay immutable in 4.0. The conditional expiry operation checks the
+current record and deletes it and its dedupe entry together under the mutation
+lock, then releases capacity. It never writes a transient failed status. Expiry
+cancels local waiting/continuation work but cannot undo an upstream write. Retrying
+an expired key is a new call; the retention window is also the dedupe window.
+
+Corrupt records, duplicate durable retry keys, unsupported schema versions or an
+unreadable store prevent service readiness. Preserve evidence; never reset the
+store to empty. A mutation whose final durability is uncertain poisons task-service
+readiness until reopened/reconciled; it must not report a contradictory successful
+state from memory. Storage failure during settlement never re-dispatches a call.
+Rollback stops the process, preserves the directory and uses a binary that supports
+its schema; older releases cannot read these task handles. Backup/restore must
+occur with the owner stopped and is tested before deployment.
+
+### 13.4 Execution, public routes and input
+
+Both `POST /mcp` and `POST /mcp/{backend}` call the same admission/control service.
+They retain their current authorization, sanitization, identity propagation,
+OAuth isolation, response scanning, accounting and provenance boundaries. Do not
+route direct calls through an unchecked shortcut or implement a second task store
+inside `MetaMcp`. Control methods on a backend route additionally verify that the
+stored backend matches the route; a mismatch has the same invalid-params not-found
+answer as an inaccessible handle. A fabricated or other-owner handle is never
+forwarded to a backend. Reject undeclared/legacy task requests before lookup.
+
+Existing shared principal/key ownership is checked before selecting a new mode. For an unowned key the deterministic eligibility rule is evaluated before dispatch: a modern request
+calls an actual external backend tool (direct route or `gateway_invoke`) or the gateway_run_playbook/gateway_execute work wrapper, declares
+the tasks extension on that request, supplies a valid explicit retry key in the
+shared `_meta` carrier, and has a strong authenticated owner. It must not contain
+an incoming MRTR continuation. Eligible calls are promoted to durable tasks;
+gateway-policy-classified read-only keyless calls retain ordinary synchronous results; other modern-protocol tools/call operations, including mutating management tools, require a key and verified owner even when synchronous.
+A declared request with a malformed key or unverifiable identity is refused,
+not silently assigned a weak owner. Do not infer eligibility from latency or tool
+name, and do not introduce an unconfigured required-task-only backend surface. Negotiation is permission, not a client task-preference flag.
+Non-declaring clients retain their supported protected synchronous/core path for a new key; an existing Task-owned key gets conflict without dispatch; a path that
+can only return a task uses `-32021` with the required extension object. An incoming
+MRTR continuation is completed through the existing synchronous MRTR gate before
+new task admission; an existing continuation is not wrapped into a second task.
+
+The detached worker needs an owned execution context, because
+`MetaMcpCallerContext` borrows the current HTTP request. Snapshot the authenticated
+principal and necessary verified claims in memory, bind target and trace identity,
+and resolve credentials through the existing identity provider at dispatch. Never
+detach an anonymous fallback, a display-name identity or a session-bound owner.
+Re-check current tool authorization for get, update, cancel, listen admission,
+notification delivery and every resume. A revoked owner receives the same
+not-found/refusal shape as an inaccessible handle and no retained payload or
+control. Internal recovery/expiry can settle/cancel the worker without granting
+the revoked caller visibility. `principal_fingerprint` using
+`VerifiedIdentity::stable_actor_id` is the existing strong owner anchor; additional
+credential schemes require the shared full-strength identity plumbing, not a
+task-specific truncated-key hash. Missing strong identity refuses task admission.
+
+Workers survive client/socket disconnect. A normal backend result commits completed
+with its original tool result, including `isError: true`; an actual JSON-RPC error
+commits failed with the JSON-RPC object. Do not reclassify transport/tool errors
+already represented by the execution boundary as tool results into protocol errors.
+
+For a modern backend interim response, reuse `InputRequired` parsing and capability
+checks, retaining raw backend continuation state privately in the task record.
+For a legacy stdio request, reuse the bridge's correlated held-exchange mechanism
+and deliver answers to that exchange; do not invoke the original backend tool
+again. Task input uses `tasks/get` and `tasks/update`, not a client retry carrying
+gateway `requestState`. The synchronous MRTR envelope remains owned by its existing
+process-local continuation service; persist neither that envelope nor its keys.
+
+Commit input-required state before exposing input requests. A partial update is
+durably recorded before ack and leaves only unanswered requests visible. Once all
+responses are committed, one revision-checked worker may resume the recorded
+continuation. Concurrent/repeated updates cannot dispatch that round twice. A
+crash after a resume-dispatch marker returns the uncertainty outcome in §13.5;
+it never resubmits answers speculatively. A new input round gets new task keys.
+Sampling/elicitation payloads retain ordinary client trust and capability rules;
+task creation declarations do not authorize a later request to receive types it
+does not declare. A get/listen request lacking the input capabilities needed for
+the current task payload receives a capability refusal without the payload.
+A stream admitted while working must retain its own declared capabilities and
+repeat this gate at every notification delivery. If later input needs an
+undeclared mode, end/refuse that subscription generically without inputRequests;
+never send a partial DetailedTask that violates the status wire shape. The owner
+can reconnect with the required declarations.
+
+### 13.5 Restart and reconnect outcomes
+
+| durable checkpoint on startup | observable recovery | forbidden action |
+|---|---|---|
+| Terminal completed/failed/cancelled | Serve the same retained owner-bound result/state until TTL | Re-run the call or replace its terminal outcome |
+| Accepted, no dispatch marker | Report explicit interrupted-before-dispatch tool-error result; retain the handle | Infer that the client wants a new call or silently enqueue it |
+| Dispatch may have occurred; no durable result or supported recovery reference | Complete with `isError: true` and a machine-readable interrupted/unknown-execution explanation; caller must reconcile the upstream effect | Report success, claim no effect occurred, or replay the original tool call |
+| Input waiting on a live stdio exchange from a dead process | Retain handle, report interruption/uncertainty as a completed tool-error result | Recreate the original write to regenerate the question |
+| Durable upstream job/continuation reference with a supported adapter | Reattach/query that exact handle, with current owner authorization and credential resolution, then persist its known outcome | Convert poll/reattach failure into a new job submission |
+
+Use a typed gateway result detail, for example `executionOutcome: "unknown"` and
+`reason: "gateway_restart"`, within the normal tool-result payload/metadata, not
+new MCP task status fields. A network error is not proof the backend did nothing.
+If credentials or a supported recovery mechanism are unavailable, use the explicit
+interrupted outcome. Ordinary reconnect while the process lives keeps the worker;
+no restart outcome is fabricated on a client disconnect.
+
+A supported recovery adapter must declare a concrete checkpoint shape and a
+reattach/query operation that never invokes the original starting operation. It
+must be configured/trusted; a backend response containing a field named `jobId`
+does not create such an adapter. No general upstream-job adapter was found in the
+bounded source search. The first concrete adapter/fixture and credential-resume
+seam are deferred in §13.8; code depending on them waits for that evidence.
+Until that seam is proven, the conservative interruption branch is implementable,
+but the positive recoverable-job acceptance case remains open.
+
+### 13.6 Notifications, observability and operational boundaries
+
+Extend the live SUB.2 `ListenRequest`, `SubscriptionRegistry` and subscription
+stream. `ListenRequest::from_params` recognizes `notifications.taskIds` as a
+first-class validated field rather than dropping it as unknown metadata. Before subscribing, validate every requested task ID against the caller;
+one inaccessible ID rejects the request with the same shape as an unknown ID and
+without echoing it in an ack. Bind an admitted stream to the authenticated owner
+and the accepted task set. Recheck access at delivery using current authorization;
+do not broadcast raw task results to a client merely because it supplied an ID.
+Publish a committed task revision only; a slow/closed stream does not roll back
+execution. Polling is authoritative and reconnect uses a new stream plus a get.
+No SSE resume/event-ID guarantee is added. Task streams contain task notifications
+and the required subscription framing, never request progress/log messages.
+
+Metrics: retained count/bytes, running count, admission refusal reason, storage
+failure, interrupted recovery count, update/recovery latency, and task age at
+settlement. Reuse structured logging and trace propagation; keep credentials,
+input payloads and result bodies out of logs and metric labels. Ownership denials
+use the existing security-event path, distinguishable from storage/ops failures.
+The release evidence must include the binary revision, state schema, filesystem,
+configuration bounds, sanitized request transcript and upstream effect counter.
+
+### 13.7 Source touch map for implementation ownership
+
+| area | expected change / production consumer |
+|---|---|
+| `src/protocol/tasks.rs` | Detailed task wire types and result/state transitions; consumed by task service and HTTP serializers |
+| New focused `src/gateway/task_service/` modules | Durable records/store, ordered executor and recovery; consumed by both router paths |
+| `src/gateway/router/{mod,handlers,backend_handlers}.rs` | Shared service state, admission and get/update/cancel dispatch after existing security checks |
+| `src/gateway/meta_mcp/{mod,invoke}.rs` | Owned execution seam, task-owned dedupe bypass, reuse current secured backend invocation and MRTR parsing |
+| `src/gateway/server/`, `src/config/`, `src/config_reload/` | Persistent-store startup/readiness/shutdown, validated bounded task config, defaults only for newly created records |
+| `src/protocol/{headers,meta,extensions,subscriptions}.rs`, `src/gateway/meta_mcp_helpers.rs` | Modern method/name gates, declaration only with working service, task-ID filters |
+| `src/gateway/{subscription_registry,streaming}.rs` | Owner-bound task notifications on existing stream |
+| Bridge-owned legacy exchange adapter | Answer held stdio request exactly once; TASKS consumes its reviewed interface |
+
+These are a dependency map, not ownership permission to rewrite concurrent work.
+No runtime symbol was changed by this amendment. GitNexus returned repository not
+found (only `hebb` indexed); bounded source reads supplied the map. The implementer
+must run available impact analysis before symbol edits, with the delivery lead
+resolving index availability and source ownership.
+
+### 13.8 Unknown register and review handoff
+
+| question | result or deferred owner / check / trigger / adverse outcome |
+|---|---|
+| Did the operator want full input and restart behavior? | Answered by the accepted expansion and the five lifecycle requirements linked in §13.1. Changes old exclusions to required acceptance. |
+| Does the versioned specification support the input/cancel rules? | Re-fetched exact blob with Python `urllib.request`, recomputed Git blob hash; matches §1. Lines 350, 379 and 404-406 invalidate mandatory server refusal and guarantee neither undo nor cancellation victory. |
+| Can process-local continuation envelopes be durable task state? | Source `ContinuationState` and `principal_fingerprint` read at `0d4df3c0`: keys/held exchanges are process-local. No; persist task-owned backend checkpoints and use explicit interruption for lost held exchanges. |
+| Is there a stream or persistence primitive to reuse? | Source reads found live `SubscriptionRegistry`/`subscription_stream`, `fs_lock::ExclusiveFileLock` and `control_plane::store::write_atomic`. Reuse those contracts/patterns; no new stream framework or database. |
+| Is the proposed store durable on each shipped OS/filesystem? | Owner TASKS implementer. Resolve with process-lock exclusion and kill/reopen tests on Linux/macOS local filesystems. Before enabling the task service on that platform. Failure blocks its task readiness; do not fall back to volatile storage. |
+| How does the owned execution context preserve current identity/authorization? | Owner TASKS + IDENTITY implementers. Resolve with a reviewed owned-context seam and a reconnect/revocation integration fixture using production auth. Before worker/resume wiring. Failure refuses admission/resume; no weaker owner key. |
+| Which real upstream job/continuation can resume after restart? | Owner TASKS implementer. Resolve by naming and testing one trusted adapter's checkpoint and query/reattach operation, with effect-count positive control. Before implementing its recovery branch and before closing LIFECYCLE.4. If unavailable, explicit interruption still ships for ordinary calls but the positive recovery criterion remains blocking; no invented topology claim. |
+| Can full stdio input run inside a task? | Owner BRIDGE implementer for the correlated exchange interface; TASKS implementer for consumption. Resolve with a held-request/update/completion fixture and wrong-owner/late-answer variants. Before claiming full input coverage. A missing adapter blocks that case, never justifies replay. |
+| Do proposed limits satisfy release performance budgets? | Owner TASKS implementer. Resolve with bounded-record create/update/poll/expiry workload against the unchanged synchronous route and release NFR budgets. After focused correctness tests, before final review. Failure reduces serialization/lock work or revises the reviewed mechanism; it does not raise thresholds silently. |
+
+DoR for this documentation increment: accepted scope, alternatives, ownership map,
+risks, fail-fast answers and dependency schedule are recorded. Alternatives rejected:
+volatile store loses accepted handles; full-snapshot rewrites scale with unrelated
+results; SQLite/Temporal add a new dependency/operational contract before a local
+record store has failed the required workload; a distributed store would widen
+the topology promise. This is a reliability/adoption increment, not a novel-storage
+claim. B1 binds verified identity; B2/B3 are durable task state and recovery; B4
+reuses gateway dispatch, MRTR, subscriptions and filesystem primitives.
+
+Design and plan review of this amendment is **pending**. The test plan §10 is the
+V-model matrix. Its failures must be reviewed as tests before implementation.
+For these prose edits the drivable-surface gate is N/A; implementation must still
+have independent functional driving from the built revision. Docs validation is
+whitespace/link/criterion trace checks and inspection of the owned diff, not a
+claim that the task runtime works. The release lead owns dual-vendor review,
+tracker evidence and subsequent delivery; no receipt is inferred from prior rounds.
+
+Current r4 finder repair cross-references: SUB4.COMPAT.1 preserves 3.5 client behavior; SUB4.MANAGEMENT.1 drives all six mutating meta branches with lost-response/replay and real effect-entry counts; SUB4.SPOOF.1 uses production verified stable actor IDs and one configured backend audience. See SUB.4 for the executable collision fixture, fixed metadata envelope and exhaustive built-in classification.

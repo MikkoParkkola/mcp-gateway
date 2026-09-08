@@ -26,6 +26,10 @@ fn allow_all_ctx_named<'a>(
     agent_id: Option<&'a str>,
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'a> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        execution: None,
+        signing: None,
+        is_modern: false,
+        credential_principal: None,
         authorizer: &ALLOW_ALL,
         api_key_name,
         agent_id,
@@ -46,6 +50,10 @@ fn allow_all_ctx_named<'a>(
 /// `#[cfg(test)]`, so no release build can reach this path.
 fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        execution: None,
+        signing: None,
+        is_modern: false,
+        credential_principal: None,
         authorizer: &ALLOW_ALL,
         api_key_name: None,
         agent_id: None,
@@ -745,6 +753,10 @@ providers:
             Some("session-1"),
             &{
                 crate::gateway::meta_mcp::MetaMcpCallerContext {
+                    execution: None,
+                    signing: None,
+                    is_modern: false,
+                    credential_principal: None,
                     authorizer: &ALLOW_ALL,
                     api_key_name: Some("shared-api-key"),
                     agent_id: Some("agent-1"),
@@ -1301,6 +1313,10 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
             // reload REPORTS, not about the gate — an operator running it holds
             // a credential.
             MetaMcpCallerContext {
+                execution: None,
+                signing: None,
+                is_modern: false,
+                credential_principal: None,
                 is_admin: true,
                 input_capabilities: crate::protocol::meta::Declared::NONE,
                 retry: &crate::protocol::mrtr::NO_RETRY,
@@ -2411,6 +2427,10 @@ auth:
     // An admin caller reaches the capability. It fails at the network, which is
     // the point: the guard is what differs, not the outcome.
     let admin_caller = MetaMcpCallerContext {
+        execution: None,
+        signing: None,
+        is_modern: false,
+        credential_principal: None,
         is_admin: true,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
@@ -2446,6 +2466,10 @@ fn the_stdio_caller_is_the_operator() {
 #[test]
 fn a_playbook_carries_the_caller_identity() {
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        execution: None,
+        signing: None,
+        is_modern: false,
+        credential_principal: None,
         api_key_name: Some("scoped-client"),
         ..allow_all_ctx()
     };
@@ -2508,6 +2532,10 @@ async fn global_meta_tool_reaches_an_admin_caller() {
             json!({}),
             Some("sess-dispatcher-admin"),
             crate::gateway::meta_mcp::MetaMcpCallerContext {
+                execution: None,
+                signing: None,
+                is_modern: false,
+                credential_principal: None,
                 is_admin: true,
                 input_capabilities: crate::protocol::meta::Declared::NONE,
                 retry: &crate::protocol::mrtr::NO_RETRY,
@@ -2908,6 +2936,10 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
     // (`principal_fingerprint` reads the OIDC identity alone) -- so `alice`
     // alone would exit on the unnameable-caller refusal (MRTR.2).
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        execution: None,
+        signing: None,
+        is_modern: false,
+        credential_principal: None,
         input_capabilities: declaring(&json!({"elicitation": {}})),
         verified_identity: Some(&NAMED_CALLER),
         ..allow_all_ctx_named(Some("alice"), Some("agent-1"))
@@ -3343,6 +3375,10 @@ fn allow_all_ctx_declaring(
     declared: crate::protocol::meta::Declared,
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        execution: None,
+        signing: None,
+        is_modern: false,
+        credential_principal: None,
         authorizer: &ALLOW_ALL,
         api_key_name: None,
         agent_id: None,
@@ -3360,6 +3396,10 @@ fn anonymous_ctx_declaring(
     declared: crate::protocol::meta::Declared,
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        execution: None,
+        signing: None,
+        is_modern: false,
+        credential_principal: None,
         verified_identity: None,
         ..allow_all_ctx_declaring(declared)
     }
@@ -4373,6 +4413,10 @@ providers:
 
 fn grant_ctx(agent_id: &'static str) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
+        execution: None,
+        signing: None,
+        is_modern: false,
+        credential_principal: None,
         agent_id: Some(agent_id),
         grant_subject: Some(crate::identity_grants::GrantSubject::new(
             "cloudflare_access",
@@ -4656,7 +4700,9 @@ fn discovery_names(v: &Value) -> Vec<String> {
             // `gateway_search` names a tool `server:tool_name`; the other three
             // readers name it bare. Compare on the bare name so one pinned
             // literal covers all four entry points.
-            raw.rsplit_once(':').map_or(raw, |(_, name)| name).to_string()
+            raw.rsplit_once(':')
+                .map_or(raw, |(_, name)| name)
+                .to_string()
         })
         .collect();
     names.sort();

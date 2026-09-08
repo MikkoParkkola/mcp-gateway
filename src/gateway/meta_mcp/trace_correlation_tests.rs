@@ -83,6 +83,10 @@ fn meta_with_transparency_log() -> (MetaMcp, std::path::PathBuf) {
 
 fn ctx() -> MetaMcpCallerContext<'static> {
     MetaMcpCallerContext {
+        execution: None,
+        signing: None,
+        is_modern: false,
+        credential_principal: None,
         authorizer: &AllowAll,
         api_key_name: Some("test-caller"),
         agent_id: None,

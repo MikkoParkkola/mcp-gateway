@@ -3,6 +3,14 @@
 Status: proposed · 2026-09-06 · GH [#475](https://github.com/MikkoParkkola/mcp-gateway/issues/475), [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481)
 No code in this document (§P1).
 
+Delivery reconciliation and the current confirmation request are in
+[`2026-09-06-gh475-rl10-delivery-closure.md`](2026-09-06-gh475-rl10-delivery-closure.md).
+That document binds the current source, full test matrix, typed classification
+arms and remaining gates; the historical reviews below are not a closed gate.
+The former 429 body-to-WARN proposal retained below as history is superseded:
+untrusted body content is omitted from both the returned error and new logs.
+Only protocol/status metadata is logged, through one private response helper.
+
 ## §P0 Scope
 
 FOR: deciding whether capability execution participates in the error-budget
@@ -279,8 +287,10 @@ the one this module already uses: `redact_url` (`executor/mod.rs:107-109`) is
 `e.without_url()`, applied to every transport error `send_with_retry` returns
 (`:129-133`, `:156`). The capability executor already treats a reqwest URL as
 something an agent must not see; O1 was about to introduce the first path that
-did not. The full `Display`, URL and all, stays in the `tracing::warn!` line
-beside the body, where an operator reads it and an agent does not.
+did not. The new `tracing::warn!` line records the protocol, status and bounded
+body only. It must not record the full `Display` or URL: operator logs are also
+an inappropriate destination for query credentials. This corrects the earlier
+diagnostic proposal as recorded in the delivery reconciliation.
 
 Both review legs raised this independently — Kimi K3 as its only HIGH,
 Grok as CRITICAL/CERTAIN — and Grok named the in-tree helper. Two vendors on

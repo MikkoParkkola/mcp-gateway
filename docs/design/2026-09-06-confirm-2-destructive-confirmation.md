@@ -43,6 +43,44 @@ So U1 — the client-ecosystem unknown — does not become a licence to defer; i
 unknown on the critical path, and its bad-resolution field says who hears about it rather than
 what the slice may do unilaterally.
 
+## Current era-by-transport contract — full stdio scope amendment
+
+The root release owner authorized this narrow reconciliation on 2026-09-06 after
+the operator approved full legacy stdio delivery. The earlier C5/OUT statements
+that stdio must always remain unavailable are historical implementation limits,
+not the final release contract. Earlier option rulings and review history remain
+recorded below; this amendment does not ratify the new implementation.
+
+| Era / transport / capability | Required confirmation behavior |
+|---|---|
+| Legacy HTTP, live admitted session and declared form elicitation | Deliver the question; affirmative acceptance executes, explicit decline/cancel refuses. |
+| Legacy HTTP, unconfirmable outcome | Preserve `ConfirmationPolicy::for_legacy` and its `PROCEED_WITH_WARNING` fallback, as explicitly required by canonical CONFIRM.1b. Report it as unconfirmed, never as affirmative confirmation. This amendment does not tighten that historical policy silently. |
+| Legacy stdio, initialized client declaring form elicitation with a live writer | Deliver through the shared production channel; affirmative acceptance executes. This is the newly required positive path. |
+| Legacy stdio, undeclared capability, unavailable writer, timeout, decline or cancel | Refuse with zero destructive dispatch. The old transport refused all such calls; enabling the positive path does not import HTTP's warning fallback into stdio. |
+| Admitted modern request on a supported modern transport, declared input capability | Gateway-originated MRTR question, bound retry and verified affirmative input; no legacy server request or session fallback. |
+| Modern request without required capability/input, or request on an unsupported modern transport | Refuse under the applicable existing capability/version/confirmation contract; no warning-based execution. This amendment does not advertise modern stdio support where the dispatcher does not yet implement it. |
+| Any non-admin caller | Refuse before confirmation or destructive dispatch, on every transport. |
+
+The legacy form exchange must itself be valid MCP: the shared confirmation
+constructor includes `requestedSchema: {"type":"object","properties":{}}`
+(an omitted mode is the supported default form). Affirmative consent is the
+whole `ElicitResult` with `action:"accept"` and object `content`, including an
+empty object for this no-field confirmation form. An action-only form result,
+nonobject/missing content, unknown/missing action or JSON-RPC error is a terminal
+refusal with zero destructive dispatch, not an Unsupported outcome eligible
+for warning fallback. A strict fixture must reject a missing requestedSchema.
+The unavailable-channel/timeout fallback in the table remains distinct. This
+repairs the currently reused legacy constructor/parser and does not specify a
+different modern confirmation schema. The parser shares the protocol layer's
+mode-aware ElicitResult validator with the bridge, selecting Form explicitly;
+it does not maintain a second acceptance-content rule.
+
+The bridge design owns the shared runtime/channel and [composition tests](2026-09-05-mrtr7-test-plan.md);
+CONFIRM.2 retains modern continuation, cache, replay and audit ownership. The
+stdio channel selects an explicit refusal policy, not `for_legacy` merely because
+the request uses a legacy revision. Shared caller-context edits are coordinated
+by the root release owner. The separate audit-policy question is unchanged.
+
 ## Measured constraints
 
 Each row is a fact read out of the tree at the cited location, not an inference.
@@ -53,7 +91,7 @@ Each row is a fact read out of the tree at the cited location, not an inference.
 | C2 | The modern path **drops the subscription**, so there is no request-scoped channel back to the caller. The only send is `send_to_session`, which needs the session C1 does not create. | `src/gateway/router/handlers.rs:~604` |
 | C3 | The gateway **does** know a modern client's declared input capabilities: `caller.input_capabilities`. | field: `src/gateway/meta_mcp/mod.rs:142`; value derived by `RequestShape::declared_capabilities`, `src/protocol/meta.rs:406-411` |
 | C4 | The admin gate runs **before** the confirmation gate. Every governed tool is *today* admin-only — a **snapshot**, not an invariant: CONFIRM.3 derives the governed set from `destructiveHint`, so a future destructive tool outside the admin set would falsify it, and CONFIRM.3 must preserve destructive ⊆ admin for Option R's argument to keep holding. On the snapshot, the real access control is the credential and the confirmation is "the confirmation an honest client offers its user". | `src/gateway/meta_mcp/mod.rs:1578-1584`; module header of `src/gateway/destructive_confirmation.rs` |
-| C5 | `ConfirmationChannel::Unavailable` transports (stdio) refuse unconditionally and must keep refusing — stdio cannot answer a question it is being asked. | refuse: `src/gateway/meta_mcp/mod.rs:1866`; stdio assignment: `src/gateway/server/mod.rs:1874` |
+| C5 | Source snapshot: stdio currently uses `ConfirmationChannel::Unavailable` and refuses. The approved full stdio bridge adds a live channel for capable initialized clients; unavailable/incapable stdio still refuses under the current matrix above. | refuse: `src/gateway/meta_mcp/mod.rs:1866`; stdio assignment: `src/gateway/server/mod.rs:1874`; approved full stdio scope amendment above |
 | C6 | The MRTR continuation machinery is **live for backend-originated exchanges on the invoke path**: `redeem_retry` is called at `invoke.rs:1327`, `mint_continuation` at `:1559`, both inside `invoke_tool`. It is not unwired. What this does *not* say: the confirmation case is gateway-originated at a meta-tool gate, and C9/C10 show that site reaches neither. Option I therefore reuses the **primitives** (`Keyring`, `InFlight`, `Payload`) and **none of the call sites**. | `src/gateway/meta_mcp/invoke.rs:376,529,1327,1559` |
 | C7 | What *is* unwired for 4.0.0 is the **InputBridge** (MRTR.7a/7b, modern-backend → legacy-client), scored unwired in commit `f2bcbd1d`, blocked by MIK-7388, which blocks MIK-7212. | commit `f2bcbd1d`; MRTR.7a/7b rows in the requirements |
 | C8 | A continuation `Payload` names **`backend_id`** — which backend holds the exchange — plus principal fingerprint, original-request digest, origin replica, jti, and the `InFlight` `hold_key`. `backend_id` is a `String`, so the type does not forbid a meta-tool name, but every consumer reads it as a backend. | `src/protocol/continuation.rs:64-98`, `:161-175` |
@@ -304,13 +342,15 @@ Nothing that depends on this is implemented, which is the condition a scheduled 
 
 ## Explicitly out of scope
 
-- **stdio and every other `ConfirmationChannel::Unavailable` transport.** They refuse today and
-  keep refusing under every option here (C5). A transport that cannot carry a question cannot be
-  made to answer one.
+- **A channel that remains unavailable.** It continues to refuse. The old blanket
+  stdio exclusion is superseded by the full-scope matrix above: capable initialized
+  legacy stdio gains an affirmative path through the separately owned bridge.
 - **The admin gate.** Untouched. It runs first and stays first (C4).
 - **MIK-7212 / MIK-7388 and the InputBridge.** Not unblocked, not partially wired, not worked
   around by this design.
-- **The legacy (session-bearing) confirmation path.** Unchanged in all options.
+- **Legacy HTTP confirmation policy.** Its deliberate warning fallback stays unchanged.
+  Legacy stdio channel construction and affirmative/negative composition now follow the
+  matrix above and the bridge work package; they are no longer a blanket exclusion.
 - **Any change to which meta-tools are destructive.** The set is what
   `is_destructive_meta_tool` says it is.
 - **Backend and capability tools — out of scope, and by an operator decision rather than a
@@ -533,4 +573,3 @@ request therefore keeps the session-bearing kill path, and only a client that ca
 else is unable to kill a server at all. One edge for whoever answers: `handlers.rs:572` resolves a
 request carrying BOTH version headers to modern, so the legacy path needs the legacy header
 alone.
-

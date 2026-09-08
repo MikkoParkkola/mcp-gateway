@@ -46,7 +46,7 @@ cc	1.2.57	Alex Crichton <alex@alexcrichton.com>	https://github.com/rust-lang/cc-
 cesu8	1.1.0	Eric Kidd <git@randomhacks.net>	https://github.com/emk/cesu8-rs	Apache-2.0 OR MIT		Convert to and from CESU-8 encoding (similar to UTF-8)
 cfg-if	1.0.4	Alex Crichton <alex@alexcrichton.com>	https://github.com/rust-lang/cfg-if	Apache-2.0 OR MIT		A macro to ergonomically define an item depending on a large number of #[cfg] parameters. Structured like an if-else chain, the first matching branch is the item that gets emitted.
 cfg_aliases	0.2.1	Zicklag <zicklag@katharostech.com>	https://github.com/katharostech/cfg_aliases	MIT		A tiny utility to help save you a lot of effort with long winded `#[cfg()]` checks.
-chacha20	0.10.0	RustCrypto Developers	https://github.com/RustCrypto/stream-ciphers	Apache-2.0 OR MIT		The ChaCha20 stream cipher (RFC 8439) implemented in pure Rust using traits from the RustCrypto `cipher` crate, with optional architecture-specific hardware acceleration (AVX2, SSE2). Additionally provides the ChaCha8, ChaCha12, XChaCha20, XChaCha12 and XChaCha8 stream ciphers, and also optional rand_core-compatible RNGs based on those ciphers.
+chacha20	0.10.2	RustCrypto Developers	https://github.com/RustCrypto/stream-ciphers	Apache-2.0 OR MIT		The ChaCha20 stream cipher (RFC 8439) implemented in pure Rust using traits from the RustCrypto `cipher` crate, with optional architecture-specific hardware acceleration (AVX2, SSE2). Additionally provides the ChaCha8, ChaCha12, XChaCha20, XChaCha12 and XChaCha8 stream ciphers, and also optional rand_core-compatible RNGs based on those ciphers.
 chrono	0.4.45		https://github.com/chronotope/chrono	Apache-2.0 OR MIT		Date and time library for Rust
 ciborium	0.2.2	Nathaniel McCallum <npmccallum@profian.com>	https://github.com/enarx/ciborium	Apache-2.0		serde implementation of CBOR using ciborium-basic
 ciborium-io	0.2.2	Nathaniel McCallum <npmccallum@profian.com>	https://github.com/enarx/ciborium	Apache-2.0		Simplified Read/Write traits for no_std usage
@@ -263,6 +263,7 @@ rustls-platform-verifier-android	0.1.1		https://github.com/rustls/rustls-platfor
 rustls-webpki	0.103.13		https://github.com/rustls/webpki	ISC		Web PKI X.509 Certificate Verification.
 rustversion	1.0.22	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/rustversion	Apache-2.0 OR MIT		Conditional compilation according to rustc compiler version
 ryu	1.0.23	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/ryu	Apache-2.0 OR BSL-1.0		Fast floating point to string conversion
+ryu-js	1.0.3	David Tolnay <dtolnay@gmail.com>|boa-dev	https://github.com/boa-dev/ryu-js	Apache-2.0 OR BSL-1.0		Fast floating point to string conversion, ECMAScript compliant.
 same-file	1.0.6	Andrew Gallant <jamslam@gmail.com>	https://github.com/BurntSushi/same-file	MIT OR Unlicense		A simple crate for determining whether two file paths point to the same file.
 schannel	0.1.29	Steven Fackler <sfackler@gmail.com>|Steffen Butzer <steffen.butzer@outlook.com>	https://github.com/steffengy/schannel-rs	MIT		Schannel bindings for rust, allowing SSL/TLS (e.g. https) without openssl
 scoped-tls	1.0.1	Alex Crichton <alex@alexcrichton.com>	https://github.com/alexcrichton/scoped-tls	Apache-2.0 OR MIT		Library implementation of the standard library's old `scoped_thread_local!` macro for providing scoped access to thread local storage (TLS) so any type can be stored into TLS.
@@ -274,6 +275,7 @@ serde	1.0.228	Erick Tryzelaar <erick.tryzelaar@gmail.com>|David Tolnay <dtolnay@
 serde_core	1.0.228	Erick Tryzelaar <erick.tryzelaar@gmail.com>|David Tolnay <dtolnay@gmail.com>	https://github.com/serde-rs/serde	Apache-2.0 OR MIT		Serde traits only, with no support for derive -- use the `serde` crate instead
 serde_derive	1.0.228	Erick Tryzelaar <erick.tryzelaar@gmail.com>|David Tolnay <dtolnay@gmail.com>	https://github.com/serde-rs/serde	Apache-2.0 OR MIT		Macros 1.1 implementation of #[derive(Serialize, Deserialize)]
 serde_json	1.0.150	Erick Tryzelaar <erick.tryzelaar@gmail.com>|David Tolnay <dtolnay@gmail.com>	https://github.com/serde-rs/json	Apache-2.0 OR MIT		A JSON serialization file format
+serde_json_canonicalizer	0.3.2		https://github.com/evik42/serde-json-canonicalizer	MIT		JSON Canonicalization Scheme (JCS - RFC 8785) implementation
 serde_path_to_error	0.1.20	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/path-to-error	Apache-2.0 OR MIT		Path to the element that failed to deserialize
 serde_urlencoded	0.7.1	Anthony Ramine <n.oxyde@gmail.com>	https://github.com/nox/serde_urlencoded	Apache-2.0 OR MIT		`x-www-form-urlencoded` meets Serde
 serde_yaml	0.9.34+deprecated	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/serde-yaml	Apache-2.0 OR MIT		YAML data format for Serde

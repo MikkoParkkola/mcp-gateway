@@ -435,6 +435,7 @@ mod tests {
         let identity = CertIdentity {
             san_uris: vec!["spiffe://example.test/agent/alpha".to_owned()],
             display_name: "spiffe://example.test/agent/alpha".to_owned(),
+            quota_principal: None,
             ..CertIdentity::default()
         };
         let mut service = PeerCertIdentityLayer::new(Some(identity.clone())).layer(EchoIdentity);

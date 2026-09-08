@@ -1,17 +1,61 @@
 # MRTR.8b in-flight lifetime (MRTR.10a wiring withdrawn to SUB.4)
 
-Status: revision 2, repaired after round 1. No code written. Round 1 withdrew Change B entirely;
+Status: observer tests closure, before behavior implementation. The signature adapter
+compiles; the first reviewed run has 13 assertion failures and 7 passing controls.
+Strengthened multi-expired fixtures await a fresh red run. Round 1 withdrew Change B entirely;
 what remains for implementation is Change A, and the MRTR.10a material is retained as the evidence
 and the prerequisite that travel to `2026-08-31-sub-4-idempotency-wiring.md`.
 Criteria source: `docs/requirements/RELEASE-4.0.0-criteria-status.md:140` (MRTR.8b PARTIAL),
 `:143` (MRTR.10a UNWIRED). `:359` (NFR.PERF.3 ABSENT) depends on both and is OUT of scope here.
 
+## Takeover closure delta — 2026-09-06
+
+Codex owns this increment and accepts the idempotency transfer into the release's
+TASKS/SUB.4 integration package; no transferred obligation is dropped. The earlier
+reviews and their dispositions below remain evidence for their actual material.
+This closure review covers the current contract, repaired plan and inherited test
+code before implementation. It does not reintroduce withdrawn Change B.
+
+Two self-review corrections are explicit: equality remains live (`now <= deadline`),
+and test-plan row .08 is already green under the old capacity-only reclaim. The
+compile adapter must retain that old branch; only the final implementation moves
+its reclaim into the shared guard. The original five-red row enumeration below
+is historical, before additional cases. The old 15 E0061 signature errors are
+resolved and were never evidence of the lifetime defect. `is_empty` also gains
+and forwards `now`.
+
+Targets are the `InFlight` methods, two existing production call sites in
+`meta_mcp/invoke.rs`, and all existing `InFlight` test callers. No other lifecycle
+or idempotency behavior changes in this increment. Validation is the unchanged
+fixture on the behavior-preserving adapter, the same fixture after reclamation,
+deadline/live/capacity falsifiers, caller regression suites, formatter/clippy and
+current review evidence. The tests are reviewed as a distinct artifact before
+the reclamation change is permitted.
+
+Closure review GPT finding: include `is_empty(now)` in expired, live and equality
+cases using fresh fixtures, so another observer cannot hide its bypass. Adopted
+in test-plan .12; mixed-state .13 guards against clearing live records. The
+reviewer's later-gated expired-insertion concern is also eliminated by rejecting
+`expires_at < now` before insertion, with equality retained (.14). This strengthens
+the stated table invariant with a local branch, not a new feature or lifecycle.
+The original five-red/five-control enumeration below describes rows .01-.09 only;
+.12-.14 add their own negative and positive cases. Earliest-deadline optimization
+remains measurement-driven under PERF.3 rather than adding another cached invariant
+before the bounded implementation is measured.
+
+Grok closure finding: inherited row .05's `hold` fixture was full, so the old
+capacity-only reclaim passed it. The repaired plan now uses capacity 4 with one
+expired occupant, inserts one live occupant and inspects the private map before
+any other observer. This isolates the below-capacity production defect. The
+test itself will be repaired at the tests stage and reviewed before implementation.
+
 ## §P0 SCOPE — two changes, one document
 
 These are not one change and must not be reviewed as one.
 
-**Change A — FOR:** make an abandoned in-flight exchange unobservable once its deadline has
-passed, so MRTR.8b's lifetime bound holds without a reclaimer anyone must remember to call.
+**Change A — FOR:** every observer removes all records whose deadlines have passed,
+including unrelated expired keys. This is the observer prerequisite for MRTR.8b;
+the lifetime requirement additionally needs mandatory scheduled-expiry Change C.
 **Change B — WITHDRAWN 2026-09-06, before any code.** It was FOR making the idempotency key
 path reachable from a production deployment. A sibling design already owns that decision and
 already had it answered by the operator; the mechanism this document proposed is one that design
@@ -74,14 +118,32 @@ never. Consequences, in order of weight:
 `InFlight::reap` was deleted in `ec11dcec` and must not come back: a reclaimer someone must
 remember to call is the defect, not the fix. The doc comment in `hold` already says so.
 
+## Takeover r3 finding disposition: bounded idle lifetime remains required
+
+GPT r3 correctly rejected the claim that lazy observers alone satisfy MRTR.8b.
+An idle table can retain a record forever. The release lead accepts this finding:
+Change A is the observer-correctness prerequisite, with its own discriminating
+unit acceptance below; it does not close MRTR.8b. Change C, specified in
+[scheduled expiry](2026-09-06-continuation-scheduled-expiry.md), is a mandatory
+same-release integration owned by the release lead, with production HTTP/stdio
+lifecycle wiring and idle-expiry tests. The criterion stays PARTIAL/blocking
+until both increments and their combined validation pass. No requirement is
+narrowed to observability-relative lifetime and no timer test is waived.
+
+The behavior-preserving API adapter and reviewed failing observer tests may be
+implemented independently of the scheduler; the scheduler consumes the same
+reclaiming guard afterward. Its final production claim cannot be inferred from
+those unit tests. Historical timer rejection and R2a conclusions below are
+superseded by this accepted review finding.
+
 ## Design A — the deadline owns every read
 
-Repair-protocol step 0: the mechanism (`InFlight`) is sound; what is wrong is that ONE of its four
-entry points enforces the deadline and the other three do not. Elimination, not patching: give the
+Repair-protocol step 0: the mechanism (`InFlight`) is sound; what is wrong is that only the capacity branch of `hold` enforces the deadline; all five public
+observers must enforce it, including `is_empty`. Elimination, not patching: give the
 table exactly one place where the lock is taken, and reclaim there.
 
 ```
-InFlight::guard(&self, now: u64) -> MutexGuard<'_, HashMap<String,(String,u64)>>
+async fn guard(&self, now: u64) -> tokio::sync::MutexGuard<'_, HashMap<String, (String, u64)>>
     // takes the lock, calls reclaim_abandoned(&mut held, now), returns the guard
 ```
 
@@ -89,7 +151,9 @@ InFlight::guard(&self, now: u64) -> MutexGuard<'_, HashMap<String,(String,u64)>>
 `now: u64` parameter — the same clock the rest of the module reads
 (`continuation::now_unix_secs`, `:140`), passed in rather than read internally so a test can drive
 the deadline without sleeping. `reclaim_abandoned` stops being called from inside `hold`'s
-capacity branch and `hold` keeps only its capacity refusal.
+capacity branch. After acquiring the reclaiming guard, `hold` refuses both a full table
+and an already-expired insertion (`expires_at < now`). Equality remains live.
+`is_empty(now)` delegates to `len(now)` so it cannot bypass reclamation.
 
 Test of the repair, per the protocol: **after the fix, can the finding still be stated, relative to
 the `now` a reader supplies?** No — and the qualifier is part of the answer, not a footnote to it
@@ -102,14 +166,15 @@ The alternative — teaching `route` to compare deadlines — leaves the finding
 Cost: `retain` over a map bounded by `IN_FLIGHT_CAPACITY` on every read. The lock was already
 being taken; this adds an O(capacity) walk under it. Accepted because the capacity is the bound
 that makes it O(1) in the size of the table, whose bound is `IN_FLIGHT_CAPACITY = 4_096`
-(`src/protocol/continuation.rs:811`) — a client can drive occupancy up to that ceiling but no
-further, and `hold` refuses past it. Stated as a number rather than as "anything a client
+(`src/protocol/continuation.rs:811`) — a client can drive occupancy up to that production ceiling but no
+further, and `hold` refuses past it. Library constructors can choose another capacity.
+Stated as a number rather than as "anything a client
 controls" so that a future capacity bump is visibly a change to every reader's cost, not a silent
-one. `SpentLedger::consume` (`src/idempotency.rs:600-611`) already pays exactly this price for
-exactly this reason — same shape, deliberately.
+one. `ConsumedLedger::consume` currently reclaims only at capacity; it does not
+provide evidence of the cost of reclaiming on every read. PERF.3 must measure this change.
 
 **The guarantee is relative to the supplied `now`, and that is the whole contract.** After this
-change the table holds no record whose deadline is at or before the `now` most recently passed in.
+change the table holds no record whose deadline is strictly before the `now` most recently passed in.
 It does *not* hold that the table is free of records expired against the wall clock at the instant
 a caller reads the result: `invoke.rs` captures `now` once at `:546` and reuses it at `:584` and
 `:613`, so an exchange expiring inside that window survives the reclaim and still routes. That is
@@ -158,9 +223,9 @@ and it should find this sentence rather than discover the cost in a profile.
 
 ### Alternatives rejected
 
-- **A second reaper task.** Rejected: this is `InFlight::reap` returning under a new name, and the
-  deleted-reaper comment in `hold` is the record of why it went. A background task also introduces
-  a clock the tests cannot drive deterministically.
+- **A callerless reaper helper.** Rejected: a helper with no runtime owner still does not
+  reclaim idle state. A lifecycle-owned scheduled task is now REQUIRED as Change C; its
+  controlled-clock tests and production builder tests address the earlier objections.
 - **Deadline check in `route` only.** Rejected above: patch, leaves the finding stateable.
 - **Read `now_unix_secs()` inside `guard`, inject a test clock behind `#[cfg(test)]`.** Raised in
   review as the way to make R1 unstateable at the type level, and it would — but it is not
@@ -183,12 +248,10 @@ and it should find this sentence rather than discover the cost in a profile.
   public on `hold` (`:696`), so this change widens no surface. Named because passing `now` in is
   what makes it possible at all. Mitigation is the freshness sentence above living in `guard`'s
   doc comment, not a reviewer remembering.
-- **R2a** — the bound A delivers is *observability-relative*, not absolute: an expired hold stays
-  in the map until the next call through `guard`, so on an idle gateway a dead entry can occupy a
-  slot indefinitely in memory while being unobservable through every public reader. That is the
-  bargain deliberately taken over a clock-driven reaper (Alternatives), and `IN_FLIGHT_CAPACITY`
-  bounds the residue at 4 096 entries. It is stated because "lifetime is bounded" and "lifetime is
-  bounded *to a reader*" are different claims and the criterion is met by the second one.
+- **R2a** — Change A alone has no idle-residency bound. That is an unresolved release
+  obligation discharged only by scheduled Change C, not a claim that MRTR.8b accepts
+  a weaker reader-relative lifetime. The release lead owns both increments and their
+  combined acceptance; the release row remains blocking meanwhile.
 - **R2** — a wall-clock jump backwards makes `now <= deadline` true for records that had expired,
   briefly resurrecting them in `len`. Pre-existing (the same comparison already gates `hold` and
   the envelope check); not made worse; not fixed here.
@@ -626,6 +689,11 @@ withdrawal removed. A test plan for a withdrawn change would be the duplicate th
 withdrawal exists to avoid.
 
 ### The transfer is a request, not a note (BLOCKING for this document's closure)
+
+Closed at takeover: Codex now owns the release integration and accepts this
+transfer. SUB.4 revision 5 already carries P8/P9, R4/R5 and the production-builder
+and cross-principal tests; the full tasks amendment retains them. The text below
+records the earlier handoff and does not leave a second unowned dependency.
 
 Four items leave this document for SUB.4: the caller-binding prerequisite on the idempotency key,
 R4 and R5, and the three constraints above. **Recorded only here, they are inert** — SUB.4's author

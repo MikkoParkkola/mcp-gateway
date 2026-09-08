@@ -76,6 +76,36 @@ pub struct CapabilityExecutor {
 /// outbound transport failures.
 pub(super) const MAX_SEND_ATTEMPTS: u32 = 3;
 
+/// Render an outbound transport error without the URL it was built from.
+///
+/// `reqwest::Error`'s `Display` appends `" for url (...)"` verbatim
+/// (`reqwest-0.13.4/src/error.rs:279-280`), and reqwest's own docs on
+/// [`reqwest::Error::without_url`] warn that the URL may carry a credential.
+/// Backend URLs here are operator-configured and a query-string API key is a
+/// common shape, so the raw error must never reach a log sink or a client.
+fn redact_url(e: reqwest::Error) -> reqwest::Error {
+    e.without_url()
+}
+
+/// Retain throttling as a typed status without reading or logging an untrusted
+/// response body, removing reason-phrase metadata before constructing the error.
+/// Other HTTP statuses keep their existing protocol diagnostics.
+fn rate_limited_response_error(response: &mut reqwest::Response, protocol: &str) -> Option<Error> {
+    if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    // This terminal response may carry an untrusted HTTP reason phrase in its
+    // extensions. Remove it before reqwest copies it into the status error.
+    response.extensions_mut().clear();
+    let error = response.error_for_status_ref().err()?;
+    tracing::warn!(
+        protocol,
+        status = response.status().as_u16(),
+        "Capability backend rate limited"
+    );
+    Some(Error::Http(redact_url(error)))
+}
+
 /// Send an outbound HTTP request, retrying transient transport failures with
 /// exponential backoff, and recording the transport outcome on `health`.
 ///
@@ -97,17 +127,6 @@ pub(super) const MAX_SEND_ATTEMPTS: u32 = 3;
 /// Health: a transport success (any HTTP status) records success; exhausting
 /// retries records a failure. The request is cloned per attempt; a
 /// non-cloneable body is sent once.
-/// Render an outbound transport error without the URL it was built from.
-///
-/// `reqwest::Error`'s `Display` appends `" for url (...)"` verbatim
-/// (`reqwest-0.13.4/src/error.rs:279-280`), and reqwest's own docs on
-/// [`reqwest::Error::without_url`] warn that the URL may carry a credential.
-/// Backend URLs here are operator-configured and a query-string API key is a
-/// common shape, so the raw error must never reach a log sink or a client.
-fn redact_url(e: reqwest::Error) -> reqwest::Error {
-    e.without_url()
-}
-
 pub(super) async fn send_with_retry(
     request: reqwest::RequestBuilder,
     label: &str,
@@ -701,3 +720,11 @@ impl Default for CapabilityExecutor {
 #[cfg(test)]
 #[path = "../executor_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../executor_rl10_regression_tests.rs"]
+mod rl10_regression_tests;
+
+#[cfg(test)]
+#[path = "../executor_rl10_tests.rs"]
+mod rl10_tests;

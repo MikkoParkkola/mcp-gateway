@@ -1,16 +1,23 @@
 # ORDER.2 — list results must not vary per connection, nor as a side effect
 
-MIK-7272.ORDER.2a, MIK-7272.ORDER.2b. Design only. No code, no tests.
+MIK-7272.ORDER.2a, MIK-7272.ORDER.2b. This note adds no code and no tests. It is not, however, a design written ahead of all of its subject: two of the three legs below had already landed when it was written (`eb9e537a`, `76b8536c` and the five profile cases are ancestors of the revision under review). For those two legs this note is a POST-HOC RECORD and should be read as one; only the third leg, the FSM workflow-state store, is designed here before it is built. A reviewer judging the closed legs is judging a decision already constrained by its implementation, and saying so is cheaper than implying otherwise.
 
 ## What this note is, and is not
 
 This is a **delta** on `docs/design/2026-08-31-cluster-b-connection-invariance.md`
 (Part I of that note *is* ORDER.2) and its sibling test plan. It does not restate
 the option analysis, the blast radius, or the cases already written there. It
-records two things that note could not: that the profile leg has since been
-**closed in code**, and that the one remaining leg is the `spec-preview`
-promotion store, which cluster-b classified in its §I.2 and explicitly left to
-"whichever ORDER.2 option is chosen".
+records what that note could not: which legs have since **closed in code** and which
+have not. Three legs, measured against `fd93bf87` and not against a working tree.
+The routing profile is closed and carried by five cases. The `spec-preview`
+promotion store — which cluster-b classified in its §I.2 and explicitly left to
+"whichever ORDER.2 option is chosen" — is closed in code at `eb9e537a` but has no
+sessionless case behind it. The **FSM workflow-state store is the one leg still open
+in committed code**: `76b8536c` converged four discovery entry points onto one
+accessor, which is the precondition for a filter and is not the filter. An earlier
+revision of this paragraph named `spec-preview` as the sole remainder; that was
+written before `eb9e537a` landed and is corrected here rather than left to mislead
+an implementer into repairing the leg that is already done.
 
 ## §P0 SCOPE
 
@@ -53,10 +60,15 @@ in the shape of cluster-b's **option (b)** (profiles do not exist in modern mode
 not the option (a) that note recommended. The mechanism is elimination, not a
 check: with no non-empty key there is no per-connection profile state to vary.
 
-## 2. What remains: the spec-preview promotion store
+## 2. The spec-preview promotion store — closed in code, and now tested
 
-`spec-preview` dynamic promotion (SEP-1862) is the one list-shaping input that
-does **not** pass through `session_key`.
+`spec-preview` dynamic promotion (SEP-1862) was the one list-shaping input that
+did **not** pass through `session_key`. It does now: `promote_tool_for_session`
+takes `Option<&str>` and returns early when `session_key` rejects the caller
+(`src/gateway/meta_mcp/spec_preview.rs:238-241`, landed in `eb9e537a`), and a
+sessionless caller is held to promoting nothing by a case added in `0527aacc`.
+The facts below record the defect as it stood, because the option analysis in
+§4 was written against it.
 
 | # | fact | source |
 |---|---|---|
@@ -299,11 +311,12 @@ Every unknown is resolved with a recorded answer or deferred with four fields.
 
 Nothing in this note's recommendation depends on either deferred item.
 
-## 6. Questions put to the requester — three settled, one open
+## 6. Questions put to the requester — decisions recorded
 
 Recorded here because a question that was asked and answered is evidence; a
-question that quietly stopped being asked is not. Q4 is open and blocks the
-`session_state` half of the implementation, not the note.
+question that quietly stopped being asked is not. Q4 was answered by the operator;
+the recovered answer below removes the decision dependency. Implementation and
+acceptance validation remain separate and pending.
 
 **Q1 is struck.** It asked whether the `gateway_set_profile` refusal was
 intended. The operator answered that on 2026-08-31 in cluster-b Part IV §4.1 —
@@ -330,23 +343,28 @@ and not an escalation to the operator, and it is why nothing in §7 moves. What 
 fixes is where the work lands: the `session_state` half of (c) belongs to ORDER.2
 itself rather than to a sibling criterion, so implementation is one ticket.
 
-**Q4 — OPEN, and it blocks implementation of (c)'s `session_state` half.** After
+**Q4 — RESOLVED: the operator ratified the refusal on 2026-09-06.** After
 (c), `gateway_set_state` **refuses** on a modern HTTP connection, in the
-**default build**, on a tool that succeeds today. §4 prices this; §4 cannot
-ratify it. This is the same shape as cluster-b §4.1, where the operator ratified
-the `gateway_set_profile` refusal before it shipped, and the reason to ask again
-rather than infer from that answer is that the profile refusal shipped behind an
-already-agreed removal while this one is a live tool changing behaviour under
-`default`.
+**default build**, on a tool that previously succeeded. The question explicitly
+named that compatibility cost. Its recorded answer was **"Ratify the refusal
+(recommended)"** at `2026-09-06T11:19:59.466Z`, through `AskUserQuestion`, tool-use
+ID `toolu_01SKMFrjNivV7VaHyKzwEt4c`, session
+`be5177ff-7fa6-4b0c-9c6c-fecc3f7548e1`. The answer was recovered from the actual
+tool result during release takeover, rather than inferred from the implementation
+comment. The design's former OPEN status had not been updated after that answer.
+
+This selects option (c)'s refusal branch and B-08/B-09's refusal-plus-unchanged-list
+assertions. It does not establish that those tests compile or pass, or that the
+implementation is reviewed or delivered.
 
 | answer | what it buys | what it costs |
 |---|---|---|
-| **ratify the refusal** (recommended) | 2a and 2b both closed on modern HTTP by removing state rather than adding checks; `gateway_set_state` behaves exactly as `gateway_set_profile` already does, so the surface stays coherent | a modern client calling `gateway_set_state` starts getting a protocol error where it got a success; if any client depends on it, that client breaks at upgrade |
+| **ratify the refusal** (selected) | 2a and 2b can close on modern HTTP by removing state rather than adding checks; `gateway_set_state` follows `gateway_set_profile`'s session rule | a modern client calling `gateway_set_state` starts getting a protocol error where it got a success; if any client depends on it, that client breaks at upgrade |
 | keep it succeeding, close 2a only | no client-visible break | the tool's effect still leaks to every other sessionless connection, which is the defect — a per-connection tool that is not per-connection |
 
-Recommended: ratify. The tool's current success is not a working feature, it is
-the defect wearing a return value — the state it sets is read by every other
-modern connection on the same gateway.
+The selected refusal prevents a modern caller from writing state that every other
+sessionless connection can read. Existing session-bearing callers retain their
+stateful behavior; the acceptance tests must verify both populations.
 
 ## 7. Test plan — moved to its own document
 
@@ -365,15 +383,28 @@ copy nobody reads is the one that goes stale.
 
 ## 8. What this note does not close
 
-ORDER.2a and ORDER.2b are **not** satisfied by this note. It is design only: no
-code changed, no test was added, and the promotion leg in §2 is open in the
-source as of 682a709a. The ledger rows stay blocking. What has changed is what
+ORDER.2a and ORDER.2b are **not** satisfied by this note. The promotion leg of §2 has since closed —
+guarded in `eb9e537a`, covered by a sessionless case in `0527aacc` — and the FSM
+state store of §2b is the one leg still open in the source at `0527aacc`. The ledger rows stay blocking. What has changed is what
 the evidence cell can now say: the profile leg is closed in code and measured
-here, the remaining defect is **two stores and four call sites** — the
-feature-gated promotion store of §2 and the default-build FSM state store of §2b
-— and the option to close both is chosen and priced. §2b belongs to ORDER.2
+here, the remaining defect is **one store** — the
+default-build FSM state store of §2b; the feature-gated promotion store of §2 is
+closed — and the option to close both is chosen, priced, and ratified by the operator
+on 2026-09-06 (§6 Q4). §2b belongs to ORDER.2
 itself, per Q3's answer of 2026-09-06; it would have been the same defect under
 either reading.
+
+**Disposal of that limit, named rather than defaulted (§P0).** Of the four
+disposals, the one that holds is *write it into the design* — cluster-g's, not this
+note's, because the finding changes what that cluster's convergence point should be
+and its owner is who acts on it. Done on 2026-09-06: a section at the end of
+`docs/design/2026-09-02-cluster-g-stdio-dispatch-parity.md` records the non-empty
+`"stdio-session"` id, the two stores that would have to be re-keyed, and the fact
+that the settlement is a product call rather than a repair. It was **not** filed as a
+ticket: filing is the most expensive disposal, cluster-g already owns a design note
+and a board row, and a new ticket would have added a queue entry without adding a
+decision. What the disposal does not do is build the watcher — that stays cluster-g's
+implementation step and is named as missing there.
 
 One coverage limit, found by review and worth more than the rest of this note:
 **(c) closes both legs on modern HTTP and neither of them on stdio.** stdio

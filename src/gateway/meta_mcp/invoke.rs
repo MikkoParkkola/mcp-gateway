@@ -387,7 +387,7 @@ async fn mint_continuation(
             backend_request_state,
             crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)?,
             crate::protocol::mrtr::original_request_digest(server, tool, arguments),
-            crate::protocol::continuation::now_unix_secs(),
+            continuation.now(),
         )
         .await
     else {
@@ -397,6 +397,10 @@ async fn mint_continuation(
     match continuation.keyring().mint(&payload) {
         Ok(envelope) => Some(envelope),
         Err(error) => {
+            continuation
+                .in_flight()
+                .complete(&payload.hold_key, payload.issued_at)
+                .await;
             warn!(server, tool, %error, "Continuation mint refused");
             None
         }
@@ -499,7 +503,7 @@ pub(super) fn retry_origin_backend(
     retry: &crate::protocol::mrtr::RetryFields,
 ) -> Option<Result<String>> {
     let token = retry.request_state.as_deref()?;
-    let now = crate::protocol::continuation::now_unix_secs();
+    let now = continuation.now();
     Some(
         continuation
             .keyring()
@@ -543,7 +547,7 @@ async fn redeem_retry(
         });
     };
 
-    let now = crate::protocol::continuation::now_unix_secs();
+    let now = continuation.now();
     let payload = continuation.keyring().open(token, now).map_err(|error| {
         warn!(server, tool, %error, "Continuation refused");
         rejected_continuation(&error)
@@ -581,7 +585,7 @@ async fn redeem_retry(
     //
     // Checked before the handle is spent. A retry the gateway cannot honour
     // should not also burn the client's one redemption.
-    if continuation.in_flight().route(&payload.hold_key).await
+    if continuation.in_flight().route(&payload.hold_key, now).await
         == crate::protocol::continuation::Routing::Gone
     {
         warn!(
@@ -610,7 +614,10 @@ async fn redeem_retry(
     // Releasing the slot is what keeps capacity a measure of exchanges still
     // open rather than of every exchange ever started, and it is what makes the
     // refusal above true of a handle redeemed twice.
-    continuation.in_flight().complete(&payload.hold_key).await;
+    continuation
+        .in_flight()
+        .complete(&payload.hold_key, now)
+        .await;
 
     Ok(OutboundRetry {
         request_state: payload.backend_request_state,
@@ -685,6 +692,13 @@ fn undeclared_input_request(
             ),
             None,
         ),
+        Refusal::MalformedParams => (
+            format!(
+                "Tool '{tool}' on server '{server}' asked for input '{}' with malformed parameters",
+                refused.key
+            ),
+            None,
+        ),
     };
     Error::JsonRpc {
         code: -32021,
@@ -699,6 +713,117 @@ fn undeclared_input_request(
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl MetaMcp {
+    /// Current authorization must run before either execution or retained replay.
+    pub(super) fn check_invocation_policy(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    ) -> Result<()> {
+        let server = extract_required_str(args, "server")?;
+        let tool = extract_required_str(args, "tool")?;
+        self.authorize_invocation(args, caller)?;
+        if let Err(reason) = validate_tool_name(tool) {
+            return Err(Error::Protocol(format!(
+                "Invalid tool name '{tool}': {reason}"
+            )));
+        }
+        self.check_attestation(args, caller.agent_id)?;
+        self.active_profile(session_id)
+            .check(server, tool)
+            .map_err(Error::Protocol)
+    }
+
+    pub(super) fn authorize_invocation(
+        &self,
+        args: &Value,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    ) -> Result<()> {
+        let authorizer = caller.authorizer;
+        let api_key_name = caller.api_key_name;
+        let agent_id = caller.agent_id;
+        let caller_identity = caller.grant_subject.as_ref();
+        let caller_is_admin = caller.is_admin;
+        let server = extract_required_str(args, "server")?;
+        let tool = extract_required_str(args, "tool")?;
+        // === THE AUTHORIZATION CHOKEPOINT (MIK-7252) ===
+        //
+        // Every meta-layer dispatch passes through here: a surfaced tool, a
+        // `gateway_invoke`, a code-mode step, a playbook step. The router
+        // authorizes only the shapes whose targets appear in the request, so a
+        // playbook step — whose targets come from the playbook definition —
+        // reached a backend with none of the caller's scope checks applied.
+        //
+        // Placed at the top, reading `arguments` raw, for two reasons. It is
+        // the earliest point at which the target is known, so nothing has yet
+        // happened that a refused call is not entitled to: no nonce consumed,
+        // no cache read, no idempotency entry, no credential minted, no budget
+        // consulted. And the router builds its own target from the same raw
+        // arguments, so a policy that one day reads them cannot give the two
+        // layers two answers.
+        // `{}` and not `Null`: the router's own target builder defaults a
+        // missing inner `arguments` to an empty object, and two gates that see
+        // different targets are two gates that can disagree.
+        let empty_args = serde_json::json!({});
+        let target = crate::gateway::authz::ToolTarget {
+            server,
+            tool,
+            arguments: args.get("arguments").unwrap_or(&empty_args),
+        };
+        if let Err(e) = authorizer.authorize(target) {
+            crate::gateway::authz::audit_refusal(
+                authorizer.transport(),
+                authorizer.caller_name(),
+                server,
+                tool,
+                &e.message,
+            );
+            return Err(Error::Forbidden {
+                code: e.code,
+                status: e.status.as_u16(),
+                message: e.message,
+            });
+        }
+
+        // A capability that hands a caller-chosen destination to a third party
+        // which then calls it creates persistent state outside this gateway,
+        // addressed by the caller and authorised by the operator's credential.
+        // That is an out-of-band channel needing no readable response, so it is
+        // an admin action. Derived from the definition, so one added later
+        // inherits the rule.
+        if !caller_is_admin
+            && let Some(capabilities) = self.get_capabilities()
+            && server == capabilities.name
+            && let Some(def) = capabilities.get(tool)
+            && crate::capability::definition::creates_caller_addressed_external_state(&def)
+        {
+            return Err(crate::Error::Config(format!(
+                "'{tool}' registers a caller-supplied address with a third party, which \
+                 then delivers to it using this gateway's credential. That requires an \
+                 admin credential."
+            )));
+        }
+
+        // Identity grants are the same decision as the authorizer above: whether
+        // this caller may reach this tool at all. They are taken here, with
+        // every other refusal, because the response cache and the idempotency
+        // short-circuit both return below this point — a gate under a cache
+        // read decides nothing on a hit, and hands the refused caller the
+        // answer the admitted one paid for. Resolved from the definition, so a
+        // capability added later inherits the rule.
+        if let Some(cap) = self.get_capabilities()
+            && server == cap.name
+            && cap.has_capability(tool)
+        {
+            let cap_def = cap
+                .get(tool)
+                .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
+            self.enforce_identity_grants(&cap_def, tool, api_key_name, agent_id, caller_identity)?;
+        }
+
+        Ok(())
+    }
+
     /// Validate the per-action attestation token presented on a
     /// `gateway_invoke` call (MIK-5223, B1-IDENT).
     ///
@@ -869,89 +994,19 @@ impl MetaMcp {
         // Unpacked once, here, so the context travels whole across the call
         // boundary for the same reason `invoke_tool` takes it whole: no call
         // site can pass an authorizer without the identity it authorizes.
-        let authorizer = caller.authorizer;
         let api_key_name = caller.api_key_name;
         let agent_id = caller.agent_id;
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
-        let caller_is_admin = caller.is_admin;
 
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
 
-        // === THE AUTHORIZATION CHOKEPOINT (MIK-7252) ===
-        //
-        // Every meta-layer dispatch passes through here: a surfaced tool, a
-        // `gateway_invoke`, a code-mode step, a playbook step. The router
-        // authorizes only the shapes whose targets appear in the request, so a
-        // playbook step — whose targets come from the playbook definition —
-        // reached a backend with none of the caller's scope checks applied.
-        //
-        // Placed at the top, reading `arguments` raw, for two reasons. It is
-        // the earliest point at which the target is known, so nothing has yet
-        // happened that a refused call is not entitled to: no nonce consumed,
-        // no cache read, no idempotency entry, no credential minted, no budget
-        // consulted. And the router builds its own target from the same raw
-        // arguments, so a policy that one day reads them cannot give the two
-        // layers two answers.
-        // `{}` and not `Null`: the router's own target builder defaults a
-        // missing inner `arguments` to an empty object, and two gates that see
-        // different targets are two gates that can disagree.
-        let empty_args = serde_json::json!({});
-        let target = crate::gateway::authz::ToolTarget {
-            server,
-            tool,
-            arguments: args.get("arguments").unwrap_or(&empty_args),
-        };
-        if let Err(e) = authorizer.authorize(target) {
-            crate::gateway::authz::audit_refusal(
-                authorizer.transport(),
-                authorizer.caller_name(),
-                server,
-                tool,
-                &e.message,
-            );
-            return Err(Error::Forbidden {
-                code: e.code,
-                status: e.status.as_u16(),
-                message: e.message,
-            });
-        }
-
-        // A capability that hands a caller-chosen destination to a third party
-        // which then calls it creates persistent state outside this gateway,
-        // addressed by the caller and authorised by the operator's credential.
-        // That is an out-of-band channel needing no readable response, so it is
-        // an admin action. Derived from the definition, so one added later
-        // inherits the rule.
-        if !caller_is_admin
-            && let Some(capabilities) = self.get_capabilities()
-            && server == capabilities.name
-            && let Some(def) = capabilities.get(tool)
-            && crate::capability::definition::creates_caller_addressed_external_state(&def)
+        if !caller
+            .signing
+            .is_some_and(|context| context.prepared_for(server, tool))
         {
-            return Err(crate::Error::Config(format!(
-                "'{tool}' registers a caller-supplied address with a third party, which \
-                 then delivers to it using this gateway's credential. That requires an \
-                 admin credential."
-            )));
-        }
-
-        // Identity grants are the same decision as the authorizer above: whether
-        // this caller may reach this tool at all. They are taken here, with
-        // every other refusal, because the response cache and the idempotency
-        // short-circuit both return below this point — a gate under a cache
-        // read decides nothing on a hit, and hands the refused caller the
-        // answer the admitted one paid for. Resolved from the definition, so a
-        // capability added later inherits the rule.
-        if let Some(cap) = self.get_capabilities()
-            && server == cap.name
-            && cap.has_capability(tool)
-        {
-            let cap_def = cap
-                .get(tool)
-                .ok_or_else(|| Error::Config(format!("Capability not found: {tool}")))?;
-            self.enforce_identity_grants(&cap_def, tool, api_key_name, agent_id, caller_identity)?;
+            self.check_invocation_policy(args, session_id, caller)?;
         }
 
         let mut arguments = parse_tool_arguments(args)?;
@@ -992,6 +1047,13 @@ impl MetaMcp {
         // Computed eagerly here so the hash covers the raw arguments before any
         // secret injection or transformation.  Zero-cost when the logger is None.
         let request_hash = if self.transparency_logger.is_some() {
+            // MIK-7377.SIGNING.5: the `cfg(test)` context that makes THIS
+            // block's canonicalization and hashing distinguishable from the
+            // credential hashing the same helpers perform during
+            // authentication. Sync, dropped at the end of this block, never
+            // held across an await.
+            #[cfg(test)]
+            let _transparency = crate::hashing::observer::TransparencyScope::enter();
             format!(
                 "sha256:{}",
                 sha256_hex(canonical_json(&arguments).as_bytes())
@@ -1000,43 +1062,7 @@ impl MetaMcp {
             String::new()
         };
 
-        // Validate tool name syntax before any work — prevents session corruption
-        // from malformed names injected by compromised backend servers.
-        if let Err(reason) = validate_tool_name(tool) {
-            return Err(Error::Protocol(format!(
-                "Invalid tool name '{tool}': {reason}"
-            )));
-        }
-
-        // === PRE-INVOKE: Nonce replay protection (ADR-001, OWASP ASI07) ===
-        //
-        // Check and register the request nonce before any dispatch work so that
-        // replayed requests are rejected cheaply without touching the backend.
-        let request_nonce = args.get("nonce").and_then(Value::as_str);
-        if let Some(ref nonce_store) = self.nonce_store {
-            match request_nonce {
-                Some(nonce) => nonce_store.check_and_register(nonce)?,
-                None if self.require_nonce => {
-                    return Err(Error::json_rpc(
-                        -32001,
-                        "Nonce required when message signing is enforced",
-                    ));
-                }
-                None => {} // backward-compatible: nonce is optional by default
-            }
-        }
-
         tracing::Span::current().record("trace_id", trace_id);
-
-        // === PRE-INVOKE: Per-action attestation (MIK-5223, B1-IDENT) ======
-        //
-        // Zero-cost no-op unless a validator was attached via
-        // `with_attestation`. The token is presented in the top-level
-        // `attestation` field of the call. In observe mode validation is
-        // audited but never blocks; in enforce mode a missing/invalid token
-        // fails the call closed. The clock is the gateway's trusted clock,
-        // never a caller-supplied timestamp.
-        self.check_attestation(args, agent_id)?;
 
         if self.kill_switch.is_killed(server) {
             return Err(Error::json_rpc(
@@ -1063,10 +1089,6 @@ impl MetaMcp {
         }
 
         let profile = self.active_profile(session_id);
-        if let Err(msg) = profile.check(server, tool) {
-            return Err(Error::Protocol(msg));
-        }
-
         let tool_key = format!("{server}:{tool}");
 
         // `_full` requests bypass idempotency and response caching entirely.
@@ -1339,6 +1361,9 @@ impl MetaMcp {
                 }
             };
 
+        if let Some(execution) = caller.execution {
+            execution.mark_dispatched();
+        }
         let dispatch_start = Instant::now();
         let dispatch_result = self
             .dispatch_to_backend(
@@ -1880,9 +1905,6 @@ impl MetaMcp {
             crate::trust::CacheOutcome::Miss,
             client_claim.as_ref(),
         );
-        if let Some(ref signer) = self.message_signer {
-            final_result = signer.sign_response(final_result, request_nonce);
-        }
 
         // `result` passed apply_context_integrity earlier on this path; the steps
         // since then add only gateway-authored metadata. Seal at the delivery
@@ -2911,13 +2933,14 @@ impl MetaMcp {
 
         debug!(playbook = name, "Running playbook");
 
-        let definition = {
-            let engine = self.playbook_engine.read();
-            engine
-                .get(name)
-                .cloned()
-                .ok_or_else(|| Error::json_rpc(-32602, format!("Playbook not found: {name}")))?
-        };
+        // A keyed outer owner pins the definition checked and fingerprinted at
+        // admission. Engine replacement cannot silently change its operation.
+        let definition = caller
+            .execution
+            .and_then(super::admission::SyncLease::playbook_definition)
+            .cloned()
+            .or_else(|| self.playbook_engine.read().get(name).cloned())
+            .ok_or_else(|| Error::json_rpc(-32602, format!("Playbook not found: {name}")))?;
 
         let invoker = MetaMcpInvoker { meta: self, caller };
 
@@ -2948,9 +2971,13 @@ fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) {
         Error::BackendUnavailable(msg) | Error::Transport(msg) => {
             (ErrorCategory::BackendError, msg.clone())
         }
-        // Protocol errors carry upstream HTTP failures as their message
-        // (e.g. "API returned 429 Too Many Requests"). Inspect the text so a
-        // rate limit or transient 5xx is not mislabelled as a param error.
+        Error::Http(http_error)
+            if http_error.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) =>
+        {
+            (ErrorCategory::RateLimited, error.to_string())
+        }
+        // Non-429 capability statuses and legacy Protocol errors retain their
+        // existing text classification, including transient 5xx recovery.
         Error::Protocol(msg) => (classify_from_detail(Some(msg)), msg.clone()),
         Error::JsonRpc { message, .. } => (ErrorCategory::BackendError, message.clone()),
         _ => (ErrorCategory::BackendError, error.to_string()),
@@ -2972,9 +2999,8 @@ pub(super) enum BudgetOutcome {
 impl BudgetOutcome {
     /// Classify a dispatch result.
     ///
-    /// Rate limiting is recognised through the same predicate the backend
-    /// circuit breaker uses, so the two cannot disagree about what a throttled
-    /// response is.
+    /// Typed HTTP statuses are authoritative. Other errors preserve the shared
+    /// text predicate used by backend circuit breakers.
     ///
     /// MCP carries tool-level failures *inside* a successful response
     /// (`isError: true`), so a throttled backend can answer `Ok`. Reading only
@@ -2999,6 +3025,15 @@ impl BudgetOutcome {
                     // backend that answered correctly every time. It is
                     // sampled as a success on purpose.
                     Self::Success
+                }
+            }
+            Err(Error::Http(error)) if error.status().is_some() => {
+                // Never fall back to text for a typed status, even when its
+                // diagnostic happens to contain a rate-limit phrase.
+                if error.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) {
+                    Self::IgnoredRateLimit
+                } else {
+                    Self::Failure
                 }
             }
             Err(error) => {
@@ -3894,6 +3929,10 @@ mod identity_propagation_enforcement_tests {
         let (m, captured) = meta_with_capturing_backend();
         let id = identity();
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            execution: None,
+            signing: None,
+            is_modern: false,
+            credential_principal: None,
             authorizer: &ALLOW_ALL_INVOKE,
             verified_identity: Some(&id),
             api_key_name: None,
@@ -3924,6 +3963,10 @@ mod identity_propagation_enforcement_tests {
     async fn code_mode_execute_fails_closed_without_identity() {
         let (m, _captured) = meta_with_capturing_backend();
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            execution: None,
+            signing: None,
+            is_modern: false,
+            credential_principal: None,
             authorizer: &ALLOW_ALL_INVOKE,
             api_key_name: None,
             agent_id: None,
@@ -3959,6 +4002,10 @@ mod identity_propagation_enforcement_tests {
         let (m, captured) = meta_with_capturing_backend_no_log();
         let id = identity();
         let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            execution: None,
+            signing: None,
+            is_modern: false,
+            credential_principal: None,
             authorizer: &ALLOW_ALL_INVOKE,
             verified_identity: Some(&id),
             api_key_name: None,
@@ -4685,3 +4732,7 @@ mod error_budget_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "invoke_rl10_tests.rs"]
+mod rl10_tests;

@@ -234,14 +234,17 @@ pub const REMOVED_IN_2026_07_28: &[&str] = &[
 /// 2026 method to a 2025 client tells it the gateway speaks a revision that
 /// client cannot hold up its end of.
 ///
-/// `tasks/get` and `tasks/update` are listed because the revision adds them, not
-/// because this gateway serves them: neither is implemented. `tasks/get`
-/// previously answered every handle with a `not_found` **success**, which is
-/// not in the protocol's task model and told a client its handle had been
-/// looked up and missed. Both now reach the ordinary method-not-found answer,
-/// which is true. The specification page for the tasks extension returns 404 at
-/// the path its own index links, so there is no shape to implement against yet.
-pub const ADDED_IN_2026_07_28: &[&str] = &["subscriptions/listen", "tasks/get", "tasks/update"];
+/// Membership is an era boundary, independent of whether the corresponding
+/// service is enabled or implemented. Task notifications are server-to-client;
+/// listing their name here does not install an inbound dispatcher or advertise
+/// the Tasks extension.
+pub const ADDED_IN_2026_07_28: &[&str] = &[
+    "subscriptions/listen",
+    "tasks/get",
+    "tasks/update",
+    "tasks/cancel",
+    "notifications/tasks",
+];
 
 /// The client capability a method needs, if it needs one.
 ///
@@ -286,14 +289,12 @@ impl ElicitationMode {
     /// value is one this gateway cannot service.
     ///
     /// An omitted `mode` is form because the specification's request table says
-    /// so — the entry reads *"Optional for form mode (defaults to `"form"` if
-    /// omitted)"*. An explicit `null` resolves the same way: `Option` cannot
-    /// distinguish the two, the specification draws no distinction between
-    /// them, and so neither does the gateway.
+    /// so. A present value must be a recognized string; explicit null does not
+    /// receive the omission default.
     #[must_use]
     pub fn from_params(params: Option<&Value>) -> Option<Self> {
         match params.and_then(|p| p.get("mode")) {
-            None | Some(Value::Null) => Some(Self::Form),
+            None => Some(Self::Form),
             Some(Value::String(mode)) => match mode.as_str() {
                 "form" => Some(Self::Form),
                 "url" => Some(Self::Url),
@@ -708,16 +709,14 @@ mod declared_parse_boundary_tests {
         }
     }
 
-    /// Case 5, the boundary the plan pins deliberately: an explicit `null`
-    /// resolves through the same default as an omitted field. `Option` cannot
-    /// tell the two apart, the specification draws no distinction between them,
-    /// and so neither does the gateway.
+    /// The string-valued mode defaults only when omitted. Explicit null must
+    /// remain distinguishable from absence before the bridge sends a question.
     #[test]
-    fn an_explicit_null_mode_resolves_the_same_way_as_an_absent_one() {
+    fn only_an_absent_mode_defaults_to_form() {
         let absent = ElicitationMode::from_params(Some(&json!({ "message": "Which one?" })));
         let null = ElicitationMode::from_params(Some(&json!({ "mode": Value::Null })));
         assert_eq!(absent, Some(ElicitationMode::Form));
-        assert_eq!(null, absent, "an explicit null is not a fifth thing");
+        assert_eq!(null, None, "an explicit null is not a string-valued mode");
         assert_eq!(ElicitationMode::from_params(None), absent);
     }
 }

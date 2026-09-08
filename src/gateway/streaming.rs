@@ -28,6 +28,10 @@ use crate::Result;
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
 
+mod request_delivery;
+use request_delivery::RequestWriters;
+pub(crate) use request_delivery::{DeliveryLease, QueuedRequest, RequestWriter};
+
 /// A tagged notification event from a backend
 #[derive(Debug, Clone, Serialize)]
 pub struct TaggedNotification {
@@ -64,6 +68,8 @@ struct ClientSession {
     /// than the owner's, which keeps resumption working for the owner and
     /// leaks nothing to anyone else.
     owner: String,
+    /// Each request has exactly one selected transport writer.
+    request_writers: RequestWriters,
 }
 
 /// Notification Multiplexer
@@ -132,9 +138,10 @@ impl NotificationMultiplexer {
         let before = sessions.len();
         sessions.retain(|id, session| {
             let expired = now.duration_since(session.created_at) >= ttl;
-            let abandoned = session.tx.receiver_count() == 0;
+            let abandoned = session.tx.receiver_count() == 0 && session.request_writers.is_empty();
 
             if expired && abandoned {
+                session.request_writers.close();
                 info!(session_id = %id, "Reaping expired streaming session (no active receivers)");
                 false
             } else {
@@ -192,6 +199,7 @@ impl NotificationMultiplexer {
                     subscribed_backends: RwLock::new(Vec::new()),
                     created_at: Instant::now(),
                     owner: owner.to_string(),
+                    request_writers: RequestWriters::default(),
                 }),
             );
             return (fresh, rx);
@@ -206,6 +214,7 @@ impl NotificationMultiplexer {
             subscribed_backends: RwLock::new(Vec::new()),
             created_at: Instant::now(),
             owner: owner.to_string(),
+            request_writers: RequestWriters::default(),
         });
 
         sessions.insert(id.clone(), session);
@@ -217,14 +226,51 @@ impl NotificationMultiplexer {
     /// Remove a session
     pub fn remove_session(&self, session_id: &str) {
         let mut sessions = self.sessions.write();
-        if sessions.remove(session_id).is_some() {
+        if let Some(session) = sessions.remove(session_id) {
+            session.request_writers.close();
             info!(session_id = %session_id, "Removed streaming session");
+        }
+    }
+
+    /// Remove only a matching owner, with lookup and removal under one write lock.
+    pub(crate) fn remove_session_for(&self, session_id: &str, owner: &str) -> bool {
+        let mut sessions = self.sessions.write();
+        match sessions.entry(session_id.to_owned()) {
+            std::collections::hash_map::Entry::Occupied(entry) if entry.get().owner == owner => {
+                entry.remove().request_writers.close();
+                true
+            }
+            _ => false,
         }
     }
 
     /// Check if a session exists
     pub fn has_session(&self, session_id: &str) -> bool {
         self.sessions.read().contains_key(session_id)
+    }
+
+    /// Register a live request writer; ordinary notification receivers do not qualify.
+    pub(crate) fn register_request_writer(&self, session_id: &str) -> Option<RequestWriter> {
+        let sessions = self.sessions.read();
+        let session = sessions.get(session_id)?;
+        session
+            .request_writers
+            .register(session, self.config.buffer_size)
+    }
+
+    /// Enqueue once to one bounded private writer, retaining a liveness lease.
+    pub(crate) fn send_request_to_session(
+        &self,
+        session_id: &str,
+        id: &str,
+        json: String,
+        delivery: Arc<super::input_bridge::DeliveryProgress>,
+    ) -> Option<DeliveryLease> {
+        let sessions = self.sessions.read();
+        sessions
+            .get(session_id)?
+            .request_writers
+            .send(id, json, delivery)
     }
 
     /// The event id stored for `session_id`, if that session exists.
@@ -357,6 +403,12 @@ pub fn create_sse_response(
     }
 
     let mut rx = session.tx.subscribe();
+    // Register eagerly and capture the registration in the body. Even a body
+    // dropped before its first poll must release its selected exchanges. Both
+    // subscriptions belong to this same owner-checked session lookup.
+    let mut requests = session
+        .request_writers
+        .register(session, multiplexer.config.buffer_size)?;
     let session_id_owned = session_id;
 
     // Create the stream with owned data
@@ -367,8 +419,19 @@ pub fn create_sse_response(
             .data(json!({ "session_id": session_id_owned }).to_string()));
 
         loop {
-            match rx.recv().await {
-                Ok(notification) => {
+            tokio::select! {
+                request = requests.recv() => {
+                    let Some(request) = request else { break };
+                    let event = Event::default().event("message").data(&request.json);
+                    // HTTP has no partial frame state here: this poll yields
+                    // the whole encoded event. Check cancellation and record
+                    // handoff in one synchronized transition just before yield.
+                    if request.delivery.mark_handed_off() {
+                        yield Ok(event);
+                    }
+                }
+                notification = rx.recv() => match notification {
+                  Ok(notification) => {
                     // MCP-standard events (event_type == "message") send raw
                     // JSON-RPC as data so compliant clients (e.g. Claude Code)
                     // can parse them as server-to-client requests.
@@ -390,16 +453,17 @@ pub fn create_sse_response(
                     };
 
                     yield Ok(event);
-                }
-                Err(broadcast::error::RecvError::Closed) => {
+                  }
+                  Err(broadcast::error::RecvError::Closed) => {
                     break;
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
+                  }
+                  Err(broadcast::error::RecvError::Lagged(n)) => {
                     // Client fell behind, notify them
                     yield Ok(Event::default()
                         .event("lagged")
                         .data(json!({ "missed": n }).to_string()));
-                }
+                  }
+                },
             }
         }
     };

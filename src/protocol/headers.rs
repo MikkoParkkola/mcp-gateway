@@ -35,9 +35,10 @@ const SENTINEL_SUFFIX: &str = "?=";
 
 /// The methods that carry a name, and therefore require `Mcp-Name`.
 ///
-/// Exactly these three, from the specification's Standard Request Headers
-/// table. Requiring the header everywhere rejects valid requests — a
-/// `tools/list` has no name to mirror — and that is the likelier mistake,
+/// The three core methods and the three Tasks extension methods carry names.
+/// The method-specific mapping below chooses the field to mirror. Requiring
+/// the header everywhere rejects valid requests: `tools/list` has no name to
+/// mirror. That is the likelier mistake,
 /// because "required for compliance" reads as "required on everything".
 #[must_use]
 pub fn mcp_name_required(method: &str) -> bool {
@@ -60,6 +61,7 @@ pub fn mcp_name_body_field(method: &str) -> Option<&'static str> {
     match method {
         "tools/call" | "prompts/get" => Some("name"),
         "resources/read" => Some("uri"),
+        "tasks/get" | "tasks/update" | "tasks/cancel" => Some("taskId"),
         _ => None,
     }
 }
@@ -134,7 +136,7 @@ pub struct HeaderCheck<'a> {
     pub body_method: &'a str,
     /// `Mcp-Name`, possibly sentinel-encoded.
     pub header_name: Option<&'a str>,
-    /// `params.name` or `params.uri`.
+    /// The method-selected `params.name`, `params.uri` or `params.taskId`.
     pub body_name: Option<&'a str>,
 }
 
@@ -178,7 +180,7 @@ impl HeaderCheck<'_> {
 
         if !mcp_name_required(self.body_method) {
             // No name to mirror. A header sent anyway is not a mismatch — the
-            // specification requires the header for three methods and says
+            // specification requires the header for named methods and says
             // nothing that forbids it elsewhere, and refusing on it would
             // reject a client that is merely generous.
             return Ok(());

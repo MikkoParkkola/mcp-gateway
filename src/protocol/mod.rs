@@ -5,6 +5,7 @@
 
 pub mod cacheable;
 pub mod continuation;
+pub(crate) mod elicitation;
 pub mod era;
 pub mod extensions;
 pub mod headers;

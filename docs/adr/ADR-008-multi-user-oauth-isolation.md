@@ -1,10 +1,48 @@
 # ADR-008: Multi-user OAuth isolation — credential-agnostic by default
 
-- **Status**: Accepted (supersedes the gateway-brokered-first draft on MIK-6742)
+- **Status**: Accepted historical decision; release scope and authorization mechanics superseded for 4.0 by the amendment below
 - **Date**: 2026-07-03
 - **Ticket**: MIK-6742 (P0 release blocker for v3.0.0)
 - **Deciders**: operator + gateway maintainers
 - **Composes with**: ADR-007 (identity propagation / the chokepoint this generalizes), ADR-001 (`GatewayKeyPair`), MIK-6648 (OIDC verify), MIK-6704 (per-user credential minting)
+
+## 4.0 amendment — 2026-09-06
+
+The operator approved MIK-6744/6745 as required 4.0 capabilities and selected
+Open WebUI on Spark → gateway → Google Workspace, with two personal accounts
+and an unconnected user. The [decision record](../requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md)
+is the scope authority. The [4.0 account design](../design/2026-09-06-personal-accounts.md)
+and [test plan](../design/2026-09-06-personal-accounts-test-plan.md) define the
+replacement implementation contract; they remain subject to process review.
+
+For 4.0, the historical **A + D + advertisement** release gate and earlier
+**A+B+C+D** shorthand are superseded by the seven account acceptance criteria in
+the [approved scope](../requirements/RELEASE-4.0.0-scope-update.md). B and C are
+release requirements. External credential management remains preferred; encrypted,
+principal-bound gateway custody is an explicitly configured fallback. Existing
+identity, grant, credential and connection primitives are extended together.
+
+The historical raw backend-token passthrough and gateway-login-token reuse
+descriptions below are not a current MCP authorization contract. The
+[2026-07-28 authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)
+requires tokens presented to the gateway to be valid for the gateway resource.
+A downstream token is obtained through the separately authorized backend flow or
+token exchange, never by treating the inbound bearer token as interchangeable.
+A custom header does not create an exemption. The Open WebUI signed-user header
+is an explicitly trusted adapter assertion, alongside separate gateway access
+authentication; it is not a downstream OAuth token or a standard gateway bearer.
+
+Identity uses verified authority plus subject, never email, display label or
+caller count. Existing `AuthConfig::implies_multi_user` fail-closed detection is
+preserved. Authorization, fallback tokens, refresh/revoke generations, connections,
+catalogues, schemas, results and idempotency all share this context. A personal
+request lacking a valid own-account grant refuses even if an operator token is
+available. Single-user legacy migration is explicit and cannot assign a legacy
+operator token to a newly arriving user.
+
+The remainder preserves the reasoning and release evidence at its original dates;
+its versions, "not release-gating" headings and promises of no token custody are
+historical, not current 4.0 completion claims.
 
 ## Context
 
@@ -45,6 +83,10 @@ build a parallel subsystem. Credential resolution returns one of:
 `Attach { headers, cache_binding }` · `Passthrough` · `NoCredential` · `Refuse`.
 
 ### The preference ladder (gateway auto-selects the highest rung that works, per backend)
+
+Historical ladder: rungs 1–2 below preserve the July decision and are superseded
+by the 4.0 audience-boundary amendment above. They are not implementation guidance
+for forwarding gateway or downstream bearer tokens in 4.0.
 
 1. **SSO reuse (zero prompts)** — the caller's gateway login already carries the
    backend's provider scopes (e.g. Google login → Gmail/Calendar/Drive). Reuse it.

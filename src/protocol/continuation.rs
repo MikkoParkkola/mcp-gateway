@@ -24,11 +24,11 @@
 //! continuation in flight — and so a rotation cannot be passed off as a
 //! different version.
 
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
-use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use ring::rand::{SecureRandom as _, SystemRandom};
 use serde::{Deserialize, Serialize};
+
+mod keyring;
+pub use keyring::Keyring;
 
 /// Wire format version. Outside the ciphertext, authenticated as associated
 /// data: a wire format needs a version, and one that can be changed without
@@ -126,6 +126,9 @@ impl std::fmt::Debug for Payload {
 /// Keys do not outlive the process, and neither does the ledger. Persistent
 /// keys arrive with the durable ledger (MIK-7312) and not before.
 const CONTINUATION_LIFETIME_SECS: u64 = 300;
+
+/// Mint-side age interval. Rotation behavior follows the reviewed NFR.SEC.3 tests.
+const CONTINUATION_ROTATION_SECS: u64 = 60;
 
 /// When a continuation minted at `now` dies.
 ///
@@ -287,249 +290,6 @@ impl std::fmt::Display for ContinuationError {
 
 impl std::error::Error for ContinuationError {}
 
-/// The keys a gateway mints and verifies continuations with.
-///
-/// One key mints; several may verify. A verification key is retained for at
-/// least the maximum continuation lifetime after it stops minting — without
-/// that, rotating a key breaks every elicitation in flight, and a redeploy
-/// looks exactly like an attack.
-pub struct Keyring {
-    minting_kid: u8,
-    keys: Vec<(u8, LessSafeKey)>,
-    rng: SystemRandom,
-    minted: std::sync::atomic::AtomicU64,
-    mint_budget: u64,
-}
-
-#[expect(
-    clippy::missing_fields_in_debug,
-    reason = "the omitted field is the key material, and the omission is the point: a Debug that prints keys puts them in every log that ever formats a Keyring"
-)]
-impl std::fmt::Debug for Keyring {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Never the key material, not even in a debug log.
-        f.debug_struct("Keyring")
-            .field("minting_kid", &self.minting_kid)
-            .field("verification_keys", &self.keys.len())
-            .finish()
-    }
-}
-
-/// The most envelopes one key may seal.
-///
-/// AES-GCM here uses a random 96-bit nonce, and random nonces collide by the
-/// birthday bound rather than never. NIST SP 800-38D §8.3 caps a key at 2^32
-/// invocations to hold the collision probability below 2^-32; a nonce reused
-/// under one key is a catastrophic loss of confidentiality, not a degradation.
-/// Rotation is what keeps a deployment under this.
-///
-/// **What this bound actually is, stated precisely because the difference
-/// matters**: the counter lives in memory, so it counts envelopes sealed by
-/// *this process* since it started — not by this *key* over its life. A
-/// restart, a config reload that rebuilds the keyring, or a second replica each
-/// begin again at zero. So the ceiling holds per process and the key's true
-/// total is the sum across all of them.
-///
-/// That is a real ceiling and a useful one — it bounds a single runaway process,
-/// which is the shape a nonce-collision risk takes when it arrives suddenly —
-/// but it is not the per-key guarantee the NIST bound is written about. Making
-/// it one requires the count to be durable and shared by key identity, which is
-/// the same shared-state gap [`ConsumedLedger`] names. Both are gates on
-/// multi-replica production, not on this change: `server.modern_protocol`
-/// defaults off and nothing mints yet.
-const MINT_BUDGET: u64 = 1 << 32;
-
-impl Keyring {
-    /// Build a keyring from raw 32-byte keys, the first of which mints.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Malformed` if a key is not 32 bytes, the list is empty, or two
-    /// keys share an id. A duplicated id is refused rather than tolerated
-    /// because lookup takes the first match: the second key would silently
-    /// never verify, and the failure would surface only on envelopes minted
-    /// before the deploy that introduced it.
-    pub fn new(keys: &[(u8, [u8; 32])]) -> Result<Self, ContinuationError> {
-        let Some((minting_kid, _)) = keys.first() else {
-            return Err(ContinuationError::Malformed);
-        };
-        let mut unbound: Vec<(u8, LessSafeKey)> = Vec::with_capacity(keys.len());
-        for (kid, material) in keys {
-            if unbound.iter().any(|(seen, _)| seen == kid) {
-                return Err(ContinuationError::Malformed);
-            }
-            let key = UnboundKey::new(&AES_256_GCM, material)
-                .map_err(|_| ContinuationError::Malformed)?;
-            unbound.push((*kid, LessSafeKey::new(key)));
-        }
-        Ok(Self {
-            minting_kid: *minting_kid,
-            keys: unbound,
-            rng: SystemRandom::new(),
-            minted: std::sync::atomic::AtomicU64::new(0),
-            mint_budget: MINT_BUDGET,
-        })
-    }
-
-    /// Lower the mint budget below the default ceiling.
-    ///
-    /// A deployment that rotates faster than [`MINT_BUDGET`] can say so, and a
-    /// test can reach the boundary without sealing four billion envelopes — a
-    /// bound nothing can arrive at is a bound nobody has checked. Raising it
-    /// above the default is refused: the ceiling is a property of AES-GCM with
-    /// random nonces, not a preference.
-    #[must_use]
-    pub fn with_mint_budget(mut self, budget: u64) -> Self {
-        self.mint_budget = budget.min(MINT_BUDGET);
-        self
-    }
-
-    /// The number of envelopes this key may still seal.
-    ///
-    /// Exposed so the ceiling can be observed rather than trusted: a bound
-    /// nothing can read is a bound nobody can check, and an operator watching
-    /// this approach zero is the signal that rotation is overdue.
-    #[must_use]
-    pub fn mint_budget_remaining(&self) -> u64 {
-        self.mint_budget
-            .saturating_sub(self.minted.load(std::sync::atomic::Ordering::Relaxed))
-    }
-
-    /// Seal a payload into an envelope for the client to echo back.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Malformed` if the payload cannot be serialised or the system
-    /// random source fails, and `MintBudgetExhausted` once this key has sealed
-    /// its budget of envelopes (see [`MINT_BUDGET`]), and `TooLarge` when the
-    /// sealed envelope would exceed [`MAX_ENVELOPE_LEN`], and
-    /// `LifetimeExceeded` when the payload's window is wider than
-    /// [`CONTINUATION_LIFETIME_SECS`].
-    pub fn mint(&self, payload: &Payload) -> Result<String, ContinuationError> {
-        // Ahead of the budget, so a refusal cannot consume one — the same
-        // reason the budget is charged before the nonce is drawn.
-        //
-        // `expiry_for` is the only deadline this gateway offers, and a caller
-        // that sets its own could offer any. Checked here rather than only at
-        // `open` because a bound applied at one end lets the gateway mint what
-        // it will later refuse; the same argument `MAX_ENVELOPE_LEN` makes.
-        //
-        // `saturating_sub` reads a backwards window (`expires_at` before
-        // `issued_at`) as zero rather than wrapping it into a legal width.
-        // Sealing one is harmless: it is already past its deadline, and
-        // `Expired` is the honest answer for it.
-        if payload.expires_at.saturating_sub(payload.issued_at) > CONTINUATION_LIFETIME_SECS {
-            return Err(ContinuationError::LifetimeExceeded);
-        }
-        // Counted before the nonce is drawn, so a refusal cannot consume one.
-        // Fetch-and-add rather than read-then-write: concurrent minters must not
-        // be able to step past the budget between the two halves.
-        let used = self
-            .minted
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if used >= self.mint_budget {
-            // Saturate rather than wrap: a counter that wraps re-opens the
-            // budget it exists to close.
-            self.minted
-                .store(self.mint_budget, std::sync::atomic::Ordering::Relaxed);
-            return Err(ContinuationError::MintBudgetExhausted);
-        }
-        let key = self.key(self.minting_kid)?;
-        let mut nonce_bytes = [0u8; NONCE_LEN];
-        self.rng
-            .fill(&mut nonce_bytes)
-            .map_err(|_| ContinuationError::Malformed)?;
-
-        let mut buffer = serde_json::to_vec(payload).map_err(|_| ContinuationError::Malformed)?;
-        let header = [VERSION, self.minting_kid];
-        key.seal_in_place_append_tag(
-            Nonce::assume_unique_for_key(nonce_bytes),
-            Aad::from(header),
-            &mut buffer,
-        )
-        .map_err(|_| ContinuationError::Malformed)?;
-
-        let mut wire = Vec::with_capacity(2 + NONCE_LEN + buffer.len());
-        wire.extend_from_slice(&header);
-        wire.extend_from_slice(&nonce_bytes);
-        wire.extend_from_slice(&buffer);
-        let encoded = B64.encode(wire);
-        if encoded.len() > MAX_ENVELOPE_LEN {
-            return Err(ContinuationError::TooLarge);
-        }
-        Ok(encoded)
-    }
-
-    /// Open an envelope the client presented.
-    ///
-    /// Treated as attacker-controlled throughout: every failure returns an
-    /// error rather than a partially-trusted value, and nothing is read out of
-    /// the payload before authentication succeeds.
-    ///
-    /// # Errors
-    ///
-    /// Returns the reason it was refused; see [`ContinuationError`]. A token
-    /// longer than [`MAX_ENVELOPE_LEN`] is refused on its length alone.
-    pub fn open(&self, token: &str, now: u64) -> Result<Payload, ContinuationError> {
-        // Before the decode, so an oversized token costs a length comparison.
-        if token.len() > MAX_ENVELOPE_LEN {
-            return Err(ContinuationError::TooLarge);
-        }
-        let wire = B64
-            .decode(token)
-            .map_err(|_| ContinuationError::Malformed)?;
-        if wire.len() <= 2 + NONCE_LEN {
-            return Err(ContinuationError::Malformed);
-        }
-        let version = wire[0];
-        if version != VERSION {
-            return Err(ContinuationError::UnknownVersion(version));
-        }
-        let kid = wire[1];
-        let key = self.key(kid)?;
-
-        let mut nonce_bytes = [0u8; NONCE_LEN];
-        nonce_bytes.copy_from_slice(&wire[2..2 + NONCE_LEN]);
-        let mut buffer = wire[2 + NONCE_LEN..].to_vec();
-
-        let plaintext = key
-            .open_in_place(
-                Nonce::assume_unique_for_key(nonce_bytes),
-                Aad::from([version, kid]),
-                &mut buffer,
-            )
-            .map_err(|_| ContinuationError::NotAuthentic)?;
-
-        let payload: Payload =
-            serde_json::from_slice(plaintext).map_err(|_| ContinuationError::NotAuthentic)?;
-
-        // Checked after authentication, never before: an unauthenticated
-        // deadline is a field an attacker chose.
-        if now > payload.expires_at {
-            return Err(ContinuationError::Expired);
-        }
-        // After the deadline check, never before: a handle that is merely late
-        // must answer `Expired`, and an age older than the ceiling implies a
-        // passed deadline for every payload `mint` accepts. So this branch is
-        // unreachable today — it is what would refuse an envelope sealed by a
-        // build whose mint-side check was removed, which is the case the
-        // ceiling exists to survive. `saturating_add` keeps an absurd
-        // `issued_at` from wrapping the sum into the past and reading as fresh.
-        if now > payload.issued_at.saturating_add(CONTINUATION_LIFETIME_SECS) {
-            return Err(ContinuationError::LifetimeExceeded);
-        }
-        Ok(payload)
-    }
-
-    fn key(&self, kid: u8) -> Result<&LessSafeKey, ContinuationError> {
-        self.keys
-            .iter()
-            .find(|(id, _)| *id == kid)
-            .map(|(_, key)| key)
-            .ok_or(ContinuationError::UnknownKey(kid))
-    }
-}
-
 /// The continuations already spent.
 ///
 /// Encryption makes an envelope unforgeable; it does nothing about how many
@@ -666,14 +426,28 @@ pub struct InFlight {
     capacity: usize,
     /// key -> (replica holding it, deadline).
     held: tokio::sync::Mutex<std::collections::HashMap<String, (String, u64)>>,
+    #[cfg(test)]
+    scan_barrier: parking_lot::Mutex<Option<std::sync::Arc<TestScanBarrier>>>,
+}
+
+/// Tests pause the real scheduled scan while its table lock is held.
+#[cfg(test)]
+#[derive(Default, Debug)]
+pub(crate) struct TestScanBarrier {
+    pub(crate) entered: tokio::sync::Notify,
+    pub(crate) release: tokio::sync::Notify,
 }
 
 /// Drop exchanges whose deadline has passed.
 ///
-/// A free function rather than a method because [`InFlight::hold`] calls it
-/// while already holding the lock.
-fn reclaim_abandoned(held: &mut std::collections::HashMap<String, (String, u64)>, now: u64) {
+/// Called while the table lock is held, with the caller's trusted epoch.
+fn reclaim_abandoned(
+    held: &mut std::collections::HashMap<String, (String, u64)>,
+    now: u64,
+) -> usize {
+    let before = held.len();
     held.retain(|_, (_, deadline)| now <= *deadline);
+    before - held.len()
 }
 
 impl InFlight {
@@ -684,30 +458,64 @@ impl InFlight {
             replica: replica.to_string(),
             capacity,
             held: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            #[cfg(test)]
+            scan_barrier: parking_lot::Mutex::new(None),
         }
+    }
+
+    /// Reclaim every expired record before an observer examines the table.
+    ///
+    /// Keep the supplied epoch: reading a second clock here could disagree with
+    /// continuation verification. Equality remains live, as in `Keyring::open`.
+    async fn guard(
+        &self,
+        now: u64,
+    ) -> tokio::sync::MutexGuard<'_, std::collections::HashMap<String, (String, u64)>> {
+        let mut held = self.held.lock().await;
+        reclaim_abandoned(&mut held, now);
+        held
+    }
+
+    /// Reclaim abandoned exchanges under one lock, returning the exact count.
+    pub(crate) async fn reclaim_now(&self, now: u64) -> usize {
+        let mut held = self.held.lock().await;
+        #[cfg(test)]
+        {
+            let barrier = self.scan_barrier.lock().take();
+            if let Some(barrier) = barrier {
+                barrier.entered.notify_one();
+                barrier.release.notified().await;
+            }
+        }
+        reclaim_abandoned(&mut held, now)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_scan_barrier(&self, barrier: std::sync::Arc<TestScanBarrier>) {
+        *self.scan_barrier.lock() = Some(barrier);
+    }
+
+    /// Observe raw occupancy without triggering the behavior being tested.
+    #[cfg(test)]
+    pub(crate) async fn snapshot(&self) -> std::collections::HashMap<String, u64> {
+        self.held
+            .lock()
+            .await
+            .iter()
+            .map(|(key, (_, deadline))| (key.clone(), *deadline))
+            .collect()
     }
 
     /// Record that this replica is holding an exchange open, returning its key.
     ///
-    /// `None` at capacity — a refusal the caller turns into an error the client
-    /// can see. Growing instead would make the table a memory-exhaustion vector
+    /// `None` at capacity or for an expired deadline — a refusal the caller turns
+    /// into an error the client can see. Growing instead would make the table a memory-exhaustion vector
     /// reachable by any client that starts elicitations and walks away, which
     /// the specification explicitly permits it to do.
     pub async fn hold(&self, backend_id: &str, expires_at: u64, now: u64) -> Option<String> {
-        let mut held = self.held.lock().await;
-        if held.len() >= self.capacity {
-            // Reclaim here rather than in a separate reaper someone must
-            // remember to call. Abandonment is the common case — a client is
-            // free never to retry — so a table that only ever grew would
-            // refuse every new elicitation once enough callers walked away,
-            // which is the denial of service the bound exists to prevent.
-            // Same shape as `SpentLedger::consume`, deliberately: one place
-            // enforces the bound and one place reclaims, and they are the same
-            // place, so neither can be wired without the other.
-            reclaim_abandoned(&mut held, now);
-            if held.len() >= self.capacity {
-                return None;
-            }
+        let mut held = self.guard(now).await;
+        if now > expires_at || held.len() >= self.capacity {
+            return None;
         }
         // Named by the gateway, never by the client: two exchanges against one
         // backend must not collide, and no caller may name another's.
@@ -734,8 +542,8 @@ impl InFlight {
     /// this table exists to prevent. The wait is bounded by the map operations
     /// the other holders are performing, all of which are O(1) or a retain over
     /// a table with a capacity.
-    pub async fn route(&self, key: &str) -> Routing {
-        let held = self.held.lock().await;
+    pub async fn route(&self, key: &str, now: u64) -> Routing {
+        let held = self.guard(now).await;
         match held.get(key) {
             Some(_) => Routing::Here,
             None => Routing::Gone,
@@ -748,18 +556,18 @@ impl InFlight {
     /// deadline passes, so a busy gateway refuses new elicitations on behalf of
     /// ones that completed long ago. Reaping is the backstop for abandonment,
     /// not the ordinary path — the ordinary path is that an exchange ends.
-    pub async fn complete(&self, key: &str) -> bool {
-        self.held.lock().await.remove(key).is_some()
+    pub async fn complete(&self, key: &str, now: u64) -> bool {
+        self.guard(now).await.remove(key).is_some()
     }
 
-    /// How many exchanges are held.
-    pub async fn len(&self) -> usize {
-        self.held.lock().await.len()
+    /// How many live exchanges are held after an O(capacity) expiry scan.
+    pub async fn len(&self, now: u64) -> usize {
+        self.guard(now).await.len()
     }
 
-    /// Whether nothing is held.
-    pub async fn is_empty(&self) -> bool {
-        self.len().await == 0
+    /// Whether nothing remains after an O(capacity) expiry scan.
+    pub async fn is_empty(&self, now: u64) -> bool {
+        self.len(now).await == 0
     }
 }
 
@@ -786,12 +594,12 @@ impl InFlight {
 /// without a shared ledger is exactly the deployment the requirement forbids.
 ///
 /// See `docs/design/2026-08-30-shared-continuation-state.md`.
-#[derive(Debug)]
 pub struct ContinuationState {
     replica: String,
     keyring: Keyring,
     ledger: ConsumedLedger,
     in_flight: InFlight,
+    clock: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
 /// How many spent continuations one process remembers at once.
@@ -811,6 +619,11 @@ const CONSUMED_LEDGER_CAPACITY: usize = 65_536;
 const IN_FLIGHT_CAPACITY: usize = 4_096;
 
 impl ContinuationState {
+    /// Current trusted epoch shared with the serving cleanup worker.
+    pub(crate) fn now(&self) -> u64 {
+        (self.clock)()
+    }
+
     /// Build the state for this process, generating its key material.
     ///
     /// # Panics
@@ -821,6 +634,11 @@ impl ContinuationState {
     /// sees it, rather than on the first elicitation a user reaches.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_clock(std::sync::Arc::new(now_unix_secs))
+    }
+
+    /// Construct unpublished state with the serving runtime's trusted clock.
+    pub(crate) fn with_clock(clock: std::sync::Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
         let rng = SystemRandom::new();
         let mut key = [0u8; 32];
         rng.fill(&mut key)
@@ -835,6 +653,7 @@ impl ContinuationState {
             ledger: ConsumedLedger::new(CONSUMED_LEDGER_CAPACITY),
             in_flight: InFlight::new(&replica, IN_FLIGHT_CAPACITY),
             replica,
+            clock,
         }
     }
 
@@ -899,8 +718,23 @@ impl ContinuationState {
     }
 }
 
+impl std::fmt::Debug for ContinuationState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContinuationState")
+            .field("replica", &self.replica)
+            .field("keyring", &self.keyring)
+            .field("ledger", &self.ledger)
+            .field("in_flight", &self.in_flight)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for ContinuationState {
     fn default() -> Self {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[path = "continuation/in_flight_lifetime_tests.rs"]
+mod in_flight_lifetime;

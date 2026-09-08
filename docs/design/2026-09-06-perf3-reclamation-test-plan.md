@@ -1,6 +1,11 @@
 # Test plan — NFR.PERF.3 reclamation
 
-Status: reviewed as a PLAN by both vendors, twice. No test code written. Provenance at the foot.
+Status: historical observer-only plan, superseded for idle reclamation by
+`2026-09-06-continuation-scheduled-expiry.md` EXPIRY.1–8. The old row 2's
+`len(now)` invokes cleanup and MUST NOT be used as an idle-expiry oracle.
+Retain its review history below as historical evidence only. Change A's observer
+regressions remain useful; Change C's raw snapshot and real serving lifecycle
+are required to close MRTR.8b / NFR.PERF.3.
 Design: `docs/design/2026-09-01-nfr-perf3-reclamation.md`, including its 2026-09-06 receipt update
 and the same-day correction that hands the lifetime mechanism to MRTR.8b.
 Depends on: `docs/design/2026-09-06-mrtr-8b-10a-lifetime-and-idempotency-wiring.md` Design A

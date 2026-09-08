@@ -1,1034 +1,895 @@
-# MRTR.7 — wiring `InputBridge::run` into the production path
+# MRTR.7 — production legacy bridge, including stdio
 
-Status: design, not implemented. Change: `fix/mrtr2-continuation-handle`.
+Status: amended design awaiting fresh design and test-plan review. No new
+implementation or executed acceptance evidence is claimed by this document.
+Worktree: `mcp-v4-delivery`; source inspection on 2026-09-06 at `0d4df3c0` plus
+concurrent delivery changes. Symbol names below are authoritative over old line
+numbers. Companion: [test plan](2026-09-05-mrtr7-test-plan.md).
 
-Reviewed twice, adversarially, by two vendors: `gpt-review` (Codex/GPT-5.x) and
-`synthetic-review` (the open-weights leg, `glm-5.3` alias — the wrapper formerly
-called `kimi-review`; earlier revisions of this file misattributed it to Kimi K2,
-which did not run). Round 2 ran against `08c0b9c9` and both returned
-SHIP-WITH-FIXES, each naming a doc-level fix inside this design. A third,
-confirmation pass ran against `b645491e`: `gpt-review` returned SHIP-WITH-FIXES
-naming three defects this wiring would activate rather than inherit, amended
-below. The open-weights leg returned SHIP-WITH-FIXES on the same revision and is
-amended alongside it. Its run file read as zero bytes while the process was
-still running — the wrapper writes the file at completion, so an empty read is a
-race, not a missing verdict, and this document briefly recorded it as the
-latter. Findings disposed below.
+## Scope receipt update — 2026-09-06
 
-Round 5 (2026-09-06) is reviewed by the pair the release board binds instead:
-`grok-review` and `kimi-review`. Reviewer identity verified rather than assumed —
-`~/.claude/bin/kimi-review` is a 1.1K transition shim that `exec`s
-`synthetic-review --model "${KIMI_REVIEW_MODEL:-kimi-k3}"`. Same wrapper binary
-as the round-2/3 open-weights leg, DIFFERENT model: that leg ran `glm-5.3`, this
-one runs `kimi-k3`. The pair is therefore two distinct models, not one wrapper
-counted twice. `gpt-review` is unavailable for this round (Codex usage-limited
-until 2026-09-12; its ledger rows read `process_status=error, exit_code=1` since
-2026-09-06T05:41Z) — an availability gap, recorded as such and never as a pass.
+FOR: make the existing `InputBridge::run` reachable from real legacy HTTP and
+stdio calls, preserving declarations, caller isolation, raw question delivery,
+cancellation cleanup, retry accounting and the final response contract.
 
-## Problem
+The 2026-09-05 HTTP-only increment was a sequencing decision. The operator has
+now approved full stdio bridging in 4.0.0; see the [recorded capability
+expansion](../requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md) and
+[scope acceptance rows](../requirements/RELEASE-4.0.0-scope-update.md).
+`MIK-7387.STDIO.1`–`.3` and `MIK-7388.CANCEL.1` are release obligations.
+An HTTP-only success cannot close MRTR.7a/7b for this release. The old WIRE.10
+assertion that every initialized stdio client must be refused is superseded;
+refusal remains required for undeclared capabilities and unavailable channels.
+This is a scope-move receipt, not a reset of the change's review history.
 
-`src/gateway/input_bridge.rs` implements `InputBridge::run` and 18 acceptance
-rows drive it green through trait fakes (mapped to their tests by name in the
-companion test plan). It has **no production call site**, so
-`docs/requirements/RELEASE-4.0.0-criteria-status.md:130,:131` are honestly
-marked UNWIRED. Tests-only reachability is a D7:WIRED failure, not done.
+OUT of this increment:
 
-## Scope
+- Rebuilding `InputBridge`, its bounds, protocol parsing or the 23 existing
+  component tests; adapt the typed backend-result and delivery-progress seams
+  specified below. Preserve their intent and names; the pinned-spec correction
+  below supersedes content-only elicitation payload expectations.
+- Inventing another continuation store, grant system, session declaration map,
+  or typed forwarding layer. Existing platform owners remain authoritative.
+- General chat/model proxying, transparent multi-replica recovery, or automatic
+  replay after a connection dies. These are not bridge mechanisms.
+- The modern destructive-confirmation implementation. It remains required for
+  4.0.0 under [CONFIRM.2](2026-09-06-confirm-2-destructive-confirmation.md),
+  coordinated as a dependency below; this document does not narrow that scope.
 
-FOR: giving `InputBridge::run` one production caller **on the HTTP transports**,
-so a legacy client that declared a capability at `initialize` is asked the
-backend's question and the backend is retried with the answer.
+## Review provenance and Definition of Ready
 
-OUT OF THIS CHANGE, NOT OUT OF THE RELEASE: legacy **stdio** callers keep the
-MRTR.9 refusal they get today. Ruled by the requester on 2026-09-05, on the
-finding below that stdio's serial read loop deadlocks any bridged call. Stdio
-concurrency is a **separate work package** — independently designed,
-independently implemented, lower priority than this one — and whether it lands
-in 4.0.0 is decided after that design exists and carries an effort estimate,
-not now. Deferring it here is a sequencing decision, not a decision to drop it.
+Earlier revisions carry rounds 2–6 findings in Git history. The useful decisions
+are consolidated below so historical HTTP-only instructions cannot be mistaken
+for current implementation directions. The latest Grok receipt's
+`material_sha256` covered a **134-byte stub**, not the full reviewed material.
+Its source-verifiable findings informed the design, but that receipt does not
+approve this document or the release expansion. Fresh reviews must receive the
+same full design, test plan, scope delta and applicable canonical DoR, and bind
+the ledger row to those bytes with successful process status. A verdict string
+or a nonzero reviewer exit is not approval. Root owns that review before source
+or test implementation starts.
 
-IN, not out: live delivery of the question over the client's own stream.
-Release row 308 defers its own evidence with this commit as the trigger, which
-defers *that row's evidence* and is **not** permission for this change to skip
-delivery. A
-legacy HTTP client that cannot actually receive the bridge's question has not
-been bridged, so delivery over the live stream is inside FOR and
-`MIK-7212.WIRE.8` is the row that finds out whether it works; the `NFR.OBS.4` counter name
-(`RELEASE-4.0.0-cluster-a-readiness.md:44` — "No design, no counters"); any
-change to the MRTR.9 refusal or to the continuation mint for modern callers; and
-the reply projection that reads any result containing `action` as an elicitation
-reply (`input_bridge.rs:454`) — that file's own bug rather than this change's
-wiring, filed as **MIK-7388**.
+DoR for this documentation increment: approved user outcome is answering legacy
+client questions on both transports; target files are this design and its
+existing test plan. Reuse and in-flight work were inspected first. Risks are
+blocked reader/writer progress, permission widening, lost pending state, and
+unaccounted retries. Acceptance is a single coherent contract with each release
+row mapped to a falsifiable test, plus a fresh review gate. Validation is the
+source-symbol inventory, test-name coverage, link resolution and `git diff
+--check`; these checks do not establish runtime correctness. No dependency or
+license changes are proposed by this documentation increment.
 
-### The other MIK-7388 defect is this change's, and BRIDGE.2 is satisfied here
+Policy read for this increment:
+`/Users/mikko/.claude/rules-source/workflows/development-process.md`,
+`/Users/mikko/.claude/rules-source/workflows/quality-gates-dor.md`, and
+`/Users/mikko/.claude/rules-source/workflows/quality-gates-dod.md`.
+For the later code increment, source impact analysis and the reviewed red tests
+remain prerequisites; document checks cannot satisfy them.
 
-MIK-7388's second defect — "a pending entry stranded when the outer timeout
-cancels registration (`:430`)" — was filed against `input_bridge.rs` and is not
-there. That file holds no pending state, as the findings table below already
-records, so the OUT item points at a repair with nothing to repair. The
-obligation it describes lands on whoever *implements* `ClientChannel`, and the
-trait's own cancellation contract (`src/gateway/input_bridge.rs:268-287`) names
-the owner verbatim: "The requirement is recorded as MIK-7388; the first
-implementation obliged by it, and the test that proves it, arrive with
-MIK-7212." This change writes that implementation, so this change carries the
-obligation. Concretely: the production `ClientChannel` impl holds a
-`PendingRequestGuard`-shaped RAII across the awaited send (the shape at
-`src/transport/stdio.rs:517`), and `MIK-7212.WIRE.11` in the test plan pins it,
-mirroring `cancelled_request_does_not_strand_pending_entry`
-(`src/transport/stdio.rs:815`).
+### Applicable DOCS DoR verdicts
 
-So the re-bound `MIK-7388.BRIDGE.2` — "Given the production `ClientChannel`
-implementation that registers pending state keyed by request id" — is
-**satisfied by this change**, not handed a surface and left open.
-
-This is not a §P0 scope move. FOR is unchanged: one production caller for
-`InputBridge::run` on the HTTP transports. OUT is unchanged: a repair to
-`input_bridge.rs`'s own code at `:430` stays out, because there is nothing there
-to repair. Cancellation safety in code this change *writes* is not the repair of
-an existing defect; it is a correctness property of new code, mandated by the
-trait it implements. The only edit the reading forces is the one above — the OUT
-list previously described `:430` as a defect inside `input_bridge.rs` while the
-findings table recorded that it is not, and those two lines disagreed.
-
-Two further findings were carried here as defects and **died at the
-requirements**, which is why the count fell from four. A timed-out prompt
-retrying the backend without an answer (`:433`) is what requirement row 320
-specifies — "abandoned at `min(remaining, 30s)`, and the rounds still remaining
-are unaffected" — and `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call`
-pins `frames == 2, calls == 2` to prove the call does **not** end. Deserializing
-prompt params into a typed `ServerRequest` (`:409`) is what row 308 forbids:
-params must reach the client whole, "nothing dropped and nothing invented", and
-a round-trip through a typed struct drops what the struct does not name. The
-reviewer's underlying worry — a backend continuing without input a person never
-gave — is real and unaddressed; changing either row is the **requester's** call,
-not a repair, and it is raised as an open question rather than made here.
-
-**The merge-before-wiring wait is DELETED.** An earlier revision made this
-change wait for MIK-7388 to land first, on the ground that wiring is what makes
-its defects reachable. Grok raised it in round 6 and it is confirmed: by the
-time that sentence was written, every defect the wait was built on had already
-been accounted for somewhere else in this document, and the wait had nothing
-left to wait for.
-
-| the defect the wait named | where it went |
-|---|---|
-| `:430`, cancellation safety in the awaited send | RE-BOUND to this change six paragraphs above. It is a correctness property of code this change WRITES, mandated by the trait it implements — not a repair of an existing defect, and the OUT list now says so |
-| `:433`, a timed-out prompt retrying the backend without an answer | DIED AT THE REQUIREMENTS. Row 320 specifies exactly that behaviour, and `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call` pins it |
-| `:454`, a reply projection that is not kind-aware | ALREADY IN THE TREE, fixed in `60a28464` and checked off as `MIK-7388.BRIDGE.5`. `project()` takes `kind` and branches on it (`input_bridge.rs:476-495`): everything but `Elicitation` returns the result whole, and the doc comment states the reason — reading an `action` member on a roots or sampling reply would drop the rest of the answer |
-
-A blocking edge whose three grounds are one re-binding, one requirement and one
-shipped function is not a schedule; it is a sentence nobody re-read after the
-document around it moved. Deleting it is the repair. What survives is the ASK,
-unchanged and still the requester's: whether row 320's "abandoned at
-`min(remaining, 30s)`, rounds unaffected" is the behaviour they want, given that
-it lets a backend continue without input a person never gave.
-
-The ticket was read too, not only the tree, because a wait is drawn against a
-ticket. MIK-7388 today carries one retired identifier, one met, and three live:
-`BRIDGE.1` was RETIRED with the withdrawn `:433` defect, `BRIDGE.5` is CHECKED
-and shipped in `60a28464` (the kind-aware projection), and `BRIDGE.2` — the
-`:430` cancellation entry — is re-bound by the ticket itself, in its own words,
-to “the change that creates the risk”, which is this one. What remains is
-`BRIDGE.3`, that the MIK-7212 acceptance suite still passes whole, which this
-change runs anyway, and `BRIDGE.4`, which IS the open question above. Not one
-of the five is a thing this change could wait for someone else to do.
-
-Consequence, stated rather than discovered later: rows :130 and :131 go green
-for the HTTP transports only. Whether that reads as met, or as met with a named
-limit, is the release owner's call and not this design's.
-
-## Where it goes
-
-`src/gateway/meta_mcp/invoke.rs`, between the MRTR.9 undeclared gate (:1517)
-and the continuation mint (:1543).
-
-After the gate, not before: a question the client never declared is refused,
-never bridged. Bridging first would relay the request the gate exists to stop.
-
-Before the mint, and instead of it for a bridged call: a legacy client never
-redeems a continuation. Minting one for an exchange the gateway is about to
-complete itself leaves a redeemable envelope for a finished exchange — the
-MRTR.2 replay surface, pointed at our own state.
-
-On success `run` returns the backend's completed result, which replaces
-`result` and flows through the response-contract gate below unchanged. On
-`BridgeError` the call fails; the error's variants already distinguish a
-person's refusal from a transport fault, which is what `NFR.OBS.4` needs.
-
-## Blocker — the capability store this presupposes does not exist
-
-`CallerContext::input_capabilities` is populated only from
-`RequestShape::declared_capabilities()` (`src/protocol/meta.rs:406-408`), which
-reads the **per-request** `_meta` of a `Modern` request. `RequestShape::Legacy`
-yields `Declared::NONE` (asserted at `src/protocol/meta.rs:549`). The only
-production write is `src/gateway/router/handlers.rs:705,1164`; the other three
-construction sites pass `Declared::NONE` outright.
-
-Two consequences, both fatal to the feature as specified:
-
-1. A **legacy** client sends no `_meta` by definition, so it declares nothing,
-   so `InputBridge::plan` asks it nothing. The bridge can never fire for the
-   only client class it exists for.
-2. Rows 311 and 325 assert the **session** store is authoritative and the
-   per-request slice may only narrow it. There is no session store. `run`
-   already takes `declared` and `slice` as separate arguments and pins that
-   rule; production has one value, and it is the slice.
-
-Verified on the write side rather than inferred from the read side: a search
-for `declared_capabilities` across `src/` returns one producer.
-
-MCP's `initialize` handshake is where a legacy client declares `elicitation`,
-`sampling` and `roots`. The gateway does not retain it — a search for
-`"capabilities"` across the router and server finds one test assertion and no
-store.
-
-## Options for the missing store
-
-**A. Capture `initialize` client capabilities per session; pass as `declared`.**
-The store the requirements already assume. `run`'s two arguments become two
-real values: session store authoritative, per-request slice narrowing.
-Pro: rows 311 and 325 become true statements about production, not about fakes.
-Con: a new per-session store with its own lifetime and eviction; largest change.
-
-**B. Derive "legacy" from `RequestShape::Legacy` and treat any legacy caller as
-declaring everything.** Smallest diff.
-Pro: unblocks the bridge today.
-Con: fail-open. It asks a client for a capability it never claimed, which is
-the exact inversion of the MRTR.9 gate one branch above. Rejected.
-
-**C. Option A's store, plus `shape: RequestShape` on `CallerContext`, bridging
-only for `Legacy`.** A modern caller that declared capabilities must get a
-continuation, not a bridge, and `Declared` alone cannot tell the two apart.
-
-**The merge is conditional on shape, and that is load-bearing.** The MRTR.9
-gate is shape-blind — `invoke.rs:1518` reads `caller.input_capabilities` with
-no modern/legacy branch — so an unconditional merge would silently widen the
-gate for modern callers too: one that declared `elicitation` at `initialize`
-and sent no per-request `_meta` is refused today and would be minted a
-continuation after the change. That is a fail-open move on a security gate
-nobody asked for, and it is the same inversion option B was rejected for.
-So `input_capabilities` is the session value **only for `Legacy`**, which has
-no per-request channel at all — that absence is the whole reason the merge
-exists. `Modern` keeps per-request semantics exactly as today. Every row of
-the decision table below then holds as written.
-
-Recommendation: **C**. Deriving the discriminator from `Declared` conflates
-"declared nothing" with "cannot understand `input_required`", and those two
-need opposite handling.
-
-## Second blocker — stdio cannot answer a question it is being asked
-
-Both reviewers returned SHIP-WITH-FIXES. One finding is fatal to the feature on
-the transport it exists for, and it is verified at source rather than accepted
-on the reviewer's word.
-
-`src/gateway/server/mod.rs:1581` is `while let Ok(Some(line)) =
-reader.next_line().await { … dispatch … }` — one reader, strictly serial, the
-next line read only after the current dispatch returns. A bridged call blocks
-inside that dispatch waiting for the client's answer, and the answer arrives on
-the stdin nobody is reading. Every legacy stdio bridge deadlocks until
-`BridgeBounds::DEFAULT` expires it: 30 s per prompt, 120 s aggregate.
-
-This is not a defect in the bridge. It is the transport lacking the concurrency
-the bridge presupposes, and no placement of the call inside `invoke.rs` avoids
-it. Two honest responses, and the choice was not engineering's to make alone:
-
-- **Make stdio concurrent** — dispatch off the read loop, route replies by id
-  before dispatch, one serialized writer, an `initialize` barrier. A transport
-  rewrite, several times the size of the wiring this design is for.
-- **Bridge only where the concurrency already exists** — the HTTP transports
-  have in-flight request correlation (`ProxyManager`'s pending-response path).
-  Legacy stdio callers keep the MRTR.9 refusal they get today.
-
-Asked of the requester, 2026-09-05. Answer: bridge on HTTP only. Stdio
-concurrency becomes its own work package — designed and estimated separately,
-kept at lower priority, and admitted to or excluded from the release once that
-design shows what it costs. It narrowed this design's FOR to the HTTP
-transports; stdio moves out of THIS change, above, and stays on the release's
-open list until its own design is reviewed.
-
-The tests this change needs are planned separately, in
-`docs/design/2026-09-05-mrtr7-test-plan.md`, and reviewed as a plan before any
-test code is written.
-
-## Review findings, disposed
-
-| finding | disposal |
-|---|---|
-| gate refuses before the bridge is reached (both vendors, HIGH) | confirmed as a **documentation** gap, not a mechanism one — see below |
-| read side never verified: does the bridge site hold the session id (synthetic, HIGH) | **died at source.** The lookup belongs at `CallerContext` construction, where `session_id` is already in scope on both transports. Nothing new reaches `invoke.rs`, and the suggested fix — threading a store into the invoke path — is unnecessary |
-| absent session capabilities leave the default unspecified (synthetic, HIGH) | confirmed. Pinned fail-closed below |
-| store has no eviction or ownership (both vendors, HIGH) | confirmed. The answer given here first, `SessionLifecycle`, was superseded on the next round — see the re-raised row below for the owner that ships |
-| no production `ClientChannel` / `BackendInvoker` / `BridgeObserver` (GPT, HIGH, CERTAIN) | confirmed. This design understated its own change surface; see below |
-| stdio serial dispatch deadlocks a bridged call (GPT, HIGH, CERTAIN) | confirmed at source. Second blocker, above. **Filed as MIK-7387** with the three failing rows as its acceptance evidence; the requester decides include/exclude for the release there |
-| reply projection is not request-kind-aware; params forwarded unvalidated (GPT) | out of this scope — defects in `input_bridge.rs` itself, not in wiring it. Filed rather than fixed here |
-| store as an injected trait (Kimi) | declined. A trait with one implementation is an abstraction nothing asked for. `BridgeObserver` earns its trait because production genuinely passes a no-op; a capability store does not |
-| two of MIK-7388's four defects contradict frozen acceptance rows (implementer, HIGH) | confirmed at source. `:433` is what row 320 specifies and `:409` is what row 308 forbids; both findings die at the requirement, and the ticket narrowed to `:430` + `:454`. It has since narrowed again: `:454` was fixed in `60a28464` and checked off as `BRIDGE.5`, leaving `:430` alone. Whether row 320 is the behaviour the requester wants is open question 4, not a repair |
-| store has no eviction or ownership (both vendors, HIGH) — **re-raised on the amended design** (GPT, HIGH) | confirmed twice. The first answer, `SessionLifecycle`, has no production caller at all; declarations live in the `NotificationMultiplexer` session map instead, the only session-keyed store whose removal runs in production. Superseded answer recorded at open question 3; the owner is fixed by amendment 3 |
-| bridge retries invoke the backend outside cost accounting (GPT, HIGH, LIKELY) | confirmed at source: `invoke.rs:1246,1369,1394` each fire once around the single dispatch at :1327. In scope — this change creates the second invocation. One dispatch helper, change surface above |
-| the merge widens MRTR.9 for modern callers while the table says it does not (synthetic, MEDIUM, CERTAIN) | confirmed at source: the gate at `invoke.rs:1518` is shape-blind. Merge scoped to `Legacy` only, option C above |
-| construction-site census says five and lists seven (synthetic, LOW) | confirmed. Count was wrong, list was right; re-enumerated by role |
-| timed-out client prompt discarded, backend retried without the answer (GPT, HIGH, LIKELY) | out of this scope — a defect inside `input_bridge.rs`, not fixed by a wiring change. **Filed as MIK-7388** with the pending-map growth, blocking MIK-7212. Both halves of that row are now superseded: the ticket WITHDREW this criterion (`BRIDGE.1`, retired) once row 320 was read at source, and round 6 deleted the blocking edge |
-| pending-response map grows if the outer timeout cancels after registration (GPT, HIGH) | out of this scope. **Filed as MIK-7388**, which blocks MIK-7212: neither defect is reachable until this wiring gives the bridge a caller. Recorded here as being in the same file as the row above, which it is not — `input_bridge.rs` holds no pending state, and `rg 'impl .*ClientChannel for' src/` returns nothing, so the map this names belongs to an implementor the UNWIRED decision means nobody has written. Re-bound on MIK-7388 to the production `ClientChannel` impl on 2026-09-05 — which is the impl THIS change writes, so `BRIDGE.2` is satisfied here and is not something to wait for |
-| production-path HTTP test beyond trait fakes (GPT, MEDIUM) | accepted. The acceptance rows are fake-driven; one end-to-end HTTP test is the honest evidence and belongs in the test plan |
-| compact legacy-or-modern discriminator instead of full `RequestShape` (GPT, both passes) | accepted. Recorded as the field's intended shape; `RequestShape` was shorthand, not a requirement |
-
-### One capability value, two consumers
-
-The gate at `invoke.rs:1514` reads `caller.input_capabilities`. So does the
-bridge. Feeding that one field from the merged value — session store
-authoritative, per-request slice narrowing — makes the gate consult the merged
-set by construction, with no second consumer to keep in step. Stating it is the
-fix; changing the gate would be the defect.
-
-The merge happens where `CallerContext` is built, not where it is read:
-`src/gateway/router/handlers.rs:705,1164` (HTTP, `session_id` in scope at :707)
-and `src/gateway/server/mod.rs:1827` (stdio, `session_id` in scope from :1722,
-constant `"stdio-session"` at :1579 — a key nothing ever writes under, so the
-stdio read returns nothing and the caller is refused).
-
-**Absent is fail-closed.** No captured capabilities for a session — evicted,
-pre-store, restarted — means the client declared nothing, and the question is
-refused. The rejected option B is exactly what a fail-open default would
-reintroduce through the back door.
-
-**The store is not a store.** Declarations are co-owned by each transport's
-existing session state. A declaration is removed from the map exactly once, on
-session `DELETE` (`handlers.rs:354`), and replaced in place exactly once, on
-`initialize`. There is no disconnect hook. There IS a reaper, and an
-earlier revision of this paragraph denied it: `NotificationMultiplexer::spawn_reaper_on`
-(`streaming.rs:105`) spawns a ticker whose `reap_expired_sessions` (:128)
-`retain`s away every session that is past `session_ttl` AND has no active
-receivers. Its doc comment records that `server.rs`, `webhooks.rs` and
-`proxy.rs` all call it, so it runs in production.
-
-A session id is client-supplied, and `get_or_create_session_for`
-(`handlers.rs:300`) will CREATE a session under an id the client chose, so the
-question "who may read this declaration" has exactly one honest answer: whoever
-presents the session id.
-
-An earlier revision of this paragraph invented a per-connection generation to
-narrow that. It was removed rather than patched: on HTTP a client reattaches to
-its session on a new connection without re-`initialize` (the SSE attach path at
-`handlers.rs:290-300` is exactly that), so a per-connection generation either
-fail-closes legitimate reattached traffic — the feature dead on the one
-transport this design ships to — or is per-session, which is the rule below
-under a longer name.
-
-The rule, stated once: **a declaration is session-scoped.** Reattaching to a
-session inherits its declaration, because that is what reattaching means. The
-protection is the session id's secrecy, and it is exactly the protection every
-other piece of session state in the gateway already has — this change adds no
-new exposure and inherits the existing one. That inheritance is stated below
-alongside the session lifetime, and it is not deferred: it is a property this
-change reads off the gateway it is being wired into.
-
-### Change surface, stated
-
-Wiring one call is the smallest part of this.
-
-- `Declared::parse` (`src/protocol/meta.rs:367`) already takes a plain
-  capabilities map of exactly the `initialize` shape, and already reads the 2026
-  elicitation modes from it — an empty `elicitation` object declares form mode.
-  It is **private**. Rather than widening the parser itself, expose a named
-  constructor — `Declared::from_initialize` — documenting the exact
-  capabilities-map contract it accepts. The visibility change then reads as a
-  designed API surface instead of a convenience opening.
-- stdio writes nothing. The store is written at the HTTP `initialize` call
-  site only, so a stdio caller has no entry and the conjunction in amendment 1
-  refuses it. An earlier revision had stdio capture under a `"stdio-session"`
-  constant, on the rationale that one write site should cover every bridgeable
-  transport; that rationale died when stdio left the bridgeable set, and a
-  stored-but-unread declaration is a claim about permission that nothing
-  checks.
-- a write at the HTTP `initialize` call site (`router/handlers.rs:926`), and a
-  read at each `CallerContext` construction site. Seven, enumerated from source and split by role: two
-  production writes carrying a real declaration (`handlers.rs:705,1164`), and
-  five passing `Declared::NONE` today (`invoke.rs:3816,3846,3881` — tests —
-  and `server/mod.rs:1827,2619` — stdio). An earlier revision of this document
-  said "five" while listing seven; the count was wrong, the list was right.
-  The read is the *same* read at all seven, which is what makes it safe to add
-  at the stdio sites: the store is written only at the HTTP `initialize` call
-  site, so a stdio read finds no declaration and the conjunction in amendment 1
-  refuses. Nothing at `server/mod.rs:1827,2619` needs a transport check, and
-  the deadlock the descope exists to prevent stays unreachable.
-- `shape` threaded to each of those sites, and production implementations of
-  the bridge's three traits, which today exist only as test fakes.
-- **one dispatch path, not two.** The budget gate and the accounting emissions
-  around the single `dispatch_to_backend` are enumerated once, in the section 4
-  table — this bullet deliberately does not restate them, because the earlier
-  three-item copy here had already drifted from what the table lists, with stale
-  line numbers. A bridged retry invokes the backend a *second* time, after all of
-  them, so without this a paid backend is called twice and billed once and a
-  configured budget is exceeded with no record. Factor the backend attempt and
-  its accounting into one helper that the initial invocation and every bridge
-  retry both go through. Elimination rather than patch: a second accounting
-  call would leave "a dispatch path that is not accounted for" still
-  describable; one path leaves it undescribable.
-- `CallerContext::input_capabilities` currently documents itself as "what this
-  caller declared on **this** request". That contract changes to the merged
-  value; the comment changes with it.
-
-### Decision table
-
-Because the merge is conditional on shape, the two shapes do not read the same
-value, and a row is only decidable once its source is named. The middle column
-names it.
-
-| shape | where `declared` is read | outcome |
+| Gate | Verdict | Evidence / reason |
 |---|---|---|
-| modern | this request's `_meta` — declared there | continuation minted, as today |
-| modern | this request's `_meta` — absent there, and the session value is **not** merged in | refused by MRTR.9, as today |
-| legacy | the session's `initialize` declaration — declared there | bridged |
-| legacy | the session's `initialize` declaration — absent there | refused by MRTR.9, as today |
+| G0 priority | PASS | E1: operator approved full 4.0 scope; E2: `MIK-7212.MRTR.7a`/`.7b` and the supplementary stdio rows are release blockers. Unblocking their design precedes their implementation. |
+| G4 clear requirements | PASS | E4: this scope receipt; companion canonical criterion-to-case matrix identifies positive and negative outcomes. |
+| G5 minimum coherent scope | PASS | E2: existing `InputBridge::run`, pending-map guard and 23 component tests are reused. E4: one shared session owner and one writer; historical HTTP-only instructions consolidated in their original files. |
+| L1 licenses/IP | PASS | Documentation changes preserve existing project licensing and cite protocol sources; no dependency, copied implementation, or license change. Code-package SBOM review is not performed or claimed by this DOCS increment. |
+| O1 structure | PASS | Both primary amendments stay in existing `docs/design` files; the root-authorized confirmation edit is limited to the conflicting transport contract. |
+| O2 no clutter | PASS | E3: `git diff --check` and local-link/test-name inventory passed; review packets live in the external Codex review archive, not the repository. |
+| O3 naming | PASS | Existing filenames and stable canonical MRTR/STDIO/CANCEL IDs remain; new WIRE rows are supporting cases, never replacement canonical criteria. |
 
-Row 2 is the one an unconditional merge would flip: a modern client that
-declared at `initialize` and omitted `_meta` would start being asked, which is
-the per-request gate MRTR.9 exists to enforce. It stays refused.
+DoR: NPV/Cost/ROI N/A under canonical DOCS applicability; **7/84 applicable
+DOCS gates PASS, 77 N/A because this increment edits documents only**. E1:
+[operator scope record](../requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md);
+E2: [canonical release criteria](../requirements/RELEASE-4.0.0-requirements.md);
+E3: recorded diff and inventory checks; E4: this design and its test plan.
+This summary does not waive the larger code increment's DoR, reviewed red tests,
+source impact analysis, or runtime DoD. Fresh review closure is still pending.
 
-## Round-3 amendments — three defects the wiring would activate
+## Measured constraints and reuse
 
-The confirmation pass (`gpt-review`, `b645491e`, SHIP-WITH-FIXES) found three
-things that are not bridge-internal and not out of scope: each one is created,
-or first made reachable, by this change. All three verified at source before
-being accepted. Each is eliminated rather than patched — after the amendment the
-finding can no longer be stated.
+Source observations are **I (one source)**, not runtime measurements:
 
-**1. The bridge gate is a conjunction, and that is what makes it transport-safe.**
-The reviewer read the design as "legacy shape -> bridge" and objected that every
-stdio request is legacy-shaped, so the HTTP-only scope would not survive contact
-with stdio. Correct about the shape, and the design did not say the second half
-out loud. The gate is `Legacy` shape **and** a declaration present for this
-session in the HTTP session store. Stdio never writes that store — the store is
-owned by the streaming session manager and stdio has no session in it — so a
-stdio request finds no declaration and takes the existing fail-closed refusal.
-No transport enum, no `is_http` flag: the scope boundary is the store's
-membership, which already had to be checked. Row 3 of the decision table is this
-case and it stays refused.
-
-**2. Post-dispatch verdicts are computed from the final result, not the first.**
-`invoke.rs:1475` reads `stopped_to_ask` once, from the first dispatch result,
-and two later gates depend on it: the idempotency settle at `:1499` and the
-response gate at `:1769`. A bridge retry that succeeds leaves that verdict
-saying the backend stopped to ask when it has since acted — the key is never
-settled and the response is judged on a stale verdict. Confirmed at source.
-The dispatch helper named in the change surface therefore returns the *settled*
-result, and `interim` and `stopped_to_ask` are derived after it returns. One
-result value in scope means a stale verdict has nowhere to live. The two uses
-of "did it stop to ask" are distinct and neither name is reused:
-
-```
-let first = dispatch(...);                       // one attempt
-let asked = InputRequired::claims_input_required(&first);   // authorizes bridging only
-let result = if asked && bridgeable { bridge_and_retry(first) } else { first };
-let stopped_to_ask = InputRequired::claims_input_required(&result);  // settles + gates
-```
-
-**3. The declaration store is owned by the session manager, not by `ClientSession`.**
-Open question 3 answered "declarations live in `ClientSession`". `ClientSession`
-is private to `src/gateway/streaming.rs:47` and constructed only there
-(`:188`, `:202`), and that file never sees an `initialize` message — it builds
-sessions from transport state. `MetaMcp::handle_initialize`
-(`src/gateway/meta_mcp/mod.rs:1151`) is the only place the declaration exists,
-and it already carries `session_id: Option<&str>`. So the writer and the owner
-are real but in different modules, and the earlier answer would not have
-compiled. Amended: the declaration is a **field on `ClientSession`**, reached through
-getter and setter methods on `NotificationMultiplexer`
-(`src/gateway/streaming.rs:73`). The session map's value type is already
-`Arc<ClientSession>` (`:75`), so a field cannot drift from the session the way
-a second keyed map can, and it cannot outlive it: the declaration is dropped
-with the session, by construction rather than by a removal call anyone has to
-remember. `get_or_create_session` returns the existing session, so a stream
-reconnect keeps the declaration instead of silently losing the client's
-capabilities.
-
-The sole production REMOVAL is `handlers.rs:354` on DELETE; `initialize`
-replaces in place and removes nothing, which is why the two counts in this
-document are one rule and not a contradiction. An earlier revision
-of this paragraph also cited `streaming.rs:578` as a stream-end removal. It is
-a line inside a test — the same defect that disqualified `SessionLifecycle`
-four paragraphs down, made while writing the sentence that disqualified it.
-A third removal exists that no `rg remove_session` can see, because it does not
-call it: the reaper `retain`s. Grok raised it (round 6, MEDIUM, CERTAIN) and it
-is confirmed at source — `streaming.rs:75` is the map the reaper walks and the
-map that holds `ClientSession`, so the same eviction that ends a streaming
-session ends its declaration.
-
-This CLOSES the unknown rather than deferring it. It was parked first as a
-"named residual", then as a DEFERRED unknown with four fields; both were wrong,
-and wrong in the expensive direction — a deferral schedules work for a question
-already answered in the tree.
-
-```
-resolved (checkable): does anything reclaim a session that is never DELETEd?
-  — rg -n 'spawn_reaper_on|reap_expired_sessions' src/ then read streaming.rs:105-152
-  — a production ticker retains away sessions past session_ttl with zero receivers,
-    and it walks the same `sessions` map (:75) whose value type is Arc<ClientSession>
-  — the four-field deferred table is deleted; a declaration's lifetime is DELETE,
-    or the reaper, and the memory bound the deferral was going to measure is
-    already enforced by session_ttl
-```
-
-The read-access property is NOT part of that answer and is not deferred either:
-a declaration is readable by whoever presents the session id, exactly like every
-other piece of session state in this gateway. That is inherited, not introduced,
-and if it is judged unacceptable the fix is server-minted unguessable session
-ids, which belong to the session store and not to this change.
-
-
-
-Two stores were rejected on the same test, applied to each in turn — does
-anything outside a test remove from it. `SessionProfileStore`
-(`src/routing_profile/mod.rs:430`) is already owned by `MetaMcp` and keyed by
-session id, so it looked like the obvious home; its `remove_session` has no
-non-test caller, so it would have leaked exactly as `SessionLifecycle` would.
-The stdio `initialize` path (`src/gateway/server/mod.rs:1788`) has no
-multiplexer to write to, which is amendment 1's conjunction holding by
-construction rather than by a transport check.
-
-Not amended, still out of scope: the aggregate deadline not bounding backend
-retries, and prompt parameters forwarded without typed validation. Both are
-inside `input_bridge.rs`, neither is created by the call site, and MIK-7388 is
-where bridge-internal defects go. The third item this sentence used to list —
-reply projection ignoring request kind — left the list by being FIXED
-(`60a28464`, `MIK-7388.BRIDGE.5`), not by being scoped out.
-
-What keeps the remaining two from shipping live is the UNWIRED row, which is
-what this change replaces, so the honest statement of the risk is that this
-wiring makes them reachable and neither is a blocker: one is bounded by the
-per-call deadline the bridge already carries, the other by the firewall the
-call site puts in front of it. An earlier revision said instead that MIK-7388
-blocking MIK-7212 held them back. That edge is deleted — see the round 6
-disposal below.
-
-## Round 4 review, disposed
-
-Fourth pass, GPT on the amended design plus the test plan. Verdict
-SHIP-WITH-FIXES. Three HIGH findings were the same defect: the amendments were
-appended and the passages they overturned were left standing, so the document
-stated both readings. Each is now eliminated rather than annotated — the
-superseded sentence is gone, not footnoted.
-
-| finding | disposal |
+| Existing owner | Observation and consequence |
 |---|---|
-| stdio still captures a declaration while the amendment says it never writes (HIGH, CERTAIN) | confirmed in the text. The capture is deleted: the store is written at the HTTP `initialize` site only. Its rationale — one write site for every bridgeable transport — died when stdio left that set |
-| the earlier resolution still assigns the store to `ClientSession` (HIGH, CERTAIN) | confirmed in the text, in the disposal table and in the open-question-3 answer. Both now name the `NotificationMultiplexer` session map and record `ClientSession` as the superseded answer |
-| scope excludes live SSE delivery that the HTTP bridge requires (HIGH, CERTAIN) | confirmed in the text. The paragraph opened "Also out" and then argued the opposite; it now opens "IN, not out". Delivery is inside FOR and `MIK-7212.WIRE.8` is its evidence |
-| no non-ignored case proves an initialized stdio caller stays refused (HIGH, LIKELY) | accepted. Added as `MIK-7212.WIRE.10`, deliberately not `#[ignore]`d: the refusal is stdio's behaviour until MIK-7387 lands |
-| WIRE.5 checks one generic accounting record (HIGH, POSSIBLE) | accepted. The row now asserts the backend-call count and each sink — invocation metrics, error budget, cost tracker, spend — carries three |
-| WIRE.9 does not test the cache gate (MEDIUM, CERTAIN) | accepted. The row now asserts the settled result is cached and a follow-up call is served without a further invocation |
-| pseudocode for interim vs settled verdict (improvement) | accepted. Four lines under amendment 2 |
-| make MIK-7388 a merge-before-wiring prerequisite, defects in one place (improvement) | accepted then, REVERSED in round 6. It was closed by giving the deferral four schedule fields with `when` = merges before this wiring; grok showed that edge had nothing left to hold, and it is now deleted. The half that survives is the one this finding actually wanted: bridge-internal defects live on one ticket |
-| stage both a permitted and a forbidden request in WIRE.4 (improvement) | accepted, row rewritten |
-| map each of the 21 existing rows to its test name (improvement) | accepted, scheduled: done before implementation handoff, so an omission is mechanically visible rather than inferred from a count |
+| `src/gateway/input_bridge.rs` | `InputBridge::run` already owns round/request/aggregate bounds and raw prompt planning. `ClientChannel` has only a test fake; `BackendInvoker::invoke` returns bare `Value`. Add adapters and a typed error seam, not another bridge loop. |
+| `src/gateway/proxy.rs` | `register_pending`, `resolve_pending`, `cancel_pending`, `PendingSampleGuard` and `send_to_session` forwarding already exist. `resolve_pending` binds a response to its originating session and does not consume another session's waiter. |
+| `src/gateway/streaming.rs` | `ClientSession` lives in the multiplexer map and already has an authenticated owner. DELETE and the TTL reaper remove that same map entry; owner-authorized reconnect reuses it. No declaration field exists yet. |
+| `src/gateway/server/mod.rs` | `build_meta_mcp` is shared, but the multiplexer/proxy are currently constructed only in HTTP `run`. `run_stdio` awaits dispatch inline and exclusively owns stdout. Moving dispatch alone leaves the writer blocked. |
+| `src/gateway/meta_mcp/mod.rs` | Both transport initialize paths reach `MetaMcp::handle_initialize`; no capability capture exists. `MetaMcpCallerContext` currently describes only per-request declarations. |
+| `src/gateway/router/handlers.rs` | HTTP reply ingress recognizes bridge IDs and calls `resolve_pending`; the normal stdio request parser does not provide this reply path. |
+| `src/gateway/meta_mcp/invoke.rs` | MRTR.9 precedes continuation minting; the paid dispatch is surrounded by governance, accounting and final-result gates. A direct retry would bypass them. |
 
-## Unknowns, scheduled
+The old claim that session-id secrecy alone protects declarations is obsolete:
+`ClientSession::owner` already exists. Preserve that owner boundary, including
+[GH452 DELETE ownership](2026-09-06-gh452-session-delete-ownership.md), rather
+than reintroducing a bearer-session assumption.
 
-1. Does the gateway see `initialize` on every transport that can be bridged
-   (stdio, SSE, streamable HTTP), or only some? — read the two production
-   dispatch sites — RESOLVED: both reach one shared handler,
-   `MetaMcp::handle_initialize` (`src/gateway/meta_mcp/mod.rs:1151`), from
-   `src/gateway/server/mod.rs:1788` (stdio serve loop) and
-   `src/gateway/router/handlers.rs:926` (HTTP router). It already receives both
-   values a per-session store needs: the `initialize` `params`, which carry the
-   client's `capabilities` object, and a `session_id` that both call sites pass
-   as `Some(..)`, never `None`. That answer is superseded by amendment 3: the store
-   is written at the HTTP call site (`router/handlers.rs:926`) only. One write
-   site covering every bridgeable transport was the right shape while stdio was
-   bridgeable; it left that set, and a declaration nothing reads is a claim
-   about permission nobody checks.
-2. Is the `NFR.OBS.4` counter name decided anywhere? — deferred. Owner: the
-   readiness doc's owner. Resolves when a counter design exists. Nothing here
-   depends on it: `BridgeObserver` is a trait, and production can pass a no-op
-   until the name is chosen, which is honest rather than inventing a literal.
-   When: at the counter design, which is `RELEASE-4.0.0-cluster-a-readiness.md`
-   work, not this change's. If it resolves badly — no counter is ever named —
-   the no-op observer ships permanently and the release row stays unmet on
-   observability grounds alone, which is a reporting outcome, not a bridge one.
+Protocol anchors: legacy [2025-11-25 transport framing](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
+and [lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
+were read on 2026-09-06. The gateway's new transport sends newline-delimited
+JSON-RPC, keeps logs on stderr, and observes the initialize/initialized barrier.
+Modern requests keep the [2026-07-28 MRTR contract](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr):
+per-request capabilities, input responses keyed to the original questions and
+opaque backend state on retries. The bridge is compatibility translation for a
+legacy client, never permission to send old server requests to a modern client.
 
-3. Which existing session state should carry the declarations? — RESOLVED, and
-   the answer is not the one both reviewers assumed. `SessionStateStore`
-   (`src/gateway/state.rs:22`) is the right shape to copy: keyed by session id,
-   `Arc<RwLock<HashMap<..>>>`, cheaply cloneable. `SessionLifecycle`
-   (`src/gateway/session_lifecycle.rs:22`) is the right owner in principle —
-   named callbacks fired on disconnect and on a reclamation deadline, the
-   deadline existing precisely because MCP 2026-07-28 removed protocol
-   sessions.
+## One shared runtime and declaration owner
 
-   But **nothing registers with it in production.** `register` is called only
-   from its own unit tests; `SessionStateStore::remove_session` has no
-   production caller either. Three modules' doc comments instruct the reader to
-   register via the hook — `src/security/firewall/anomaly.rs:187`,
-   `src/security/firewall/mod.rs:680` — and `anomaly.rs:129` states in its own
-   words that nothing reclaims a session.
+1. Construct one `Arc<NotificationMultiplexer>` and its one `Arc<ProxyManager>`
+   in `Gateway::build_meta_mcp`, returning the same handles in `BuiltMetaMcp` to
+   either transport. HTTP stops constructing a second pair. `MetaMcp` receives
+   that proxy through a builder/setter; the proxy owns the multiplexer already,
+   so it is the sole route to session declaration reads/writes and channel
+   construction. Do not store `Arc<AppState>` in `MetaMcp` (reference cycle).
+   Test-only `MetaMcp` construction without this runtime remains fail-closed.
+2. Add `Declared` plus handshake readiness to **`ClientSession` itself**, behind
+   the existing session owner's synchronization. Access through narrow
+   multiplexer methods; `ProxyManager` delegates access for `MetaMcp`. Do not add
+   a second session-keyed map. Missing session, failed handshake or absent
+   capability yields `Declared::NONE`, never all capabilities.
+3. Expose `Declared::from_initialize` over the existing capabilities-map parser.
+   At shared `MetaMcp::handle_initialize`, capture the successful handshake's
+   capabilities in the already admitted session. This write creates no session
+   and bypasses no owner check. Read **`params.capabilities`**, never request
+   `_meta`. Admit initialization exactly once under the session-state lock and
+   keep its declaration immutable thereafter. Reject reinitialization of an
+   already initialized session with `-32600`; changing declarations requires a
+   fresh owned HTTP session or a new stdio process. This eliminates the
+   active-call/reinitialization race instead of coordinating two counters. A
+   concurrent second initialize cannot win a second write under that lock.
+4. `notifications/initialized` marks the same session ready on both transports.
+   The stdio writer acknowledges the flushed initialize response before any
+   prompt-capable dispatch is released. Capability capture alone is not channel
+   readiness. A pipelined legacy tool request waits behind that barrier in a
+   bounded queue; a capability that was never declared still refuses.
+5. HTTP uses its authenticated session creation/lookup, owner checks, DELETE and
+   reaper. Stdio creates one process-private session and subscribes its writer
+   before initialization. Its identifier is generated per runtime, not a shared
+   global `"stdio-session"` value. Its owner is `stdio-local:<runtime UUID>`,
+   created only by the stdio runtime and never by the HTTP owner mapper, which
+   emits `credential:` or `unauthenticated:` domains. Never create it through
+   the `anonymous` compatibility helper. HTTP GET, POST and DELETE presenting
+   even the exact stdio ID cannot resume, read, answer or delete it.
+   EOF/cancellation removes it. This separation holds even in a fixture hosting
+   both transports with the same multiplexer.
+6. Both transports classify the request before constructing caller context.
+   For **Legacy**, effective capabilities come from that session and an optional
+   slice may only narrow them. For **Modern**, capabilities come only from this
+   request's well-formed `_meta`; session capabilities never widen it. Carry the
+   shape explicitly; malformed modern declarations cannot become Legacy.
 
-   So "bind eviction to the existing session lifecycle" — which both reviewers
-   recommended and which an earlier revision of this design accepted — would
-   have written a comment claiming eviction while shipping the leak they
-   flagged. Verified on the write side, which is where an absent caller is
-   visible: no non-test `register` call, no production `remove_session` call.
-
-   **The declarations therefore live in the `NotificationMultiplexer` session
-   map** (`src/gateway/streaming.rs:75`) — the only session-keyed store with a
-   production removal path, on `DELETE` (`router/handlers.rs:354`) and in
-   the session reaper (`streaming.rs:128`). An earlier revision of this answer
-   cited `streaming.rs:578` as a stream-end removal; that line is inside a
-   test, and the real second path is the reaper, which removes by `retain`
-   rather than by calling `remove_session`. This answer first named `ClientSession`
-   itself; amendment 3 records why that owner cannot hold it — the struct is
-   private, is built only at `streaming.rs:188,202`, and never sees
-   `initialize`. Eviction is then not a mechanism this change adds; it is an
-   entry removed by the path that already removes the session. Nothing hangs off the
-   dead hook, so wiring `SessionLifecycle` is **not** a prerequisite of this
-   change. Its absence stays recorded here because it is the reason the obvious
-   answer was the wrong one, and because the firewall's anomaly tracker
-   (`src/security/firewall/anomaly.rs:129`) is still waiting on that same
-   callback — a leak this change neither causes nor fixes.
-
-4. Should a prompt no human answers still retry the backend without that
-   answer? — **deferred, and it is an ASK, not a check.** Requirement row 320
-   says yes in terms ("abandoned at `min(remaining, 30s)`, and the rounds still
-   remaining are unaffected"), and the frozen acceptance row pins it. GPT-5
-   raised the same behaviour as a HIGH defect on the ground that a backend may
-   then continue without input a person was required to give. Both readings are
-   coherent; only the requester can choose. Owner: the release owner, with this
-   design. What resolves it: the requester answering, in one line, whether an
-   abandoned prompt ends the round (today) or the call (the reviewer's reading).
-   When: before this change ships, since the behaviour it settles is reachable
-   the moment the bridge has a caller. MIK-7388 already carries this question as
-   `BRIDGE.4` and has RETIRED the `:433` criterion that assumed the reviewer's
-   reading, so the ticket is waiting on the answer, not the other way round. If
-   it resolves toward the reviewer: row 320 and its acceptance test change
-   first, this wiring is unaffected, and `:433` returns to the ticket as a
-   requirements change rather than a bug fix.
-
-## What is not claimed
-
-The 21 bridge rows are reported green by a peer session (21 passed, 0 failed,
-0.50s). This session has not reproduced that run, so the evidence level is I —
-one run, reported — not V.
-
-The obstacle was disk, and it is fixed: the root filesystem stood at 4.4 GB
-free (99% used), below the fail-fast threshold that halts the build. Cleaning
-this worktree's `target/` returned 6.9 GB, leaving 10.9 GB. The test command
-itself remains refused until 13:41 UTC by a circumvention latch recorded
-against the earlier disk block, which expires on a four-hour timer. Re-running
-both acceptance suites after that expiry is what raises this to V; nothing in
-this design should be implemented on the strength of the reported run alone.
-
-## Closure re-check, disposed
-
-The finder re-checked its own round-4 findings against the repaired text and
-re-raised three. All three were verified at source before being touched; none
-was taken on the reviewer's word.
-
-| finding | disposal |
-|---|---|
-| the write site is still named twice, HTTP-only in one place and `MetaMcp::handle_initialize` in another (HIGH, CERTAIN) | confirmed. The round-4 repair fixed the stdio paragraph and left two passages carrying the old instruction — the change-surface bullet and the answer recorded against the first scheduled question. Both now name `router/handlers.rs:926`, and the recorded answer says which amendment superseded it rather than being quietly rewritten |
-| the store's owner is not concrete, and the cited stream-end removal does not exist (HIGH, LIKELY) | confirmed, and the citation was worse than the finding said. `streaming.rs:578` is a line inside a test; the only production removal is `handlers.rs:354` on DELETE (I: `rg -n 'remove_session' src/` returns those two and nothing else — one grep is one source, however carefully it was run). Eliminated rather than patched: the declaration becomes a field on `ClientSession`, which the map already holds as its value type, so it cannot drift from or outlive the session and no second keyed map needs removal wiring. The follow-on claim that no reaper exists was itself false, and round 6 killed it: `spawn_reaper_on` runs in production over the same map, so the unknown is RESOLVED rather than deferred |
-| `WIRE.9`'s follow-up call is answered by the settled idempotency entry, so the cache gate never runs (MEDIUM, CERTAIN) | confirmed by reading the row: it reused the key it had just asserted settled, which is exactly the shape `test-plan-honesty` calls a case that cannot fail. The follow-up now carries a different idempotency key and the same response-cache key, and settlement is asserted separately |
-
-Two improvements taken, both in the test plan: `WIRE.10` sat outside the
-acceptance table as a detached row and is now inside it, and rows 312, 323 and
-324 are mapped to their three stdio test names, with the stale sentence saying
-the mapping was still scheduled removed — it had landed one commit earlier.
-
-One improvement declined with its reason: splitting the normative plan from the
-review-disposal history (MEDIUM). The history is what stops a superseded
-decision being re-proposed, and this document has now had the same passage
-re-raised twice; moving it to a second file is how it stops being read.
-
-## Design event — the retry interface cannot carry a governance refusal
-
-Named here per the development process: a decision the design did not make,
-surfaced while the test plan was under review, changing an observable contract.
-
-`BackendInvoker::invoke` yields a bare `Value` (`src/gateway/input_bridge.rs:299-302`),
-and `InputBridge::run` returns that value to the caller unchanged once it is not
-another interim (`src/gateway/input_bridge.rs:366-369`). The production path it will
-wrap does not speak in values alone: the cost-governance check refuses a call with
-`Err(Error::json_rpc(-32003, …))` before dispatch (`src/gateway/meta_mcp/invoke.rs:1290-1297`),
-and every other pre-dispatch gate on that path refuses the same way.
-
-An adapter bridging the two can therefore only flatten a refusal into
-success-shaped data. The first attempt's refusal reaches the caller intact,
-because it happens before the bridge is entered; the *retry's* refusal does not.
-An operator's spend limit would be enforced on attempt one and silently discarded
-on attempt two, which is the failure the limit exists to prevent.
-
-**Decision**: `BackendInvoker::invoke` yields `Result<Value, Error>`, and
-`BridgeError` gains a variant carrying a backend error so `InputBridge::run`
-propagates it to `invoke_tool` rather than fabricating a result. The alternative —
-encoding the refusal as an error-shaped `Value` and re-parsing it — was rejected:
-it invents a second spelling for an error the path already types, and every
-consumer would have to agree on the spelling.
-
-**Who decided**: recorded here rather than settled in an implementation commit,
-because it changes a public trait signature and the observable outcome of a
-budget-blocked retry.
-
-**Found by**: the GPT leg of the test-plan review, held across three rounds against
-a decline that cited the trait's own signature as evidence the channel existed. The
-decline was wrong: the signature is what removes the channel. Verified at source
-before this was written.
-
-**Cost of the alternative history**: the plan would have shipped a WIRE.5 whose
-budget assertion could never go green, and the defect would have been found in
-implementation, against code written to the wrong contract.
-
----
-
-## Round 5 amendments — 2026-09-06, measured at source
-
-Five measurements taken against `fix/mrtr2-continuation-handle` before this
-round's review. Three change what the design claims; two close unknowns it left
-open. The reviewers for this round are the pair the release board binds
-(`grok-review` + `kimi-review`), neither of which reviewed rounds 2-4.
-
-### 1. The stdio block is TWO blocks, not one
-
-`## Second blocker — stdio` (line 188) says the answer arrives on a stdin nobody
-is reading. That is true, and it is the smaller half.
-
-Measured: `src/gateway/server/mod.rs` line 1606 is
-`while let Ok(Some(line)) = reader.next_line().await {`, and its body awaits
-`Self::dispatch_batch_with_sink(...)` (line 1629) and
-`Self::dispatch_single_with_sink(...)` (line 1646) INLINE. No `tokio::spawn`
-occurs in that path — the spawn sites in the file are 223, 897, 1321, 1401,
-2081, 2135 and 3250, none in the read loop. Line 1598 is the sole gateway
-consumer of stdin; the tree's other stdin reads are CLI prompts
-(`src/cli/invoke.rs` lines 102 and 104, `src/commands/setup.rs` lines 47 and
-241).
-
-Second block, independent of the first: `let mut stdout = stdout;` at line 1601
-is exclusively `&mut`-borrowed by the in-loop `Self::write_response(&mut stdout,
-…)`. So on stdio the bridge cannot WRITE THE QUESTION either, not merely fail to
-read the answer.
-
-Why this earns a paragraph rather than a footnote: it kills a repair that looks
-obvious and fixes half the problem. "Just `tokio::spawn` the dispatch" frees the
-reader and leaves the writer contended — the question still cannot go out. Any
-stdio concurrency design must own the reader and the writer together, and that
-design is out of scope here by the requester's 2026-09-05 ruling.
-
-The design's stale citation (line 1581) is corrected to 1606; the line moved,
-the loop did not.
-
-### 2. "No production `ClientChannel`" is true of the TRAIT and false of the MACHINERY
-
-`## Blocker — capability store missing` and the change-surface section (line 269)
-count a production `ClientChannel` implementation among the things that must be
-built. The trait half is correct and re-verified: `pub trait ClientChannel: Send
-+ Sync` at `src/gateway/input_bridge.rs` line 268 has exactly one implementation
-repo-wide, `impl ClientChannel for FakeClient` at
-`tests/mik_7212_mrtr7_bridge_acs.rs` line 145. Zero production implementations.
-
-What the design does not say is that the request-response machinery such an
-implementation would wrap is already in production, on the HTTP path, with
-callers:
-
-| piece | location | state |
+| Request shape / input support | Backend asks | Result |
 |---|---|---|
-| mint id + register waiter | `src/gateway/proxy.rs` line 128 `register_pending` | production |
-| resolve waiter from a reply | `src/gateway/proxy.rs` line 151 `resolve_pending` | production |
-| send-and-await, sampling | `src/gateway/proxy.rs` line 206 `forward_sampling_with_response` | production, called at `router/handlers.rs` line 1275 |
-| send-and-await, elicitation | `src/gateway/proxy.rs` line 271 `forward_elicitation_with_response` | production, called at `router/handlers.rs` line 1294 and `destructive_confirmation.rs` line 241 |
-| reply ingress | `router/handlers.rs` lines 627-642 | production: no `method`, has `result` or `error`, `input_bridge::is_bridge_reply_id(resp_id)` at line 630, then `resolve_pending` at line 635 |
+| Legacy, ready session, declared method/mode | supported question | bridge on HTTP or stdio |
+| Legacy, no declaration or unavailable channel | any question | bounded refusal, zero prompts/retries |
+| Modern, this request declares the method/mode | supported question | existing continuation, zero legacy prompts |
+| Modern, only a session declaration or malformed `_meta` | question | MRTR.9 / existing malformed-request refusal |
 
-Both forwarders mint `sampling-{uuid}` / `elicitation-{uuid}`, hold a
-`PendingSampleGuard` across the await, deliver via
-`multiplexer.send_to_session(session_id, …)`, and wrap the receiver in
-`tokio::time::timeout`, returning Ok / Cancelled / Timeout. The id prefixes
-MATCH the bridge's: `ServerRequestKind::prefix()` (`input_bridge.rs` lines 69-75)
-mints `sampling-`, `elicitation-`, `roots-`, and `is_bridge_reply_id` (line 144)
-admits exactly those back.
+Session removal also cancels pending requests bound to that session, so a later
+session cannot inherit either permission or unanswered prompts. An ordinary HTTP
+stream disconnect does not revoke a still-valid session declaration; if an
+exchange cannot be delivered, fail that exchange rather than manufacture input.
 
-So the HTTP `ClientChannel` is an ADAPTER over machinery that already exists, is
-already called from production, and already uses the same id space — not new
-plumbing. This SHRINKS the change surface; it does not delete the blocker, and
-the change-surface section is amended to say which of the two it is rather than
-leaving a reader to size it as new machinery.
+### HTTP control ingress at request capacity
 
-**WHICH LAYER THE ADAPTER SITS ON, corrected.** An earlier revision of this
-section wrapped the two `*_with_response` forwarders. Grok raised it in round 6
-and it is confirmed at source: that adapter cannot satisfy the trait it
-implements.
+`router/handlers.rs` currently acquires `AppState::inflight` before identifying
+reply envelopes or initialization notifications. A normal call holds that
+permit while waiting on its bridge; filling the normal lane can therefore
+prevent the replies that would release it. Keep the normal drain/admission
+semaphore, and add a separate **32-permit control lane** owned by AppState.
+Classification follows bounded body parsing and the existing authentication,
+protocol and session-owner checks; it does not bypass any of those checks.
 
-| `ClientChannel::send_request` is given | `forward_*_with_response` does |
+Validated response envelopes and `initialize`, `notifications/initialized`
+and cancellation control messages use this lane without waiting for a normal
+permit. The dispatcher validates the exact control shape and method before
+choosing it; arbitrary tools, unknown methods, malformed envelopes, or a result
+member attached to a tools/call request cannot smuggle normal dispatch through
+the lane. Use non-blocking admission: at control capacity refuse with HTTP 503;
+an initialize request retains its ID in a `-32000` capacity error, while replies
+and notifications receive no new JSON-RPC response envelope. Their transport
+refusal must not consume a pending ID. Count admitted controls in graceful
+drain while keeping them available to finish already admitted normal calls.
+
+For a batch, validate and process eligible controls under one bounded control
+admission, then **drop that control permit before normal-member admission or
+dispatch**. Non-blocking-admit each normal member on the normal semaphore;
+if it is full, return that member's `-32000` capacity error without waiting or
+holding control occupancy. Reuse `dispatch_batch_with_sink` for common batch
+result assembly and per-member error behavior, adapting its admission/sink
+boundary for both transports rather than creating a second HTTP assembler.
+A mixed batch is not permission for tools/call members to bypass admission.
+As on stdio, an initialize-plus-prompt batch returns the initialize result and
+`-32600` for the prompt-capable member without awaiting an initialized
+notification the client cannot yet send. Separately pipelined normal calls
+retain the bounded readiness barrier. A pure control batch never waits behind
+normal work. Reply, initialized and cancellation progress at normal capacity,
+mixed batches while unrelated calls fill the normal lane, and control-lane
+saturation require distinct production HTTP cases. No mixed batch may pin a
+control permit while waiting on a normal tool handler.
+
+## Raw production `ClientChannel`
+
+Implement `ClientChannel` for `ProxyManager` in `proxy.rs`, where the private
+`PendingSampleGuard` is available. The same adapter serves HTTP and stdio;
+transport selection belongs to the session's live delivery path. Factor the
+register/guard/send/receive sequence into one private exact-ID exchange helper
+used by the raw adapter and existing typed forwarders; the typed forwarders
+retain their own payload construction and IDs for their existing consumers.
+The shared exact-ID helper returns the **raw JSON-RPC envelope**, including its
+result/error discriminator. The raw bridge consumes it as-is; each existing
+typed forwarder extracts its expected result exactly once and retains its
+existing error contract. Never nest the envelope inside a second result.
+
+For each bridge-minted ID, register that **exact ID** with its session, establish
+`PendingSampleGuard` before any await, then use the session request primitive
+described below with raw JSON-RPC containing the supplied method and supplied
+`Option<Value>` params. Omit absent params; preserve present params exactly,
+including unknown fields and nested values, except the explicitly required
+legacy URL `elicitationId` adaptation below. Await the registered receiver without
+a competing adapter timeout: the existing
+`InputBridge::ask` owns `min(per_prompt, remaining aggregate)` and drops that
+future when the prompt expires. A second timer returning `DeliveryError::TimedOut`
+would fail the whole call instead of preserving the approved abandoned-round
+behavior. Add a per-prompt `DeliveryProgress` shared with the channel: on its
+outer timeout the bridge checks whether writer handoff occurred and whether the
+transport is known closed. Before handoff or after known transport closure it
+returns `NoSession`; only a handed-off, still-live unanswered prompt takes the
+existing omitted-answer retry. This progress parameter is the narrow channel
+interface change needed to distinguish delivery failure from silence. The guard
+removes the entry on success, error, no receiver, outer prompt timeout, outer
+future cancellation and task abort. Session-close cleanup removes all waiters
+for that session and closes their receivers.
+
+Do not wrap `forward_sampling_with_response` or
+`forward_elicitation_with_response`: they mint a second ID and serialize typed
+params that can drop fields. They retain their existing consumers. `roots/list`
+uses the same raw path with its own ID prefix; no sibling typed forwarder is
+needed. Keep the admission set closed to `elicitation/create`,
+`sampling/createMessage` and `roots/list`.
+
+Inbound responses are recognized before normal method parsing and correlated
+by exact ID **and session**. Unknown, duplicate, late and wrong-session replies
+never consume another waiter and never get mistaken for tool requests. A
+JSON-RPC error remains `ClientRefused` when `InputBridge::project` examines the
+raw response; the bridge-owned prompt timeout abandons only that answer. A lost
+receiver or unavailable delivery returns `NoSession`, a delivery failure, never
+`TimedOut`, human refusal or accepted empty input. Unknown methods/modes fail
+before any frame.
+
+Reuse the existing kind-aware `InputBridge::project` (MIK-7388.BRIDGE.5): an
+`action` field on sampling or roots is ordinary result data. Preserve the
+approved abandoned-round contract (MIK-7388.BRIDGE.4): timeout omits that answer
+key on a bounded retry; it does not insert `{}` or imply approval. For destructive
+confirmation, silence is never labelled affirmative acceptance; the explicit
+era-by-transport policy below decides the unconfirmable outcome.
+
+### Pinned-spec elicitation correction — same bridge, valid results
+
+Source inspection after R2 found that the old component expectation is not a
+valid modern backend response. The pinned [MRTR InputResponses contract](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/mrtr)
+files the complete client result, so an accepted form response contains both
+`action` and `content`. [2026 URL elicitation](https://modelcontextprotocol.io/specification/2026-07-28/client/elicitation)
+accepts an action-only result. Today's `InputBridge::project` instead strips
+`action` and rejects URL acceptance because it requires object content. The
+existing row 308 fixture hides this by combining URL mode with a fabricated
+form answer. This is a conformance correction under canonical MRTR.7a/7b,
+superseding that old design/fixture payload contract, not a new bridge loop.
+
+Keep the existing kind discriminator. Pass the planned elicitation mode to
+`project` using the existing `protocol::meta::ElicitationMode` and
+`from_params`; retain it on `Prompt` rather than deducing mode from a reply.
+Correct that parser's existing null equivalence: only an absent mode defaults
+to form. A present null, nonstring or unrecognized string is invalid and must
+refuse the whole planned batch before any client frame, even for a caller that
+declared form. Reuse the parser with that correction rather than adding a
+second mode classifier. This follows the pinned schema's string-valued mode.
+Mode classification is not request validation: before whole-batch admission,
+require an elicitation `params` object and a string `message`. Form requires
+object `requestedSchema` with `type:"object"` and object `properties`; URL
+requires a string `url` accepted by the existing `url::Url::parse` as an
+absolute URL. Missing/null/scalar/array params, missing or incorrectly typed
+required fields, invalid URLs and malformed required form-schema structure
+refuse before any frame in a mixed batch. Run this structural validation on
+the raw value without typed reserialization, defaults, URL normalization or
+dropping unknown fields. It returns the already validated mode for `Prompt`.
+Do not use `ElicitationCreateParams` alone as the validator: its schema and URL
+fields are optional today. The legacy `elicitationId` rule below then applies
+to an already valid URL request; its absence is the one permitted adaptation.
+
+Form-schema validation covers the **complete restricted elicitation subset**,
+not just the top-level object. Each property must be a supported string,
+number/integer, boolean, single-select string enum (plain enum or titled
+oneOf), or multi-select string enum (the specified enum/anyOf items variants).
+Check the pinned subset's required and optional field types, supported string
+formats, numeric/length/item bounds, default types and enum option shapes;
+`required`, when present, is a string list naming declared properties exactly
+once each; duplicate names are malformed. Accept
+the empty object schema and every specified enum variant. Refuse nested object
+properties, arrays of objects, arbitrary non-enum arrays, unknown property
+types and advanced schema constructs such as references or general composition
+before any batch member is sent. Do not resolve schema references or fetch
+resources. Preserve annotation/extension data that does not introduce an
+unsupported validation construct, without rewriting the admitted raw schema.
+The pinned [form schema subset](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation#requested-schema)
+defines this finite validator; use its full examples as positive fixtures and
+nested/unsupported/mistyped variants as zero-frame falsifiers. This checks the
+request's schema shape, **not the client's content against it**: the existing
+component case forwarding schema-invalid object content remains required.
+
+For form acceptance require object `content`; for URL acceptance require
+`content` to be absent. On either valid acceptance return the **whole result**,
+including `action`, object content where applicable and unknown result fields.
+Sampling and roots results remain whole irrespective of any `action` member.
+Missing/unknown elicitation action, malformed form content and content-bearing
+URL acceptance refuse. Existing explicit decline/cancel and client-error
+policies remain terminal refusals; timeout remains omitted input on a bounded
+retry. This correction does not turn refusal or silence into acceptance.
+
+Use one crate-private mode-aware ElicitResult validator in the protocol layer
+for the bridge and legacy destructive-confirmation parser. It validates the
+raw result and returns the recognized action without altering that value;
+accepted form/URL content rules are identical in both consumers. Consumers
+retain their own terminal decline/cancel/error policy and the bridge files
+the original whole accepted result. Confirmation selects Form explicitly.
+
+There is one necessary legacy wire adaptation to otherwise exact params:
+[2025-11-25 URL elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation)
+requires `elicitationId`, which is absent from the 2026 request shape. The
+`ClientChannel` interface still receives the backend's exact raw params. Its
+production legacy adapter clones only a URL params object and inserts a missing
+`elicitationId` equal to this prompt's unique bridge ID; the JSON-RPC ID is
+unchanged. Preserve an already present nonempty string ID and every other field
+exactly. Do not serialize through typed forwarders, synthesize form content,
+change the URL or insert an ID into any other mode/method. Planning rejects a
+present invalid legacy ID before the first prompt in the batch, so a later bad
+entry cannot cause a partially delivered batch. The adapter does not store a
+second ID map or interpret backend state.
+
+URL acceptance means consent to navigate, not completion of the out-of-band
+operation. Retry with the exact action-only result and backend state; only the
+backend's final result establishes completion. Existing round and aggregate
+bounds still apply if the backend asks again. Optional legacy completion
+notifications are not fabricated by this bridge because it cannot observe the
+external operation's completion.
+
+### Single-recipient request delivery (U5 design decision)
+
+Direct `send_to_session` cannot carry bridge requests: its broadcast sends the
+same request to every subscriber. Keep that method for notifications. Add one
+private `send_request_to_session` primitive over bounded per-writer request
+queues registered **inside `ClientSession`**; do not add another session map.
+Each live SSE body and the stdio writer registers a unique writer ID with a
+bounded sender and removes it on drop. Choose one live writer in stable
+registration order and enqueue the frame exactly once. A failed `try_send`
+proves non-delivery and may select another live writer; a successful enqueue
+must never be replayed to another writer after delivery becomes uncertain.
+
+The queued request carries its exact bridge ID and the per-prompt
+`DeliveryProgress` object created by `InputBridge::ask`. The production writer
+marks handoff; queue rejection/drop or stream closure marks delivery failure.
+The channel future waits for handoff and then the correlated reply under the
+existing bridge-owned prompt deadline. The shared progress survives cancellation
+of that future so `ask` can distinguish timeout-before-handoff from a genuinely
+unanswered prompt. Cancelling before handoff prevents a queued frame from being
+handed off later; handoff and cancellation use one synchronized transition.
+Preserve whether handoff occurred when recording later cancellation, and record
+known transport failure separately from the bridge abandoning a timed-out wait. A dropped/rejected frame before
+handoff, a writer I/O error or a closed selected stream returns `NoSession`
+and cancels that waiter; it cannot turn into a timeout-driven answerless retry.
+No live writer means immediate `NoSession`. Once any JSON-RPC response arrives,
+the response itself proves delivery and remains authoritative.
+
+The acknowledgement boundary is explicit: stdio acknowledges after `flush`;
+HTTP acknowledges when its response body yields the complete encoded SSE frame
+to the HTTP transport, **not merely when the queue accepts it**. HTTP body yield
+cannot prove peer receipt or TCP flush; do not claim that guarantee. A guard on
+the selected response body cancels its still-pending exchanges when the stream
+drops, including drop before handoff. If the stream stays live and no answer
+arrives, the existing unanswered-prompt policy applies. Acceptance must stage
+both pre-handoff drop and post-handoff disconnect; neither retries the backend.
+There is no blind retransmission on another stream.
+
+`ClientChannel::send_request` receives `Arc<DeliveryProgress>` as its final
+argument. `DeliveryProgress` is an opaque public handle because external
+implementers of the public channel trait must acknowledge actual handoff;
+`mark_handed_off()` returns whether that transition was admitted. Its one
+synchronized phase enum remains internal, with the following transitions.
+Tests' fake clients acknowledge only after recording their observed frame;
+production enqueue never supplies that acknowledgement. Implement the channel
+trait directly on the existing `ProxyManager`, preserving its current pending
+map and `PendingSampleGuard`. Existing typed forwarders remain independent.
+
+The crate-private writer seam is
+`NotificationMultiplexer::register_request_writer(session_id) -> Option<RequestWriter>`.
+`RequestWriter::recv`/`try_recv` yield a `QueuedRequest` carrying the complete
+encoded JSON-RPC `json` and the same `delivery` handle. The registration owns
+the selected writer's lifetime; dropping it fails its outstanding deliveries.
+Its crate-private `queued_count` reports the underlying receiver's item count
+so tests can establish a full or unreceived queue without consuming a frame.
+The HTTP body and stdio loop both consume this seam. Unit integration fixtures
+may control a real registration, but this cannot replace tests of HTTP body
+yield, stdio flush or transport shutdown.
+
+Terminal states
+retain whether handoff occurred and the failure cause; resetting those facts
+would confuse failed delivery with a live unanswered prompt.
+
+| Current state / event | Next state / obligation |
 |---|---|
-| `id: &str`, minted by the bridge (`input_bridge.rs:69-75`) | mints its OWN `sampling-{uuid}` / `elicitation-{uuid}` (`proxy.rs:212`, `:279`) and never sees the bridge's |
-| `params: Option<Value>`, the backend's object verbatim | takes `&SamplingCreateMessageParams` / `&ElicitationCreateParams` and re-serializes with `serde_json::to_value` (`proxy.rs:225`, `:292`) |
-| `method: &str` | is one method per function |
+| Queued / writer claims frame | Writing for stdio; HTTP remains queued until one atomic complete-frame body yield. Only that registered writer may claim it. |
+| Queued / HTTP body yields the complete frame while exchange remains live | HandedOff. Check cancellation and record this handoff in the same synchronized transition as yielding the frame. |
+| Queued / cancellation or deadline | Cancelled, with no handoff; dequeue must suppress the frame. Remove pending ID; no backend retry. |
+| Queued / rejected queue or selected stream drop | Failed, with no handoff; return NoSession and remove pending ID. |
+| Writing / flush completes while exchange remains live | HandedOff. The writer acknowledges the complete frame exactly once. |
+| Writing / cancellation or deadline before flush | Cancelled, with no acknowledged handoff. Remove pending ID and do not retry. Bytes already written cannot be recalled: finish this one frame within the bounded output/shutdown deadline or close the transport. Do not start another frame in its middle or acknowledge the cancelled exchange. |
+| Queued or Writing / correlated client response wins | Answered; the response proves delivery even if writer acknowledgement has not yet run. Validate that response normally. |
+| HandedOff / correlated response | Answered; resolve exactly one waiter. |
+| HandedOff / live prompt deadline | Cancelled, with handoff retained and no known transport failure; only this timeout takes the existing omitted-answer retry. |
+| Writing or HandedOff / selected transport failure | Failed; preserve handoff history, return NoSession, remove pending ID and do not retry. |
+| Any nonterminal state / outer caller cancellation | Cancelled; remove pending ID and end the bridge without retry. Queued frames are suppressed; already-started writes follow the complete-frame-or-close rule above. |
+| Answered, Failed or Cancelled / late reply, handoff or duplicate close | Remain terminal; never restore pending state, emit a suppressed frame or consume another exchange's reply. |
 
-`SamplingCreateMessageParams` (`protocol/messages.rs:525-543`) is six named
-fields with NO `#[serde(flatten)]` catch-all, so the round trip through it is
-LOSSY BY CONSTRUCTION: every field a backend declared and this gateway does not
-model is silently gone by the time the client sees the question. That is exactly
-what row 308 forbids, and no amount of adapter code can put back what the type
-dropped. The minted-id half is as bad in a quieter way — the bridge hands the
-adapter an id and the forwarder discards it, so the id the client answers is not
-the id the bridge is waiting on, and WIRE.11 cannot assert on a value that never
-reached the wire.
+The writer's bounded output/shutdown handling is transport lifetime control,
+not a second prompt timeout. Tests stage each side of the claim, flush,
+response and cancellation transitions, including a partially written stdio
+frame. They distinguish a valid response that wins from a late response after
+terminal cancellation.
 
-The repair is not a patch to the adapter. It is one layer down, over the pieces
-the forwarders are themselves built from — the same three lines, in the same
-file, already exercised by the tests at `proxy.rs:503-561`:
+Tests separate exact raw roundtrip/ID preservation from single-recipient delivery
+and acknowledgement failures. A controlled real writer/HTTP-body seam proves
+the failure boundary; a real two-stream system case proves the primitive is
+actually wired. Existing broadcast notification tests must remain green.
 
-```
-register_pending(the BRIDGE-minted id, session_id)   -> proxy.rs:128
-PendingSampleGuard held across the await             -> proxy.rs:97
-send_to_session(session_id, raw method + raw params) -> streaming.rs:254
-tokio::time::timeout on the receiver
-```
+## Stdio: continuous reader, bounded dispatch, single writer
 
-Raw `Value` in, bridge id out, one function for all three methods. The typed
-forwarders keep their existing callers (`handlers.rs:1275`, `:1294`,
-`destructive_confirmation.rs:241`) and the bridge does not go through them.
+Use exactly one internal serving seam, called by production `run_stdio`:
+`async fn serve_stdio<R, W>(context: StdioServeContext, reader: R, writer: W)
+-> Result<()>`, with `R: AsyncBufRead + Unpin + Send + 'static` and
+`W: AsyncWrite + Unpin + Send + 'static`. Production passes `BufReader<Stdin>`
+and `Stdout`; deterministic tests pass duplex and controlled short-writing
+adapters. No second test-only dispatch loop is allowed.
 
-Restating what is still owed, so the shrink is not read as a pass: the trait
-implementation over those four lines, and the timeout translation from the
-receiver's outcome to `DeliveryError` (the bridge's `Timeout` and
-`ClientRefused` must stay distinguishable for NFR.OBS.4).
+`StdioServeContext` owns the shared `MetaMcp`, proxy/multiplexer, policies,
+limits and telemetry sink. The separately owned scheduled-expiry change supplies
+the production continuation state/clock handle and cleanup guard moved into
+this context; root owns their concrete types, lifecycle and clock injection.
+The bridge owns only reader/admission/dispatch/writer logic. The same root clock
+hook drives expiry tests; do not invent a second bridge cleanup timer or clock.
+Owning context inside `serve_stdio` makes EOF, writer error and task cancellation
+end the same lifetime that owns the scheduled-expiry guard. Root's lifetime
+suite can therefore exercise production cleanup through this seam. The normal
+`run_stdio` preparation/shutdown of backend warm-start and health tasks stays
+integrated with this one serving call.
 
-### 3. The gap the shrink appeared to expose, and why it is gone
+The transport owns three coordinated activities, with cancellation owned by
+that serving lifetime rather than detached tasks:
 
-`proxy.rs` line 396 is `pub fn forward_roots_list(&self, session_id: &str) ->
-bool` — fire-and-forget. No `register_pending`, no receiver, no timeout, not
-`async`. There is no roots counterpart to the two `*_with_response` forwarders.
+- **Reader:** continuously reads/decodes lines, routes response envelopes to the
+  shared proxy before request dispatch, handles cancellation notifications, and
+  admits normal requests to a bounded in-flight set. It never awaits a backend
+  call, a prompt answer, or a dispatch permit. Reply and cancellation ingress
+  remains usable at request capacity. Duplicate active client request IDs refuse
+  without replacing the original cancellation handle.
+- **Dispatch:** tracked tasks invoke the existing shared dispatch path and send
+  complete response values to the writer queue. Do not clone a durable telemetry
+  sink into tasks: observe/persist each inbound message in the reader before
+  dispatch can await, preserving NFR.OBS.1, and split the existing observation
+  prologue from dispatch. Batch requests retain envelope semantics; members
+  cannot bypass the barrier
+  or lose correlation. Reject prompt-capable members batched with `initialize`
+  using `-32600`, rather than queueing them behind an initialized notification
+  that a client may send only after receiving the whole batch response. The
+  initialize member still receives its response. Separately pipelined calls
+  remain bounded behind the barrier.
+- **Writer:** one task owns stdout and serializes whole JSON values plus newline
+  and flush. The generic writer seam is production code, so controlled flush
+  and short-write tests exercise this same writer rather than a fixture copy.
+  It consumes the bounded response queue, the selected request queue and the
+  session's broadcast notification receiver, writing raw request data rather
+  than an SSE wrapper.
+  All responses, server prompts and protocol notifications use this writer.
+  Initialize carries a flush acknowledgement that opens the first barrier;
+  receipt of `notifications/initialized` opens the second. Neither permission
+  is inferred from task spawning or enqueue order.
 
-The design does not mention this, because it treated the whole channel as
-unbuilt. While this section still wrapped the typed forwarders, the missing
-third forwarder read as the concrete piece of new code the wiring needs.
+U2 inventory is resolved at source: `ServerConfig::shutdown_timeout` defaults to
+30 seconds, `max_body_size` to 10 MiB and `StreamingConfig::buffer_size` to 100;
+there is no stdio admission limit. HTTP's 10,000-permit drain semaphore is not a
+suitable new stdio default. Set explicit private stdio bounds: **32 active
+requests**, **8 pre-initialize queued requests**, **32 queued response frames**;
+per-writer request queues reuse the configured positive streaming buffer size.
+Reject zero buffer size as configuration error, not by silent clamping. Bound
+input frame reads incrementally using `server.max_body_size` so newline-free
+input cannot grow before a late size check. Use the configured shutdown timeout
+as the maximum drain deadline, then abort and join remaining tasks.
 
-Is it reachable? Yes, and it is one grep: `InputBridge::prompt`
-(`input_bridge.rs`) maps a backend request to a kind through
-`ServerRequestKind::from_method(method)`, and line 52 maps `"roots/list"` to
-`Self::Roots`. A backend that names `roots/list` in an `input_required` produces
-a `Roots` prompt, which `ask` sends by
-`self.channel.send_request(session_id, &id, prompt.kind.method(), prompt.params)`
-with `params` of `None` (line 127). Nothing in `plan` or `prompt` excludes the
-kind. The gap is therefore live, not theoretical.
+On admission saturation, enqueue JSON-RPC `-32000` with `Gateway is at capacity`
+without waiting in the reader; if even the bounded output queue cannot accept
+that error, close admission and terminate the session as output saturation.
+These are engineering limits, not claimed performance measurements; WIRE.12/13
+must measure them before the stdio implementation is accepted. On output queue saturation, multiplexer lag, stdout failure, EOF or
+outer cancellation, close admission, cancel and join active dispatch, drop
+pending guards, stop/join the writer, remove the stdio session, then run the
+existing warm-start/reaper/health-loop/backend shutdown sequence. Do not reinterpret
+lost output as the ordinary unanswered-prompt retry. Cleanup on outer cancellation
+needs RAII as a backstop in addition to the awaited normal shutdown path.
+A closed pipe is not a trigger to replay a write against the backend.
 
-The reachability stands; the gap does not. Correcting section 2 to adapt over
-`register_pending` + `send_to_session` DELETED this item rather than repairing
-it. There is no third forwarder to write, because the adapter uses no forwarder:
-`roots/list` is the same call with a different method string and `None` params,
-and the bridge already mints its `roots-` id and admits it back
-(`is_bridge_reply_id`, `input_bridge.rs:144`). A sibling
-`forward_roots_list_with_response` would have been a fourth typed function whose
-only caller was about to stop existing.
+Keep pre-initialize `server/discover` compatibility probes and ordinary ping
+behavior. The new barrier applies to operations that could emit input prompts;
+it is not permission to silently change unrelated discovery semantics.
 
-That is worth recording rather than quietly dropping: this section was a real
-finding against a wrong mechanism, and fixing the mechanism removed the finding.
-Grok raised both halves in one round — the layer error and the roots sibling it
-implies — and the second was the cheaper tell.
+## One accounted backend attempt and one final-result decision
 
-Rejected alternative, still recorded because it is still available: refuse
-`roots/list` at the bridge and let it fall to MRTR.9. That narrows what the
-bridge is FOR by removing a declared capability from the answerable set, which is
-a requester decision, not an engineering one (repair protocol, step 0). Not
-taken, and now unnecessary.
+Before bridge retries are wired, extract the existing paid-attempt boundary from
+`invoke.rs`: authorization/security context, governance check, dispatch,
+statistics and epilogue. Both the initial call and the bridge adapter call that
+same path exactly once per backend attempt. Preserve existing conditional
+emissions rather than adding an approximate second counter.
 
-### 4. MRTR.7b's accounting blocker: one gate and eight emissions around one dispatch, read at source (I)
-
-The 7b criterion names two blockers. The first is already recorded as a design
-event at line 546 (`BackendInvoker::invoke` returns a bare `Value`, so a
-budget-refused retry has no way to propagate a refusal). The second was named but
-never measured. Measured now, in `src/gateway/meta_mcp/invoke.rs`:
-
-| step | line | condition |
-|---|---|---|
-| `enforcer.check(tool, api_key_name)` | 1289 | BEFORE dispatch, `cost-governance`. REFUSES with `-32003` when the budget is exceeded; otherwise returns the warnings the epilogue injects |
-| `stats.record_invocation(server, tool)` | 1263 | unconditional, BEFORE dispatch |
-| `ranker.record_use(server, tool)` | 1266 | unconditional, before dispatch |
-| `dispatch_to_backend(...).await` | 1344 | the single paid call |
-| `counter!("mcp_tool_invocations_total")` | after 1357 | unconditional, after |
-| `histogram!("mcp_tool_invocation_duration_seconds")` | after 1357 | unconditional, after |
-| `stats.record_cached_tokens(...)` | in the `Ok` arm | on success with cached tokens |
-| `self.record_error_budget(server, tool, BudgetOutcome::of(&dispatch_result))` | 1384 | unconditional, after |
-| `self.cost_tracker.record(sid, api_key_name, server, tool, 0, …)` | after 1386 | on success |
-| `enforcer.record_spend(tool, api_key_name, cost)` | 1409 | on success, `cost-governance` |
-
-Eight accounting and telemetry emissions and ONE GATE, none of them factored
-into a function, arranged as a straight-line prologue and epilogue around ONE
-awaited `dispatch_to_backend`. There is no "invoke the backend once, accounted"
-callable in this file — the accounting IS the surrounding statements.
-
-The gate is listed first because an earlier revision of this section did not
-list it at all. That revision counted EMISSION POINTS, and `enforcer.check` is
-not an emission: it is the one statement on this path that can REFUSE. Grok
-raised the omission in round 6 and it is confirmed at source — `invoke.rs:1289`
-returns `Err(-32003)` before `dispatch_to_backend` is ever awaited, and the
-bridge module contains no reference to an enforcer at all (`rg enforcer
-src/gateway/input_bridge.rs` is empty). A retry loop wired over a path extracted
-from a count of emissions would therefore make every bridged round after the
-first UNMETERED: the operator's per-tool spend limit is checked once, on the
-call that entered the bridge, and never again on the `rounds + 1` backend
-invocations `InputBridge::run` can drive.
-
-So the invariant below is stated over the whole boundary, not over a list: what
-the extraction factors is EVERY STATEMENT BETWEEN THE GATE AND THE EPILOGUE,
-including the gate. A count is the wrong shape for this requirement, and
-counting is what lost the gate.
-
-That is what makes the 7b blocker structural rather than a missing call. A
-bridged retry has exactly two shapes available today and both are wrong:
-
-- call `dispatch_to_backend` again from inside the bridge's `BackendInvoker`: a
-  second paid backend call that is invisible to the gate and to all eight
-  emissions. Billed once, invoked twice, unmetered on the second pass, and a
-  per-tool daily budget can be exceeded with no record that it happened.
-- add a second copy of the accounted block around the retry: two owners of the
-  same counter, which the repair protocol's own table calls the patch (a check
-  detecting the disagreement) rather than the elimination (one owner).
-
-What the design REQUIRES is the invariant, not the mechanism: every backend
-invocation the gateway makes — initial or bridged — passes through exactly one
-accounted path, exactly once. An earlier revision named a single mechanism as
-REQUIRED without recording what else was available, which is the Definition of
-Ready bar failed on the one item this round calls structural. Four shapes, with
-their dispositions:
-
-| shape | disposition |
+| Existing operation | Required treatment |
 |---|---|
-| the bridge calls `dispatch_to_backend` directly | REJECTED. A second paid call invisible to the gate and to all eight emissions: invoked twice, billed once, unmetered on the second pass, a per-tool budget exceedable with no record that it happened. |
-| a second copy of the accounted block around the retry | REJECTED. Two owners of one counter and two owners of one spend limit — the repair protocol's own table calls that the patch, not the elimination. |
-| extract the accounted block; the bridge's `BackendInvoker` runs over the extraction | VIABLE. Costs a cross-cutting change to a path every invocation in the gateway uses. |
-| the bridge RETURNS its answers and the invoke path re-enters its own prologue-dispatch-epilogue in a loop | VIABLE ON ACCOUNTING — every pass is accounted by code that already exists — but it fails on criteria; see below. |
+| `enforcer.check(tool, api_key_name)` | Before each paid attempt; preserve `-32003` and the block reason on refusal. No backend or spend after denial. |
+| `stats.record_invocation`, `ranker.record_use` | Preserve current pre-governance placement: attempted invocation/rank use increments even when that attempt is then budget-denied. These are not paid-dispatch counters. |
+| `mcp_tool_invocations_total`, `mcp_tool_invocation_duration_seconds` | Observe every actual dispatched attempt exactly once. |
+| `stats.record_cached_tokens` | Record successful cached-token usage under the existing condition. |
+| `record_error_budget(BudgetOutcome::of(...))` | Observe every dispatch outcome exactly once. |
+| `cost_tracker.record`, `enforcer.record_spend` | Record successful attempts according to existing feature gates/conditions. |
 
-The loop shape's cost is not accounting, it is MRTR.7a. `InputBridge::run` owns
-the round count, the aggregate deadline and the request budget. Moving the loop
-into the invoke path either bypasses `run` — and 7a's criterion is precisely
-that `run` is reached from production, so bypassing it fails the criterion this
-change exists to satisfy — or it duplicates the bounds, which is two owners of
-one budget: the same defect class as two owners of one counter, one layer up.
+Change `BackendInvoker::invoke` to return the existing typed `Result<Value,
+Error>` and propagate that failure through `InputBridge::run`. Add a backend
+failure variant carrying the original `Error`; the invoke boundary unwraps it
+without changing its code, status or data. `Error` is not `Clone`/`Eq`, so the
+bridge error enum cannot retain those derives unchanged: existing tests use
+variant/field assertions for bridge failures after this seam change. Preserve
+their expected outcomes. A governance refusal must not become success-shaped
+JSON or a generic bridge error. Component backend fakes return `Ok`; this is an
+interface adaptation, not permission to rewrite their fixtures or semantics.
+Preserve the firewall owner's typed `Error::ResponseFirewallRefused` provenance
+through this path too. Never flatten it to text or infer it from a backend's
+code/message; the external adapter retains that server-only identity when
+projecting the generic refusal and avoiding breaker success/failure updates.
 
-That is a REASON, not a preference, and it is recorded so implementation
-inherits the reasoning rather than the conclusion. If the requester would
-rather relax 7a's wording than pay for the cross-cutting extraction, that is a
-criteria decision and belongs beside the section 5 question, not inside an
-implementation commit. On the criteria as they stand, the extraction is the
-shape that survives: the gate and the eight emissions factored around the single
-await, and the bridge's `BackendInvoker` implemented over that extraction rather
-than over `dispatch_to_backend`.
+`Bridge::retry_params` produces an overlay, not a complete tool call. Reuse
+`OutboundRetry::apply` so `requestState` and `inputResponses` are siblings of the
+original `name` and `arguments`. Preserve a user tool argument named
+`requestState`. Do not run `redeem_retry` on backend-owned state; no gateway
+continuation was minted for a legacy call held open by the bridge. Every retry
+gets a fresh backend request ID while its original request and caller remain
+bound. Bridge bounds stay owned by `InputBridge::run`. Source inspection found
+that its current aggregate check only surrounds rounds/prompts: the awaited
+backend retry itself is not deadline-wrapped. Bound that await by the same
+remaining aggregate budget and return `BridgeError::Deadline` when it expires;
+never retry after this deadline. This repairs enforcement of the existing bound,
+not its value. A timeout does not prove a backend write had no effect, so the
+terminal result must not invite automatic replay. WIRE.6 needs a stalled-backend
+fixture as well as prompt/round exhaustion.
 
-What the accounted path receives from the bridge, stated because the two
-adjacent shapes are both wrong. `Bridge::retry_params` (`mrtr.rs:477-489`)
-returns a BARE OVERLAY — `{requestState, inputResponses}` and nothing else, with
-each field omitted when it has no content. It is not a params object: it carries
-no `name` and no `arguments`, so an implementation that hands it to a backend as
-the call's params sends a call with no tool in it. The gateway already owns the
-correct merge and it is not a new helper: `OutboundRetry::apply`
-(`invoke.rs:455-465`) inserts both fields BESIDE `name` and `arguments` in the
-existing object, which is what the specification makes them and what lets a tool
-keep an argument of its own called `requestState`.
+Place bridging after per-attempt response admission and MRTR.9, and before
+continuation minting. A legacy bridge mints no redeemable continuation for its
+already completed exchange. The admission path applies to the first backend
+result and every retry result, never only to the final result.
 
-The accounted path must also NOT run `redeem_retry` (`invoke.rs:529`) on that
-overlay. That function redeems a continuation handle this gateway minted for a
-CLIENT to present later, and it refuses a handle replayed against another tool
-by checking the digest sealed in the envelope. A bridged retry has no such
-handle: the client never went away, the bridge is holding the call open, and the
-`requestState` in the overlay is the BACKEND's own, echoed verbatim. Running the
-redemption over it would refuse every honest bridged retry.
+Extract one common per-attempt processing path from `invoke_tool_traced`:
+classify the raw backend completion claim; preserve the existing completed-effect
+idempotency checkpoint for a completed result before any post-dispatch policy
+can refuse it; run the applicable response policies; only then expose an
+admitted challenge to the bridge or continuation minting. An input_required
+attempt must not be checkpointed as a completed effect. The accounted retry
+adapter uses this same path, without another policy finalizer or reservation
+owner. A final policy refusal must never release a completed effect for replay.
 
-Consequence for sequencing, stated because it is easy to get wrong: this
-extraction is a prerequisite of 7b, not a part of it. It changes the accounting
-path for every invocation in the gateway, including the ones that never touch the
-bridge, and its own regression evidence is the existing counter tests
-(`record_error_budget` has arm-level tests at lines 4412-4681). It must land, and
-be green, before a retry is wired through it.
+The existing D1 response-contract gate and D2 anomaly screening are currently
+below the proposed bridge hook in `invoke.rs`. Move their decision into this
+shared per-attempt admission, preserving action/observe settings, annotations
+and refusal error families. For a challenge, their inspection text is canonical
+JSON of **inputRequests**, including every raw method/params/unknown question
+field, excluding the backend's opaque requestState. The existing
+`response_inspect::extract_text_from_result` returns empty for a bare
+InputRequired and cannot supply this text. Preserve the complete typed challenge
+separately; the serialized inspection view never replaces its params. D1
+fail_closed/no contract still refuses; a declared contract's forbidden patterns
+and max_bytes must inspect the question, not silently skip an empty string.
 
-### 5. What this round does NOT settle — one question for the requester
+Existing context-integrity enforcement must also decide before a challenge
+can reach the client. Observe/Allow may retain outer diagnostics while leaving
+client-visible inputRequests unchanged. If an enforced transform/redaction or
+withholding would change a question, refuse it instead of silently rewriting
+the backend's request. This same rule applies to the firewall's challenge
+inspection. No raw prompt, answer, opaque state or finding fragment is added to
+refusal text or logs by the new path.
 
-Both rulings this change stands on are recorded and neither answers the other.
+The separately owned [response firewall](2026-09-06-firewall-response-enforcement.md)
+supplies reusable scanner/enforcement code. An interim challenge is a distinct
+artifact inspected exactly once before emission; it is not a final tool result.
+The agreed crate-private seam is
+`MetaMcp::enforce_firewall_challenge(&self, challenge: &serde_json::Value,
+targets: &[ResponsePolicyTarget], correlation: &ResponseCorrelation<'_>)
+-> crate::Result<()>`. The firewall owner owns `response_security.rs` and the
+always-available `meta_mcp` re-exports: `ResponsePolicyTarget { server: String,
+tool: String }` and `ResponseCorrelation<'a> { session_id: &'a str,
+caller: &'a str, external_server: &'a str, external_tool: &'a str }`.
+Bridge passes the full client-visible inputRequests Value, not the surrounding
+opaque state. The helper scans a clone using the shared configured firewall;
+Block or any redaction/mutation refuses generically, while Warn/Allow passes the
+unchanged question. Audit the final combined decision once, tagged by the
+server as `bridge_challenge`; do not audit Warn and then secretly refuse.
+Feature-off uses the same signature as a no-op. No signing or transport
+delivery-attempt log belongs in this helper.
 
-- 2026-09-05, requester: the bridge lands on HTTP only; legacy stdio keeps the
-  MRTR.9 refusal; stdio concurrency is a separate, lower-priority work package
-  whose 4.0.0 membership is decided after its own design exists. Recorded as out
-  of THIS CHANGE, explicitly not out of the RELEASE.
-- 2026-09-06, operator (`RELEASE-4.0.0-readiness-board.md` lines 984-1008):
-  `server.modern_protocol` stays true, and 4.0.0 is blocked until the
-  legacy-client bridge is REACHABLE FROM PRODUCTION. The ruling names no
-  transport.
+This helper covers internally consumed **legacy bridge** questions. A modern
+InputRequired returned externally uses only the firewall owner's external
+response boundary, tagged `final_response`; do not scan it through this helper
+and again at that wrapper. At that one external boundary, inputRequests and
+opaque requestState are immutable: Block or a firewall redaction that changes
+either must produce generic refusal before the one final Block audit. Allowed
+modern output preserves both exactly. The firewall owner implements this
+specialization; it is not another bridge scan. Common D1/D2/context admission remains before
+bridge/mint in both cases. Tests filter the relevant artifact kind.
+The actual final tool result retains its own D1/D2/context processing and the
+firewall owner's one external final-response inspection/signing boundary. Do
+not route the interim through a finalizer that changes its wire kind, and do
+not use final-only FWR-02 evidence to claim challenge coverage. WIRE.21 stages
+both an immediately refused challenge and a later refused challenge after a
+permitted round, with zero emission/retry for the refused artifact.
 
-An HTTP-only bridge makes the bridge reachable from production on one transport
-and leaves legacy stdio callers refused. An earlier revision opened this
-paragraph by asserting that stdio is the dominant MCP client transport. That
-was an A-grade claim — no source — in the sentence that frames a question for
-the requester, which is the worst place to put one. How much stdio matters is
-the requester's weighing, and this design should not pre-argue it. Whether that satisfies the release gate is not checkable by running
-anything, and it must not be assumed: nothing on the record shows the 09-06
-ruling had the 09-05 descope in view.
+Derive `interim`/`stopped_to_ask`, idempotency settlement and response-cache
+eligibility from the **final** result. The first interim only selects the
+bridge; retain each raw attempt's completion claim for its checkpoint before
+policy transformation. Policy and accounting apply to every attempt and final
+delivery retains its separate result-level gates. Invoke-loop duplication and direct unaccounted dispatch were
+rejected: both create a second owner for bounds or budgets.
 
-**Question, scheduled per §P1 (askable, not checkable)**: does an HTTP-only
-bridge satisfy the 4.0.0 gate, with legacy stdio callers keeping the MRTR.9
-refusal?
+## Confirmation dependency and observability
 
-- asked of: the requester, via team-lead
-- what would resolve it: a recorded yes or no on the readiness board
-- when: before implementation of 7a begins — it decides whether stdio
-  concurrency is in the release, and a yes written after the code lands is a
-  ruling with a sunk cost arguing for it
-- if it resolves badly (HTTP-only does NOT satisfy the gate): the stdio
-  concurrency design becomes a 4.0.0 blocker and must start now, against the
-  two-block finding in section 1 above. 7a and 7b are unaffected in shape; the
-  release date is not.
+CONFIRM.2 owns gateway-originated modern `InputRequired`, continuation
+binding/single-use and cache-before-redeem behavior. Its implementation must
+reuse the same initialized session and production channel for legacy HTTP and
+stdio, and retain the central admin/authorization gate. A generic bridge timeout,
+absent input or backend retry is never affirmative confirmation. The explicitly
+preserved legacy HTTP warning fallback remains a different, named policy outcome.
+The confirmation owner coordinates caller-context edits with the bridge owner;
+root authorized the conflicting transport-contract amendments and the R2
+atomic-redemption test-plan row in the confirmation package; its implementation
+and audit decisions retain their owner.
 
-Nothing in sections 1-4 depends on the answer, so this amendment is reviewable
-while the question is open. Implementation of 7a is not.
+Follow the era-by-transport [confirmation matrix](2026-09-06-confirm-2-destructive-confirmation.md#current-era-by-transport-contract--full-stdio-scope-amendment),
+including the deliberately preserved legacy HTTP warning fallback and the
+existing refusal floor for legacy stdio when confirmation fails.
 
-### Amendment provenance
+Use the existing `BridgeObserver` seam for NFR.OBS.4; record request kind,
+outcome and bounded count/duration, never answer bodies, prompt payloads,
+credentials, or unbounded session-ID labels. Confirmation-specific audit
+requirements remain with CONFIRM.2. Remove the existing full reply-body debug
+field at `router/handlers.rs` (`Received sampling/elicitation response POST-back`);
+WIRE.17 captures logs as well as observer records. Session/ID correlation may
+remain in debug logs where already supported, never raw prompts or responses.
+No new meta-tools are needed.
 
-Every claim in sections 1-4 was read at source on 2026-09-06 against
-`fix/mrtr2-continuation-handle` — no claim here is carried from a previous
-round's summary. Each is marked **I**, not V: one careful read of the tree is
-one source, and nothing in this round was corroborated by a second independent
-one. Line numbers are as of that revision and will drift; the
-symbols are the durable anchors. Section 5 quotes two records rather than
-measuring anything, and says so.
+## Unknowns and fail-fast schedule
 
-Inherited test evidence, unchanged and re-run 2026-09-06:
-`cargo test --test mik_7212_mrtr7_bridge_acs` = 23 passed, 0 failed. Three
-counts appear in this document — 18 acceptance rows, 21 bridge rows, 23
-passing — and they are one suite at three moments, not three suites. The
-current count is measured, not remembered: `rg -c '#\[tokio::test\]|#\[test\]'
-tests/mik_7212_mrtr7_bridge_acs.rs` = 23 (I). The lower two are snapshots taken
-while rows were still being added on 2026-09-05; where an earlier paragraph
-quotes one, it is quoting its own moment. That suite
-exercises the bridge through `FakeClient`; it is what makes the module live, and
-it is not evidence of a production path. That distinction is the whole of
-MRTR.7a.
+| ID / state | Owner | Check or answer | Trigger / bad outcome |
+|---|---|---|---|
+| U0 resolved (askable) | Mikko Parkkola | Accepted full stdio expansion recorded in the linked scope decision. | Removes the old include/exclude question; HTTP-only cannot close release. |
+| U1 resolved (checkable, I) | MIK-7212 | Read `proxy.rs` register/resolve/guard and both typed forwarders; raw ID + params can use existing primitives. | Select raw adapter; reject typed-forwarder wrapper. Runtime cancellation remains WIRE.11, not measured by this read. |
+| U2 limits resolved (checkable, I); red fixture deferred | MIK-7387 | Read `src/config/mod.rs` and `src/config/features/streaming.rs`: defaults above, no stdio concurrency setting. The explicit 32/8/32 limits, positive configured request buffer, `-32000` saturation error and configured shutdown deadline above are the selected design. Run the saturation/reply-progress fixture. | After plan approval, before stdio source implementation. If the fixture cannot keep reply ingress live at capacity, revise the admission mechanism; do not raise limits to hide the defect. |
+| U3 executable cancellation result deferred | MIK-7388 | Red `WIRE.11`: stage a real pending ID, abort its owner, await cancellation and assert removal; wrong-session/late reply cannot complete the next exchange. | First executable new test after plan review; before runtime adapter implementation. If primitives cannot uphold it, amend the adapter boundary before dependent wiring. |
+| U4 transport contract resolved; audit/implementation evidence deferred | MIK-7246, coordinated with MIK-7212 | Root authorized the full stdio confirmation amendment on 2026-09-06; the linked confirmation matrix is now the common contract. Its U2 owns the separate pending operator audit decision. | Shared interface agreement before shared-symbol edits; cross-transport confirmation and required audit evidence before deployment. Missing audit policy does not authorize omitting a required record. |
+| U5 mechanism selected; executable handoff result deferred | MIK-7212 | Single-recipient request queue + writer acknowledgement + stream-drop cleanup specified above; ordinary notifications remain broadcast. Run separated raw-roundtrip, two-stream, pre-handoff drop and post-handoff disconnect cases. | After design/plan review, before production HTTP delivery implementation. If the actual HTTP body cannot expose the named handoff/drop boundary, revise that mechanism before dependent wiring; do not call enqueue a flush. |
+| U6 protocol mismatch resolved at source; executable conformance result deferred | MIK-7212 / MIK-7388 | Pinned modern MRTR/Elicitation and legacy URL elicitation specs contradict content-only projection and the URL fixture's invented form content. Root approved complete ElicitResult and the narrow legacy ID adaptation. WIRE.20 plus corrected existing component assertions must fail the old implementation. | After plan approval, before production bridge changes. A form-only fixture or fake adapter cannot establish URL compatibility; preserve raw fields and exact IDs while proving the action-only backend retry. |
+| U7 admission order resolved; executable refusal evidence deferred | MIK-7212 with MIK-7407 | Root approved shared per-attempt D1/D2/context ordering and firewall owner agreed the exact challenge helper above. WIRE.21 observes meaningful challenge text and zero frames/retries for a refused artifact, plus completed-effect replay prevention. | After plan approval, before hook implementation. Final-only scanning or empty challenge extraction is not acceptance; preserve current configured action/observe behavior. |
+| U8 HTTP control capacity resolved; executable progress deferred | MIK-7212 / MIK-7388 | Source confirms normal semaphore is acquired before response routing. Separate 32-permit control lane, bounded batch control dispatch and normal-member admission are specified above. WIRE.22 fills real normal capacity, proves mixed batches release control permits before normal admission/dispatch, and separately exhausts controls. | Before production HTTP bridge acceptance. If control traffic still waits for the normal permit, repair ordering rather than increase its capacity. |
 
-## Round 6, disposed — 2026-09-06
+No deferred row is a pass; no dependent source implementation starts before its
+specified precondition. The three stdio ACs remain ignored in the current tree;
+that is unresolved implementation evidence, not an accepted release exclusion.
+The 23-test component count was inspected, not re-run for this docs amendment.
+A speculative `.../2026-07-28/client/input` URL failed to open; the authoritative
+MRTR page linked above was reached from the pinned changelog instead. Incorrect
+local policy/helper paths were corrected to the files cited above; no source
+claim depends on the missing paths.
 
-Two reviewers, two shapes. The closure re-check went back to the finder that
-raised round 5's findings; grok reviewed the whole document fresh. Every finding
-below was read at source before it was touched, and two of them died there or
-turned out to be worse than stated.
+## R1 review evidence and disposition — closure recheck pending
 
-| finding | vendor | disposal |
-|---|---|---|
-| the round-5 repair invented a per-connection generation and asserted "readable only by the connection that made it" (HIGH) | closure finder | confirmed, and eliminated rather than patched. `handlers.rs:290-300` reattaches an SSE stream to an existing session with no re-`initialize`, so the generation either fail-closes legitimate reattached traffic on the one transport this design ships to, or is per-session under a longer name. The mechanism is deleted; the rule is stated once — a declaration is session-scoped |
-| the removal count is stated in two vocabularies, "exactly two places" against "the sole production removal" (LOW) | closure finder | confirmed. One wording in both passages: removed from the map once on `DELETE`, replaced in place once on `initialize` |
-| the deferred owner cell names no accountable party; §4 over-grades a count the same round marked I | closure finder | both taken. The team lead is accountable until the session-store work package has a name in it; the heading says "read at source (I)" |
-| "nothing reaps a session that is never DELETEd" is false — `spawn_reaper_on` runs in production (MEDIUM, CERTAIN) | grok | confirmed and larger than stated. The reaper walks the same map (`streaming.rs:75`) that holds `ClientSession`, and it removes by `retain`, which is why the write-side grep could not see it. The four-field deferred table is DELETED and the unknown recorded as resolved |
-| open question 3 still cites `streaming.rs:578` as a stream-end removal (MEDIUM, CERTAIN) | grok | confirmed. The main passage had been corrected and the recorded answer had not. It now names the reaper |
-| the `ClientChannel` shrink wraps typed forwarders that re-serialize params and mint a second id (HIGH, CERTAIN) | grok | CONFIRMED at source and the approach changed, not patched. `send_request` is handed a bridge-minted id and raw `Value` params; `forward_sampling_with_response` mints its own uuid (`proxy.rs:212`) and re-serializes a six-field struct with no `serde(flatten)` (`messages.rs:525-543`), so the wrap is lossy by construction and WIRE.11 could never see the id it was given. The adapter now sits one layer down, on `register_pending` + `PendingSampleGuard` + `send_to_session` |
-| the accounted helper omits `enforcer.check`, and the retry overlay's shape is unstated (HIGH, LIKELY) | grok | CONFIRMED at source and repaired. `invoke.rs:1289` refuses with `-32003` before the dispatch is awaited and `src/gateway/input_bridge.rs` names no enforcer at all, so a path extracted from a COUNT OF EMISSIONS would leave every bridged round after the first unmetered. §4 now states the invariant over the whole boundary — gate included — and states what the accounted path does with `retry_params`: merge it as siblings via the existing `OutboundRetry::apply`, and never run `redeem_retry` on a backend's own echoed state |
-| the wait on MIK-7388 has nothing left to wait for (MEDIUM, CERTAIN) | grok | CONFIRMED at source. `:430` is re-bound to this change in the OUT list, `:433` is what row 320 specifies, and `:454` is already kind-aware — `project()` branches on `kind` at `input_bridge.rs:476-495`. The ticket agrees at every point: `BRIDGE.1` retired, `BRIDGE.5` checked (`60a28464`), `BRIDGE.2` re-bound by the ticket to “the change that creates the risk”. The merge-before-wiring edge is deleted; the ASK it travelled with survives as `BRIDGE.4` |
-| WIRE.8 should assert elicitation params arrive whole on the production wire; record the invoke-loop as a rejected alternative | grok | the second is already in §4's shape table with its rejection reason. The first is a test-plan change and goes to the test plan, not here |
+Run `mcp-v4-bridge-design-20260906-r1` submitted identical frozen material to
+`gpt-review` and `grok-review`. Both wrapper processes exited **0**; both
+canonical ledger rows have `process_status=ok`, material size **390419** and
+SHA-256 `f9258f751483faad6ff21ca10116cc31c9d6593812c80e0587147abe23ba54f1`
+(scope + NUL + stdin). Both verdicts were **SHIP-WITH-FIXES**, not approval.
+Their output paths are `gpt-20260906T132324Z-31996.md` and
+`grok-20260906T132325Z-31997.md` under
+`/Users/mikko/.claude/data/reviews/runs/`; frozen copies, manifest and receipts
+are in the external `mcp-v4-bridge-design-20260906-r1` review archive.
+The following repairs are documentation changes awaiting closure verification;
+no runtime defect is claimed fixed by writing its intended behavior.
 
-All three findings that this table first recorded as OPEN were read at source
-afterwards and moved to repaired above, which is what the open state is FOR. All
-three were confirmed, and none was a patch: a count of emissions that lost its
-gate, an adapter one layer too high, and a blocking edge with nothing left to
-block. Recording them open first was not caution for its own sake — a finding is
-a lead until it is read at source, and this document has twice recorded what
-closing one on the reviewer's word costs.
+| Finding | Source verification and disposal |
+|---|---|
+| GPT.1 reply-body log leaks answers | Confirmed `handlers.rs` logs `%request` on the POST-back path. Design requires removing that field; WIRE.17 now captures debug logs as well as observer output. |
+| GPT.2 / Grok.2 stdio confirmation contradicts C5 | Confirmed. Root authorized only the conflicting confirmation passages to change; one era-by-transport matrix now governs WIRE.16 and the companion confirmation cases. Preserve canonical legacy HTTP warning policy. Grok's suggested removal of positive stdio coverage is rejected because it would cut approved scope. |
+| GPT.3 reinit/admission race | Confirmed the design had no atomic transition. Eliminate mutable post-handshake declarations: one lock admits initialize once, then changing support needs a new owned session/process; WIRE.15 tests it. |
+| GPT.4 enqueue is not writer delivery | Confirmed `send_to_session` is only broadcast enqueue. Specify per-writer request delivery and progress/handoff/drop state; WIRE.18 tests pre-handoff timeout and both disconnect boundaries. Explicitly do not promise peer receipt from an HTTP body yield. |
+| GPT.5 gateway initialize delay not exercised | Confirmed the old fixture delays backend initialize while the gateway response is local. Require controlled gateway writer flush on the same generic production serving seam. |
+| GPT.6 probabilistic framing test | Confirmed large writes alone do not force scheduling. Add deterministic short-write/interleaving falsifier at the production writer seam, retaining the real-process test. |
+| GPT.7 canonical MRTR IDs absent | Confirmed. Companion now maps every canonical MRTR criterion to bridge cases or its separately owned evidence with a reason. |
+| GPT.8 unnamed deferred owners | Confirmed. U2–U5 now name stable MIK tickets. |
+| GPT.9 DOCS DoR evidence incomplete | Confirmed. Applicable DOCS gates and reasoned N/A summary are recorded above. |
+| Grok.1 existing stdio fixture is Modern and skips initialized | Confirmed `asking_call` sets protocol `_meta` keys and the process tests omit initialized. Plan explicitly repairs those helpers/handshakes and asserts Legacy classification, without weakening production classification. |
+| Grok.3 stdio owner domain unspecified | Confirmed compatibility `get_or_create_session` uses anonymous ownership. Require an internal `stdio-local:` owner domain outside HTTP mappings; WIRE.19 exercises exact-ID GET/POST/DELETE isolation. |
+| Reviewer improvements | Selected single-recipient primitive; separated WIRE.8 from WIRE.18; pinned `params.capabilities`; preserve pre-governance attempt statistics; reject same-batch prompt requests during initialize; share one private exact-ID exchange helper. |
 
-**Grok's verdict is recorded with a caveat about its own provenance.** The
-ledger row exists with `process_status: ok` and verdict SHIP-WITH-FIXES, but its
-`material_sha256` attests to a 134-byte stub, not to the 55KB material — the
-wrapper passed the path and the reviewer read the document off disk itself. The
-findings are real and cite real line numbers. The chain from verdict to material
-is not, and the next round submits the material on stdin.
+## R2 review evidence and disposition — closure recheck pending
+
+Run `mcp-v4-bridge-design-20260906-r2` submitted identical frozen material to
+both vendors. Authoritative ledgers show **395687** material bytes and SHA-256
+`4cac6bc863390a6e097ceb492126f88d87a37fac175287d0cab90f8463b817df`;
+both wrapper exits were **0**, both process statuses **ok**, and both verdicts
+**SHIP-WITH-FIXES**. Actual output files are
+`gpt-20260906T134951Z-699.md` and `grok-20260906T134951Z-700.md` in the canonical
+review output directory; the external R2 archive holds exact frozen material,
+outputs and receipts. These results do not approve the repaired bytes below.
+
+| R2 finding / improvement | Source disposition and repair |
+|---|---|
+| GPT NOW: confirmation MRTR.5c incorrectly called replica-only | Confirmed against the canonical requirement. Root authorized a narrow test-plan correction: a fresh-key concurrent retry of the same continuation cannot reach the held destructive dispatch twice; dedicated atomicity race case retains the real ledger. |
+| Grok NOW: initialize-plus-prompt batch has no falsifier | Confirmed. WIRE.14 now stages that exact batch, expects initialize success plus member `-32600` and zero prompts, then proves a separately initialized call succeeds. |
+| GPT optional state/queue/case specificity | Added DeliveryProgress transition table and partial-write rule; concrete zero-buffer/per-writer-capacity cases; separately named WIRE.11/16 outcomes. |
+| Grok optional ownership/bounds/observer/mapping specificity | WIRE.19 explicitly depends on GH452.SESSION.1; WIRE.12 covers 8/32/configured queue bounds; WIRE.17 requires bridge phase; WIRE.14 maps to canonical MRTR.7a and stdio closure. A full response queue cannot emit an extra refusal frame and instead exercises the specified bounded shutdown. |
+| Independently discovered pinned-spec elicitation defect | Root approved the evidence-backed correction after both R2 reviews. U6, the mode-aware whole-result contract and WIRE.20 replace obsolete payload expectations while retaining the existing run loop and component case names. Fresh review must include this scope receipt and the exact pinned spec evidence. |
+
+Inventory validation now keys only canonical criterion table rows: **21 MRTR
+criteria**, all mapped. An earlier 22-ID tally included the bare MRTR.7 prose
+shorthand; it was not an extra criterion. All 23 existing component names and
+24 production supporting AC IDs were accounted for at R3 freeze. No runtime test result
+is claimed by this correction.
+
+## R3 review evidence and disposition — closure recheck pending
+
+Run `mcp-v4-bridge-design-20260906-r3` supplied the same frozen **472454**
+material bytes to both wrappers, SHA-256
+`e68f9e8dd15695146caf40cbb198ef2660c45fbca14d39d2b102a6a0314e743e`.
+Both exits were 0 and both authoritative ledger process statuses were ok.
+Grok returned **SHIP**; GPT returned **SHIP-WITH-FIXES**. Grok reported truncated
+stdin display and read the full live docs/specs; all four owned documents were
+verified to still match the R3 frozen hashes when its result arrived. These
+receipts are in the external R3 archive, not approval of the R4 repairs.
+
+| R3 item | Source verification / disposition |
+|---|---|
+| GPT NOW: response-contract gate bypassed by early bridge | Confirmed D1 below mint in invoke.rs; existing extraction is empty for bare inputRequests. Root approved common per-attempt admission before exposure, preserving D1/D2/context enforcement, completed-effect checkpoint and the firewall owner's single challenge helper. WIRE.21 covers both missing contract and declared-contract dangerous prompt, not just the empty-extraction case. |
+| GPT NOW: HTTP normal semaphore starves bridge controls | Confirmed acquisition before response routing in handlers.rs. Dedicated bounded control lane and WIRE.22 cover response/initialized/cancellation progress and mixed-batch admission without permission bypass. |
+| GPT NOW: reused legacy confirmation form invalid | Confirmed constructor omits requestedSchema and parser accepts action-only form. The authorized transport contract now requires valid empty-object form schema and object-content ElicitResult; WIRE.16 and confirmation composition cases terminally refuse malformed/error replies while preserving unavailable-channel policy. |
+| GPT NOW: explicit null mode accepted as omitted | Confirmed in ElicitationMode::from_params. Shared parser now requires a recognized string when present; WIRE.20 contrasts omitted-form success with null/nonstring/unknown-mode zero-frame refusal. |
+| GPT/Grok optional small consistency repairs | Exact-ID helper returns the raw JSON-RPC envelope; tests pin fresh backend retry IDs; DeliveryProgress is one named enum; U2–U8 decisions and deferred executable evidence are distinguished. Root authorized synchronizing the two old release-test-plan oracle cells with the already reviewed URL/result contract. |
+| GPT optional serialized-byte queue budgets | Deferred optimization owned by MIK-7387's runtime capacity validation; no new default output-size restriction is added here. Current explicit item/input-frame bounds remain required and are not represented as a low-RSS guarantee. Record queued serialized bytes and their return to zero alongside counts. Retained bytes after completed drain fail the existing cleanup requirement; a further default payload budget needs its own measured compatibility decision. |
+
+At R4 the supporting matrix had 26 IDs (WIRE.1–22, STDIO.1–3, CANCEL.1),
+mapped to unchanged canonical criteria. R4 scope remains design/test-plan
+correction; all source and executable evidence is still owned by later gates.
+
+## R4 review evidence and focused repair disposition
+
+Run `mcp-v4-bridge-design-20260906-r4` supplied identical frozen **308249**
+material bytes, SHA-256
+`9db0c1c96c65b23d69416505971bee3d6e76a3ad234b5e2e8098b7c2c38d7e04`.
+Both authoritative ledgers report process status ok, both wrapper exits were
+0, and both verdicts were **SHIP-WITH-FIXES**. Actual outputs are
+`gpt-20260906T144843Z-53447.md` and `grok-20260906T144843Z-53448.md`;
+the external R4 archive includes these outputs and verified receipts. Five
+owned documents still matched frozen hashes when both outputs arrived.
+
+| R4 finding / improvement | Source-verified disposition |
+|---|---|
+| GPT NOW: WIRE.21 can miss the bridged completed-effect path | Require admitted prompt, valid answer, completed side-effecting retry, policy refusal, then same-key resubmission with exactly one effect and no extra prompt/dispatch. A direct-call checkpoint test cannot close this case. |
+| GPT NOW: mode parser is not required-request validation | Require raw params object, message string, required form schema structure or valid absolute URL before whole-batch admission. Keep the raw value and unknown fields; only the pinned legacy URL ID adaptation is permitted. WIRE.20 contains positive neighbours and each malformed field case. |
+| Grok NOW: mixed batches can hold control occupancy while waiting on normal work | Drop control permit immediately after controls; non-blocking-admit normal members with per-member capacity refusal. WIRE.22 fills normal capacity with unrelated pending prompts and submits enough mixed batches to expose pinned control permits, then proves an unrelated reply succeeds. |
+| Small consistency improvements | Shared protocol ElicitResult validator; repaired confirmation table rendering; WIRE.16 named malformed/error splits; invert the old null-mode unit oracle; WIRE.20/21/22 appear at their fail-fast preconditions; common dispatch_batch_with_sink assembly. |
+| Shared firewall dependency clarification | Modern external InputRequired also preserves immutable questions/state at its one external final_response scan. The firewall owner owns its specialization and real-wire test; no duplicate legacy helper scan. |
+| Repeated optional serialized-byte budget | Same named deferred optimization and measured-capacity owner as R3; no new compatibility restriction or memory guarantee is inferred. |
+
+Root directs focused finder closure under canonical repair item 6: each finder
+checks its own repaired findings, without reopening unchanged full design.
+The repaired bytes remain pending that closure; no runtime pass is claimed.
+
+## Capability advertisement delta — strict modern backend, review pending
+
+This is a source-backed completion of MRTR.7/MRTR.9 within the approved full
+bridge, not a new client-facing feature. Component design closure is recorded
+externally in `bridge-design-closure.json`; its approved contract remains
+unchanged. Source inspection while deriving real stdio tests found
+`transport/http/mod.rs::with_modern_meta` unconditionally overwrites
+`io.modelcontextprotocol/clientCapabilities` with `{}`. The pinned modern MRTR
+spec forbids a backend from asking for an undeclared input type. A permissive
+fixture that ignores that envelope would certify a bridge a conforming backend
+cannot enter. This delta must be reviewed before its dependent source changes. WIRE.23 adds
+one supporting ID (27 total), mapped to the unchanged canonical criteria.
+
+Carry a fixed, copied `protocol::meta::Declared` down the existing accounted
+attempt. Add `Backend::request_with_capabilities` and the matching `Transport`
+method, with the existing request-with-headers arguments plus this declaration.
+Existing APIs delegate with `Declared::NONE`. The exact delegation is:
+Backend request → request_with_headers → request_with_capabilities(NONE), then
+the single backend body calls Transport::request_with_capabilities. Its default
+implementation calls request_with_headers so existing transport overrides retain
+headers/identity; the default request_with_headers calls request. HTTP overrides
+request_with_capabilities with its single request body; its request_with_headers
+delegates to that override with NONE, and request delegates to request_with_headers.
+The HTTP override never delegates back into an old wrapper. Move each
+existing backend/HTTP implementation body into that one new entry rather than
+copying accounting, retries, identity propagation or session recovery. This is
+per-call data, never stored on a backend, transport, pooled entry or global.
+
+At the gateway dispatcher, derive the value from the capabilities that this
+attempt can actually service: a ready legacy session's immutable declaration,
+intersected with its per-request narrowing slice, or the modern request's own
+validated declaration. An absent legacy declaration, unready legacy session or
+explicit empty slice advertises nothing. A declaration for one client cannot
+be reused for another. Do not infer support from arbitrary `_meta`, nested tool
+arguments, method names or the existence of a proxy. Independent dispatchers
+that have no input-handling path keep the default NONE. The same effective
+value applies to every bridge retry, including retries after omitted answers;
+there is no capability escalation to make a later question succeed. Derive one
+effective Declared using a helper next to its parser; use that same value for
+outbound advertisement, MRTR.9 admission and InputBridge planning (passing no
+second narrowing slice to the production run). The existing slice contains
+capability names only: it removes whole kinds, not individual elicitation modes.
+
+Add a bounded projection method on `Declared`, next to its parser, into protocol
+capabilities: only the three supported kinds. Elicitation is present only when
+form or URL is set, as the exact supported mode objects. If both mode flags are
+false, omit elicitation entirely, even when the broad elicitation flag is true
+from an unknown-only or malformed-mode source declaration. Never emit an empty
+elicitation object for such a value: inbound parsing gives that shape form
+support. Unknown declaration fields are never copied. The HTTP metadata builder keeps
+unrelated caller metadata and overwrites both protocol version and capability
+keys from trusted per-attempt facts. Notifications, probes and legacy handshakes
+retain their existing NONE behavior. Legacy outbound peers are unaffected;
+only requests to an already classified modern backend gain the trusted
+capability envelope. The strict server/discover/probe fixture must classify the
+peer modern while accepting NONE; it may demand input kinds only on tools/call. Do not use ambient task-local state or preserve an
+untrusted capability blob to avoid the explicit parameter.
+
+The strict HTTP backend fixture must classify as modern through real
+`server/discover`, require the expected protocol/capability envelope before
+returning InputRequired, and record each actual tools/call. It must refuse an
+undeclared question, so deleting the propagation cannot leave the bridge test
+green. Its success checks exact original name/arguments, sibling-only
+inputResponses/requestState, whole accepted results, unchanged backend state,
+and a fresh backend JSON-RPC ID on retries. A user argument named requestState
+is preserved independently. Client calls in the legacy fixture carry no modern
+protocol metadata and must classify as Legacy after a real initialize and
+initialized barrier. Concurrent callers with disjoint declarations and reversed
+answers demonstrate that both advertisement and retry correlation remain local.
+
+Fail-fast unknown U9: the current transport's empty declaration is source-
+confirmed; exact strict-fixture wire behavior is still unmeasured. First review
+this delta and its WIRE.23 tests, then run that fixture against current transport:
+it must report the missing required declaration before any question, rather than
+silently fall through to a timeout. Only then implement and prove the full
+question/answer/retry journey. Root reserved the narrow `backend/ops.rs` and
+`transport/mod.rs` API hunks, `transport/http/mod.rs` metadata/request hunks and
+our existing invoke attempt seam. No additional backend lifecycle owner or
+accounting path is introduced. Root continues to serialize Spark compilation.
+
+## Handoff order and ownership
+
+1. Root obtains fresh dual design/plan review against these full documents;
+   then reviews newly written failing tests as tests before implementation.
+2. Bridge owner: `input_bridge.rs`, `proxy.rs`, `streaming.rs`,
+   `protocol/meta.rs` and corresponding bridge tests. Reuse the 23 existing
+   component cases and three real-process stdio fixtures. No test-only runtime.
+3. Shared-boundary owner assigned by root: `server/mod.rs` (including the single
+   internal generic `serve_stdio` seam),
+   `router/handlers.rs`, `meta_mcp/mod.rs` and `meta_mcp/invoke.rs`. Coordinate
+   with active confirmation, catalogue/auth and discovery work; these are not
+   independent edit surfaces. Extract accounted attempts and preserve their
+   regressions before connecting bridge retries.
+4. Execute raw-channel cleanup, declaration/shape/accounting tests, real stdio
+   and HTTP journeys, then the cross-transport confirmation integration.
+5. Run applicable DoD coverage/mutation, formatting, clippy, security and full
+   regression gates; obtain independent code and functional review, CI and
+   deployment evidence. Keep MRTR.7/MIK-7387/MIK-7388 pending until their actual
+   evidence is posted. Local docs, green fakes, review intent and ignored tests
+   do not satisfy those delivery gates.

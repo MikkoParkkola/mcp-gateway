@@ -37,12 +37,15 @@ impl CapabilityExecutor {
     /// back to auto-detection from the `Content-Type` response header.
     pub(super) async fn handle_response(
         &self,
-        response: Response,
+        mut response: Response,
         config: &RestConfig,
     ) -> Result<Value> {
         let status = response.status();
 
         if !status.is_success() {
+            if let Some(error) = super::rate_limited_response_error(&mut response, "rest") {
+                return Err(error);
+            }
             let error_text = response
                 .text()
                 .await

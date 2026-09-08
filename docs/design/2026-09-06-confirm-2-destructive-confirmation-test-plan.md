@@ -7,7 +7,11 @@ filled quietly.
 
 Scope (§P0). **FOR**: the cases that would prove Option I's seven items meet the acceptance
 criteria they answer to. **OUT**: Option R's cases (the branch was not taken), the legacy
-elicitation path beyond one regression row, and anything the criteria do not name.
+HTTP elicitation policy beyond its regression row, and anything the criteria do
+not name. The approved full stdio scope now also requires the positive and negative
+legacy stdio composition controls below; their shared channel is owned by the bridge.
+This limited amendment supersedes the earlier always-unavailable stdio assumption
+and follows the companion design's era-by-transport matrix.
 
 ## The one thing every reader gets wrong here
 
@@ -25,10 +29,12 @@ states the call site it observes; a case that exercises `enforce` satisfies none
 |---|---|---|---|---|
 | `MIK-7246.CONFIRM.2` (also `MIK-7212.MRTR.1a` / `.1b`) | modern caller, no session, destructive call → `input_required` result carrying the question → retry with `inputResponses` + `requestState` → continuation redeemed, kill proceeds. End to end over the transport, not against the gate function. **This is also MRTR.1a/1b's case**: both fields are dropped today by `extract_tools_call_params` (`helpers.rs:178`), so nothing reaches the gate to redeem unless they survive the extractor — they need no row of their own, and a unit test on the extractor would prove less | system | functional | Option I |
 | `MIK-7246.CONFIRM.1a` | modern caller that declared **no** input capabilities is still refused, `-32001`, message still containing `none could be obtained` (see the string collision below) | integration | negative | either |
-| `MIK-7246.CONFIRM.1b` | legacy path still warns and proceeds; Option I changed the modern branch and must not have moved this one | integration | regression | either |
+| `MIK-7246.CONFIRM.1b` | legacy HTTP unconfirmable outcome retains warning-and-proceed, explicitly marked unconfirmed; modern unconfirmable outcome never proceeds on a warning. Legacy stdio does not inherit HTTP's fallback: it previously refused and retains refusal on failed confirmation. | integration | regression | either |
+| `MIK-7246.CONFIRM.1a` / `MIK-7246.CONFIRM.2` (legacy transport composition dependency) | capable initialized legacy HTTP and stdio admin clients receive a real form question with requestedSchema and return a whole accepted ElicitResult with object content before action proceeds. A strict fixture rejects missing requestedSchema. Explicit decline/cancel, action-only form acceptance, missing/nonobject content, unknown/missing action and JSON-RPC errors terminally refuse on both, with zero destructive dispatch and no Unsupported fallback. For legacy stdio also assert undeclared capability, writer unavailability and timeout each refuse. Non-admin requests refuse before asking. Legacy HTTP unavailable-confirmation warning fallback is the separate 1b regression, not proof of confirmation. Reuse bridge WIRE.16 so the two packages exercise one shared path. | system | positive + negative | Option I + approved full stdio bridge |
 | `MIK-7212.MRTR.9` / `.9a` | **at the gate**: with `caller.input_capabilities` absent the gate refuses rather than asking; with the mode declared it asks, in the declared mode. Two cases, one per direction — the refusing half alone cannot distinguish "checks the declaration" from "never asks anyone" | unit + integration | negative | Option I (item 5) |
 | `MIK-7212.MRTR.8a` / `.8b` (also `MIK-7212.MRTR.5b`) | **at the gate**: a client that mints a confirmation continuation and never retries. Bound observed as a **count of live continuations** under an injectable clock, not a sleep. `5b` (expiry) is what makes that count fall, on the same clock — the bound and the expiry are one case read in two directions, not two cases | unit | resource | Option I (item 6) |
 | `MIK-7212.MRTR.10a` / `.10b` (also `MIK-7212.MRTR.5a`) | **at the gate**: duplicate delivery of a call whose confirmation was redeemed and whose kill succeeded returns the **recorded result**. This is the floor's `retry_after_redeemed_confirmation_returns_recorded_result`. **Two cases that must not be collapsed**, and the design's own reading of `enforce` is why: on the **same** idempotency key `enforce` returns `CachedResult` (`src/idempotency.rs:568,582`) *before redemption is attempted*, so that case proves idempotency and says nothing about single-use. `5a` therefore needs the second case — the **same continuation under a fresh idempotency key**, which reaches redemption and must be refused by `ConsumedLedger::consume` (`continuation.rs:595-611`) | integration | idempotency + negative | Option I (item 7) |
+| `MIK-7212.MRTR.5c` (atomic confirmation redemption) | Through the actual destructive-confirmation retry entry point, mint one valid continuation, start a confirmed retry with idempotency key A, and hold its destructive dispatch behind a test-controlled barrier. After observing that dispatch admission, submit the same continuation with fresh key B while A is still blocked. Assert B reaches redemption, is refused as consumed, and cannot enter destructive dispatch; then release A and assert exactly one dispatch total and its successful result. A separate barrier-controlled race starts two fresh-key retry redemptions concurrently and proves exactly one succeeds. Use the real consumed ledger and retry path; a fake gate or duplicate-key cache cannot establish atomicity. | integration | concurrency/security | Option I (item 7), root-authorized R2 correction |
 | item 4 — gate precedence | a valid retry is redeemed **before** gate re-entry: assert the gate was **not entered** (refusal absent, gate counter unmoved), not merely that the retry succeeded | integration | ordering | Option I (item 4) |
 | item 3 — typed origin | a gateway-authored continuation is **not** routed as a backend by `retry_origin_backend` (`invoke.rs:497-513`) | unit | correctness | Option I (item 3) |
 | `MIK-7212.MRTR.3a` / `.3b`, `.4a` / `.4b` | **at the gate**: a continuation minted for one caller confirming one kill, presented (i) by a different principal and (ii) against a different server, is refused at redemption. The design's own S and T rows say this binding is inherited from `redeemable_by` (`continuation.rs:202-224`, live at `invoke.rs:556-570`) and that what Option I owes is **that the gate sits on that path rather than beside it** — an obligation the design names in prose and no row carried. Two negative cases; the valid retry in the CONFIRM.2 row cannot tell "verifies the binding" from "verifies nothing" | integration | negative | Option I (items 1-2) |
@@ -105,13 +111,15 @@ dispositioning a dangling forward reference as though its text had been read. It
 residue of the defect this check was rewritten to catch, which is why it is named here rather
 than quietly counted.
 
-**Eighteen of the 25 are carried on rows and named in their AC cells.** The remaining seven get a
-clause each rather than seven rows: `2a`/`2b` are vacuous under Option I, which authors the
+**The historical plan carried eighteen of the 25 on rows.** The atomicity
+correction adds a dedicated `5c` row at the new confirmation call site, so
+nineteen now have named row coverage; the remaining six get a
+clause each rather than six rows: `2a`/`2b` are vacuous under Option I, which authors the
 question rather than relaying a backend's, so there is no backend `requestState` to forward or to
-wrap; `5c`/`5d` and `6` are multi-replica criteria the design lists under what it does not touch;
+wrap; `5d` and `6` are replica-related criteria the design lists under what it does not touch;
 `7a`/`7b` have the paragraph above.
 
-Standing: eleven rows. **Eight carry a criterion ID** (CONFIRM.2, 1a, 1b, 3; MRTR.9/9a, 8a/8b,
+Historical pre-stdio-amendment count: eleven rows. **Eight carried a criterion ID** (CONFIRM.2, 1a, 1b, 3; MRTR.9/9a, 8a/8b,
 10a/10b, 3a/3b+4a/4b) — eighteen IDs between them, because three of those rows carry a second
 criterion in their AC cell: 1a/1b on the CONFIRM.2 row, 5a on 10a/10b, 5b on 8a/8b. **Three are
 not criteria** and say so — items 4 and 3 are design items whose failure is invisible in the

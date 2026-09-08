@@ -16,6 +16,9 @@
 
 use serde_json::Value;
 
+mod delivery;
+pub use delivery::DeliveryProgress;
+
 use crate::protocol::{ElicitationCreateParams, SamplingCreateMessageParams};
 
 /// Which of the three server-to-client requests an entry projects into.
@@ -279,18 +282,18 @@ pub trait ClientChannel: Send + Sync {
     /// behind, the entry leaks for the life of the connection and a late reply
     /// finds no receiver.
     ///
-    /// `PendingRequestGuard` in `src/transport/mod.rs` is the cancellation-safe
-    /// shape to mirror: `src/transport/stdio.rs:517` holds one across the
-    /// awaited send, and `cancelled_request_does_not_strand_pending_entry`
-    /// (`src/transport/stdio.rs:815`) pins the behaviour. The requirement is
-    /// recorded as MIK-7388; the first implementation obliged by it, and the
-    /// test that proves it, arrive with MIK-7212.
+    /// The production `ProxyManager` retains its existing `PendingSampleGuard`
+    /// across delivery and reply, including the selected writer's liveness
+    /// lease. Implementers must acknowledge `delivery` only at actual frame
+    /// handoff. The bridge uses that history to distinguish non-delivery from
+    /// a live client that left a handed-off prompt unanswered.
     async fn send_request(
         &self,
         session_id: &str,
         id: &str,
         method: &str,
         params: Option<Value>,
+        delivery: std::sync::Arc<DeliveryProgress>,
     ) -> Result<Value, DeliveryError>;
 }
 
@@ -421,10 +424,19 @@ impl InputBridge<'_> {
                 capability,
             )));
         }
+        let elicitation_mode = if kind == ServerRequestKind::Elicitation {
+            Some(
+                crate::protocol::elicitation::validate_request(request.get("params"))
+                    .ok_or_else(|| refused(crate::protocol::mrtr::Refusal::MalformedParams))?,
+            )
+        } else {
+            None
+        };
         Ok(Prompt {
             key: key.to_string(),
             kind,
             params: request.get("params").cloned(),
+            elicitation_mode,
         })
     }
 
@@ -445,15 +457,28 @@ impl InputBridge<'_> {
         for prompt in prompts {
             let id = format!("{}{}", prompt.kind.prefix(), uuid::Uuid::new_v4());
             let left = self.bounds.aggregate.saturating_sub(started.elapsed());
-            let sent =
-                self.channel
-                    .send_request(session_id, &id, prompt.kind.method(), prompt.params);
+            let delivery = std::sync::Arc::new(DeliveryProgress::default());
+            let _cancel_delivery = delivery.cancel_on_drop();
+            let sent = self.channel.send_request(
+                session_id,
+                &id,
+                prompt.kind.method(),
+                prompt.params,
+                std::sync::Arc::clone(&delivery),
+            );
             let Ok(reply) = tokio::time::timeout(self.bounds.per_prompt.min(left), sent).await
             else {
-                continue;
+                delivery.cancel();
+                if delivery.unanswered_live_timeout() {
+                    continue;
+                }
+                return Err(BridgeError::Delivery {
+                    key: prompt.key,
+                    error: DeliveryError::NoSession,
+                });
             };
             let answer = reply
-                .and_then(|reply| Self::project(prompt.kind, &reply))
+                .and_then(|reply| Self::project(prompt.kind, prompt.elicitation_mode, reply))
                 .map_err(|error| BridgeError::Delivery {
                     key: prompt.key.clone(),
                     error,
@@ -468,12 +493,15 @@ impl InputBridge<'_> {
     /// `action` is elicitation's word, so the accept/decline projection is read
     /// for that kind and no other. `roots/list` and `sampling/createMessage`
     /// answer with their own shapes and are filed whole however they are
-    /// spelled: reading an `action` member there returns `content` alone and
-    /// silently drops the rest of an answer the backend was given. An
-    /// elicitation reply that omits its `action` is unreadable rather than
-    /// filable, because filing it whole hands the backend the same answer one
-    /// nesting deeper than an accept does.
-    fn project(kind: ServerRequestKind, reply: &Value) -> Result<Value, DeliveryError> {
+    /// spelled. Elicitation uses its validated request mode to check acceptance
+    /// and files the complete result, including its unknown extension fields.
+    fn project(
+        kind: ServerRequestKind,
+        mode: Option<crate::protocol::meta::ElicitationMode>,
+        mut reply: Value,
+    ) -> Result<Value, DeliveryError> {
+        use crate::protocol::elicitation::{ElicitAction, ElicitResultError, validate_result};
+
         if let Some(error) = reply.get("error") {
             return Err(DeliveryError::ClientRefused {
                 code: error
@@ -487,25 +515,24 @@ impl InputBridge<'_> {
                     .to_string(),
             });
         }
-        let Some(result) = reply.get("result") else {
+        let Some(result) = reply
+            .as_object_mut()
+            .and_then(|reply| reply.remove("result"))
+        else {
             return Err(DeliveryError::NoReplyMember);
         };
         if kind != ServerRequestKind::Elicitation {
-            return Ok(result.clone());
+            return Ok(result);
         }
-        let Some(action) = result.get("action").and_then(Value::as_str) else {
-            return Err(DeliveryError::Malformed);
-        };
-        match action {
-            "accept" => result
-                .get("content")
-                .filter(|content| content.is_object())
-                .cloned()
-                .ok_or(DeliveryError::Malformed),
-            "decline" | "cancel" => Err(DeliveryError::Declined {
-                action: action.to_string(),
-            }),
-            _ => Err(DeliveryError::UnknownAction {
+        match validate_result(mode.ok_or(DeliveryError::Malformed)?, &result) {
+            Ok(ElicitAction::Accept) => Ok(result),
+            Ok(action @ (ElicitAction::Decline | ElicitAction::Cancel)) => {
+                Err(DeliveryError::Declined {
+                    action: action.as_str().to_string(),
+                })
+            }
+            Err(ElicitResultError::Malformed) => Err(DeliveryError::Malformed),
+            Err(ElicitResultError::UnknownAction(action)) => Err(DeliveryError::UnknownAction {
                 action: action.to_string(),
             }),
         }
@@ -538,4 +565,6 @@ struct Prompt {
     kind: ServerRequestKind,
     /// The params to send, absent for a request that carries none.
     params: Option<Value>,
+    /// Validated at planning time, never inferred from the client's answer.
+    elicitation_mode: Option<crate::protocol::meta::ElicitationMode>,
 }

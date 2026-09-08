@@ -26,6 +26,10 @@ use tracing::debug;
 use crate::hashing::{canonical_json, sha256_hex_chunks};
 use crate::{Error, Result};
 
+#[path = "idempotency/admission.rs"]
+#[allow(dead_code, reason = "core increment precedes transport activation")]
+pub(crate) mod admission;
+
 // ── Public constants ──────────────────────────────────────────────────────────
 
 /// TTL for completed results (24 hours).

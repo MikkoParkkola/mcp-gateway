@@ -350,13 +350,13 @@ pub struct Undeclared<'a> {
     pub key: &'a str,
     /// The method the entry asked with. Empty when the entry carried none.
     pub method: &'a str,
-    /// Which of the four refusals this is.
+    /// Which refusal this is.
     pub reason: Refusal,
 }
 
 /// Why an entry cannot be put to this client.
 ///
-/// Four cases rather than one string, because each meets the client
+/// Separate cases rather than one string, because each meets the client
 /// differently: only the first names something the client could add to its
 /// declaration and retry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -370,6 +370,8 @@ pub enum Refusal {
     Mode(ElicitationMode),
     /// An elicitation `mode` value this gateway cannot read as a mode at all.
     UnrecognisedMode,
+    /// Required request fields or the restricted form schema are malformed.
+    MalformedParams,
 }
 
 /// The caller binding sealed into a continuation, or `None` when this caller

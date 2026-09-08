@@ -3,6 +3,14 @@
 
 # NFR.PERF.3 — reclamation, and the one table that cannot currently reclaim
 
+**Current implementation direction (takeover r4, 2026-09-06):** MRTR.8b Change A
+fixes observer correctness; mandatory Change C adds lifecycle-owned scheduled
+idle expiry. Both are required before this release's reclamation claim closes.
+Historical conclusions below that guard-only cleanup eliminates the timer are
+superseded. Use the current A plan plus `2026-09-06-continuation-scheduled-expiry.md`
+for implementation; measure empty/half/full occupancy and idle reclamation without
+calling a reclaiming observer as the oracle.
+
 `NFR.PERF.3` (`docs/requirements/RELEASE-4.0.0-requirements.md:283`), verbatim: *"Memory MUST NOT
 grow unboundedly with abandoned continuations; a soak with abandonment MUST show reclamation."*
 
@@ -358,7 +366,10 @@ ceiling assertion that fails when the model-facing meta-tool count exceeds 16.
 release owner ruled on 2026-09-05 that 4.0.0 ships on headroom); `NFR.PERF.2`; `MRTR.7`; deleting
 the seventeenth meta-tool, which is gated on the operator's breaking-change question.
 
-> **WITHDRAWN, same day — do not build either of these.** Both mechanisms below were superseded by
+> **Historical withdrawal, superseded by takeover r4.** The old standalone helpers below
+> remain withdrawn. Mandatory lifecycle-owned scheduled expiry is now specified in
+> `2026-09-06-continuation-scheduled-expiry.md`; guard-only cleanup cannot bound idle
+> residency. Do not treat the historical no-timer instruction as active. Originally these were superseded by
 > the correction at the end of this document, and one of them is rejected at source: `ec11dcec`
 > deleted `InFlight::reap` deliberately, and MRTR.8b's Design A replaces the interval task with a
 > single `guard(now)` entry point every reader passes through. The two paragraphs are kept because

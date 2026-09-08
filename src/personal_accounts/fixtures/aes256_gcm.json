@@ -1,0 +1,26 @@
+{
+  "provenance": "Generated independently using Python cryptography AESGCM, fixed nonce is fixture-only, expired payload is intentional storage data, never provider credentials.",
+  "key_hex": "5151515151515151515151515151515151515151515151515151515151515151",
+  "aad_hex": "6d63702d676174657761792f6163636f756e742d746f6b656e2d6161642f763100000014706572736f6e616c5f6163636f756e74732e76310000000763757272656e7400000010676174657761792d696e7374616e63650000002030313233343536373839616263646566303132333435363738396162636465660000001868747470733a2f2f6964656e746974792e6578616d706c6500000005616c69636500000010676f6f676c652d776f726b73706163650000002368747470733a2f2f7777772e676f6f676c65617069732e636f6d2f64726976652f76330000001b68747470733a2f2f6163636f756e74732e676f6f676c652e636f6d",
+  "record": {
+    "generation": "fedcba9876543210fedcba9876543210",
+    "token_revision": 1,
+    "authorization_epoch": 1,
+    "descriptor_revision": "0000000000000000000000000000000000000000000000000000000000000000",
+    "scopes": [
+      "https://www.googleapis.com/auth/drive.readonly"
+    ],
+    "access_token": "synthetic-alice-access-private-material-9f3a71",
+    "refresh_token": "synthetic-alice-refresh-private-material-8c9d21",
+    "token_type": "Bearer",
+    "expires_at": 0,
+    "provider_account_id": "synthetic-alice-provider-account-private-1a92",
+    "client_id": "synthetic-google-client"
+  },
+  "envelope": {
+    "schema_version": "personal_accounts.v1",
+    "key_id": "current",
+    "nonce": "AAECAwQFBgcICQoL",
+    "ciphertext": "p7ZKP3odKeGUcO/Uh3pLaQZDRGqg3O9BZET1DXlKa2FEUijY7v9EXFaLl2pfJL18Q+b+2I/S8Rgp2fgSVEIpwRS4FV92sfa6frV3nqkSnPpRHIk8/TNqEgB8M5JhU4z93x4vNLezelg7M/hF5PiKqDKxMEZ7KLubP+7aSVwM9St5ANoY5EYNwIZEOiSzXui6ZmglnRQyQfE2I6APBBK9o/kFIvgIGZgohdRDrZC/IMrhPHYwotiDBL1aYNPaQSnlFL3cBcfQ4+nwAweC3pkEuXCVXs2ljCvoaWT8/E3B5l4sjYTgoOQN3qWjFfkD0x99i/o5+HiOsTloVDFFpxiWLXF4iK1J6FbedVJ0OAc7LcRqikD0idcSsUKqPJ+uAy83S2t3ll2t53EmawTdQTZ0XBsV8z7Evc5FXYRboeAtcW9gRsB0F+hefca/GkhQP5Z/N+5wlSjvRjLtnoYhHLzrK01G+iFAbJBu1L9pn/JGupw+1hxMVp6sX4RkHVGI8aGfDUS6fERDOwn4xfeh6SO6xUpNnrE0HsM9yh7WKA4/dWiKHWZq9c9ojSanirQae45UJNkUBtyH5F30ZyQZyJUZGHFwHXfeqU9X1Ach8532XwwZkhcZiWrDgySSsqkInMtVKPHrfM39bxgLRW0z8A02INJJy54FzRhfgdfLnnU2VDdigVbbRQENxtYv9nNIB+Y2dIuNPA=="
+  }
+}

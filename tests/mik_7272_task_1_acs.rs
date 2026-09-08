@@ -26,7 +26,7 @@
 //! `pollIntervalMs?: number`) is in scope and is asserted below.
 
 use mcp_gateway::protocol::cacheable::is_final;
-use mcp_gateway::protocol::headers::mcp_name_body_field;
+use mcp_gateway::protocol::headers::{HeaderCheck, mcp_name_body_field};
 use mcp_gateway::protocol::meta::ADDED_IN_2026_07_28;
 use mcp_gateway::protocol::tasks::{Task, TaskStatus};
 use serde_json::{Value, json};
@@ -55,23 +55,19 @@ fn ac_task_1_5_tasks_cancel_is_gated_as_a_2026_07_28_method() {
 // tool result with `isError: true` is `completed`, never `failed`.
 // ===========================================================================
 
-/// This case is REWRITTEN, not repaired, when `Task::error()` stops returning
-/// `Option<&str>` — §3.1 mandates that signature change, so the breakage is the
-/// change working rather than a regression. Asserting over the *value's* shape
-/// keeps it compiling against today's type while still failing on the defect.
+/// TASK.1.6 checks the actual value, so a JSON-encoded string cannot pass.
 #[test]
 fn ac_task_1_6_a_failed_task_carries_an_error_object_not_a_string() {
     let mut task = Task::create("weather.get");
-    task.fail("upstream refused");
-
-    let raw = task.error().expect("a failed task reports why it failed");
-    let parsed: Option<Value> = serde_json::from_str(raw).ok();
-    assert!(
-        parsed
-            .as_ref()
-            .is_some_and(|v| v.get("code").is_some() && v.get("message").is_some()),
-        "the specification requires a JSON-RPC error object with `code` and \
-         `message`; a bare string cannot carry either, and got {raw:?}"
+    task.fail(mcp_gateway::protocol::JsonRpcError {
+        code: -32603,
+        message: "upstream refused".into(),
+        data: None,
+    });
+    let error = serde_json::to_value(task.error().expect("failed task reports why")).unwrap();
+    assert_eq!(
+        error,
+        json!({ "code": -32603, "message": "upstream refused" })
     );
 }
 
@@ -115,18 +111,87 @@ fn ac_task_1_7_mcp_name_mirrors_task_id_on_the_task_methods() {
     }
 }
 
+/// Drive the shared validator using the method-selected body field, including
+/// decoys that must never be used instead of the task identifier.
+#[test]
+fn ac_task_1_7_task_header_requires_matching_id_and_preserves_other_methods() {
+    let params = json!({"taskId": "task-real", "name": "decoy-name", "uri": "decoy-uri"});
+    let check = |method, header_name| {
+        HeaderCheck {
+            header_protocol_version: Some("2026-07-28"),
+            body_protocol_version: Some("2026-07-28"),
+            header_method: Some(method),
+            body_method: method,
+            header_name,
+            body_name: mcp_name_body_field(method)
+                .and_then(|field| params.get(field))
+                .and_then(Value::as_str),
+        }
+        .validate()
+    };
+    for method in ["tasks/get", "tasks/update", "tasks/cancel"] {
+        for offered in [
+            None,
+            Some("other-task"),
+            Some("decoy-name"),
+            Some("decoy-uri"),
+        ] {
+            let error =
+                check(method, offered).expect_err("task header must identify the body task");
+            assert_eq!(error.field, "Mcp-Name");
+            assert_eq!(error.body.as_deref(), Some("task-real"));
+            assert_eq!(error.header.as_deref(), offered);
+        }
+        assert!(check(method, Some("task-real")).is_ok());
+    }
+    for (method, name) in [
+        ("tools/call", "decoy-name"),
+        ("prompts/get", "decoy-name"),
+        ("resources/read", "decoy-uri"),
+    ] {
+        assert!(check(method, Some(name)).is_ok());
+        assert_eq!(
+            check(method, Some("task-real")).unwrap_err().field,
+            "Mcp-Name"
+        );
+        assert_eq!(check(method, None).unwrap_err().field, "Mcp-Name");
+    }
+    for method in [
+        "tools/list",
+        "resources/list",
+        "prompts/list",
+        "ping",
+        "notifications/tasks",
+    ] {
+        assert!(check(method, None).is_ok());
+        assert!(check(method, Some("unrelated")).is_ok());
+    }
+}
+
+#[test]
+fn ac_task_1_5_task_notification_is_new_but_existing_core_methods_are_not() {
+    assert!(ADDED_IN_2026_07_28.contains(&"notifications/tasks"));
+    assert!(ADDED_IN_2026_07_28.contains(&"subscriptions/listen"));
+    for method in [
+        "tools/call",
+        "tools/list",
+        "resources/read",
+        "prompts/get",
+        "ping",
+    ] {
+        assert!(
+            !ADDED_IN_2026_07_28.contains(&method),
+            "legacy method must remain usable: {method}"
+        );
+    }
+}
+
 // ===========================================================================
 // MIK-7272.TASK.1.2 — `tasks/get` returns the per-status shape.
 // ===========================================================================
 
-/// PARTIAL, and the missing half is stated rather than skipped: `input_required`
-/// and `cancelled` are not variants of `TaskStatus` today, so a case naming them
-/// would not compile — and a test file that does not compile reports no failure
-/// text for any case in it. What is asserted here is the three variants that
-/// exist and the shape rule that separates them.
-///
-/// DEFERRED: `input_required` + `inputRequests`, and `cancelled`, land with the
-/// enum. Until then this case says nothing about them.
+/// Five-state payload and terminal matrices additionally live in
+/// `protocol::tasks::lifecycle_tests`; this retains the original three controls.
 #[test]
 fn ac_task_1_2_each_status_carries_its_own_payload_and_no_other() {
     let working = Task::create("weather.get");
@@ -145,7 +210,11 @@ fn ac_task_1_2_each_status_carries_its_own_payload_and_no_other() {
     );
 
     let mut failed = Task::create("weather.get");
-    failed.fail("upstream refused");
+    failed.fail(mcp_gateway::protocol::JsonRpcError {
+        code: -32603,
+        message: "upstream refused".into(),
+        data: None,
+    });
     assert_eq!(failed.status(), TaskStatus::Failed);
     assert!(
         failed.error().is_some() && failed.result().is_none(),

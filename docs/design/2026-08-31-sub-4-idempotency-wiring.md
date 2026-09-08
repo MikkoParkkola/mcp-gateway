@@ -39,17 +39,16 @@ build that has ever shipped.
 
 Two further gaps compound it, both found in review and verified at source.
 
-**No advertised way for a client to send a key.** `resolve_idempotency_key` reads
-`args["idempotency_key"]` (`src/gateway/meta_mcp/support.rs:40`), and that string appears in
-exactly six places in the tree, all internal: the module doc, the function, and its call site.
-It is in no tool schema. A client cannot discover it, so today the *only* reachable protection
-is the automatic derivation — which is itself defect P2 below. This is the finding that
-reshapes the design: "enforce only on an explicit client key" is not an available option until
-a carrier exists on both routes.
+**Carrier and current baseline.** The old `resolve_idempotency_key` description
+was stale at takeover: that function no longer exists, and automatic key derivation
+is not current behavior. The active design uses the operator-selected
+`params._meta["io.mcp-gateway/idempotency-key"]` on both public routes. Production
+builder wiring and direct-route admission remain required; no invented auto-key
+baseline may be used to claim a red test.
 
 **The direct route bypasses the machinery entirely.** `POST /mcp/{name}`
 (`src/gateway/router/backend_handlers.rs:338-353`) does not go through `invoke_tool_traced` and
-never calls `resolve_idempotency_key`, whose sole call site is `meta_mcp/invoke.rs:782`.
+does not currently share the mandatory production idempotency admission boundary.
 Revision 1 attributed that bypass to "ADR-008 rung 2"; that was a misreading. ADR-008 rung 2 is
 client-native OAuth passthrough and says nothing about HTTP routing. No ADR sanctions the
 bypass.
@@ -64,24 +63,53 @@ then `cache.mark_in_flight(key)` as two separate `DashMap` operations. Two concu
 both observe `Proceed` and both execute — the exact duplication SUB.4 exists to prevent. Fix: one
 atomic entry transition, with a concurrent same-key falsifier proving the old code fails it.
 
-**P2 — a keyless call gets an automatic key.** `resolve_idempotency_key`
-(`src/gateway/meta_mcp/support.rs:26-45`) derives a key from `(server, tool, arguments)` whenever a
-cache is active, whether or not the client supplied one. Turning the cache on therefore silently
-deduplicates *intentional* identical side effects for 24 hours. Fix depends on the carrier
-question below: deleting the derivation is only safe once clients can send a key.
+**P2 — explicit operations, mandatory write protection.** No key is automatically
+derived from an otherwise identical body. A call explicitly classified read-only
+by gateway-controlled policy may execute keylessly and repeated
+calls both run. Any modern-protocol tools/call not affirmatively classified read-only must
+supply a valid explicit key and stable verified principal or be refused BEFORE
+dispatch. Downstream annotations alone, including readOnlyHint=true, are not authority for this exemption. Deliberate
+repeated modern writes use different keys. SUB.4 applies to the modern protocol's
+reissue semantics. Legacy 3.5-compatible requests retain their existing unkeyed
+synchronous behavior (NFR.COMPAT.2), including existing auth-disabled and stdio
+clients without configuration changes. A legacy call explicitly opting into the
+reserved retry-key carrier uses the same protected admission/owner checks; it cannot
+bypass an existing modern guard merely by changing era. A modern call omitting a
+key never silently falls back to the legacy path. Era comes from the existing
+validated request negotiation, never arguments or a new client override. No
+protection is claimed for a legacy request without an operation key. Document
+that existing legacy boundary and the modern mandatory-key contract together.
 
-**P3 — the entry map is unbounded.** `IdempotencyCache { entries: DashMap<...> }`
-(`src/idempotency.rs:93`) has no capacity policy and `COMPLETED_TTL` is 24 hours. RESOLVED: take
-the response cache's bound, `DEFAULT_MAX_ENTRIES = 10_000` (`src/config/features/cache.rs:12`), and
-reject its policy. `ResponseCache::enforce_max_entries` evicts the oldest
-(`src/cache.rs:185-204`), which for a side-effect guard would silently re-admit a duplicate.
-Fail closed instead: refuse a new protected side effect at the bound.
+**P3 — bound entries AND retained bytes.** The existing map intends a 10,000-entry bound but checks len before the per-key lock, so concurrent distinct keys can overfill it. Enforce a STRICT global slot reservation in the one shared admission map transaction, then add a 512 KiB
+maximum secured result per entry and a 128 MiB aggregate result budget. Reserve
+metadata capacity before dispatch; reserve exact serialized result bytes atomically
+before storing. If a completed result exceeds either byte bound, store a compact
+completed/no-result marker using the already reserved metadata slot. Retries get
+an explicit retained-result-unavailable tool error and NEVER redispatch the effect.
+Do not evict unexpired guards to make room. Same-key retrieval remains available
+at capacity. Budget markers and metadata also count toward bounded total memory;
+set a 4 KiB serialized metadata/key/fingerprint envelope per entry, rejecting
+oversized keys before reservation. The wire-independent accounting encoding is
+compact UTF-8 JSON of this fixed-order tuple: `[1, principal, explicit_key,
+operation_sha256_hex, representation_sha256_hex, mode, expires_unix_secs,
+state_tag, task_id_or_null]`. Strings use serde_json escaping, no whitespace;
+mode/state are bounded enums, hashes are lowercase64hex, task IDs are bounded
+to36bytes, and expiry is a checked u64 integer. Reserve the largest permitted
+state/task-ID representation at admission, so a settlement never exceeds its
+reserved metadata budget. Envelope bytes include quotes, escaping, commas,
+brackets and null; neither raw arguments nor result bytes are in this envelope.
+Result bytes have their separate stated budget. Require exact4096byte and4097byte
+independent fixture vectors with quote/backslash/Unicode keys, not only ASCII length. Counts and bytes release only on expiry/removal. Use one parking_lot mutex around the admission map/counters for these short synchronous transactions; no await or backend/disk I/O while held. Task creation retains its reserved slot across unlocked disk commit. Store completed results as canonical serialized bytes (Arc<[u8]>) with exact accounting, not unbounded heap-expanded Values; parsing for delivery is bounded by the per-result cap.
 
-**P4 — `_full` calls are unprotected.** `let idem_key = if want_full { None }`
-(`src/gateway/meta_mcp/invoke.rs:779`) forces the key to `None` for every raw-output call, so an
-irreversible tool invoked through that path can execute twice however the rest is wired. Fix:
-keep idempotency active and isolate the replay payload with an explicit key suffix, as the
-projection suffix already does.
+**P4 — one execution identity across representations.** `_full`, projection arm,
+session and response format NEVER partition admission identity. Preserve the
+principal+explicit-key guard for every output mode. Store the requested
+representation descriptor beside the canonical operation fingerprint; a retry
+asking for a different descriptor receives 409/Mismatch without new dispatch.
+If experimental projection selects an arm, derive it deterministically from the
+stable admission identity, not session ID. This scope chooses mismatch refusal,
+not a new raw-result reprojection store. Replays recheck current authorization and
+response policy and receive fresh delivery signing; no stored signature is reused.
 
 **P5 — an explicit key is not bound to the request.** The client key is used verbatim
 (`src/gateway/meta_mcp/support.rs:40`) with no fingerprint of `(server, tool, arguments)`. Reusing
@@ -156,15 +184,13 @@ not before.
   different `(server, tool, arguments)` gets a silent replay; once P5's binding check lands it gets
   `Mismatch`. That is the intended behaviour and it is still a client-visible change, so it belongs
   in this change's release note rather than being discovered in production.
-- **R5 — an unverifiable identity leaves the key unbound.** When neither `cache_binding` nor a
-  stable actor id resolves, the *key* carries no principal at all — the fingerprint never carries
-  one by design (the fingerprint in `invoke_tool` is `derive_key(server:tool, arguments)` plus the
-  retry discriminator). The choice is this
-  change's to make and to state: refuse to protect the call, or protect it with an unbound key and
-  accept cross-caller replay. Left unstated it defaults to the second by accident.
-  The two options are NOT symmetric, and R6 is why: after P8's fallback chain lands, the callers
-  whose `identity_suffix` is still empty are exactly this population, so "protect it with an unbound
-  key" is the option that keeps R6's spoofable-suffix population alive. Decide R5 with R6 in hand.
+- **R5 — resolved: no unbound protected execution.** If no stable verified
+  principal can be constructed, refuse before protected admission/dispatch. Apply
+  this to task and synchronous routes, including auth-disabled HTTP; never share
+  a placeholder, display name, session ID or empty suffix as a protection owner.
+  Supported trusted stdio identity must come from its server-owned authorizer,
+  never client-supplied arguments. Keyless read-only behavior remains P2's separate
+  path. Document this compatibility boundary with the key requirement.
 - **R6 — the idempotency suffix is appended raw after a client-supplied prefix, so a caller can
   spell another caller's binding.** Dormant, for the same reason everything else here is: with
   `idempotency_cache` always `None`, `idempotency_key_for` returns `None` before it formats
@@ -277,21 +303,21 @@ The specification is not silent. `_meta` is the protocol's own field for out-of-
 request, so the meta route carries the key at `params._meta["io.mcp-gateway/idempotency-key"]`.
 That is protocol-native, survives over stdio where a client has no HTTP layer at all, and adds
 nothing to the tool schema, so the compact-surface decision in `CLAUDE.md` is untouched. The
-direct route `POST /mcp/{name}` has no schema to advertise into and is raw JSON-RPC passthrough,
-so it takes the key from an `Idempotency-Key` HTTP header, which is the industry spelling.
+direct route `POST /mcp/{name}` uses that same request `_meta` field. It must parse
+and validate the carrier before forwarding the call; an HTTP header is not an
+alternative authority, and is not used to override a payload key.
 
 Rejected: an `idempotency_key` tool argument, because it puts a gateway-internal concern into
 every backend tool's advertised surface. Rejected: a header on both routes, because a stdio
 client has no headers and would be left unprotected. Rejected: keeping automatic derivation as a
 fallback, because it is defect P2 — deriving a key for a client that never asked for one silently
-collapses deliberate repeats for 24 hours. Protection applies when a key is present and never
-otherwise.
+collapses deliberate repeats for 24 hours. Protected operations require a valid explicit key before dispatch; the read-only exemption is defined by trusted policy below.
 
 ## Open questions — each scheduled, none assumed
 
 | question | how it is settled | state |
 |---|---|---|
-| What carries a retry key, on both routes? | ASKED 2026-08-31, four options put, ANSWERED: `_meta` on both routes. Rejected in the ask: an HTTP header alone (a stdio client has no HTTP layer, so protection stays unreachable for local setups), `_meta` alone (spec-native and stdio-safe, but the direct route is raw JSON-RPC passthrough needing new plumbing, and no client sends it today), and keeping automatic derivation (ships fastest, keeps P2's silent 24-hour collapse of deliberate repeats). | RESOLVED — `_meta` on both routes; code unblocked |
+| What carries a retry key, on both routes? | ASKED 2026-08-31, four options put, ANSWERED: `_meta` on both routes. Rejected in the ask: an HTTP header alone (a stdio client has no HTTP layer, so protection stays unreachable for local setups), keeping automatic derivation (ships fastest, keeps P2's silent 24-hour collapse of deliberate repeats). | RESOLVED — `_meta` on both routes; code unblocked |
 | May an operator disable protection a criterion states as MUST? | DECIDED on the requirement rather than asked: no. A switch makes the criterion unverifiable wherever the running configuration differs from the shipped default. Recorded so it can be overruled, not so it can be confirmed. | RESOLVED — overrulable |
 | Does ADR-008 bear on the direct route's bypass? | CHECKED end to end. It does not; rung 2 is client-native OAuth passthrough. What it does bind is INV-3. CHANGED: the bypass loses its justification and axis 2 gains a placement constraint. | RESOLVED |
 | What capacity bound, and what happens at the bound? | CHECKED `src/config/features/cache.rs:12` and `src/cache.rs:185-204`: bound 10_000, policy evict-oldest. CHANGED: take the number, reject the policy, fail closed. | RESOLVED |
@@ -304,7 +330,7 @@ amended, because a reader who reached it first stopped there.
 
 ## Test plan
 
-**Fixture invariant, applying to every row: `config.cache.enabled = false`.** Three reviewers
+**Fixture invariant: `config.cache.enabled = false`, except the explicit SUB4.SYNC.CACHE.1 cache-ON discriminator in the [owner-transfer amendment](2026-09-07-sub4-continuation-owner-transfer.md).** Three reviewers
 independently found rows that pass through the response cache rather than the code under test.
 The response cache stores before transmission, so no argument about *when* a stream aborts can
 defeat it. Turning it off in the fixture is the only mechanism that does, and stating it once as
@@ -315,12 +341,13 @@ an invariant is what stops the defect returning row by row.
 | SUB.4, meta route | abort after the backend executed, reissue with a new request id and the same retry key, assert a mutation counter on a `destructiveHint` tool reads 1 | unwired: the counter reaches 2 |
 | SUB.4, concurrency (P1) | two same-key requests in flight together; exactly one executes, the other gets `409` or the stored result | non-atomic `enforce` lets both proceed |
 | SUB.4, direct route | the same post-execution reissue through `POST /mcp/{name}` | that route never resolves a key |
-| no false dedup (P2) | the *identical* keyless call issued twice, both backends must run | red once the cache is wired with auto-derivation intact — which is the point of the row |
+| no false dedup / mandatory write guard (P2) | identical explicitly read-only keyless calls both execute; external write/unknown mutability missing key refuses before dispatch; two distinct valid keys deliberately execute twice | missing-key write gate currently absent; no-auto-dedupe control stays independent |
 | `_full` protection (P4) | the meta-route case again with `_full` requested | `want_full` forces the key to `None` |
 | key/request binding (P5) | one key reused for a different `(server, tool, arguments)`; the second call must be refused, not replayed | the key is used verbatim, so the first result is replayed |
-| reservation release (P6) | a call that trips the contract gate after dispatch; a later same-key call must not be locked out | the entry stays `InFlight` until timeout |
-| bound (P3) | fill to 10_000, assert a new protected side effect is refused rather than admitted | unbounded map admits it |
-| MRTR.10b regression | a non-final `InputRequired` result through the newly wired path must leave the call retryable, not stored as completed | SUB.4 is the change that first populates the cache, so this guard has never run in production; its only coverage calls `mark_completed` directly |
+| reservation window (P7) | Through production config load and reload, effective protected non-task execution timeout strictly below `IN_FLIGHT_TIMEOUT` loads; equality and one-above refuse before activation. Exercise server, backend and bridge aggregate timeout surfaces, with cache OFF. Task-owned dispatch uses its durable reservation and does not inherit this volatile expiry. | rejects unsafe configuration rather than allowing a reservation to expire while work still runs; include valid below-bound positive control |
+| completed effect before refusal (P6) | backend commits one effect, final response contract/firewall refuses, then same key is retried; count remains one and retry gets secured retained outcome/refusal | removing reservation on post-effect refusal permits duplicate execution; BRIDGE owns per-attempt ordering |
+| count and byte bounds (P3) | keep 10,000 guard cap; independently hit per-result/aggregate byte limits and assert compact completed marker, no eviction, no duplicate dispatch on retry; exact limits and one-over | existing entry bound is a regression control; result bytes and completed no-result settlement are new guards |
+| MRTR.10b regression | a usable authenticated continuation preserves the same owner and permits one validated next phase; it is not stored as completed. A dispatched malformed/capability-refused interim with no usable continuation retains unavailable ownership under the same key, without a no-effects claim or automatic redispatch. A new deliberate key is a new operation, not a guarantee about prior effects. | See [the owner-transfer amendment](2026-09-07-sub4-continuation-owner-transfer.md): both HTTP routes must use authenticated single-use claims and preserve explicit-key ownership through final secured settlement. |
 
 The assertion is a mutation counter on the tool, never the response body: two identical bodies
 are also what executing twice produces.
@@ -342,3 +369,201 @@ constraints on *this* plan because this is the change that activates the cache.
 | criterion | case | how it fails today |
 |---|---|---|
 | cross-principal binding (P8/P9) | two *different* authenticated callers issue the same tool, same arguments and the same key string, with identity propagation OFF; the second must execute rather than receive the first's stored response | `identity_suffix` is empty at that default, so both callers derive the same *key* (`support.rs:43`); `admit` looks the entry up by key (`idempotency.rs:256`) and `matches` (`:130-131`) then compares fingerprints, which are identical because the two calls genuinely are the same `(server, tool, arguments)` — so it returns `AdmitOutcome::Completed` and replays |
+
+## Current TASKS/SUB.4 admission contract — 2026-09-06
+
+One `ExecutionAdmission` service owns `(stable verified principal, explicit key)`
+for BOTH task and synchronous execution. Compute its identity with domain-separated
+SHA256 over a canonical structured tuple (use existing hashing::sha256_hex).
+Never concatenate an attacker-supplied prefix with a raw principal suffix. The
+operation fingerprint is stored beside it, not included in the lookup identity.
+Canonical operation fingerprint covers the secured backend target/name/arguments
+and semantic MRTR retry discriminator. Exclude transport ID, session ID, task
+capability declaration and presentation controls; include every value actually
+forwarded as backend arguments, after ordinary gateway control removal/sanitization.
+Credentials and nonce/signature material are not fingerprint fields. Preserve
+MRTR answers/state so a changed retry cannot masquerade as the original request.
+
+Implementation checkpoint (2026-09-07): keyed code-mode and playbook admission
+checks every planned target through the existing authorization chokepoint before
+retained-state lookup, including requests that would otherwise mismatch. Legacy
+unkeyed admission retains its existing per-step behavior. Playbook preflight
+checks definition arguments; ordinary dispatch still checks interpolated arguments.
+The complete cloned definition is hashed into the bounded operation descriptor
+and held by its request owner for dispatch. An engine replacement must not switch
+the admitted operation; a fresh key uses the new definition. This makes the
+definition ownership explicit without changing the shared admission identity or
+waiving current checks. The six current-policy/semantic-identity component tests
+pass. The deterministic engine-replacement dispatch test independently received
+P2 SHIP (`mcp-v4-sub4-snapshot-tests-20260907-r1`) after proving that the previous
+runtime selected the replacement definition. Dispatch now reads its owner's
+snapshot, and all 71 focused policy/playbook/code-mode checks pass. Code review,
+quantitative evidence, full transport integration and final DoD remain open.
+
+The first runtime review confirmed two further gaps: preflight must apply the
+current routing profile as well as credential/tool policy, and HTTP admission
+must preserve a typed authorization refusal's status. Added P2 regressions cover
+playbook/code-mode/single-target profile revocation before mismatch, restoration
+of the same owner's replay, and real modern/legacy-keyed HTTP 403 with permitted
+dispatch and ordinary-400 controls. All five reproduce their intended defects;
+their test review is pending. Reuse the existing replay-applicable invocation
+policy checks with the actual session context; do not infer HTTP status solely
+from a JSON-RPC error code. No broader authorization contract is changed.
+
+Current-profile/HTTP checkpoint (2026-09-07): Grok runtime now passes the
+session through keyed playbook and code-mode target checks, uses the existing
+`check_invocation_policy` for unprepared single-target admission, and preserves
+`Error::Forbidden`'s HTTP status while JSON-RPC 409 stays 409 and ordinary
+errors stay 400. Snapshot/fingerprint ownership and the legacy unkeyed bypass
+are unchanged. P2 finder SHIP (`grok-sub4-profile-status-p2-closure-20260907`).
+Behavioral RED was actual 101 on the three profile tests (409 instead of
+profile denial) and the two HTTP tests (400 instead of 403). Supervised Spark
+GREEN, runner actual 0: HTTP 2 pass; related library 74 pass (including the
+three new profile tests and the immutable snapshot tests); public regressions
+59 pass (`message_signing_delivery` 5 + `sub4_execution_admission` 54).
+Approved tests observe a registered forbidden backend at count 0 and a broader
+credential at count 1. Strict library Clippy remains the same 76 inherited
+diagnostics as the root baseline; none in the three owned files; not a
+whole-clippy, whole-SUB.4, DoD, or release claim. Source is local/uncommitted.
+Commands, logs, and hashes:
+`/Users/mikko/Documents/Codex/2026-09-06/mcp-gateway-v4-scope-review/grok-sub4-profile-status-20260907`.
+Both finders returned SHIP on that original profile and HTTP checkpoint. Claude
+then preserved the original `gateway_invoke` attestation envelope rather than
+reshaping it: the newly embedded Enforce HTTP 4, plus 2 HTTP, 74 library and 59
+public, are 139 GREEN. Strict library Clippy is 72 inherited against the root
+baseline's 76, exactly 4 root mechanical diagnostics removed and none in the
+owned files. P2 SHIP and both P4 legs SHIP, runner actual 0, run
+`grok-sub4-attestation-code-closure-20260907`, binding
+`7dbfaf2c5d10a7b39eccec390303001b78b26623a638fd029af6cb810c739808/26966`; the
+preceding evidence folder is `grok-sub4-policy-envelope-20260907`. The existing
+SDK Enforce surfacing and discovery limitations remain separately recorded,
+neither fixed nor supported in 4.0, and no CLI Enforce rollout is claimed.
+
+After ordinary current authorization and key/identity validation, one atomic map
+transition chooses Sync or Task for a previously unseen identity. The task path
+reserves CreatingTask before disk I/O, blocks same-key callers, commits its durable
+record/index, then publishes its task handle. No acknowledgement or dispatch before
+durability. A failed pre-publication task creation releases only its own reserved
+entry and has performed no backend work. Sync uses the existing atomic reservation
+and settlement guard behind that SAME owner service; no independent competing
+lookup permits dispatch. Existing ownership is checked before current per-request
+eligibility is allowed to choose a path. A same-key different-mode retry gets
+409/Mismatch, in either direction, including after task-store restart rebuild;
+it cannot fall through to synchronous execution or create a second task. A
+same-mode matching task retry returns its one handle; matching Sync returns its
+in-flight/secured completed outcome. Fingerprint or representation mismatch always
+refuses. Different keys remain independent operations.
+
+Startup restores Task ownership into this service from durable records before
+HTTP/stdio admission begins. Synchronous guards retain their documented process
+lifetime; no cross-restart synchronous-write replay guarantee is invented. A
+persisted task cannot be bypassed by reconnecting without tasks declaration.
+CreateTaskResult is not stored as completed synchronous output. Bound admission
+metadata for Sync and Task together, while task records retain their separate
+256-record/128 MiB storage caps. One owner, two settlement kinds, no duplicate
+execution owner and no per-request mode switch after reservation.
+
+Required added cases, cache OFF on both routes:
+
+| ID | Decisive assertion |
+|---|---|
+| SUB4.MODE.1 | Barrier-race same principal/key/body with one contender through /mcp gateway_invoke and the other through /mcp/{backend}, task declaration present/absent; one backend start at most, one chosen mode; loser gets conflict. Reverse winning order. Persist Task winner, restart, retry without declaration: zero new starts. |
+| SUB4.REPR.1 | Same principal/key/body across sessions, experimental arms and `_full` choices never repeats effect; matching stable descriptor replays, changed descriptor conflicts. Positive different-key control executes twice. |
+| SUB4.SPOOF.1 | Victim key `X` and unverified attacker key `X|idp:<victim binding>`: attacker refused before dispatch/lookup; victim result never exposed. Also two verified distinct owners with DIFFERENT crafted prefix/suffix keys cannot collide; each gets its own counted result. Directly falsify structured derivation with ambiguous raw concatenation. |
+| SUB4.BYTES.1 | Exact and one-over 4 KiB serialized key/metadata envelopes on both routes (reject before lookup/reservation/dispatch), 512 KiB per-result and 128 MiB aggregate bytes, concurrent settlements, compact marker retry, TTL release and positive small-result replay. No unexpired eviction or backend redispatch. |
+| SUB4.CARRIER.1 | Both routes use payload `_meta` key, reject malformed values, and ignore conflicting HTTP key header as authority; backend never receives gateway retry metadata. |
+
+### Authoritative read-only and nested work rules
+
+`idempotency.read_only_tools` is an operator-controlled list of exact structured
+{server, tool} targets, empty by default. It has no activation switch. Configuration
+validates target names and size limits before use; no wildcard or client `_meta`
+override. Only this list or the gateway's compiled, audited read-only built-in
+classification permits keyless execution. Remote annotations, injected tool
+names, response content and caller claims never add to the list. A backend
+falsely advertising readOnlyHint=true with no policy entry must refuse keyless
+execution; its keyed positive control executes once. Add a valid policy-listed
+read-only positive control. Wire the same policy on meta, direct and stdio routes.
+
+Every potentially mutating modern-protocol tools/call takes shared admission, including
+`gateway_run_playbook`, `gateway_execute` and mutating gateway management tools.
+For orchestration, one outer lease protects the whole logical invocation; internal
+steps carry its unforgeable server-owned execution context and cannot bypass the
+outer owner through client metadata. Per-step backend authorization/response
+controls still run. Completed effect/refusal retains a completed guard. Test
+post-effect disconnect/reissue of each orchestration tool, effect counter one,
+and distinct-key intentional repeat counter two. Ordinary core protocol methods
+outside tools/call are not silently promoted into this work-operation API.
+
+| ID | Decisive additional assertion |
+|---|---|
+| SUB4.READONLY.1 | A malicious remote readOnlyHint alone never permits keyless execution; exact operator policy target and compiled read-only built-in do. Modern unknown/mutating built-ins refuse without key; legacy behavior remains compatible. |
+| SUB4.ORCHESTRATE.1 | Real gateway_run_playbook and gateway_execute each commit a counted backend write, lose response, receive same-key retry: one effect. Fresh-key control produces two. Internal steps retain ordinary security checks. |
+| SUB4.SLOTS.1 | With one slot remaining, barrier-release many DISTINCT new keys across meta/direct routes and task/sync modes. Exactly one admission succeeds, global map never exceeds 10,000 and losers never dispatch; same-key existing retrieval still works at capacity. |
+
+Verified-owner raw-concatenation collision fixture (R6) uses two actual
+`VerifiedIdentity` values from validated signed OIDC tokens, one configured issuer
+`https://idp.example` and the SAME configured backend audience `https://svc/a`.
+Derive every binding through `stable_actor_id()` and the production signed-assertion
+identity-propagation builder. The fixture construction is executable and avoids
+assuming that raw subjects themselves are cache bindings:
+
+```python
+issuer = "https://idp.example"
+audience = "https://svc/a"
+def actor(subject):
+    return f"oidc:{len(issuer)}:{issuer}:{len(subject)}:{subject}"
+def binding(subject):
+    value = actor(subject)
+    return f"idp:{len(value)}:{value}:{len(audience)}:{audience}"
+subject_a = "alice"
+trailer = f":{len(audience)}:{audience}"
+binding_a = binding(subject_a)
+subject_b = "bob|idp:" + binding_a[:-len(trailer)]
+binding_b = binding(subject_b)
+suffix_a, suffix_b = "|idp:" + binding_a, "|idp:" + binding_b
+assert suffix_b.endswith(suffix_a)
+key_a, key_b = "X" + suffix_b[:-len(suffix_a)], "X"
+assert key_a != key_b and key_a + suffix_a == key_b + suffix_b
+```
+
+The test obtains both real verified identities through the production HTTP builder,
+checks its propagated binding bytes against this independent ASCII fixture, then
+asserts the two OLD concatenations are byte-identical before testing the new
+structured identities and owner-specific counted outputs. The opaque OIDC subject
+containing delimiters is signed by the fixture issuer; it is not injected as an
+unverified caller argument. Keep the unverified-attacker R5 vector separate.
+
+### r4 finder repairs: compatibility and complete mutation paths
+
+The exact compiled read-only meta-tool allowlist is `gateway_search`,
+`gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools`,
+`gateway_get_stats`, `gateway_cost_report`, `gateway_webhook_status`,
+`gateway_list_disabled_capabilities`, `gateway_get_profile`, and
+`gateway_list_profiles`. Audit those real handlers before implementation. Tests
+compare the classification domain with the production dispatch/exposure registry
+and require every new name to be explicitly classified; unknown names default to
+requires-key on the modern path. `gateway_invoke` and surfaced/direct backend
+calls use exact trusted target policy instead. Orchestration and management
+never inherit a downstream untrusted readOnlyHint exemption.
+
+| ID | Decisive additional assertion |
+|---|---|
+| SUB4.COMPAT.1 | Real 3.5-era HTTP and stdio clients with unchanged config, no key and no new principal requirement execute the same supported mutation as before; two intentional calls still execute twice. Modern matched controls refuse without key and dispatch zero times. Modern keyed call followed by same-owner/key legacy opt-in replay cannot repeat the effect. |
+| SUB4.MANAGEMENT.1 | Independently drive each actual mutation branch: gateway_kill_server, gateway_revive_server, gateway_set_profile, gateway_set_state, gateway_reload_config, gateway_reload_capabilities. With required existing admin/session config, commit effect then drop response before delivery; same-key reissue reaches the handler only once and returns retained secured result. Observe real method entry/effect revision through a server-owned test counter, plus the resulting live state; do not accept idempotent final state alone. New-key control reaches the same handler twice. Both HTTP meta and actual stdio dispatch, cache OFF; same-key representation mismatch does not execute again. |
+| SUB4.CONTENTION.1 | On the fixed Spark host record admission-wait P50/P99 and throughput under a mixed Sync/Task workload at1/16/64concurrency, same-key and distinct-key cases. No I/O under map lock; compare no-contention and contended runs, retain all samples. This is diagnostic evidence alongside the release NFR latency thresholds, not an invented standalone pass threshold. |
+
+
+Design closure receipt (2026-09-06): GPT r5 SHIP, actualexit0/processok,
+run mcp-v4-tasks-design-20260906-r5; bound SHA256
+bd1e78c214242a7a8c6bbc0310293ccdb56351a2d7d1fd9bfd18f7c00d60eeb7,
+210396bytes. Grok r2 SHIP retained under development-process item6. No source or
+acceptance pass is claimed. Small reviewer improvements adopted before tests:
+reserved retry keys are nonempty JSON strings, exact decoded Unicode scalar
+sequence, with no normalization, trimming or delimiter restrictions; the complete
+metadata-envelope cap bounds them. Null/nonstring/empty values reject. Crafted
+R6 ASCII delimiter keys are valid positive fixtures. Derive the management test
+matrix from the production dispatch registry/classification and compare it with
+the explicit six-name baseline so a new branch cannot silently escape coverage.
+
+The [owner-transfer amendment](2026-09-07-sub4-continuation-owner-transfer.md) is the controlling continuation/stdio invariant. Its typed StdioLocalOperator is created only by actual stdio dispatch, never by ToolPolicyAuthorizer; no HTTP credential or caller metadata can construct or alias it. Its ticket-qualified OWNER cases also appear in the canonical test plan.

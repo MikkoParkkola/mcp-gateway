@@ -506,7 +506,7 @@ pub(super) async fn backend_handler(
     };
 
     // Parse request
-    let (id, method, params) = match parse_request(&json_request) {
+    let (id, method, mut params) = match parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
             return build_http_response(&response, StatusCode::BAD_REQUEST);
@@ -756,10 +756,29 @@ pub(super) async fn backend_handler(
         );
     }
 
-    // SECURITY: apply tool policy, name validation, and input sanitization to
-    // tools/call requests unless the backend explicitly opts into pass-through
-    // mode (passthrough: true in config — only for fully-trusted internals).
+    // The direct route uses the same verified-principal/key owner index as
+    // meta invocation. Ordinary authorization/sanitization precedes admission.
+    let mut execution = None;
     if method == "tools/call" {
+        let shape = crate::protocol::meta::classify_request(params.as_ref(), protocol_header);
+        let is_modern = matches!(shape, crate::protocol::meta::RequestShape::Modern(_));
+        if matches!(shape, crate::protocol::meta::RequestShape::Malformed { .. }) {
+            return build_http_error_response(
+                Some(id),
+                -32602,
+                "Malformed protocol metadata",
+                StatusCode::BAD_REQUEST,
+            );
+        }
+        let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
+        if retry.is_malformed() {
+            return build_http_error_response(
+                Some(id),
+                -32602,
+                "Malformed execution retry metadata",
+                StatusCode::BAD_REQUEST,
+            );
+        }
         match apply_backend_tool_call_security(
             &state,
             &name,
@@ -772,58 +791,96 @@ pub(super) async fn backend_handler(
             &id,
             !backend.passthrough(),
         ) {
-            Some(Ok(Some(sanitized_params))) => {
-                // Forward the sanitized params to the backend
-                let forward = if propagated_headers.is_empty() && identity_key.is_none() {
-                    backend.request(&method, Some(sanitized_params)).await
-                } else {
-                    backend
-                        .request_with_headers(
-                            &method,
-                            Some(sanitized_params),
-                            &propagated_headers,
-                            identity_key.as_deref(),
-                        )
-                        .await
-                };
-                return match forward {
-                    Ok(mut response) => {
-                        record_client_success(&state, client.as_ref());
-                        // The transport uses its own request IDs to correlate
-                        // concurrent upstream calls. Restore the caller's ID at
-                        // the HTTP boundary so the client can correlate this
-                        // response with its original JSON-RPC request.
-                        response.id = Some(id.clone());
-                        scan_direct_backend_response(
-                            &state,
-                            &name,
-                            params.as_ref(),
-                            client.as_ref(),
-                            &mut response,
-                        );
-                        stamp_direct_provenance(
-                            &state,
-                            &name,
-                            params.as_ref(),
-                            client.as_ref(),
-                            &mut response,
-                        );
-                        build_http_response(&response, StatusCode::OK)
-                    }
-                    Err(e) => {
-                        record_client_failure(&state, client.as_ref());
-                        error!(backend = %name, error = %e, "Backend request failed");
-                        let response =
-                            JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
-                        build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
-                    }
-                };
-            }
+            Some(Ok(Some(sanitized))) => params = Some(sanitized),
             Some(Err(rejection)) => return rejection,
-            Some(Ok(None)) | None => {} // no tool name present; fall through to normal forwarding
+            Some(Ok(None)) | None => {}
+        }
+        let Some(tool) = params
+            .as_ref()
+            .and_then(|params| params.get("name"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            return build_http_error_response(
+                Some(id),
+                -32602,
+                "Missing tool name",
+                StatusCode::BAD_REQUEST,
+            );
+        };
+        let mut arguments = match crate::gateway::meta_mcp_helpers::parse_tool_arguments(
+            params.as_ref().unwrap(),
+        ) {
+            Ok(arguments) => arguments,
+            Err(error) => {
+                return build_http_error_response(
+                    Some(id),
+                    error.to_rpc_code(),
+                    error.to_string(),
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        };
+        let full = crate::gateway::meta_mcp::admission::execution_arguments(&mut arguments);
+        let admission = state.meta_mcp.admit_sync(
+            is_modern,
+            verified_identity.as_ref(),
+            client.as_ref().map(|client| client.principal.as_str()),
+            &retry,
+            &name,
+            &tool,
+            &arguments,
+            &json!({"route": "direct", "full": full}),
+            &id,
+        );
+        match admission {
+            Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) => {
+                execution = Some(lease);
+            }
+            Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => {}
+            Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(mut response)) => {
+                stamp_direct_provenance(
+                    &state,
+                    &name,
+                    params.as_ref(),
+                    client.as_ref(),
+                    &mut response,
+                );
+                let response = finalize_direct_response(
+                    &state,
+                    &name,
+                    &method,
+                    params.as_ref(),
+                    client.as_ref(),
+                    response,
+                );
+                return build_http_response(&response, StatusCode::OK);
+            }
+            Err(error) => {
+                let status = if error.to_rpc_code() == 409 {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::BAD_REQUEST
+                };
+                return build_http_error_response(
+                    Some(id),
+                    error.to_rpc_code(),
+                    error.to_string(),
+                    status,
+                );
+            }
+        }
+        if let Some(params) = params.as_mut() {
+            params["arguments"] = arguments;
+            if let Some(meta) = params.get_mut("_meta").and_then(Value::as_object_mut) {
+                meta.remove(crate::protocol::mrtr::IDEMPOTENCY_KEY_META);
+            }
         }
     }
 
+    if let Some(execution) = &execution {
+        execution.mark_dispatched();
+    }
     // Forward to backend
     let forward = if propagated_headers.is_empty() && identity_key.is_none() {
         backend.request(&method, params.clone()).await
@@ -839,21 +896,12 @@ pub(super) async fn backend_handler(
     };
     match forward {
         Ok(mut response) => {
-            record_client_success(&state, client.as_ref());
             // Upstream transport IDs are private gateway correlation state;
             // direct-route clients must receive the ID they supplied.
             response.id = Some(id.clone());
             if method == "tools/list" {
                 normalize_tools_list_response(&name, &mut response);
-                scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
             } else if method == "tools/call" {
-                scan_direct_backend_response(
-                    &state,
-                    &name,
-                    params.as_ref(),
-                    client.as_ref(),
-                    &mut response,
-                );
                 stamp_direct_provenance(
                     &state,
                     &name,
@@ -862,12 +910,34 @@ pub(super) async fn backend_handler(
                     &mut response,
                 );
             }
+            let response = finalize_direct_response(
+                &state,
+                &name,
+                &method,
+                params.as_ref(),
+                client.as_ref(),
+                response,
+            );
+            if !response.excludes_client_accounting() {
+                record_client_success(&state, client.as_ref());
+            }
+            if let Some(execution) = execution {
+                execution.complete_secured(&response);
+            }
             build_http_response(&response, StatusCode::OK)
         }
         Err(e) => {
             record_client_failure(&state, client.as_ref());
             error!(backend = %name, error = %e, "Backend request failed");
             let response = JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string());
+            let response = finalize_direct_response(
+                &state,
+                &name,
+                &method,
+                params.as_ref(),
+                client.as_ref(),
+                response,
+            );
             build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -916,93 +986,47 @@ fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>)
     }
 }
 
-#[cfg(feature = "firewall")]
-fn scan_direct_backend_response(
+/// Finalize the normalized response, after restoring the caller's ID and provenance.
+fn finalize_direct_response(
     state: &AppState,
-    backend_name: &str,
+    backend: &str,
+    method: &str,
     params: Option<&Value>,
     client: Option<&AuthenticatedClient>,
-    response: &mut JsonRpcResponse,
-) {
-    let Some(ref fw) = state.firewall else {
-        return;
+    response: JsonRpcResponse,
+) -> JsonRpcResponse {
+    use crate::gateway::meta_mcp::response_security::{
+        ResponseCorrelation, ResponseDeliveryContext, ResponsePolicyTarget,
     };
-    let Some(params) = params else {
-        return;
+    let tool = if method == "tools/call" {
+        params
+            .and_then(|params| params.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or(method)
+    } else {
+        method
     };
-    let Some(tool_name) = params.get("name").and_then(Value::as_str) else {
-        return;
-    };
-    let Some(ref mut result) = response.result else {
-        return;
-    };
-
-    let caller_name = client.map_or("anonymous", |c| c.name.as_str());
-    let session_id = format!("direct:{backend_name}");
-    let verdict = fw.check_response(&session_id, backend_name, tool_name, result, caller_name);
-    if verdict.action == FirewallAction::Warn {
-        warn!(
-            backend = %backend_name,
-            tool = %tool_name,
-            findings = verdict.findings.len(),
-            "Firewall: direct backend response warning"
-        );
-    }
-}
-
-#[cfg(not(feature = "firewall"))]
-fn scan_direct_backend_response(
-    _state: &AppState,
-    _backend_name: &str,
-    _params: Option<&Value>,
-    _client: Option<&AuthenticatedClient>,
-    _response: &mut JsonRpcResponse,
-) {
-}
-
-/// Scan a `tools/list` response through the same firewall response scanner used
-/// for `tools/call` (OWASP ASI01 tool-poisoning defense).
-///
-/// Backend-supplied tool `description`/metadata strings are scanned for prompt
-/// injection and have embedded credentials redacted in place before the tool
-/// list reaches the client — closing the gap where `tools/list` previously
-/// bypassed all content scanning. Gated on the same firewall config as the
-/// `tools/call` path: [`Firewall::check_response`] is a no-op when the firewall
-/// is absent or response scanning is disabled, so behavior is unchanged when
-/// the feature/config is off.
-#[cfg(feature = "firewall")]
-fn scan_direct_tools_list_response(
-    state: &AppState,
-    backend_name: &str,
-    client: Option<&AuthenticatedClient>,
-    response: &mut JsonRpcResponse,
-) {
-    let Some(ref fw) = state.firewall else {
-        return;
-    };
-    let Some(ref mut result) = response.result else {
-        return;
-    };
-
-    let caller_name = client.map_or("anonymous", |c| c.name.as_str());
-    let session_id = format!("direct:{backend_name}");
-    let verdict = fw.check_response(&session_id, backend_name, "tools/list", result, caller_name);
-    if verdict.action == FirewallAction::Warn {
-        warn!(
-            backend = %backend_name,
-            findings = verdict.findings.len(),
-            "Firewall: direct tools/list response warning"
-        );
-    }
-}
-
-#[cfg(not(feature = "firewall"))]
-fn scan_direct_tools_list_response(
-    _state: &AppState,
-    _backend_name: &str,
-    _client: Option<&AuthenticatedClient>,
-    _response: &mut JsonRpcResponse,
-) {
+    let targets = [ResponsePolicyTarget {
+        server: backend.to_owned(),
+        tool: tool.to_owned(),
+    }];
+    let session_id = format!("direct:{backend}");
+    state.meta_mcp.finalize_response_for_delivery(
+        response,
+        &ResponseDeliveryContext {
+            method,
+            targets: &targets,
+            correlation: ResponseCorrelation {
+                session_id: &session_id,
+                caller: client.map_or("anonymous", |client| client.name.as_str()),
+                external_server: backend,
+                external_tool: tool,
+            },
+            mutation:
+                crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
+            signing: None,
+        },
+    )
 }
 
 /// GET /api/costs — REST endpoint for per-key and aggregate cost views.

@@ -441,7 +441,7 @@ mod inflight {
         let table = InFlight::new("gw-1", 100);
         let key = table.hold("weather", 2_000, 0).await.expect("capacity");
 
-        assert!(matches!(table.route(&key).await, Routing::Here));
+        assert!(matches!(table.route(&key, 0).await, Routing::Here));
     }
 
     #[tokio::test]
@@ -466,14 +466,14 @@ mod inflight {
         let key = minting.hold("weather", 2_000, 0).await.expect("capacity");
 
         assert!(
-            matches!(receiving.route(&key).await, Routing::Gone),
+            matches!(receiving.route(&key, 0).await, Routing::Gone),
             "a retry for an exchange another replica holds is refused, never restarted"
         );
         // AND the exchange is still open where it was minted: the refusal above
         // must be the receiving replica not knowing, never the exchange having
         // been consumed or invalidated by the attempt.
         assert!(
-            matches!(minting.route(&key).await, Routing::Here),
+            matches!(minting.route(&key, 0).await, Routing::Here),
             "the minting replica still holds the exchange after a foreign retry"
         );
     }
@@ -484,7 +484,7 @@ mod inflight {
         // the honest answer is a refusal the client can act on — never a silent
         // second exchange.
         let table = InFlight::new("gw-1", 100);
-        assert!(matches!(table.route("no-such-key").await, Routing::Gone));
+        assert!(matches!(table.route("no-such-key", 0).await, Routing::Gone));
     }
 
     #[tokio::test]
@@ -522,7 +522,7 @@ mod inflight {
             "a table full of abandoned exchanges must reclaim rather than refuse"
         );
         assert!(
-            matches!(table.route(&key).await, Routing::Gone),
+            matches!(table.route(&key, 0).await, Routing::Gone),
             "an abandoned exchange must not hold its slot forever"
         );
         assert!(
@@ -970,7 +970,7 @@ mod hardening {
         assert!(table.hold("weather", 9_999, 0).await.is_none());
 
         assert!(
-            table.complete(&key).await,
+            table.complete(&key, 0).await,
             "completing must report the release"
         );
         assert!(
@@ -978,7 +978,7 @@ mod hardening {
             "a finished exchange must return its slot"
         );
         assert!(
-            !table.complete("no-such-key").await,
+            !table.complete("no-such-key", 0).await,
             "completing an unknown exchange must report that it released nothing"
         );
     }
@@ -987,10 +987,10 @@ mod hardening {
     async fn a_completed_exchange_is_gone_for_routing() {
         let table = InFlight::new("gw-1", 4);
         let key = table.hold("weather", 9_999, 0).await.expect("capacity");
-        assert!(table.complete(&key).await);
+        assert!(table.complete(&key, 0).await);
 
         assert!(
-            matches!(table.route(&key).await, Routing::Gone),
+            matches!(table.route(&key, 0).await, Routing::Gone),
             "a retry against a finished exchange must fail explicitly"
         );
     }
@@ -1023,7 +1023,7 @@ mod hardening {
         };
         for _ in 0..500 {
             assert!(
-                matches!(table.route(&key).await, Routing::Here),
+                matches!(table.route(&key, 0).await, Routing::Here),
                 "a held exchange must route to its holder even under contention"
             );
             tokio::task::yield_now().await;

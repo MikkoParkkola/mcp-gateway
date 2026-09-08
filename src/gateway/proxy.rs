@@ -31,7 +31,63 @@ use uuid::Uuid;
 
 use crate::protocol::{ElicitationCreateParams, Root, SamplingCreateMessageParams};
 
+use super::input_bridge::{ClientChannel, DeliveryError, DeliveryProgress};
+use super::streaming::DeliveryLease;
 use super::streaming::{NotificationMultiplexer, TaggedNotification};
+
+#[cfg(test)]
+mod bridge_channel_tests;
+
+#[async_trait::async_trait]
+impl ClientChannel for ProxyManager {
+    async fn send_request(
+        &self,
+        session_id: &str,
+        id: &str,
+        method: &str,
+        mut params: Option<Value>,
+        delivery: Arc<DeliveryProgress>,
+    ) -> Result<Value, DeliveryError> {
+        use crate::protocol::meta::ElicitationMode;
+
+        // Consume the already-owned raw params; the only legacy adaptation is
+        // the URL mode's required ID. No typed reserialization loses fields.
+        if method == "elicitation/create"
+            && ElicitationMode::from_params(params.as_ref()) == Some(ElicitationMode::Url)
+        {
+            let object = params
+                .as_mut()
+                .and_then(Value::as_object_mut)
+                .ok_or(DeliveryError::Malformed)?;
+            object.entry("elicitationId").or_insert_with(|| json!(id));
+        }
+        let mut request = json!({"jsonrpc":"2.0", "id":id, "method":method});
+        if let Some(params) = params {
+            request["params"] = params;
+        }
+        let json = serde_json::to_string(&request).map_err(|_| DeliveryError::Malformed)?;
+        let receiver = self.register_pending_with_delivery(
+            id.to_string(),
+            session_id,
+            Some(Arc::clone(&delivery)),
+        );
+        let mut cleanup = PendingSampleGuard {
+            proxy: self,
+            id,
+            writer: None,
+        };
+        cleanup.writer = Some(
+            self.multiplexer
+                .send_request_to_session(session_id, id, json, Arc::clone(&delivery))
+                .ok_or(DeliveryError::NoSession)?,
+        );
+        tokio::select! {
+            biased;
+            reply = receiver => reply.map_err(|_| DeliveryError::NoSession),
+            () = delivery.closed() => Err(DeliveryError::NoSession),
+        }
+    }
+}
 
 // ============================================================================
 // Sampling error types
@@ -80,6 +136,7 @@ pub struct ProxyManager {
 struct PendingSample {
     session_id: String,
     tx: oneshot::Sender<Value>,
+    delivery: Option<Arc<DeliveryProgress>>,
 }
 
 /// Removes a pending entry when the request future ends, however it ends.
@@ -97,11 +154,13 @@ struct PendingSample {
 struct PendingSampleGuard<'a> {
     proxy: &'a ProxyManager,
     id: &'a str,
+    writer: Option<DeliveryLease>,
 }
 
 impl Drop for PendingSampleGuard<'_> {
     fn drop(&mut self) {
         self.proxy.cancel_pending(self.id);
+        drop(self.writer.take());
     }
 }
 
@@ -130,12 +189,22 @@ impl ProxyManager {
         id: String,
         session_id: impl Into<String>,
     ) -> oneshot::Receiver<Value> {
+        self.register_pending_with_delivery(id, session_id, None)
+    }
+
+    fn register_pending_with_delivery(
+        &self,
+        id: String,
+        session_id: impl Into<String>,
+        delivery: Option<Arc<DeliveryProgress>>,
+    ) -> oneshot::Receiver<Value> {
         let (tx, rx) = oneshot::channel();
         self.pending_sampling.write().insert(
             id,
             PendingSample {
                 session_id: session_id.into(),
                 tx,
+                delivery,
             },
         );
         rx
@@ -163,6 +232,13 @@ impl ProxyManager {
             }
             Some(_) => {
                 let entry = pending.remove(id).expect("entry present");
+                if entry
+                    .delivery
+                    .as_ref()
+                    .is_some_and(|delivery| !delivery.answered())
+                {
+                    return false;
+                }
                 // If the receiver has already been dropped (timeout), send fails silently.
                 let _ = entry.tx.send(response);
                 true
@@ -174,7 +250,10 @@ impl ProxyManager {
     ///
     /// Called on timeout to clean up the map entry.
     pub fn cancel_pending(&self, id: &str) {
-        self.pending_sampling.write().remove(id);
+        let entry = self.pending_sampling.write().remove(id);
+        if let Some(delivery) = entry.and_then(|entry| entry.delivery) {
+            delivery.cancel();
+        }
     }
 
     // ========================================================================
@@ -218,6 +297,7 @@ impl ProxyManager {
         let _cleanup = PendingSampleGuard {
             proxy: self,
             id: &id,
+            writer: None,
         };
 
         let data = json!({
@@ -285,6 +365,7 @@ impl ProxyManager {
         let _cleanup = PendingSampleGuard {
             proxy: self,
             id: &id,
+            writer: None,
         };
 
         let data = json!({
@@ -476,9 +557,14 @@ mod tests {
     use crate::config::StreamingConfig;
     use crate::protocol::{Content, ModelHint, ModelPreferences, SamplingMessage, ToolChoice};
 
-    fn make_multiplexer() -> Arc<NotificationMultiplexer> {
+    pub(super) fn make_multiplexer() -> Arc<NotificationMultiplexer> {
+        make_multiplexer_with_config(StreamingConfig::default())
+    }
+
+    pub(super) fn make_multiplexer_with_config(
+        config: StreamingConfig,
+    ) -> Arc<NotificationMultiplexer> {
         let backends = Arc::new(BackendRegistry::new());
-        let config = StreamingConfig::default();
         Arc::new(NotificationMultiplexer::new(backends, config))
     }
 

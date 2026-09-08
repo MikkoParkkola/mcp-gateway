@@ -1087,6 +1087,7 @@ fn session_expired_response_detection_matches_known_signatures() {
             data: None,
         }),
         confirmation_refusal: false,
+        delivery_refusal: false,
     };
 
     // MIK-6040: 200 + JSON-RPC error shapes a remote may use for session expiry.
@@ -1115,6 +1116,7 @@ fn session_expired_response_detection_matches_known_signatures() {
         result: Some(serde_json::json!({"ok": true})),
         error: None,
         confirmation_refusal: false,
+        delivery_refusal: false,
     }));
 }
 

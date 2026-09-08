@@ -265,6 +265,52 @@ mtls:
   require_client_cert: true
 ```
 
+### Strict validation and existing certificate generations
+
+Newly generated 4.0 CA certificates include certificate-signing and CRL-signing
+key usage; issued server and client certificates include an Authority Key
+Identifier matching their issuer. These extensions support strict X.509 clients,
+including Python 3.13's default TLS context. Keep certificate and hostname
+verification enabled.
+
+Check a new generation before deploying it:
+
+```bash
+openssl verify -x509_strict -purpose sslserver \
+  -verify_hostname gateway.company.com \
+  -CAfile ./tls-next/ca.crt ./tls-next/server.crt
+openssl verify -x509_strict -purpose sslclient \
+  -CAfile ./tls-next/ca.crt ./tls-next/clients/claude-code-agent.crt
+```
+
+Existing gateway-generated CAs may lack key usage, and existing leaves may lack
+issuer identifiers. A new leaf alone cannot repair a malformed CA. The gateway
+does not replace an existing certificate generation automatically.
+
+For an existing deployment, perform the following rollout during an operator
+chosen maintenance window:
+
+1. Retain the old CA, leaf certificates, private keys, configuration and trust
+   bundles. Generate the replacement CA/server/client material with the commands
+   above in a **new directory**, such as `./tls-next`, rather than in the live
+   certificate directory. Protect and store the new CA key offline after issuance.
+2. Distribute a trust bundle containing both old and new CA certificates to the
+   gateway and clients before switching leaf certificates. The gateway's
+   `mtls.ca_cert` accepts a PEM bundle. Restart it after changing its TLS paths or
+   trust bundle, and verify existing clients still authenticate.
+3. Switch server and client certificate/key paths to the new generation. Restart
+   the gateway and reconnect clients. Verify an actual authenticated MCP
+   initialize/tool-list exchange with the new client certificate, as well as
+   continued operation of supported existing clients. An old malformed chain
+   remains incompatible with strict clients even when both CAs are trusted;
+   enable those clients only after the new server chain is active.
+4. Rehearse rollback in an isolated deployment: restore the retained old
+   certificate/key/configuration paths while keeping overlapping trust, restart,
+   and verify the original client **with its old certificate and key**. This
+   restores prior compatibility; it does not make the old chain strict-valid.
+5. Remove old trust only after every consumer has migrated and the operator has
+   ended the rollback window. Retention and key disposal follow your PKI policy.
+
 ## Reverse Proxy
 
 Bind the gateway to `127.0.0.1` (default) and proxy from the public-facing server. SSE streaming requires disabled response buffering.
@@ -423,6 +469,10 @@ internet with a firewall rule or a reverse-proxy allow-list.
 - `mcp_gateway_active_connections` -- current connections
 - `mcp_backend_idle_stop_close_failures` -- per backend, counts backends stopped
   for idleness that did not shut down cleanly (see below)
+- `mcp_message_signing_nonce_entries` -- live signing nonces held for replay
+  protection, as one aggregate number with no labels (see below)
+- `mcp_message_signing_nonce_rejections_total` -- refused nonce admissions,
+  labelled only by `reason` (see below)
 
 #### Alerting on a backend that would not stop
 
@@ -455,6 +505,97 @@ When it fires: check for an orphaned child process of the gateway
 Then look at that backend's shutdown path — a server ignoring SIGTERM is the
 usual cause. Setting a longer `stop_when_idle_for` does not help; removing the
 setting for that backend stops the leak at the cost of keeping it resident.
+
+#### Signing nonce telemetry and capacity alerting
+
+Message signing rejects a replayed nonce by remembering every nonce it has
+admitted inside the replay window. That store is bounded, so it reports two
+things and deliberately nothing else.
+
+`mcp_message_signing_nonce_entries` is the number of nonces currently held: one
+aggregate gauge with **no labels**, because occupancy is a property of the store
+rather than of any caller. It is written while the store's own lock is held, on
+every path that can change it -- admission, the reclamation an admission
+performs, and expiry cleanup. What that buys is publication order: because each
+count is published under the same lock that produced it, an older operation can
+never overwrite a newer one's value, so the last published number is the newest
+one. It does not make a scrape atomic with the store -- a scrape reads whatever
+was published most recently, and the store may have moved on since.
+
+`mcp_message_signing_nonce_rejections_total` counts refused admissions and
+carries exactly one label, `reason`, drawn from a closed set:
+
+| `reason` | meaning |
+|---|---|
+| `replay` | the nonce was already admitted inside the replay window |
+| `invalid` | a nonce was supplied but is unusable: `null`, not a string, empty, or longer than 256 UTF-8 bytes |
+| `principal_capacity` | one quota bucket reached its own limit |
+| `global_capacity` | the store as a whole reached its limit |
+
+A *missing* nonce is not an `invalid` one and is never counted here. Depending on
+configuration it is either permitted or refused by the existing
+nonce-required error, neither of which is a malformed value.
+
+A quota bucket is an opaque identity the gateway derives from an already
+validated credential; several callers can legitimately share one, as the
+dashboard and anonymous buckets do, so `principal_capacity` means "this bucket is
+full", not necessarily "one client is full".
+
+No nonce, credential, digest, identity, session, request ID or key ever appears
+as a label or a value on either series. A scrape endpoint is read by more systems
+than a log is, and a label is the easiest place to leak an identifier the rest of
+the gateway keeps opaque.
+
+Two rules ship in
+[`deploy/prometheus/mcp-gateway-alerts.yml`](../deploy/prometheus/mcp-gateway-alerts.yml),
+with their expectations in
+[`deploy/prometheus/mcp-gateway-alerts-test.yml`](../deploy/prometheus/mcp-gateway-alerts-test.yml):
+
+```yaml
+# prometheus rules
+- alert: McpSigningNonceCapacity
+  expr: mcp_message_signing_nonce_entries > 80000
+  for: 5m
+  labels: { severity: warning, category: security }
+  annotations:
+    summary: "Signing nonce store is above its capacity watermark"
+
+- alert: McpSigningNonceCapacityRefusal
+  expr: >-
+    sum(increase(mcp_message_signing_nonce_rejections_total{reason=~"principal_capacity|global_capacity"}[5m]))
+    > 0
+  labels: { severity: warning, category: security }
+  annotations:
+    summary: "Signing nonce admissions are being refused for capacity"
+```
+
+The two differ in kind on purpose. Occupancy near the bound is a trend, so it
+needs `for: 5m` -- a store briefly high is normal, a store parked there is not. A
+capacity refusal is the store declining to take on more while keeping every
+entry it already holds, so replay protection is preserved rather than given up;
+what it signals is that legitimate traffic is now being turned away, which is
+worth knowing at once. That rule therefore has no `for` clause and fires as soon
+as the increase is visible. The `sum` collapses
+both capacity reasons into a single series, so one condition pages once instead of
+once per reason and the alert carries no `reason` label of its own; increments are
+non-negative, so the sum is positive exactly when at least one capacity reason
+increased. `replay` and `invalid` refusals are the store working as designed and
+never page, however many of them there are.
+
+When either fires: look at occupancy against expiry first -- a store that climbs
+and never falls points at cleanup, not at load. Then look at the client side, at
+retry storms and at nonce churn. The bounds are compiled-in defaults -- 100,000
+entries globally and 10,000 per quota bucket -- not settings exposed in signing
+configuration, so the useful comparison is how far real traffic sits from those
+numbers. Moving them is a reviewed code change with a memory cost, not a knob to
+turn during an incident.
+
+Do not evict live entries to clear the alert, and do not turn nonce checking off
+to silence it: both trade a warning for an open replay window, which is the
+condition the store exists to prevent.
+
+Alert routing -- which receiver these reach, and who is woken -- is deployment
+configuration and is not covered by the shipped rules or their tests.
 
 ### Live Statistics / Web Dashboard
 

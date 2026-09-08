@@ -16,7 +16,7 @@ use crate::gateway::oauth::{
 use crate::mtls::{CertIdentity, PolicyDecision};
 use crate::security::{validate_tool_name, validate_url_not_ssrf};
 
-pub(super) fn backend_tool_targets_for_call(
+pub(crate) fn backend_tool_targets_for_call(
     meta_mcp: &MetaMcp,
     tool_name: &str,
     arguments: &Value,
@@ -294,6 +294,19 @@ pub(super) struct RouterAuthorizer<'a> {
 }
 
 impl ToolAuthorizer for RouterAuthorizer<'_> {
+    fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
+        if let Some(client) = self.client
+            && client.authenticated
+        {
+            return client.quota_principal.as_ref();
+        }
+        if let Some(agent) = self.oauth_agent_identity {
+            return agent.quota_principal.as_ref();
+        }
+        self.cert_identity
+            .and_then(|cert| cert.quota_principal.as_ref())
+    }
+
     fn authorize(&self, target: ToolTarget<'_>) -> Result<(), AuthorizationError> {
         authorize_tool_target(
             self.state,

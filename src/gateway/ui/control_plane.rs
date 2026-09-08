@@ -1361,6 +1361,7 @@ mod role_wiring_tests {
 
     fn client(admin: bool) -> AuthenticatedClient {
         AuthenticatedClient {
+            quota_principal: None,
             principal: String::new(),
             name: "c".to_string(),
             rate_limit: 0,

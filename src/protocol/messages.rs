@@ -66,6 +66,10 @@ pub struct JsonRpcResponse {
     /// dispatcher, to keep a refusal out of client failure accounting.
     #[serde(skip)]
     pub confirmation_refusal: bool,
+    /// Server-owned response security refusal. Never accepted from wire data
+    /// or serialized; it excludes both client strikes and success resets.
+    #[serde(skip)]
+    pub(crate) delivery_refusal: bool,
 }
 
 impl<'de> Deserialize<'de> for JsonRpcResponse {
@@ -96,6 +100,7 @@ impl<'de> Deserialize<'de> for JsonRpcResponse {
             result: shadow.result,
             error: shadow.error,
             confirmation_refusal: false,
+            delivery_refusal: false,
         })
     }
 }
@@ -110,6 +115,7 @@ impl JsonRpcResponse {
             result: Some(result),
             error: None,
             confirmation_refusal: false,
+            delivery_refusal: false,
         }
     }
 
@@ -143,6 +149,7 @@ impl JsonRpcResponse {
                 data: None,
             }),
             confirmation_refusal: false,
+            delivery_refusal: false,
         }
     }
 
@@ -180,7 +187,22 @@ impl JsonRpcResponse {
                 data: Some(data),
             }),
             confirmation_refusal: false,
+            delivery_refusal: false,
         }
+    }
+}
+
+impl JsonRpcResponse {
+    /// Only gateway-owned finalization failures acquire this private marker.
+    pub(crate) fn delivery_refusal_error(id: Option<RequestId>, code: i32, message: &str) -> Self {
+        let mut response = Self::error(id, code, message);
+        response.delivery_refusal = true;
+        response
+    }
+
+    /// Policy refusals neither consume a failure strike nor reset prior strikes.
+    pub(crate) fn excludes_client_accounting(&self) -> bool {
+        self.confirmation_refusal || self.delivery_refusal
     }
 }
 

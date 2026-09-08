@@ -79,6 +79,7 @@ tower-http = { version = "0.7", features = ["cors", "trace", "timeout", "compres
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_json_canonicalizer = "0.3.2"
 serde_yaml = "0.9"
 
 # Configuration
@@ -168,6 +169,7 @@ metrics-exporter-prometheus = { version = "0.18", optional = true }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 
 [dev-dependencies]
+tokio = { version = "1.52", features = ["test-util"] }
 tokio-test = "0.4"
 pretty_assertions = "1.4"
 tempfile = "3.14"

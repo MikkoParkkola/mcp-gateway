@@ -1,6 +1,10 @@
 # NFR.SEC.3 — rotatable continuation keys, retained for the max lifetime
 
-Status: DESIGN, dual-reviewed, no code exists. Author: `sec-nfr`, 2026-09-06.
+Status: design, assertion-first tests and final code gates are approved by both
+vendors. Implementation, focused regressions, coverage, mutation and component
+measurements pass; the independent acceptance-only drive and parent-owned release
+chain remain open. Final receipts and evidence are recorded at the end of the test plan.
+Historical author: `sec-nfr`, 2026-09-06.
 Round-by-round verdicts live in the table below, not in this line — a status line carrying round
 state is stale the moment a leg returns, and it was, twice.
 
@@ -110,6 +114,59 @@ leg. glm-5.3 stands in.
 
 Round 2 deleted the rotation trigger outright and the text has moved again since, so a §P4
 confirmation pass against the current revision is owed before this design is called reviewed.
+
+## Delivery takeover clarification — current contract
+
+The release lead resolved Q1 to existing option C, per-process mint-side age
+rotation, under the approved single-process topology. No operator approval or
+shared-key infrastructure is needed; restart is still not key rotation.
+The paired current design/test-plan review must precede new tests and code.
+
+Two arithmetic/atomicity repairs from direct inspection are part of that review.
+At exact retirement+lifetime equality a verification key remains valid, so an
+actively rotating production ring can contain **seven**, not six, keys at the
+boundary (six retired/current-age cohorts plus the new minting key). Bound it by
+`floor(CONTINUATION_LIFETIME_SECS / CONTINUATION_ROTATION_SECS) + 2`; do not prune
+at equality to make the old count true. The 256-slot wrap-distance still holds.
+A quota counter must never wrap after refusals: reserve one slot with a bounded
+atomic `fetch_update`/CAS (Relaxed), stop incrementing at the per-key budget, and
+reject without rotation until the age interval is reached. No load/check/separate-add race or unbounded increment is permitted.
+
+The public raw-key constructor can preload verification keys with no retirement
+epoch. Stamp the initial minting key and preload verification retirement epochs
+at the first trusted mint; preserve verification before that mint. Production
+uses one RNG-created key, so the seven-key bound is the production schedule bound;
+a library caller's explicitly preloaded ring has its constructor-supplied bound
+until its first retention window elapses. Never overwrite a still-retained
+successor. First stamp and due-age recheck happen under the same write lock;
+ordinary minting and verification use the read lock. Backward supplied time
+neither rotates nor prunes; checked/saturating arithmetic must not wrap.
+
+The test plan is `2026-09-06-nfr-sec3-key-rotation-test-plan.md`. It separately
+proves age rotation, retirement-boundary retention, old-key pruning, concurrent
+budget/rotation behavior and preservation of the actual continuation state.
+No review of documentation alone closes NFR.SEC.3.
+
+### Production clock and integration seam
+
+Add a crate-private `ContinuationState::with_clock(Arc<dyn Fn() -> u64 + Send + Sync>)`
+and `now()` accessor. Ordinary constructors bind `now_unix_secs`; the real
+Gateway builder accepts the same trusted callback already specified by Change C's
+CleanupRuntime, so worker and invoke share one epoch source. Replace the three
+trusted reads in invoke's mint/retry validation paths with `continuation.now()`.
+There is no wire parameter, public runtime switch or constructor wall-clock stamp.
+Raw `Keyring::mint` still takes time solely from Payload::issued_at.
+
+ROTATE.12 lives in an in-crate meta-MCP integration test module with access to the
+same builder/runtime seam. Through the actual handle_tools_call path, initialize
+a capable verified synthetic caller, receive a backend InputRequired/opaque
+continuation at T, leave it pending, advance callback to T+60, mint a second
+exchange through that path to trigger rotation, then answer/redeem the first
+handle. Count actual backend dispatches and verify a duplicate redemption with
+fresh explicit idempotency key cannot repeat the completed effect. Do not replace
+the keyring, held table or consumed ledger, call raw mint to simulate this wiring,
+or sleep 60 seconds. The backend and reply fixtures follow BRIDGE's actual
+transport contract; tests own their temporary state and clock.
 
 ## MRTR.5 is the constraint that decides this design — and its text is narrower than the first draft claimed
 
@@ -256,7 +313,7 @@ already in hand at both call sites. A timer adds a second, independent clock, an
 between the two is exactly the `UnknownKey` failure that RETAINED exists to prevent.
 
 So: **rotate lazily, inside `mint` alone, off the `now` already passed in.** If the minting
-key is older than the rotation interval, retire it and mint a fresh one before proceeding; drop
+key age is `>= CONTINUATION_ROTATION_SECS`, retire it and mint a fresh one before proceeding; drop
 retained keys whose retirement is more than `CONTINUATION_LIFETIME_SECS` behind `now` in the same
 pass. Nothing is spawned, nothing is shut down, no constructor changes.
 
@@ -305,38 +362,31 @@ deadline; the rotation code must not carry a second copy of the number.
 
 ### The real mechanical work
 
-`ContinuationState` lives behind an `Arc` (`src/gateway/meta_mcp/mod.rs:230`) and `open`
-takes `&self`, so the key vector must become interior-mutable — **`std::sync::RwLock`**, taken
-for READ on every `open` and for WRITE only by the rotation inside `mint`. That split only
-works because the mint counter is NOT inside the lock: `minted` is an `AtomicU64` on the key
-itself, so an ordinary mint increments it under the read guard and only a rotation needs the
-write guard. Left as a plain field it would have made every mint a writer, and the read/write
-split above would have been unimplementable as written — a read guard cannot be upgraded, and
-the workaround is a write lock on the authentication path. Explicitly NOT the `tokio::sync::Mutex` that
-`ConsumedLedger` and `InFlight` use (`:561`, `:668`): those are `async fn`s already, `mint` and
-`open` are not, and copying their lock type would make every call site of both `async`. That is a LOCAL lock change, not a distributed one,
-and with the counter moved out of the lock it is the whole of the concurrency work.
+`Keyring` holds one `parking_lot::RwLock<RingState>` containing the minting
+kid and all verification entries. Use the existing dependency: its task-fair
+policy avoids writer starvation; do not recursively acquire read guards. See
+[parking_lot RwLock documentation](https://docs.rs/parking_lot/0.12.5/parking_lot/type.RwLock.html).
+Ordinary mint and `open` take read guards; first stamping and age-due rotation
+recheck and publish under the write guard. Seal/open remain inside their guard.
+No Tokio lock or async public keyring API is introduced.
 
-The counter is incremented with `fetch_add(1, Relaxed)` and the check reads the value that
-`fetch_add` RETURNS — never a load, then a comparison, then a separate add. The returned
-value is a slot no other mint can also draw, so exactly `budget` mints get a sealing slot and
-every later one is refused. Load-check-add lets every mint in a racing set read the same
-under-budget value and all seal, so the key seals `budget + N - 1` envelopes for a racing set
-of N — a bound violated by however many threads happened to be in flight is not a bound.
+Every key owns an AtomicU64 quota counter. Reserve exactly one slot with bounded
+`fetch_update`/CAS using Relaxed ordering; reject when already at budget without
+incrementing. Failed reservations cannot wrap or reset the counter. The write
+lock publishes each new key with counter zero; quota exhaustion never rotates.
 
-Drawing the slot is NOT a rotation trigger, and the distinction matters more than it looks: a
-mint that draws a slot past the budget FAILS, it does not rotate. Rotation is age-driven and
-nothing else, for the reason given two sections down — a caller who can exhaust a key can
-otherwise clock the ceremony. The counter therefore keeps climbing past the budget while a
-key is stalled, which is harmless because the comparison is `>=` and the counter dies with the
-key. `Relaxed` is sufficient because the counter orders nothing: the write guard is what
-publishes the new key.
-
-The lock is `std::sync::RwLock`, so a panic while holding it poisons it. `open` and `mint`
-both take the inner value and continue rather than propagating: the ring is a `Vec` of keys
-and a kid, there is no partial update a panic can leave half-applied — rotation swaps both
-fields under one guard — so a poisoned lock here signals a bug elsewhere, and refusing every
-subsequent continuation would turn that bug into an outage on the authentication path.
+The lock does not poison, so state publication must be transactional on panic as
+well as on RNG errors. Retained key material/counters live in immutable shared
+key objects; ring-entry creation/retirement metadata are copied into a candidate
+RingState, not mutated in the live entries. Under the writer, prebuild and
+validate the ENTIRE successor state, including retention filtering, unique kids,
+initial stamps and new RNG key. Only then replace RingState with one non-panicking
+assignment. No fallible call, test callback, logging, allocation or custom
+panicking destructor may occur between field updates: there are no sequential
+live field updates. A failpoint before replacement leaves the old snapshot,
+quota and cryptographic behavior unchanged. After replacement the new state is
+coherent; diagnostics happen after publishing. Keep `minting_kid` and entries
+inside this one state, never separately updated locks.
 
 One consequence of the lock that the current shape hides: `Keyring::key` returns
 `Result<&LessSafeKey, _>` (`continuation.rs:524-530`), a borrow into `self.keys`. A borrow
@@ -358,7 +408,7 @@ a long-lived replica that exhausted one key with no way to mint again short of a
 budget can still exhaust before the key is old enough to rotate, and the decision there is
 that `mint` FAILS until the age check rotates it — at most one interval of stalled minting for
 a replica minting fast enough to burn a per-key NIST bound in under an interval. That stall
-begins at the exact envelope the bound names, not somewhere near it, and the `fetch_add`
+begins at the exact envelope the bound names, not somewhere near it, and the bounded atomic reservation
 discipline above is the whole reason: the refusal is decided by a slot number no two mints
 share. Rotating on
 exhaustion instead would hand the mint rate back to the caller, which is the attacker-triggered
@@ -392,16 +442,18 @@ The SUCCESSOR RULE is the other half of that schedule, and naming the interval w
 would leave the arithmetic below open to two readings: the new kid is always
 `minting_kid.wrapping_add(1)`, NEVER the lowest free slot. One clause, and it is what makes
 the reuse distance a function of the interval at all. A lowest-free-slot search over a
-six-key ring hands a retired kid straight back on the very next rotation, so the distance
+small retained ring hands a retired kid straight back on the very next rotation, so the distance
 would collapse from the number below to roughly the retention window itself — the same
 mechanism, no margin, and nothing in the prose to say which was meant.
 
 With the successor fixed the arithmetic is checkable rather than asserted. At one rotation
 per 60 seconds against a 300-second retention window the live ring holds
-`ceil(300 / 60) + 1 = 6` kids. Kid space is 256 and the counter advances by exactly one per
+`floor(CONTINUATION_LIFETIME_SECS / CONTINUATION_ROTATION_SECS) + 2 = 7` kids
+at retirement+lifetime equality. Prune only when `now > retirement + lifetime`. Kid space is 256 and the counter advances by exactly one per
 rotation, so a kid comes round again 256 intervals — 15,360 seconds — after its previous use,
 against a retention window of 300. Fifty-one times the margin, and the bound to keep is
-simply `256 * CONTINUATION_ROTATION_SECS > CONTINUATION_LIFETIME_SECS`. Choosing an interval
+simply `(256 - 1) * CONTINUATION_ROTATION_SECS > CONTINUATION_LIFETIME_SECS`:
+reuse is 256 intervals after creation but only 255 after retirement. Choosing an interval
 that violates it does not corrupt anything: the successor kid is still live when its turn
 comes round, so the fallback below fires every time and rotation silently stops. That is the
 failure worth a test.
@@ -438,9 +490,11 @@ answers an operator will actually see come from elsewhere — an envelope presen
 that did not mint it, and an envelope presented after the minting process restarted, since the
 startup key comes from the RNG and nothing survives the restart. Neither is caused by
 rotation, and the log line's job is to let an operator rule rotation out in one look. The
-third case is the one worth alerting on: a `NotAuthentic` whose kid IS live and whose envelope
-is inside its lifetime means the wrap bound above was violated, which is the invariant failing,
-not the key ceremony working.
+directly observable invariant failures are successor collisions or an invalid
+RingState before publication. Log/alert those with bounded kid/count metadata.
+Never infer an invariant failure from `NotAuthentic`: ciphertext tampering can
+cause it for a live kid, and the untrusted encrypted expiry is unavailable on
+a failed authentication. No token body, secret or claimed expiry is logged.
 
 These are the invariants the implementation must hold, written here so the concurrency work
 has checkable properties rather than prose:
@@ -459,7 +513,7 @@ has checkable properties rather than prose:
    with no invariant riding on it.
 3. Kids are unique within the live ring — a CONSEQUENCE of the successor rule, not a check to
    write: `minting_kid.wrapping_add(1)` advances by one, and
-   `256 * CONTINUATION_ROTATION_SECS > CONTINUATION_LIFETIME_SECS` keeps the returning value
+   `(256 - 1) * CONTINUATION_ROTATION_SECS > CONTINUATION_LIFETIME_SECS` keeps the returning value
    outside the live window. A test asserting uniqueness is really asserting that bound.
 4. `minted` is 0 immediately after a rotation, on every path that rotates — and there is one.
    It is an `AtomicU64` on the key, not a field of the locked ring, so this is a property of
@@ -520,9 +574,10 @@ linearizable and reachable, which forces the partition answer — fail closed an
 liveness, or fail open and lose 5a. It is also the larger build by a wide margin, which is
 the least interesting objection and is not why it is declined here.
 
-This is a §P3 design event and is named as one: (b) is the scoped instruction, and this
-design declines three of its four pieces. That decision belongs to the team lead to confirm
-or overturn, not to be taken silently here.
+This was a §P3 design event: an earlier ledger interpretation selected (b). The
+takeover delivery lead now selects (c) against the unchanged requirement and approved
+topology boundary, as recorded in Q1 below. No operator-supplied key requirement is
+removed, because none appears in NFR.SEC.3; no shared-state guarantee is claimed.
 
 ## Out of scope
 
@@ -537,19 +592,15 @@ fields, and nothing depending on an open one gets built first.
 
 | # | question | fail-fast |
 |---|---|---|
-| 1 | Does the criterion's author read "rotatable" as requiring operator-supplied material? If yes, (c) does not meet it and (b) returns. | **DEFERRED** — askable, not checkable. *Owner:* the team lead. *What resolves it:* the ruling on whether `RELEASE-4.0.0-test-plan.md:301` stands as written, asked and unanswered. *When:* before ANY implementation begins — this design ships as design either way, and no code is written against an unanswered Q1. *If it resolves badly:* option (b) returns and this document becomes the record of why (c) was preferred, not the plan. Blocks all four implementation pieces; blocks nothing in the design itself. |
+| 1 | Does the rotation criterion require operator-supplied material? | **RESOLVED by the delivery lead, 2026-09-06.** NFR.SEC.3 requires versioning, live rotation and retention for the maximum continuation lifetime; it does not prescribe external/shared keys. Implement option C with per-process keys, mint-side age rotation and retention. Preserve the production-constructor separation case in RELEASE-4.0.0-test-plan.md (MRTR.5). The operator delegated release delivery and approved the topology boundary; this is the lead's engineering ruling, not an invented operator answer. A future requirement for shared keys needs its shared replay store and separate review. |
 | 2 | What is "the max lifetime" as a number, and is it bounded anywhere today? RETAINED is unimplementable without it. | RESOLVED, checkable. `rg CONTINUATION_LIFETIME_SECS src/` — `const CONTINUATION_LIFETIME_SECS: u64 = 300` at `src/protocol/continuation.rs:128`, not a parameter and deliberately not one. The retention window is therefore 300 seconds, a compile-time constant. It changed the design: the retention deadline needs no new config and no new plumbing. |
 | 3 | Can the config-reload path actually REACH the live keyring? The whole ROTATABLE claim, and the D7 WIRED argument with it, rests on this. | RESOLVED, checkable. `rg -n "MetaMcp\|continuation\|ContinuationState" src/config_reload/` — zero hits; `ReloadContext` (`:1371-1388`) holds config path, live config, registry, failsafe, TTL and env, and no gateway handle. The meta-tool caller reaches it for free, the file watcher does not. It changed the design twice: first the "free trigger" claim turned out half true, and then review showed the reload trigger was the wrong choice altogether. Every trigger was eventually dropped: the watcher for its plumbing, then the meta-tool and the interval task in round 2, in favour of an age check on the `now` already injected into `mint`. Written up above rather than left as a table cell. |
 
-Question 1 is load-bearing: a yes reverses the recommendation. One documentation delta rides
-on it, recorded here rather than done: `docs/requirements/RELEASE-4.0.0-criteria-status.md:353`
-states **"Branch (b) is the one taken"**, which this design contradicts. It is deliberately NOT
-edited yet — that cell is the ledger's record of a decision only the team lead can change, and
-rewriting it to match my own recommendation before the ruling would be the design marking its
-own homework. It is a §P4a obligation attached to the Q1 answer: (c) confirmed, the cell is
-rewritten in this change; (b) confirmed, the cell was right and this document becomes history. It is DEFERRED rather than
-resolved because only the requester can settle it, and a design that recorded it as "asked"
-would be claiming a third state the process does not have.
+The takeover delivery lead resolved Q1 above and reconciled the criterion-status row.
+The earlier option-B assumption is superseded; the requirements and planned constructor
+separation assertion stay intact. Option C is the current design direction, not a claim
+that rotation is implemented or validated. The separate test plan, failing-test review,
+production wiring, retention/concurrency falsifiers and final review remain required.
 
 ## The repo already ticketed option (b), and sequenced it after this release
 
@@ -573,3 +624,73 @@ wait for MIK-7312, because none of them asks for a persistent key.
 **T1c (PQC readiness) — N/A, recorded rather than skipped.** This design adds no key-agreement
 and no signature primitive. It rotates an existing symmetric AES key, which is the DoR T1c
 symmetric-only fast path (`HMAC`/`AES`/`ChaCha` = auto-PASS).
+
+### Mechanical module-size repair before final code review
+
+FOR: move the unchanged Keyring/SealingKey/KeyEntry/RingState implementation and
+its private test hooks to `src/protocol/continuation/keyring.rs`, with a public
+`continuation::Keyring` re-export. Keep every public method, wire constant,
+payload, clock and state behavior unchanged. OUT: new API, visibility of key
+material, runtime cleanup changes or revised acceptance. Root separately owns
+moving unchanged inline lifetime tests out of this shared file.
+
+The 1469-line combined module exceeds the canonical 800-line gate; extracting
+both cohesive sections brings each file below the limit. Alternatives: leave
+it together (fails the gate), or split payload/state now (unnecessary ownership
+and behavior-context churn). Keyring is the cohesive boundary already reviewed.
+No benchmark interpretation or concurrency contract changes. GitNexus reports
+LOW/0 for the type but HIGH/11 upstream nodes for `Keyring.open` (seven direct
+callers: route lookup, redemption, benchmark and four MRTR tests); the latter
+and static public-path searches are the conservative impact evidence.
+
+The private rotation test module moves under `keyring` so its existing direct
+private-state observations remain private. Test names gain only `::keyring`;
+the 18 assertions remain unchanged. Its support path stays relative to the
+actual source file and explicit imports obtain sibling state types. Validation:
+byte-identical extracted implementation body, external old-path integration
+compilation, focused 18+2 behavior tests and existing continuation regressions.
+This mechanical move uses the canonical trivial/mechanical review exception;
+parent peer review precedes edits and the final dual code pass includes the
+full final files. No compiler failure is behavioral RED.
+
+### Code finder repair: failed mint must release its unpublished hold
+
+GPT code leg r1 confirmed a lifecycle gap in `mint_continuation`:
+`begin_exchange` inserts a hold before `keyring.mint`; an `Err` logs and returns
+no envelope, leaving capacity occupied without a client-visible continuation.
+Successor RNG failure is newly relevant to ordinary rotation, while TooLarge
+already takes the same path. This is a caller rollback repair within NFR.SEC.3,
+with no new public capability or changed successful continuation semantics.
+
+FOR (ROTATE.16): on every returned mint error, remove exactly that payload's
+hold before returning the existing generic refusal; retain other live holds,
+consumed-ledger state and the usable old token; a subsequent normal mint works.
+Use `in_flight.complete(&payload.hold_key, payload.issued_at).await` in the error
+arm. The payload timestamp is already trusted and avoids an additional clock
+read. Existing `complete` owns its table locking; no key-ring guard survives
+`mint` returning. OUT: new wire errors, constructor/state replacement, cancellation
+or panic RAII refactoring, runtime fault injection, or preflight-size optimization.
+
+Alternatives: a new begin-and-seal/lease abstraction broadens state ownership and
+async cleanup for a single missing rollback; pre-rejecting oversized state alone
+does not repair RNG or quota failures. The narrow error-arm rollback covers every
+returned error with the existing release primitive. Risks: completing the wrong
+hold or pruning a live unrelated hold; the test retains and later redeems a
+separate successful exchange to falsify both.
+
+Test plan before behavior: two actual-builder cases (rotation successor RNG
+failure, oversized backend state) establish one live pending exchange, advance
+its trusted clock to T+60, drive the refused second backend interim result, and
+require the full held map and consumed-ledger count to equal their prior values.
+Each then clears only its fixture fault, successfully mints another envelope,
+and redeems the original pending exchange once. Cache is off for guard-driving
+fixtures. Add a narrowly scoped cfg(test)-only crate-visible successor-failure
+switch on Keyring to drive its existing private factory hook through the real
+builder; it exposes no runtime API or material. The backend fixture supplies
+oversized opaque state only when that case selects it. Before rollback is
+implemented, both cases must compile and fail on the extra held entry. Then
+separate tests-as-tests review precedes implementation, followed by green, a
+remove-rollback sabotage, focused mutation/coverage and finder code closure.
+DoR applicability remains the accepted takeover's crypto/security/process scope;
+no new dependencies, identity, external state, durable storage or protocol shape.
+These results are pending, not inferred from the earlier ring tests.

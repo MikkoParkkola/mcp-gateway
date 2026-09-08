@@ -1514,6 +1514,7 @@ fn authorize_tool_target_enforces_agent_scope() {
             crate::gateway::oauth::Scope::parse("tools:demo:allowed_tool:execute").unwrap(),
         ],
         raw_scopes: vec!["tools:demo:allowed_tool:execute".to_string()],
+        quota_principal: None,
     };
     let args = json!({});
 
@@ -2329,6 +2330,7 @@ fn scoped_client(
     allowed_tools: Option<Vec<String>>,
 ) -> AuthenticatedClient {
     AuthenticatedClient {
+        quota_principal: None,
         name: name.to_string(),
         rate_limit: 0,
         backends,
@@ -2373,6 +2375,10 @@ async fn run_step_with_identity(
         ),
     };
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        execution: None,
+        signing: None,
+        is_modern: false,
+        credential_principal: None,
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
@@ -2575,6 +2581,10 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         principal: super::authorization::refusal_principal(Some(&client), None, None),
     };
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        execution: None,
+        signing: None,
+        is_modern: false,
+        credential_principal: None,
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
@@ -2766,6 +2776,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
         agent_name: "runner".to_string(),
         scopes: Vec::new(),
         raw_scopes: Vec::new(),
+        quota_principal: None,
     };
     assert_eq!(
         super::authorization::refusal_principal(None, Some(&agent), None).as_deref(),
@@ -2775,6 +2786,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
 
     let cert = CertIdentity {
         display_name: "machine-7".to_string(),
+        quota_principal: None,
         ..CertIdentity::default()
     };
     assert_eq!(
@@ -2784,6 +2796,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
     );
 
     let anonymous = AuthenticatedClient {
+        quota_principal: None,
         authenticated: false,
         ..scoped_client("public", vec![], None)
     };
@@ -2833,6 +2846,7 @@ async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
     let cert = CertIdentity {
         common_name: Some("trusted-machine".to_string()),
         display_name: "trusted-machine".to_string(),
+        quota_principal: None,
         ..CertIdentity::default()
     };
 
@@ -2881,6 +2895,7 @@ async fn authz_11_agent_scope_refuses_and_permits_a_playbook_step() {
         agent_name: "runner".to_string(),
         scopes: vec![Scope::parse("tools:alpha:permitted:*").expect("scope must parse")],
         raw_scopes: vec!["tools:alpha:permitted:*".to_string()],
+        quota_principal: None,
     };
 
     let refused =
@@ -2933,6 +2948,10 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         principal: super::authorization::refusal_principal(Some(&client), None, None),
     };
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        execution: None,
+        signing: None,
+        is_modern: false,
+        credential_principal: None,
         authorizer: &authorizer,
         api_key_name: Some(client.name.as_str()),
         agent_id: None,
@@ -3252,3 +3271,8 @@ async fn ac_order_2_a_modern_caller_is_refused_gateway_set_profile() {
          cannot help: {message}"
     );
 }
+
+mod preflight_policy_envelope;
+mod signing_nonce_cache_admission;
+mod signing_nonce_cache_admission_support;
+mod signing_nonce_clone_hash;

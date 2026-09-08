@@ -1104,7 +1104,7 @@ async fn ac_mrtr_8_an_exchange_the_gateway_opened_occupies_a_slot() {
     let (_status, response) = post(&state, &fresh_body(1, TOOL_INTERIM, &arguments())).await;
 
     assert_eq!(
-        state.continuation.in_flight().len().await,
+        state.continuation.in_flight().len(now_secs()).await,
         1,
         "a backend that asked for input leaves an exchange open, and an open \
          exchange must occupy a slot in the bounded table; the table holds \
@@ -1128,7 +1128,7 @@ async fn ac_mrtr_8_a_call_that_finished_holds_no_slot() {
     let (_status, response) = post(&state, &fresh_body(1, TOOL, &arguments())).await;
 
     assert_eq!(
-        state.continuation.in_flight().len().await,
+        state.continuation.in_flight().len(now_secs()).await,
         0,
         "a call the backend answered outright opened no exchange, so it must \
          hold no slot; the gateway answered {response}"
@@ -1231,12 +1231,16 @@ async fn ac_mrtr_6_a_retry_at_another_replica_is_refused_and_opens_no_exchange()
         "the neighbour's refusal must not consume the handle the origin still owes"
     );
     assert_eq!(
-        origin.continuation.in_flight().len().await,
+        origin.continuation.in_flight().len(now_secs()).await,
         1,
         "the neighbour's refusal must not end an exchange the origin is holding"
     );
     assert!(
-        origin.continuation.in_flight().complete(&held).await,
+        origin
+            .continuation
+            .in_flight()
+            .complete(&held, now_secs())
+            .await,
         "the origin must still hold the exchange *this handle names*, not merely \
          one of the same shape"
     );
@@ -1280,7 +1284,11 @@ async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused(
         .expect("a handle this replica just minted must open");
     let held = payload.hold_key.clone();
     assert!(
-        state.continuation.in_flight().complete(&held).await,
+        state
+            .continuation
+            .in_flight()
+            .complete(&held, now_secs())
+            .await,
         "the exchange that ends must be the one this handle names, or the state \
          under test is not the one this case names"
     );
@@ -1301,7 +1309,7 @@ async fn ac_mrtr_6_a_retry_whose_exchange_the_origin_no_longer_holds_is_refused(
         "the stranger must be a second exchange, not the one just ended"
     );
     assert_eq!(
-        state.continuation.in_flight().len().await,
+        state.continuation.in_flight().len(now_secs()).await,
         1,
         "the exchange this handle continues must be gone and a stranger's must \
          remain, or the case is not the one it names"

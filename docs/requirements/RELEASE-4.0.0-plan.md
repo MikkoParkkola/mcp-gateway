@@ -1,8 +1,15 @@
 # v4.0.0 release plan — closing the blocking criteria
 
-Companion to `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is the status SSOT.
+Companion to `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which is the baseline status SSOT.
 This file is the ORDER OF WORK, not a second status table. When the two disagree, the status
 doc wins.
+
+The approved 2026-09-06 expansion adds a separate
+[delivery plan](RELEASE-4.0.0-scope-delivery.md) and
+[acceptance ledger](RELEASE-4.0.0-scope-status.json). Both ledgers govern release
+acceptance; `check_scope_acceptance.py --release` checks the combined set.
+Keep current implementation ownership; integrate supplemental work as the
+delivery plan describes instead of starting overlapping edits.
 
 The standing counts are not repeated here. `docs/requirements/RELEASE-4.0.0-criteria-status.md`
 carries them, `scripts/release/count-release-criteria.py --check` verifies its headline against
@@ -399,7 +406,7 @@ touched by other sessions. Coordinate before editing them.
 
 ## Open for the operator
 
-Five decisions are the requester's, not the team lead's, and are recorded here rather than in the
+Six decisions are the requester's, not the team lead's, and are recorded here rather than in the
 design that raised each one so they survive a session boundary. None blocks the work that does not
 turn on it. Each names what changes either way, so an answer costs a sentence.
 
@@ -412,6 +419,7 @@ running anything, which is why none has a command against it.
 | 2. SCHEMA.1b posture on an invalid backend schema | operator picks refuse, publish-and-flag, or degrade | before the revision-surface design (Wave 1) freezes its scope | fall back to publish-and-flag, the least destructive of the three, and record it as provisional in the design |
 | 5. whether v4.0.0 lands as one merge or a sequence of them | **answered 2026-09-03: a sequence of per-cluster PRs.** Cluster A first, then each later cluster on its own PR; cluster F's default flip lands after both A and C | resolved | — |
 | 4. what the direct `POST /mcp/{name}` route needs | operator says whether it gets its own instrumentation, and whether CACHE.1-4 are HTTP-only | before response-cache keying (MIK-7213) starts code in Wave 3 | scope CACHE.1-4 to the traced route only and leave the direct route uninstrumented, which is today's behaviour and reversible |
+| 6. whether `GH475.RL.10`'s property leg breaks `capability::Error` in 4.0.0 | operator picks: ship with the residual risk recorded, add the typed variant now, or drop the criterion from 4.0.0 | asked 2026-09-06 and unanswered; must be settled before cluster H can be called closed | ship 4.0.0 with the behaviour met and the property recorded as residual risk, and re-file the typed signal against 4.1.0 — the reversible option, and the only one that does not change a public error type inside the release that already carries the upgrade path |
 
 The two resolved items below stay in the section because their *scheduling* consequences are
 still live; they are not open questions.

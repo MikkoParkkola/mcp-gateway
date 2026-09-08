@@ -7,6 +7,14 @@
 ticket manifest live there and are **not** restated here.
 **Portfolio strategy**: `docs/design/RFC-0060-dual-generation-mcp.md`
 
+**Approved scope update (2026-09-06)**:
+[capability requirements](RELEASE-4.0.0-scope-update.md),
+[decision provenance](RELEASE-4.0.0-scope-decisions-2026-09-06.md) and
+[supplemental acceptance ledger](RELEASE-4.0.0-scope-status.json).
+These add required release work; the original ledger alone is no longer the
+complete acceptance set. The original 3.5.0 benchmark baseline stays fixed;
+3.5.1 is also required as the current published upgrade source.
+
 This document states **what must be true** for 4.0.0 to ship. It does not say how. Where a
 requirement and the design disagree, the requirement is the one that was agreed and the design is
 wrong until re-reviewed.
@@ -183,8 +191,15 @@ This is the release's hardest requirement and the one no other portfolio surface
 | MIK-7212.MRTR.8b | State held for an in-flight exchange MUST be bounded in lifetime, and MUST be reclaimed when a client abandons a continuation — the expected case, since the spec permits a client never to retry. | Spec: *"Servers MUST NOT assume that clients will fulfill…"* | T, M |
 | MIK-7212.MRTR.9 | The gateway MUST NOT include an `inputRequest` of a type the client has not declared support for. | Spec: *"Servers MUST NOT send an inputRequests that the client has not declared support for"* | T |
 | MIK-7212.MRTR.9a | The gateway MUST NOT send an `elicitation/create` request in a **mode** the client has not declared. A client declaring `elicitation` in one mode has declared nothing about the other, so the capability name alone is not the permission. | Spec: *"Servers MUST NOT send an inputRequests that the client has not declared support for"*, read at the depth the request is written; raised in the 2026-09-02 review | T |
-| MIK-7212.MRTR.10a | Idempotency keys MUST include `inputResponses` and `requestState`. | `src/idempotency.rs:10` keys on `server:tool:hash(arguments)` | T |
+| MIK-7212.MRTR.10a | The complete internal idempotency operation identity MUST include `inputResponses` and `requestState`: stable owner identity composed with the semantic phase fingerprint. A validated continuation advances that phase under the same owner; it does not allocate another execution owner. | Shared SUB4 owner-transfer contract; the historical `server:tool:hash(arguments)` omitted the semantic retry fields. | T |
 | MIK-7212.MRTR.10b | An `InputRequired` result MUST NOT be cached as a completed call. | `src/idempotency.rs:10` keys on `server:tool:hash(arguments)` | T |
+
+MRTR.5 single-use remains a dispatch-redemption invariant. Reading an already
+secured matching operation through the separate existing-only SUB4 result lookup
+is not another continuation redemption: it never consumes/takes the claim, inserts
+an owner or dispatches a backend. The lookup retains r3 envelope validation and
+exact principal/key/phase/representation checks. A second invocation of the
+dispatch-redemption API still refuses. See the [owner-transfer amendment](../design/2026-09-07-sub4-continuation-owner-transfer.md).
 
 ### 3.7 Controls that must survive the migration
 
@@ -347,7 +362,7 @@ the gateway shows the world.
 | Other portfolio surfaces (hebb, throttla, fulcrum, botnaut-client, pithy) | RFC-0060 owns them. The gateway goes first because it is the only surface that must speak both eras at once. |
 | Retiring 2025-03-26 and 2024-11-05 | Needs one week of revision telemetry. Retiring a revision on a guess breaks a client nobody knew was connecting. |
 | Skills-over-MCP, MCP Apps extensions | Not stable specifications. |
-| OAuth consumer slices MIK-6744 / 6745 / 6746 | Consumers of the identity seam, each with its own consent and storage design. 4.1.0. |
+| Broad OAuth expansion beyond the approved personal-account journey | MIK-6744/6745 fallback consent/storage is now in 4.0; reconcile MIK-6746's existing implementation and authorization contract. See the approved scope update. |
 | Kubernetes operator GA | Its own dependency chain, orthogonal to the protocol. |
 | MIK-7251, MIK-7250, MIK-7042 | Aimed at code this release deletes; re-scoped after slice 2 rather than written twice. |
 
@@ -376,6 +391,8 @@ none here. Full statements in RFC-0061 §Unknowns.
 6. Two independent frontier-model reviews, from different vendors, recorded against the final change.
 7. The nineteen manifest tickets carry per-criterion verdicts; the six already-fixed tickets are closed; the three superseded tickets are re-scoped.
 8. `cargo clippy -D warnings`, `cargo fmt --check` and the full suite are green.
+9. Every supplemental scope criterion and required decision is complete:
+   `python3 scripts/release/check_scope_acceptance.py --release` succeeds.
 
 **Explicitly not acceptance**: that the code compiles and the existing suite passes. This release's
 failure mode is a control that still runs and no longer protects, and an existing suite written

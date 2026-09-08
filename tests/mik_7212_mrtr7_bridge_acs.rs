@@ -81,7 +81,7 @@ use serde_json::{Value, json};
 
 use mcp_gateway::gateway::input_bridge::{
     BackendInvoker, BridgeBounds, BridgeError, BridgeObserver, BridgeRecord, ClientChannel,
-    DeliveryError, InputBridge,
+    DeliveryError, DeliveryProgress, InputBridge,
 };
 use mcp_gateway::protocol::meta::{Declared, classify_request};
 use mcp_gateway::protocol::mrtr::{InputRequired, Refusal};
@@ -149,6 +149,7 @@ impl ClientChannel for FakeClient {
         id: &str,
         method: &str,
         params: Option<Value>,
+        delivery: std::sync::Arc<DeliveryProgress>,
     ) -> Result<Value, DeliveryError> {
         self.frames.lock().expect("frames").push(Frame {
             session: session_id.to_string(),
@@ -156,6 +157,10 @@ impl ClientChannel for FakeClient {
             method: method.to_string(),
             params: params.clone(),
         });
+        assert!(
+            delivery.mark_handed_off(),
+            "the fake observed this frame before replying"
+        );
         let reply = self.replies.lock().expect("replies").pop_front();
         match reply {
             Some(Reply::Now(envelope)) => Ok(envelope),
@@ -344,7 +349,7 @@ async fn ac_mrtr_7a_elicitation_params_reach_the_client_whole() {
         "requestedSchema": {"type": "object", "properties": {"ok": {"type": "boolean"}}},
         "url": "https://example.test/authorise",
     });
-    let client = FakeClient::new(vec![accepted(&json!({"ok": true}))]);
+    let client = FakeClient::new(vec![result(&json!({"action": "accept"}))]);
     let backend = FakeBackend::new(vec![completed()]);
     let records = Records::default();
 
@@ -490,10 +495,7 @@ async fn ac_mrtr_7a_an_undeclared_variant_is_not_asked_under_an_empty_slice() {
         slice,
         &interim(&[(
             "k1",
-            entry(
-                "elicitation/create",
-                &json!({"mode": "form", "message": "Which branch?"}),
-            ),
+            entry("elicitation/create", &form_params("Which branch?")),
         )]),
     )
     .await;
@@ -520,10 +522,7 @@ async fn ac_mrtr_7a_an_undeclared_variant_is_not_asked_under_an_empty_slice() {
         &interim(&[
             (
                 "k1",
-                entry(
-                    "elicitation/create",
-                    &json!({"mode": "form", "message": "Which branch?"}),
-                ),
+                entry("elicitation/create", &form_params("Which branch?")),
             ),
             (
                 "k2",
@@ -567,10 +566,7 @@ async fn ac_mrtr_7a_an_undeclared_variant_is_not_asked_under_an_empty_slice() {
         Some(&empty[..]),
         &interim(&[(
             "k1",
-            entry(
-                "elicitation/create",
-                &json!({"mode": "form", "message": "Which branch?"}),
-            ),
+            entry("elicitation/create", &form_params("Which branch?")),
         )]),
     )
     .await;
@@ -697,10 +693,7 @@ async fn ac_mrtr_7b_an_accepted_answer_is_filed_under_the_backend_key() {
         None,
         &interim(&[(
             "server-chose-this",
-            entry(
-                "elicitation/create",
-                &json!({"mode": "form", "message": "Which branch?"}),
-            ),
+            entry("elicitation/create", &form_params("Which branch?")),
         )]),
     )
     .await;
@@ -710,8 +703,8 @@ async fn ac_mrtr_7b_an_accepted_answer_is_filed_under_the_backend_key() {
     assert_eq!(calls.len(), 1, "one answered round, one retry");
     assert_eq!(
         calls[0].pointer("/inputResponses/server-chose-this"),
-        Some(&content),
-        "the answer must arrive under the key the backend assigned"
+        Some(&json!({"action":"accept", "content":content})),
+        "the complete client result must arrive under the backend key"
     );
     assert_eq!(
         calls[0].get("requestState").and_then(Value::as_str),
@@ -740,13 +733,7 @@ async fn ac_mrtr_7b_a_decline_fails_the_call_as_a_refusal_by_a_person() {
         &records,
         declared_all(),
         None,
-        &interim(&[(
-            "k1",
-            entry(
-                "elicitation/create",
-                &json!({"mode": "form", "message": "Deploy?"}),
-            ),
-        )]),
+        &interim(&[("k1", entry("elicitation/create", &form_params("Deploy?")))]),
     )
     .await;
 
@@ -785,13 +772,7 @@ async fn ac_mrtr_7b_an_error_reply_fails_the_call_as_a_client_refusal() {
         &records,
         declared_all(),
         None,
-        &interim(&[(
-            "k1",
-            entry(
-                "elicitation/create",
-                &json!({"mode": "form", "message": "Deploy?"}),
-            ),
-        )]),
+        &interim(&[("k1", entry("elicitation/create", &form_params("Deploy?")))]),
     )
     .await;
 
@@ -840,13 +821,7 @@ async fn ac_mrtr_7b_an_unusable_accept_fails_as_malformed() {
             &records,
             declared_all(),
             None,
-            &interim(&[(
-                "k1",
-                entry(
-                    "elicitation/create",
-                    &json!({"mode": "form", "message": "Deploy?"}),
-                ),
-            )]),
+            &interim(&[("k1", entry("elicitation/create", &form_params("Deploy?")))]),
         )
         .await;
 
@@ -913,8 +888,8 @@ async fn ac_mrtr_7b_content_violating_the_requested_schema_is_forwarded_unchange
     assert_eq!(calls.len(), 1, "the round must still complete");
     assert_eq!(
         calls[0].pointer("/inputResponses/k1"),
-        Some(&content),
-        "the answer must reach the backend byte for byte, wrong type and extra field included"
+        Some(&json!({"action":"accept", "content":content})),
+        "the complete accepted result retains wrong content type and extra fields"
     );
 }
 
@@ -938,12 +913,18 @@ fn asking(entries: &[(&str, Value)]) -> Value {
     })
 }
 
+/// A valid no-field form; malformed-request cases construct their raw params directly.
+fn form_params(message: &str) -> Value {
+    json!({
+        "mode": "form",
+        "message": message,
+        "requestedSchema": {"type": "object", "properties": {}},
+    })
+}
+
 /// One elicitation entry carrying this message.
 fn ask(message: &str) -> Value {
-    entry(
-        "elicitation/create",
-        &json!({"mode": "form", "message": message}),
-    )
+    entry("elicitation/create", &form_params(message))
 }
 
 /// `count` client replies, each accepting with the same content.
@@ -1282,7 +1263,7 @@ async fn ac_mrtr_7b_a_batch_of_three_answers_arrives_in_one_retry() {
     );
     for (key, message) in [("one", "one?"), ("two", "two?"), ("three", "three?")] {
         assert_eq!(
-            calls[0].pointer(&format!("/inputResponses/{key}/echo/message")),
+            calls[0].pointer(&format!("/inputResponses/{key}/content/echo/message")),
             Some(&json!(message)),
             "the answer filed under {key} must be the one that key's question drew"
         );
@@ -1585,4 +1566,553 @@ fn ac_mrtr_7a_the_capability_fixture_declares_what_it_names() {
              or every capability row gates on a client that declared nothing"
         );
     }
+}
+
+// WIRE.20 component falsifiers. Production HTTP/stdio journeys remain separate.
+
+/// Whole results include extensions; schema validation never reserializes them.
+#[tokio::test]
+async fn mik_7212_wire_form_files_the_complete_elicit_result() {
+    let answer = json!({
+        "action": "accept",
+        "content": {"branch": "main"},
+        "_meta": {"example.test/answer": [1, "kept"]},
+        "extension": {"opaque": true},
+    });
+    let client = FakeClient::new(vec![result(&answer)]);
+    let backend = FakeBackend::new(vec![completed()]);
+    let outcome = bridge(
+        &client,
+        &backend,
+        &Records::default(),
+        declared_all(),
+        None,
+        &interim(&[("backend-key", ask("Which branch?"))]),
+    )
+    .await;
+    assert!(outcome.is_ok(), "valid accepted form: {outcome:?}");
+    assert_eq!(client.frames().len(), 1);
+    assert_eq!(backend.calls().len(), 1);
+    assert_eq!(
+        backend.calls()[0].pointer("/inputResponses/backend-key"),
+        Some(&answer)
+    );
+}
+
+/// URL acceptance does not invent a form body or attest navigation completion.
+#[tokio::test]
+async fn mik_7212_wire_url_files_action_only_acceptance() {
+    let params = json!({
+        "mode": "url", "message": "Connect account",
+        "url": "https://example.test/connect?state=opaque",
+        "example.test/extension": {"keep": [1, 2]},
+    });
+    let answer = json!({"action": "accept", "_meta": {"example.test/client": true}});
+    let client = FakeClient::new(vec![result(&answer)]);
+    let backend = FakeBackend::new(vec![completed()]);
+    let outcome = bridge(
+        &client,
+        &backend,
+        &Records::default(),
+        declared_all(),
+        None,
+        &interim(&[("url-key", entry("elicitation/create", &params))]),
+    )
+    .await;
+    assert!(outcome.is_ok(), "action-only URL acceptance: {outcome:?}");
+    assert_eq!(client.frames().len(), 1);
+    assert_eq!(client.frames()[0].params.as_ref(), Some(&params));
+    assert_eq!(backend.calls().len(), 1);
+    assert_eq!(
+        backend.calls()[0].pointer("/inputResponses/url-key"),
+        Some(&answer)
+    );
+    assert_eq!(backend.calls()[0]["requestState"], "state-1");
+}
+
+#[tokio::test]
+async fn mik_7212_wire_url_refuses_content_bearing_acceptance() {
+    let client = FakeClient::new(vec![accepted(&json!({}))]);
+    let backend = FakeBackend::never();
+    let params = json!({"mode":"url", "message":"Connect", "url":"https://example.test/connect"});
+    let outcome = bridge(
+        &client,
+        &backend,
+        &Records::default(),
+        declared_all(),
+        None,
+        &interim(&[("url-key", entry("elicitation/create", &params))]),
+    )
+    .await;
+    assert!(
+        matches!(
+            outcome,
+            Err(BridgeError::Delivery {
+                ref key,
+                error: DeliveryError::Malformed,
+            }) if key == "url-key"
+        ),
+        "URL content must be malformed: {outcome:?}"
+    );
+    assert_eq!(
+        client.frames().len(),
+        1,
+        "this is a reply refusal, after valid delivery"
+    );
+    assert!(backend.calls().is_empty());
+}
+
+/// A valid first member makes per-member validation-after-send observably wrong.
+async fn assert_whole_batch_refused(label: &str, bad: Value) -> Refusal {
+    let client = FakeClient::new(accepts(2, &json!({})));
+    let backend = FakeBackend::new(vec![completed()]);
+    let first = interim(&[("a-valid", ask("Valid neighbour")), ("z-invalid", bad)]);
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(1),
+        bridge(
+            &client,
+            &backend,
+            &Records::default(),
+            declared_all(),
+            None,
+            &first,
+        ),
+    )
+    .await
+    .expect("request validation must not wait for prompt timeout");
+    assert!(
+        matches!(&outcome, Err(BridgeError::Refused { key, .. }) if key == "z-invalid"),
+        "{label}: expected request refusal attributed to z-invalid, got {outcome:?}"
+    );
+    assert!(
+        client.frames().is_empty(),
+        "{label}: whole-batch refusal must precede every frame"
+    );
+    assert!(
+        backend.calls().is_empty(),
+        "{label}: a refused batch must not retry the backend"
+    );
+    match outcome {
+        Err(BridgeError::Refused { reason, .. }) => reason,
+        _ => unreachable!("the refusal and offending key were asserted above"),
+    }
+}
+
+#[tokio::test]
+async fn mik_7212_wire_missing_or_nonobject_elicitation_params_are_unsent() {
+    assert_whole_batch_refused("missing params", json!({"method":"elicitation/create"})).await;
+    for bad in [
+        Value::Null,
+        json!(false),
+        json!(7),
+        json!("form"),
+        json!([]),
+    ] {
+        let label = format!("nonobject params {bad}");
+        assert_whole_batch_refused(&label, entry("elicitation/create", &bad)).await;
+    }
+}
+
+#[tokio::test]
+async fn mik_7212_wire_explicit_invalid_modes_are_unsent() {
+    for mode in [
+        Value::Null,
+        json!(false),
+        json!(7),
+        json!({}),
+        json!("other"),
+    ] {
+        let mut params = form_params("Valid form apart from mode");
+        params["mode"] = mode;
+        assert_whole_batch_refused("present invalid mode", entry("elicitation/create", &params))
+            .await;
+    }
+    let mut params = form_params("Omitted mode defaults to form");
+    params.as_object_mut().expect("object").remove("mode");
+    let client = FakeClient::new(accepts(1, &json!({})));
+    let backend = FakeBackend::new(vec![completed()]);
+    assert!(
+        bridge(
+            &client,
+            &backend,
+            &Records::default(),
+            declared_all(),
+            None,
+            &interim(&[("default-form", entry("elicitation/create", &params))])
+        )
+        .await
+        .is_ok()
+    );
+    assert_eq!(client.frames().len(), 1);
+    assert_eq!(client.frames()[0].params.as_ref(), Some(&params));
+    assert_eq!(backend.calls().len(), 1);
+    assert_eq!(
+        backend.calls()[0].pointer("/inputResponses/default-form"),
+        Some(&json!({"action":"accept","content":{}}))
+    );
+}
+
+#[tokio::test]
+async fn mik_7212_wire_required_elicitation_fields_are_validated_unsent() {
+    for field in ["message", "requestedSchema"] {
+        let mut missing = form_params("Valid form");
+        missing.as_object_mut().expect("object").remove(field);
+        assert_whole_batch_refused(field, entry("elicitation/create", &missing)).await;
+        for value in [Value::Null, json!(7), json!([]), json!(false)] {
+            let mut malformed = form_params("Valid form");
+            malformed[field] = value;
+            assert_whole_batch_refused(field, entry("elicitation/create", &malformed)).await;
+        }
+    }
+    let url = json!({"mode":"url", "message":"Connect", "url":"https://example.test/connect"});
+    for value in [
+        Value::Null,
+        json!(9),
+        json!(""),
+        json!("/relative"),
+        json!("http://[broken"),
+    ] {
+        let mut malformed = url.clone();
+        malformed["url"] = value;
+        assert_whole_batch_refused("invalid URL", entry("elicitation/create", &malformed)).await;
+    }
+    let mut missing = url;
+    missing.as_object_mut().expect("object").remove("url");
+    assert_whole_batch_refused("missing URL", entry("elicitation/create", &missing)).await;
+    for message in [Value::Null, json!(7), json!({})] {
+        let malformed =
+            json!({"mode":"url", "message":message, "url":"https://example.test/connect"});
+        assert_whole_batch_refused(
+            "nonstring URL message",
+            entry("elicitation/create", &malformed),
+        )
+        .await;
+    }
+    assert_whole_batch_refused(
+        "missing URL message",
+        entry(
+            "elicitation/create",
+            &json!({"mode":"url", "url":"https://example.test/connect"}),
+        ),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn mik_7212_wire_present_invalid_legacy_elicitation_ids_are_unsent() {
+    for id in [Value::Null, json!(""), json!(7), json!({})] {
+        let params = json!({"mode":"url", "message":"Connect", "url":"https://example.test/connect", "elicitationId":id});
+        assert_whole_batch_refused(
+            "invalid present legacy ID",
+            entry("elicitation/create", &params),
+        )
+        .await;
+    }
+    let params = json!({"mode":"url", "message":"Connect", "url":"https://example.test/connect", "elicitationId":"backend-id"});
+    let client = FakeClient::new(vec![result(&json!({"action":"accept"}))]);
+    let backend = FakeBackend::new(vec![completed()]);
+    let outcome = bridge(
+        &client,
+        &backend,
+        &Records::default(),
+        declared_all(),
+        None,
+        &interim(&[("url", entry("elicitation/create", &params))]),
+    )
+    .await;
+    assert!(outcome.is_ok(), "valid preexisting URL ID: {outcome:?}");
+    assert_eq!(client.frames().len(), 1);
+    assert_eq!(client.frames()[0].params.as_ref(), Some(&params));
+    assert_eq!(backend.calls().len(), 1);
+}
+
+#[tokio::test]
+async fn mik_7212_wire_unsupported_form_schemas_are_unsent() {
+    let schemas = [
+        json!({"type":"array", "properties":{}}),
+        json!({"type":"object", "properties":[]}),
+        json!({"type":"object"}),
+        json!({"type":"object", "properties":{"nested":{"type":"object", "properties":{}}}}),
+        json!({"type":"object", "properties":{"list":{"type":"array", "items":{"type":"object"}}}}),
+        json!({"type":"object", "properties":{"list":{"type":"array", "items":{"type":"string"}}}}),
+        json!({"type":"object", "properties":{"bad":{"type":"mystery"}}}),
+        json!({"type":"object", "properties":{"bad":{"$ref":"https://example.test/schema"}}}),
+        json!({"type":"object", "properties":{"bad":{"allOf":[{"type":"string"}]}}}),
+        json!({"type":"object", "properties":{"bad":{"type":"string", "minLength":"3"}}}),
+        json!({"type":"object", "properties":{"bad":{"type":"boolean", "default":"true"}}}),
+        json!({"type":"object", "properties":{"bad":{"type":"string", "oneOf":[{"const":4,"title":"four"}]}}}),
+        json!({"type":"object", "properties":{"name":{"type":"string"}}, "required":["missing"]}),
+    ];
+    for (index, schema) in schemas.into_iter().enumerate() {
+        let mut params = form_params("Unsupported schema");
+        params["requestedSchema"] = schema;
+        assert_whole_batch_refused(
+            &format!("unsupported schema {index}"),
+            entry("elicitation/create", &params),
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn mik_7212_wire_supported_form_schema_variants_preserve_raw_fields() {
+    let properties = [
+        json!({"type":"string", "minLength":1, "maxLength":90, "format":"email", "default":"user@example.test"}),
+        json!({"type":"number", "minimum":0, "maximum":100, "default":2.5}),
+        json!({"type":"integer", "minimum":0, "maximum":100, "default":2}),
+        json!({"type":"boolean", "default":true}),
+        json!({"type":"string", "enum":["red","green"], "default":"red"}),
+        json!({"type":"string", "oneOf":[{"const":"red","title":"Red"}], "default":"red"}),
+        json!({"type":"array", "minItems":1, "maxItems":2, "items":{"type":"string","enum":["red","green"]}, "default":["red"]}),
+        json!({"type":"array", "minItems":1, "maxItems":2, "items":{"anyOf":[{"const":"red","title":"Red"},{"const":"green","title":"Green"}]}, "default":["red"]}),
+    ];
+    for (index, mut property) in properties.into_iter().enumerate() {
+        property["title"] = json!("Value");
+        property["description"] = json!("A preserved field description");
+        let params = json!({
+            "message":"Choose", "requestedSchema":{"type":"object","properties":{"value":property},"required":["value"]},
+            "_meta":{"example.test/schema-case":index}, "example.test/extension":[true,"retain"],
+        });
+        // Intentionally invalid answer content: schema-shape validation must not
+        // turn into backend answer-content validation or fill in defaults.
+        let client = FakeClient::new(accepts(1, &json!({"unasked":true})));
+        let backend = FakeBackend::new(vec![completed()]);
+        let outcome = bridge(
+            &client,
+            &backend,
+            &Records::default(),
+            declared_all(),
+            None,
+            &interim(&[("schema", entry("elicitation/create", &params))]),
+        )
+        .await;
+        assert!(outcome.is_ok(), "supported variant {index}: {outcome:?}");
+        assert_eq!(client.frames().len(), 1);
+        assert_eq!(client.frames()[0].params.as_ref(), Some(&params));
+        assert_eq!(backend.calls().len(), 1);
+        assert_eq!(
+            backend.calls()[0].pointer("/inputResponses/schema"),
+            Some(&json!({"action":"accept","content":{"unasked":true}}))
+        );
+    }
+}
+
+/// Each format comes from the pinned supported-format list, including URI.
+#[tokio::test]
+async fn mik_7212_wire_form_formats_pattern_and_multiple_properties_are_supported() {
+    for (format, default) in [
+        ("email", "person@example.test"),
+        ("uri", "https://example.test/path"),
+        ("date", "2026-09-06"),
+        ("date-time", "2026-09-06T15:00:00Z"),
+    ] {
+        let params = json!({
+            "message": "Provide details",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "formatted": {"type":"string", "format":format, "default":default, "title":"Formatted", "description":"Preserve this"},
+                    "patterned": {"type":"string", "pattern":"^[A-Za-z]+$", "minLength":1, "maxLength":50, "default":"Ada"},
+                    "enabled": {"type":"boolean", "default":false},
+                },
+                "required": ["formatted", "patterned"],
+            },
+        });
+        let answer = json!({"action":"accept", "content":{"intentionally_unasked":true}});
+        let client = FakeClient::new(vec![result(&answer)]);
+        let backend = FakeBackend::new(vec![completed()]);
+        let outcome = bridge(
+            &client,
+            &backend,
+            &Records::default(),
+            declared_all(),
+            None,
+            &interim(&[("schema", entry("elicitation/create", &params))]),
+        )
+        .await;
+        assert!(outcome.is_ok(), "supported format {format}: {outcome:?}");
+        assert_eq!(client.frames().len(), 1);
+        assert_eq!(client.frames()[0].params.as_ref(), Some(&params));
+        assert_eq!(backend.calls().len(), 1);
+        assert_eq!(
+            backend.calls()[0].pointer("/inputResponses/schema"),
+            Some(&answer)
+        );
+    }
+}
+
+async fn assert_property_refused(label: &str, property: Value) {
+    let params = json!({"message":"Invalid property", "requestedSchema":{"type":"object", "properties":{"field":property}}});
+    assert_whole_batch_refused(label, entry("elicitation/create", &params)).await;
+}
+
+#[tokio::test]
+async fn mik_7212_wire_string_schema_keyword_types_are_validated() {
+    for (field, value) in [
+        ("title", json!(7)),
+        ("description", json!(false)),
+        ("minLength", json!(-1)),
+        ("minLength", json!(1.5)),
+        ("maxLength", json!("8")),
+        ("maxLength", json!(-1)),
+        ("pattern", json!([])),
+        ("format", json!(7)),
+        ("format", json!("unsupported-format")),
+        ("default", json!(7)),
+    ] {
+        let mut property = json!({"type":"string"});
+        property[field] = value;
+        assert_property_refused(field, property).await;
+    }
+}
+
+#[tokio::test]
+async fn mik_7212_wire_number_and_boolean_schema_keyword_types_are_validated() {
+    for kind in ["number", "integer"] {
+        for field in ["minimum", "maximum", "default"] {
+            let mut property = json!({"type":kind});
+            property[field] = json!("7");
+            assert_property_refused(field, property).await;
+        }
+    }
+    assert_property_refused("boolean default", json!({"type":"boolean", "default":1})).await;
+}
+
+#[tokio::test]
+async fn mik_7212_wire_single_enum_shapes_are_validated() {
+    for property in [
+        json!({"type":"string", "enum":"red"}),
+        json!({"type":"string", "enum":["red",7]}),
+        json!({"type":"string", "enum":["red"], "default":false}),
+        json!({"type":"string", "oneOf":{}}),
+        json!({"type":"string", "oneOf":["red"]}),
+        json!({"type":"string", "oneOf":[{"title":"Red"}]}),
+        json!({"type":"string", "oneOf":[{"const":"red"}]}),
+        json!({"type":"string", "oneOf":[{"const":"red","title":7}]}),
+        json!({"type":"string", "oneOf":[{"const":"red","title":"Red"}], "default":7}),
+    ] {
+        assert_property_refused("single enum", property).await;
+    }
+}
+
+#[tokio::test]
+async fn mik_7212_wire_multi_enum_shapes_and_constraints_are_validated() {
+    for property in [
+        json!({"type":"array"}),
+        json!({"type":"array", "items":[]}),
+        json!({"type":"array", "items":{"type":"string","enum":"red"}}),
+        json!({"type":"array", "items":{"type":"string","enum":["red",false]}}),
+        json!({"type":"array", "items":{"type":"string","enum":["red"]}, "minItems":-1}),
+        json!({"type":"array", "items":{"type":"string","enum":["red"]}, "maxItems":"2"}),
+        json!({"type":"array", "items":{"type":"string","enum":["red"]}, "default":"red"}),
+        json!({"type":"array", "items":{"type":"string","enum":["red"]}, "default":[7]}),
+        json!({"type":"array", "items":{"anyOf":{}}}),
+        json!({"type":"array", "items":{"anyOf":[{"title":"Red"}]}}),
+        json!({"type":"array", "items":{"anyOf":[{"const":"red"}]}}),
+        json!({"type":"array", "items":{"anyOf":[{"const":7,"title":"Red"}]}}),
+        json!({"type":"array", "items":{"anyOf":[{"const":"red","title":false}]}}),
+        json!({"type":"array", "items":{"anyOf":[{"const":"red","title":"Red"}]}, "default":[false]}),
+    ] {
+        assert_property_refused("multi enum", property).await;
+    }
+}
+
+#[tokio::test]
+async fn mik_7212_wire_required_lists_and_property_shapes_are_validated() {
+    for required in [json!("field"), json!([7]), json!(["unknown"])] {
+        let params = json!({"message":"Required", "requestedSchema":{"type":"object","properties":{"field":{"type":"string"}},"required":required}});
+        assert_whole_batch_refused("required list", entry("elicitation/create", &params)).await;
+    }
+    for property in [Value::Null, json!(7), json!("string"), json!([]), json!({})] {
+        assert_property_refused("property object/type required", property).await;
+    }
+}
+
+#[tokio::test]
+async fn mik_7212_wire_form_only_declaration_refuses_a_mixed_url_batch() {
+    let client = FakeClient::new(accepts(2, &json!({})));
+    let backend = FakeBackend::new(vec![completed()]);
+    let url = entry(
+        "elicitation/create",
+        &json!({"mode":"url", "message":"Connect", "url":"https://example.test/connect"}),
+    );
+    let outcome = bridge(
+        &client,
+        &backend,
+        &Records::default(),
+        declared(&json!({"elicitation":{"form":{}}})),
+        None,
+        &interim(&[("a-valid", ask("Valid form")), ("z-invalid", url)]),
+    )
+    .await;
+    assert!(
+        matches!(&outcome, Err(BridgeError::Refused { key, reason:Refusal::Mode(mcp_gateway::protocol::meta::ElicitationMode::Url) }) if key == "z-invalid"),
+        "URL must be refused as an undeclared mode: {outcome:?}"
+    );
+    assert!(client.frames().is_empty());
+    assert!(backend.calls().is_empty());
+}
+
+#[tokio::test]
+async fn mik_7212_wire_form_schema_type_missing_is_unsent() {
+    let params = json!({"message":"Schema type required", "requestedSchema":{"properties":{}}});
+    assert_whole_batch_refused("missing schema type", entry("elicitation/create", &params)).await;
+}
+
+#[tokio::test]
+async fn mik_7212_wire_form_schema_type_null_is_unsent() {
+    let params =
+        json!({"message":"Schema type required", "requestedSchema":{"type":null,"properties":{}}});
+    assert_whole_batch_refused("null schema type", entry("elicitation/create", &params)).await;
+}
+
+#[tokio::test]
+async fn mik_7212_wire_form_schema_type_number_is_unsent() {
+    let params =
+        json!({"message":"Schema type required", "requestedSchema":{"type":7,"properties":{}}});
+    assert_whole_batch_refused("numeric schema type", entry("elicitation/create", &params)).await;
+}
+
+#[tokio::test]
+async fn mik_7212_wire_form_schema_type_array_is_unsent() {
+    let params = json!({"message":"Schema type required", "requestedSchema":{"type":["object"],"properties":{}}});
+    assert_whole_batch_refused("array schema type", entry("elicitation/create", &params)).await;
+}
+
+/// JSON Schema's required names are unique, even when both name a real field.
+#[tokio::test]
+async fn mik_7212_wire_duplicate_required_names_are_unsent() {
+    let params = json!({"message":"Required", "requestedSchema":{
+        "type":"object", "properties":{"field":{"type":"string"}},
+        "required":["field","field"]
+    }});
+    assert_eq!(
+        assert_whole_batch_refused("duplicate required", entry("elicitation/create", &params))
+            .await,
+        Refusal::MalformedParams,
+    );
+}
+
+/// A valid primitive type prevents the type gate from masking a missed $ref.
+#[tokio::test]
+async fn mik_7212_wire_reference_beside_valid_primitive_type_is_unsent() {
+    let params = json!({"message":"Unsupported reference", "requestedSchema":{
+        "type":"object", "properties":{"field":{"type":"string", "$ref":"https://example.test/unsupported-schema"}}
+    }});
+    assert_eq!(
+        assert_whole_batch_refused("typed reference", entry("elicitation/create", &params)).await,
+        Refusal::MalformedParams,
+    );
+}
+
+/// General composition stays forbidden even alongside a supported type.
+#[tokio::test]
+async fn mik_7212_wire_composition_beside_valid_primitive_type_is_unsent() {
+    let params = json!({"message":"Unsupported composition", "requestedSchema":{
+        "type":"object", "properties":{"field":{"type":"string", "allOf":[{"minLength":1}]}}
+    }});
+    assert_eq!(
+        assert_whole_batch_refused("typed composition", entry("elicitation/create", &params)).await,
+        Refusal::MalformedParams,
+    );
 }

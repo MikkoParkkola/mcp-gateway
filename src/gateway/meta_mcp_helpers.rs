@@ -615,7 +615,16 @@ pub(crate) fn extract_required_str<'a>(args: &'a Value, key: &str) -> Result<&'a
 /// Handles both JSON objects and stringified JSON objects (OpenAI-style).
 /// Returns an error if arguments are neither.
 pub(crate) fn parse_tool_arguments(args: &Value) -> Result<Value> {
-    let mut arguments = args.get("arguments").cloned().unwrap_or(json!({}));
+    let cloned = args.get("arguments").cloned();
+    // Observed AT the clone, and only when one actually happened (MIK-7377
+    // .SIGNING.5). `cfg(test)` only — production behaviour is unchanged.
+    #[cfg(test)]
+    {
+        if cloned.is_some() {
+            crate::hashing::observer::record_argument_clone();
+        }
+    }
+    let mut arguments = cloned.unwrap_or(json!({}));
 
     // Accept OpenAI-style tool arguments passed as a JSON string.
     if let Value::String(raw) = &arguments {

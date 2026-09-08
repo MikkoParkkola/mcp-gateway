@@ -84,6 +84,10 @@ fn counted_backend(name: &str) -> (Arc<BackendRegistry>, Arc<AtomicUsize>) {
 /// chokepoint is reached.
 fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
     MetaMcpCallerContext {
+        execution: None,
+        signing: None,
+        is_modern: false,
+        credential_principal: None,
         authorizer,
         api_key_name: Some("test-caller"),
         agent_id: None,
@@ -697,13 +701,29 @@ async fn authz_12_refused_caller_is_not_served_a_cached_result() {
 
 /// AUTHZ.20 — a refused call consumes no nonce.
 ///
-/// The nonce store is consulted at `invoke.rs:634`, below the chokepoint. If
+/// The nonce store is consulted by external signing admission, after policy. If
 /// the order were reversed, a refused call would burn the caller's nonce and
 /// the legitimate retry below would be rejected as a replay — a refusal
 /// causing a denial of service on the next honest request.
 #[tokio::test]
 async fn authz_20_refused_call_consumes_no_nonce() {
-    let (registry, _calls) = counted_backend("alpha");
+    async fn external_invoke(
+        meta: &MetaMcp,
+        args: &Value,
+        authorizer: &(dyn ToolAuthorizer + Sync),
+    ) -> crate::Result<()> {
+        let mut request = json!({"jsonrpc":"2.0", "id":1, "method":"tools/call",
+            "params":{"name":"gateway_invoke", "arguments":args}});
+        let mut signing = super::signing::SigningInvocationContext::capture(&mut request);
+        signing.restore(&mut request)?;
+        let arguments = &request["params"]["arguments"];
+        let mut caller = ctx(authorizer);
+        meta.prepare_signing_invocation(&mut signing, arguments, None, &caller)?;
+        caller.signing = Some(&signing);
+        meta.invoke_tool(arguments, None, &caller).await.map(|_| ())
+    }
+
+    let (registry, calls) = counted_backend("alpha");
     let mut meta = MetaMcp::new(registry);
     meta.enable_message_signing(
         crate::security::message_signing::MessageSigner::new(
@@ -718,20 +738,22 @@ async fn authz_20_refused_call_consumes_no_nonce() {
     let mut args = invoke_args("alpha", "read");
     args["nonce"] = json!("nonce-used-once");
 
-    let refused = meta.invoke_tool(&args, None, &ctx(&DenyAll)).await;
+    let refused = external_invoke(&meta, &args, &DenyAll).await;
     assert!(refused.is_err(), "the call must be refused");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 
     // The same nonce must still be usable: the refusal happened before it was
     // registered.
-    let allowed = meta.invoke_tool(&args, None, &ctx(&AllowAll)).await;
+    let allowed = external_invoke(&meta, &args, &AllowAll).await;
     assert!(
         allowed.is_ok(),
         "a refused call must not burn the nonce — the honest retry is being \
          rejected as a replay: {allowed:?}"
     );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 
     // And the nonce IS a real one: replaying it now must fail.
-    let replayed = meta.invoke_tool(&args, None, &ctx(&AllowAll)).await;
+    let replayed = external_invoke(&meta, &args, &AllowAll).await;
     let replay_error = replayed.expect_err("a replayed nonce must be rejected");
     assert!(
         replay_error.to_string().to_lowercase().contains("nonce")
@@ -740,6 +762,7 @@ async fn authz_20_refused_call_consumes_no_nonce() {
          is not live and the assertion above passed for the wrong reason: \
          {replay_error}"
     );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 /// AUTHZ.13a — a surfaced tool is refused when the authorizer denies.

@@ -480,6 +480,32 @@ mod tests {
         assert!(entry.contains(&"brave:brave_web_search".to_string()));
     }
 
+    /// `MIK-7272.ORDER.2a` — a promotion written under the shared empty key
+    /// would surface in every other sessionless connection's tool list, which
+    /// is the per-connection variance the criterion forbids. Both spellings of
+    /// "no session" are exercised because the router uses one (`Some("")`, the
+    /// `declares_modern_by_header` branch) and the pre-2026-07-28 paths use the
+    /// other; a filter that catches only `None` still shares state across every
+    /// modern connection.
+    #[test]
+    fn ac_order_2_a_sessionless_caller_promotes_nothing() {
+        // GIVEN: MetaMcp and two callers that have no session between them
+        let m = meta();
+        // WHEN: each promotes a tool
+        m.promote_tool_for_session(Some(""), "brave:brave_web_search");
+        m.promote_tool_for_session(None, "ecb:exchange_rates");
+        // THEN: nothing was stored under any key -- not merely "not under mine",
+        // because a store holding one shared entry is exactly the defect
+        assert!(
+            m.session_promoted.is_empty(),
+            "sessionless promotion wrote {:?}",
+            m.session_promoted
+                .iter()
+                .map(|e| (e.key().clone(), e.value().clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn promote_tool_for_session_is_idempotent() {
         // GIVEN: MetaMcp

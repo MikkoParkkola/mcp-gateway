@@ -6,7 +6,7 @@
 //! interface. Kept separate from the helper utilities so the schema definitions
 //! can be updated without touching the routing/search logic.
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::protocol::{Tool, ToolAnnotations};
 
@@ -145,7 +145,13 @@ fn build_invoke_tool() -> Tool {
             "properties": {
                 "server":    { "type": "string", "description": "Backend server name" },
                 "tool":      { "type": "string", "description": "Tool name to invoke" },
-                "arguments": { "type": "object", "description": "Tool arguments", "default": {} }
+                "arguments": { "type": "object", "description": "Tool arguments", "default": {} },
+                "nonce": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "description": "Optional signing nonce of at most 256 UTF-8 bytes; JSON Schema maxLength is a character ceiling. Required when message signing requires a nonce."
+                }
             },
             "required": ["server", "tool"]
         }),
@@ -175,6 +181,28 @@ pub(crate) fn build_base_tools(tool_count: usize, server_count: usize) -> Vec<To
         build_search_tools_tool(tool_count, server_count),
         build_invoke_tool(),
     ]
+}
+
+/// Mark the advertised `gateway_invoke` nonce as required.
+///
+/// [`build_invoke_tool`] always declares the optional nonce property. Call this
+/// only when `signing_enabled() && require_nonce`. Code Mode and an exposure
+/// filter that hid `gateway_invoke` leave the slice unchanged.
+pub(crate) fn require_gateway_invoke_nonce(tools: &mut [Tool]) {
+    let Some(tool) = tools.iter_mut().find(|tool| tool.name == "gateway_invoke") else {
+        return;
+    };
+    let Some(required) = tool
+        .input_schema
+        .get_mut("required")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    if required.iter().any(|value| value.as_str() == Some("nonce")) {
+        return;
+    }
+    required.push(json!("nonce"));
 }
 
 /// Build the optional stats tool definition.
