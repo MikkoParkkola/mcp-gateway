@@ -159,6 +159,9 @@ pub fn child_command(directory: &Path, config_path: &Path) -> Command {
         .arg(config_path)
         .arg("serve")
         .kill_on_drop(true);
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
     command
 }
 
