@@ -491,3 +491,46 @@ declaration the tasks dispatcher already exercises, so it may be closer to done 
 
 Also on the ledger, and not requirements, so no row will report them: strict CI is red,
 no live-acceptance run exists for this tree, and most quantitative gates are unmeasured.
+
+## 2026-09-08 — two checks that were half-done, now finished at source
+
+Neither changes a decision. Both close a gap where the evidence stopped one step
+short of the claim built on it.
+
+### 1. The bridge mints the prefix — the round trip is proven at both ends, not one
+
+The earlier correction proved the POST-back GATE admits a `ServerRequestKind`-prefixed
+id (`handlers.rs:754` -> `is_bridge_reply_id` @`input_bridge.rs:144`). It did not prove
+the bridge PRODUCES one, and the adapter test hard-codes `"elicitation-1"` — a literal
+chosen to satisfy the gate, not a value the bridge emitted. A test that asserts on the
+string it passed in proves the gate and nothing about the producer.
+
+Settled at the mint site, `input_bridge.rs:446`:
+
+```rust
+let id = format!("{}{}", prompt.kind.prefix(), uuid::Uuid::new_v4());
+```
+
+Same `prefix()` the gate iterates at `:147`. Producer and gate read one function, so
+they cannot drift apart without the compiler saying so. The claim stands as written.
+
+### 2. `NoClientChannel` returns `NoSession`, and here is why that is honest
+
+`DeliveryError`'s variants exist so the bridge can say WHICH thing happened. "This
+transport structurally has no server-to-client path" and "the SSE session went away"
+are different facts, and mapping the first onto the second collapses them.
+
+Checked before minting a variant: `DeliveryError` has ZERO consumers outside
+`input_bridge.rs` and `proxy.rs`, and NOTHING matches on it exhaustively — no counter,
+no branch, no report keys on the distinction. (Every other `NoSession` hit in `src/` is
+`SamplingError::NoSession`, a different enum.) A variant nobody reads is a public
+enum widened for an audience that does not exist, and every future exhaustive match
+pays for it.
+
+So: reuse `NoSession`, and carry the distinction in the doc comment rather than the
+type. `NoSession` is literally true at that site — there is no session-carrying channel,
+permanently. If a `NFR.OBS.4` counter later needs the two apart, that is the moment to
+split the variant, with a consumer to justify it.
+
+Named residual: until such a counter exists, a stdio elicitation attempt is
+indistinguishable in telemetry from a dropped session.
