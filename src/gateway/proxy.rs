@@ -1248,7 +1248,7 @@ mod tests {
             Duration::from_millis(50),
             channel.send_request(
                 &session,
-                "bridge-elicit-1",
+                "elicitation-1",
                 "elicitation/create",
                 Some(json!({"message": "which one?", "requestedSchema": {"type": "object"}})),
             ),
@@ -1264,8 +1264,17 @@ mod tests {
             .expect("the request must have reached the session");
         assert_eq!(delivered.data["method"], "elicitation/create");
         assert_eq!(
-            delivered.data["id"], "bridge-elicit-1",
+            delivered.data["id"], "elicitation-1",
             "the bridge's own id must go on the wire, not a freshly minted one"
+        );
+        // The answer has to be able to come back. `handlers.rs:754` only
+        // resolves a POST-back whose id passes this gate, so an id that goes
+        // out without it would strand the caller with both halves green.
+        assert!(
+            crate::gateway::input_bridge::is_bridge_reply_id(
+                delivered.data["id"].as_str().expect("the id is a string")
+            ),
+            "the id on the wire must be one the POST-back path admits"
         );
 
         assert_eq!(
