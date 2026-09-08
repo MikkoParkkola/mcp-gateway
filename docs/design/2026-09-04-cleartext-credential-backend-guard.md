@@ -306,3 +306,162 @@ is the only exposure this guard exists to prevent. `docs/REMOTE_BACKENDS.md` alr
 "Loopback is exempt", which is true of that input — so no doc change. Naming one
 alternate spelling would imply hex, octal and `127.1` are uncovered when the same
 normalisation covers them all.
+
+---
+
+# Amendment — operator ruling R35 (2026-09-08)
+
+R35 (`docs/release/2026-09-08-team-lead-rulings.md`) rules on the same behaviour this
+document designed, and changes two things about it. Recorded here rather than in a new
+document because a second design for one mechanism is how two designs come to disagree.
+
+R35, verbatim substance:
+
+> A backend address that embeds a username and password over unencrypted `http` exposes
+> those credentials to anyone on the path. The gateway REFUSES to start, naming the
+> offending address. Addresses resolving to the local machine are exempt: there is no
+> network segment to observe. There is NO opt-out setting.
+
+An opt-out was rejected because "a flag that suppresses a startup error is pasted in to
+make the error go away and never removed, so the unsafe path survives and the alerts stay
+open." Warning-only was rejected because "startup-log warnings are not read." R35 is
+declared a BREAKING CHANGE whose migration note ships with the change, not after it.
+
+## What already exists, and where it exists
+
+Load-bearing, because two lanes and the release ledger read R35 as unstarted work.
+
+`0b4ec223` (2026-09-04, this document's change) already ships the refusal:
+`Config::reject_cleartext_credentials` at `src/config/mod.rs:1004`, called from
+`validate_backend_urls` at `:953` (Http arm `:962`, A2a arm `:979`), reached from
+`validate()` `:706` and `validate_with_env()` `:719`. `15d7bcfe` and `9f9315cd` add the
+transport-side OAuth guard `require_secure_oauth_target` at
+`src/transport/http/mod.rs:81`, which has no escape hatch at all.
+
+All three commits are on this branch and **absent from `main`**. Evidence, not inference:
+
+```
+git show main:src/config/mod.rs | rg -c reject_cleartext_credentials   # no match
+git show main:src/transport/http/mod.rs | rg -c require_secure_oauth_target  # no match
+```
+
+So R35's residual is two edits, not a feature.
+
+1. The opt-in still covers userinfo. Only OAuth was carved out of it, and that carve-out
+   lives in the transport, not in config. R35 says no opt-out.
+2. The error names the backend and not the address. R35 says name the address.
+
+## What changes
+
+`allow_cleartext_credentials` stops covering **userinfo only** — a username or a password
+embedded in the address. `oauth`, `identity_propagation`, `secrets`, `headers` and `query`
+stay flag-governed. R35 authorises what it names: credentials embedded in the address.
+Pulling the flag off all seven arms is a materially larger break than the operator was
+told about, and is out of scope for this amendment. Believing otherwise is a §P3 design
+event to be named, not acted on.
+
+A username with no password is refused. R35's text says username *and* password; the
+narrower reading is rejected because a bare username in an address is still an identifier
+on the wire, and the predicate already spells it
+`!url.username().is_empty() || url.password().is_some()`.
+
+## Naming the address without echoing the credential
+
+R35 and MIK-7221 appear to contradict: name the offending address, never echo the
+credential-bearing URL. They do not. `crate::security::sanitize::redact_url_for_diagnostics`
+(`src/security/sanitize.rs:599`) returns `scheme://host[:port]` and drops userinfo, query,
+path and fragment — pinned by its own tests at `:617-636`, including the unparseable input
+that would otherwise become the leak. The address it yields is not itself a credential, so
+both rules hold. The transport guard already uses this helper for exactly this reason
+(`src/transport/http/mod.rs:43`).
+
+The error text becomes:
+
+```
+Backend 'name' would send credentials in cleartext to http://host:port, off this machine.
+Use TLS, or a loopback address.
+```
+
+The "or set allow_cleartext_credentials" clause is removed for the userinfo case. There is
+no opt-out to offer, and an error naming a remedy that does not apply is worse than one
+that names none.
+
+This supersedes "What the error says" above for the userinfo case only. That section
+continues to govern the five arms the flag still covers, which still name no address.
+
+## "Addresses resolving to the local machine" — literal, never resolved
+
+Literal `localhost`, `127.0.0.0/8` and `::1`, decided by the existing
+`crate::gateway::is_loopback_host` so config, the Origin gate and the transport cannot
+drift. Integer, hex and octal spellings of `127.0.0.1` are covered by the WHATWG parser's
+normalisation before the classifier sees them (see the observation at the end of the
+functional-pass section).
+
+**DNS is not resolved.** R35's wording invites it and the answer is still no:
+
+- A resolver answer is attacker-influenceable, so a refusal that depends on it is a
+  refusal an attacker can turn off.
+- The name resolved at startup need not be the address the connection later reaches
+  (TOCTOU). A check whose answer expires is not a boundary.
+- It makes the same configuration refuse on one host and start on another, which turns a
+  security property into a property of the network.
+- `validate()` performs no network I/O today, and a startup check that can hang on a
+  resolver is a new failure mode in the startup path.
+
+The cost is stated rather than hidden: a hostname that resolves to loopback is refused.
+That is the same residual this document already accepted in the opposite direction
+(`localhost` can be repointed), and it fails closed rather than open.
+
+## CodeQL #90 and #91 do not close
+
+Both are `rust/cleartext-transmission` (CWE-319, security-severity HIGH), created
+2026-08-29, `state: open`, `dismissed_reason: null`, anchored at
+`src/transport/http/mod.rs:643` and `:826`, tainted from `new_with_oauth`.
+
+A config-load check is not a sanitizer CodeQL can correlate to a transport sink, so this
+amendment moves neither alert. CodeQL re-ran on `main` on 2026-09-07 and both are still
+open — consistent with the fix being on this branch and not on `main`.
+
+Prediction, recorded so it can be wrong: the alerts close when this branch is on `main`
+and CodeQL re-scans with `require_secure_oauth_target` present. If they are still open
+after that re-scan, the transport guard does not sanitise the sink and that is a finding.
+
+The alerts are **not** dismissed and carry no suppression comment. An alert dismissed
+because the fix is elsewhere is an alert nobody re-checks. The criteria ledger records
+them as open, pending merge and re-scan.
+
+`CHANGELOG.md:64` claims the 2026-09-04 entry closed alerts #90 and #91. It did not, and
+that line is corrected in this change to say the entry addresses CWE-319 at config load.
+That wording is true today and remains true after the branch merges; "closed #90/#91" is
+false in one state and unverifiable in the other, and a changelog claim about a security
+alert is exactly the kind that is later quoted as evidence.
+
+## Test plan (R35 amendment)
+
+Every row states whether it can go red before the change, so no row passes vacuously.
+Three rows are falsifiers; five are regression guards and are labelled as such rather than
+dressed up as new coverage.
+
+| # | case | expected | can fail today |
+|---|---|---|---|
+| 1 | `http` + user + password, non-loopback, flag unset | refuse | no — regression guard |
+| 2 | `http` + username only, non-loopback, flag unset | refuse | no — regression guard |
+| 3 | `http` + user + password, non-loopback, flag `true` | refuse | **yes — falsifier** |
+| 4 | `http` + username only, non-loopback, flag `true` | refuse | **yes — falsifier** |
+| 5 | error names the sanitized address and contains neither username nor password | both asserted | **yes — falsifier** |
+| 6 | `https` + credentials | accept | no — regression guard |
+| 7 | `http` + credentials on `localhost` / `127.0.0.1` / `[::1]`, flag unset | accept | no — regression guard |
+| 8 | `http`, no credentials, non-loopback | accept | no — regression guard |
+
+Rows 3, 4 and 5 are run and shown red before the implementation exists.
+
+`src/config/tests.rs:1948` sets the flag `true` and asserts acceptance of a case R35 now
+refuses. It asserts the behaviour being removed, so it is rewritten rather than deleted —
+a deleted test leaves no record that the behaviour changed.
+
+## Documents this makes untrue
+
+Updated inside this change: `README.md:331`, `docs/REMOTE_BACKENDS.md:188` and `:192`,
+this document's "The opt-in" and "What the error says" sections (superseded above for the
+userinfo case), `CHANGELOG.md:64`, and a new `CHANGELOG` entry under a BREAKING heading
+carrying the migration note R35 requires.
