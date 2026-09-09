@@ -5491,6 +5491,7 @@ const B06_EXPECTED_TOOLS: &[&str] = &["invariance_always", "invariance_denied"];
 /// than strict.
 #[cfg(feature = "spec-preview")]
 #[tokio::test]
+#[allow(clippy::similar_names)]
 async fn b06_a_two_modern_connections_get_the_same_filtered_tool_list() {
     let meta = meta_with_narrowable_tools().await;
 
