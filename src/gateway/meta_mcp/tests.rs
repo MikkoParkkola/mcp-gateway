@@ -3708,15 +3708,17 @@ async fn an_unconfirmable_destructive_call_is_refused_and_marked() {
     // GIVEN: a destructive call on a transport with nobody to ask
     let ctx = allow_all_ctx();
     // WHEN: the gate judges it
-    let refusal = super::destructive_confirmation_gate(
+    let outcome = super::destructive_confirmation_gate(
         &RequestId::Number(1),
         "gateway_kill_server",
         &json!({"server": "brave"}),
         None,
         &ctx,
     )
-    .await
-    .expect("a destructive call nobody can confirm is refused");
+    .await;
+    let super::GateOutcome::Refuse(refusal) = outcome else {
+        panic!("a destructive call nobody can confirm is refused");
+    };
 
     // THEN: refused with -32001, and the message names the action rather than
     // stopping at the generic prefix. The prefix alone was what both HTTP-level
@@ -3744,7 +3746,10 @@ async fn a_non_destructive_call_is_not_judged_by_this_gate() {
     // WHEN/THEN: the gate declines to answer at all, so `Unavailable` refuses
     // destructive calls specifically rather than refusing everything -- which a
     // test asserting only the refusal above cannot tell apart.
-    assert!(
+    // `Proceed` and not merely "not a refusal": `ProceedConfirmed` would mean
+    // the gate had opened and spent a confirmation on a tool it does not
+    // govern, which a `!matches!(.., Refuse(_))` assertion would wave through.
+    assert!(matches!(
         super::destructive_confirmation_gate(
             &RequestId::Number(1),
             "gateway_list_servers",
@@ -3752,9 +3757,9 @@ async fn a_non_destructive_call_is_not_judged_by_this_gate() {
             None,
             &ctx,
         )
-        .await
-        .is_none()
-    );
+        .await,
+        super::GateOutcome::Proceed
+    ));
 }
 
 #[test]
@@ -5905,3 +5910,8 @@ fn block_1_promotion_ignores_tools_that_cannot_produce_a_round() {
         "only the invocation paths mint continuations, so only they promote",
     );
 }
+
+// Declared here, not in `mod.rs`: these cases drive the shared fixtures and
+// helpers defined above, which are private to this module.
+#[path = "order2_fsm_tests.rs"]
+mod order2_fsm_tests;

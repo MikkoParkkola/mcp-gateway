@@ -397,6 +397,30 @@ on it. A test module fails silently instead, which is why it survived a MET
 verdict. Before a criterion's evidence is read as executed, the file it names has
 to be traceable to a `mod` declaration.
 
+### Fixed — the three cases now compile and run
+
+The declaration belongs in `tests.rs`, not `mod.rs`. Declaring it as a sibling in
+`mod.rs` compiles the file but fails it 18 times: the cases call
+`assert_membership` and read `STAGED_DEFAULT_TOOLS`
+(`src/gateway/meta_mcp/tests.rs:4944`), which are private to the `tests` module and
+unreachable from a sibling. The file was written as a child of `tests` — its own
+`pub(super) fn assert_refusal` is scoped for that parent — so the fix is
+`#[path = "order2_fsm_tests.rs"] mod order2_fsm_tests;` at the end of `tests.rs`.
+The path is not `../order2_fsm_tests.rs`: `tests.rs` is itself loaded through a
+`#[path]` attribute, so a nested `#[path]` resolves against `src/gateway/meta_mcp/`
+rather than a `tests/` subdirectory.
+
+`cargo test --lib order2_fsm_tests`, exit status 0: 3 passed, 0 failed —
+`missing_and_empty_keys_are_explicitly_refused`,
+`old_empty_key_state_cannot_influence_any_discovery_reader` and
+`nonempty_legacy_and_stdio_keys_retain_isolated_state_changes`. ORDER.2a's evidence
+now matches what executes.
+
+Two intermediate runs of this fix reported success while the crate did not compile.
+Piping cargo into `tail` reports the pipe's exit status, so `[exited with code 0]`
+accompanied `could not compile ... due to 18 previous errors`. Redirect to a file
+and read `$?` when the exit status is the thing being trusted.
+
 ## `ConfirmationPolicy::for_modern()` is built on every modern call and discarded
 
 Measured 2026-09-09. `src/gateway/router/handlers.rs:1378` selects a
