@@ -964,7 +964,7 @@ disagree, the source is recorded and the cell is named as stale.
 
 ### 6.1 The headline number overstates the work
 
-`Coverage: 146 criteria, 183 rows, 163 met or non-blocking, 20 blocking.` Of those 20:
+`Coverage: 146 criteria, 183 rows, 174 met or non-blocking, 9 blocking.` Of those 9:
 
 | Verdict at source | Rows | Cost |
 |---|---|---|
