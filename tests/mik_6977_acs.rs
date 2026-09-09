@@ -177,11 +177,15 @@ fn mik6977_claim_3_compact_surfaces_match_the_canonical_tool_counts() {
 
     let library_docs = read("src/lib.rs");
     assert!(library_docs.contains("14 tools minimum"));
-    assert!(library_docs.contains(&format!("{scenario_tools} in the README benchmark scenario")));
+    assert!(library_docs.contains(&format!(
+        "{scenario_tools} in the README benchmark scenario"
+    )));
     assert!(!library_docs.contains("12 tools minimum"));
 
     assert!(llms.contains(&format!("{scenario_tools} Meta-MCP tools in context")));
-    assert!(llms.contains(&format!("{scenario_tools} in the README benchmark scenario")));
+    assert!(llms.contains(&format!(
+        "{scenario_tools} in the README benchmark scenario"
+    )));
     assert!(read("docs/show-hn.md").contains(&format!("{scenario_tools} in the README scenario")));
 
     let benchmark_docs = read("docs/BENCHMARKS.md");
