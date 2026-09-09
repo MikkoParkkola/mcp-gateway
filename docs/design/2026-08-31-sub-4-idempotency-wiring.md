@@ -967,3 +967,41 @@ closed by revision 9, which was written from leg 1's list before leg 2 returned:
 | CRITICAL — the Axis-4 binding is an unmade decision aimed at the wrong type | OPEN. Repaired below |
 | HIGH — path 2 is `passthrough: true`, and the guard's site does not cover both forwards | OPEN. Repaired below, and it retracts a sentence of revision 9's |
 | IMPROVEMENT — the Axis-4 row must name WHICH identity differs | OPEN. Repaired below |
+
+### G1 repair (CRITICAL) — the direct route's identity inputs, named, and the fork route 1 already decided
+
+The finding: revision 9 left Axis 4 as a check to be performed, and pointed it at
+`BackendAuthContext`. That type carries `client`, `cert_identity` and `oauth_agent_identity` — the
+TOOL-POLICY trio `authorize_tool_target` consumes. It is not what the retry suffix reads. An
+implementer following revision 9's sentence would find no identity to key on and would then choose,
+alone and invisibly, between pooling two authenticated callers on one entry and refusing every keyed
+call. Confirmed at source, and the sentence is retracted.
+
+This IS a design event under §P3 — it decides what an acceptance criterion (Axis 4) asserts — so it
+is named here rather than made at the first line of guard code. The answer:
+
+`retry_identity_suffix` (`pub(super) fn retry_identity_suffix` in `src/gateway/meta_mcp/support.rs`)
+takes exactly two arguments: a `cache_binding` and a `verified_subject`. Route 3 calls the SAME
+function with the direct route's two analogs, both already in scope in `backend_handler` above the
+proposed guard site:
+
+| suffix argument | direct-route value | where it comes from |
+|---|---|---|
+| `cache_binding` | `identity_key` | the minting chokepoint's binding (MIK-6784), or `passthrough_identity_key`'s SHA-256 of the forwarded credential (MIK-6785) |
+| `verified_subject` | `verified_identity` | the `VerifiedIdentity` the auth middleware attaches, cloned out of the request extensions before the body is consumed |
+
+Two things this makes explicit rather than leaving to be discovered:
+
+- `identity_key` is NOT always a minted `cache_binding`. On a passthrough backend it is a digest of
+  the caller's own forwarded credential. Both are per-caller opaque strings and both land under the
+  suffix's `idp:` tag, so the pooling property holds either way — but they are different namespaces
+  and an implementer who assumes one shape will write the wrong assertion.
+- The `verified_subject` argument is a STRING. Route 1 derives it from the verified actor; route 3
+  must use the same accessor on the same type, not a second spelling. That is a wiring check the
+  Axis-4 test row pins, not an open question.
+
+The weaken-vs-refuse fork leg 2 flagged is NOT open, and route 3 mints no rule about it. Route 1
+already decided it, in the function itself: with neither value present the suffix is `""`, and its
+own documentation says two such callers are pooled by the operator's own decision to run without
+authentication. Route 3 inherits that, exactly as it inherits the 409. Deciding it a second time
+here would be the second spelling this design keeps refusing to write.
