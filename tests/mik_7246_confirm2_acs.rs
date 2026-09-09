@@ -3,19 +3,21 @@
 //! `MIK-7246.CONFIRM.2` — the confirmation gate MUST be reachable through the
 //! modern (2026-07-28) stateless path.
 //!
-//! Written before the mechanism exists, so the failure is the free one: it
-//! fails because the in-band ask is unbuilt, not because a fixture was bent to
-//! make it fail. The shape asserted is the one fixed by
+//! Written before the mechanism existed. The mechanism has since landed —
+//! `handlers.rs:1462` hands a modern caller `ConfirmationChannel::InBand`
+//! where it once built `Elicit` unconditionally, and `meta_mcp/mod.rs:2164`
+//! mints the envelope and answers `input_required` — so these two tests are no
+//! longer failing-by-construction. They have also never run: nothing has been
+//! measured against a build. Read them as unverified, not as green.
+//!
+//! The shape asserted is the one fixed by
 //! `docs/design/2026-09-09-confirm-2-in-band-schema-and-wiring.md`, spelled in
 //! the wire vocabulary `src/protocol/mrtr.rs:238-249` parses.
 //!
-//! What is deliberately NOT asserted: the refusal branch. On unmodified source
-//! a modern destructive call is already refused with `none could be obtained`
-//! (`src/gateway/router/handlers.rs:1425-1434` builds `Elicit` unconditionally;
-//! `src/gateway/destructive_confirmation.rs:75-95` refuses on `Unsupported`),
-//! and `tests/mik_7215_acs.rs` closes CONFIRM.1a on that substring. A test of
-//! that branch passes against source nobody has touched, which proves nothing
-//! about this row.
+//! What is deliberately NOT asserted: the `Unsupported` refusal. It is now the
+//! legacy path's outcome, not the modern one, and `tests/mik_7215_acs.rs`
+//! covers CONFIRM.1a on that substring. Asserting it here would observe the
+//! other era's branch.
 
 mod common;
 
@@ -123,8 +125,8 @@ async fn non_true_answer_declines_rather_than_erroring() {
         .to_string();
     assert!(
         !envelope.is_empty(),
-        "no envelope to redeem — the ask half is unbuilt, so the decline \
-         branch cannot be exercised: {ask}"
+        "no envelope to redeem — the ask half did not mint one, so the \
+         decline branch cannot be exercised: {ask}"
     );
 
     // `RetryFields::from_params` reads both at the top level of `params`
