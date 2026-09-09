@@ -289,3 +289,46 @@ forbids request-scoped notifications on the subscription stream, asserted at
 
 The conclusion is unchanged. The reason it was written down was wrong, and a reader acting on the old
 sentence would have looked for a surface that already exists.
+
+## Repair 2 — the tower middleware escape is eliminated, not assumed
+
+Both legs named the same escape route: wrap the router in a tower layer so request-scoped
+notifications are emitted without editing either held file. Checked, and it closes.
+
+`checkable:` can a tower layer reach `POST /mcp` without editing `src/gateway/router/mod.rs`? —
+`rg -n "\.layer\(|ServiceBuilder|from_fn" src` — every layer application site for this router is in
+that same held file (`:262`, `:267`, `:268`, `:269`, `:270`, `:311`). The only other sites in the
+tree are `src/gateway/server/support.rs:249` and `:440`, which attach peer-certificate identity to
+the connection service, and `src/gateway/ui/control_plane.rs:55`, which layers a different router. —
+it changed nothing: a middleware still has to be applied in the file this lane may not take.
+
+GPT's alternative anchor, `src/gateway/server/mod.rs`, is held by another session as well
+(`git status`: `MM`), which that same finding concedes in its own text.
+
+## Repair 3 — the correlation citation the second leg asked for
+
+`send_request_with_headers` is `src/transport/http/mod.rs:1106`, taking `request: &JsonRpcRequest`.
+That binding is in scope for the whole body, including the event-stream branch at `:1204-1211` where
+`parse_sse_response` drops notifications on the floor. The request id therefore travels in the call,
+not in a field on the shared struct — which is what Correction 2 asserted. Grade: V, read at source.
+
+## Repair 4 — provenance of the operator answer
+
+`git blame` on `docs/design/2026-08-31-cluster-b-connection-invariance.md:463`: commit `2746ff89e`,
+dated 2026-09-09. The ANSWERED block is a committed record, not prose authored inside this note.
+
+## Review status — round 1 closed
+
+- Reviewed by GPT-5.x (`gpt-review`, exit 0): **SHIP-WITH-FIXES** — "correct the design's
+  impossibility argument while retaining SUB.2b as blocking."
+- Reviewed by the second leg (`kimi-review`, exit 0, ledger row `synthetic-20260909T094834Z-56838`):
+  **SHIP-WITH-FIXES** — "No — no concrete mechanism in the pasted evidence meets SUB.2b's outbound
+  obligation without editing handlers.rs and mod.rs."
+
+Both answered the one question that could have overturned this note with **No**. The four repairs
+above are the confirmation pass. Everything before the "Revision 2026-09-09" heading is a prior
+session's baseline, was never reviewed, and is superseded where it conflicts.
+
+**SUB.2b stays BLOCKING.** The ledger row is untouched and the release counter is unmoved
+(`count-release-criteria.py --check`: 146 criteria, 183 rows, 5 blocking, exit 0). The three operator
+options are unchanged by this round.
