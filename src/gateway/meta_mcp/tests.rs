@@ -4816,11 +4816,11 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
 
     // Control: the same promotion over a legacy connection, which keeps its own
     // session id, must be visible to that connection.
-    const LEGACY: Option<&str> = Some("legacy-a");
+    let legacy = Some("legacy-a");
     let legacy_invoked = meta
         .invoke_tool(
             &json!({"server": "mock", "tool": "echo", "arguments": {}}),
-            LEGACY,
+            legacy,
             &allow_all_ctx(),
             None,
         )
@@ -4831,7 +4831,7 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
     );
 
     let legacy_list =
-        tools_list_names(&meta.handle_tools_list_filtered(RequestId::Number(3), "echo", LEGACY));
+        tools_list_names(&meta.handle_tools_list_filtered(RequestId::Number(3), "echo", legacy));
     assert!(
         legacy_list.iter().any(|name| name == "echo"),
         "the promotion is observable nowhere, so the assertions above are \
