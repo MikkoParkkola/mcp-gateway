@@ -430,3 +430,88 @@ Revisions 1 and 2 have **never been dual-reviewed** — that is disclosed here o
 than assumed. This revision is the material for the pair (`gpt-review` + `kimi-review`, on stdin), on
 the one question that can overturn it: does the operator's build ruling reach anything this revision
 records as out of scope or assumed?
+
+---
+
+# Revision 3 — 2026-09-09 — two retractions, one ruling, and the corrected correlation rule
+
+Revision 2 went to the two vendors. `gpt-review` returned **SHIP-WITH-FIXES** with two findings, both
+**confirmed at source** rather than accepted on the reviewer's word. Both are eliminated below, not
+patched. The lead separately ruled the router files adoptable. This revision is what binds.
+
+## Retraction 1 — stdio is IN. The exclusion contradicted the governing test plan.
+
+Revision 2 ruled stdio OUT because "the stdio transport has no per-request response stream". The
+governing test plan already says otherwise, and it is the plan this criterion is tested against:
+
+- `docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:58` — **S-02**: a backend's
+  `notifications/progress`, and separately `notifications/message`, during a `tools/call` reaches that
+  call's response stream before the result, **"over stdio and over HTTP"**.
+- `:59` — **S-03**: two concurrent calls on one connection, the notification reaches the provoking
+  call's stream and no other, **"for both notification methods and both transports"**.
+
+Both are marked `(i) only` — live under exactly the correlation option this lane carries. So the
+exclusion did not narrow a scope, it dropped coverage a reviewed plan already required. Retracted in
+full: `src/transport/stdio.rs:416-431` is IN this increment's FOR. The reasoning behind the exclusion
+was wrong, not merely inconvenient — stdio multiplexes one stdout, which is why S-03 exists to prove
+per-request isolation on it, not a reason to skip it.
+
+## Retraction 2 — POST /mcp already returns a stream. "POST answers JSON" was too strong.
+
+Revision 2 said SSE is GET-only and POST answers JSON, citing the route wiring. The route wiring is
+not the whole answer: `src/gateway/router/handlers.rs:1120-1126` returns
+`crate::gateway::streaming::subscription_stream(...)` from a **POST** `/mcp` body, for
+`subscriptions/listen`. A streaming response on POST therefore already exists.
+
+What is genuinely absent is narrower and is the real work: **the choice of an event-stream body for an
+ordinary request**, negotiated on `Accept`. Two existing pipes are the wrong pipe and neither is to be
+reused:
+
+| pipe | why it is wrong here |
+|---|---|
+| `streaming::subscription_stream` (`handlers.rs:1120`) | it is the subscription stream, and `MIK-7272.SUB.2a` forbids request-scoped notifications on it (`src/gateway/subscription_registry.rs:211`) |
+| `streaming::create_sse_response` (`src/gateway/streaming.rs:375`) | session-scoped by construction — it is the GET standalone stream, "not the response stream of any request" |
+
+## Correction — the correlation rule carries a token-match condition that Revision 2 dropped
+
+Revision 2 wrote option (i) as "correlated by which request's stream it arrived on". The operator's
+recorded answer is narrower (`2026-08-31-cluster-b-connection-invariance.md:463`, verbatim): the
+gateway "forwards a backend's own progress token **when it matches one a caller supplied on that
+request**, and never mints one". Stream arrival alone would forward a progress token the caller never
+supplied. The binding rule, both conditions:
+
+1. the notification arrived unprompted on that request's own stream, **and**
+2. any progress token it carries matches one the caller supplied on that request.
+
+Never minted, never translated, no allocation table. Where the lead's phrasing and the operator's
+recorded answer differ, the narrower one governs — it satisfies both.
+
+## Ruling — the four `MM` router files are parked, not held (team lead, 2026-09-09 11:54)
+
+Evidence given: `handlers.rs` mtime 02:08, `mod.rs` 23:19 the previous day, newest file in
+`src/gateway/router/` 03:12 — 8.7h cold; every session transcript stale at 04:09 or older except this
+one and a peer that has not touched those files. Same test that cleared the stdio wiring for SUB.4.
+**Uncommitted-and-cold is parked work, and parked work is adoptable.** Revision 2's ownership blocker
+is discharged. Two conditions bind and are recorded here so they outlive the message:
+
+1. **Surgical edits only** — never a full-file write on any of the four `MM` files. A whole-file write
+   silently replaces a peer's uncommitted hunks; surgical edits coexist with a live peer, a rewrite
+   does not.
+2. **`git commit -o <explicit paths>`** — never bare `git add` or `commit -a`. This worktree's index
+   already carries staged work that is not this lane's (two `D ` test-file deletions), and a sweeping
+   commit would publish a peer's deletions under this lane's authorship.
+
+If a surgical edit proves impossible without restructuring a function a peer holds mid-edit: STOP and
+report, never widen.
+
+## What this leaves as the shape of the work
+
+1. **Inbound (HTTP)** — `parse_sse_response` (`src/transport/http/mod.rs:276-305`) stops discarding at
+   `:294-296` and returns the notifications it saw alongside the response; sole call site
+   `:1211` inside `send_request_with_headers`, which holds the request id, so correlation travels in
+   the call and no `Transport` trait change is needed.
+2. **Inbound (stdio)** — the same capture at `src/transport/stdio.rs:416-431`, per S-02/S-03.
+3. **Outbound** — an `Accept: text/event-stream` negotiated response stream for an ordinary request on
+   POST `/mcp`, in `src/gateway/router/handlers.rs`, surgically, reusing neither pipe above.
+
+Ledger row still ABSENT/blocking. It flips when the tests are green, not when this document is.
