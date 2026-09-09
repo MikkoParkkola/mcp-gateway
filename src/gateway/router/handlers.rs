@@ -1188,25 +1188,6 @@ pub(super) async fn meta_mcp_handler(
                 state.meta_mcp.exposes_meta_tool(tool_name),
             );
 
-            // A task-augmented call is answered with a handle, not a result.
-            // The record is created before anything is dispatched: a handle the
-            // client cannot resolve on its very next request is worse than a
-            // refusal, because the client has no way to tell it apart from one
-            // that will resolve a moment later.
-            if params.as_ref().is_some_and(|p| p.get("task").is_some()) {
-                let task_id = state.tasks.create(&owner, tool_name);
-                let view = state
-                    .tasks
-                    .get(&owner, &task_id)
-                    .map_or_else(|| json!({}), |task| task_view(&task));
-                return build_json_response(
-                    serde_json::to_value(JsonRpcResponse::success(id.clone(), view))
-                        .unwrap_or_else(|_| json!({})),
-                    &session_id,
-                    StatusCode::OK,
-                );
-            }
-
             // A multi-round-trip retry carries `inputResponses` and
             // `requestState` as siblings of `name` and `arguments` (MIK-7212).
             // They are read here and travel to the invoke funnel on the caller
@@ -1397,6 +1378,174 @@ pub(super) async fn meta_mcp_handler(
                     cert_identity.as_ref(),
                 ),
             };
+
+            // A task-augmented call is answered with a handle, not a result.
+            //
+            // Created HERE, below the admin pre-check, the per-target
+            // authorization and the firewall, rather than at the top of this
+            // arm where it used to sit: a handle handed out above those gates
+            // turns a refusal into a `200` and leaves behind a record an
+            // unauthorized caller allocated. The record is still created
+            // before anything is dispatched, which is the other half of the
+            // rule -- a handle the client cannot resolve on its very next
+            // request is worse than a refusal, because nothing tells it apart
+            // from one that will resolve a moment later.
+            if params.as_ref().is_some_and(|p| p.get("task").is_some()) {
+                let task_id = state.tasks.create(&owner, tool_name);
+                let view = state
+                    .tasks
+                    .get(&owner, &task_id)
+                    .map_or_else(|| json!({}), |task| task_view(&task));
+
+                // The tool runs on a task of its own, so the handle can be
+                // answered now rather than after it finishes. Awaiting here
+                // and reporting `working` would satisfy the wire shape and
+                // defeat the point of it.
+                //
+                // `MetaMcpCallerContext` is borrows all the way down, and
+                // every one of them points at a local that dies with this
+                // response. So the dispatch takes owned copies and rebuilds
+                // the context on the other side, identically -- the ordinary
+                // path below is the specification for what it must be.
+                let dispatch_state = Arc::clone(&state);
+                let dispatch_owner = owner.clone();
+                let dispatch_task = task_id.clone();
+                let dispatch_id = id.clone();
+                let dispatch_tool = tool_name.to_string();
+                let dispatch_session = session_id.clone();
+                let dispatch_client = client.clone();
+                let dispatch_oauth = oauth_agent_identity.clone();
+                let dispatch_cert = cert_identity.clone();
+                let dispatch_verified = verified_identity.clone();
+                let dispatch_agent = agent_identity.clone();
+                tokio::spawn(async move {
+                    let dispatch_authorizer = RouterAuthorizer {
+                        state: dispatch_state.as_ref(),
+                        client: dispatch_client.as_ref(),
+                        oauth_agent_identity: dispatch_oauth.as_ref(),
+                        cert_identity: dispatch_cert.as_ref(),
+                        principal: refusal_principal(
+                            dispatch_client.as_ref(),
+                            dispatch_oauth.as_ref(),
+                            dispatch_cert.as_ref(),
+                        ),
+                    };
+                    // Read before `arguments` is handed over, because the
+                    // response scan below needs them and the call consumes it.
+                    #[cfg(feature = "firewall")]
+                    let dispatch_targets = backend_tool_targets_for_call(
+                        &dispatch_state.meta_mcp,
+                        &dispatch_tool,
+                        &arguments,
+                    );
+                    let mut task_response = dispatch_state
+                        .meta_mcp
+                        .handle_tools_call(
+                            dispatch_id,
+                            &dispatch_tool,
+                            arguments,
+                            Some(dispatch_session.as_str()),
+                            MetaMcpCallerContext {
+                                authorizer: &dispatch_authorizer,
+                                api_key_name: dispatch_client
+                                    .as_ref()
+                                    .map(|c| c.name.as_str()),
+                                agent_id: dispatch_agent.as_ref().map(|a| a.id.as_str()),
+                                grant_subject,
+                                verified_identity: dispatch_verified.as_ref(),
+                                is_admin: dispatch_client.as_ref().is_some_and(|c| c.admin),
+                                input_capabilities: declared_capabilities,
+                                retry: &retry,
+                                era,
+                                channel: dispatch_state.proxy_manager.as_ref(),
+                                confirmation: match era {
+                                    crate::protocol::meta::Era::Modern => {
+                                        crate::gateway::destructive_confirmation::ConfirmationChannel::InBand {
+                                            continuation: dispatch_state.continuation.as_ref(),
+                                        }
+                                    }
+                                    crate::protocol::meta::Era::Legacy => {
+                                        crate::gateway::destructive_confirmation::ConfirmationChannel::Elicit {
+                                            proxy: &dispatch_state.proxy_manager,
+                                            policy: confirmation_policy,
+                                        }
+                                    }
+                                },
+                            },
+                        )
+                        .await;
+
+                    // The same post-invocation scan the ordinary path runs.
+                    // Asking for a task must not be a way around it.
+                    #[cfg(feature = "firewall")]
+                    if let Some(ref fw) = dispatch_state.firewall
+                        && let Some(ref mut result_val) = task_response.result
+                    {
+                        let caller_name = dispatch_client
+                            .as_ref()
+                            .map_or("anonymous", |c| c.name.as_str());
+                        for target in &dispatch_targets {
+                            let target = target.as_target();
+                            let verdict = fw.check_response(
+                                &dispatch_session,
+                                target.server,
+                                target.tool,
+                                result_val,
+                                caller_name,
+                            );
+                            if verdict.action == FirewallAction::Warn {
+                                warn!(
+                                    server = target.server,
+                                    tool = target.tool,
+                                    findings = verdict.findings.len(),
+                                    "Firewall: response warning"
+                                );
+                            }
+                        }
+                    }
+
+                    // Settled once, and the response decides which way -- not
+                    // the tool's opinion of itself. `isError: true` is a field
+                    // of a SUCCESSFUL result, so the task produced a final
+                    // answer and that answer reports a tool error: completed.
+                    // `failed` is for a call that produced no final answer at
+                    // all, and it carries that refusal's own code, because a
+                    // client that branches on the code cannot recover one from
+                    // a blanket `-32603`.
+                    // Dressed before it is stored, because storing the
+                    // undressed result would hand a polling client a
+                    // different object from the one an ordinary call
+                    // returns for the same work. `tools/call` is not a
+                    // cacheable method, so this adds the discriminator and
+                    // the server identity and nothing else.
+                    if let Some(ref mut result) = task_response.result {
+                        decorate_modern_result(result, "tools/call");
+                    }
+
+                    dispatch_state
+                        .tasks
+                        .update(&dispatch_owner, &dispatch_task, |task| {
+                            match (task_response.result.take(), task_response.error.take()) {
+                                (Some(result), _) => task.complete(result),
+                                (None, Some(error)) => {
+                                    task.fail_with_code(error.code, error.message);
+                                }
+                                (None, None) => {
+                                    task.fail(
+                                        "the dispatch produced neither a result nor an error",
+                                    );
+                                }
+                            }
+                        });
+                });
+
+                return build_json_response(
+                    serde_json::to_value(JsonRpcResponse::success(id.clone(), view))
+                        .unwrap_or_else(|_| json!({})),
+                    &session_id,
+                    StatusCode::OK,
+                );
+            }
 
             let mut call_response = state
                 .meta_mcp
@@ -1689,9 +1838,24 @@ fn build_modern_response(
     status: StatusCode,
     method: &str,
 ) -> axum::response::Response {
-    if let Some(ref mut result) = response.result
-        && let Some(object) = result.as_object_mut()
-    {
+    if let Some(ref mut result) = response.result {
+        decorate_modern_result(result, method);
+    }
+    (status, axum::Json(response)).into_response()
+}
+
+/// The dressing every 2026 result wears: the `resultType` discriminator, the
+/// cache hints the five cacheable methods carry, and the `_meta` server
+/// identity this revision requires because it deleted the handshake that used
+/// to carry one.
+///
+/// Factored out of `build_modern_response` for the task path, which settles a
+/// result long after the response that carried its handle has gone. A client
+/// polling a handle must read exactly what it would have read had it waited,
+/// and two spellings of this dressing are two contracts -- the same reason
+/// `task_view` has one producer.
+fn decorate_modern_result(result: &mut Value, method: &str) {
+    if let Some(object) = result.as_object_mut() {
         // Required on every result in this revision, and supplied here only
         // when the result does not already carry one.
         //
@@ -1732,7 +1896,6 @@ fn build_modern_response(
             );
         }
     }
-    (status, axum::Json(response)).into_response()
 }
 
 /// The HTTP status a response deserves when it carries an authorization
