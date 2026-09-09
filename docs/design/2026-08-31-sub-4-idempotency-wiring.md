@@ -1005,3 +1005,55 @@ already decided it, in the function itself: with neither value present the suffi
 own documentation says two such callers are pooled by the operator's own decision to run without
 authentication. Route 3 inherits that, exactly as it inherits the 409. Deciding it a second time
 here would be the second spelling this design keeps refusing to write.
+
+### G3 repair (HIGH) — one guard between the security decision and both forwards, which is not where revision 9 put it
+
+Leg 2 says path 2 is `passthrough: true`, not "no tool name", and that the guard's site does not
+cover both forwards. Both halves confirmed at source, and the second half retracts a sentence of
+revision 9's own repair.
+
+What the code actually does inside `if method == "tools/call"` (content anchor: the `match
+apply_backend_tool_call_security(` in `src/gateway/router/backend_handlers.rs`):
+
+| outcome | when | what happens |
+|---|---|---|
+| `Some(Ok(Some(sanitized)))` | a normal backend: name validated, tool authorized, firewall passed, input sanitized | forwards the sanitized params AND RETURNS, inside the arm |
+| `Some(Err(rejection))` | validation, authorization or firewall refused | returns the rejection |
+| `Some(Ok(None))` | `sanitize` was false, i.e. `backend.passthrough()` — and only after name validation, authorization and the firewall have ALL passed | falls out of the block to the general forward |
+| `None` | no params, or an empty tool name | falls out of the block to the general forward |
+
+So a NAMED, AUTHORIZED `tools/call` does reach the general forward — on a passthrough backend. Leg 2
+is right about path 2, and revision 9's second test row already fixtures it that way, so that row
+needs no change.
+
+Revision 9's siting sentence does need one. It said both forwards converge below the security
+decision so one guard sees them. They do not converge: the sanitized forward returns from INSIDE the
+match arm, and a guard placed below the block never sees it. That sentence is retracted.
+
+Leg 2's own fix — first statement inside the `tools/call` block, BEFORE the security match — covers
+both forwards and reintroduces exactly the defect leg 1 raised as CRITICAL: a replay served above
+`authorize_tool_target` hands a cached protected result to a caller whose access was revoked. Two
+reviewers, two correct findings, and the sites they name are incompatible. Averaging them is not
+available; neither is picking one.
+
+The elimination is a third site that satisfies both, and it costs a `let`:
+
+```
+identity  ->  INV-2 isolation refusal  ->  apply_backend_tool_call_security  (BOUND to a value,
+              not matched inline)  ->  return on Some(Err)  ->  IDEMPOTENCY GUARD  ->  dispatch
+              the two remaining shapes to their forwards
+```
+
+After that restructure the security decision is above the guard, both forwards are below it, and the
+finding "a forward the guard does not see" cannot be stated on this route — which is the test the
+repair protocol sets for an elimination rather than a patch.
+
+Two properties that fall out and are worth stating because a later reader will otherwise re-derive
+them wrongly:
+
+- The guard sits INSIDE the `tools/call` block, so `tools/list`, `resources/read` and every other
+  method reaching the general forward are never guarded. Correct: the fingerprint is
+  (backend, tool, arguments), and a method with no tool name has nothing to key on.
+- Inside the block, the `None` case has no tool name either. The guard method takes the tool name as
+  an argument, so "no name, no key" is a fact about its signature and not a second check that could
+  be forgotten — the same reason the backend name is a parameter and not an ambient lookup.
