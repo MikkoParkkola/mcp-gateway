@@ -41,8 +41,9 @@ pub struct Fixture {
     pub meta_mcp_enabled: bool,
     pub agent_identity: mcp_gateway::config::AgentIdentityConfig,
     pub sanitize_input: bool,
-    /// The stateless path's master switch. `true` is the shipped default
-    /// (`src/config/mod.rs:1236`); `false` is COMPAT.1 C1's falsifier.
+    /// The stateless path's master switch. The default below is READ from the
+    /// shipped config so COMPAT.1 C1 pins what 4.0.0 actually serves; `false`
+    /// is that row's falsifier.
     pub modern_protocol: bool,
     /// The gate control 15 names. `None` is the shipped router-test state and
     /// the falsifier for the block below.
@@ -67,7 +68,10 @@ impl Default for Fixture {
             // The fixture default is off so the other rows reach their own
             // gate rather than being refused by this one.
             sanitize_input: false,
-            modern_protocol: true,
+            // Read, never restated: a hardcoded `true` here left C1 green
+            // against a build whose shipped default was `false`, which is the
+            // one thing that row exists to deny.
+            modern_protocol: Config::default().server.modern_protocol,
             #[cfg(feature = "firewall")]
             firewall: None,
             session_lifecycle: None,
