@@ -420,6 +420,9 @@ pub struct MetaMcp {
     /// owner, and live grant evidence.
     pub(super) identity_grants: RwLock<LocalIdentityGrantStore>,
 
+    /// Bumped when policy changes, so cached decisions keyed on it fall away.
+    pub(super) policy_epoch: Arc<std::sync::atomic::AtomicU64>,
+
     /// Trust caller identity headers from an authenticated edge proxy.
     ///
     /// Disabled by default because direct clients can otherwise spoof headers.
@@ -504,6 +507,7 @@ impl MetaMcp {
             attestation_validator: None,
             attestation_mode: crate::attestation::AttestationMode::Observe,
             identity_grants: RwLock::new(LocalIdentityGrantStore::new()),
+            policy_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             caller_identity_header_trust: CallerIdentityHeaderTrust::Disabled,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
             #[cfg(feature = "firewall")]
