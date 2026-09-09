@@ -1798,3 +1798,97 @@ async fn get_oauth_token_without_oauth_is_none_over_cleartext() {
     let t = make_transport("http://backend.example/mcp");
     assert!(t.get_oauth_token().await.unwrap().is_none());
 }
+
+// =========================================================================
+// MIK-7272.SUB.2b — request-scoped notifications MUST flow on the response
+// stream of their own request. The inbound half: the transport stops
+// discarding a notification it saw on a request's stream and returns it
+// alongside the response, in stream order, from one call.
+//
+// Governing plan: docs/design/2026-08-31-cluster-b-connection-invariance
+// -test-plan.md S-02 (forwarding) and S-03 (per-request isolation).
+// Design: docs/design/2026-09-09-sub2b-request-scoped-notifications.md.
+// =========================================================================
+
+/// A notification seen ahead of the response is CAPTURED, not dropped.
+///
+/// The discard at `mod.rs:294-296` is the defect: a conforming server may
+/// interleave `notifications/progress` on the response stream of the call in
+/// flight, and the caller currently never learns it happened.
+#[test]
+fn parse_sse_response_captures_the_notification_seen_before_the_response() {
+    // GIVEN: a progress notification ahead of the answer, on one stream
+    let body = concat!(
+        "event: message\n",
+        "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"t-1\",\"progress\":1}}\n",
+        "\n",
+        "event: message\n",
+        "data: {\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"tools\":[]}}\n",
+    );
+
+    // WHEN: the transport parses it
+    let exchange = parse_sse_response(body).expect("the response after a notification must parse");
+
+    // THEN: the response still reaches the caller ...
+    assert!(
+        exchange.response.result.is_some(),
+        "the response frame must still be returned"
+    );
+    // ... AND the notification is no longer lost.
+    assert_eq!(
+        exchange
+            .notifications
+            .iter()
+            .map(|n| n.method.as_str())
+            .collect::<Vec<_>>(),
+        vec!["notifications/progress"],
+        "the notification seen on this request's stream must be returned with it"
+    );
+}
+
+/// Stream order is preserved: two notifications come back in the order the
+/// server sent them, ahead of the response that ended the scan.
+///
+/// Order is the property the single-return shape exists to guarantee — an
+/// async sink delivering beside the call could not promise it.
+#[test]
+fn parse_sse_response_preserves_the_order_two_notifications_arrived_in() {
+    // GIVEN: message then progress, in that order, before the answer
+    let body = concat!(
+        "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{\"level\":\"info\"}}\n",
+        "\n",
+        "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":2}}\n",
+        "\n",
+        "data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n",
+    );
+
+    // WHEN: the transport parses it
+    let exchange = parse_sse_response(body).expect("the response must parse");
+
+    // THEN: both are returned, in arrival order
+    assert_eq!(
+        exchange
+            .notifications
+            .iter()
+            .map(|n| n.method.as_str())
+            .collect::<Vec<_>>(),
+        vec!["notifications/message", "notifications/progress"],
+        "stream order must survive the capture"
+    );
+}
+
+/// A body with no notifications yields an empty list, never a phantom entry.
+///
+/// The negative case an empty world would also satisfy is guarded by equality
+/// against a literal, not by `is_empty()` alone on an untouched field.
+#[test]
+fn parse_sse_response_returns_no_notifications_when_the_server_sent_none() {
+    let body = "data: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"ok\":true}}\n";
+    let exchange = parse_sse_response(body).expect("valid response must parse");
+    assert!(exchange.response.result.is_some());
+    assert_eq!(
+        exchange.notifications.len(),
+        0,
+        "a clean stream must not manufacture a notification"
+    );
+}
