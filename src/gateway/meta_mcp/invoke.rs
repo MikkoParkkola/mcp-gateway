@@ -471,7 +471,7 @@ fn unbindable_continuation(server: &str, tool: &str) -> Error {
 /// issued, unsealed from inside it. One struct for both directions is how a
 /// client-supplied string reaches a backend as if the gateway had issued it.
 #[derive(Debug, Default)]
-struct OutboundRetry {
+pub(super) struct OutboundRetry {
     /// The backend's own opaque state, or `None` when it issued none.
     request_state: Option<String>,
     /// The client's answers, verbatim.
