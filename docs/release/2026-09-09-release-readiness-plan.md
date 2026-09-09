@@ -618,3 +618,53 @@ once, and the same run tells us whether any of the other 42 stale-green binaries
 regressed during the 31 dark hours. Until then the honest statement of release
 readiness is that three criteria block by the ledger's count, and seven more are
 graded on evidence the pipeline has never seen.
+
+### G. The bridge acquired a production call site today, and two lanes are reasoning from before that
+
+`b7a4a768`, "feat(mrtr): wire the input bridge into the invoke path", landed on
+origin at 2026-09-09 11:26. `InputBridge` is constructed at
+`src/gateway/meta_mcp/invoke.rs:1733` on origin's own tip and `:1765` locally.
+Verified on both trees rather than one.
+
+Three statements in circulation predate it and are now false:
+
+- The coordination file states `InputBridge` "has zero production call sites —
+  `rg -n --hidden --no-ignore "InputBridge" src/` returns three hits, all inside
+  its own file". There is a fourth hit, in `invoke.rs`, on origin. The three
+  prerequisites that note lists as gating the call site are gating a call site
+  that already exists.
+- The MRTR.7a/7b acknowledgement describes `Bridge::retry_params` as having "one
+  non-test caller, inside the `run` nothing calls". `run` is called now.
+- The module doc of `tests/mik_7212_mrtr7_stdio_acs.rs` says its rows "cannot be
+  shown to work while `InputBridge::run` has no production caller ... nothing on
+  a transport calls it, so no bridged request is written to the pipe at all".
+  That justification for an unobservable test row has expired.
+
+The narrow claim in that same acknowledgement survives and should not be
+disturbed: `Bridge::to_legacy_client` genuinely has no caller at origin, in
+`src/` or in `tests/` — the only surviving mention is a doc comment recording
+that a property was *previously* pinned against it. So that lane's scope is
+right and its premise is stale, which is the more awkward combination: the
+conclusion holds while the reasoning behind it needs re-deriving against a tree
+where the wiring exists.
+
+Two consequences. The legacy-bridge fall-through committed as `3227c985` is on a
+live production path, not a latent one, which strengthens it. And the stdio test
+row may now be observable; nobody has re-read it since the wiring landed.
+
+**The stdio invariant holds, and its proof has a named untested seam.** The
+fall-through could in principle have shipped MIK-7387's future behaviour early,
+because `input_bridge.rs` documents the stdio refusal as deliberate "until
+MIK-7387 lands". It does not, and the reason is structural: `stdio_caller_context`
+sets `input_capabilities: Declared::NONE` (`server/mod.rs:2236`), and `run`
+calls `plan` at `:404` before `ask` at `:410`, so an undeclared caller is refused
+with `BridgeError::Refused` one step before any delivery attempt — an arm the
+fall-through does not touch. Verified at source on this tree.
+
+Worth recording the seam the same file names in its own comment: the two halves
+of that invariant are "proven separately ... No test joins the two end to end
+yet; that row is `MIK-7212.WIRE.10`". So the safety argument for `3227c985` rests
+on a structural fact whose end-to-end proof is an open test-plan row. That is not
+an objection to the fix — the structure is real and checkable by reading — but it
+belongs in the record, because a future edit to either half would break the
+invariant with no test to catch it.
