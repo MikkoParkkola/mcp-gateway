@@ -552,3 +552,50 @@ declaration somewhere in the tree (2026-09-09, 29 files). All are declared excep
 not part of this check and need no declaration: cargo discovers each as its own
 integration target, and `tests/common/mod.rs` is pulled in by `mod common;` inside
 the targets that use it.
+
+## Correction to the MRTR7 criteria finding, and the true cause of the red CI
+
+Two claims recorded earlier in this file are corrected here.
+
+### `WIRE.1` to `.13` are owned and in flight, not orphaned
+
+The section above reads the absence of `MIK-7212.WIRE.*` from
+`docs/requirements/RELEASE-4.0.0-criteria-status.md` as an untracked gap. It is
+not one. `docs/release/2026-09-08-team-lead-rulings.md` rules on these criteria
+as live work owned by the `bridge-mrtr7` lane: R1 and R8 both decide `WIRE.5`
+(the fixture stands; per-round gating is taken, the criterion is not narrowed),
+R8 withdraws the four-dispatch ceiling clause on `WIRE.13`, and R22 records that
+`WIRE.5` was ruled twice. R8 states plainly that the design event moves what a
+criterion asserts, so the earlier review phases reopen before the lane resumes.
+
+Criteria whose design is still moving are not promoted to the ledger. Adding
+thirteen rows would duplicate a lane's owned work and would state verdicts the
+owning lane has not reached. Nothing is added here.
+
+What survives of the finding is narrower: `ROOTS.1` to `.5` are implemented and
+covered by green tests, and they are the rows the ledger can carry once the lane
+confirms the mapping. That confirmation is the lane's, not this pass's.
+
+### The red CI is a dropped implementation, not the two red fixtures
+
+The earlier reading — that PR #473 is red because the fixtures landed ahead of
+their implementation — described a branch state that no longer exists. Run
+34361905129 is against `5dfbed58`, the current head, and the head already
+carries the call site at `src/gateway/meta_mcp/mod.rs:1811` and all four
+`block_1_` fixtures. It carries the function as a placeholder:
+
+    fn promote_interim_envelope(tool_name: &str, content: &Value, response: &mut JsonRpcResponse) {
+        let _ = (tool_name, content, response);
+    }
+
+That is the red-stage body. The implemented body did not survive the merges that
+landed the working tree onto the release branch (`47dd46a9`, `de7c5e2d`). The
+call site survived, the fixtures survived, the implementation did not, so the
+suite fails on exactly the two assertions the body satisfies and on nothing else
+(4155 pass, 2 fail).
+
+A sweep of the remote tip for the same placeholder shape found one occurrence,
+so this is the only implementation the merges dropped and the whole of the red.
+The repair is to restore the body on top of `5dfbed58`. It must not be pushed by
+fast-forwarding any local tip: this worktree is 39 commits behind the remote and
+16 ahead, and pushing its tip would drop the peer commits in between.
