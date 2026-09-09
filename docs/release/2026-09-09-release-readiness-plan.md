@@ -5,10 +5,18 @@ Assessed 2026-09-09 against branch `fix/mrtr2-continuation-handle`, remote tip
 
 ## Where the release stands
 
-`scripts/release/count-release-criteria.py --check` is the authority on totals
-and it reports: **146 criteria, 183 rows, 180 met or non-blocking, 3 blocking.**
-The header line in `docs/requirements/RELEASE-4.0.0-criteria-status.md` matches,
-so the ledger's arithmetic is not drifting.
+`scripts/release/count-release-criteria.py --check` is the authority on totals.
+Run against the ledger as it exists at the remote tip `5dfbed58` -- not the local
+worktree, which is 39 commits behind and carries a peer's uncommitted edits to
+that file -- it reports: **146 criteria, 183 rows, 180 met or non-blocking, 3
+blocking**, and `--blocking` names the same three rows covered below. The header
+line in `docs/requirements/RELEASE-4.0.0-criteria-status.md` matches, so the
+ledger's arithmetic is not drifting.
+
+This document is not itself on the branch. It sits on two local-only commits
+(`62570a22`, `0122ee40`) in a worktree nobody may fast-forward from, so it needs
+the same delivery path as item 0 below: rebuilt on `5dfbed58` and pushed as an
+explicit ref.
 
 Three criteria block the release. One thing outside the ledger also blocks it —
 the branch does not build green — and that is the first item below because none
@@ -29,9 +37,11 @@ fixtures, but carries the function as its red-stage placeholder:
     }
 
 The implemented body did not survive the merges that landed the working tree
-onto the release branch (`47dd46a9`, `de7c5e2d`). A sweep of the remote tip for
-the same placeholder shape found one occurrence, so this is the only dropped
-implementation and the whole of the red.
+onto the release branch. `47dd46a9` ("wip: uncommitted working-tree state on the
+stale base") introduced the placeholder and is an ancestor of `5dfbed58`, so this
+is a merge artifact rather than a deliberate revert. Two tests fail out of 4157
+and both are explained by this one placeholder -- that is what makes it the whole
+of the red, not a claim that nothing else was dropped.
 
 Restoring the body turns the suite green; it is verified green locally with that
 body (`cargo test --lib block_1_`, 4 passed). The repair must be built on top of
@@ -69,18 +79,52 @@ stream, ahead of the final response, and delete the `allow(dead_code)`. The row'
 evidence text needs rewriting at the same time, because a reader who trusts it
 today would go looking for a capture path that already exists.
 
-## 2. `MIK-7272.SUB.4` — covered on one route of three
+## 2. `MIK-7272.SUB.4` — covered on two routes of three, not one
 
 A side-effecting call re-issued after a broken stream with a new request id must
-be protected by an idempotency key or the tasks extension. The row records the
-criterion as UNWIRED because it needs all three routes and only one is covered.
-Closing it means covering the two uncovered routes, not building a new mechanism.
+be protected by an idempotency key or the tasks extension. The row records
+UNWIRED "because the criterion needs all three routes and only one is covered".
+Read at the tip rather than taken from the row: two of the three are covered, and
+the row's stdio evidence is stale.
+
+The generic `tools/call` route is live. `idempotency_key_for` has exactly one
+production call site (`src/gateway/meta_mcp/invoke.rs:1344`; every other hit is
+its definition in `meta_mcp/support.rs:48` or that module's tests), and
+`enable_idempotency` is wired unconditionally at the sole production `MetaMcp`
+construction site (`src/gateway/server/mod.rs:747`).
+
+Stdio is live too. The row says stdio "hardcodes `retry: &NO_RETRY` at the two
+sites that build its dispatch context (`server/mod.rs:2200`, `:2703`)" and that
+`RetryFields::from_params` at `handlers.rs:1220` "is the only production site
+that ever constructs a real `RetryFields`, and stdio never calls it". At
+`5dfbed58` stdio's own dispatch does call it: `dispatch_single_with_sink` builds
+real `RetryFields` and passes them into `handle_tools_call`
+(`src/gateway/server/mod.rs:1886`). The one surviving `retry: &NO_RETRY` in that
+file sits inside a test (`:2730`), and the regression test the row calls
+`#[ignore]`d is not ignored -- `server/mod.rs` carries no `#[ignore]` anywhere,
+so `stdio_caller_context_carries_the_clients_idempotency_key` runs in CI, where
+the only failures are the two from item 0.
+
+The uncovered route is `POST /mcp/{name}` (`backend_handler`,
+`src/gateway/router/backend_handlers.rs:434`), which bypasses `invoke_tool_traced`
+and never calls `idempotency_key_for` -- which the single-call-site search above
+independently confirms.
+
+So the remaining work is one route, not two. The stdio wiring arrived in
+`47dd46a9`, the same WIP commit that dropped the item 0 body, which is why the
+row was accurate when written and is not now. Re-evidencing it is deferred: the
+ledger shows uncommitted peer edits, so this text goes to the owning lane rather
+than into the row.
 
 ## 3. `MIK-7246.CONFIRM.2` — the gate is unreachable through the MRTR path
 
 The confirmation mechanism is `elicitation/create` over an SSE session
 (`ProxyManager::forward_elicitation_with_response`), and a modern client cannot
-reach it through the MRTR path. There is a second, related defect recorded in
+reach it through the MRTR path. Checked at the tip rather than quoted: that
+forwarder is at `src/gateway/proxy.rs:274` exactly as the row cites, and the
+module comment the row quotes -- "sessions, so *every* modern destructive call
+would take that branch" -- is at `src/gateway/destructive_confirmation.rs:96`,
+not the `:83-84` the row gives. The substance holds; only the line anchor drifted. There is a second, related defect recorded in
 `docs/release/verify/metamcp-blockers-fixes.md`: `for_modern()` selects a policy
 that no live branch reads, its sole consumer sits inside the `Era::Legacy` arm
 (`src/gateway/router/handlers.rs:1378-1382,1449`), and the doc comment on
