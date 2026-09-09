@@ -1,6 +1,6 @@
 # MIK-7272.SUB.4 — idempotency protection for reissued side-effecting calls
 
-Status: proposed, revision 10. Route 1 is built (`7851736d`); route 2's carrier is built and
+Status: proposed, revision 11. Route 1 is built (`7851736d`); route 2's carrier is built and
 uncommitted (rev 7); route 3 is unbuilt and acquires its design section in rev 8.
 Revisions 1 and 2 were reviewed by GPT-5.x and Grok; both returned `SHIP-WITH-FIXES` on revision 2.
 Revision 3 was the repair. Revision 4 settles the last question a check could settle, and records
@@ -1019,11 +1019,27 @@ Two things this makes explicit rather than leaving to be discovered:
   must use the same accessor on the same type, not a second spelling. That is a wiring check the
   Axis-4 test row pins, not an open question.
 
-The weaken-vs-refuse fork leg 2 flagged is NOT open, and route 3 mints no rule about it. Route 1
-already decided it, in the function itself: with neither value present the suffix is `""`, and its
-own documentation says two such callers are pooled by the operator's own decision to run without
-authentication. Route 3 inherits that, exactly as it inherits the 409. Deciding it a second time
-here would be the second spelling this design keeps refusing to write.
+The weaken-vs-refuse fork leg 2 flagged is NOT open, and route 3 mints no rule about it — but the
+reason is the opposite of the one this section carried until revision 11, and the correction is the
+point. THIS DOCUMENT ALREADY DECIDED IT, AND THE ANSWER IS REFUSE: the open-question row above
+records "is a client-keyed call protected with an unbound key, left unprotected, or refused? —
+DECIDED on the requirement, with R6 in hand: refused", and R5's acceptance row spells out that such
+a call "must be REFUSED — neither executed unprotected nor admitted under an unbound key".
+
+Revision 10 said instead that route 1 had settled the fork the other way, by returning `""` from
+`retry_identity_suffix` when both arguments are `None`, and that route 3 inherits that. THAT
+SENTENCE IS RETRACTED. It read route 1's CURRENT BEHAVIOUR as a decision. R5's row says in terms
+what that behaviour is: the caller "derives a key with an EMPTY identity suffix … and is admitted
+under it, which is the second of the two states the criterion forbids". A known-failing state is
+not a precedent, and inheriting it would have propagated R5 onto a second route while this document
+was open on the page that forbids it. The empty-string arm is `retry_identity_suffix`'s current
+implementation, not its requirement.
+
+What route 3 inherits is therefore the REQUIREMENT, not the arm: an unresolvable principal under a
+client key is refused, on both forwards, exactly as it inherits the 409. The refusal itself is
+unbuilt on route 1 as well (R5 is open), so route 3 does not get it for free — the guard's
+`identity` step returns no principal and the guard must refuse rather than key on `""`. That is one
+rule for both routes, which is why it is still not a second spelling.
 
 ### G3 repair (HIGH) — one guard between the security decision and both forwards, which is not where revision 9 put it
 
