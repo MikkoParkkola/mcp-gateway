@@ -549,3 +549,72 @@ One correction of record from that lane, kept here because it changed routing:
 two earlier commit messages state a build was unavailable to it. That was false
 and self-reported as false. The lane had a working toolchain throughout, so the
 arity repair it claimed on enumeration alone is now also settled empirically.
+
+### E-corrected: the 55 are newly dark, and six criteria rest on evidence CI has never run
+
+Two corrections to section E, both sharpening it rather than withdrawing it.
+
+**First, the darkness is 31 hours old, not the life of the branch.** At the last
+green CI run — `5cb4f4e9`, 2026-09-08 04:36 — **75 integration binaries ran and
+passed**, and `mik_7272_task_1_acs` was among them. The tree held exactly 75
+targets at that commit and holds 88 now, verified by listing `tests/` at both
+revisions. So most of the 55 currently-unrun binaries are not unknown: they hold
+green evidence that is roughly 31 hours stale, from the last green run to the
+first red one on 2026-09-09 11:20. That is a materially smaller hole than
+"55 unmeasured" implies, and section E should be read with this correction
+attached.
+
+**Second, and this is the part that touches the count.** Thirteen test binaries
+were added after that last green run, so **none of them has ever executed in a
+green CI run on this branch.** Twelve of the thirteen also sort after the
+current abort point, so they did not execute in the red run either — only
+`continuation_expiry_metric_test` sorts ahead of `mik_7212_mrtr_component_acs`.
+The thirteen:
+
+```
+continuation_expiry_metric_test          mik_7246_confirm2_acs
+mik_7213_7214_negotiated_revision_wiring mik_7246_confirm_1a_unconfirmable_producers
+mik_7215_control3b_acs                   mik_7272_sub4_three_routes
+mik_7215_control4_reap_count_acs         nfr_perf3_soak
+mik_7215_control4_sweep_log              nfr_sec1_envelope_shape
+mik_7215_control4_track_acs              nfr_sec3_key_rotation
+mik_7215_control4_wiring_acs
+```
+
+Seven of the thirteen are cited as evidence in the criteria ledger, and the
+cells quote pass counts — `6 passed, 0 failed` for `nfr_sec3_key_rotation`,
+`1 passed, 0 failed, 5.05s` for `nfr_perf3_soak`. Those numbers are real, and
+they can only have come from a local run by the lane that wrote the row, because
+CI has never executed those binaries. The affected rows:
+
+| criterion | status in ledger | cited binary |
+| --- | --- | --- |
+| `MIK-7214.HEADER.9a` | MET, not blocking | `mik_7213_7214_negotiated_revision_wiring` |
+| `MIK-7215.CONTROL.3b` | MET, not blocking | `mik_7215_control3b_acs` |
+| `MIK-7215.CONTROL.4` | MET, not blocking | `mik_7215_control4_track_acs` |
+| `MIK-7246.CONFIRM.1a` | PASS, not blocking | `mik_7246_confirm_1a_unconfirmable_producers` |
+| `NFR.OBS.4` | closed 2026-09-08 | `continuation_expiry_metric_test` |
+| `NFR.PERF.3` | blocking moved to no | `nfr_perf3_soak` |
+| `NFR.SEC.3` | all three clauses hold | `nfr_sec3_key_rotation` |
+
+At least two of these rows record a blocking flag *moving* on that evidence:
+`CONFIRM.1a` was regraded `PARTIAL -> PASS` on 2026-09-09 on the strength of its
+new binary, and `NFR.PERF.3` states in the cell that blocking goes to no once the
+soak landed.
+
+**What this does and does not mean.** It does not make any row wrong. A local
+run is real evidence and these rows are unusually well argued — several name
+their own RED-then-GREEN capture. What it means is narrower and still material:
+the headline `180 met or non-blocking, 3 blocking` is not a number the gate has
+ever reproduced. Part of it rests on runs that exist only in the lanes that
+performed them, and the gate that would independently confirm them has not
+executed those binaries once. For a release decision the distinction is between
+"we tested it" and "the pipeline shows it tested", and the ledger currently reads
+as the second while being, for these seven, the first.
+
+The remedy is the same single flag as everything else in section E. With
+`--no-fail-fast` on the Tests job, one run reproduces or refutes all seven at
+once, and the same run tells us whether any of the other 42 stale-green binaries
+regressed during the 31 dark hours. Until then the honest statement of release
+readiness is that three criteria block by the ledger's count, and seven more are
+graded on evidence the pipeline has never seen.
