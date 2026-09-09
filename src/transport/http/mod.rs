@@ -861,6 +861,21 @@ impl HttpTransport {
             }
         }
 
+        // MIK-7214.HEADER.9a/9b: the GET stream is built here and never reaches
+        // `finalise_modern_headers`, so without this it carries whatever the
+        // legacy handshake negotiated even after the peer has been observed to
+        // be modern. Last, so it outranks an operator static exactly as
+        // `finalise_modern_headers` outranks one on the POST paths. A `None`
+        // era (not yet probed, or legacy) leaves the handshake version alone.
+        if matches!(mode, HeaderMode::Sse)
+            && self.outbound_era() == Some(crate::protocol::era::Era::Modern)
+        {
+            headers.insert(
+                "MCP-Protocol-Version",
+                header::HeaderValue::from_static(MODERN_VERSIONS[0]),
+            );
+        }
+
         // Ambient trace ID (send_request only; not SSE or notify).
         if matches!(mode, HeaderMode::Request { .. })
             && let Some(trace_id) = trace::current()

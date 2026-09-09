@@ -287,7 +287,7 @@ async fn ac_control_3b_client_params_meta_trace_id_is_the_correlation_key() {
 }
 
 /// Control, not a criterion: the same wire path with a `params._meta` that
-/// carries no `traceparent` must NOT report an OTel key.
+/// carries no `traceparent` must NOT report an `OTel` key.
 ///
 /// Without it, an implementation that stamped `otel_trace_id` unconditionally —
 /// or one that read a trace id from anywhere but the client's `_meta` — would
