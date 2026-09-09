@@ -1,26 +1,45 @@
 # 4.0.0 release readiness: what is left, and the order to do it
 
-Assessed 2026-09-09 against branch `fix/mrtr2-continuation-handle`, remote tip
-`5dfbed58`, PR #473.
+Assessed 2026-09-09 against PR #473, branch `fix/mrtr2-continuation-handle`.
+The remote tip has moved twice during this assessment and is now `cbd224f0`;
+sections written earlier cite `5dfbed58` and are left as written, because the
+line numbers in them were read against that tip.
+
+**Read this first: two trees.** This document was written from a worktree that is
+now 47 commits behind `origin/fix/mrtr2-continuation-handle` and 31 ahead of it.
+Local and remote have diverged far enough that "the branch" is not a well-formed
+subject here, and several findings below turned on which one was being measured.
+Every claim states its tree. Integration is deliberately held: `git merge-tree`
+reports roughly ten conflicting regions, and two source files
+(`src/gateway/router/backend_handlers.rs`, `src/gateway/server/mod.rs`) hold
+another session's uncommitted edits, so merging now would destroy work no commit
+is holding.
 
 ## Where the release stands
 
 `scripts/release/count-release-criteria.py --check` is the authority on totals.
-Run against the ledger as it exists at the remote tip `5dfbed58` -- not the local
-worktree, which is 39 commits behind and carries a peer's uncommitted edits to
-that file -- it reports: **146 criteria, 183 rows, 180 met or non-blocking, 3
-blocking**, and `--blocking` names the same three rows covered below. The header
-line in `docs/requirements/RELEASE-4.0.0-criteria-status.md` matches, so the
-ledger's arithmetic is not drifting.
+Against the ledger at the remote tip it reports **146 criteria, 183 rows, 180 met
+or non-blocking, 3 blocking**, and `--blocking` names the same three rows covered
+below. The header line in `docs/requirements/RELEASE-4.0.0-criteria-status.md`
+matches, so the ledger's arithmetic is not drifting. That count has not moved
+today; what moved is how much of it is measured.
 
-This document is not itself on the branch. It sits on two local-only commits
-(`62570a22`, `0122ee40`) in a worktree nobody may fast-forward from, so it needs
-the same delivery path as item 0 below: rebuilt on `5dfbed58` and pushed as an
-explicit ref.
+Item 0 -- the branch not building green -- is **closed**. The lib target is
+`4157 passed; 0 failed; 3 ignored` at the remote tip, so `cargo test` reaches the
+integration binaries for the first time on this branch, and 25 of 26 CI checks
+pass. The Tests job is still red, on sixteen component acceptance criteria with a
+single root cause; see section D and its two continuations.
 
-Three criteria block the release. One thing outside the ledger also blocks it —
-the branch does not build green — and that is the first item below because none
-of the other work can be verified while the suite is red.
+Three criteria block the release by the ledger's own count. Four further gaps the
+ledger does not carry are recorded in the addendum: `CONFIRM.1a` unmeasured (A), a
+wire-contract inversion in `gateway_invoke` (B), the clippy gates' uncovered union
+(C), and the legacy-bridge refusal behind the sixteen (D). None of the four
+changes the blocking count; all four are things a reader of the count alone would
+not see.
+
+This document is not itself on the branch. It sits on local-only commits in a
+worktree nobody may fast-forward from, so it needs the same delivery path as the
+code: rebuilt on the remote tip and pushed as an explicit ref.
 
 ## 0. The branch is red, and the cause is a lost implementation
 
