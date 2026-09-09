@@ -1635,3 +1635,96 @@ no `Unanswered`, and no inner variant carries `key` (it sits on the outer
 `TimedOut` and never names it for that arm. This document implements
 `DeliveryError::TimedOut`; the correction to the rulings file belongs to its
 owner and has been reported.
+
+## Round 9 — 2026-09-09, re-verified at source
+
+Nothing in this section changes the design. It re-anchors it against the tree
+it will be implemented in, closes one open decision, and records which of the
+briefing's three prerequisites survived contact with the source.
+
+### Anchors, refreshed
+
+Every line this document cites was re-read today
+(`rg -n '<symbol>' src/gateway/meta_mcp/invoke.rs src/gateway/input_bridge.rs`).
+The MECHANISM is unchanged everywhere; only the line numbers moved.
+
+| what | cited | today |
+|---|---|---|
+| MRTR.9 undeclared gate (the call site's upper edge) | `invoke.rs:1517` | `invoke.rs:1588` |
+| continuation mint (the call site's lower edge) | `invoke.rs:1543` | `invoke.rs:1613` |
+| pre-invoke budget gate `enforcer.check` | `invoke.rs:1413` | `invoke.rs:1396` |
+| `accounted_dispatch` helper | `invoke.rs:2464` | `invoke.rs:2500` |
+| its sole caller | `invoke.rs:1344` | `invoke.rs:1449` |
+| `dispatch_to_backend` | `invoke.rs:1289` | `invoke.rs:2597` |
+| `enforcer.record_spend` | — | `invoke.rs:2584` |
+| `BackendInvoker::invoke` | `input_bridge.rs:334` | unchanged |
+| `InputBridge` / `run` / `retry_params` | — | `input_bridge.rs:348` / `:377` / `:398` |
+
+### The two blockers are still blockers
+
+- **no per-session capability store.** `rg -n declared_capabilities src/` has one
+  producer on the request path: `handlers.rs:837` reads
+  `shape.declared_capabilities()` and `handlers.rs:1415` puts it straight into
+  `input_capabilities` for that one request. `session_lifecycle.rs` holds no
+  capability field. Option C at line 256 stands unchanged.
+- **`BackendInvoker::invoke` still returns a bare `Value`**
+  (`input_bridge.rs:334`). The round-3 design event decided to widen it and the
+  code has never been touched. This is the single thing blocking the R8
+  per-round gate from reporting `-32003` with a reason, so it is the first edit
+  the implementation should make, not the last.
+
+### Briefing item 3 was stale; this design was not
+
+The task briefing listed "extract `accounted_dispatch`" as a prerequisite this
+design must specify. It is BUILT — `invoke.rs:2500`, called at `:1449`, with
+the gate deliberately left outside it and the doc-comment saying why. D-D at
+line 1222 already recorded exactly that, including the correction that the
+`invoke` half of the same commit never shipped. Recorded here so a later reader
+does not spend a round re-discovering that the briefing, not the design, was
+behind the tree.
+
+### D-B — CLOSED, and by elimination
+
+D-B (line 1191) said `Declared` has no `Vec<String>` projection and no
+`from_initialize`, and left the choice to the author. Read at source, the
+premise is wrong in a way that decides it: `run` ALREADY takes
+`declared: Declared` as the authority (`input_bridge.rs:377-381`), and the
+name list is only the `slice` NARROWING. Both sources of that narrowing on the
+production path are themselves `Declared` — `meta.rs:219` parses the request's
+capabilities into one, `handlers.rs:837` reads the shape's. **A name slice has
+no producer outside the tests.** Assembling one at the call site to feed
+`prompt()`'s `slice.is_some_and(|names| !names.iter().any(...))`
+(`input_bridge.rs:452`) is precisely the two-owners-of-one-fact shape the
+repair protocol says to eliminate.
+
+**Decision: change the narrowing parameter to `Option<Declared>` and delete the
+string slice.** `Declared` gains one field-wise AND beside `has`, in its own
+module, so one type owns the fact. `Some(Declared::NONE)` preserves the
+`Some(&[])`-is-not-`None` distinction the doc comment already spells out, and
+the refusal shape is untouched — `Refusal::Capability(capability)` still names
+the capability, now via `narrowing.has(capability)`. It also removes a latent
+asymmetry: a string list cannot express an elicitation MODE and `Declared` can,
+so the slice path could never have refused a mode the authority refuses.
+After the fix the finding cannot be restated, which is the test §P0's repair
+protocol sets. Cost: the `BridgeBounds`/`run` call sites in
+`tests/mik_7212_mrtr7_bridge_acs.rs` pass slices and move with it — all test
+sites, no production caller exists yet, which is the whole point of this change.
+
+### D-E — the one item still needing the operator
+
+`cost_warnings` first-vs-last round (line 1240) has been open since round 5 and
+is not the author's to settle: it is a question about what the CALLER should
+see, and both answers are defensible. Fail-fast, askable form: **asked of the
+release owner via team-lead — does a bridged call report the cost warnings of
+the round that opened the exchange, or of the round that completed it?** Until
+answered, nothing depending on it is implemented; the retry loop emits per
+round as it does today and no projection is chosen.
+
+### Fail-fast for what remains open
+
+| item | form | the check, or the question and whom |
+|---|---|---|
+| `invoke` widening | checkable | `rg -n 'async fn invoke' src/gateway/input_bridge.rs` returns `Result<Value, BridgeError>` — until it does, the per-round gate cannot report `-32003` |
+| per-session store | checkable | a capability field on the session record, reachable from `CallerContext`; today `rg -n declared_capabilities src/` shows only the per-request producer |
+| D-E `cost_warnings` | askable | release owner, via team-lead (above) |
+| D-C channel purpose | askable | resolved R8 — dedicated channel, 22 call sites paid |
