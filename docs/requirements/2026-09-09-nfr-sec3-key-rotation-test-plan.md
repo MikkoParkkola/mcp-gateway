@@ -47,10 +47,40 @@ cannot notice that value changing — the assertion would follow the edit. The
 cost is that a deliberate change to either constant fails these tests, which is
 the intended alarm and not a maintenance burden.
 
-## Retrofitting
+## Why these tests carry the free failure, and the one that does not
 
-These tests are written against code that already exists, so they cannot use
-the free failure of a test written first. Each was checked with the falsifier
-probe: the defect reintroduced by hand, the suite run, the assertion read
-(never the exit code), the file restored from a saved copy and the suite
-re-run. The probe is a recovery mechanism for a process violation, not a step.
+These were NOT retrofitted, and they do not rest on an inherited falsifier
+probe. They assert behaviour that did not exist before `424a2df0`, so they fail
+against the pre-change source by construction — the free failure of a test
+written first, which is stronger evidence than a probe reintroducing a defect by
+hand. The claim is checkable rather than asserted: `git show 424a2df0~1:src/protocol/continuation.rs`
+is the pre-change surface, and it decides each case below.
+
+Only `retained_kid_count` is new. `minting_kid` (`:469`), `with_mint_budget`
+(`:561`), `mint` (`:590`) and `open` (`:681`) all predate the change, so the
+six cases do not all fail for the same reason and it is worth being exact.
+
+| case | fails pre-change because |
+|---|---|
+| `rotation_happens_after_the_interval` | compiles pre-change and fails ON ITS ASSERTION: without rotation the second mint reuses kid 1, so `assert_ne!` is false |
+| `successive_rotations_take_successive_ids` | compiles pre-change and fails ON ITS ASSERTION: it observes `vec![1, 1, 1, 1]` where it demands `vec![1, 2, 3, 4]` |
+| `first_mint_does_not_rotate` | references `retained_kid_count`, absent pre-change |
+| `a_retired_key_still_opens_its_envelopes` | same |
+| `a_key_older_than_the_lifetime_is_pruned` | same |
+
+The first two are the load-bearing evidence: they fail on the assertion itself
+against source that compiles, which is exactly what a probe is a substitute for.
+
+### The exception, stated rather than hidden
+
+`budget_exhaustion_does_not_rotate` does NOT carry the free failure, and calling
+it evidence of new behaviour would be false. It fails to compile pre-change only
+because of its `retained_kid_count` line; strip that line and its remaining
+assertions PASS against the pre-change source — a build that never rotates
+trivially satisfies "a refused mint rotates nothing."
+
+That is not a defect in the test, but it changes what it is FOR. It is a
+REGRESSION GUARD, not a proof: it pins that the rotation added here did not put
+a key burn on the refusal path, and it would catch a future change that did.
+Read as proof of new behaviour it proves nothing. Recorded here so no reviewer
+has to rediscover it, and so the row's evidence is not overstated by one case.

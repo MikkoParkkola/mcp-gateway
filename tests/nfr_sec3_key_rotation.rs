@@ -138,6 +138,11 @@ fn a_key_older_than_the_lifetime_is_pruned() {
 
     ring.mint(&payload(1_000 + ROTATION_SECS + 2 + LIFETIME_SECS))
         .expect("mint");
+    // Two before and two after is NOT a vacuous assertion, though it skims as
+    // one. The third mint rotates, which would make three retained keys; the
+    // count holds at two only because the same pass drops the key retired
+    // beyond the lifetime. A build that rotated without pruning reads three
+    // here, which is the regression this line exists to catch.
     assert_eq!(
         ring.retained_kid_count(),
         2,
