@@ -405,12 +405,18 @@ The declaration belongs in `tests.rs`, not `mod.rs`. Declaring it as a sibling i
 (`src/gateway/meta_mcp/tests.rs:4944`), which are private to the `tests` module and
 unreachable from a sibling. The file was written as a child of `tests` — its own
 `pub(super) fn assert_refusal` is scoped for that parent — so the fix is
-`#[path = "order2_fsm_tests.rs"] mod order2_fsm_tests;` at the end of `tests.rs`.
-The path is not `../order2_fsm_tests.rs`: `tests.rs` is itself loaded through a
-`#[path]` attribute, so a nested `#[path]` resolves against `src/gateway/meta_mcp/`
-rather than a `tests/` subdirectory.
+`#[path = "order2_fsm_tests.rs"] mod order2_fsm;` in `tests.rs`
+(`src/gateway/meta_mcp/tests.rs:17`). The path is not `../order2_fsm_tests.rs`:
+`tests.rs` is itself loaded through a `#[path]` attribute, so a nested `#[path]`
+resolves against `src/gateway/meta_mcp/` rather than a `tests/` subdirectory.
 
-`cargo test --lib order2_fsm_tests`, exit status 0: 3 passed, 0 failed —
+A second declaration of the same file under a different module name compiles and
+is not a name collision — it includes the file twice and runs every case twice
+under two module paths. One include per file.
+
+`cargo test --lib order2_fsm`, exit status 0: 5 passed, 0 failed, each case once
+— the router and server cases the row also cites, plus the three that had never
+run:
 `missing_and_empty_keys_are_explicitly_refused`,
 `old_empty_key_state_cannot_influence_any_discovery_reader` and
 `nonempty_legacy_and_stdio_keys_retain_isolated_state_changes`. ORDER.2a's evidence

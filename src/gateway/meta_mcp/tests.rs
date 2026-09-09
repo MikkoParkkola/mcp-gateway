@@ -5910,8 +5910,3 @@ fn block_1_promotion_ignores_tools_that_cannot_produce_a_round() {
         "only the invocation paths mint continuations, so only they promote",
     );
 }
-
-// Declared here, not in `mod.rs`: these cases drive the shared fixtures and
-// helpers defined above, which are private to this module.
-#[path = "order2_fsm_tests.rs"]
-mod order2_fsm_tests;
