@@ -1135,3 +1135,85 @@ design is repaired, not ratified.
 - It changes no public signature and no invariant. The G3 restructure moves statements inside one
   handler; `apply_backend_tool_call_security` keeps its signature and its position above both
   forwards.
+
+---
+
+## Revision 11 — leg 1's confirmation pass, and the repair it forced on leg 2's repair
+
+**The ledger row, which is the verdict; the body below is evidence.** `gpt-review`,
+`2026-09-09T09:42:04Z`, `process_status = ok`, `material_bytes = 41911` (the round-10 payload,
+41910 bytes on disk plus the wrapper's newline), output
+`~/.claude/data/reviews/runs/gpt-20260909T093838Z-18506.md`, verdict `SHIP-WITH-FIXES`. Leg 2's
+confirmation pass DID NOT RUN against this material: no `grok-review` ledger row carries
+`material_bytes = 41911`, the two rows around it carry 11009 (revision 8's payload, already
+recorded) and 108, and the local capture holds 247 bytes of preamble with no finding and no
+verdict. Leg 2 is therefore `MISSING`, not silent agreement, and is relaunched against this
+revision. Repair-protocol step 6 gives closure authority to the FINDER, so leg 2's G1 and G3 remain
+formally open until leg 2 answers, whatever leg 1 says about them.
+
+### The payload asked two questions, and the answers sort into three bins
+
+Bundling the closure re-check with the first-ever plan review means each vendor now sees the
+other's repairs. That is useful and it is also the round generator, so the sort is stated before the
+dispositions rather than after:
+
+| bin | what it is | authority |
+|---|---|---|
+| closure verdicts on leg 1's OWN findings | F1, F2, F3 from revision 9 | authoritative — the finder closes |
+| plan findings on the test table | the plan had never been reviewed as a plan | new, in scope, repaired above |
+| findings against leg 2's repairs | G1 and G3 | NOT closure verdicts — disposed on their own merits, source first |
+
+**Bin 1 — F1 survives the second move.** Leg 1 raised no finding against G3's site and its own
+improvement note says the authorization order "covers both forwards". F1, F2 and F3 stay closed.
+
+**Bin 2 — six rows, all repaired above.** The plan carried a mandatory criterion with no case at
+all (MRTR.10a), a claim that it carried R6's falsifier when it did not, and four cases that pass
+while the thing they name is broken: a per-principal bound satisfied by a small global one, a P6
+release satisfied by re-executing the side effect, execution counters satisfied by refusing every
+retry, and no case anywhere that would go red if a later edit moved the guard back above the
+authorization decision. That last one is the one worth naming twice — two review legs and two
+revisions moved the guard for F1/G3, and nothing in the plan would have noticed it moving back.
+
+**Bin 3 — leg 1's CRITICAL against leg 2's G1 repair, and it holds at source.** Verified before
+any write, against this document rather than against either reviewer: the open-question row records
+the fork as "DECIDED on the requirement, with R6 in hand: refused", and R5's acceptance row says
+such a call "must be REFUSED — neither executed unprotected nor admitted under an unbound key".
+Revision 10's Axis-4 section said the opposite and said route 3 inherits it. That sentence is
+retracted in place, above. The defect was a category error rather than a disagreement — route 1's
+`""` arm is its CURRENT BEHAVIOUR, and R5 is the open criterion that says the behaviour is wrong;
+reading it as a decision would have propagated R5 onto a second route while this document was open
+on the page forbidding it.
+
+### One improvement adopted as a design point, because it is structural
+
+Leg 1 observes that the guard now lives INSIDE `if method == "tools/call"` while path 2's forward
+happens BELOW that block, so a reservation created inside the block can drop before the forward
+that must complete it. The site is still right — it is the only point between the security decision
+and both forwards — but the RESERVATION MUST OUTLIVE THE BLOCK. Concretely: the `GuardOutcome`'s
+`IdempotencyReservation` binds to a variable declared before the `if`, and both forwards complete
+that same variable. This is the lifetime half of F3's contract, and it is the first thing an
+implementer gets wrong when the guard and one of its forwards sit at different depths.
+
+### One checkable, scheduled rather than assumed
+
+Leg 1 says the meta-route rows still attribute their red to an absent `_meta` carrier while
+`handlers.rs:1222` parses `RetryFields` and `:1416` passes them on. Both line facts are confirmed
+at source. What is NOT confirmed is that those fields reach `idempotency_key_for` — the cell's
+claim is about the DERIVATION's carrier, not the handler's parse, and the two are different
+questions one line number cannot settle.
+
+```
+checkable: does the meta route's parsed retry key reach `idempotency_key_for` today, or stop at
+           the caller-context boundary? — trace `retry` from handlers.rs:1222 through
+           MetaMcpCallerContext to the derivation, and drive the meta-route row — <unanswered>
+```
+
+Answer it before that row is driven; a cell that names the wrong cause sends the next reader to the
+wrong file, which is exactly what this row's own history already did once.
+
+### What revision 11 does not do
+
+It implements nothing, settles neither the malformed-retry scope question nor route-3 ownership,
+and changes no public signature. It also does not ratify: leg 2's confirmation pass is outstanding,
+and a design with one leg reported is a design with one leg reported.
+
