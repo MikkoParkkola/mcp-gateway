@@ -937,3 +937,63 @@ fn every_name_shape_round_trips_and_only_the_safe_one_stays_plain() {
         );
     }
 }
+
+/// MIK-7214.HEADER.9a — the outbound path encodes the name it puts on the wire.
+///
+/// The round-trip case above proves the ENCODER works; this proves the
+/// TRANSPORT uses it. Nothing else in this file does: every other `Mcp-Name`
+/// case drives an ASCII sentinel, which an outbound path that skipped the
+/// encoder entirely would carry just as faithfully.
+///
+/// Both rows are needed and neither substitutes. The non-ASCII row fails
+/// against a transport that sends the raw name — `HeaderValue::from_str`
+/// refuses it, so the call never reaches the peer. The plain row fails against
+/// a transport that wraps unconditionally, which is the repair a reader reaches
+/// for first and which would hide every real tool name from an operator reading
+/// the wire.
+#[tokio::test]
+async fn a_modern_named_call_encodes_a_name_a_header_cannot_carry_raw() {
+    for (raw, plain_on_the_wire) in [("työkalu", false), ("tools-alpha", true)] {
+        for (path, label) in BOTH_PATHS {
+            let params = Some(json!({ "name": raw }));
+            let run = Run::of(Peer::Modern, *path, "tools/call", params, &[], &[]).await;
+            // Read as BYTES, not through the string helper: a transport that
+            // sent the name raw would trip that helper's own `to_str` first,
+            // and this case would fail on someone else's message rather than
+            // on the claim it is making.
+            let sent = run
+                .under_test("tools/call")
+                .headers
+                .get("Mcp-Name")
+                .expect("a named modern call must carry `Mcp-Name`")
+                .as_bytes()
+                .to_vec();
+            // GIVEN a name of this shape, THEN what reached the peer is legal
+            // as a header value,
+            assert!(
+                sent.iter().all(|b| (0x21..=0x7e).contains(b)),
+                "on the {label} path {raw:?} reached the peer as {:?}, which is \
+                 not a legal header value",
+                String::from_utf8_lossy(&sent)
+            );
+            let sent = String::from_utf8(sent).expect("visible ASCII is UTF-8");
+            // names the tool the caller addressed,
+            assert_eq!(
+                decode_header_value(&sent).as_deref(),
+                Some(raw),
+                "on the {label} path {raw:?} did not survive as `Mcp-Name`"
+            );
+            // and was wrapped only when it had to be.
+            assert_eq!(
+                sent == raw,
+                plain_on_the_wire,
+                "on the {label} path {raw:?} was {} and should not have been",
+                if plain_on_the_wire {
+                    "wrapped"
+                } else {
+                    "sent raw"
+                }
+            );
+        }
+    }
+}

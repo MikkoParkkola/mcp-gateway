@@ -90,6 +90,31 @@ impl Parent {
 /// relaying a caller's bytes onward: no control characters, no CR or LF, and
 /// nothing outside ASCII, so a field can never carry a header break or a
 /// smuggled line into a downstream request.
+/// Longest `tracestate` this gateway relays, in characters.
+///
+/// W3C Trace Context §3.3.1.5 (*tracestate Limits*): "Vendors SHOULD propagate
+/// at least 512 characters of a combined header." The spec states a floor on
+/// what a vendor must carry, not a ceiling on what may arrive, so a bound has
+/// to be chosen: this takes the floor as the bound, because relaying more than
+/// the specification obliges anyone downstream to accept buys nothing and
+/// widens the window of attacker-influenced bytes crossing the hop.
+const MAX_TRACESTATE_LEN: usize = 512;
+
+/// Most `tracestate` list-members this gateway relays.
+///
+/// W3C Trace Context §3.3.1.3 (*list-members*): "There can be a maximum of 32
+/// list-members in a list." Unlike the length this is a grammar ceiling, so a
+/// value above it is malformed rather than merely large.
+const MAX_TRACESTATE_MEMBERS: usize = 32;
+
+/// Longest `baggage` this gateway relays, in bytes.
+///
+/// W3C Baggage §3.3.2 (*Limits*), condition 2: a platform must propagate the
+/// list whenever "the resulting baggage-string is of size 8192 bytes or less".
+/// That is the largest string the specification guarantees anyone will carry,
+/// so it is the largest worth carrying.
+const MAX_BAGGAGE_LEN: usize = 8192;
+
 fn is_printable_ascii(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|b| (0x20..=0x7e).contains(&b))
 }
@@ -113,10 +138,13 @@ impl TraceContext {
             .as_ref()
             .and_then(|_| field("tracestate"))
             .filter(|value| is_printable_ascii(value))
+            .filter(|value| value.len() <= MAX_TRACESTATE_LEN)
+            .filter(|value| value.split(',').count() <= MAX_TRACESTATE_MEMBERS)
             .map(str::to_string);
         // Independent of the parent, by its own specification.
         let baggage = field("baggage")
             .filter(|value| is_printable_ascii(value))
+            .filter(|value| value.len() <= MAX_BAGGAGE_LEN)
             .map(str::to_string);
 
         if parent.is_none() && baggage.is_none() {

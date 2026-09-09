@@ -358,23 +358,30 @@ impl Firewall {
         caller: &str,
         control_identity: &str,
     ) -> FirewallVerdict {
-        if !self.config.enabled || !self.config.scan_requests {
+        if !self.config.enabled {
             return FirewallVerdict::allow();
         }
 
         let mut findings = Vec::new();
 
-        // 1. Input pattern scan (shell injection, path traversal, SQL).
-        if let Value::Object(map) = args {
-            findings.extend(self.input_scanner.scan_args(map));
-        }
+        // `scan_requests` names one control — argument content scanning — and
+        // switching it off must cost exactly that. The anomaly, tenant and
+        // budget guards below carry their own enable flags, and an operator who
+        // turned those on did not ask for them to be silently switched off by a
+        // neighbouring one.
+        if self.config.scan_requests {
+            // 1. Input pattern scan (shell injection, path traversal, SQL).
+            if let Value::Object(map) = args {
+                findings.extend(self.input_scanner.scan_args(map));
+            }
 
-        // 1b. Memory-poisoning scan (OWASP ASI06) — applied only when the tool
-        //     name is a recognised memory-write operation.
-        if self.memory_scanner.is_memory_write_tool(tool)
-            && let Value::Object(map) = args
-        {
-            findings.extend(self.memory_scanner.scan_args(map));
+            // 1b. Memory-poisoning scan (OWASP ASI06) — applied only when the
+            //     tool name is a recognised memory-write operation.
+            if self.memory_scanner.is_memory_write_tool(tool)
+                && let Value::Object(map) = args
+            {
+                findings.extend(self.memory_scanner.scan_args(map));
+            }
         }
 
         // 2. Anomaly detection — score how unusual this tool call sequence is.
@@ -861,6 +868,53 @@ mod tests {
         let args = json!({ "cmd": "; rm -rf /" });
         let verdict = fw.check_request("s1", "srv", "tool", &args, "caller", "s1");
         assert!(verdict.allowed);
+    }
+
+    #[test]
+    fn scan_requests_disabled_still_enforces_the_budget() {
+        let cfg = FirewallConfig {
+            scan_requests: false,
+            budget: budget_guard::BudgetGuardConfig {
+                enabled: true,
+                max_calls_per_window: 1,
+                window_secs: 60,
+            },
+            ..FirewallConfig::default()
+        };
+        let fw = Firewall::from_config(cfg, None);
+        let args = json!({ "q": "ok" });
+        assert!(
+            fw.check_request("s1", "srv", "tool", &args, "caller", "p1")
+                .allowed
+        );
+        let second = fw.check_request("s1", "srv", "tool", &args, "caller", "p1");
+        assert!(
+            !second.allowed,
+            "budget must still refuse once the window limit is spent, \
+             even with argument scanning switched off"
+        );
+    }
+
+    #[test]
+    fn scan_requests_disabled_still_enforces_tenant_isolation() {
+        let cfg = FirewallConfig {
+            scan_requests: false,
+            tenant_guard: tenant_guard::TenantGuardConfig {
+                enabled: true,
+                max_tenants_per_window: 1,
+                window_secs: 60,
+                arg_keys: vec!["customer_id".to_string()],
+            },
+            ..FirewallConfig::default()
+        };
+        let fw = Firewall::from_config(cfg, None);
+        let args = json!({ "customer_id": "acme" });
+        let verdict = fw.check_request("s1", "srv", "tool", &args, "caller", "");
+        assert!(
+            !verdict.allowed,
+            "an unattributable tenant-scoped call must still be refused, \
+             even with argument scanning switched off"
+        );
     }
 
     #[test]

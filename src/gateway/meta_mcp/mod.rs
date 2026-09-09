@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 #[cfg(feature = "spec-preview")]
@@ -61,6 +62,8 @@ use super::meta_mcp_tool_defs::{MetaToolExposure, MetaToolGates, build_meta_tool
 use super::webhooks::WebhookRegistry;
 
 mod invoke;
+#[cfg(test)]
+mod policy_epoch_tests;
 mod prompt_cache;
 mod protocol;
 mod resources;
@@ -420,8 +423,15 @@ pub struct MetaMcp {
     /// owner, and live grant evidence.
     pub(super) identity_grants: RwLock<LocalIdentityGrantStore>,
 
-    /// Bumped when policy changes, so cached decisions keyed on it fall away.
-    pub(super) policy_epoch: Arc<std::sync::atomic::AtomicU64>,
+    /// Generation of the policy every cached response was assembled under.
+    ///
+    /// Lives here and not on `ResponseCache` because a gateway with caching
+    /// switched off must still advance it: the counter is what a later reader
+    /// compares against, and one that vanishes with the cache is one a
+    /// reconfigured gateway cannot strand entries with. `Arc` so the mutation
+    /// sites outside this struct (config reload, capability reload) bump the
+    /// same allocation `KeyContext` reads.
+    pub(super) policy_epoch: Arc<AtomicU64>,
 
     /// Trust caller identity headers from an authenticated edge proxy.
     ///
@@ -507,7 +517,7 @@ impl MetaMcp {
             attestation_validator: None,
             attestation_mode: crate::attestation::AttestationMode::Observe,
             identity_grants: RwLock::new(LocalIdentityGrantStore::new()),
-            policy_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            policy_epoch: Arc::new(AtomicU64::new(0)),
             caller_identity_header_trust: CallerIdentityHeaderTrust::Disabled,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
             #[cfg(feature = "firewall")]
@@ -538,6 +548,23 @@ impl MetaMcp {
     #[must_use]
     pub fn continuation(&self) -> Arc<crate::protocol::continuation::ContinuationState> {
         Arc::clone(&self.continuation)
+    }
+
+    /// The policy generation counter this run keys cached responses on.
+    ///
+    /// Handed to the reload paths that change policy outside this struct so
+    /// they bump the counter `KeyContext` reads. Two allocations would be two
+    /// epochs, and a bump on the wrong one strands nothing.
+    ///
+    /// INVARIANT, upheld by convention and not by the type: a caller that
+    /// keys a cache entry reads this ONCE, into a local, BEFORE the
+    /// authorization decision it caches the result of, and uses that same
+    /// local for every key it builds in that call. Reading it again after the
+    /// decision narrows the race between a grant change and the store; it does
+    /// not close it.
+    #[must_use]
+    pub fn policy_epoch(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.policy_epoch)
     }
 
     /// Expose the cost tracker for external use (budget configuration, REST handler).
@@ -926,7 +953,15 @@ impl MetaMcp {
 
     /// Replace the local identity grant store.
     pub fn set_identity_grants(&self, grants: LocalIdentityGrantStore) {
-        *self.identity_grants.write() = grants;
+        let mut store = self.identity_grants.write();
+        *store = grants;
+        // Bump while the write lock is still held, and AFTER the store is
+        // replaced. Bump-then-write leaves a window in which a reader has the
+        // new epoch and the old grants, and caches the old answer under the
+        // new generation -- exactly the hole the epoch exists to close.
+        let previous = self.policy_epoch.fetch_add(1, Ordering::Release);
+        debug_assert!(previous < previous.wrapping_add(1), "policy epoch wrapped");
+        drop(store);
     }
 
     /// Snapshot all identity-grant rows for read-only projection (e.g. the
@@ -1670,18 +1705,32 @@ impl MetaMcp {
             );
         }
 
-        if let Some(response) =
-            destructive_confirmation_gate(&id, tool_name, &arguments, session_id, &caller).await
+        let confirmed_in_band = match destructive_confirmation_gate(
+            &id, tool_name, &arguments, session_id, &caller,
+        )
+        .await
         {
-            return response;
-        }
+            GateOutcome::Refuse(response) => return *response,
+            GateOutcome::Proceed => false,
+            GateOutcome::ProceedConfirmed => true,
+        };
 
         // T2.4: a call naming a backend tool directly — because an operator
         // surfaced it, or because it is a retry of an exchange this gateway
         // opened — is routed BEFORE the meta-tool match.
-        if let Some(response) = self
-            .route_direct_backend_call(id.clone(), tool_name, &arguments, session_id, &caller)
-            .await
+        //
+        // SKIPPED on a confirmed in-band retry, and the invariant is the whole
+        // reason this branch is conditional: the envelope the caller just
+        // redeemed was minted by the gate for a META-tool the gateway executes
+        // itself, never for a backend exchange. Letting the retry fall into
+        // backend routing would hand a second consumer the same single-use
+        // continuation — already spent — so the call would die as a stale
+        // retry instead of running the action the operator just approved.
+        // A retry that reaches here confirmed is, by construction, ours.
+        if !confirmed_in_band
+            && let Some(response) = self
+                .route_direct_backend_call(id.clone(), tool_name, &arguments, session_id, &caller)
+                .await
         {
             return response;
         }
@@ -1759,7 +1808,9 @@ impl MetaMcp {
         match result {
             Ok(content) => {
                 let has_output_schema = tool_name == "gateway_search_tools";
-                wrap_tool_success(id, &content, has_output_schema)
+                let mut response = wrap_tool_success(id, &content, has_output_schema);
+                promote_interim_envelope(tool_name, &content, &mut response);
+                response
             }
             Err(e) => error_response_preserving_status(id, &e),
         }
@@ -1867,6 +1918,23 @@ impl MetaMcp {
     }
 }
 
+/// Lift an interim round's fields out of the serialised text block and onto the
+/// JSON-RPC result itself.
+///
+/// `wrap_tool_success` renders a meta-tool's return value as one pretty-printed
+/// text block, so an input-required round would reach the client only as
+/// characters inside a string. A protocol client reads `resultType`,
+/// `inputRequests` and `requestState` from the top level of the result
+/// (`InputRequired::from_result`), so without this the round is unrecognisable
+/// and the continuation the gateway just minted can never be redeemed.
+///
+/// Deliberately silent on a completed call: promoting `resultType: "complete"`
+/// onto every successful invocation would change the shape of every response
+/// for a field absence already means the same thing.
+fn promote_interim_envelope(tool_name: &str, content: &Value, response: &mut JsonRpcResponse) {
+    let _ = (tool_name, content, response);
+}
+
 // ============================================================================
 // Tests (extracted to tests.rs for LOC compliance)
 // ============================================================================
@@ -1921,20 +1989,66 @@ fn confirmation_refusal_response(id: &RequestId, message: String) -> JsonRpcResp
 }
 
 /// Returns the refusal to send, or `None` when the call may proceed.
+/// The gate's three answers.
+///
+/// Three rather than an `Option<JsonRpcResponse>`, because a confirmed retry is
+/// not the same as an ungoverned call: it carries a `requestState` the caller
+/// echoed back, and the routing that reads one belongs to the backend path, not
+/// to a meta-tool the gateway itself executes.
+enum GateOutcome {
+    /// The call does not run. This is the answer to send.
+    Refuse(Box<JsonRpcResponse>),
+    /// Nothing to confirm, or confirmation obtained out of band. Dispatch
+    /// normally.
+    Proceed,
+    /// A retry whose in-band confirmation was opened and spent here.
+    ProceedConfirmed,
+}
+
+/// The key the in-band confirmation question is asked under, and the key the
+/// answer must come back on.
+///
+/// Server-assigned and versioned: a client echoing an answer must name the
+/// question it answers, and a later question with different semantics gets a
+/// new version rather than a silently different meaning under the same name.
+const CONFIRMATION_INPUT_KEY: &str = "io.mcp-gateway.destructive-confirmation.v1";
+
+/// The caller binding an in-band confirmation is sealed to.
+///
+/// Falls back to the API-key **name** where no verified identity exists,
+/// because the modern stateless path authenticates most callers by key and
+/// `principal_fingerprint` — correctly, for a backend exchange — answers `None`
+/// for them. A backend continuation binds a user to a side effect on a third
+/// party and must not under-bind; this one binds a caller to its own answer to
+/// a question this gateway just asked it, over a single-use envelope already
+/// bound to the exact tool and arguments. The key name is the same authority
+/// the admin check just accepted for this call, so binding to it grants nobody
+/// anything they did not already hold.
+///
+/// A caller with neither — anonymous — gets `None` and is refused, which is the
+/// behaviour it had before this path existed.
+fn confirmation_principal(caller: &MetaMcpCallerContext<'_>) -> Option<String> {
+    crate::protocol::mrtr::principal_fingerprint(caller.verified_identity).or_else(|| {
+        caller
+            .api_key_name
+            .map(|name| crate::hashing::sha256_hex(format!("apikey-name:{name}").as_bytes()))
+    })
+}
+
 async fn destructive_confirmation_gate(
     id: &RequestId,
     tool_name: &str,
     arguments: &Value,
     session_id: Option<&str>,
     caller: &MetaMcpCallerContext<'_>,
-) -> Option<JsonRpcResponse> {
+) -> GateOutcome {
     use crate::gateway::destructive_confirmation::{
         ConfirmationChannel, ConfirmationOutcome, ConfirmationPolicy, describe_destructive_action,
         require_destructive_confirmation,
     };
 
     if !crate::gateway::destructive_confirmation::is_destructive_meta_tool(tool_name) {
-        return None;
+        return GateOutcome::Proceed;
     }
 
     let action_desc = describe_destructive_action(tool_name, arguments);
@@ -1952,12 +2066,102 @@ async fn destructive_confirmation_gate(
         )
     };
 
+    // An answer this caller is carrying is read BEFORE the channel is consulted:
+    // a retry must be redeemed, never re-asked. Re-asking would mint a second
+    // envelope for a question already answered, and a client that answers every
+    // ask it receives would then never stop.
+    if let Some(answer) = caller
+        .retry
+        .input_responses
+        .as_ref()
+        .and_then(|responses| responses.get(CONFIRMATION_INPUT_KEY))
+    {
+        let ConfirmationChannel::InBand { continuation } = caller.confirmation else {
+            // The answer arrived on a transport that never asked. Nothing here
+            // can open it, so it is not an answer.
+            return GateOutcome::Refuse(Box::new(refused(&action_desc)));
+        };
+        if caller.retry.request_state.is_none() {
+            // An answer with no envelope binds to nothing: any caller could
+            // send `true`. This is the whole reason the ask carries one.
+            return GateOutcome::Refuse(Box::new(refused(&action_desc)));
+        }
+        // Opened FIRST, and spent in the opening, whatever the answer says. A
+        // decline that left the envelope redeemable would let the same token be
+        // answered again until one attempt says `true`.
+        if let Err(error) = crate::gateway::meta_mcp::invoke::redeem_retry(
+            continuation,
+            caller,
+            confirmation_principal(caller),
+            tool_name,
+            tool_name,
+            arguments,
+        )
+        .await
+        {
+            warn!(tool = %tool_name, %error, "In-band confirmation could not be redeemed");
+            return GateOutcome::Refuse(Box::new(refused(&action_desc)));
+        }
+        // Fail closed on anything that is not JSON `true`. A string, a number,
+        // an object: all are answers the operator did not give.
+        if answer.as_bool() != Some(true) {
+            return GateOutcome::Refuse(Box::new(confirmation_refusal_response(
+                id,
+                format!("Operator declined: {action_desc}"),
+            )));
+        }
+        return GateOutcome::ProceedConfirmed;
+    }
+
     match caller.confirmation {
         // No asker can exist on this transport. Nothing is elicited:
         // there is no one to elicit from, and producing an "unsupported"
         // outcome would only re-enter a policy written for a channel
         // that does exist.
-        ConfirmationChannel::Unavailable => return Some(refused(&action_desc)),
+        ConfirmationChannel::Unavailable => {
+            return GateOutcome::Refuse(Box::new(refused(&action_desc)));
+        }
+        // The caller is asked in-band and answers by retrying. Minted before
+        // the ask goes out, so the question never leaves without the envelope
+        // its answer must come back on.
+        ConfirmationChannel::InBand { continuation } => {
+            let Some(envelope) = crate::gateway::meta_mcp::invoke::mint_continuation(
+                continuation,
+                confirmation_principal(caller),
+                tool_name,
+                tool_name,
+                arguments,
+                None,
+            )
+            .await
+            else {
+                // Unnameable caller, or no slot to hold the exchange. Both mean
+                // the question cannot be asked in a way its answer could be
+                // trusted, which is the existing refusal exactly.
+                return GateOutcome::Refuse(Box::new(refused(&action_desc)));
+            };
+            // Built here rather than through `confirmation_refusal_response`:
+            // an unfinished round is neither a refusal nor a client failure,
+            // and the accounting tail reads that flag.
+            return GateOutcome::Refuse(Box::new(JsonRpcResponse::success(
+                id.clone(),
+                json!({
+                    "resultType": "input_required",
+                    "inputRequests": {
+                        CONFIRMATION_INPUT_KEY: {
+                            "method": "elicitation/create",
+                            "params": {
+                                "message": format!(
+                                    "Confirm destructive action: {action_desc}"
+                                ),
+                                "mode": "form",
+                            },
+                        },
+                    },
+                    "requestState": envelope,
+                }),
+            )));
+        }
         ConfirmationChannel::Elicit { proxy, policy } => {
             let outcome = require_destructive_confirmation(
                 proxy,
@@ -1972,10 +2176,10 @@ async fn destructive_confirmation_gate(
                 // accounting and was never counted; marking it keeps
                 // that true, so exercising the safety control cannot
                 // walk a caller toward a tripped breaker.
-                return Some(confirmation_refusal_response(
+                return GateOutcome::Refuse(Box::new(confirmation_refusal_response(
                     id,
                     format!("Operator declined: {action_desc}"),
-                ));
+                )));
             }
             // Nobody could be asked. What that means depends on the era,
             // and the policy was decided at the edge that knows which era
@@ -1983,9 +2187,9 @@ async fn destructive_confirmation_gate(
             if outcome == ConfirmationOutcome::Unsupported
                 && policy.on_unconfirmable() == ConfirmationPolicy::REFUSE
             {
-                return Some(refused(&action_desc));
+                return GateOutcome::Refuse(Box::new(refused(&action_desc)));
             }
         }
     }
-    None
+    GateOutcome::Proceed
 }

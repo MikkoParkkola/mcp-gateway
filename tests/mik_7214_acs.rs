@@ -14,6 +14,8 @@
 
 use mcp_gateway::protocol::headers::{HeaderCheck, decode_header_value, mcp_name_required};
 
+mod common;
+
 // ===========================================================================
 // MIK-7214.HEADER.4 — sentinel encoding.
 //
@@ -21,21 +23,7 @@ use mcp_gateway::protocol::headers::{HeaderCheck, decode_header_value, mcp_name_
 // read 2026-08-29. Original value on the left, header value on the right.
 // ===========================================================================
 
-/// The specification's own table. Transcribed, not generated.
-const SPEC_ENCODING_TABLE: &[(&str, &str)] = &[
-    // Plain ASCII passes through untouched.
-    ("us-west1", "us-west1"),
-    // Non-ASCII.
-    ("Hello, 世界", "=?base64?SGVsbG8sIOS4lueVjA==?="),
-    // Leading and trailing whitespace.
-    (" padded ", "=?base64?IHBhZGRlZCA=?="),
-    // Embedded newline.
-    ("line1\nline2", "=?base64?bGluZTEKbGluZTI=?="),
-    // A plain-ASCII value that happens to look like the sentinel. The
-    // specification requires clients to encode this one precisely so a server
-    // cannot mistake it for an encoded value.
-    ("=?base64?literal?=", "=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?="),
-];
+use common::SPEC_ENCODING_TABLE;
 
 #[test]
 fn ac_header_4_the_specifications_encoding_table_decodes() {

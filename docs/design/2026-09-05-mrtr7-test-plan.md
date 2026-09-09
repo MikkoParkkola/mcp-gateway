@@ -26,7 +26,8 @@ here, and they are the three stdio rows carried, `#[ignore]`d, by
 | 317 | `ac_mrtr_7b_content_violating_the_requested_schema_is_forwarded_unchanged` |
 | 318 | `ac_mrtr_7b_the_retry_bound_cuts_off_after_three_retries` |
 | 319 | `ac_mrtr_7b_the_request_budget_is_checked_before_a_batch_is_sent` |
-| 320 | `ac_mrtr_7b_an_unanswered_prompt_fails_the_call_naming_the_entry` — name PENDING: the tree still holds this row under its pre-ruling name `ac_mrtr_7b_an_unanswered_prompt_ends_its_round_not_the_call`, and renaming it is part of the inversion below, not a separate edit |
+| 320 | `ac_mrtr_7b_an_unanswered_prompt_inside_a_live_budget_ends_the_call` — inverted and renamed under `R8a` (`e015fcd1`). The name carries the discriminator the ruling drew: this row owns the `left > per_prompt` side, where the budget is still live and the failure is the prompt's |
+| 320a | `ac_mrtr_7b_a_wait_bounded_by_the_aggregate_remainder_is_a_deadline` — the other side of the same arm, added by `R8a` rather than split off later. `aggregate == per_prompt` puts the first prompt on `left <= per_prompt`, so the wait is bounded by the budget and the failure is `BridgeError::Deadline`, not the prompt's key. Row 320 alone is passed by a bridge that attributes an expired budget to whichever prompt was in flight |
 | 321 | `ac_mrtr_7b_answered_rounds_are_ended_by_the_aggregate_deadline` |
 | 322 | `ac_mrtr_7b_a_batch_of_three_answers_arrives_in_one_retry` |
 | 325 | `ac_mrtr_7a_a_session_declared_capability_is_asked_with_no_slice` |

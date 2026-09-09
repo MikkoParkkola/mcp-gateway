@@ -75,13 +75,17 @@ async fn roots_1_forwarded_frame_carries_a_request_id() {
     // GIVEN a session listening, WHEN roots/list is forwarded to it
     let (data, _) = emitted_frame("roots-id").await;
 
-    // THEN the frame is a request, not a notification
+    // THEN the frame is a request, not a notification, and the id is the
+    // `roots-<uuid>` shape the POST-back path admits — the prefix alone would
+    // pass on `roots-anything`, which routes nothing and pins nothing.
     let id = data.get("id").and_then(Value::as_str);
+    let uuid_half = id.and_then(|id| id.strip_prefix("roots-"));
     assert!(
-        id.is_some_and(|id| id.starts_with("roots-")),
-        "roots/list must be forwarded as a request bearing a `roots-<uuid>` id; \
-         got {:?}. Without one the client need not answer and no answer could \
-         be routed back (MIK-7212.ROOTS.1)",
+        uuid_half.is_some_and(|rest| uuid::Uuid::parse_str(rest).is_ok()),
+        "roots/list must be forwarded as a request bearing a `roots-<uuid>` id \
+         (the `roots-` prefix followed by a parseable UUID); got {:?}. Without \
+         one the client need not answer and no answer could be routed back \
+         (MIK-7212.ROOTS.1)",
         data.get("id")
     );
 }
