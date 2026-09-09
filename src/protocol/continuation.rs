@@ -136,6 +136,7 @@ impl std::fmt::Debug for Payload {
         // Enough to trace an exchange through a log, and nothing that would let
         // a reader of that log redeem it.
         f.debug_struct("Payload")
+            .field("purpose", &self.purpose)
             .field("backend_id", &self.backend_id)
             .field("backend_request_state", &"<redacted>")
             .field("principal_fingerprint", &"<redacted>")
