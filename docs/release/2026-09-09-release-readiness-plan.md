@@ -263,3 +263,31 @@ No criterion in the ledger asserts this, so it does not change the blocking coun
 It is a wire-contract defect on a shipped surface and should be filed and fixed
 before 4.0.0 rather than deferred: the cost of shipping it is that every client
 integrating against the not-found path builds on the inverted value.
+
+### C. The two clippy gates do not cover their union
+
+CI's Clippy job runs `cargo clippy --all-features` -- lib and bins, no test
+targets. The gate this repository states in `CLAUDE.md` is
+`cargo clippy --all-targets -- -D warnings` -- test targets, default features.
+Neither is a superset of the other, so a lint inside a *feature-gated test*
+escapes both.
+
+One does today. `src/gateway/meta_mcp/tests.rs:5518` tripped
+`clippy::similar_names`, and the case that holds it (`:5494`) is
+`#[cfg(feature = "spec-preview")]`. Two independent clippy runs disagreed about
+the same tree for exactly this reason -- `--all-targets` alone did not compile the
+case, `--all-targets --all-features` did -- and both runs were correct. The fix
+was to carry the `#[allow(clippy::similar_names)]` its sibling case at `:5361`
+already carries for the identical pair of bindings; the sibling had it and the
+copy did not.
+
+That makes three ways this branch has hidden a break from a green rollup in one
+day: a staged-but-undeclared module (absent from the committed tree, so CI
+compiles what local builds cannot), a red lib target (aborts the run before any
+integration test, see item 0), and a feature-gated test lint (outside both clippy
+gates). The pattern is the same each time -- the rollup measures a tree or a
+target set that is not the one the gate claims to cover -- and it is worth one
+decision before release rather than three more discoveries. Adding
+`--no-fail-fast` to the test job and `--all-targets` to the clippy job closes the
+second and third; both are changes to the release branch's CI configuration and
+belong to whoever owns it.
