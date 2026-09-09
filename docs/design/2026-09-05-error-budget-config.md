@@ -388,8 +388,25 @@ criterion asserts, not because it was hard.
 
 Residual, stated: `throttled: false` would match and be excluded. Nobody has
 observed that string; "request throttled by upstream" is in a test because
-somebody did. Accepted knowingly rather than traded for the observed case. A test asserts both call sites route through it.
+somebody did. Accepted knowingly rather than traded for the observed case.
 
-This change ships no code yet, so no leg has reviewed an implementation. Both
-design legs and one confirmation pass have returned; implementation starts
-against this text.
+That both recorders route through the one predicate is a STRUCTURAL property, not a
+tested one. `is_rate_limited` is defined once (`src/gateway/recovery.rs`) and every
+classifier calls it — `src/backend/ops.rs` in the failsafe arm, and the `ErrorCategory`
+classifier plus both response arms in `src/gateway/meta_mcp/invoke.rs`. No case drives
+one table of signal strings through both paths and asserts an identical verdict per
+input; the test plan records that as GH475.RL.11 with no case, disposed to
+[#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481), and the criteria ledger
+carries it as MET (`structural`) for the same reason. An earlier revision of this
+paragraph claimed such a test exists. It does not, and never did.
+
+Both design legs and one confirmation pass returned against this text, and the
+implementation was written against it afterwards. That implementation has since
+landed: its review legs, its functional pass and its per-criterion verdicts are
+recorded in the DoD comment on
+[#475](https://github.com/MikkoParkkola/mcp-gateway/issues/475). Read the issue and
+the criteria ledger for the state of the code — this document records what was
+decided, and is not revised as the code moves.
+
+An earlier revision of this paragraph read "This change ships no code yet". True
+when written, false once the implementation landed.
