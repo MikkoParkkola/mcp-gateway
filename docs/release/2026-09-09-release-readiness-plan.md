@@ -169,3 +169,57 @@ in parallel across their owning lanes once the branch builds. Item 1 is the
 cheapest of the three — one consumer against two landed capture paths — and it
 is the one whose ledger row most misleads a reader today, so it should be
 re-evidenced even before it is built.
+
+## Addendum, same day: two gaps the ledger does not carry
+
+Both surfaced from other lanes and were re-verified here at source before being
+recorded, because a lane's report is corroboration, not proof.
+
+### A. `MIK-7246.CONFIRM.1a` is marked PASS on a basis that does not hold
+
+The row at `docs/requirements/RELEASE-4.0.0-criteria-status.md:247` rests on
+`ConfirmationPolicy::for_modern()`'s `REFUSE` being "consulted rather than merely
+defined". It is not consulted, and the reason is structural rather than a missing
+call.
+
+`is_modern` is *defined* as `era == Era::Modern` on the line after `era` is read
+(`src/gateway/router/handlers.rs:826-827`). The policy is chosen from that same
+predicate: `for_modern()` when `is_modern`, `for_legacy()` otherwise (`:1359-1363`).
+`ConfirmationChannel::Elicit` -- the only channel variant that carries a policy at
+all -- is constructed at `:1468` and `:1596`, and both sites sit in the
+`Era::Legacy` arm of a match on that same `era`. The `Era::Modern` arm builds
+`InBand`, which carries a continuation and no policy.
+
+So the only policy value that can reach `policy.on_unconfirmable()` at
+`src/gateway/meta_mcp/mod.rs:2226` is `for_legacy()` = `PROCEED_WITH_WARNING`, and
+the comparison against `REFUSE` there can never be true. `for_modern()`'s value is
+constructed on the modern path and then never placed in a channel. `REFUSE` is a
+string constant with no runtime producer on any transport, stdio included.
+
+Recorded as a candidate fourth blocker rather than a fourth blocker: what is
+proven is that the row's stated basis is false, not yet that the requirement
+demands a reachable `REFUSE`. Whoever owns `MIK-7246` should read the requirement
+text and either re-evidence the row on a basis that holds or move it to blocking.
+The ledger cell is marked CONTESTED with these anchors and the PASS left standing,
+since nothing is measured by flipping a verdict on an unread requirement.
+
+Cite `on_unconfirmable` by symbol, not by line: that comparison has been cited at
+`:2201-2204`, `:1967` and `:2223` in three different documents and is at `:2226`
+now.
+
+### B. `gateway_invoke` reports a failed backend call as `isError: false`
+
+On the not-found path, the wire response carries top-level `"isError": false` and
+`"resultType": "complete"` while the real `"isError": true` sits one JSON string
+deep inside `content[0].text`. A client that branches on the top-level field --
+which is the field the specification puts there for that branch -- records a
+failed call as a success.
+
+Not house style: the same file produces a top-level `isError: true` at
+`src/gateway/meta_mcp/invoke.rs:1659`, `:1701`, `:2371` and `:2439`, so the
+not-found path is inconsistent with its own neighbours.
+
+No criterion in the ledger asserts this, so it does not change the blocking count.
+It is a wire-contract defect on a shipped surface and should be filed and fixed
+before 4.0.0 rather than deferred: the cost of shipping it is that every client
+integrating against the not-found path builds on the inverted value.
