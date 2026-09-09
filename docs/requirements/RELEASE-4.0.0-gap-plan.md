@@ -688,29 +688,34 @@ consumer must not treat the cached era as a live fact about the current process.
 
 ### The order the remaining work runs in
 
-Cluster A is the largest of the blocking clusters by a wide margin, so it goes first —
-but the first step is not code. Per the delivery process the sequence inside A is a test plan with
-one row per acceptance criterion, reviewed as a plan; then failing tests, reviewed as tests; then
-implementation, which is done when they pass. Skipping to implementation is the path that produced
-thirty-five review rounds elsewhere in this repo's history.
+Cluster A was the largest of the blocking clusters by a wide margin and went first. It is empty as
+of 2026-09-09: `NFR.SEC.3` closed at `424a2df0`, and A, D, F and G all now read zero. What remains
+blocking is cluster C (`SUB.2b`, `SUB.4`) and the residue row `CONFIRM.2` — three rows, in three
+separate mechanisms, so they run in parallel rather than in an order.
 
-Three things can run alongside it without waiting:
+The sequencing rule that governed A governs each of them unchanged, and the first step is still not
+code: a test plan with one row per acceptance criterion, reviewed as a plan; then failing tests,
+reviewed as tests; then implementation, which is done when they pass. Skipping to implementation is
+the path that produced thirty-five review rounds elsewhere in this repo's history.
+
+Two things run in parallel with the three remaining blocking rows, and neither waits on them:
 
 - **Cluster E is measurement, not code, and it is Spark-only.** No run against 3.5.0 exists. It
   needs no design and blocks nothing else, so it can start immediately; a Mac number would be worse
   than no number.
 - **Cluster B's consuming side** is a small change once someone decides what reads the era, and it
   is independent of the continuation envelope.
-- **Cluster F is three operator decisions, not four pieces of work.** Whether
-  `exposed_meta_tools` enforcement ships as a breaking change, whether a dual-role matrix is
-  required, and whether the 17-tool scenario or the documented 14-16 ceiling is the one that moves.
-  Each is a stated fact awaiting a call. They are the cheapest rows on the board and they are
-  blocked on nobody writing code. The fourth — whether the modern revision joins
-  `SUPPORTED_VERSIONS` — is decided and closed: it does not, because the handshake it belongs to
-  does not reach the modern revision. What remains there is the `server.modern_protocol` default.
+- **Cluster F is closed as of 2026-09-09**, and it was three operator decisions rather than four
+  pieces of work. Whether `exposed_meta_tools` enforcement ships as a breaking change, whether a
+  dual-role matrix is required, and whether the 17-tool scenario or the documented 14-16 ceiling is
+  the one that moves. The fourth — whether the modern revision joins `SUPPORTED_VERSIONS` — was
+  decided and closed separately: it does not, because the handshake it belongs to does not reach the
+  modern revision. What remained there was the `server.modern_protocol` default, settled by the
+  operator's ruling recorded below.
 
-Clusters C and D follow A, because both need a served modern request path to test against — the
-dependency section above already establishes that, and nothing since has changed it.
+Cluster D is empty and so is A, so nothing now follows them. Cluster C is the one dependency that
+survives: it still needs a served modern request path to test against, which the dependency section
+above establishes and nothing since has changed.
 
 ### One of cluster F's four decisions is now made
 
