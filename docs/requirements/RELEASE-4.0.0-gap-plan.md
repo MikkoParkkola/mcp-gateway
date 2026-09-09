@@ -965,9 +965,10 @@ disagree, the source is recorded and the cell is named as stale.
 ### 6.1 The headline number overstates the work
 
 `Coverage: 146 criteria, 183 rows, 174 met or non-blocking, 9 blocking.` Of those 9 —
-the headline now reads `176 met or non-blocking, 7 blocking` after `CACHE.4a` and `CACHE.4b`
-closed on 2026-09-09, which emptied cluster D; the table below is the reading that produced
-the plan and the two cache rows are struck from it rather than silently dropped:
+the headline now reads `178 met or non-blocking, 5 blocking` after `CACHE.4a` and `CACHE.4b`
+closed on 2026-09-09, which emptied cluster D, and `MRTR.7a`/`MRTR.7b` closed the same day at
+`b7a4a768`, which left cluster A holding one row; the table below is the reading that produced
+the plan and the four closed rows are struck from it rather than silently dropped:
 
 | Verdict at source | Rows | Cost |
 |---|---|---|
@@ -975,10 +976,11 @@ the plan and the two cache rows are struck from it rather than silently dropped:
 | MET in source; held open by the functional leg alone | `MRTR.8b` | a §P4 drive |
 | PARTIAL, closed by a test | `CONFIRM.1a`, `CONTROL.3b`, `NFR.PERF.3`, `NFR.SEC.1` row-5 staging | a test each |
 | PARTIAL, closed by one plumb | ~~`CACHE.4a`~~ (closed 2026-09-09), `HEADER.9a`, `HEADER.9b` | one negotiated-revision plumb, shared |
-| Genuinely unbuilt | ~~`CACHE.4b`~~ (closed 2026-09-09), `SUB.2b`, `SUB.4`, `CONFIRM.2`, `NFR.SEC.3`, `MRTR.7a`, `MRTR.7b` | the release |
+| Genuinely unbuilt | ~~`CACHE.4b`~~, ~~`MRTR.7a`~~, ~~`MRTR.7b`~~ (all closed 2026-09-09), `SUB.2b`, `SUB.4`, `CONFIRM.2`, `NFR.SEC.3` | the release |
 
 `NFR.COMPAT.1` is PARTIAL and imports its partiality entirely from `MRTR.7a`/`7b`; it adds no
-work of its own. Its `2026-07-28 served` clause holds: the revision is advertised at
+work of its own — so with both of those MET at `b7a4a768` its stated source of partiality is
+gone, and the row is due a re-read against source rather than a count edit here. Its `2026-07-28 served` clause holds: the revision is advertised at
 `src/gateway/meta_mcp/mod.rs:1092-1099` under `server.modern_protocol`, default `true` at
 `src/config/mod.rs:1236`, and `tests/nfr_compat1_revisions.rs` runs 7/7 green. Its deliberate
 absence from `SUPPORTED_VERSIONS` is pinned by an in-source guard test at `src/protocol/mod.rs:81,85`
