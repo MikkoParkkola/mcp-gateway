@@ -423,18 +423,6 @@ pub fn original_request_digest(server: &str, tool: &str, arguments: &Value) -> S
     crate::idempotency::derive_key(&format!("{server}:{tool}"), arguments)
 }
 
-/// One question, translated for a client that expects to be asked directly.
-#[derive(Debug, Clone)]
-pub struct OutboundRequest {
-    /// The server's identifier for this question, carried so the answer can be
-    /// returned under it.
-    pub key: String,
-    /// The legacy server-initiated method, e.g. `elicitation/create`.
-    pub method: String,
-    /// Its params, verbatim.
-    pub params: Value,
-}
-
 /// Translating between the two generations of asking a question.
 ///
 /// A **modern** server returns an interim result and waits to be retried. A
@@ -449,24 +437,6 @@ pub struct OutboundRequest {
 pub struct Bridge;
 
 impl Bridge {
-    /// The questions to put to a legacy client, in the shape it expects.
-    #[must_use]
-    pub fn to_legacy_client(interim: &InputRequired) -> Vec<OutboundRequest> {
-        interim
-            .requests
-            .iter()
-            .map(|(key, request)| OutboundRequest {
-                key: key.clone(),
-                method: request
-                    .get("method")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                params: request.get("params").cloned().unwrap_or(Value::Null),
-            })
-            .collect()
-    }
-
     /// The params for retrying the backend, once the client has answered.
     ///
     /// The state is echoed verbatim and the answers go back under the server's

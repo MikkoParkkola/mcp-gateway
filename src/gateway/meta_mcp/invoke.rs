@@ -788,6 +788,85 @@ fn undeclared_input_request(
     }
 }
 
+/// Re-dispatches the original call with the answers collected so far.
+///
+/// Holds the dispatch arguments rather than a closure because
+/// [`crate::gateway::input_bridge::BackendInvoker`] is an async trait and every
+/// bridged round needs the same values the first dispatch used: a round that
+/// differed in any of them would be a second call, not a retry of this one.
+struct BridgeDispatcher<'a> {
+    meta: &'a MetaMcp,
+    server: &'a str,
+    tool: &'a str,
+    arguments: &'a Value,
+    prompt_cache_key: Option<&'a str>,
+    inbound_meta: Option<&'a Value>,
+    want_full: bool,
+    session_id: Option<&'a str>,
+    caller_identity: Option<&'a GrantSubject>,
+    headers: &'a [(String, String)],
+    cache_binding: Option<&'a str>,
+    api_key_name: Option<&'a str>,
+    trace_id: &'a str,
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
+    async fn invoke(
+        &self,
+        retry_params: Value,
+    ) -> std::result::Result<Value, crate::gateway::input_bridge::BridgeError> {
+        // Through `accounted_dispatch`, not `dispatch_to_backend`: a bridged
+        // round is a real backend call and is accounted and gated exactly like
+        // the first one. A round that skipped the accounting would let a
+        // backend that keeps asking spend an unmetered budget.
+        let outbound = OutboundRetry {
+            request_state: retry_params
+                .get("requestState")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            input_responses: retry_params.get("inputResponses").cloned(),
+        };
+        self.meta
+            .accounted_dispatch(
+                self.server,
+                self.tool,
+                self.arguments.clone(),
+                &outbound,
+                self.prompt_cache_key,
+                self.inbound_meta,
+                self.want_full,
+                self.session_id,
+                self.caller_identity,
+                self.headers,
+                self.cache_binding,
+                self.api_key_name,
+                self.trace_id,
+            )
+            .await
+            .map_err(
+                |e| crate::gateway::input_bridge::BridgeError::BackendFailed {
+                    message: e.to_string(),
+                },
+            )
+    }
+}
+
+/// Emits the bridge's counters as structured trace events.
+///
+/// ponytail: tracing rather than the metrics registry — the record carries no
+/// answer body, so a log line is a complete rendering of it. Move to a counter
+/// when an operator needs it aggregated rather than searched.
+struct TracingBridgeObserver<'a> {
+    trace_id: &'a str,
+}
+
+impl crate::gateway::input_bridge::BridgeObserver for TracingBridgeObserver<'_> {
+    fn record(&self, record: crate::gateway::input_bridge::BridgeRecord) {
+        debug!(trace_id = self.trace_id, record = ?record, "input bridge round");
+    }
+}
+
 /// Monotonically increasing request counter for load-balanced cache key slot selection.
 ///
 /// Global across all backends; overflow wraps (u64 → effectively infinite for our purposes).
@@ -994,6 +1073,12 @@ impl MetaMcp {
         // `{}` and not `Null`: the router's own target builder defaults a
         // missing inner `arguments` to an empty object, and two gates that see
         // different targets are two gates that can disagree.
+        // Read ONCE, here, before the authorization decision below. Both cache
+        // keys built later in this call use this same local. Re-reading at the
+        // write site would let a grant change that landed between the decision
+        // and the store file the old answer under the new epoch.
+        let policy_epoch = self.policy_epoch.load(std::sync::atomic::Ordering::Acquire);
+
         let empty_args = serde_json::json!({});
         let target = crate::gateway::authz::ToolTarget {
             server,
@@ -1326,12 +1411,11 @@ impl MetaMcp {
                 caller.retry,
                 crate::cache::KeyContext {
                     routing_profile: &profile.name,
-                    // No negotiated revision and no policy generation reach this
-                    // layer yet: revision is shaped downstream in the router and
-                    // no policy epoch exists to read. Accepted here so the seam
-                    // is the only place that has to change when they do.
+                    // Revision is shaped downstream in the router and does not
+                    // reach this layer yet; the seam stays here so it is the
+                    // only place that has to change when it does.
                     protocol_revision: None,
-                    policy_epoch: 0,
+                    policy_epoch,
                 },
             );
             if let Some(cached) = cache.get(&cache_key) {
@@ -1537,7 +1621,7 @@ impl MetaMcp {
         // Answering or asking? Read once, because the same verdict decides two
         // things: whether the idempotency key may be settled as completed, and
         // whether the question may be put to this client at all.
-        let interim = crate::protocol::mrtr::InputRequired::from_result(&result);
+        let mut interim = crate::protocol::mrtr::InputRequired::from_result(&result);
         // Whether the backend said it acted, which is a different question from
         // whether the gateway can carry what it sent. Both post-dispatch gates
         // below need this one, not `interim`.
@@ -1596,6 +1680,85 @@ impl MetaMcp {
                 "Backend asked for input of a type the client did not declare"
             );
             return Err(undeclared_input_request(server, tool, &refused));
+        }
+
+        // MIK-7212.WIRE: a legacy client is asked here, in-band, instead of
+        // being handed a continuation envelope it has no vocabulary for. A 2025
+        // client cannot redeem one, so relaying it strands the exchange at both
+        // ends — the client holds a token it cannot spend and the backend holds
+        // a round nobody will finish.
+        //
+        // Placed between the two gates on purpose. After MRTR.9, because
+        // reaching this line means the question has already been found
+        // answerable by this client. Before the mint below, because an exchange
+        // the bridge carries to completion has no continuation to redeem: on
+        // success `interim` is cleared and the mint is skipped, and the
+        // completed body then runs the same post-invoke contract and anomaly
+        // gates every non-bridged result runs. Returning early here would buy a
+        // shorter diff by skipping them.
+        if caller.era == crate::protocol::meta::Era::Legacy
+            && let Some(pending) = interim.clone()
+            && let Some(session) = session_id
+        {
+            let dispatcher = BridgeDispatcher {
+                meta: self,
+                server,
+                tool,
+                arguments: &arguments,
+                prompt_cache_key: prompt_cache_key.as_deref(),
+                inbound_meta: args.get("_meta"),
+                want_full,
+                session_id,
+                caller_identity,
+                headers: &caller_credential.headers,
+                cache_binding: caller_credential.cache_binding.as_deref(),
+                api_key_name,
+                trace_id,
+            };
+            let observer = TracingBridgeObserver { trace_id };
+            let bridge = crate::gateway::input_bridge::InputBridge {
+                channel: caller.channel,
+                backend: &dispatcher,
+                observer: &observer,
+                bounds: crate::gateway::input_bridge::BridgeBounds::DEFAULT,
+            };
+            // `None` slice: the per-request capability slice narrows a *modern*
+            // caller's declaration, and this branch is the legacy one — there is
+            // no per-request `_meta` to narrow by, so the session store's value
+            // stands alone.
+            match bridge
+                .run(session, caller.input_capabilities, None, &pending)
+                .await
+            {
+                Ok(completed) => {
+                    // The exchange finished, so the backend has now acted and
+                    // the key may be settled. The commit above declined this
+                    // reservation precisely because the backend had stopped to
+                    // ask; that is no longer true.
+                    if let Some(reservation) = idem_reservation.as_mut() {
+                        reservation.commit(&completed);
+                    }
+                    result = completed;
+                    interim = None;
+                }
+                Err(error) => {
+                    warn!(
+                        server,
+                        tool,
+                        trace_id,
+                        error = ?error,
+                        "Bridged input exchange failed for a legacy client"
+                    );
+                    return Err(Error::JsonRpc {
+                        code: -32003,
+                        message: format!(
+                            "Tool '{tool}' on server '{server}' asked for input and the bridged \
+                             exchange could not be completed"
+                        ),
+                        data: None,
+                    });
+                }
+            }
         }
 
         // MRTR.2: the backend's own `requestState` never reaches the client.
@@ -1847,12 +2010,11 @@ impl MetaMcp {
                 caller.retry,
                 crate::cache::KeyContext {
                     routing_profile: &profile.name,
-                    // No negotiated revision and no policy generation reach this
-                    // layer yet: revision is shaped downstream in the router and
-                    // no policy epoch exists to read. Accepted here so the seam
-                    // is the only place that has to change when they do.
+                    // Revision is shaped downstream in the router and does not
+                    // reach this layer yet; the seam stays here so it is the
+                    // only place that has to change when it does.
                     protocol_revision: None,
-                    policy_epoch: 0,
+                    policy_epoch,
                 },
             );
             if cache.set(&cache_key, result.clone(), self.default_cache_ttl) {

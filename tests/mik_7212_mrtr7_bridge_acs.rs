@@ -204,13 +204,14 @@ impl FakeBackend {
 
 #[async_trait::async_trait]
 impl BackendInvoker for FakeBackend {
-    async fn invoke(&self, retry_params: Value) -> Value {
+    async fn invoke(&self, retry_params: Value) -> Result<Value, BridgeError> {
         self.calls.lock().expect("calls").push(retry_params);
-        self.results
+        Ok(self
+            .results
             .lock()
             .expect("results")
             .pop_front()
-            .unwrap_or_else(completed)
+            .unwrap_or_else(completed))
     }
 }
 
@@ -471,6 +472,41 @@ fn ac_mrtr_7b_the_shipped_bounds_are_the_documented_ones() {
 /// slice that names `elicitation`, which proves the bridge speaks without
 /// deciding the empty case, and the empty case is asserted on its own at the
 /// end.
+/// A state-only interim result carries `requestState` and no questions. The
+/// bridge must ask the client nothing at all: inventing a round trip here
+/// would put a question to a person that no server ever posed.
+///
+/// This property was previously pinned against `Bridge::to_legacy_client`, a
+/// projection with no production call site that also skipped the capability
+/// slice. That converter is deleted; the property now runs against the live
+/// run loop, which is the only thing that can dispatch.
+#[tokio::test]
+async fn ac_mrtr_7a_a_state_only_interim_asks_the_client_nothing() {
+    let client = FakeClient::mute();
+    let backend = FakeBackend::new(vec![completed()]);
+    let records = Records::default();
+
+    let outcome = bridge(
+        &client,
+        &backend,
+        &records,
+        declared(&json!({"elicitation": {"form": {}}})),
+        None,
+        &interim(&[]),
+    )
+    .await;
+
+    assert!(
+        outcome.is_ok(),
+        "a state-only interim must complete, not fail: {outcome:?}"
+    );
+    assert!(
+        client.methods().is_empty(),
+        "nothing was asked, so nothing may be put to the client: {:?}",
+        client.methods()
+    );
+}
+
 #[tokio::test]
 async fn ac_mrtr_7a_an_undeclared_variant_is_not_asked_under_an_empty_slice() {
     let elicitation_only = declared(&json!({"elicitation": {"form": {}}}));

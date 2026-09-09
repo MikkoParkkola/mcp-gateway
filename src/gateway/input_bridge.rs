@@ -208,6 +208,15 @@ pub enum BridgeError {
     RequestBudgetExhausted,
     /// The aggregate wall-clock budget for the call ran out.
     Deadline,
+    /// A bridged retry round did not reach the backend, or the backend failed.
+    ///
+    /// Carries the reason as text rather than the error itself: this type is
+    /// `Clone + PartialEq` so tests can assert on it, and `crate::Error` is
+    /// neither.
+    BackendFailed {
+        /// What went wrong, as reported by the invoker.
+        message: String,
+    },
 }
 
 /// The bounds on what a backend can make the gateway ask a client.
@@ -331,7 +340,11 @@ impl ClientChannel for NoClientChannel {
 #[async_trait::async_trait]
 pub trait BackendInvoker: Send + Sync {
     /// Retry the original call with these params, yielding its raw result.
-    async fn invoke(&self, retry_params: Value) -> Value;
+    ///
+    /// A bridged round is a real backend call: it can be refused by a policy
+    /// gate or fail in transport, and the caller must be able to say which.
+    /// A bare `Value` could only report that as a successful result.
+    async fn invoke(&self, retry_params: Value) -> Result<Value, BridgeError>;
 }
 
 /// Where the bridge's counters go.
@@ -396,7 +409,7 @@ impl InputBridge<'_> {
             self.observe(&interim);
             let answers = self.ask(session_id, prompts, started).await?;
             let retry = crate::protocol::mrtr::Bridge::retry_params(&interim, answers);
-            let result = self.backend.invoke(retry).await;
+            let result = self.backend.invoke(retry).await?;
             match crate::protocol::mrtr::InputRequired::from_result(&result) {
                 Some(next) => interim = next,
                 None => return Ok(result),
