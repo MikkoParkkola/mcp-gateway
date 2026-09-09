@@ -239,3 +239,53 @@ counter is unmoved (`count-release-criteria.py --check`: 146 criteria, 183 rows,
 two vendors on the one question that could overturn it: can SUB.2b's outbound obligation be met without
 editing those two files? Everything before this revision was never reviewed and is superseded where it
 conflicts.
+
+## Superseding rulings (2026-09-09, after this note was written)
+
+This note closes by concluding SUB.2b is unimplementable in this domain on this branch. Both blockers
+behind that conclusion have since been resolved, so the conclusion no longer holds and the sections
+above that rest on it are superseded rather than deleted — they record what was true when written.
+
+**Ruling (operator, 2026-09-09): SUB.2b is built before v4.0.0.** The `Transport` trait
+(`src/transport/mod.rs:24,41`) may change on this release branch, and the outbound leg's POST content
+negotiation in `src/gateway/router/` is in scope. The team-lead ruling quoted above — that the trait is
+fixed on this branch — is superseded by this one. The cost was put to the operator explicitly (stdio,
+websocket and every gateway call site, plus peer-owned router code, on a branch being stabilised) and
+that path was chosen with the cost visible. The criterion is not narrowed and not amended.
+
+**Assumption, not a ruling, on the §II.6 correlation key: option (i).** The gateway forwards a
+notification only when a backend sends one unprompted, correlated by the request stream it arrived on.
+It does not mint or translate progress tokens, so there is no token-allocation table and no lifetime to
+manage. The operator was asked and did not answer within the window; (i) is this note's own
+recommendation and the smaller scope, and adding (ii)'s allocation table on top of a refactor the
+operator had just authorised would widen scope they did not ask for. Recorded as assumed so a later
+reader can see it was never decided. An implementation finding that makes (i) untenable escalates
+rather than switching silently.
+
+---
+
+# Repairs 2026-09-09 — round 1, both legs returned
+
+## Repair 1 — the note's premise was false: POST /mcp already answers with an event stream
+
+The revision above states that SSE is GET-only and that POST answers JSON. That is wrong, and it is
+inverted. Verified at source today:
+
+- `src/gateway/router/handlers.rs:1120-1126` returns `crate::gateway::streaming::subscription_stream(...)`
+  from the POST dispatch, for the `subscriptions/listen` arm at `:1063`. A POST to `/mcp` therefore
+  already produces a `text/event-stream` body in this gateway.
+- `src/gateway/router/handlers.rs:333` refuses the GET: `"GET /mcp was removed in MCP 2026-07-28; use
+  subscriptions/listen"`, `405 Method Not Allowed` with `Allow: POST`, for callers on a modern era.
+  The GET stream this note leaned on is the legacy surface, not the modern one.
+- `src/gateway/streaming.rs` is unmodified in the working tree, so the streaming machinery itself is
+  not held by another session.
+
+So the shape SUB.2b needs is not architecturally absent. What is absent is narrower and still decides
+the same way: nothing chooses an event-stream body over a JSON body for an **ordinary** request, and
+the place that choice would be made is the method dispatch inside `src/gateway/router/handlers.rs` —
+the file this lane was told not to take. `subscription_stream` is also not the destination: SUB.2a
+forbids request-scoped notifications on the subscription stream, asserted at
+`src/gateway/subscription_registry.rs:211`. It proves the shape, and it is the wrong pipe.
+
+The conclusion is unchanged. The reason it was written down was wrong, and a reader acting on the old
+sentence would have looked for a surface that already exists.
