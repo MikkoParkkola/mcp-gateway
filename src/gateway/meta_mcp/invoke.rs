@@ -1796,6 +1796,19 @@ impl MetaMcp {
                 // which is exactly what this path did before the bridge was
                 // wired in front of it.
                 //
+                // This arm does NOT reach stdio, and the reason is worth naming
+                // because no test enforces it. `stdio_caller_context` declares
+                // `Declared::NONE`, and `run` calls `plan` before `ask`, so an
+                // undeclared caller is refused with `Refused` one step before
+                // any delivery is attempted — never as `NoSession`. That is
+                // what keeps the deliberate stdio refusal documented on
+                // `NoClientChannel` intact, and MIK-7387 the only thing that
+                // lifts it. The two halves are pinned separately and joined by
+                // nothing: `MIK-7212.WIRE.10` in the MRTR.7 test plan is that
+                // missing row. Until it lands, an edit to either half breaks
+                // this silently, so change `Declared::NONE` or `plan`'s
+                // position and re-read this arm.
+                //
                 // ponytail: `run` walks rounds internally and a session lost on
                 // round two surfaces the same way, so the mint would replay
                 // prompts already answered. Needs a progress signal out of
