@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! CACHE.4b — a policy change must ADVANCE the epoch that keys the response
 //! cache, so an answer computed under the old grants cannot be served under
 //! the new ones.
