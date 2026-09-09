@@ -284,6 +284,16 @@ pub(crate) struct SseExchange {
     /// The response frame that ended the scan.
     pub(crate) response: JsonRpcResponse,
     /// Notifications seen on this request's stream, in the order they arrived.
+    ///
+    /// SCAFFOLD, and labelled one: no production path reads this yet. The only
+    /// caller of `parse_sse_response` maps it away at `:1234`, and the consumer
+    /// that will read it — the `Accept`-negotiated event-stream body in
+    /// `gateway::router::handlers::meta_mcp_handler` — is the outbound half of
+    /// `MIK-7272.SUB.2b` and lands next. Until then the field is proven only by
+    /// the unit tests, so the lib build cannot see it read.
+    // ponytail: allow lifts the moment the outbound consumer lands; if it has
+    // not, this attribute is the evidence that SUB.2b is still half-built.
+    #[allow(dead_code)]
     pub(crate) notifications: Vec<JsonRpcNotification>,
 }
 
