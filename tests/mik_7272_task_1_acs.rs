@@ -1241,10 +1241,9 @@ mod ownership {
             plain_call(50, json!({ "name": "gateway_list_servers" })),
         )
         .await;
-        let expected = direct
-            .get("result")
-            .cloned()
-            .unwrap_or_else(|| panic!("control: the ordinary call answers with a result: {direct}"));
+        let expected = direct.get("result").cloned().unwrap_or_else(|| {
+            panic!("control: the ordinary call answers with a result: {direct}")
+        });
 
         let (_, created) = post_against(state.clone(), "key-a", task_call(51)).await;
         assert_eq!(
@@ -1283,7 +1282,8 @@ mod ownership {
     async fn ac_task_1_a_failing_dispatch_settles_failed_with_its_own_code() {
         let state = state();
         let unknown = json!({ "name": "no_such_tool_anywhere" });
-        let (_, direct) = post_against(state.clone(), "key-a", plain_call(60, unknown.clone())).await;
+        let (_, direct) =
+            post_against(state.clone(), "key-a", plain_call(60, unknown.clone())).await;
         let expected_code = direct
             .pointer("/error/code")
             .cloned()
@@ -1322,7 +1322,8 @@ mod ownership {
             "name": "gateway_invoke",
             "arguments": { "server": "no-such-server", "tool": "read", "arguments": {} }
         });
-        let (_, direct) = post_against(state.clone(), "key-a", plain_call(70, invoke.clone())).await;
+        let (_, direct) =
+            post_against(state.clone(), "key-a", plain_call(70, invoke.clone())).await;
         assert_eq!(
             direct.pointer("/result/isError"),
             Some(&json!(true)),
