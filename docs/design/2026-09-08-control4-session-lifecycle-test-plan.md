@@ -51,12 +51,12 @@ six supports and one compile-time obligation.
 |---|---|---|---|---|
 | T1 | a request reaching `check_request` with a non-empty `control_identity` leaves a tracked entry keyed on that identity, whose deadline is `now + IDLE_TTL` | integration (handler) | positive / functional | the write site does not exist yet, so this fails by absence today — the free failure §P2 is built on. The fixture sets `control_identity` and `session_owner_key` to DELIBERATELY DIFFERENT values; without that discriminator the D3 key-provenance half of this row cannot fail, and a write site keyed on the wrong one ships green. After wiring, it also fails if the guard is inverted or the deadline is computed from the wrong base |
 | T2 | an empty `control_identity` leaves NO entry | integration (handler) | negative | fails if the D4 guard is dropped. Cannot self-pass: the assertion is on an EMPTY map, so a fixture that accidentally tracks makes it red, not green. **Red today only by shared compile failure, and labelled below** — its own assertion cannot be reached until the write site T1 drives exists |
-| T3 | `reap` returns the number of keys it removed | unit | contract change | `reap` returns `()` today, so the test cannot compile — that red proves the signature is absent, and no more. The criterion is the VALUE, not the type: an implementation returning a constant 0 compiles and passes the type check, so T3 owes the same falsifier probe as every other row. NOT a re-test of reap's removal logic, which is already covered |
+| T3 | `reap` returns the number of keys it removed | unit | contract change | `reap` returns `()` today. The test cannot compile against the current signature — a compile failure IS the red, and it is honest because the signature change is the point. NOT a re-test of reap's removal logic, which is already covered |
 | T4 | after a sweep, the reclaimed thing is GONE: the predecessor `last_tool` entry for the reaped identity is ABSENT from the anomaly detector | integration | functional — THE criterion | **this is the row the whole plan is for.** It fails if `on_session_end` was never registered, if the registered closure captured a `Weak` that is already dead, or if reap removed the key without firing handlers. It CANNOT be satisfied by an empty map: see the fixture rule below |
 | T5 | the two constants the latency bound rests on are read where the design says: the write site reads `IDLE_TTL` (300s, D6) and the host tick reads `session_reaper_interval` from config (`streaming.rs:108`) | unit | boundary / constants | a wrong-by-10x constant passes every other row in this table while silently breaking the stated reclaim latency, because no other row reads either value. Fails if the write site hard-codes a literal, if it reaches for the unrelated shipped `PER_USER_IDLE_TTL` (`server/mod.rs:2131`) instead of D6's module constant, or if the tick uses a fixed interval rather than the configured one — which is what makes the streaming tests' 10-20 ms overrides work at all |
 | T6 | the sweep log (D7) carries the COUNT of what it reclaimed, and is absent on an empty sweep | integration | observability / negative | two identities are reclaimed in ONE sweep; the case asserts exactly one event carrying the count 2, then drives a further tick over an empty map and asserts no event at all. Captured with a test-only `tracing` subscriber installed for the case — named here because a negative assertion with no stated capture mechanism cannot fail: it is green when nothing is captured, which is also green when nothing is emitted. The empty half needs a completion signal, and the sandwich an earlier draft of this row proposed does not supply one: two events with nothing between them is equally consistent with NO empty sweep having run at all, which is the same picture an unconditional `info!` would paint. So D7 now emits a `trace!` marker on EVERY sweep, empty or not, distinct from the conditional `info!` — named as a design event in D7 of the design. But a marker alone is not enough either, because the count-2 sweep emits one too: waiting for "a marker after the `info!`" catches that sweep's OWN marker and proves nothing about an empty map. So D7 fixes the ORDER as well as the emission — the marker is the LAST thing a sweep emits, after the conditional `info!`, which makes markers sweep boundaries and puts every `info!` before its own sweep's marker. The case CONSUMES the count-2 sweep's marker, then blocks on the NEXT one. That second marker can only have come from a LATER sweep, and by then the map is empty: it IS the acknowledgement that an empty sweep completed. The case then asserts NO `info!` was captured BETWEEN the two markers. An unconditional `info!` fails that assertion; a per-key `info!` makes the first event two events. Fails if the `info!` is unconditional (the per-tick-per-idle-gateway line D7 exists to prevent) and equally if it fires once per key, which a bare presence check would pass |
 | T7 | every `spawn_reaper_on` call site supplies a lifecycle | — | **NO TEST, BY CONSTRUCTION** | D1a chose the parameter shape precisely so the COMPILER enforces this. A test asserting the compiler's own rule would be a test that cannot fail. Stated reason, per Q1 — not an empty cell |
-| T8 | reap is unconditional: a key whose request is still in flight is still reaped | integration (host) | documented-behaviour pin | D5 deliberately has no in-flight guard; the tolerance is pushed onto what a handler may reclaim. It would fail against a future in-flight guard, and that guard would be added at the HOST call site, which is why the level is integration: a unit test on `reap` cannot see a guard placed in `streaming.rs`. At that level it cannot compile today — `spawn_reaper_on` takes no lifecycle argument — so its red is a compile red and its assertion is unproven until the wiring exists |
+| T8 | reap is unconditional: a key whose request is still in flight is still reaped | integration (host) | documented-behaviour pin | D5 deliberately has no in-flight guard; the tolerance is pushed onto what a handler may reclaim. It would fail against a future in-flight guard, and that guard would be added at the HOST call site, which is why the level is integration: a unit test on `reap` cannot see a guard placed in `streaming.rs`. At that level it is RED today — the host tick does not call `reap` yet, so nothing is reaped and the assertion fails |
 
 ## The fixture rule T4 turns on (Q2, and the reason this plan was written before the tests)
 
@@ -186,7 +186,7 @@ reads as an assertion red and is wrong in exactly the way T2's label was wrong, 
 |---|---|---|
 | T1 | compile | the write site and the lifecycle handle it needs do not exist |
 | T2 | compile, shared with T1 | nothing T1's red does not already prove |
-| T3 | compile | `reap` returns `()`. The SIGNATURE is absent; whether the assertion can tell a right count from a wrong one is untested, exactly as elsewhere |
+| T3 | compile | `reap` returns `()`. Here the signature IS the criterion, so the compile red is the whole evidence — the one row where this label is not a deficit |
 | T4 | compile | `wire_session_lifecycle` (D8) does not exist |
 | T5 | compile | `IDLE_TTL` does not exist |
 | T6 | compile | the D7 marker and the handle do not exist |
@@ -195,9 +195,8 @@ reads as an assertion red and is wrong in exactly the way T2's label was wrong, 
 T8's earlier label — "fails on its own assertion" — does not survive this either: at integration level it
 drives a production tick whose signature it cannot yet name. T7 has no test at all, by construction.
 
-**The consequence is a step, not a caveat.** For every row above — T3 included, its earlier exemption
-withdrawn — the assertion is UNPROVEN until the wiring exists. So at green time each row gets one
-falsifier probe (§P2's retrofitting
+**The consequence is a step, not a caveat.** For every row above except T3, the assertion is UNPROVEN
+until the wiring exists. So at green time each such row gets one falsifier probe (§P2's retrofitting
 mechanism, the `mktemp`/`trap` recipe): break the single operand the row exists to pin — the D4 guard
 polarity for T2, the constant for T5, the returned count for T3 and T6, the `register` call for T4, the
 host's `reap` call for T8 — and observe THAT row go red ON ITS OWN ASSERTION. A row that stays green
@@ -215,19 +214,16 @@ that T1's does not already prove.
 
 Once the write site exists the case becomes real: it goes red against a write site that tracks the empty
 key, which is the D4 guard it exists to pin. So T2 is red-capable, just not independently red TODAY.
-The honest statement is the narrow one — its red is shared, its green is deferred, and it owes its
-falsifier probe at green time like every other row. The probe is not about fixing anything: it breaks
-the D4 guard polarity T2 pins and requires T2 to go red on its own assertion.
+The honest statement is the narrow one — its red is shared, its green is deferred — and the falsifier
+probe still does not apply, because nothing is being fixed.
 
-**T8's level moved twice and its red label had to move with it, to compile.** An earlier revision carried
-T8 as a unit case on `reap` and labelled it green-today; that label did not survive the level change to
-integration (host). The label that replaced it — "fails on its own assertion" — does not survive either.
-At the host level the case drives the PRODUCTION tick, and that tick cannot yet be driven with a lifecycle
-at all: `spawn_reaper_on` takes no lifecycle argument, so the file does not compile. What is TRUE today is
-the weaker fact behind both labels: `reap` has no production caller, its three call sites all sitting inside
-its own `#[cfg(test)]` module (`session_lifecycle.rs:180`, `:188`, `:209`). That is why the case is worth
-writing, and it is not evidence the assertion discriminates. The classification follows the level; changing
-one without re-deriving the other is how a table ends up claiming a red that no revision can produce.
+**T8 is red-first, and only because its level moved.** An earlier revision of this plan carried T8 as a unit
+case on `reap` and labelled it green-today; that label did not survive the level change to integration (host).
+At the host level the case drives the PRODUCTION tick, and the production tick does not call `reap` — `reap`
+has no production caller at all today: its three call sites are all inside its own `#[cfg(test)]` module
+(`session_lifecycle.rs:180`, `:188`, `:209`). So a key whose request is in flight is not reaped, and T8 fails
+on its own assertion. The classification follows the level; changing one without re-deriving the other is how
+a table ends up claiming a red that no revision can produce.
 
 ## Coverage bar and the one risk (DoD §4)
 
@@ -238,49 +234,3 @@ three call sites would be a number without a claim behind it.
 
 One risk, and it is the one both review legs found: TIMING DETERMINISM. It is addressed by removing the need
 for a clock seam entirely — see the composition table above — not by tolerating a flaky sleep.
-## The green record — NOT DISCHARGED
-
-The RED table above records why each row failed before the implementation existed.
-That failure was free: the code was not there. The other half — re-checking each row
-against a deliberately reintroduced defect, so a row that cannot fail is visible as
-one — was attempted and **did not produce usable evidence**. It is recorded here as an
-open obligation rather than as a result, because the run has three defects that each
-independently break attribution:
-
-- **The restore leg never ran.** Its backups were written to a scratch directory that
-  did not survive, so every restore reported failure and no defect was removed before
-  the next was added. Defects therefore *accumulated*: T5 ran against its own operand,
-  T3 against T5's as well, and T2/T6/T8 against three or more. No row after the first
-  has a RED attributable to the operand it names.
-- **No failure reason was read.** Probe stdout was discarded, so what each row actually
-  reported was never seen. This plan's own rule (§P2, the retrofitting exception) is
-  that a compile error is not a caught defect — and with an accumulating set of edits,
-  a compile error is the likeliest thing a later probe hit.
-- **The source was left corrupted.** Three injected defects (`from_secs(301)`,
-  `let reclaimed = 0;`, and a stubbed `wire_session_lifecycle` body) were still live in
-  a shared worktree after the run and were repaired by hand. Any red a peer session saw
-  in `mik_7215_control4_*` during that window is phantom.
-
-What the implementation *does* have: T1's red-then-green, observed live during
-implementation on the assertion text itself ("not reclaimed at its deadline: the write
-site used a longer TTL"), and all seven rows green against the repaired source with
-every operand re-verified in the file. That is the evidence CONTROL.4 rests on. The
-probe record is not part of it.
-
-### The obligation, deferred (§P1 four fields)
-
-| field | value |
-|---|---|
-| owner | MIK-7215, the next session to touch `session_lifecycle` |
-| what would resolve it | one probe per row, in an isolated checkout, each with its own restore verified by re-running the row to green before the next defect is injected, and each probe's failure text read rather than discarded |
-| when | before the 4.0.0 release tag, or on the next change to any CONTROL.4 operand |
-| if it resolves badly | a row that stays green with its operand broken is a test that does not test; that row is rewritten and this plan's table amended, which does not move CONTROL.4's wiring evidence |
-
-Nothing in this change depends on the deferred answer: the criterion is met by the
-wiring plus seven green tests, and the probe pass would only strengthen confidence in
-the tests themselves.
-
-Two constraints for whoever runs it, learned the expensive way: **do not run mutating
-probes in a shared worktree** — peers run the same suite and will diagnose an injected
-defect as their own regression — and **keep the only copy of the source out of scratch
-storage**, which is how this run lost its restores.

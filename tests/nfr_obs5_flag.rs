@@ -90,7 +90,6 @@ fn state(base: &Config, modern_protocol: bool) -> Arc<AppState> {
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
     Arc::new(AppState {
-        session_lifecycle: None,
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         env: None,
         meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),

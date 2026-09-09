@@ -27,8 +27,6 @@ use super::helpers::{
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
-#[cfg(feature = "firewall")]
-use crate::gateway::session_lifecycle;
 use crate::gateway::streaming::create_sse_response;
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -1302,19 +1300,6 @@ pub(super) async fn meta_mcp_handler(
                     } else {
                         session_id.clone()
                     };
-                    // Renew this identity's reclaim deadline on every call, so
-                    // a sweep only reclaims state nobody has touched for
-                    // `IDLE_TTL`. An empty identity is never tracked: the
-                    // firewall refuses it rather than scoring it, so it holds
-                    // no per-identity state to reclaim.
-                    if let Some(ref lifecycle) = state.session_lifecycle
-                        && !control_identity.is_empty()
-                    {
-                        lifecycle.track(
-                            control_identity.clone(),
-                            session_lifecycle::now_unix() + session_lifecycle::IDLE_TTL.as_secs(),
-                        );
-                    }
                     let verdict = fw.check_request(
                         &session_id,
                         target.server,

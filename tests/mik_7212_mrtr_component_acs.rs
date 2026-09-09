@@ -90,7 +90,6 @@ fn app_state() -> Arc<AppState> {
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let continuation = meta_mcp.continuation();
     Arc::new(AppState {
-        session_lifecycle: None,
         env: None,
         meta_mcp,
         backends,

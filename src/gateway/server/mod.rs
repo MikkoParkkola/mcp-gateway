@@ -992,8 +992,7 @@ impl Gateway {
         // One lifecycle registry, swept by the same tick that reaps stream
         // sessions. Constructed here so the reaper has an owner; the write
         // side that populates it is wired separately.
-        let session_lifecycle =
-            Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
+        let session_lifecycle = Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
         multiplexer.spawn_reaper_on(Arc::clone(&session_lifecycle));
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let auth_config = Arc::new(ResolvedAuthConfig::try_from_config(&self.config.auth)?);
@@ -1215,13 +1214,6 @@ impl Gateway {
             Some(fw)
         };
 
-        // The write side of the registry: without this the reaper sweeps an
-        // empty map forever, which is silent and looks exactly like working.
-        #[cfg(feature = "firewall")]
-        if let Some(ref firewall) = firewall_arc {
-            crate::gateway::session_lifecycle::wire_session_lifecycle(&session_lifecycle, firewall);
-        }
-
         // Keep a clone of meta_mcp for post-shutdown operations (periodic
         // persistence and graceful shutdown cost saves use this handle).
         let meta_mcp_for_shutdown = Arc::clone(&meta_mcp);
@@ -1230,7 +1222,6 @@ impl Gateway {
             build_control_plane_store(&self.config, self.config_path.as_deref());
 
         let state = Arc::new(AppState {
-            session_lifecycle: Some(Arc::clone(&session_lifecycle)),
             // Shared, not minted: the invoke path mints continuations against
             // `meta_mcp`'s keyring, so a second one here would be a keyring
             // that opens nothing this gateway ever sealed.

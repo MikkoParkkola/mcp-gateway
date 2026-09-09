@@ -38,7 +38,6 @@ fn app_state() -> Arc<AppState> {
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
     let agent_registry = Arc::new(AgentRegistry::new());
     Arc::new(AppState {
-        session_lifecycle: None,
         env: None,
         meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
         backends,

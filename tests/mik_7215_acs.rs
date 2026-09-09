@@ -244,7 +244,6 @@ mod http {
         let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
         let agent_registry = Arc::new(AgentRegistry::new());
         Arc::new(AppState {
-            session_lifecycle: None,
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
             env: None,
             meta_mcp: Arc::new(

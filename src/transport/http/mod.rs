@@ -273,16 +273,33 @@ fn bearer_header_value(token: &str) -> Result<header::HeaderValue> {
         .map_err(|_| Error::OAuth("OAuth token is not a valid HTTP header value".into()))
 }
 
-/// Extract and deserialize the JSON-RPC response carried by an SSE body.
+/// One request's SSE exchange: its response, and the notifications the server
+/// sent on that request's own stream ahead of it, in arrival order.
+///
+/// The two travel together out of one call because that is what makes stream
+/// order free: capture and result leave the parse as a single value, so no
+/// second delivery path can reorder them. `MIK-7272.SUB.2b`.
+#[derive(Debug)]
+pub(crate) struct SseExchange {
+    /// The response frame that ended the scan.
+    pub(crate) response: JsonRpcResponse,
+    /// Notifications seen on this request's stream, in the order they arrived.
+    pub(crate) notifications: Vec<JsonRpcNotification>,
+}
+
+/// Extract the JSON-RPC response carried by an SSE body, with the notifications
+/// that preceded it on the same stream.
 ///
 /// A server may interleave notifications on a request's own stream ahead of the
-/// final response, so every `data:` line is classified and non-response frames
-/// are skipped rather than taken as the answer. An inbound *request* is refused:
-/// it is a call addressed to this client, never this call's result.
+/// final response. They are CAPTURED, not skipped: they belong to this request
+/// and the caller is entitled to them (`MIK-7272.SUB.2b`). An inbound *request*
+/// is still refused: it is a call addressed to this client, never this call's
+/// result.
 ///
 /// Returns a transport error when the body carries no response frame, or when a
 /// payload does not deserialize as a JSON-RPC message.
-fn parse_sse_response(text: &str) -> Result<JsonRpcResponse> {
+fn parse_sse_response(text: &str) -> Result<SseExchange> {
+    let mut notifications = Vec::new();
     for line in text.lines() {
         let Some(data) = line.strip_prefix("data:") else {
             continue;
@@ -290,9 +307,15 @@ fn parse_sse_response(text: &str) -> Result<JsonRpcResponse> {
         let message: JsonRpcMessage = serde_json::from_str(data.trim())
             .map_err(|e| Error::Transport(format!("Failed to parse SSE data: {e}")))?;
         match message {
-            JsonRpcMessage::Response(response) => return Ok(response),
+            JsonRpcMessage::Response(response) => {
+                return Ok(SseExchange {
+                    response,
+                    notifications,
+                });
+            }
             JsonRpcMessage::Notification(notification) => {
-                debug!(method = %notification.method, "Skipping notification on response stream");
+                debug!(method = %notification.method, "Notification on response stream");
+                notifications.push(notification);
             }
             JsonRpcMessage::Request(request) => {
                 return Err(Error::Transport(format!(
@@ -1208,7 +1231,10 @@ impl HttpTransport {
                 .await
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e))?;
 
-            parse_sse_response(&text)
+            // ponytail: caller still wants only the response. The captured
+            // notifications are dropped HERE and nowhere else, so the outbound
+            // consumer lands by changing this one line. `MIK-7272.SUB.2b`.
+            parse_sse_response(&text).map(|e| e.response)
         } else {
             // Parse JSON response
             response

@@ -35,15 +35,6 @@ pub struct SessionLifecycle {
     tracked: RwLock<std::collections::HashMap<String, u64>>,
 }
 
-/// How long an identity's derived state outlives its last observed request.
-///
-/// The revision removed protocol sessions, so nothing signals a disconnect and
-/// the only honest question left is "has this identity been quiet long enough".
-/// Five minutes is the answer the reclaim-latency bound in the design is stated
-/// against: a caller idle this long has its per-identity state reclaimed, and a
-/// caller still working keeps pushing its deadline forward.
-pub const IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
-
 /// Seconds since the Unix epoch, the unit every deadline in this module uses.
 ///
 /// One helper so the seam between this module's `u64` seconds and callers that
@@ -180,29 +171,6 @@ impl SessionLifecycle {
     pub fn handler_count(&self) -> usize {
         self.callbacks.read().len()
     }
-}
-
-/// Register the firewall's per-identity cleanup with a lifecycle registry.
-///
-/// Held as a `Weak`, never an `Arc`: the registry outlives a request and would
-/// otherwise keep the firewall — and every scanner and tracker it owns — alive
-/// for the process lifetime. An upgrade that fails means the firewall is gone,
-/// and so is the state this handler existed to reclaim.
-///
-/// Production code calls this at gateway startup. Tests call the same function,
-/// because a test that registers its own handler proves only that a test can
-/// register one.
-#[cfg(feature = "firewall")]
-pub fn wire_session_lifecycle(
-    lifecycle: &Arc<SessionLifecycle>,
-    firewall: &Arc<crate::security::firewall::Firewall>,
-) {
-    let firewall = Arc::downgrade(firewall);
-    lifecycle.register("firewall-anomaly", move |key| {
-        if let Some(firewall) = firewall.upgrade() {
-            firewall.on_session_end(key);
-        }
-    });
 }
 
 #[cfg(test)]

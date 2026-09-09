@@ -803,14 +803,6 @@ fn governed_meta_tool_names() -> &'static std::collections::HashSet<String> {
     })
 }
 
-/// Whether the name belongs to this gateway's own meta-tool roster.
-///
-/// Distinct from exposure: a governed name can be hidden, and a name outside
-/// the roster is a surfaced backend tool that no gateway policy owns.
-pub(crate) fn is_governed_meta_tool(name: &str) -> bool {
-    governed_meta_tool_names().contains(name)
-}
-
 /// Which meta-tools an operator has chosen to expose.
 ///
 /// One predicate, consumed by both `tools/list` and `tools/call`. Hiding a
