@@ -1931,7 +1931,20 @@ impl MetaMcp {
 /// onto every successful invocation would change the shape of every response
 /// for a field absence already means the same thing.
 fn promote_interim_envelope(tool_name: &str, content: &Value, response: &mut JsonRpcResponse) {
-    let _ = (tool_name, content, response);
+    if !matches!(tool_name, "gateway_invoke" | "gateway_execute") {
+        return;
+    }
+    if content.get("resultType").and_then(Value::as_str) != Some("input_required") {
+        return;
+    }
+    let Some(result) = response.result.as_mut().and_then(Value::as_object_mut) else {
+        return;
+    };
+    for field in ["resultType", "inputRequests", "requestState"] {
+        if let Some(value) = content.get(field) {
+            result.insert((*field).to_string(), value.clone());
+        }
+    }
 }
 
 // ============================================================================
