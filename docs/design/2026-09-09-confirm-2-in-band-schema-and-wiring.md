@@ -301,3 +301,51 @@ Consequence for the RED test: `tests/mik_7246_confirm2_acs.rs` is written and du
 admin key supplied (the first run failed 403 — the wrong failure), and it never hardcodes
 `modern_protocol`. Its real assertion line cannot be captured until the tree compiles, so this
 design does not yet claim one. An unrunnable test is a written test, not a passing gate.
+
+## Design events — decisions this design did not make (§P3)
+
+Two choices were made during implementation that this document had not settled. Naming them here
+is the whole obligation: it grants no authority and closes no gate. §P0 owns whether either moved
+what the change is FOR, §P2 owns the tests, §P4 owns the review.
+
+### DE1 — the confirmation principal falls back to the API-key NAME
+
+`principal_fingerprint(verified_identity)` answers `None` for most modern stateless callers, because
+that path authenticates by API key and the fingerprint is written for a verified backend exchange.
+Minting on `None` was never an option: an envelope bound to nobody is a token any caller can spend.
+Refusing on `None` would have made the entire in-band ask unreachable on precisely the transport
+CONFIRM.2 exists to serve — the criterion would have been met by code nothing could execute.
+
+So `confirmation_principal` falls back to `sha256("apikey-name:" + name)`.
+
+Why this binding is not a widening: it seals a caller to **its own answer to a question this gateway
+just asked it**, over a single-use envelope already bound to the exact tool and the exact arguments.
+It is not a backend continuation binding a user to a side effect on a third party, which is what
+`principal_fingerprint`'s stricter answer is calibrated for. The key name is the same authority the
+admin check accepted one frame earlier for this very call, so the fallback grants no caller anything
+it did not already hold. A caller with neither identity nor key name — anonymous — still gets `None`
+and is still refused, which is exactly the behaviour that existed before this path.
+
+Trigger it meets: a material security property the design left unstated. Residual, stated rather
+than mitigated: two API keys sharing a `name` share a confirmation principal. Nothing in the config
+schema forbids that, and this change does not add a check for it.
+
+### DE2 — the in-band ask is NOT capability-gated
+
+A client that never declared it can answer an `elicitation/create` question still receives the ask.
+The design did not decide this and the obvious reading — gate it, as `Elicit` gates on the proxy —
+is the one NOT taken.
+
+Reason: the two channels fail in opposite directions. `Elicit` calls out to a proxy that must exist,
+so an absent capability is a real dead end. The in-band ask is a **response field**; a client that
+cannot answer simply does not retry, and gets no side effect. Gating it would convert every
+undeclared-but-capable client into the `none could be obtained` refusal — reintroducing the exact
+defect CONFIRM.2 was opened to remove, on a population that cannot be measured from here because
+the modern stateless path carries no negotiated capability record at this point in the call.
+
+Cost, named and accepted: a client that cannot answer sees a response shape it did not ask for
+instead of a refusal it would have understood. That is a worse error message, never a side effect.
+
+Trigger it meets: it changes an observable contract — what a modern destructive call returns to a
+client that declared nothing. Not a scope move, so §P0's freeze does not re-open; it does belong in
+front of §P4 as a decision, not as an implementation detail nobody voted on.
