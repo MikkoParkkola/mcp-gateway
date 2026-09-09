@@ -4,8 +4,11 @@
 //!
 //! Cargo compiles this module once per test binary, so an item only one
 //! suite uses is genuinely dead in the other. That is a property of the
-//! harness layout, not a defect in either suite.
-#![allow(dead_code)]
+//! harness layout, not a defect in either suite. The same holds for the
+//! re-exports below, which `dead_code` does not cover: `Duration` is used by
+//! `nfr_sec1_controls` alone and unused in every other binary that includes
+//! this module.
+#![allow(dead_code, unused_imports)]
 
 pub use axum::body::Body;
 pub use axum::http::{Request, StatusCode};
@@ -35,6 +38,9 @@ pub fn modern(method: &str, params: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
 }
 
+/// Every field is an independent switch a suite flips on its own; folding
+/// them into enums would couple settings that vary independently.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Fixture {
     pub auth: AuthConfig,
     pub agent_auth_enabled: bool,
@@ -217,3 +223,29 @@ pub fn auth_with(keys: Vec<ApiKeyConfig>, bearer: Option<&str>) -> AuthConfig {
         single_user: false,
     }
 }
+
+/// The specification's own "Encoding examples" table, read 2026-08-29.
+/// Original value on the left, header value on the right.
+///
+/// Transcribed from the specification, never produced by our own encoder: a
+/// round-trip through our encoder would only prove that it agrees with our
+/// decoder, which was worth nothing once this release when a whole increment
+/// passed against an invented wire format.
+///
+/// Lives here because both the inbound suite (`mik_7214_acs.rs`, decode) and
+/// the outbound one (`mik_7214_header_9_acs.rs`, encode) must be checked
+/// against the SAME rows. A second transcription is a second specification.
+pub const SPEC_ENCODING_TABLE: &[(&str, &str)] = &[
+    // Plain ASCII passes through untouched.
+    ("us-west1", "us-west1"),
+    // Non-ASCII.
+    ("Hello, \u{4e16}\u{754c}", "=?base64?SGVsbG8sIOS4lueVjA==?="),
+    // Leading and trailing whitespace.
+    (" padded ", "=?base64?IHBhZGRlZCA=?="),
+    // Embedded newline.
+    ("line1\nline2", "=?base64?bGluZTEKbGluZTI=?="),
+    // A plain-ASCII value that happens to look like the sentinel. The
+    // specification requires clients to encode this one precisely so a server
+    // cannot mistake it for an encoded value.
+    ("=?base64?literal?=", "=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?="),
+];

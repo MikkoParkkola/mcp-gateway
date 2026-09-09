@@ -96,6 +96,12 @@ pub struct StdioTransport {
     writer: Mutex<Option<tokio::process::ChildStdin>>,
     /// Negotiated protocol version (config override or auto-negotiated)
     protocol_version: RwLock<Option<String>>,
+    /// Notifications captured for a call that supplied a progress token.
+    ///
+    /// Keyed by the token itself, because stdout is one multiplexed stream:
+    /// "which stream it arrived on" cannot separate two calls in flight here,
+    /// so the token the caller supplied is the whole correlation.
+    captured_notifications: dashmap::DashMap<String, Vec<JsonRpcNotification>>,
 }
 
 impl StdioTransport {
@@ -123,6 +129,7 @@ impl StdioTransport {
             request_timeout,
             writer: Mutex::new(None),
             protocol_version: RwLock::new(protocol_version),
+            captured_notifications: dashmap::DashMap::new(),
         })
     }
 
@@ -421,18 +428,72 @@ impl StdioTransport {
         Ok(())
     }
 
+    /// Register a progress token a caller supplied on a request.
+    ///
+    /// Until a token is registered nothing carrying it is kept: the gateway
+    /// passes a backend's own token through only when it matches one the caller
+    /// supplied, and never mints one (MIK-7272.SUB.2b, §II.6 option (i)).
+    // SCAFFOLD, labelled: the consumer that registers and drains is the
+    // `Accept`-negotiated event-stream body, the outbound half of SUB.2b, which
+    // lands next. Until then only the unit tests reach these, so the lib build
+    // cannot see them called — and this attribute is the evidence of that.
+    #[allow(dead_code)]
+    pub(crate) fn register_progress_token(&self, token: &str) {
+        self.captured_notifications
+            .insert(token.to_string(), Vec::new());
+    }
+
+    /// Take everything captured for a token, ending its registration.
+    #[allow(dead_code)]
+    pub(crate) fn take_captured_notifications(&self, token: &str) -> Vec<JsonRpcNotification> {
+        self.captured_notifications
+            .remove(token)
+            .map(|(_, v)| v)
+            .unwrap_or_default()
+    }
+
+    /// Keep a peer notification for the call that supplied its progress token.
+    ///
+    /// A notification with no token, or one whose token no caller supplied, is
+    /// dropped exactly as before — on a multiplexed stdout there is nothing else
+    /// to attribute it to, and inventing an owner is the failure this guards.
+    // ponytail: token-less methods (`notifications/message`) stay unattributable
+    // over stdio; a per-request stream is what would carry them, and stdio has
+    // none. Named as a design event in the SUB.2b note rather than papered over.
+    fn capture_notification(&self, notification: JsonRpcNotification) {
+        let token = notification
+            .params
+            .as_ref()
+            .and_then(|p| p.get("progressToken"))
+            .and_then(|t| match t {
+                serde_json::Value::String(s) => Some(s.clone()),
+                serde_json::Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            });
+
+        match token.and_then(|t| self.captured_notifications.get_mut(&t)) {
+            Some(mut entry) => {
+                debug!(method = %notification.method, "Capturing peer notification for its caller");
+                entry.push(notification);
+            }
+            None => {
+                debug!(method = %notification.method, "Ignoring peer notification");
+            }
+        }
+    }
+
     /// Handle a response line from stdout
     ///
-    /// The line is classified before it is routed. A peer notification is
-    /// accepted and ignored; a peer *request* is refused, because routing one to
-    /// a pending caller would answer that caller with a frame carrying neither
-    /// `result` nor `error`.
+    /// The line is classified before it is routed. A peer notification is kept
+    /// for the caller that supplied its progress token and otherwise ignored; a
+    /// peer *request* is refused, because routing one to a pending caller would
+    /// answer that caller with a frame carrying neither `result` nor `error`.
     fn handle_response(&self, line: &str) -> Result<()> {
         debug!(line = %line, "Parsing response");
         let response = match serde_json::from_str::<JsonRpcMessage>(line)? {
             JsonRpcMessage::Response(response) => response,
             JsonRpcMessage::Notification(notification) => {
-                debug!(method = %notification.method, "Ignoring peer notification");
+                self.capture_notification(notification);
                 return Ok(());
             }
             JsonRpcMessage::Request(request) => {
@@ -1031,7 +1092,8 @@ done
         panic!(
             "child survived dropping every handle to its transport: pid {pid} still alive after 2s"
         );
-    
+    }
+
     // =========================================================================
     // MIK-7272.SUB.2b — request-scoped notification capture over stdio.
     //

@@ -59,7 +59,7 @@ benefit.
 | MIK-7245 | P3 | write config files `0600` |
 | MIK-7263 | P3 | callback-registration admin denial returned as a configuration error |
 | MIK-7262 | P3 | an explicit `registers_external_callback` declaration is ignored in three shapes |
-| MIK-7291 | — | `SessionLifecycle` is dead code on the 2026 path: wire it or delete it |
+| MIK-7291 | — | `SessionLifecycle` is unreached on the 2026 path: wire it (ruled 2026-09-08) |
 
 Eighteen issues; MIK-7291 was filed off this branch and is not in the project
 filter. Five are P1 and every one of those is an authentication or
@@ -74,7 +74,18 @@ capability backend has loaded is what a deployment's own rollout gate reads —
 a wrong answer there routes traffic at a gateway that cannot serve it, which
 is an availability defect rather than polish. MIK-7291 is the narrowed one: it rides along as a
 deletion only; wiring `SessionLifecycle` on a path that removes sessions would
-be new work. Nothing exploitable ships, and the hardening set is not split
+be new work. **That deletion clause was withdrawn on 2026-09-08**
+(`docs/release/2026-09-08-team-lead-rulings.md` §R3, ruling `8bbca3eb`): the
+2026-08-29 narrowing binds the *ticket*, not the `CONTROL.4` criterion. "Dead
+code" described the code's state — nothing calls `register`/`track`/`reap` —
+and said nothing about whether the requirement is dead. The requirement is live
+precisely because the 2026 transport removed the disconnect event that used to
+trigger the cleanup: state reclaimed on disconnect is now reclaimed by nothing,
+so deleting the mechanism would leave a blocking criterion unmet and remove the
+evidence that anyone noticed. MIK-7291 now closes when `CONTROL.4` wires it, on
+the 2026-09-07 terms that still stand — a maintenance-tick reaper, with the TTL
+carried as a defensible default stated as an assumption rather than as a
+settled operator decision. Nothing exploitable ships, and the hardening set is not split
 across two releases where the reload-config family would be worked twice. They
 are sequenced by shared code path, not by priority, so each batch is one design
 and one review rather than twenty:
@@ -86,7 +97,7 @@ and one review rather than twenty:
 | 3 — caller identity | MIK-7252, 7251, 7257 | who the request is for, and how that is proven |
 | 4 — callback registration | MIK-7263, 7262 | the `registers_external_callback` declaration |
 | 5 — secret redaction | MIK-7221, 7222 | the credential-disclosure class across transports |
-| 6 — loose ends | MIK-7268, 7246, 7291, 7265 | health readiness, the destructive gate, dead code, the build |
+| 6 — loose ends | MIK-7268, 7246, 7291, 7265 | health readiness, the destructive gate, session-lifecycle wiring, the build |
 
 ## C. 4.1 — real product work, weeks not hours
 

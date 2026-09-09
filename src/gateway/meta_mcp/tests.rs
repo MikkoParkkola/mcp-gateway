@@ -5772,3 +5772,89 @@ async fn a_reissued_idempotency_key_is_served_from_the_stored_result() {
          placeholder: first={first}, second={second}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BLOCK-1: an interim round must survive the meta-tool success wrapper
+// ---------------------------------------------------------------------------
+
+/// The envelope a backend returns when it stops to ask the client something.
+fn interim_envelope() -> serde_json::Value {
+    json!({
+        "resultType": "input_required",
+        "inputRequests": {
+            "confirm": { "type": "elicitation", "message": "proceed?" }
+        },
+        "requestState": "opaque-continuation-handle",
+        "content": [{ "type": "text", "text": "waiting" }],
+    })
+}
+
+#[test]
+fn block_1_gateway_invoke_interim_fields_reach_the_result() {
+    let content = interim_envelope();
+    let mut response = wrap_tool_success(RequestId::Number(1), &content, false);
+    promote_interim_envelope("gateway_invoke", &content, &mut response);
+
+    let result = response.result.expect("success response carries a result");
+    assert_eq!(
+        result.get("resultType").and_then(serde_json::Value::as_str),
+        Some("input_required"),
+        "a client reads resultType from the top level of the result",
+    );
+    assert_eq!(
+        result
+            .get("requestState")
+            .and_then(serde_json::Value::as_str),
+        Some("opaque-continuation-handle"),
+        "without the handle at the top level the round cannot be continued",
+    );
+    assert!(
+        result
+            .get("inputRequests")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|map| map.contains_key("confirm")),
+        "the questions must be readable as JSON, not as characters in a text block",
+    );
+}
+
+#[test]
+fn block_1_gateway_execute_interim_fields_reach_the_result() {
+    let content = interim_envelope();
+    let mut response = wrap_tool_success(RequestId::Number(2), &content, false);
+    promote_interim_envelope("gateway_execute", &content, &mut response);
+
+    let result = response.result.expect("success response carries a result");
+    assert_eq!(
+        result
+            .get("requestState")
+            .and_then(serde_json::Value::as_str),
+        Some("opaque-continuation-handle"),
+        "the single-tool execute path shares the wrapper and the defect",
+    );
+}
+
+#[test]
+fn block_1_promotion_leaves_a_completed_call_alone() {
+    let content = json!({ "resultType": "complete", "content": [] });
+    let mut response = wrap_tool_success(RequestId::Number(3), &content, false);
+    promote_interim_envelope("gateway_invoke", &content, &mut response);
+
+    let result = response.result.expect("success response carries a result");
+    assert!(
+        result.get("resultType").is_none(),
+        "a completed call keeps the response shape it always had",
+    );
+}
+
+#[test]
+fn block_1_promotion_ignores_tools_that_cannot_produce_a_round() {
+    let content = interim_envelope();
+    let mut response = wrap_tool_success(RequestId::Number(4), &content, false);
+    promote_interim_envelope("gateway_list_servers", &content, &mut response);
+
+    let result = response.result.expect("success response carries a result");
+    assert!(
+        result.get("requestState").is_none(),
+        "only the invocation paths mint continuations, so only they promote",
+    );
+}

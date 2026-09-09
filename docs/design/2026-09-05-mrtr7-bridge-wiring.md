@@ -1728,3 +1728,56 @@ round as it does today and no projection is chosen.
 | per-session store | checkable | a capability field on the session record, reachable from `CallerContext`; today `rg -n declared_capabilities src/` shows only the per-request producer |
 | D-E `cost_warnings` | askable | release owner, via team-lead (above) |
 | D-C channel purpose | askable | resolved R8 — dedicated channel, 22 call sites paid |
+
+## §P3 design events — decisions made during the production wiring
+
+The wiring of `InputBridge` into `MetaMcp::invoke_tool_traced`
+(`src/gateway/meta_mcp/invoke.rs`) forced six choices the design above did not
+make. Each is named here at the moment it was made, per `development-process.md`
+§P3; naming grants no authority and opens no exit, it only exposes them.
+
+### D1 — a successful bridged exchange does NOT return early
+
+`result = completed; interim = None;` rather than an early
+`GuardedValue::sealed_by_guard`. Returning early would skip the post-invoke
+response-contract gate, anomaly screening and caching that the completed path
+runs. A bridged answer is a backend answer and is screened like one. Changes an
+observable security property, so it is a design event.
+
+### D2 — idempotency reservation commits on the bridged result
+
+The commit above the interim branch is skipped because `stopped_to_ask` holds.
+After a completed bridged exchange it no longer holds, so the `Ok` arm calls
+`reservation.commit(&completed)` with `idem_reservation` still in scope. Without
+this a bridged call is replayable; with it, the exchange has the same
+at-most-once shape as an ordinary invoke.
+
+### D3 — `TracingBridgeObserver`
+
+No `BridgeObserver` implementation existed anywhere in `src/`. The production
+path gets a minimal one emitting `debug!` with `trace_id` and the round record.
+`ponytail:` a tracing line, not a metric — move to a counter when an operator
+needs aggregation rather than a single exchange.
+
+### D4 — no capability slice on the legacy branch
+
+`slice = None`. The legacy branch carries no per-request `_meta` to narrow by,
+so the session-store `Declared` authority stands alone. This is the slice
+asymmetry above resolving in the only direction the legacy era allows.
+
+### D5 — bridge failure is `-32003`, data-less
+
+`Error::JsonRpc { code: -32003, message, data: None }`, shape copied from
+`undeclared_input_request`. The message names the tool and server and says the
+bridged exchange could not be completed; the `BridgeError` variant is logged at
+`warn!` and NOT put on the wire, because its `key`/`reason` fields describe the
+client's own refusals back to the client.
+
+### D6 — the impact gate could not run
+
+`gitnexus_impact({target: "invoke", direction: "upstream"})` returned
+`Error: No indexed repositories. Run: gitnexus analyze`. The blast radius below
+is therefore evidence-class **I (grep-derived)**, not V (graph-derived), and the
+widening of `BackendInvoker::invoke` happened before the gate was attempted, not
+after. Implementers: `FakeBackend` (`tests/mik_7212_mrtr7_bridge_acs.rs:206`)
+and the new `BridgeDispatcher`; callers internal to `input_bridge.rs`. LOW.

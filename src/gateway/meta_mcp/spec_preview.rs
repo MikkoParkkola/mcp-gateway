@@ -577,7 +577,15 @@ mod tests {
     fn build_initialize_result_advertises_filtering_and_resolve_capabilities() {
         // GIVEN: MetaMcp (spec-preview feature is enabled in this test build)
         let m = meta();
-        let resp = m.handle_initialize(RequestId::Number(99), None, None, None);
+        // `None` params declare no protocol era, which is the legacy
+        // handshake -- the arm that carries no extensions.
+        let resp = m.handle_initialize(
+            RequestId::Number(99),
+            None,
+            None,
+            None,
+            crate::protocol::meta::Era::Legacy,
+        );
         // THEN: capabilities.tools.filtering = true and resolve = true
         let result = resp.result.unwrap();
         let filtering = &result["capabilities"]["tools"]["filtering"];
