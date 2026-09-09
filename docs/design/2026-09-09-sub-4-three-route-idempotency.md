@@ -81,8 +81,20 @@ exported.
 
 `identity_suffix` is a parameter, not derived inside: without it one caller's key
 replays another caller's result. Route 1 binds identity through
-`retry_identity_suffix`; the direct route has `api_key_name` in hand and binds the
-same way.
+`retry_identity_suffix` (`src/gateway/meta_mcp/support.rs:80`), which takes TWO
+inputs — the propagation `cache_binding` first, the verified subject otherwise.
+The direct route holds both by the time it would call this: `verified_identity`
+is lifted out of the request extensions before the body is consumed
+(`backend_handlers.rs:449`), and `identity_key` is set by the propagation
+resolution a few lines further down (`backend_handlers.rs:625` and `:638`). It binds
+with the same two, in the same order. It does NOT bind on `api_key_name`: that
+names the API KEY, not the end user, so two people sharing one gateway key would
+share one cache entry — the exact disclosure `SUB.4.DIRECT.2` exists to deny.
+
+The malformed refusal is reachable on this route for a plain reason: the handler
+already parses the frame into `(id, method, params)` at
+`backend_handlers.rs:509`, so `RetryFields::from_params(params.as_ref())` has its
+argument in hand, before anything dispatches upstream.
 
 ## Open questions — scheduled, per §P1
 
