@@ -186,9 +186,9 @@ cheapest of the three — one consumer against two landed capture paths — and 
 is the one whose ledger row most misleads a reader today, so it should be
 re-evidenced even before it is built.
 
-## Addendum, same day: two gaps the ledger does not carry
+## Addendum, same day: gaps the ledger does not carry
 
-Both surfaced from other lanes and were re-verified here at source before being
+Each surfaced from another lane and was re-verified here at source before being
 recorded, because a lane's report is corroboration, not proof.
 
 ### A. `MIK-7246.CONFIRM.1a` is not a blocker, and is not measured either
@@ -291,3 +291,48 @@ decision before release rather than three more discoveries. Adding
 `--no-fail-fast` to the test job and `--all-targets` to the clippy job closes the
 second and third; both are changes to the release branch's CI configuration and
 belong to whoever owns it.
+
+### D. A legacy caller with a session id but no usable channel is refused outright
+
+The three red tests in `src/gateway/meta_mcp/tests.rs` --
+`a_declared_input_request_passes_the_gateway_gate` (line 3486),
+`a_continuation_that_is_never_retried_stores_nothing_gateway_side` (line 3552)
+and `an_enforced_transform_preserves_the_continuation_handle` (line 2977) -- do
+not fail in the continuation mint. They fail one branch earlier, and the error
+string is what separates the two. Two `-32003` sites exist and they say
+different things: `unbindable_continuation`, at line 459 of
+`src/gateway/meta_mcp/invoke.rs`, says "cannot be continued for this caller",
+while the legacy-bridge branch at line 1801 of the same file -- the only site
+producing that wording -- says "the bridged exchange could not be completed".
+All three failures carry the second. The mint at line 1822 is never reached, so
+every hypothesis about the keyring, the principal or the slot table is about a
+function these tests do not enter.
+
+The branch guard at lines 1745 to 1747 is
+`caller.era == Era::Legacy && interim.is_some() && session_id.is_some()`. The
+shared fixture `allow_all_ctx_named`, at line 27 of the test module, sets
+`era: Era::Legacy` on line 43 and `channel: &NoClientChannel` on line 44; the
+tests pass `Some("session-1")` and declare elicitation. So `InputBridge::run`
+reaches `NoClientChannel::send_request`, at line 328 of
+`src/gateway/input_bridge.rs`, which returns `Err(DeliveryError::NoSession)`
+unconditionally on line 335, and the branch converts any bridge error into a
+hard refusal at lines 1798 to 1805.
+
+The defect is in the guard, not the fixture. It tests `session_id.is_some()` --
+a session *identifier* -- but what decides whether a bridge can run is whether
+the *channel* can deliver, and those are different facts. A legacy client whose
+session id is known while its channel cannot deliver -- a disconnected SSE
+stream, stdio with no client half -- now receives a hard refusal where the
+pre-split code minted a redeemable continuation. `DeliveryError::NoSession` is a
+distinguishable variant, so the fall-through is available: on `NoSession`
+specifically, leave `interim` set and drop through to the mint, which is the
+case that path exists to serve. `Declined`, `UnknownAction` and `ClientRefused`
+are real answers from a reachable client and must keep failing hard.
+
+This belongs to the era-split lane. The branch and its guard arrived with the
+split, and it shares a root with section A above: the split changed which
+callers reach which path, and the fixtures encoding the old routing were not
+re-read. It does not change the blocking count -- the tests are red today and
+already counted under item 0 -- but the production behaviour behind them is a
+wire regression, not a test-fixture artefact, and shipping it would refuse a
+class of legacy client the gateway previously served.
