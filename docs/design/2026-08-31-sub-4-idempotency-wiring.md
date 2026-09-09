@@ -1,6 +1,6 @@
 # MIK-7272.SUB.4 — idempotency protection for reissued side-effecting calls
 
-Status: proposed, revision 9. Route 1 is built (`7851736d`); route 2's carrier is built and
+Status: proposed, revision 10. Route 1 is built (`7851736d`); route 2's carrier is built and
 uncommitted (rev 7); route 3 is unbuilt and acquires its design section in rev 8.
 Revisions 1 and 2 were reviewed by GPT-5.x and Grok; both returned `SHIP-WITH-FIXES` on revision 2.
 Revision 3 was the repair. Revision 4 settles the last question a check could settle, and records
@@ -947,3 +947,23 @@ route 3 adopts route 1's.
   requester's.
 - It does not claim a passing dual review. One leg returned `SHIP-WITH-FIXES` and was repaired; the
   second is outstanding, and a design with one leg back is not a reviewed design.
+
+## Revision 10 — the second review leg came back, and it moved the guard again
+
+Leg 2 landed at `2026-09-09T09:30:51Z` against the same material leg 1 saw
+(`material_bytes` 11009, `head` `12441cec`), `process_status = ok`,
+verdict `SHIP-WITH-FIXES`. Per §PA that row and that exit status ARE the verdict; nothing here is
+scraped from the body. The design is now dual-reviewed. Both legs returned SHIP-WITH-FIXES, which
+is not a ship — it is two lists of findings, and this revision closes leg 2's.
+
+Leg 2 raised three findings and three improvements. Two findings and two improvements were already
+closed by revision 9, which was written from leg 1's list before leg 2 returned:
+
+| leg-2 item | state |
+|---|---|
+| HIGH — the guard cannot be an `enforce_oauth_isolation` sibling returning `Result<()>`; it must carry the reservation | CLOSED by revision 9's F3 repair. Identical finding, independently raised. Two vendors converging on one defect is the strongest signal either produced |
+| IMPROVEMENT — extract route 1's key derivation into the shared method rather than cloning it | CLOSED by revision 9's F2 repair: one fingerprint spelling, reused, not respelled |
+| IMPROVEMENT — content-anchor the handler as `backend_handler`; `handle_backend_request` does not exist | CLOSED by revision 9's improvement 7, and finished below — the anchors in the test rows still carried line numbers |
+| CRITICAL — the Axis-4 binding is an unmade decision aimed at the wrong type | OPEN. Repaired below |
+| HIGH — path 2 is `passthrough: true`, and the guard's site does not cover both forwards | OPEN. Repaired below, and it retracts a sentence of revision 9's |
+| IMPROVEMENT — the Axis-4 row must name WHICH identity differs | OPEN. Repaired below |
