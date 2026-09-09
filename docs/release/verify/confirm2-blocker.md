@@ -228,3 +228,59 @@ lead's condition for bumping ("only if you cannot avoid it") was never met.
 **Still unmeasured.** `/` is at 3.4G against the 5G floor. Nothing in this entry was
 compiled or run; the code is committed with that stated in the commit body, per the lead's
 standing instruction. `RELEASE-4.0.0-criteria-status.md:249` stays `ABSENT`.
+
+## Fifth entry (2026-09-09) — the requirement does not demand REFUSE, but CONFIRM.1a's cited test should now be RED
+
+Answering the lead's question directly: **not a fourth blocker.** The requirement text
+(`RELEASE-4.0.0-requirements.md:204-205`) does not demand that `for_modern()`'s `REFUSE` be
+reachable.
+
+- `CONFIRM.1a` demands an *outcome*: "MUST refuse when it cannot obtain confirmation." It
+  names no mechanism. A refusal delivered by the in-band mint failing satisfies it exactly as
+  a policy-driven refusal would.
+- `CONFIRM.1b` demands "MUST NOT proceed on a warning **on the modern path**" and then says
+  the legacy path "keeps `PROCEED_WITH_WARNING` deliberately... that asymmetry is intentional
+  and is not a defect of this criterion." So the legacy-proceeds consequence recorded in the
+  third finding is **explicitly permitted**, and my earlier framing of it as a defect was
+  wrong on the requirement. Withdrawn.
+
+A dead `for_modern()` is therefore dead code, not a requirement violation. What must go is the
+CONFIRM.1a cell's *basis*, not its verdict — as the lead ruled.
+
+### But re-evidencing turns up something worse, and it is a prediction, not a measurement
+
+The row's PASS rests on `ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused`
+(`tests/mik_7215_acs.rs:683`), which asserts `-32001` with "none could be obtained" for a
+modern admin call. Four facts at `HEAD` say that assertion can no longer hold:
+
+1. The era split is **committed**, not in-flight. `HEAD`'s `handlers.rs` holds two
+   `ConfirmationChannel::InBand` sites and two `Elicit` sites, and the file has no uncommitted
+   changes at all (V: `git show HEAD:...handlers.rs | rg -c`, `git status --short`). A modern
+   request takes `InBand`.
+2. `state.continuation` is `Arc<ContinuationState>`, not an `Option` (`router/mod.rs:95`), so
+   the channel always carries one.
+3. `ContinuationState::new()` configures a working keyring — `Keyring::new(&[(1, key)])` with
+   a real 32-byte key (`protocol/continuation.rs:1109-1120`) — and the fixture builds exactly
+   that (`tests/mik_7215_acs.rs:248`). The mint is not short of keys.
+4. `confirmation_principal` falls back to the api-key name (`meta_mcp/mod.rs:2043-2047`), so an
+   `admin-client` api-key caller **is** nameable. This is the "principal fallback" design event
+   named in `e68abcb0`.
+
+With a live channel, a working keyring and a nameable principal, the in-band mint succeeds and
+the modern caller is **asked**. The refusal that test asserts requires the mint to fail, and
+none of its failure modes are present in that fixture.
+
+**Consequence for the ledger.** CONFIRM.1a's cell is not merely mis-based: the test it cites
+is predicted red at `HEAD`. The honest grade is not `PASS` and not `FAIL` — it is unmeasured
+and at risk, pending a host that can run it. Recorded here rather than flipped: verdict
+authority is the lead's, and a prediction is not a measurement. The lead's CI figure of 4155
+of 4157 (two failures) is consistent with this but does not identify which tests failed.
+
+**Consequence for CONFIRM.2, this lane's own row.** The same four facts predict that the ask
+half is already live at `HEAD`, which is what
+`tests/mik_7246_confirm2_acs.rs::modern_destructive_call_asks_in_band` asserts. That row may be
+closer to met than `ABSENT` records. It stays `ABSENT`: an unmeasured row is not a met row, and
+the second test in that file (the decline branch) additionally needs the redemption wired,
+which is the 141 uncommitted lines this lane is holding under ruling (c).
+
+Everything in this entry is source reading. Nothing was compiled or run; the disk floor stands.
