@@ -1787,6 +1787,24 @@ impl MetaMcp {
                     result = completed;
                     interim = None;
                 }
+                // No client session to reach is not a failed exchange: it is
+                // the absence of one. A legacy caller can arrive with a
+                // declared capability and no session to carry the request on —
+                // every stateless caller does — and the bridge is the wrong
+                // messenger for it, not the last one. Fall through with
+                // `interim` still set and the ask goes out as a continuation,
+                // which is exactly what this path did before the bridge was
+                // wired in front of it.
+                //
+                // ponytail: `run` walks rounds internally and a session lost on
+                // round two surfaces the same way, so the mint would replay
+                // prompts already answered. Needs a progress signal out of
+                // `run` to tell the two apart; not built, because no channel in
+                // tree fails later than round one.
+                Err(crate::gateway::input_bridge::BridgeError::Delivery {
+                    error: crate::gateway::input_bridge::DeliveryError::NoSession,
+                    ..
+                }) => {}
                 Err(error) => {
                     warn!(
                         server,
