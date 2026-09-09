@@ -406,6 +406,7 @@ fn json_is_populated(value: &Value) -> bool {
 /// the other's rule.
 pub(super) async fn mint_continuation(
     continuation: &crate::protocol::continuation::ContinuationState,
+    purpose: crate::protocol::continuation::ContinuationPurpose,
     principal: Option<String>,
     server: &str,
     tool: &str,
@@ -426,6 +427,9 @@ pub(super) async fn mint_continuation(
         record_continuation_mint("no_slot");
         return None;
     };
+    // Stamped before the seal, so the purpose is inside the authenticated
+    // plaintext rather than alongside it where a client could restate it.
+    let payload = payload.with_purpose(purpose);
     match continuation.keyring().mint(&payload) {
         Ok(envelope) => {
             record_continuation_mint("ok");
@@ -471,7 +475,7 @@ fn unbindable_continuation(server: &str, tool: &str) -> Error {
 /// issued, unsealed from inside it. One struct for both directions is how a
 /// client-supplied string reaches a backend as if the gateway had issued it.
 #[derive(Debug, Default)]
-struct OutboundRetry {
+pub(super) struct OutboundRetry {
     /// The backend's own opaque state, or `None` when it issued none.
     request_state: Option<String>,
     /// The client's answers, verbatim.
@@ -589,19 +593,31 @@ pub(super) fn retry_origin_backend(
     continuation: &crate::protocol::continuation::ContinuationState,
     retry: &crate::protocol::mrtr::RetryFields,
 ) -> Option<Result<String>> {
+    use crate::protocol::continuation::ContinuationPurpose;
+
     let token = retry.request_state.as_deref()?;
     let now = crate::protocol::continuation::now_unix_secs();
-    Some(
-        continuation
-            .keyring()
-            .open(token, now)
-            .map(|payload| payload.backend_id)
-            .map_err(|error| {
-                warn!(%error, "Continuation refused before routing");
-                record_continuation_rejection(continuation_error_reason(&error));
-                rejected_continuation(&error)
-            }),
-    )
+    let payload = match continuation.keyring().open(token, now) {
+        Ok(payload) => payload,
+        Err(error) => {
+            warn!(%error, "Continuation refused before routing");
+            record_continuation_rejection(continuation_error_reason(&error));
+            return Some(Err(rejected_continuation(&error)));
+        }
+    };
+    match payload.purpose {
+        ContinuationPurpose::Backend => Some(Ok(payload.backend_id)),
+        // Not a route. `backend_id` holds the meta-tool the gateway asked about,
+        // and no backend of that name need exist. `None` falls through to the
+        // meta surface, which is where the answer was always going.
+        //
+        // Unreachable today by construction: this site sits inside
+        // `route_direct_backend_call` (`mod.rs:1532`), whose only caller is
+        // `mod.rs:1732`, downstream of the gate at `:1715` and skipped on
+        // `ProceedConfirmed`. It is here so that ordering stops being the only
+        // thing keeping a spent confirmation envelope out of the redeem path.
+        ContinuationPurpose::GatewayConfirmation => None,
+    }
 }
 
 /// Open the continuation a retry presents and recover what the backend gets
@@ -620,6 +636,7 @@ pub(super) fn retry_origin_backend(
 /// exists to close.
 pub(super) async fn redeem_retry(
     continuation: &crate::protocol::continuation::ContinuationState,
+    purpose: crate::protocol::continuation::ContinuationPurpose,
     caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     principal: Option<String>,
     server: &str,
@@ -642,6 +659,20 @@ pub(super) async fn redeem_retry(
         record_continuation_rejection(continuation_error_reason(&error));
         rejected_continuation(&error)
     })?;
+
+    // The envelope must have been minted for the redemption now spending it.
+    // Checked before the hold is spent, like the bindings below: a handle
+    // presented at the wrong site should not burn the redemption its rightful
+    // site still needs. The error names neither purpose — which one it hit is
+    // not the client's business.
+    if payload.purpose != purpose {
+        warn!(
+            server,
+            tool, "Continuation presented to a redemption it was not minted for"
+        );
+        record_continuation_rejection("purpose_mismatch");
+        return Err(rejected_continuation(&ContinuationError::NotAuthentic));
+    }
 
     // The same fingerprint the mint bound to, derived the same way. A caller the
     // gateway cannot name cannot match one it could: `principal_fingerprint`
@@ -1519,30 +1550,30 @@ impl MetaMcp {
         // the only scope holding all five values the mint sealed — the backend
         // server and tool, its argument object, the caller's identity, and the
         // handle itself.
-        let outbound_retry =
-            match redeem_retry(
-                &self.continuation,
-                caller,
-                crate::protocol::mrtr::principal_fingerprint(caller.verified_identity),
-                server,
-                tool,
-                &arguments,
-            )
-            .await
-            {
-                Ok(retry) => retry,
-                Err(error) => {
-                    // Refused before the backend was reached, so it has not
-                    // acted: the key is released rather than settled. Settling
-                    // one here would answer an honest retry, made after a fresh
-                    // question, with a sentence naming a side effect nothing
-                    // performed.
-                    if let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.release();
-                    }
-                    return Err(error);
+        let outbound_retry = match redeem_retry(
+            &self.continuation,
+            crate::protocol::continuation::ContinuationPurpose::Backend,
+            caller,
+            crate::protocol::mrtr::principal_fingerprint(caller.verified_identity),
+            server,
+            tool,
+            &arguments,
+        )
+        .await
+        {
+            Ok(retry) => retry,
+            Err(error) => {
+                // Refused before the backend was reached, so it has not
+                // acted: the key is released rather than settled. Settling
+                // one here would answer an honest retry, made after a fresh
+                // question, with a sentence naming a side effect nothing
+                // performed.
+                if let Some(reservation) = idem_reservation.as_mut() {
+                    reservation.release();
                 }
-            };
+                return Err(error);
+            }
+        };
 
         let dispatch_result = self
             .accounted_dispatch(
@@ -1790,6 +1821,7 @@ impl MetaMcp {
         if let Some(interim) = interim {
             let Some(envelope) = mint_continuation(
                 &self.continuation,
+                crate::protocol::continuation::ContinuationPurpose::Backend,
                 crate::protocol::mrtr::principal_fingerprint(caller.verified_identity),
                 server,
                 tool,
