@@ -1228,11 +1228,6 @@ mod ownership {
 
     /// The tool actually runs, and the handle resolves to its result.
     ///
-    /// Two assertions on the creation response carry as much as the settle
-    /// does: `working` with no `result` is a shape a synchronous
-    /// invoke-then-settle implementation cannot produce, so the pair excludes
-    /// the design this one was chosen over.
-    ///
     /// LIMIT, stated rather than left for a reviewer to find: this does not
     /// prove the backend call runs CONCURRENTLY with the response. That needs
     /// a backend the test can hold at a barrier and release after the poll,
