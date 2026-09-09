@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Continuation key rotation — NFR.SEC.3.
 //!
 //! Test plan: `docs/requirements/2026-09-09-nfr-sec3-key-rotation-test-plan.md`.
