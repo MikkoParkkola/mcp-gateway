@@ -391,15 +391,15 @@ observed that string; "request throttled by upstream" is in a test because
 somebody did. Accepted knowingly rather than traded for the observed case.
 
 That both recorders route through the one predicate is a STRUCTURAL property, not a
-tested one: `is_rate_limited` is defined once, in `src/gateway/recovery.rs`, and no
-classifier keeps a second copy. No case drives one table of signal strings through both
-paths asserting an identical verdict per input. The test plan records that as
-GH475.RL.11 with no case, disposed to
+tested one: at the time of this decision `is_rate_limited` was defined once, in
+`src/gateway/recovery.rs`, and no classifier kept a second copy. No case drives one
+table of signal strings through both paths asserting an identical verdict per input.
+The test plan records that as GH475.RL.11 with no case, disposed to
 [#481](https://github.com/MikkoParkkola/mcp-gateway/issues/481); the criteria ledger
-carries the row, its current caller list and its `structural` qualifier, and is the one
+carries the row, its caller list and its `structural` qualifier, and is the one
 place that inventory lives.
 
-An earlier revision of this paragraph claimed a test asserts both call sites route
+An earlier revision of this paragraph claimed a test asserts both recorders route
 through the predicate. No such test exists.
 
 Both design legs and one confirmation pass returned against this text, and the
