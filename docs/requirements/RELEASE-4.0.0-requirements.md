@@ -7,6 +7,14 @@
 ticket manifest live there and are **not** restated here.
 **Portfolio strategy**: `docs/design/RFC-0060-dual-generation-mcp.md`
 
+**Approved scope update (2026-09-06)**:
+[capability requirements](RELEASE-4.0.0-scope-update.md),
+[decision provenance](RELEASE-4.0.0-scope-decisions-2026-09-06.md) and
+[supplemental acceptance ledger](RELEASE-4.0.0-scope-status.json).
+These add required release work; the original ledger alone is no longer the
+complete acceptance set. The original 3.5.0 benchmark baseline stays fixed;
+3.5.1 is also required as the current published upgrade source.
+
 This document states **what must be true** for 4.0.0 to ship. It does not say how. Where a
 requirement and the design disagree, the requirement is the one that was agreed and the design is
 wrong until re-reviewed.
@@ -347,7 +355,7 @@ the gateway shows the world.
 | Other portfolio surfaces (hebb, throttla, fulcrum, botnaut-client, pithy) | RFC-0060 owns them. The gateway goes first because it is the only surface that must speak both eras at once. |
 | Retiring 2025-03-26 and 2024-11-05 | Needs one week of revision telemetry. Retiring a revision on a guess breaks a client nobody knew was connecting. |
 | Skills-over-MCP, MCP Apps extensions | Not stable specifications. |
-| OAuth consumer slices MIK-6744 / 6745 / 6746 | Consumers of the identity seam, each with its own consent and storage design. 4.1.0. |
+| Broad OAuth expansion beyond the approved personal-account journey | MIK-6744/6745 fallback consent/storage is now in 4.0; reconcile MIK-6746's existing implementation and authorization contract. See the approved scope update. |
 | Kubernetes operator GA | Its own dependency chain, orthogonal to the protocol. |
 | MIK-7251, MIK-7250, MIK-7042 | Aimed at code this release deletes; re-scoped after slice 2 rather than written twice. |
 
@@ -376,6 +384,8 @@ none here. Full statements in RFC-0061 §Unknowns.
 6. Two independent frontier-model reviews, from different vendors, recorded against the final change.
 7. The nineteen manifest tickets carry per-criterion verdicts; the six already-fixed tickets are closed; the three superseded tickets are re-scoped.
 8. `cargo clippy -D warnings`, `cargo fmt --check` and the full suite are green.
+9. Every supplemental scope criterion and required decision is complete:
+   `python3 scripts/release/check_scope_acceptance.py --release` succeeds.
 
 **Explicitly not acceptance**: that the code compiles and the existing suite passes. This release's
 failure mode is a control that still runs and no longer protects, and an existing suite written

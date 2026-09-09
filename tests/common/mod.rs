@@ -10,7 +10,7 @@
 pub use axum::body::Body;
 pub use axum::http::{Request, StatusCode};
 pub use mcp_gateway::backend::BackendRegistry;
-pub use mcp_gateway::config::{ApiKeyConfig, AuthConfig, CircuitBreakerConfig, Config};
+pub use mcp_gateway::config::{ApiKeyConfig, AuthConfig, Config};
 pub use mcp_gateway::gateway::auth::ResolvedAuthConfig;
 pub use mcp_gateway::gateway::oauth::{AgentAuthState, AgentRegistry, GatewayKeyPair};
 pub use mcp_gateway::gateway::proxy::ProxyManager;
@@ -20,7 +20,6 @@ pub use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 pub use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 pub use serde_json::{Value, json};
 pub use std::sync::Arc;
-pub use std::time::Duration;
 pub use tower::ServiceExt;
 
 /// A modern request frame: the revision removed the handshake, so every

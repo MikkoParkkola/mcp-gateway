@@ -298,8 +298,7 @@ impl Run {
         // accounting — lets a handful of malformed local calls count against a
         // peer that never saw them.
         assert_eq!(
-            *code,
-            -32600,
+            *code, -32600,
             "a locally refused caller error is an invalid request, not a \
              backend failure; got {error}"
         );

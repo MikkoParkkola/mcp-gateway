@@ -1,0 +1,208 @@
+{
+  "schema_version": 1,
+  "criteria": [
+    {
+      "id": "GH462.CONFIG.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "GH452.SESSION.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-7377.SIGNING.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-7334.CATALOGUE.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-7387.STDIO.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-7387.STDIO.2",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-7387.STDIO.3",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-7388.CANCEL.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-7311.LIFECYCLE.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-7311.LIFECYCLE.2",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-7311.LIFECYCLE.3",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-7311.LIFECYCLE.4",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-7311.LIFECYCLE.5",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-6744.STORE.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-6744.STORE.2",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-6745.JOURNEY.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-6745.JOURNEY.2",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-6745.JOURNEY.3",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-6746.CONTRACT.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-3274.RANKING.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-3274.RANKING.2",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-3274.RANKING.3",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-7332.DISCOVERY.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-7235.PIN.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "MIK-6710.AUDIT.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "NFR.CONFORMANCE.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "NFR.WORKLOAD.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "NFR.UPGRADE.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "NFR.RELEASEGATE.1",
+      "status": "met",
+      "evidence": [
+        "docs/release/v4.0.0-scope-contract-validation.md",
+        ".github/workflows/ci.yml",
+        ".github/workflows/docker.yml",
+        ".github/workflows/release.yml",
+        "scripts/release/test_scope_acceptance.py",
+        "scripts/release/test_scope_contract_interface.py"
+      ],
+      "note": "Integrated by PR497 at424f997eb06f0590d31dc604c52c5dbe536db318. All18 applicable pre-merge checks and post-merge CI34187040999/Docker34187040990 passed.44 scope tests,100% native checker line coverage and90.21% mutation score; publishing paths enforce complete baseline/supplemental acceptance and decisions. This closes the tooling criterion only."
+    },
+    {
+      "id": "NFR.DEMO.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    },
+    {
+      "id": "NFR.BUILD.1",
+      "status": "pending",
+      "evidence": [],
+      "note": "Not yet graded against the approved scope update; see the supplemental test and delivery plans."
+    }
+  ],
+  "decisions": [
+    {
+      "id": "reference_personal_account_journey",
+      "status": "resolved",
+      "selection": "Open WebUI on Spark \u2192 gateway \u2192 Google Workspace",
+      "evidence": [
+        "docs/requirements/RELEASE-4.0.0-scope-decisions-2026-09-06.md"
+      ]
+    }
+  ]
+}

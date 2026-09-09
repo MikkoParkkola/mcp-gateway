@@ -9,10 +9,12 @@ This is a **delta** on `docs/design/2026-08-31-cluster-b-connection-invariance.m
 the option analysis, the blast radius, or the cases already written there. It
 records what that note could not: which legs have since **closed in code** and which
 have not. Three legs, measured against `fd93bf87` and not against a working tree.
+Historical citations remain evidence of the original investigation rather than
+re-measurements of a later base.
 The routing profile is closed and carried by five cases. The `spec-preview`
 promotion store — which cluster-b classified in its §I.2 and explicitly left to
 "whichever ORDER.2 option is chosen" — is closed in code at `eb9e537a` but has no
-sessionless case behind it. The **FSM workflow-state store is the one leg still open
+sessionless case behind it at that revision. The **FSM workflow-state store is the one leg still open
 in committed code**: `76b8536c` converged four discovery entry points onto one
 accessor, which is the precondition for a filter and is not the filter. An earlier
 revision of this paragraph named `spec-preview` as the sole remainder; that was
@@ -66,7 +68,8 @@ check: with no non-empty key there is no per-connection profile state to vary.
 did **not** pass through `session_key`. It does now: `promote_tool_for_session`
 takes `Option<&str>` and returns early when `session_key` rejects the caller
 (`src/gateway/meta_mcp/spec_preview.rs:238-241`, landed in `eb9e537a`), and a
-sessionless caller is held to promoting nothing by a case added in `0527aacc`.
+sessionless caller is held to promoting nothing by a case added in `0527aacc`,
+with `B-10` as the in-tree same-connection promotion regression alongside it.
 The facts below record the defect as it stood, because the option analysis in
 §4 was written against it.
 
@@ -78,7 +81,7 @@ The facts below record the defect as it stood, because the option analysis in
 | 10 | The router passes `Some(session_id.as_str())` on both the list and the call path, i.e. `Some("")` for a modern connection. | `handlers.rs:971` (`tools/list`), `handlers.rs:1162` (`tools/call`) |
 | 11 | Promoted tools are appended to the assembled list inside `handle_tools_list_for_session`, immediately after the surfaced-tool loop. | `mod.rs:1284-1330`, surfaced loop at `mod.rs:1310` |
 
-**Both clauses fail on this leg.** 2b: a successful `gateway_invoke` changes the
+**Before `eb9e537a`, both clauses failed on this leg.** 2b: a successful `gateway_invoke` changes the
 next `tools/list` on the same connection. 2a: because the key is `""` and every
 sessionless modern caller shares it, the change is visible to *other*
 connections too — a strictly worse failure than the one the criterion names.
@@ -87,7 +90,7 @@ connections too — a strictly worse failure than the one the criterion names.
 set: `Cargo.toml:179` lists `default = ["a2a","webui","config-export",
 "cost-governance","firewall","discovery","semantic-search","tool-profiles",
 "metrics"]`, and `Cargo.toml:193` declares `spec-preview = []`. A default build
-does not compile this path. It is a real defect in the builds that enable the
+does not compile this path. It was a defect in the builds that enabled the
 feature, and the feature is the one this whole protocol effort exists to
 prepare. Whether that lowers the criterion's severity was Q2, answered on
 2026-09-06: it does not (§6). Not a reason to leave it.
@@ -95,8 +98,7 @@ prepare. Whether that lowers the criterion's severity was Q2, answered on
 **Not a discovery.** cluster-b's test plan already specifies this case as
 **B-07** ("a promoted tool must not appear in session A's modern list, nor make
 it differ from B") and **B-06** (B-01 re-run under `--features spec-preview`).
-What is new here is the measurement that the production path is still open and
-that the profile leg around it has closed, which changes which option is cheap.
+This historical measurement motivated the now-landed promotion guards. The FSM leg below is the remaining prerequisite.
 
 ## 2b. A second store with the same defect — the FSM workflow state
 
@@ -141,7 +143,7 @@ reaches list assembly was read:
 | Code Mode | `handlers.rs:497` `code_mode_url_active` | **not a violation** — read from the request's own URL query, per-request input, not connection state |
 | meta-tool set | global configuration | invariant across connections by construction |
 | backend tool cache contents | shared, time-varying | out of scope; cluster-b Part III item 1 |
-| spec-preview promotion | §2 | **a remaining violation** |
+| spec-preview promotion | §2 | closed in code, `eb9e537a`; in-tree B-10 regression; `0527aacc` is external/unreplayed |
 | FSM workflow state, via the discovery surface | §2b, `mod.rs:1688-1696` and `search.rs:161-165` | **a remaining violation**, in the default build |
 
 Other `active_profile` call sites were checked. `invoke.rs:1065` is dispatch.
@@ -187,32 +189,16 @@ and the operator ratified it on 2026-08-31 (cluster-b §4.1, recorded in §5), s
 there is nothing left to decide here — (a) is dead rather than merely expensive.
 
 **(c) Extend the `session_key` discipline to the two raw-id stores — RECOMMENDED.**
-Two writes and two reads — but only **after** a duplication is removed, and that
-removal is part of (c) rather than a tidy-up beside it:
+**Historical implementation sequence.** Promotion guards (`eb9e537a`) and the FSM reader consolidation (`76b8536c`) are already in integration base `0d4df3c0`. The only remaining production edits are the FSM write guard and the one consolidated read guard. The following inventory explains why the original design required consolidation; it does not prescribe repeating that completed work:
 
-| store | write | read |
+| Remaining FSM owner | Required change | Existing consumers |
 |---|---|---|
-| `session_promoted` (§2, feature-gated) | `invoke.rs:1826-1828` | `promoted_tools_for_session`, `mod.rs:1021-1030` — the only reader of the map; `mod.rs:1266`, `mod.rs:1330` and `spec_preview.rs:112` all go through it |
-| `session_state` (§2b, **default build**) | `mod.rs:1689` | `current_search_state`, `search.rs:161-165` — **plus two inlined copies of its body**, `search.rs:581-584` in `list_tools_single_server` and `search.rs:647-650` in `list_tools`, which call `self.session_state.get_state(sid)` directly |
+| `MetaMcp::set_state` | reject missing/empty session key with the ratified protocol error | real `handle_tools_call` dispatch |
+| `MetaMcp::current_search_state` | normalize missing/empty key to the default state | code-mode search, search_tools, list_tools, list_tools_single_server |
 
-The promotion store already has one owner per direction. The FSM store does not:
-the same `map_or_else(DEFAULT_STATE, get_state)` expression is written out three
-times, and `session_key` applied only to `current_search_state` would leave
-`gateway_list_tools` reading the shared entry on both of its paths while
-`gateway_search_tools` and code-mode search were fixed — a guard that holds on
-some surfaces and not others, which is the defect this note is about, one level
-down. So (c) folds `search.rs:581-584` and `search.rs:647-650` into
-`current_search_state` first, and then filters inside it. Three sites become one,
-and the finding stops being restatable rather than being patched three times.
-
-**The filter goes inside the owning function, not at its call sites.** A counted
-list of call sites is a discipline the next caller can skip — which is precisely
-how `list_tools` came to read the FSM store directly while `current_search_state`
-sat one file away. So: inside `promoted_tools_for_session` (`mod.rs:1021-1030`)
-and inside `promote_tool_for_session` (`spec_preview.rs:228`), and inside
-`current_search_state` (`search.rs:161-165`) once the three copies are folded
-into it. Each store then has one accessor and one mutator, both filtering, and a
-future list-shaping caller inherits the guard instead of having to remember it.
+The promotion guards and FSM reader fold have already landed. They are not work
+for this increment. Both remaining guards reuse `session_key`, so future callers
+inherit the invariant at its existing owner rather than repeating call-site checks.
 
 One deliberate exception, because it is the kind that gets "corrected" later: the
 FSM **write** is filtered at the `gateway_set_state` handler (`mod.rs:1689`), not
@@ -316,7 +302,9 @@ Nothing in this note's recommendation depends on either deferred item.
 Recorded here because a question that was asked and answered is evidence; a
 question that quietly stopped being asked is not. Q4 was the last one open; it
 is answered as of 2026-09-06 and no longer blocks the `session_state` half of
-the implementation.
+the implementation. Removing the decision dependency is not the same as
+delivering it: implementation and acceptance validation remain separate and are
+tracked as such below.
 
 **Q1 is struck.** It asked whether the `gateway_set_profile` refusal was
 intended. The operator answered that on 2026-08-31 in cluster-b Part IV §4.1 —
@@ -343,24 +331,29 @@ and not an escalation to the operator, and it is why nothing in §7 moves. What 
 fixes is where the work lands: the `session_state` half of (c) belongs to ORDER.2
 itself rather than to a sibling criterion, so implementation is one ticket.
 
-**Q4 — RESOLVED 2026-09-06, and it no longer blocks implementation of (c)'s
-`session_state` half.** After
+**Q4 — RESOLVED 2026-09-06: the operator ratified the refusal, and it no longer
+blocks implementation of (c)'s `session_state` half.** After
 (c), `gateway_set_state` **refuses** on a modern HTTP connection, in the
-**default build**, on a tool that succeeds today. §4 prices this; §4 cannot
-ratify it. This is the same shape as cluster-b §4.1, where the operator ratified
-the `gateway_set_profile` refusal before it shipped, and the reason to ask again
-rather than infer from that answer is that the profile refusal shipped behind an
-already-agreed removal while this one is a live tool changing behaviour under
-`default`.
+**default build**, on a tool that previously succeeded. The question explicitly
+named that compatibility cost. Its recorded answer was **"Ratify the refusal
+(recommended)"** at `2026-09-06T11:19:59.466Z`, through `AskUserQuestion`, tool-use
+ID `toolu_01SKMFrjNivV7VaHyKzwEt4c`, session
+`be5177ff-7fa6-4b0c-9c6c-fecc3f7548e1`. The answer was recovered from the actual
+tool result during release takeover, rather than inferred from the implementation
+comment. The design's former OPEN status had not been updated after that answer.
+
+This selects option (c)'s refusal branch and B-08/B-09's refusal-plus-unchanged-list
+assertions. It does not establish that those tests compile or pass, or that the
+implementation is reviewed or delivered.
 
 | answer | what it buys | what it costs |
 |---|---|---|
-| **ratify the refusal** (recommended) | 2a and 2b both closed on modern HTTP by removing state rather than adding checks; `gateway_set_state` behaves exactly as `gateway_set_profile` already does, so the surface stays coherent | a modern client calling `gateway_set_state` starts getting a protocol error where it got a success; if any client depends on it, that client breaks at upgrade |
+| **ratify the refusal** (selected) | 2a and 2b can close on modern HTTP by removing state rather than adding checks; `gateway_set_state` follows `gateway_set_profile`'s session rule | a modern client calling `gateway_set_state` starts getting a protocol error where it got a success; if any client depends on it, that client breaks at upgrade |
 | keep it succeeding, close 2a only | no client-visible break | the tool's effect still leaks to every other sessionless connection, which is the defect — a per-connection tool that is not per-connection |
 
-Recommended: ratify. The tool's current success is not a working feature, it is
-the defect wearing a return value — the state it sets is read by every other
-modern connection on the same gateway.
+The selected refusal prevents a modern caller from writing state that every other
+sessionless connection can read. Existing session-bearing callers retain their
+stateful behavior; the acceptance tests must verify both populations.
 
 **Answer, in this note's askable form.** *Question* — ratify the refusal, taking
 option (c) as recommended, including the default-build `gateway_set_state`
@@ -393,7 +386,8 @@ copy nobody reads is the one that goes stale.
 ## 8. What this note does not close
 
 ORDER.2a and ORDER.2b are **not** satisfied by this note. The promotion leg of §2 has since closed —
-guarded in `eb9e537a`, covered by a sessionless case in `0527aacc` — and the FSM
+guarded in `eb9e537a`, covered by a sessionless case in `0527aacc` and by B-10 as
+an in-tree regression — and the FSM
 state store of §2b is the one leg still open in the source at `0527aacc`. The ledger rows stay blocking. What has changed is what
 the evidence cell can now say: the profile leg is closed in code and measured
 here, the remaining defect is **one store** — the
@@ -423,3 +417,207 @@ invoke on a stdio connection can still promote into that connection's next list 
 2b, live, after the recommended fix. §P0 puts transport parity with cluster-g and
 this note does not price it; what this note owes cluster-g is the measurement,
 which is now in §5 rather than sitting in the deferred column as a question.
+
+
+## 9. FSM prerequisite delivery checkpoint — 2026-09-07
+
+**Current increment status:** the two FSM guards are implemented; eight focused
+acceptance/caller cases pass after compiled assertion RED and test-finder closure.
+Formatting passes. Draft publication starts CI in parallel with remaining final
+code review, quantitative checks and independent functional acceptance. No merge
+or complete release acceptance is claimed.
+
+**FOR:** unblocking the 4.0 integration base and configuration PR #483 by closing
+only the sessionless FSM write/read invariant already selected in option (c).
+**OUT:** profile/promotion redesign, stdio/A2A transport policy, notifications,
+cache behavior, unrelated release implementations, and merging or release closure.
+This is the remaining FSM increment of the original ORDER.2 change, not a new
+requirement or a reset of its review history. Historical ledgers stored
+`change_id: null`; the original frozen design receipt remains material
+`5f262fb547766dfac8835f691fe481ff017fdbea709008f78f9bc40522ee3a14`
+(31,167 bytes, Grok `grok-20260906T064155Z-129`). Preserve that lineage rather
+than inventing a previous passing gate. This prerequisite is two steps from the
+configuration implementation (CI selection, then its failing integration base);
+it still serves the user's original 4.0 release delivery objective.
+
+A prepared repair exists in the separate delivery worktree, but its required
+gates are missing. The authoritative later GPT/Grok design/plan findings are
+`gpt-20260906T153954Z-80665` and `grok-20260906T154615Z-96685`, both
+SHIP-WITH-FIXES. They require the ratified refusal assertions, modern-aware error
+text, and an honest distinction between completed promotion work and the two
+remaining FSM guards. Their original differing material hashes are retained;
+they do not constitute a matching final approval. The historical Kimi plan leg
+`synthetic-20260906T080350Z-26796` also returned SHIP-WITH-FIXES, despite the
+older record saying pending. No FSM tests-as-tests closure, final code pair,
+independent functional drive, or quantitative receipt was found in the inherited
+OUT/ledger audit. None is claimed as passed.
+
+### Definition of Ready and validation boundary
+
+- Value/priority: mandated `MIK-7272.ORDER.2a/.2b` release invariance; CI run
+  34062367993 on config SHA `bfa16dc3` compiled 4,058 library cases and returned
+  4,052 passed, two B08/B09 assertion failures, four ignored, exit 101. The same
+  relevant production blobs and test bodies are present in base `0d4df3c0`.
+  The private Spark rebuild now independently confirms B08/B09 assertion RED and one staging control PASS (exit 101); see `order2-prerequisite-base-red-r2.log`.
+- Scope/dependencies: only `MetaMcp::set_state`, its refusal text, and
+  `MetaMcp::current_search_state`; the existing `session_key` helper and four
+  discovery consumers already exist. Tests and these two design files accompany
+  the patch. No new public API, dependency, storage format, crypto, service, or
+  deployment topology. Parent owns TLS; config PR #483 stays separate.
+- Alternatives: reuse the selected owner-level guards; reject a silent store
+  no-op because it hides the refusal, and reject principal re-keying because a
+  caller could still change its own subsequent list. The existing operator Q4
+  answer settles the only product compatibility decision: refuse sessionless
+  state changes; non-empty legacy/stdio session keys retain their behavior.
+- Risks: write-only repair misses already contaminated empty-key state; read-only
+  repair makes the refused mutation appear successful. Separate write/read tests
+  and their falsifiers cover both. Exact error assertions prevent advice to send
+  a session header that modern HTTP ignores. Unchanged non-empty controls detect
+  overbroad normalization.
+- Applicable DoR: CODE/security mandate and existing ticket/criteria; G0-G12,
+  C1-C15 and rollback/test/CI requirements apply. Novelty/NPV/emerging-tech
+  benchmark, new-service SLO, crypto/PQC, AI/ML, residency, device and new-license
+  conditions are N/A because no such surface changes. The existing Rust helper
+  avoids introducing a new abstraction or technology. No new telemetry event is
+  needed for an existing protocol refusal. STRIDE: eliminate shared-state
+  tampering/information influence; no new identity or credential is trusted.
+- Unknowns: Q4 is resolved by the recorded operator answer. Compiled repaired
+  assertions, read-guard falsification, critical coverage/mutation, final review
+  and independent public HTTP behavior are **pending results**, owned by this
+  increment before merge; any failure blocks that gate and is repaired within
+  this same invariant. A full release/transport-wide claim remains out of scope.
+- Quantitative plan: exercise >=95% of changed critical executable lines and
+  catch >=85% of viable focused mutations, including each omitted guard and a
+  silent-success fault. Run default and all-feature affected tests, formatter,
+  Clippy and same-SHA CI. Use a pinned actual CLI HTTP drive with modern and
+  session-bearing controls; the independent driver gets ACs and launch details,
+  no source/diff. No passing score is inferred from old unrelated reviews.
+- Rollback: revert this isolated prerequisite commit; this restores the known
+  shared-state defect, so it is an operational rollback rather than a release
+  acceptance outcome. No migration or data rewrite is required.
+
+The isolated branch starts at `0d4df3c0bd4e3b3ca5afa3f2d63bdb3261b118cf`:
+`codex/v4-order2-prerequisite`. Gate receipts and full command logs are retained
+under the external release evidence directory as `order2-prerequisite-*`.
+
+
+### Complete named DoR gate inventory (finder repair)
+
+This is the security-mandate path, with no claim of financial NPV or novelty.
+The canonical file's enumerated IDs total **72**, although its heading says 84:
+22 G + 5 B + 9 T + 17 C + 8 P + 7 L + 4 O. All 72 named IDs are accounted for
+below; no twelve invented gates are marked complete. Of these, 50 apply and 22
+are N/A. Pending DoD execution is not represented as a passing DoR result.
+
+| IDs | Applicability and readiness evidence |
+|---|---|
+| G0–G5 | Apply: release mandate and CI dependency demonstrated by run 34062367993; Q4 approved. Fixed planning estimate for gate recovery: 220,000 input tokens and 16,000 output tokens, including reviews and validation interpretation; at the canonical $15/M input + $75/M output rates, $3.30 + $1.20 = **$4.50**. Allow 1–2 hours including approximately 15 minutes of context restoration and review handoffs. These are estimates, not measured billing or a claim about actual vendor rates. NPV/ROI dollar calculation is N/A under the security mandate. Minimum repair is two owner guards; no optional redesign. |
+| G6–G12 | Apply: owner guards versus silent no-op/principal re-keying already compared in §4; same-session and cross-session impact plus overbroad legacy refusal identified; the cheapest high-risk assumption is now tested on a rebuilt base: B08/B09 assertion RED, one staging control green, actual exit101 in `order2-prerequisite-base-red-r2.log`. Required runtime dependencies are in base. |
+| G13, G14, G15, G18, G20, G21 | N/A: no novel technology, optimization, emerging-tech bet or moat claim; bounded security repair estimated below four hours, so G15's hotfix exception applies. |
+| G16, G17, G19 | Apply: four primary prior-art sources and the NIH decision are cited in the focused evidence below; reproduce the observed failure rather than invent a new mechanism. Revert is possible without migration. User outcome is stable tool membership and explicit refusal for sessionless clients, measured by all four discovery surfaces. |
+| B1–B5 | Apply: existing MIK-7272, High, 8 points, mcp-gateway project, Mikko team, v4.0.0 milestone, In Progress, prioritized prerequisite for PR483. Coordinator completed and read back Mikko as owner, Bug+mcp-gateway labels, and all five stable FSM criteria in the existing description; `order2-linear-prerequisite-readback.json` retains the full receipt. Original scope and relations are preserved. B2/B4 metadata readiness is verified. This is an increment of that ticket, not a new orphan issue. |
+| T0, T1, T2, T4, T5 | Apply: reliability/security fix in the existing Rust gateway; reuse the proven helper and protocol error type. No technology switch is warranted at a two-guard boundary; it would add deployment/review cost without improving this invariant. Direct callers verified by GitNexus and static source: one write handler and four discovery readers. |
+| T1b, T1c, T3, T6 | N/A: no emerging-tech claim, crypto, framework selection, numeric/collective processing. |
+| C1–C12, C14–C16 | Apply: one existing helper per invariant, no new API/schema/dependency/cycle; the reviewed plan has red drivers and independent read/write falsifiers. Trust boundary is the unauthenticated/sessionless request context; no user label becomes identity. Existing locked session store retains strong per-key ownership for non-empty callers. The compatibility refusal is Q4-approved. Existing protocol envelopes and version routing remain intact; memory/state capacity decreases for forbidden keys. Source delta target is under 400 lines. Pre-existing large parent modules are not expanded with a new production abstraction. |
+| C13, C17 | N/A as readiness gates: C13 explicitly moved to DoD mutation evidence (planned, not passed); no new cross-service failure mechanism or resilience policy. |
+| P1, P2, P4, P6, P7 | Apply: existing observable JSON-RPC refusal/trace path; tested binary rollback planned; no additional stored state, data migration, or capacity dependency; reuse the exact already-reviewed integration-branch CI selector from bfa16dc3 and obtain this PR's own head-bound run. |
+| P3, P5, P8 | N/A: no feature flag or new service/SLO/alert threshold is introduced; this is the operator-ratified invariant at existing endpoints. |
+| L1 | Apply: owned source is PolyForm-Noncommercial-1.0.0, not MIT; preserve each header. Actual header check, current 453-package license inventory, CycloneDX 1.5 SBOM, AGPL scan and identical-lock CI vulnerability audit are recorded below. No new dependency, algorithm or license/patent claim. |
+| L2–L7 | N/A: no new personal data, AI feature, transfer/residency flow, license set, device contribution, or crypto/ML distribution. |
+| O1–O3 | Apply: separate owned worktree, scoped changes, existing design/test-plan SSOT, evidence outside source; owned build artifacts cleaned after handoff. |
+| O4 | N/A: no one-way architectural decision requiring a new ADR; existing option (c) and Q4 decision are retained. |
+
+**DoR summary:** mandate-justified NPV/ROI N/A; estimated recovery cost above;
+72/72 named IDs assessed (50 applicable, 22 N/A; canonical heading says 84).
+Readiness remains **pending GPT finder confirmation** of the remaining G16 arXiv citation and L1 scoped patent-search record; G2/C6 and the other G16/L1 audit items closed in r3; Grok r2 closed its NOW findings with SHIP, actual exit 0. Evidence counts: E1 four declarations (scope, AC contract, rollback, fixed effort/cost estimate); E2 eight citation groups (four prior-art sources, original decisions, reviewer ledgers, live tracker, source owners/callers); E3 nine output groups (four symbol impacts, rebuilt baseline RED, license-header check, current metadata/AGPL inventory, CycloneDX output, identical-lock CI audit); E4 three records (existing design, existing test plan, focused STRIDE/auth/input record below).
+No DoD final approval or functional pass is implied by this readiness inventory.
+
+
+### Focused readiness evidence: G16, C6 and L1
+
+**G16 — prior art and NIH decision (checked 2026-09-07).**
+
+1. [Rust `Option::filter`](https://doc.rust-lang.org/std/option/enum.Option.html#method.filter)
+   specifies preservation of `None` and predicate-based removal of `Some`. This
+   is the existing `session_key` mechanism; no replacement abstraction is needed.
+2. [MCP 2025-11-25 session management](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management)
+   specifies server-assigned session identifiers and subsequent client use. It
+   grounds the non-empty legacy compatibility control; it does not establish the
+   newer HTTP decision, which is the separately ratified Q4 contract.
+3. [Pinned gateway prior art at base 0d4df3c0](https://github.com/MikkoParkkola/mcp-gateway/blob/0d4df3c0bd4e3b3ca5afa3f2d63bdb3261b118cf/src/gateway/meta_mcp/mod.rs#L1095)
+   already filters empty keys for neighboring per-session behavior. Reuse that
+   helper in the two FSM owners; existing profile refusal demonstrates the same
+   explicit error boundary. Local pinned source was inspected.
+4. [Calzavara et al., Language-Based Web Session Integrity, arXiv:2001.10405v2](https://arxiv.org/abs/2001.10405v2)
+   studies server-side session integrity with a security type system and real
+   application analyses. It motivates checking both the mutation boundary and
+   discovery observations. The application to these guards is an engineering
+   inference; this increment does not adopt that type system or claim a formal
+   proof. The existing predicate remains the smallest mechanism.
+
+**C6 — security record.** Trust domain: unauthenticated or authenticated request
+contexts may be sessionless; session identifiers are state keys, not principals.
+Existing router authentication/authorization remains authoritative. Inputs are
+optional internal session IDs, the state argument, and protocol/session headers
+already normalized by transport handling. State is local in-process, partition
+handling is unchanged, and the locked per-key store retains strong ownership.
+No crypto algorithm, signature, key exchange, randomness or credential generation
+changes; crypto/PQC applicability is N/A.
+
+| STRIDE concern | Mitigation in this bounded change |
+|---|---|
+| Spoofing | An empty key cannot create a session identity; existing authentication remains unchanged. |
+| Tampering | Reject unkeyed FSM writes and ignore a pre-existing empty-key state on every reader. |
+| Repudiation | Preserve the JSON-RPC request ID and explicit protocol error; never acknowledge a refused state mutation as success. |
+| Information disclosure | Prevent one sessionless caller from changing another caller's discoverable membership; refusal adds no secret data. |
+| Denial of service | Rejected empty-key writes allocate no persistent entry; normalization is one constant-time empty-string check. Existing request limits remain. |
+| Elevation of privilege | Refusal grants no permissions; non-empty state ownership and existing authorization continue unchanged. |
+
+These are design mitigations; their behavioral tests and fault checks are pending,
+not represented as completed security testing.
+
+**L1 — actual audit evidence.** `order2-prerequisite-license-audit.json` binds the
+following artifacts to base `0d4df3c0` and the identical lockfile used in the
+passing CI audit. `bash scripts/ci/check-license-headers.sh` passed (exit 0): all
+first-party headers match the existing per-file license boundary. The affected
+meta-MCP files carry PolyForm-Noncommercial-1.0.0; new tests must preserve it.
+Current `cargo metadata --locked --all-features` succeeded and enumerates 453
+packages: no AGPL expression and no missing dependency license; the only package
+using a license file is this workspace's `LICENSES.md`. The snapshot includes
+existing MPL and optional LGPL alternatives; this increment adds no dependency
+or distribution. `cargo cyclonedx` 0.5.9 with `--all-features --target all --all
+--format json --spec-version 1.5` passed (exit 0), producing a 399-component
+runtime/build dependency SBOM in `order2-prerequisite-bom.json`; the broader
+metadata inventory also covers development dependencies.
+
+[CI audit job 101565032105](https://github.com/MikkoParkkola/mcp-gateway/actions/runs/34062367993/job/101565032105)
+passed against byte-identical Cargo.toml/Cargo.lock, scanning 453 crates using
+1,239 advisories. It reported one allowed, pre-existing warning: **chacha20 0.10.0
+is yanked**. The warning and full log are retained, with no policy change or
+claim of a warning-free audit. A scoped patent search is recorded in `order2-prerequisite-prior-art-search.json`:
+query `site:patents.google.com "session identifier" "empty" session state`.
+[US9058214B2](https://patents.google.com/patent/US9058214B2/en) describes pooling,
+checking out and returning session tokens to reuse established sessions.
+[CN103095859B](https://patents.google.com/patent/CN103095859B/en) describes sharing
+session information across domain names through a synchronization system. These
+technical features are outside the proposed delta: two calls to an existing
+empty-key predicate, a protocol refusal and default reads. No token pool,
+credential exchange, synchronization system or cross-domain session sharing is
+added. This is a scoped technical comparison of the retrieved publications,
+not a conclusion that patents do not exist or a freedom-to-operate opinion.
+No new algorithm or patent/license claim is introduced. The unavailable
+`cargo license` attempt and incomplete offline metadata attempt are superseded
+by the successful current metadata and installed CycloneDX tool, with failures
+retained in the audit receipt. This PR still requires its own CI run before merge.
+
+Evidence locator for this increment: `/Users/mikko/Documents/Codex/2026-09-06/mcp-gateway-v4-scope-review/order2-prerequisite-evidence-index.json`. It names exact artifact paths and SHA-256 values; each review manifest also binds its own immutable material.
+
+
+Readiness closure: GPT r4 SHIP (actual exit 0, material
+`a447e2ffa0668d1464ff3db148cec39fc97b0830afc0b6c52271f50414d2b16b`,
+12,264 bytes) closes the remaining arXiv/patent findings; Grok r2 SHIP is retained.
+`order2-prerequisite-plan-closure.json` preserves each finder and original lineage.
+Test r1 compiled with four assertion failures and two controls passing. Grok
+reviewed those tests SHIP; GPT requested two caller regressions. This adjusts
+only test coverage of the existing FSM.3/.5 contract, with the coordinator's
+approval; the two-owner production repair and all OUT boundaries stay fixed.

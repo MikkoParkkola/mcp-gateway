@@ -49,6 +49,12 @@ jobs:
         run: python3 scripts/release/test_count_release_criteria.py
       - name: Check the release-criteria ledger header against its rows
         run: python3 scripts/release/count-release-criteria.py --check
+      - name: Test supplemental acceptance checks
+        run: python3 scripts/release/test_scope_acceptance.py
+      - name: Validate supplemental scope (pending work is reported)
+        run: python3 scripts/release/check_scope_acceptance.py --check
+      - name: Require completed acceptance in publishing context
+        run: python3 scripts/release/check_scope_acceptance.py --publish-check
 
   build:
     needs: [security-gate, release-criteria]

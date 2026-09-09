@@ -12,6 +12,10 @@
 
 mod common;
 use common::*;
+// Control 5 is the only test here that builds a breaker config, so these stay
+// local rather than in the shared module every target compiles.
+use mcp_gateway::config::CircuitBreakerConfig;
+use std::time::Duration;
 
 // ============================================================================
 // NFR.SEC.1 control 3 — authentication

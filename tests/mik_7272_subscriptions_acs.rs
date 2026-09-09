@@ -579,52 +579,56 @@ mod http {
     }
 
     #[tokio::test]
-    async fn ac_task_1_tasks_get_answers_a_stranger_handle_from_the_task_model() {
-        // Inverted when TASK.1 landed. This case pinned the ABSENCE of the
-        // extension -- `tasks/get` answering method-not-found -- which was the
-        // true statement while no dispatcher existed. It is false now, and
-        // repairing it to keep the old assertion green would re-assert that the
-        // shipped dispatcher is not there.
+    async fn ac_task_1_tasks_get_answers_an_unknown_id_with_no_such_task() {
+        // `tasks/get` is dispatched against the store (`router::handlers`), so a
+        // fully valid modern request must reach the LOOKUP and be told the id is
+        // absent — not turned away by a guard on the way in. Every precondition
+        // the route imposes is therefore supplied here, and each one it is
+        // missing would answer with a different refusal that this case would
+        // read as the lookup's:
         //
-        // `Mcp-Name` binds to `params.taskId` on the task methods
-        // (`src/protocol/headers.rs:67`), so a call without it is refused at the
-        // header guard before dispatch and proves nothing about the method.
+        //   * the mirrored `Mcp-Name`. `tasks/get` mirrors `params.taskId`
+        //     (`protocol::headers::mcp_name_body_field`), so omitting the header
+        //     is a header/body mismatch refused with -32020 before routing.
+        //     Supplied here rather than in `modern_call`, which would change the
+        //     header profile of every modern case in this file.
+        //   * the tasks extension, DECLARED ON THIS REQUEST. A request reaching
+        //     the extension without it is refused -32021 with a
+        //     `requiredCapabilities` payload. `modern_call` sends an empty
+        //     `clientCapabilities` on purpose — the negative cases depend on it —
+        //     so the declaration is added to this request's envelope only.
         //
-        // A handle no store holds is answered by the task model itself: -32602
-        // with the id-free wording of `missing_task_error`
-        // (`src/gateway/router/handlers.rs:249`), which is what stops a caller
-        // telling "not yours" from "never existed".
-        // The extension is declared per request (`-32021` otherwise), so the
-        // capabilities block is written out here rather than taken from
-        // `modern_call`, which declares none.
-        let body = json!({
-            "jsonrpc": "2.0", "id": 1, "method": "tasks/get",
-            "params": {
-                "taskId": "task-absent",
-                "_meta": {
-                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                    "io.modelcontextprotocol/clientCapabilities": {
-                        "extensions": { "io.modelcontextprotocol/tasks": {} }
-                    }
-                }
-            }
-        });
-        let (status, body) = post(
-            true,
-            body,
-            &[
-                ("mcp-protocol-version", "2026-07-28"),
-                ("mcp-method", "tasks/get"),
-                ("mcp-name", "task-absent"),
-            ],
-        )
-        .await;
+        // A declared extension is this fixture's INPUT, not a way around a gate:
+        // it is what a client that can hold a task handle actually sends.
+        let (mut request, mut headers) =
+            modern_call("tasks/get", json!({ "taskId": "task-unknown" }));
+        request["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"]["extensions"] =
+            json!({ "io.modelcontextprotocol/tasks": {} });
+        headers.push(("mcp-name", "task-unknown".to_string()));
+        let borrowed: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let (status, body) = post(true, request, &borrowed).await;
+
+        // The answer the store gives for an id it does not hold: `-32602`, and
+        // the id-free wording that keeps "not yours" indistinguishable from
+        // "never existed". 200 is not an oversight — the modern path promotes
+        // only `-32601` to 404, and this method is not missing, this task is.
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["error"]["code"], -32602, "{body}");
-        assert_ne!(
-            body["error"]["code"], -32601,
-            "method-not-found would mean the dispatcher is unreachable: {body}"
+        assert_eq!(body["error"]["message"], "no such task", "{body}");
+        // The defect this row was written against: an absent handle was once
+        // answered with a `not_found` **success**, a status the protocol's task
+        // model does not have. An error here, never a result.
+        assert!(
+            body.get("result").is_none(),
+            "an absent handle is an error, not a success carrying a status: {body}"
         );
+        // WHICH refusal this is cannot be told apart from the status and body
+        // read above: the router answers an unattributed caller with the same
+        // `missing_task_error` before dispatch. It is the dispatched one
+        // here because `AuthConfig::default().enabled` is false in `state`, so
+        // the empty owner key is not an unattributed caller. The identity rows
+        // that DO separate the two live in `mik_7272_task_1_acs.rs`, which
+        // configures principals; nothing is asserted about ownership here.
     }
 
     #[tokio::test]
