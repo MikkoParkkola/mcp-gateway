@@ -286,7 +286,8 @@ pub(crate) struct SseExchange {
     /// Notifications seen on this request's stream, in the order they arrived.
     ///
     /// SCAFFOLD, and labelled one: no production path reads this yet. The only
-    /// caller of `parse_sse_response` maps it away at `:1234`, and the consumer
+    /// caller of `parse_sse_response` — `send_request_with_headers` — maps it
+    /// away, and the consumer
     /// that will read it — the `Accept`-negotiated event-stream body in
     /// `gateway::router::handlers::meta_mcp_handler` — is the outbound half of
     /// `MIK-7272.SUB.2b` and lands next. Until then the field is proven only by

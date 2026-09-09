@@ -253,6 +253,14 @@ fixed on this branch — is superseded by this one. The cost was put to the oper
 websocket and every gateway call site, plus peer-owned router code, on a branch being stabilised) and
 that path was chosen with the cost visible. The criterion is not narrowed and not amended.
 
+> **RETRACTED by Correction 1 (above). Do not read the next paragraph as live.**
+> §II.6 was ANSWERED by the operator — the committed record at
+> `docs/design/2026-08-31-cluster-b-connection-invariance.md:463`, provenance
+> verified in Repair 4. This lane's parallel escalation raced an answer that
+> already existed; it did not go unanswered. Option (i) binds as an operator
+> RULING. The framing below is kept only so the race is visible, and it is
+> wrong about the one thing that matters: whether anyone decided.
+
 **Assumption, not a ruling, on the §II.6 correlation key: option (i).** The gateway forwards a
 notification only when a backend sends one unprompted, correlated by the request stream it arrived on.
 It does not mint or translate progress tokens, so there is no token-allocation table and no lifetime to
@@ -365,7 +373,17 @@ response, one value, one function, sole call site `src/transport/http/mod.rs:121
 no trait change. Authorisation to widen `Transport::request` should be spent only if the outbound
 leg genuinely demands it. Permission granted is not permission that must be used.
 
-## §II.6 correlation key — recorded as an ASSUMPTION, with its reasoning
+## §II.6 correlation key — SUPERSEDED: it is an operator RULING, not an assumption
+
+> **RETRACTED by Correction 1.** The heading below survived a repair that should
+> have taken it with it. Option (i) is the operator's recorded answer
+> (`2026-08-31-cluster-b-connection-invariance.md:463`), not this lane's
+> assumption. The reasoning under it still holds; the *provenance* claim does not.
+> Kept, retracted in place, because deleting it would hide that this note once
+> asserted the opposite — and a reader who finds only the corrected text cannot
+> tell whether the question was ever confused.
+
+### Original text, retracted — recorded as an ASSUMPTION, with its reasoning
 
 **This lane proceeds on option (i): pass-through only.** The gateway forwards a notification only when
 a backend sends one unprompted on a request's own stream, correlated by which request's stream it
