@@ -470,8 +470,14 @@ meant.
 
 What this does NOT settle, named so nobody reads it as settled: whether `Transport::request`'s
 signature must change so that a captured notification has an in-domain consumer. That question is
-ruled out for the 4.0.0 release on cost and timing — it touches stdio, websocket and every gateway
-call site on a stabilising branch — and the answer above neither requires nor forbids it.
+ruled out for 4.0.0 PROVISIONALLY — on cost and timing, since it touches stdio, websocket and every
+gateway call site on a stabilising branch — and the ruling is conditional on there being another
+path. The claim that the change is needed regardless of (i) or (ii) was made while both were live;
+(i) concerns the gateway matching a token it did not mint, which is a different layer. If the
+forwarder increment turns out to have no deliverable path under (i) without it, then ruling out the
+mechanism would make a blocking criterion unmeetable this release — a requirement narrowing in
+mechanism clothing, which is the operator's recorded call and not the lead's. The provisional
+ruling holds only until that check comes back.
 
 ### What this revision does not do
 
