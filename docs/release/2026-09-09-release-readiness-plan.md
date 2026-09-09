@@ -481,3 +481,71 @@ commits. A third figure in circulation, PR496's `182 / 157 / 25`, is older than
 both. None of the three is wrong for its own tree, which is the whole hazard:
 every one of them reads like a fact about the release rather than about a
 commit. The script is the authority and costs a second to run.
+
+### E. The ledger counts 55 unmeasured test binaries as passing surface
+
+This is the largest finding of the day and it is not about any one criterion.
+
+At origin's own tip, the Tests job ran **33 of 88 integration binaries. 55 never
+executed.** The run stops at `error: test failed, to rerun pass --test
+mik_7212_mrtr_component_acs`, that binary reports `FAILED. 3 passed; 16 failed`,
+and no `Running tests/...` line appears after it. Read from the job log, not
+inferred.
+
+Cargo runs targets in byte order, confirmed against the same log:
+`mik_7212_acs` then `mrtr7_bridge` then `mrtr7_stdio` then `mrtr_component`,
+because `'7'` is `0x37` and sorts before `'_'` at `0x5F`. Every `mik_7215`
+through `mik_7272` target sorts after the aborting one, which is why
+`mik_7272_task_1_acs` and seven sibling dispatcher binaries are in the unrun 55,
+along with every `mik_7215`, `mik_7216`, `mik_7217`, `mik_7218`, `mik_7222` and
+`mik_7246` target.
+
+The distinction that matters for a release decision: those 55 are **unmeasured
+surface, not passing surface.** Nothing in the run says they are green. The
+ledger's met count has been reading them as though it did. That does not make
+any individual row wrong — most rows carry their own named test evidence — but
+it does mean the suite-level assurance behind the count is thinner than the
+count implies, and no amount of re-reading the ledger would reveal it.
+
+There is a second-order trap here worth stating plainly. Fail-fast reveals
+exactly one failing target per run, so the question "would the run still abort
+before the dispatcher binary once the sixteen clear" **cannot be answered by the
+gate as configured.** You cannot learn whether a 34th-to-88th binary is red
+without first adding the flag. This is why `--no-fail-fast` on the Tests job is
+required rather than prudent: it is not tidying, it is the only way to observe
+the two-thirds of the suite that currently reports nothing.
+
+The clippy half of the same gap is now empirical rather than structural. The
+`Clippy (pedantic)` job **passed** at the same tip whose test module holds a
+genuine `items_after_statements` error, because the job omits `--all-targets`
+and so never compiles test code. A real `-D warnings` error sat on the pushed
+branch under a green lint badge.
+
+So origin is simultaneously green on a lint gate that does not compile the code
+holding the error, and red on a test gate that stops before two-thirds of its
+own suite. Both are one flag.
+
+### D-implemented: the fall-through landed while this section was being written
+
+The previous subsection routed the fall-through to another lane as a finding
+rather than a patch. That routing is superseded: the fix is committed as
+`3227c985`, `+18/-0`, confined to `src/gateway/meta_mcp/invoke.rs`.
+
+`Delivery { error: NoSession, .. }` gets its own arm and falls through with
+`interim` still set, so the ask goes out as a continuation. Every other
+`BridgeError` keeps the `-32003`, because those are exchanges that were
+attempted and failed by a reachable client. The fixture was left untouched,
+which is the right call: the guard was the defect.
+
+The evidence base is deliberately labelled weak by the lane that produced it. A
+full target check exits 0, and the three named lib tests report 3 passed. But
+the pre-fix RED baseline was not captured, and **the sixteen cases in
+`tests/mik_7212_mrtr_component_acs.rs` have not been run** — and those sixteen
+are the only tests that are this change's actual specification. The static case
+is strong and the measurement does not exist yet. Until it does, this is a fix
+believed correct, not a fix shown correct.
+
+One correction of record from that lane, kept here because it changed routing:
+two earlier commit messages state a build was unavailable to it. That was false
+and self-reported as false. The lane had a working toolchain throughout, so the
+arity repair it claimed on enumeration alone is now also settled empirically.
