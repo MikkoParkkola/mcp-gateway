@@ -756,3 +756,56 @@ reservation rather than satisfying it. The same reasoning holds the two CI
 workflow flags in section E: `--no-fail-fast` at `ci.yml:198` and
 `--all-targets` at `ci.yml:180` are one-line edits with a lane volunteering to
 make them, and both remain unowned by decision, not by difficulty.
+
+## I. The path to release-ready, in dependency order
+
+Sections 0–3 order the three blocking criteria against each other. The addenda
+added gaps those items do not cover, and several of them are blocked on the same
+two things. This section is the whole scope in one list, ordered by what unblocks
+what rather than by severity, because severity is not what decides what to do
+first here.
+
+**Two unlocks sit above everything, and neither is a technical problem.**
+
+*Unlock 1 — push authority.* This branch is 47 commits behind its own remote and
+about 35 ahead, and nothing local has ever been pushed. Every commit in this
+document, including this document, is invisible to PR #473 and to CI. A `ci.yml`
+edit on an unpushable branch is inert: the workflow that runs is the one at
+origin. So the two CI flags are not a live decision yet — they are downstream of
+push. This is the single unlock with the most behind it.
+
+*Unlock 2 — disk headroom.* 3.9G free against a 5G hook threshold halts every
+build in every lane, including the local runs that would settle the local-side
+gaps. Section H holds the detail and the ownership.
+
+**The ordered path.** Each row names what closes it, not merely what is wrong.
+
+| # | Gap | Action | Blocked on | Observable that closes it |
+| --- | --- | --- | --- | --- |
+| 1 | Nothing local is visible to CI or the PR | Push the branch | operator: push authority | `origin/fix/mrtr2-continuation-handle` contains `d053bc7e` |
+| 2 | Tests job aborts at the first failing binary | `--no-fail-fast` at `ci.yml:198` | #1 | a run whose log lists all 88 `Running tests/…` lines |
+| 3 | Clippy does not lint test targets | `--all-targets` at `ci.yml:180` | #1 | the `items_after_statements` error at `tests.rs:4840` appears in CI, not only locally |
+| 4 | 16 component ACs fail; branch is red | Section 0's lost implementation | #1, #2 for confirmation | `mik_7212_mrtr_component_acs` green in CI |
+| 5 | 7 rows graded on evidence CI never ran | No code change — re-run under #2 | #2, #4 | those 7 binaries appear with pass lines in one CI run |
+| 6 | 42 binaries hold green from 31 hours ago | No code change — same run as #5 | #2, #4 | the same run covers them; regressions surface or do not |
+| 7 | `MIK-7246.CONFIRM.2` unreachable | Peer fix `3227c985` needs its RED baseline and the 16 ACs | disk, then #4 | pre-fix red, post-fix green, both recorded |
+| 8 | `MIK-7272.SUB.2b` emit half missing | Build it (section 1) | #4 clears the tree | a consumer test over the two landed capture paths |
+| 9 | `MIK-7272.SUB.4` covered on 2 routes of 3 | Third route (section 2) | #4 | `mik_7272_sub4_three_routes` green on all three |
+| 10 | `gateway_invoke` reports backend failure as `isError: false` | Section B | #4 | a test asserting `isError: true` on a failed backend call |
+| 11 | `MIK-7212.WIRE.10` — stdio invariant unproven end to end | One joining test | none technical; owned by `bridge-mrtr7` | a test that drives a stdio caller to `BridgeError::Refused` |
+| 12 | Local tree cannot merge | Merge, never rebase | two peers' uncommitted `backend_handlers.rs` and `server/mod.rs` | a clean merge commit with both lanes' work intact |
+
+**What the ordering says that a severity list would not.** Items 5 and 6 need no
+engineering at all — one flag and one run resolve ten rows between them, and that
+run is worth more than any single fix in the table because it is the only step
+that converts "we tested it" into "the pipeline shows it tested" across the whole
+suite at once. Items 8, 9 and 10 are real build work and are the only rows that
+are. Items 1, 2 and 3 are decisions rather than work, and they gate almost
+everything else.
+
+**What release-ready means concretely, when this list is done:** one CI run at a
+named commit, with `--no-fail-fast` on, in which all 88 binaries execute, none
+fails, and `scripts/release/count-release-criteria.py --check` reports zero
+blocking against a ledger whose cited evidence that run reproduced. Today none of
+those four conditions is met, and the ledger's `180 met or non-blocking, 3
+blocking` is a count the pipeline has never once reproduced end to end.
