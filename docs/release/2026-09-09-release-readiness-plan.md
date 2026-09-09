@@ -379,3 +379,49 @@ sorts before `mik_7272_task_1_acs`, and with no `--no-fail-fast` the run aborts
 before the dispatcher binary executes. The `--no-fail-fast` change recorded in
 section C is therefore not housekeeping; without it, one lane's red spec keeps a
 second lane's evidence unobtainable.
+
+### D-corrected: the three lib tests were staleness; the sixteen were not
+
+The three red lib tests are withdrawn as evidence for section D, and section D
+survives on different evidence.
+
+`ci-green` is right about them and I was wrong. This worktree is 47 commits
+behind `origin/fix/mrtr2-continuation-handle` and 31 ahead of it. `91b58974`
+("fix(meta-mcp): match fixture era to the capabilities the fixture declares") is
+on origin and not on local `HEAD`, and origin's `allow_all_ctx_declaring` sets
+`era: Era::Modern` with a comment that predicts the failure I diagnosed: "Pinning
+`Legacy` here claimed a wire shape the fixture never sent -- a 2025 client that
+somehow declared 2026 input capabilities -- and took the legacy input bridge,
+which this context's `NoClientChannel` then refuses." Read from origin, not
+relayed. A fixture that declares 2026 input capabilities is a modern caller, the
+legacy branch should never have been reachable from it, and the fix for those
+three is to stop measuring a stale tree.
+
+That withdrawal does not reach the sixteen. Those failed on
+`tests/mik_7212_mrtr_component_acs.rs` in CI, at origin's own tip `cbd224f0`,
+which contains `91b58974`. They are not a staleness artefact and no fixture-era
+correction is available to them, because their era is not a fixture choice at
+all: `fresh_body` (origin, line 689) sends a bare `tools/call` with no `_meta`
+block, no protocol-version header, no session header and no
+`Accept: text/event-stream`. `classify_request` reads that as `Legacy` because it
+*is* legacy -- a genuine 2025-shaped request. The caller then receives a minted
+session id from `handlers.rs:704-719`, satisfies `session_id.is_some()`, takes
+the bridge, and is refused.
+
+So the distinction that matters is between two callers that both reach the
+legacy branch for opposite reasons. One declared 2026 capabilities and was
+mislabelled; origin fixed that. The other is honestly legacy, has no stream, and
+is refused a continuation the sixteen acceptance criteria require it to be
+given. Only the second is section D, and it is unaffected by the rebase.
+
+One thing the withdrawal does change: the fall-through on
+`DeliveryError::NoSession` should be proposed on the strength of the sixteen and
+of the invariant quoted above from `handlers.rs:720-725`, not on the three. A
+production behaviour change argued from a local staleness artefact would be
+exactly the error this document keeps recording in other lanes.
+
+Integration is deliberately not being done right now. A merge of origin into this
+worktree reports roughly ten conflicting regions, and two source files
+(`src/gateway/router/backend_handlers.rs`, `src/gateway/server/mod.rs`) currently
+hold another session's uncommitted edits. Rebasing or merging under that would
+destroy work no commit is holding. The integration waits for those edits to land.
