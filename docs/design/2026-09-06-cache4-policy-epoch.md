@@ -183,10 +183,17 @@ body, so a response-inequality assertion cannot go red and is not the falsifier.
 
 ### Measured constraints (re-derived 2026-09-09; the citations below supersede this document's earlier ones, which drifted)
 
+**Line numbers below are ANCHORED TO SYMBOLS, not trusted as addresses.** This worktree is shared,
+`src/gateway/server/mod.rs` is under concurrent edit by another session, and `fn run` moved from
+809 to 811 *during this document's own review*. Every citation names its containing function,
+which is stable; the numbers are approximate, as of `b92c69c8`. A reader who finds a number off by a few
+lines should trust the symbol. In a live shared tree, a design that cites only line numbers reads
+as wrong within a day.
+
 | # | fact | where |
 |---|---|---|
-| C9 | All three bump sites are constructed inside **one function body**, `Gateway::run`: grant writer `:754`, capability watcher `:894` with `meta_mcp` still in scope (`meta_mcp.set_capabilities(...)` at `:900`), `ConfigWatcher::start` at `:1309`. | `src/gateway/server/mod.rs:809` |
-| C10 | `meta_mcp` moves into the router state at `:1240`, **before** `:1309` — but `meta_mcp_for_shutdown = Arc::clone(&meta_mcp)` at `:1227` proves a clone taken before the move outlives it. A handle cloned out of `MetaMcp` before `:1240` is therefore usable at `:1309`. | `src/gateway/server/mod.rs:1227`, `:1240` |
+| C9 | All three bump sites reach **one `MetaMcp` value**. `Gateway::build_meta_mcp` constructs it and performs the grant write (`set_identity_grants`, under `Arc::get_mut`) before returning it; `Gateway::run` receives it and holds it in scope at the capability watcher (`meta_mcp.set_capabilities(...)` immediately above) and, via a clone taken before the move into router state, at `ConfigWatcher::start`. **Not** one function body — one object. | `src/gateway/server/mod.rs`: `build_meta_mcp` 465-810 (grant write ~754), `run` 811+ (cap watcher ~896, `ConfigWatcher::start` ~1311) |
+| C10 | `meta_mcp` moves into the router state **before** `ConfigWatcher::start` — but `meta_mcp_for_shutdown = Arc::clone(&meta_mcp)`, taken a few lines earlier, proves a clone taken before the move outlives it. The epoch handle is an `Arc<AtomicU64>` *inside* `MetaMcp`, so cloning it clones the inner `Arc`, not the `Arc<MetaMcp>` — the `Arc::get_mut(&mut meta_mcp)` in `build_meta_mcp` is unaffected. | `src/gateway/server/mod.rs`, `run`: `meta_mcp_for_shutdown` ~1229, move into state ~1242 |
 | C11 | The 4.f.2 predicate **already exists**: `ConfigDiff.profiles_changed`, computed by `fn profiles_changed(old, new)` and set on the diff; its operator-facing string is "profiles/meta config changed". Nothing new is invented to decide when a profile changed. | `src/config_reload/mod.rs:84`, `:647`, `:330`, `:191-192` |
 | C12 | `ReloadContext` (`:1371-1388`) and `LiveConfig` (`:243-253`) carry **no generation counter** — `rg "generation\|reload_count\|AtomicU64" src/config_reload/mod.rs` returns 0. There is nothing to reuse as an epoch; a counter must be supplied. | `src/config_reload/mod.rs` |
 | C13 | `CapabilityWatcher::start(backend, shutdown_rx)` takes **no callback**; the reload it must follow is `backend.reload().await` inside the spawned task, after a 500 ms debounce and the pinned-capability verify. 4.f.3 therefore needs a third parameter — a signature change, named here rather than discovered in implementation. | `src/capability/watcher.rs:35-38`, `:57`, `:116`, `:144-148`, `:159` |
@@ -269,10 +276,14 @@ Format: `question — check run — what came back — what it changed`.
   **CORRECTED 2026-09-09 — the check above asked the wrong question, and its conclusion was
   wrong.** It searched `src/gateway/meta_mcp/mod.rs` for the *watchers*; the watchers are not
   built there, so zero hits was guaranteed and carried no information. The question that decides
-  the shape is where the three bump sites are *constructed*, and the answer is that all three sit
-  inside one function body — `Gateway::run` (`src/gateway/server/mod.rs:809`): the grant writer at
-  `:754`, `meta_mcp.set_capabilities(...)` beside the capability watcher at `:900`/`:894`, and
-  `ConfigWatcher::start` at `:1309`. They **do** converge on one construction point. Option A's
+  the shape is where the three bump sites are *constructed*, and the answer is that all three reach
+  **the same `MetaMcp` value**. Two are inside `Gateway::run` — the capability watcher, with
+  `meta_mcp.set_capabilities(...)` in scope, and `ConfigWatcher::start`. The third, the grant
+  writer, is inside `Gateway::build_meta_mcp`, which `run` calls to obtain that very `MetaMcp`, so
+  it operates on the object under construction rather than a different one. (An earlier draft of
+  this correction said all three sit in one function body. That was wrong — the grant write is in
+  `build_meta_mcp` — and a reviewer caught it. Convergence on one *object* is what the mechanism
+  needs; one *function* never was.) They **do** converge. Option A's
   owner survives the correction unchanged (see *Closing U6*); what does not survive is the claim
   that 4.f.2 and 4.f.3 need plumbing that does not exist.
 
@@ -284,9 +295,9 @@ Format: `question — check run — what came back — what it changed`.
   Recorded so the option is visibly rejected rather than silently unconsidered.
 
 - **U6. What carries the epoch to the config and capability watchers?** (was deferred; resolved
-  2026-09-09) — `rg -n "^    (pub )?(async )?fn " src/gateway/server/mod.rs` to bound `Gateway::run`,
-  plus `sed -n` at each of the three bump sites — all three are constructed inside `run`
-  (`:754`, `:894`/`:900`, `:1309`), and `ConfigDiff.profiles_changed`
+  2026-09-09) — `rg -n "^    (pub )?(async )?fn " src/gateway/server/mod.rs` to bound the enclosing
+  functions, plus `sed -n` at each of the three bump sites — all three act on one `MetaMcp`
+  (grant write in `build_meta_mcp`; both watchers in `run`, which owns that same `MetaMcp`), and `ConfigDiff.profiles_changed`
   (`src/config_reload/mod.rs:84`, computed `:647`, set `:330`) already exists as the 4.f.2
   predicate — **changed the scope**: 4.f.2 and 4.f.3 move from deferred to FOR, with no second
   epoch and no invented predicate. Mechanism in *Closing U6*.
