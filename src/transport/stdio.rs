@@ -1031,6 +1031,66 @@ done
         panic!(
             "child survived dropping every handle to its transport: pid {pid} still alive after 2s"
         );
+    
+    // =========================================================================
+    // MIK-7272.SUB.2b — request-scoped notification capture over stdio.
+    //
+    // stdout is ONE multiplexed stream, so "arrived on that request's own
+    // stream" buys nothing here: the token match IS the correlation. Plan
+    // rows: docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md
+    // :58 (S-02, "over stdio and over HTTP") and :59 (S-03, per-request
+    // isolation on one connection).
+    // =========================================================================
+
+    fn progress_line(token: &str, progress: u64) -> String {
+        format!(
+            r#"{{"jsonrpc":"2.0","method":"notifications/progress","params":{{"progressToken":"{token}","progress":{progress}}}}}"#
+        )
+    }
+
+    /// S-02 over stdio: a backend's progress notification during a call is kept
+    /// for the caller that supplied its token, not discarded.
+    #[test]
+    fn stdio_captures_a_progress_notification_for_the_call_that_supplied_its_token() {
+        let t = make_transport("cat");
+        t.register_progress_token("tok-a");
+
+        t.handle_response(&progress_line("tok-a", 1))
+            .expect("a notification must not fail the read loop");
+
+        let captured = t.take_captured_notifications("tok-a");
+        assert_eq!(captured.len(), 1, "the notification must be kept");
+        assert_eq!(captured[0].method, "notifications/progress");
+    }
+
+    /// S-03 over stdio: two calls in flight on the one stdout. The notification
+    /// reaches the call that provoked it and no other.
+    #[test]
+    fn stdio_routes_a_progress_notification_to_only_the_call_that_supplied_the_token() {
+        let t = make_transport("cat");
+        t.register_progress_token("tok-a");
+        t.register_progress_token("tok-b");
+
+        t.handle_response(&progress_line("tok-b", 7)).unwrap();
+
+        assert!(
+            t.take_captured_notifications("tok-a").is_empty(),
+            "the other call in flight must see nothing"
+        );
+        assert_eq!(t.take_captured_notifications("tok-b").len(), 1);
+    }
+
+    /// Condition 2 of the correlation rule: a token no caller supplied is never
+    /// forwarded. The gateway passes a backend's token through, never mints one.
+    #[test]
+    fn stdio_drops_a_progress_notification_no_caller_asked_for() {
+        let t = make_transport("cat");
+        t.register_progress_token("tok-a");
+
+        t.handle_response(&progress_line("tok-stray", 3)).unwrap();
+
+        assert!(t.take_captured_notifications("tok-a").is_empty());
+        assert!(t.take_captured_notifications("tok-stray").is_empty());
     }
 }
 
