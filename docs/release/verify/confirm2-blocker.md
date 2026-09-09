@@ -166,3 +166,31 @@ Also unresolved and larger than a fixture: whether `for_modern()`'s refusal was 
 survive the in-band ask at all. If it was, `handlers.rs:1441-1451` splits on era where it
 should split on era *and* channel availability, and the dead `for_modern()` is the symptom.
 That is a design question for the CONFIRM.2 author, not a test repair.
+
+## Fourth entry — W1 built after all, and the wire version does NOT move
+
+The lead ruled W1 in on 2026-09-09 and approved the flat `purpose` field. The adjudication
+two sections up recorded the opposite outcome; this supersedes it on the ruling, and the
+reasoning there still stands on one point the ruling does not disturb — the mechanism has no
+test that can fail only for its absence. `docs/design/2026-09-09-confirm-2-in-band-schema-and-wiring.md`
+carries the full argument, including the corrected gate-ordering table.
+
+**Decision: `VERSION` stays 1.** Reasoning, since the outcome alone is not the useful part:
+
+- The sealed payload is JSON (`serde_json::to_vec`, `src/protocol/continuation.rs:650`;
+  `from_slice` at `:715`), so `#[serde(default)]` on a new field lets a payload sealed before
+  the field existed deserialize untouched. Nothing about the format forces a bump.
+- Bumping would be actively destructive rather than merely noisy. `open()` reads the version
+  byte off the wire and refuses anything `!= VERSION` (`:692-694`), so a bump invalidates
+  every envelope in flight at the instant of deploy — a rotation event in all but name, and
+  one nobody scheduled.
+- The default is correct rather than convenient. Every envelope minted before this field
+  existed IS a backend exchange, which is precisely what `Backend`-as-default asserts. A
+  defaulted read of an old envelope therefore states a true thing about it, not a guess.
+
+No case was found in which a v1 envelope fails to deserialize without the bump, so the
+lead's condition for bumping ("only if you cannot avoid it") was never met.
+
+**Still unmeasured.** `/` is at 3.4G against the 5G floor. Nothing in this entry was
+compiled or run; the code is committed with that stated in the commit body, per the lead's
+standing instruction. `RELEASE-4.0.0-criteria-status.md:249` stays `ABSENT`.

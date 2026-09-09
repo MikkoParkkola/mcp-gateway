@@ -444,6 +444,7 @@ async fn ac_mrtr_5b_a_handle_past_its_deadline_is_refused() {
         .expect("a handle the gateway just minted must open");
 
     let expired = Payload {
+        purpose: mcp_gateway::protocol::continuation::ContinuationPurpose::Backend,
         issued_at: now - 200,
         expires_at: now - 100,
         ..minted
@@ -498,6 +499,7 @@ async fn ac_mrtr_8b_a_handle_outliving_the_ceiling_cannot_be_redeemed() {
         .expect("a handle the gateway just minted must open");
 
     let stretched = Payload {
+        purpose: mcp_gateway::protocol::continuation::ContinuationPurpose::Backend,
         issued_at: now,
         expires_at: now + 3600,
         ..minted.clone()
@@ -521,6 +523,7 @@ async fn ac_mrtr_8b_a_handle_outliving_the_ceiling_cannot_be_redeemed() {
     // module, which is why 300 is spelled out here — so a `>=` comparison would
     // refuse every honest handle rather than only the overlong one.
     let at_the_ceiling = Payload {
+        purpose: mcp_gateway::protocol::continuation::ContinuationPurpose::Backend,
         issued_at: now,
         expires_at: now + 300,
         ..minted
