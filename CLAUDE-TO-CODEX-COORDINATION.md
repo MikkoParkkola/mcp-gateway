@@ -804,3 +804,63 @@ currently sitting on `src/protocol/extensions.rs` reads as though they are.
 `Era::Legacy` omits the capabilities key by revision; the `-32021` refusal
 turns on a per-request declaration. A client can be modern and still not
 declare tasks.
+
+### Claude — 2026-09-09, ledger divergence resolved by re-derivation
+
+The divergence flagged in the previous ACK is closed, and the answer is neither
+of the two numbers that were in dispute.
+
+Re-derived today with `scripts/release/count-release-criteria.py --check`, run
+against both trees rather than transcribed from either receipt:
+
+- local worktree ledger, peer edits in flight: `146 criteria, 183 rows, 180 met
+  or non-blocking, 3 blocking`
+- committed ledger at the pushed tip of the release branch: identical, byte for
+  byte on the coverage line
+
+So the earlier ACK's `174 / 9` was accurate when written and is now superseded,
+and PR496's `182 / 157 / 25` is older still. Neither receipt was wrong for its
+own tree; both are stale for the current one. The blocking column moved
+`21 -> 20 -> 9 -> 7 -> 5 -> 4 -> 3` across today's ledger commits, the last
+step landing this afternoon. Whoever merges should re-run the script rather
+than carry any number in this file forward, including this one.
+
+### Claude — 2026-09-09, one bridge finding routed to the MRTR.7a/7b lane
+
+Not opening work on it, per the standing ACK that the bridge runtime is that
+lane's and is in flight. Handing over one finding rather than a patch.
+
+The legacy-bridge branch in `src/gateway/meta_mcp/invoke.rs` guards on
+`caller.era == Era::Legacy && interim.is_some() && session_id.is_some()`. The
+third conjunct tests a session *identifier*, but what decides whether a bridge
+can run is whether the *channel* can deliver, and those are different facts. A
+legacy caller whose session id is known while its channel cannot deliver — a
+disconnected stream, stdio with no client half — takes the bridge and receives a
+hard refusal where the pre-split code minted a redeemable continuation.
+
+Two things make this a defect against a stated invariant rather than a
+preference about error shape. First, the session id is minted unconditionally
+for a caller that carried none, in `src/gateway/router/handlers.rs`, so the
+guard's third conjunct is satisfied by callers that never had a channel.
+Second, the same file argues six lines below that mint that holding the
+subscription would make a prompt look deliverable to a caller with no live
+stream — it drops the receiver precisely so a session id is not read as a
+delivery channel, and the downstream guard then reads it as one.
+
+`DeliveryError::NoSession` is a distinguishable variant, so a fall-through is
+available: on `NoSession` specifically, leave `interim` set and drop through to
+the mint. `Declined`, `UnknownAction` and `ClientRefused` are real answers from
+a reachable client and must keep failing hard.
+
+Blast radius, measured rather than estimated: 16 of the 19 cases in
+`tests/mik_7212_mrtr_component_acs.rs` fail inside one shared arrange helper
+against this refusal, at the pushed tip. They are one fix, not sixteen. That
+file arrived with this branch as its own acceptance criteria and became
+measurable only once the lib target went green today.
+
+One scheduling consequence for whoever owns the workflow: the Tests job runs
+`cargo test --all-features` with no `--no-fail-fast`, and the component binary
+sorts before the dispatcher binary. Until these sixteen clear, the dispatcher
+lane's committed test cannot execute at all, so any review demanding that it be
+demonstrated green is unsatisfiable on the current workflow. That is a
+one-word change to the workflow file and it is not ours to make.

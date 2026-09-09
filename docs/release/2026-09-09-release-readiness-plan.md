@@ -444,3 +444,40 @@ worktree reports roughly ten conflicting regions, and two source files
 (`src/gateway/router/backend_handlers.rs`, `src/gateway/server/mod.rs`) currently
 hold another session's uncommitted edits. Rebasing or merging under that would
 destroy work no commit is holding. The integration waits for those edits to land.
+
+### D-owner: the fall-through belongs to the MRTR.7a/7b bridge lane
+
+Section D closes its open question. It asked who signs off on changing a
+production refusal into a fall-through; the answer was already recorded in the
+shared coordination file and had not been read into this document.
+
+The bridge runtime is owned by the `MRTR.7a/7b` lane, that lane's ACK states the
+work is assigned and in flight, and it asks explicitly that no second lane open
+work on it. So the fall-through described above is handed over as a finding, not
+implemented here. What was handed over is the guard's third conjunct, the
+invariant it contradicts in its own file, the `DeliveryError::NoSession`
+discrimination that makes the fall-through available, and the measured blast
+radius of sixteen cases against one shared arrange helper.
+
+Two consequences for the plan. This removes section D from the list of things
+this document is waiting on an owner for — it is scheduled work in another lane
+now, not an unowned defect. And it leaves exactly one item in that state: the
+two workflow changes in section C, which belong to whoever owns the release
+branch's CI configuration and are still unmade.
+
+### Count re-derived on both trees
+
+The coverage headline above was re-derived today rather than carried forward,
+because the shared coordination file contained a second Claude lane quoting
+`174 met or non-blocking, 9 blocking` from a receipt this morning, against this
+document's `180 / 3`. Running
+`scripts/release/count-release-criteria.py --check` against the local worktree
+ledger and against the committed ledger at the pushed tip returns the same line
+from both: `146 criteria, 183 rows, 180 met or non-blocking, 3 blocking`.
+
+The other figure was accurate when it was written and is superseded; the
+blocking column moved `21 -> 20 -> 9 -> 7 -> 5 -> 4 -> 3` across today's ledger
+commits. A third figure in circulation, PR496's `182 / 157 / 25`, is older than
+both. None of the three is wrong for its own tree, which is the whole hazard:
+every one of them reads like a fact about the release rather than about a
+commit. The script is the authority and costs a second to run.
