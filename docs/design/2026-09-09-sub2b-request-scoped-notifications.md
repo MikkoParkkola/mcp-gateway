@@ -332,3 +332,101 @@ session's baseline, was never reviewed, and is superseded where it conflicts.
 **SUB.2b stays BLOCKING.** The ledger row is untouched and the release counter is unmoved
 (`count-release-criteria.py --check`: 146 criteria, 183 rows, 5 blocking, exit 0). The three operator
 options are unchanged by this round.
+
+---
+
+# Revision 2 — 2026-09-09 (operator ruling: build it)
+
+Revision 1 closed on a three-way operator choice. **The operator took option 1-and-2 together and
+ruled BUILD SUB.2b BEFORE v4.0.0.** This revision records what that ruling changes, what it does not,
+and what now blocks the work. Everything above stands except where contradicted here.
+
+## What the ruling supersedes
+
+| superseded | by |
+|---|---|
+| "**Answered — the `Transport` trait does not change on this release branch**" (this note, above) | The trait **MAY** change. `src/transport/mod.rs:24,41` is in scope. |
+| "the outbound leg needs POST content negotiation … which is peer-owned and out of this domain" | Outbound POST content negotiation in `src/gateway/router/` **IS** in scope. |
+| Revision 1 option 3, "accept `MIK-7272.SUB.2b` red for 4.0.0" | Withdrawn. The criterion is built, not narrowed and not deferred. |
+
+The lead's earlier ruling is superseded, not deleted, and is left in place above so a reader can see
+which sentence stopped binding. The operator made this call **with the cost visible** — stdio,
+websocket, every gateway call site, peer-owned router code, on a stabilising branch — and chose it
+anyway. The cost is therefore not a reason to re-narrow the criterion later; it is a price already
+accepted on the record.
+
+## Scope note — the trait change is permitted, not thereby required
+
+Correction 2 above stands and now bounds the work rather than unblocking it. `attach_era`
+(`src/backend/lifecycle.rs:379` calling `src/transport/http/mod.rs:573`, both re-verified at source
+at `b28ad089`) attaches a collaborator to the **concrete** `HttpTransport` with no trait change. The
+inbound capture shape — `parse_sse_response` returning the notifications it saw alongside the
+response, one value, one function, sole call site `src/transport/http/mod.rs:1211` — likewise needs
+no trait change. Authorisation to widen `Transport::request` should be spent only if the outbound
+leg genuinely demands it. Permission granted is not permission that must be used.
+
+## §II.6 correlation key — recorded as an ASSUMPTION, with its reasoning
+
+**This lane proceeds on option (i): pass-through only.** The gateway forwards a notification only when
+a backend sends one unprompted on a request's own stream, correlated by which request's stream it
+arrived on. No token minting, no translation, no token-allocation table.
+
+Two things are true at once and a reader needs both:
+
+- `docs/design/2026-08-31-cluster-b-connection-invariance.md:463` records this as **ANSWERED by the
+  operator** ("(i), pass through only … never mints one"). Re-read at source today at `b28ad089`.
+- **This lane's own escalation of the same question went unanswered in its window.** The lead
+  therefore instructed that (i) be carried **as an assumption, not as a ruling this lane received.**
+
+Reasoning for choosing (i) as the assumption, so the choice is checkable rather than inherited: it is
+the design's own recommendation; it is the smaller scope; and (ii) would add a token-allocation table
+the operator did not ask for, on top of a refactor the operator has just authorised.
+
+**If implementation makes (i) untenable, this lane STOPS and escalates.** It does not silently switch
+to (ii). A correlation key changed under an assumption is a design event (§P3) and an operator
+question, in that order.
+
+## What blocks the outbound leg now: file ownership, not scope
+
+Revision 1 blocked on **scope** (nobody had authorised the router work). That blocker is discharged.
+What replaces it is narrower and is a different kind of thing:
+
+`src/gateway/router/handlers.rs`, `helpers.rs`, `mod.rs` and `tests.rs` are all `MM` in `git status` —
+staged **and** unstaged edits belonging to another session. Under §P5, uncommitted work in a live
+checkout **is** the running system, and `git commit -o <path>` takes that path's whole working tree,
+so committing the outbound leg would ship a stranger's in-flight edit under this lane's message.
+Editing without committing is worse, not a compromise: it stacks two sessions' changes in one file.
+
+This is the lead's call, not this lane's and not the operator's: the operator authorised **scope**,
+the lead owns **sequencing in a shared worktree**. Raised, not worked around.
+
+`src/transport/**` is clean (`git status --porcelain src/transport/` returns nothing, checked at
+`b28ad089`), so the inbound half is takeable the moment the outbound half has an owner.
+
+**The inbound leg is deliberately NOT built alone.** §II.2 scored a capture with no destination as "a
+dead pipe: correctly addressed, never written to", and the ledger row scores the same shape as "a
+parsed field with no reader is a placeholder, not a half-implementation". Building capture while the
+outbound surface is absent produces exactly the artefact this criterion's own review standard fails.
+
+## stdio — explicitly in or out, since the old scope no longer inherits
+
+`src/transport/stdio.rs:416-431` discards peer notifications the same way ("A peer notification is
+accepted and ignored"). Under the old trait-frozen ruling that site was outside this note's scope by
+default. That default is gone with the ruling, so it is stated rather than inherited: **stdio is OUT
+of this increment's FOR**, because SUB.2b names *the response stream of their own request* and the
+stdio transport has no per-request response stream to flow them on — it multiplexes one stdout. If
+the criterion is later read to bind stdio, that is a §P0 scope move needing a receipt update, not a
+silent extension of this note.
+
+## Ledger status unchanged
+
+`MIK-7272.SUB.2b` remains **ABSENT / blocking = yes** at
+`docs/requirements/RELEASE-4.0.0-criteria-status.md:230`. Nothing is flipped by a ruling; only shipped
+code with tests flips a row. The release counter is untouched.
+
+## Review status of this revision
+
+Revisions 1 and 2 have **never been dual-reviewed** — that is disclosed here on the artefact rather
+than assumed. This revision is the material for the pair (`gpt-review` + `kimi-review`, on stdin), on
+the one question that can overturn it: does the operator's build ruling reach anything this revision
+records as out of scope or assumed?
