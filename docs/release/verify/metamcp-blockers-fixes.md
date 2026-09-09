@@ -12,7 +12,7 @@ explicitly.
 
 | finding | verdict | commit |
 |---|---|---|
-| BLOCK-1 | pending | |
+| BLOCK-1 | implemented, unverified locally | `promote_interim_envelope` (`src/gateway/meta_mcp/mod.rs:1933`) is no longer a no-op. It promotes `resultType`, `inputRequests` and `requestState` onto the JSON-RPC result for `gateway_invoke` and `gateway_execute` when `resultType` is `input_required`, and returns early otherwise. Written to the four tests that specify it (`tests.rs:5842-5915`): the two failing CI cases plus `block_1_promotion_leaves_a_completed_call_alone` and `block_1_promotion_ignores_tools_that_cannot_produce_a_round`, which together pin the tool-name scope that was previously called an open design question. The two-name set matches the existing idiom at `mod.rs:1589`. The disk floor (MIK-4777, 5 GB) that previously blocked cargo no longer binds; the tree has 36.9 GB free as of 2026-09-09, and the remaining wait is the shared build lock. `mod.rs` also carries a concurrent session's extract-function refactor of `destructive_confirmation_gate` into `redeem_carried_confirmation` and `unconfirmable_refusal`, so any commit of this file publishes that too. |
 | BLOCK-2 | fixed | `1e8d6967` |
 | BLOCK-3 | fixed, independently verified SOUND | `73cf8117` |
 | BLOCK-4 | fixed, independently verified SOUND | `7abb3514` |
@@ -365,3 +365,109 @@ until that edit is committed by whoever owns it — it is another session's file
 not this one's to commit. And any local clippy result read off this worktree is
 evidence about the worktree, not about the branch; the same caveat applies to the
 green reported above.
+
+## Three tests cited by ORDER.2a's MET verdict are in an undeclared module
+
+Measured 2026-09-09. `src/gateway/meta_mcp/order2_fsm_tests.rs` is staged as a new
+file (`A` in `git status`) and is declared by no module file. `mod.rs`'s module
+block lists `invoke`, `policy_epoch_tests`, `prompt_cache`, `protocol`,
+`resources`, `search`, `spec_preview`, `support` and `surfaced`; `order2_fsm_tests`
+is not among them and appears nowhere else in the crate. The file is therefore not
+part of the build: its contents never compile and its tests never run.
+
+The MIK-7272.ORDER.2a row in `RELEASE-4.0.0-criteria-status.md:215` is `MET`, and
+its evidence names three cases in that file —
+`missing_and_empty_keys_are_explicitly_refused` (`:51`),
+`old_empty_key_state_cannot_influence_any_discovery_reader` (`:70`) and
+`nonempty_legacy_and_stdio_keys_retain_isolated_state_changes` (`:86`). None of the
+three has ever executed. A file-and-line citation reads as proof that a case ran;
+here it only proves the text exists on disk.
+
+The rest of the row's evidence does execute and was checked separately:
+`src/gateway/router/tests/order2_fsm.rs` is declared at
+`src/gateway/router/tests.rs:35`, and `src/gateway/server/tests/order2_fsm.rs` at
+`src/gateway/server/mod.rs:2285`. Both are inside the build. So ORDER.2a is not
+unsupported — it is supported by fewer cases than it claims, and the refusal path
+and the contaminated-old-state path are among the ones with no live coverage.
+
+This is the second instance of the same defect on this branch. `direct_route.rs`
+sat on disk outside the crate the same way while `backend_handlers.rs:781` called
+into it; that one surfaced as a build error only because production code depended
+on it. A test module fails silently instead, which is why it survived a MET
+verdict. Before a criterion's evidence is read as executed, the file it names has
+to be traceable to a `mod` declaration.
+
+## `ConfirmationPolicy::for_modern()` is built on every modern call and discarded
+
+Measured 2026-09-09. `src/gateway/router/handlers.rs:1378` selects a
+`confirmation_policy`, taking `for_modern()` when `is_modern` and `for_legacy()`
+otherwise. That value reaches exactly one consumer, at `:1449`, inside the
+`Era::Legacy` arm of the `confirmation` match. The `Era::Modern` arm at `:1441`
+builds `ConfirmationChannel::InBand` and never reads it.
+
+`is_modern` is not an independent input: `handlers.rs:826-827` derives it as
+`era == Era::Modern` from the same `shape.era()` the match switches on. The two
+cannot disagree, so the `Elicit` arm is reached only when `era` is `Legacy`, which
+is exactly when `confirmation_policy` holds `for_legacy()`. The `for_modern()`
+branch therefore has no consumer on any path: its value is constructed and
+dropped on every modern destructive call.
+
+`for_modern()` has one call site in the crate (`rg 'for_modern\(\)' src/`,
+2026-09-09): that one. Stdio does not consult it and says so —
+`src/gateway/server/mod.rs:2711-2716` records that stdio refuses unconditionally
+because no asker can exist, rather than by asking about the revision.
+
+Nothing computes a wrong answer today, so this is not a correctness defect. What
+it costs is read: the module doc at `src/gateway/destructive_confirmation.rs:31`
+introduces `for_modern()` as the policy for modern requests and states that it is
+`REFUSE`, which invites the conclusion that a modern HTTP destructive call is
+refused. CONFIRM.2 replaced that behaviour with the in-band ask, and the constant
+was left standing. A future reader reconciling the doc against the wire will find
+they disagree.
+
+Left unpatched deliberately. Deleting the branch, deleting the constant, or
+rewriting the doc are three different decisions about what the modern policy is
+supposed to mean, and that belongs with CONFIRM.2's owner rather than in a
+blocker-fix pass.
+
+## The tasks extension's TTL and admission rules are designed and unbuilt
+
+Measured 2026-09-09. `docs/design/2026-08-31-task-1-tasks-extension.md` settles four
+requirements about task lifetime, three in §3 and one in the amendment §10.3 closed
+on 2026-09-06:
+
+- a finite default TTL and a global cap, because `ttlMs: null` with no admission
+  bound lets a caller hold memory indefinitely (§3, `:118`);
+- a cap that counts every **unreaped** record rather than active ones, because a
+  terminal record is retained until its TTL expires and a flood of fast-finishing
+  tasks exhausts memory while an active-only counter reads zero (`:927`);
+- a reap that is a single store-level compare-and-delete against the record's
+  **current** `ttlMs`, never a read followed by an unconditional delete (§3,
+  `:103-104`, `:159`);
+- `ttlMs` and `pollIntervalMs` both mutable over a task's life, one rule for both,
+  because a reaper pinning the TTL it read at creation reaps a task the server has
+  since extended (§10.3 amendment, `:126`, `:676-677`).
+
+None of the four exists in the code. `rg 'ttl' src/protocol/task_store.rs
+src/protocol/tasks.rs` (2026-09-09) matches only two prose comments about settled
+tasks; there is no TTL field, no cap, and no function named for reaping, sweeping,
+expiring or pruning. The design records the same absence itself at `:140`.
+
+`Task` at `src/protocol/tasks.rs` also still carries neither `createdAt` nor
+`lastUpdatedAt` (design `:57`), which the reap would need to compute an expiry
+against.
+
+Recorded here because this file is the one this pass owns. The row belongs in
+`RELEASE-4.0.0-gap-plan.md` under the tasks-extension work, and needs its acceptance
+criteria written against the four bullets above rather than against "TTL is
+implemented" — a default TTL with a read-then-delete reap satisfies the sentence and
+not the requirement.
+
+### Swept for the same defect: `order2_fsm_tests.rs` is the only one
+
+Every `.rs` file this branch adds under `src/` was checked against a `mod <name>;`
+declaration somewhere in the tree (2026-09-09, 29 files). All are declared except
+`src/gateway/meta_mcp/order2_fsm_tests.rs`. The files directly under `tests/` are
+not part of this check and need no declaration: cargo discovers each as its own
+integration target, and `tests/common/mod.rs` is pulled in by `mod common;` inside
+the targets that use it.
