@@ -39,11 +39,27 @@ fixtures, but carries the function as its red-stage placeholder:
 The implemented body did not survive the merges that landed the working tree
 onto the release branch. `47dd46a9` ("wip: uncommitted working-tree state on the
 stale base") introduced the placeholder and is an ancestor of `5dfbed58`, so this
-is a merge artifact rather than a deliberate revert. Two tests fail out of 4157
-and both are explained by this one placeholder -- that is what makes it the whole
-of the red, not a claim that nothing else was dropped.
+is a merge artifact rather than a deliberate revert. Both failures are explained
+by this one placeholder.
 
-Restoring the body turns the suite green; it is verified green locally with that
+That is the whole of the *measured* red, and the measurement is narrower than the
+count suggests. CI runs `cargo test --all-features` with no `--no-fail-fast`
+(`.github/workflows/ci.yml:198` at `5dfbed58`), so cargo aborts after the first
+failing target. Both failures are lib tests
+(`src/gateway/meta_mcp/tests.rs:5872`, `:5900`), so the run stopped at the lib
+target and no `tests/*.rs` integration target executed. The 4157 figure is
+essentially the lib target alone: a filtered lib run at this tree reports 4116 to
+4120 tests filtered out of the same population.
+
+The consequence is a structural gap in the evidence chain, not just a caveat on
+one number: **while any lib test is red, the CI test job cannot report the
+integration suite's status at all**, and a green rollup on the other 26 jobs does
+not compensate -- none of them run `tests/*.rs`. Every acceptance criterion
+evidenced by an integration test is therefore currently unmeasured, whatever its
+ledger row says. Restoring the item 0 body is what makes the rest of the suite
+observable, which is a second and stronger reason to do it first.
+
+Restoring the body turns the lib target green; it is verified green locally with that
 body (`cargo test --lib block_1_`, 4 passed). The repair must be built on top of
 `5dfbed58` and pushed as an explicit ref. It must not be delivered by pushing a
 local tip: the worktree at `/Users/mikko/github/.worktrees/mcp-2026-protocol` is
@@ -175,7 +191,7 @@ re-evidenced even before it is built.
 Both surfaced from other lanes and were re-verified here at source before being
 recorded, because a lane's report is corroboration, not proof.
 
-### A. `MIK-7246.CONFIRM.1a` is marked PASS on a basis that does not hold
+### A. `MIK-7246.CONFIRM.1a` is not a blocker, and is not measured either
 
 The row at `docs/requirements/RELEASE-4.0.0-criteria-status.md:247` rests on
 `ConfirmationPolicy::for_modern()`'s `REFUSE` being "consulted rather than merely
@@ -196,12 +212,36 @@ the comparison against `REFUSE` there can never be true. `for_modern()`'s value 
 constructed on the modern path and then never placed in a channel. `REFUSE` is a
 string constant with no runtime producer on any transport, stdio included.
 
-Recorded as a candidate fourth blocker rather than a fourth blocker: what is
-proven is that the row's stated basis is false, not yet that the requirement
-demands a reachable `REFUSE`. Whoever owns `MIK-7246` should read the requirement
-text and either re-evidence the row on a basis that holds or move it to blocking.
-The ledger cell is marked CONTESTED with these anchors and the PASS left standing,
-since nothing is measured by flipping a verdict on an unread requirement.
+The requirement text settles what that costs, and it is not a blocker.
+`RELEASE-4.0.0-requirements.md:204-205` demands an outcome -- the gate MUST refuse
+when it cannot obtain confirmation -- and names no mechanism, so a refusal
+delivered by a failed in-band mint satisfies it exactly as a policy-driven one
+would. `CONFIRM.1b` states in writing that the legacy path keeps
+`PROCEED_WITH_WARNING` deliberately and that the asymmetry "is not a defect of
+this criterion". So the dead `for_modern()` is dead code, not a violation, and the
+blocking count stays at three.
+
+What remains is worse than a stale citation and is the reason the row still cannot
+be called met. `CONFIRM.1a`'s PASS rests on
+`ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused`
+(`tests/mik_7215_acs.rs:684`), whose own doc comment gives its premise: "a modern
+request cannot carry a session -- this revision deleted them -- so there is nobody
+to elicit over and `Unsupported` is the outcome every time". The era split removed
+that premise: a modern request now takes `InBand`, `state.continuation` is an
+`Arc` rather than an `Option` so the channel always carries one,
+`ContinuationState::new()` configures a working keyring, and
+`confirmation_principal` falls back to the api-key name, which makes the test's
+`admin-client` nameable. Live channel, working keyring, nameable principal: the
+mint succeeds and the modern caller is asked rather than refused.
+
+That prediction cannot be checked against the last CI run, because the era split
+was already present at `5dfbed58` (`handlers.rs:1441-1447` there) and the run
+still stopped at the lib target -- see item 0 -- so this test did not execute. The
+honest grade is neither PASS nor FAIL but unmeasured-and-at-risk, and it is an
+instance of the general gap recorded in item 0 rather than a separate defect. The
+ledger cell keeps PASS with a CONTESTED note carrying these anchors: a prediction
+from source is not a measurement, and the measurement is available the moment the
+lib target goes green.
 
 Cite `on_unconfirmable` by symbol, not by line: that comparison has been cited at
 `:2201-2204`, `:1967` and `:2223` in three different documents and is at `:2226`
