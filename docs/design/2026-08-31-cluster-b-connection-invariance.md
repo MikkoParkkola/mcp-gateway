@@ -404,6 +404,81 @@ Those belong to whichever increment threads it, with both consumers' requirement
 in hand. Cluster A is owned by another session; coordination sits with the team
 lead, not with this note.
 
+## II.6 Revision, 2026-09-09 — option (b) names no correlation key, and MCP's is absent from the tree
+
+§4.3 is answered: option (i), `SUB.2` unamended, so option (b) — mechanism plus backend
+forwarding — is in scope for v4.0.0. This section records what building (b) turns out to require
+that §II.3 and §II.4 do not say, and schedules the one question only the operator can settle. It
+reopens no decision: (b) is still the recommendation and (a)-then-forwarder is still the
+sequencing.
+
+### The gap, stated plainly
+
+`SUB.2`'s second clause is *request-scoped* notifications reaching *the caller that provoked
+them*. §II.5 threads one identity from the router to the transport, which answers **which
+connection** a notification belongs to. It does not answer **which request**. A connection with
+two calls in flight — which the streamable-HTTP transport permits and the meta route encourages —
+has two provoking requests and one identity, and the forwarder has nothing to sort the traffic by.
+
+MCP's own answer to this is the **progress token**: a client puts `progressToken` in a request's
+`_meta`, and a server's `notifications/progress` carries that token back so the client can
+correlate. That is the protocol-native correlation key, and this design has never mentioned it.
+
+### The check, run 2026-09-09
+
+| question | command | result | what it changed |
+|---|---|---|---|
+| does this design specify a correlation key? | `rg -i 'token' docs/design/2026-08-31-cluster-b-connection-invariance.md` | **zero matches**, across all 602 lines | §II.3's options are underspecified: (b) and (c) both forward, neither says what the receiver correlates on |
+| does the tree parse one? | `rg -e progressToken -e progress_token src` | **nothing** | not a wiring gap. There is no parser, no field, no emitter. `_meta` (`src/protocol/meta.rs:78-80`) carries `log_level` and not this |
+| is the inbound leg even open? | read `parse_sse_response`, `src/transport/http/mod.rs` | `JsonRpcMessage::Notification(..) => { debug!(..., "Skipping notification on response stream"); }` | a backend's progress notification is dropped inside the transport before any forwarder could see it. §II.1's "no forwarder" understated it: the leg that would feed a forwarder is closed too |
+
+Third row is the one that matters for sequencing. §II.2's measured constraints are about the
+gateway→client leg (POST never negotiates `text/event-stream`). The backend→gateway leg has its
+own defect and its own file, and (b) needs both.
+
+### What must be decided, and by whom
+
+Not the wire format — that is the spec's, and it is settled. The open question is **scope**, and
+it is the operator's for the same reason §4.3 was:
+
+| | consequence |
+|---|---|
+| **(i) forward only what a backend sends unprompted** | the gateway never mints a token; it forwards a backend notification only when the backend's own `progressToken` matches one a caller supplied on that request. Smallest change: parse the token inbound, keep it in the per-invocation identity of §II.5, match on the way back. A backend that emits nothing yields nothing, and `SUB.2` is met for backends that do emit |
+| **(ii) the gateway mints and translates tokens** | the gateway allocates its own token per backend call, rewrites it on the way out to the caller's, and can therefore also originate its own progress. Strictly larger — it is §II.3 option (c) arriving through the back door — and it makes the gateway a notification source, which §II.4 deliberately did not choose |
+
+*Recommendation: (i).* It is what option (b) already means, it needs no new configuration surface,
+and it keeps the gateway a router rather than an emitter. (ii) should be reached only by choosing
+option (c) openly, not by letting a correlation mechanism grow into one.
+
+**Scheduled, not assumed** — the four fields, since nothing depending on it may be implemented
+until it is answered:
+
+| field | value |
+|---|---|
+| owner | operator, as the §4.3 answer's direct consequence |
+| what would resolve it | the answer to "does the gateway forward a backend's own progress tokens only (i), or mint and translate its own (ii)?" |
+| when | before the forwarder increment starts; the §II.2 transport work and the §II.5 identity are unaffected and may proceed |
+| what if it resolves badly | if (ii), the forwarder grows a token-allocation table keyed by the §II.5 identity, and `SUB.2`'s increment absorbs part of option (c)'s scope — a scope change to report, not a design change to absorb quietly |
+
+**ANSWERED 2026-09-09 (operator): (i), pass through only.** The gateway forwards a backend's own
+progress token when it matches one a caller supplied on that request, and never mints one. The
+four fields above are discharged — this is a resolved question, not a deferred one, and the
+forwarder increment is unblocked on it. The "resolves badly" branch did not occur: no
+token-allocation table, and `SUB.2` absorbs none of option (c)'s scope. The gateway stays a router
+rather than becoming a notification source, which is what §II.4 chose and what option (b) already
+meant.
+
+What this does NOT settle, named so nobody reads it as settled: whether `Transport::request`'s
+signature must change so that a captured notification has an in-domain consumer. That question is
+ruled out for the 4.0.0 release on cost and timing — it touches stdio, websocket and every gateway
+call site on a stabilising branch — and the answer above neither requires nor forbids it.
+
+### What this revision does not do
+
+It does not add a criterion. `SUB.2` is unamended and its second clause is what it always was;
+this section names the mechanism that clause requires and which nobody had written down. It does
+not touch Part I, §I.5, or the §4.3 answer.
+
 ---
 
 # Part III — findings that fall out of this design
