@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `MIK-7246.CONFIRM.2` — the confirmation gate MUST be reachable through the
 //! modern (2026-07-28) stateless path.
 //!
