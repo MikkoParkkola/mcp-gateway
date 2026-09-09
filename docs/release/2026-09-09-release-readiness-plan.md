@@ -719,3 +719,40 @@ What caught it was the answer contradicting data read twenty minutes earlier —
 suspicion, not a control. The control is the guard that followed: **an empty
 result and a failed fetch must not be able to look alike.** A zero that can be
 produced by a broken fetch is not a measurement.
+
+### H. The disk blocker is not ours, and it is getting worse
+
+Every plan item below the documentation layer is gated on one environmental
+fact: the repository's disk-pressure hook refuses any command containing
+`cargo` while free space on `/` is under 5G, and free space is **3.9G**. No
+lane can build, test, or reproduce a single criterion until that clears. This
+is upstream of every remaining verification in this document, including the
+`--no-fail-fast` re-run that would settle the seven rows in section E and the
+component-AC run that would move `MIK-7246.CONFIRM.2`.
+
+Three measurements taken an hour apart change what the blocker is:
+
+- Free space fell from **4.2G to 3.9G with no build running**. `procs` matched
+  no `rustc` and no `cargo` process anywhere on the machine.
+- Exactly **one** worktree holds a `target/` directory at all — this one, at
+  10.0Gi, and it is static. The other lanes have never built here.
+- Its largest reclaimable component is `target/debug/incremental` at 7.2Gi,
+  whose last write was several minutes before the first measurement.
+
+So the drain is somewhere else on the system entirely. Reclaiming inside this
+repository would buy roughly 7Gi of headroom and unblock the lanes, but it
+would not touch the cause, and at the observed rate the same wall returns. The
+useful framing for whoever picks this up is that there are two separate jobs —
+**headroom now** (delete `target/debug/incremental`; `deps/` survives, so no
+lane pays a cold rebuild) and **the actual leak**, which nobody has located and
+which is not in this repository.
+
+**Why this is recorded rather than fixed.** The disk-pressure hook reserves
+reclamation to the operator. The decision was put to the operator three times
+and went unanswered each time. Three unanswered asks are an absent operator,
+not consent, so nothing was deleted — and the other two lanes were told not to
+take it either, because routing the reserved action to a peer defeats the
+reservation rather than satisfying it. The same reasoning holds the two CI
+workflow flags in section E: `--no-fail-fast` at `ci.yml:198` and
+`--all-targets` at `ci.yml:180` are one-line edits with a lane volunteering to
+make them, and both remain unowned by decision, not by difficulty.
