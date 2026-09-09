@@ -921,3 +921,25 @@ holds ACROSS dispatch and settles on every exit — success, backend error, and 
 using the existing commit/complete/release semantics unchanged. No new lifecycle is invented here;
 route 3 adopts route 1's.
 
+### The four IMPROVEMENTs, accepted
+
+- The second-path row picks a **passthrough backend** with a valid `tools/call` name. Request shape
+  alone cannot steer a validly-named call down the general forward, so rev 8's row as written could
+  not reliably reach the path it exists to cover — it would have tested the guard's placement in the
+  text rather than in the execution.
+- The caller-isolation row issues **each** caller's keyed request twice and asserts exactly two
+  backend executions. That kills the vacuous pass rev 8 admitted to: the row now fails both when
+  isolation breaks and when deduplication does not work at all.
+- The Axis-4 check gets an explicit **blocking** outcome and takes the handler's `verified_identity`
+  and resolved `identity_key` as inputs alongside `BackendAuthContext` — which is where rev 8's own
+  resolved answer already found them.
+- The handler is `backend_handler`; rev 8's `handle_backend_request` is corrected, and the existing
+  abort/reissue and route-neutral replay rows are referenced rather than re-derived.
+
+### What rev 9 does NOT do
+
+- It does not implement anything. Every row is still RED or unwritable.
+- It does not settle the malformed-retry-field scope. That question is unchanged and still the
+  requester's.
+- It does not claim a passing dual review. One leg returned `SHIP-WITH-FIXES` and was repaired; the
+  second is outstanding, and a design with one leg back is not a reviewed design.
