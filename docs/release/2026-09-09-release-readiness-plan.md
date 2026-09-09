@@ -93,7 +93,7 @@ its definition in `meta_mcp/support.rs:48` or that module's tests), and
 `enable_idempotency` is wired unconditionally at the sole production `MetaMcp`
 construction site (`src/gateway/server/mod.rs:747`).
 
-Stdio is live too. The row says stdio "hardcodes `retry: &NO_RETRY` at the two
+Stdio's dispatch is wired too. The row says stdio "hardcodes `retry: &NO_RETRY` at the two
 sites that build its dispatch context (`server/mod.rs:2200`, `:2703`)" and that
 `RetryFields::from_params` at `handlers.rs:1220` "is the only production site
 that ever constructs a real `RetryFields`, and stdio never calls it". At
@@ -104,6 +104,14 @@ file sits inside a test (`:2730`), and the regression test the row calls
 `#[ignore]`d is not ignored -- `server/mod.rs` carries no `#[ignore]` anywhere,
 so `stdio_caller_context_carries_the_clients_idempotency_key` runs in CI, where
 the only failures are the two from item 0.
+
+What that evidence covers, precisely: real `RetryFields` reach
+`handle_tools_call` on the stdio path, and the watching test is live and green.
+It is a unit test over a constructed caller context, so the last step -- a
+retried side-effecting call over stdio actually reaching the guard at
+`invoke.rs:1344` -- is inferred from those two facts rather than separately
+exercised. The owning lane should decide whether that inference is enough to
+close the route or whether it wants an end-to-end case.
 
 The uncovered route is `POST /mcp/{name}` (`backend_handler`,
 `src/gateway/router/backend_handlers.rs:434`), which bypasses `invoke_tool_traced`
