@@ -56,11 +56,15 @@ They are green for two different reasons, and both are worth naming:
   it has anywhere. Same shape for `ac_otel_1_the_context_is_propagated_to_the_backend_unchanged:126`
   against `to_meta()`. The mechanism works; nothing on the production path reaches it, and no test
   asserts that it does.
-- **They pin the absence as correct behaviour.** `ac_task_1_tasks_get_reports_that_it_is_not_implemented`
-  (`tests/mik_7272_subscriptions_acs.rs:580`) asserts `tasks/get` answers `404 / -32601`. That is a
-  defensible assertion today — it replaced a lying `not_found` success — but it goes **red the moment
-  TASK.1 is implemented**, along with `ac_task_1_tasks_get_is_not_reachable_on_the_legacy_path:596`.
-  Whoever lands the first TASK.1 code must invert these two, not repair them.
+- **They pinned the absence as correct behaviour — and that has since been resolved.** Corrected
+  2026-09-09, verified at source: neither name survives as written. The first case was inverted when
+  `tasks/get` landed and is now `ac_task_1_tasks_get_answers_an_unknown_id_with_no_such_task`
+  (`tests/mik_7272_subscriptions_acs.rs:582`), which asserts the served behaviour rather than the
+  absence. The second is `ac_task_1_tasks_get_is_not_reachable_on_the_legacy_path:635`, and it does
+  **not** go red when TASK.1 lands: the legacy path never serves `tasks/get`, so refusing it there is
+  permanent behaviour rather than a stand-in. `tasks/get` and `tasks/update` are served on the modern
+  path: the `"tasks/get"` arm at `src/gateway/router/handlers.rs:1729` and the
+  `"tasks/update"` / `"tasks/cancel"` arm at `:1738`. Nothing here is left to invert.
 
 So Design ✓, test plan ✓, failing tests ✗, implementation ✗ still holds — but the missing artifact is
 specifically **a test that fails because the production path does not do the thing**. Coverage looks
@@ -133,6 +137,26 @@ field and the rule, TASK.1 ships the first entry.
   `ac_task_1_tasks_get_is_not_reachable_on_the_legacy_path:596` **must not be inverted** — they
   correctly describe 4.0.0 as shipped. Inverting them was the instruction the drifted citation
   produced, and it would have been wrong. They invert under MIK-7311, not here.
+
+  **CORRECTED 2026-09-09 (TASK.1 landed at `3bff103b`; both rows read at source).** The verdict
+  above -- do not invert -- holds, but neither row was right about *why*, and each was wrong in a
+  different way. Both were written as if landing TASK.1 must turn these cases red. It does not.
+
+  - `ac_task_1_tasks_get_reports_that_it_is_not_implemented` **does not exist**, at `:580` or
+    at any other line in `tests/`. The case at `:582` is `ac_task_1_tasks_get_answers_an_unknown_id_with_no_such_task`, which asserts the opposite of what
+    the missing row's name implies: it supplies every precondition the modern route imposes -- the
+    mirrored `Mcp-Name` and a per-request tasks declaration -- precisely so the request reaches the
+    store LOOKUP rather than a guard, and is told the id is absent. It asserts TASK.1 *served*, and
+    it passes with TASK.1 landed. There is nothing in it to invert or repair.
+  - `ac_task_1_tasks_get_is_not_reachable_on_the_legacy_path` is real, at `:635` (not `:596`). It
+    posts `tasks/get` on the 2025 path and requires a refusal. The era gate is the design, not an
+    artifact of TASK.1 being absent: the extension belongs to a revision the legacy client does not
+    speak, so the legacy path must keep refusing after TASK.1 ships. Inverting it would assert the
+    opposite of the design.
+
+  Both rows were therefore wrong about what landing TASK.1 requires: one names a test that has no
+  referent, the other reads a permanent era gate as a temporary absence. `handlers.rs` serves
+  `tasks/get` on the modern path only, which is what the two live cases already pin.
 
 ## Ledger corrections found while verifying (V, by symbol)
 
