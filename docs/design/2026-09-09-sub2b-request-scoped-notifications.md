@@ -533,3 +533,29 @@ report, never widen.
    POST `/mcp`, in `src/gateway/router/handlers.rs`, surgically, reusing neither pipe above.
 
 Ledger row still ABSENT/blocking. It flips when the tests are green, not when this document is.
+
+## Design event (§P3) — a token-less notification is unattributable over stdio
+
+Named at the moment it was made, because the design did not make it.
+
+The correlation rule's condition 1 is "arrived unprompted on that request's own stream". stdio has no
+such stream — one stdout carries every call — so on stdio condition 2, the progress-token match, is
+the *whole* correlation. That works for `notifications/progress`, which carries `params.progressToken`.
+It does not work for `notifications/message`, which carries no token at all: on a multiplexed stdout
+there is nothing left to attribute it to.
+
+Decision: over stdio, a notification with no progress token is dropped, exactly as before. The
+alternative — attributing it to whichever call happens to be in flight — invents an owner, and S-03
+exists precisely to forbid that. Inventing one to satisfy a plan row would have passed the row and
+shipped the defect.
+
+What this costs against the plan: S-02 (`…test-plan.md:58`) asks for **both** notification methods
+over both transports. `notifications/progress` is met on both. `notifications/message` is met over
+HTTP, where the per-request stream carries it, and is **not met over stdio**. That is a coverage gap
+in this increment, stated rather than papered over. Closing it needs a per-request framing stdio does
+not have — a change to the wire, not to this code — and that is an operator/spec question, not an
+implementation choice.
+
+Implemented at `src/transport/stdio.rs` as `register_progress_token` / `take_captured_notifications`
+with the capture in `handle_response`; the same scaffold status as the HTTP field until the outbound
+leg reads it.
