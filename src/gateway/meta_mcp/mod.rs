@@ -1987,7 +1987,6 @@ fn confirmation_refusal_response(id: &RequestId, message: String) -> JsonRpcResp
     response
 }
 
-/// Returns the refusal to send, or `None` when the call may proceed.
 /// The gate's three answers.
 ///
 /// Three rather than an `Option<JsonRpcResponse>`, because a confirmed retry is
@@ -2034,6 +2033,80 @@ fn confirmation_principal(caller: &MetaMcpCallerContext<'_>) -> Option<String> {
     })
 }
 
+/// The refusal sent when a destructive call cannot be confirmed.
+///
+/// One function rather than one per branch: every caller of this is a place
+/// where the gate could not obtain an answer it trusts, and they must be
+/// indistinguishable on the wire. A branch that phrased its own refusal would
+/// tell a caller which check it tripped.
+fn unconfirmable_refusal(id: &RequestId, tool_name: &str, action_desc: &str) -> GateOutcome {
+    warn!(
+        tool = %tool_name,
+        "refusing a destructive call that cannot be confirmed"
+    );
+    GateOutcome::Refuse(Box::new(confirmation_refusal_response(
+        id,
+        format!(
+            "Destructive action requires confirmation and none could be obtained: {action_desc}"
+        ),
+    )))
+}
+
+/// Redeems the confirmation answer this request is carrying, if it carries one.
+///
+/// `None` means no answer rode in on this request, and the gate still has to
+/// ask. Every other path is an answer: honoured, declined, or refused because
+/// it could not be bound to the question it claims to answer.
+async fn redeem_carried_confirmation(
+    id: &RequestId,
+    tool_name: &str,
+    arguments: &Value,
+    action_desc: &str,
+    caller: &MetaMcpCallerContext<'_>,
+) -> Option<GateOutcome> {
+    use crate::gateway::destructive_confirmation::ConfirmationChannel;
+
+    let answer = caller
+        .retry
+        .input_responses
+        .as_ref()
+        .and_then(|responses| responses.get(CONFIRMATION_INPUT_KEY))?;
+    let ConfirmationChannel::InBand { continuation } = caller.confirmation else {
+        // The answer arrived on a transport that never asked. Nothing here
+        // can open it, so it is not an answer.
+        return Some(unconfirmable_refusal(id, tool_name, action_desc));
+    };
+    if caller.retry.request_state.is_none() {
+        // An answer with no envelope binds to nothing: any caller could
+        // send `true`. This is the whole reason the ask carries one.
+        return Some(unconfirmable_refusal(id, tool_name, action_desc));
+    }
+    // Opened FIRST, and spent in the opening, whatever the answer says. A
+    // decline that left the envelope redeemable would let the same token be
+    // answered again until one attempt says `true`.
+    if let Err(error) = crate::gateway::meta_mcp::invoke::redeem_retry(
+        continuation,
+        caller,
+        confirmation_principal(caller),
+        tool_name,
+        tool_name,
+        arguments,
+    )
+    .await
+    {
+        warn!(tool = %tool_name, %error, "In-band confirmation could not be redeemed");
+        return Some(unconfirmable_refusal(id, tool_name, action_desc));
+    }
+    // Fail closed on anything that is not JSON `true`. A string, a number,
+    // an object: all are answers the operator did not give.
+    if answer.as_bool() != Some(true) {
+        return Some(GateOutcome::Refuse(Box::new(
+            confirmation_refusal_response(id, format!("Operator declined: {action_desc}")),
+        )));
+    }
+    Some(GateOutcome::ProceedConfirmed)
+}
+
 async fn destructive_confirmation_gate(
     id: &RequestId,
     tool_name: &str,
@@ -2051,65 +2124,15 @@ async fn destructive_confirmation_gate(
     }
 
     let action_desc = describe_destructive_action(tool_name, arguments);
-    let refused = |desc: &str| {
-        warn!(
-            tool = %tool_name,
-            "refusing a destructive call that cannot be confirmed"
-        );
-        confirmation_refusal_response(
-            id,
-            format!(
-                "Destructive action requires confirmation and none could be obtained: \
-                     {desc}"
-            ),
-        )
-    };
 
     // An answer this caller is carrying is read BEFORE the channel is consulted:
     // a retry must be redeemed, never re-asked. Re-asking would mint a second
     // envelope for a question already answered, and a client that answers every
     // ask it receives would then never stop.
-    if let Some(answer) = caller
-        .retry
-        .input_responses
-        .as_ref()
-        .and_then(|responses| responses.get(CONFIRMATION_INPUT_KEY))
+    if let Some(outcome) =
+        redeem_carried_confirmation(id, tool_name, arguments, &action_desc, caller).await
     {
-        let ConfirmationChannel::InBand { continuation } = caller.confirmation else {
-            // The answer arrived on a transport that never asked. Nothing here
-            // can open it, so it is not an answer.
-            return GateOutcome::Refuse(Box::new(refused(&action_desc)));
-        };
-        if caller.retry.request_state.is_none() {
-            // An answer with no envelope binds to nothing: any caller could
-            // send `true`. This is the whole reason the ask carries one.
-            return GateOutcome::Refuse(Box::new(refused(&action_desc)));
-        }
-        // Opened FIRST, and spent in the opening, whatever the answer says. A
-        // decline that left the envelope redeemable would let the same token be
-        // answered again until one attempt says `true`.
-        if let Err(error) = crate::gateway::meta_mcp::invoke::redeem_retry(
-            continuation,
-            caller,
-            confirmation_principal(caller),
-            tool_name,
-            tool_name,
-            arguments,
-        )
-        .await
-        {
-            warn!(tool = %tool_name, %error, "In-band confirmation could not be redeemed");
-            return GateOutcome::Refuse(Box::new(refused(&action_desc)));
-        }
-        // Fail closed on anything that is not JSON `true`. A string, a number,
-        // an object: all are answers the operator did not give.
-        if answer.as_bool() != Some(true) {
-            return GateOutcome::Refuse(Box::new(confirmation_refusal_response(
-                id,
-                format!("Operator declined: {action_desc}"),
-            )));
-        }
-        return GateOutcome::ProceedConfirmed;
+        return outcome;
     }
 
     match caller.confirmation {
@@ -2118,7 +2141,7 @@ async fn destructive_confirmation_gate(
         // outcome would only re-enter a policy written for a channel
         // that does exist.
         ConfirmationChannel::Unavailable => {
-            return GateOutcome::Refuse(Box::new(refused(&action_desc)));
+            return unconfirmable_refusal(id, tool_name, &action_desc);
         }
         // The caller is asked in-band and answers by retrying. Minted before
         // the ask goes out, so the question never leaves without the envelope
@@ -2137,7 +2160,7 @@ async fn destructive_confirmation_gate(
                 // Unnameable caller, or no slot to hold the exchange. Both mean
                 // the question cannot be asked in a way its answer could be
                 // trusted, which is the existing refusal exactly.
-                return GateOutcome::Refuse(Box::new(refused(&action_desc)));
+                return unconfirmable_refusal(id, tool_name, &action_desc);
             };
             // Built here rather than through `confirmation_refusal_response`:
             // an unfinished round is neither a refusal nor a client failure,
@@ -2186,7 +2209,7 @@ async fn destructive_confirmation_gate(
             if outcome == ConfirmationOutcome::Unsupported
                 && policy.on_unconfirmable() == ConfirmationPolicy::REFUSE
             {
-                return GateOutcome::Refuse(Box::new(refused(&action_desc)));
+                return unconfirmable_refusal(id, tool_name, &action_desc);
             }
         }
     }
