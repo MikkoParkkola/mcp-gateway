@@ -559,3 +559,29 @@ implementation choice.
 Implemented at `src/transport/stdio.rs` as `register_progress_token` / `take_captured_notifications`
 with the capture in `handle_response`; the same scaffold status as the HTTP field until the outbound
 leg reads it.
+
+## Round 3 — both legs returned
+
+| leg | exit | verdict |
+|---|---|---|
+| `kimi-review` | 0 | SHIP-WITH-FIXES |
+| `gpt-review` | 0 | SHIP-WITH-FIXES — "the submitted commits contain unrelated deletions that break compilation" |
+
+Findings, each verified at source before anything was written:
+
+| # | claim | disposition |
+|---|---|---|
+| gpt-1 HIGH | `is_governed_meta_tool` deleted, caller left at `meta_mcp/mod.rs:608` | **CONFIRMED.** `git grep` at HEAD found the caller and no definition. Repaired by `5792c57e`. The reviewer put it in `c77f3bbc`; the sweep was in `cba1ea8b`. |
+| gpt-2 HIGH | the commit also removes lifecycle tracking and its tests, invisible in the supplied diff | **CONFIRMED, and larger than stated.** `cba1ea8b` committed **29 files it did not author** — another session's live edits in this shared worktree. Same repair. |
+| gpt-3 MED | `SseExchange.notifications` has no production consumer | **CONFIRMED, already the recorded merge constraint** (kimi F3, same finding, independently). Not repaired here: deleting the capture would unbuild the inbound half, and the outbound consumer sits in `router/handlers.rs`, a file another session holds. The constraint stands — this scaffold does not merge alone. |
+| gpt-4 MED | stdio correlation left unspecified for concurrent calls | **DIED AT SOURCE.** `b18d438f` names it: over stdio the token match is the whole of the rule, `notifications/message` is unattributable and dropped, recorded as an S-02 coverage gap. The reviewer's package predates that commit. |
+
+Why the two HIGH findings existed at all: the commit took a path's whole working tree instead of its
+own hunks, in a checkout several sessions are writing to. The green test and clippy runs were real —
+they ran against the *dirty tree*, which still held the peer edits that make it compile. A commit
+whose correctness depends on uncommitted files is not a commit anyone else can build.
+
+`5792c57e` restores those 29 paths to `424a2df0` **in history only**. The working tree was not
+touched: verified byte-identical before and after, and no peer commit had landed on any reverted
+path (`git log cba1ea8b..HEAD^ --name-only`, no overlap). The edits are their author's uncommitted
+work again, which is what they were.
