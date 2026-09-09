@@ -214,7 +214,9 @@ impl CapabilityExecutor {
             .await
             .map_err(|e| {
                 Error::Config(format!(
-                    "OAuth refresh request to '{token_endpoint}' failed: {e}"
+                    "OAuth refresh request to '{}' failed: {}",
+                    crate::security::sanitize::redact_url_for_diagnostics(token_endpoint),
+                    super::redact_url(e)
                 ))
             })?;
 

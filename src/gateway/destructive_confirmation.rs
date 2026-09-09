@@ -134,6 +134,20 @@ pub enum ConfirmationChannel<'a> {
         /// What to do when confirmation cannot be obtained.
         policy: ConfirmationPolicy,
     },
+    /// The asker is the caller itself, one round-trip away: the gate answers
+    /// the call with an `input_required` result and the caller confirms by
+    /// retrying with the answer. Carried on the modern stateless path, where
+    /// there is no session to hold an elicitation open but the caller can be
+    /// asked in-band and bound to its answer by a continuation.
+    ///
+    /// The continuation state travels here rather than as a gate parameter for
+    /// the reason this enum exists: "who can be asked, and how" is one
+    /// question, and a channel that cannot ask carries no way to.
+    InBand {
+        /// Mints the envelope the answer comes back on, and opens it again on
+        /// the retry.
+        continuation: &'a crate::protocol::continuation::ContinuationState,
+    },
     /// No asker can exist on this transport. The action is refused; nothing
     /// is elicited.
     Unavailable,

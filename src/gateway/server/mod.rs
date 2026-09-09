@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Gateway server
 
+#[cfg(test)]
+mod gh475_budget_decides_tests;
 mod persistence;
 mod support;
 // Two questions leave this module, both to `config_reload`, and each is
@@ -52,6 +54,9 @@ use warmstart::{WarmStartMode, build_warm_start_list, spawn_warm_start_task};
 #[cfg(feature = "cost-governance")]
 use support::build_persisted_costs;
 use support::{log_startup_banner, serve_tls, shutdown_signal};
+
+/// State owner for the single client on a long-lived stdio connection.
+const STDIO_SESSION_ID: &str = "stdio-session";
 
 fn expand_home_path(path: &str) -> PathBuf {
     if path == "~" {
@@ -1635,7 +1640,7 @@ impl Gateway {
         let mut stdout = stdout;
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
-        let session_id = "stdio-session";
+        let session_id = STDIO_SESSION_ID;
 
         while let Ok(Some(line)) = reader.next_line().await {
             let line = line.trim().to_string();
@@ -1878,13 +1883,15 @@ impl Gateway {
                     tool_policy: tool_policy.as_ref(),
                 };
 
+                let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
+
                 meta_mcp
                     .handle_tools_call(
                         id,
                         &tool_name,
                         arguments,
                         Some(session_id),
-                        stdio_caller_context(&stdio_authorizer, shape.era()),
+                        stdio_caller_context(&stdio_authorizer, shape.era(), &retry),
                     )
                     .await
             }
@@ -2191,6 +2198,7 @@ fn spawn_idle_reaper(
 fn stdio_caller_context<'a>(
     authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
     era: crate::protocol::meta::Era,
+    retry: &'a crate::protocol::mrtr::RetryFields,
 ) -> MetaMcpCallerContext<'a> {
     MetaMcpCallerContext {
         authorizer,
@@ -2210,7 +2218,11 @@ fn stdio_caller_context<'a>(
         // stdio carries no per-request capability
         // declaration to read, and absent means absent.
         input_capabilities: crate::protocol::meta::Declared::NONE,
-        retry: &crate::protocol::mrtr::NO_RETRY,
+        // Built from the request, not pinned absent: `invoke_tool_traced`
+        // reads the client's idempotency key off this field, so a pinned
+        // `NO_RETRY` silently disarms duplicate suppression for every stdio
+        // caller while HTTP keeps it.
+        retry,
         // Same `shape` the `initialize` arm advertises
         // against, two arms up.
         era,
@@ -2253,6 +2265,8 @@ mod tests {
         protocol::{JsonRpcResponse, RequestId},
         security::ToolPolicy,
     };
+
+    mod order2_fsm;
 
     fn test_meta_mcp() -> Arc<MetaMcp> {
         Arc::new(MetaMcp::new(Arc::new(BackendRegistry::new())))
@@ -3673,24 +3687,64 @@ mod tests {
             );
         }
 
-        // OBS.1 / MRTR, the stdio retry gap -- NOT closed by this change and
-        // deliberately left red rather than pinned as correct. See
-        // `docs/design/2026-09-02-cluster-g-stdio-dispatch-parity.md` §P3,
-        // "`NO_RETRY` on stdio -- declared OUT, with something watching it":
-        // closing it needs `RetryFields` built at the convergence point and
-        // malformed retry fields refused pre-dispatch on both transports, which
-        // is its own change with its own test rows.
+        // MIK-7272.SUB.4 -- the stdio retry gap. `invoke_tool_traced` reads the
+        // client's idempotency key off the caller context, so a context that
+        // pins `NO_RETRY` makes every stdio key inert: the guard never engages
+        // and a retried side-effecting call executes a second time with no
+        // refusal and no warning. HTTP reaches the same guard through its own
+        // `RetryFields`, so this is a per-transport hole, not a missing feature.
         #[test]
-        #[ignore = "stdio hardcodes `retry: &NO_RETRY` (server/mod.rs); out of scope for cluster G, watched here so the defect is not pinned as correct"]
-        fn stdio_should_present_a_retry_when_the_context_declares_one() {
+        fn stdio_caller_context_carries_the_clients_idempotency_key() {
+            let tool_policy = ToolPolicy::default();
+            let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
+                tool_policy: &tool_policy,
+            };
+            let params = json!({
+                "name": "some_backend_tool",
+                "arguments": {},
+                "_meta": { crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "stdio-key-1" },
+            });
+            let retry = crate::protocol::mrtr::RetryFields::from_params(Some(&params));
+            assert_eq!(
+                retry.idempotency_key.as_deref(),
+                Some("stdio-key-1"),
+                "fixture guard: the parser must read the key, else the assertion \
+                 below would pass against an empty expectation"
+            );
+
+            let context = super::super::stdio_caller_context(
+                &authorizer,
+                crate::protocol::meta::Era::Modern,
+                &retry,
+            );
+
+            assert_eq!(
+                context.retry.idempotency_key.as_deref(),
+                Some("stdio-key-1"),
+                "the stdio caller context must carry the client's idempotency key; \
+                 an absent one makes the duplicate-suppression guard inert on this \
+                 transport"
+            );
+        }
+
+        /// The dispatch arm must BUILD those retry fields from the request. The
+        /// seam test above proves the context propagates what it is given; this
+        /// proves stdio gives it the request's own fields rather than a pinned
+        /// absent one. Scoped to the function body so the hand-built contexts in
+        /// this module's own tests are not mistaken for the production pin.
+        #[test]
+        fn stdio_dispatch_builds_its_retry_fields_from_the_request() {
             let source = include_str!("mod.rs");
-            // Split so this assertion is not itself the occurrence it looks
-            // for: a watcher that can never go green watches nothing.
-            let hardcoded = concat!("retry: &", "NO_RETRY");
+            let start = source
+                .find("fn stdio_caller_context<'a>(")
+                .expect("the stdio caller context must exist");
+            let body = &source[start..start + 2000];
+            // Split so this assertion is not itself the occurrence it looks for.
+            let pinned = concat!("retry: &crate::protocol::mrtr::", "NO_RETRY");
             assert!(
-                !source.contains(hardcoded),
-                "the stdio context must build its retry fields at the convergence \
-                 point instead of hardcoding an absent retry"
+                !body.contains(pinned),
+                "the stdio context must take its retry fields from the request \
+                 instead of pinning an absent retry"
             );
         }
     }

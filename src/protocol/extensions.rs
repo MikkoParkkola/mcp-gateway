@@ -55,11 +55,14 @@ impl ExtensionSet {
     /// revision of this comment said nothing called it, which stopped being
     /// true the moment discovery advertised the extension.
     ///
-    /// The `initialize` result deliberately does NOT carry it. The 2026-07-28
-    /// lifecycle scopes the handshake to "2025-11-25 and earlier", so the only
-    /// clients that reach `initialize` are the ones this extension is not for,
-    /// and adding a key to their result changes a wire answer they already
-    /// depend on to advertise something they can never use.
+    /// The `initialize` result carries it for a 2026 peer and for no one else.
+    /// Both halves of the handshake read THIS method through
+    /// `initialize_extensions(era)`, so `server/discover` and `initialize`
+    /// cannot drift. The legacy arm stays an absent KEY rather than an empty
+    /// object: the 2026-07-28 lifecycle scopes the older handshake to
+    /// "2025-11-25 and earlier", those clients can never use the extension, and
+    /// an always-present `"extensions": {}` would itself change a wire answer
+    /// they already depend on.
     ///
     /// The task model in `super::tasks` is knowingly short of the extension
     /// specification for 4.0.0 — `input_required` is out of scope by design,

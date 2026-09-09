@@ -398,9 +398,15 @@ fn json_is_populated(value: &Value) -> bool {
 ///
 /// The exchange is opened on this replica before the envelope is sealed, so the
 /// handle that goes out names a slot this process is holding (MRTR.8).
-async fn mint_continuation(
+///
+/// The principal is passed in rather than derived here, because the two mint
+/// sites bind different things: a backend exchange binds the verified identity
+/// and refuses without one, and the destructive-confirmation gate binds the
+/// credential that authorised the call. Deriving it inside would give one site
+/// the other's rule.
+pub(super) async fn mint_continuation(
     continuation: &crate::protocol::continuation::ContinuationState,
-    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    principal: Option<String>,
     server: &str,
     tool: &str,
     arguments: &Value,
@@ -410,7 +416,7 @@ async fn mint_continuation(
         .begin_exchange(
             server.to_string(),
             backend_request_state,
-            crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)?,
+            principal?,
             crate::protocol::mrtr::original_request_digest(server, tool, arguments),
             crate::protocol::continuation::now_unix_secs(),
         )
@@ -612,9 +618,10 @@ pub(super) fn retry_origin_backend(
 /// authorises. Spending it on success instead would leave it redeemable again
 /// to anyone who can make a dispatch fail, which is the replay this ledger
 /// exists to close.
-async fn redeem_retry(
+pub(super) async fn redeem_retry(
     continuation: &crate::protocol::continuation::ContinuationState,
     caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    principal: Option<String>,
     server: &str,
     tool: &str,
     arguments: &Value,
@@ -640,8 +647,7 @@ async fn redeem_retry(
     // gateway cannot name cannot match one it could: `principal_fingerprint`
     // returns `None` for exactly the credential schemes no continuation is ever
     // minted for, so there is no handle here for such a caller to hold.
-    let Some(fingerprint) = crate::protocol::mrtr::principal_fingerprint(caller.verified_identity)
-    else {
+    let Some(fingerprint) = principal else {
         warn!(
             server,
             tool, "Retry from a caller no continuation can be bound to"
@@ -1514,7 +1520,16 @@ impl MetaMcp {
         // server and tool, its argument object, the caller's identity, and the
         // handle itself.
         let outbound_retry =
-            match redeem_retry(&self.continuation, caller, server, tool, &arguments).await {
+            match redeem_retry(
+                &self.continuation,
+                caller,
+                crate::protocol::mrtr::principal_fingerprint(caller.verified_identity),
+                server,
+                tool,
+                &arguments,
+            )
+            .await
+            {
                 Ok(retry) => retry,
                 Err(error) => {
                     // Refused before the backend was reached, so it has not
@@ -1775,7 +1790,7 @@ impl MetaMcp {
         if let Some(interim) = interim {
             let Some(envelope) = mint_continuation(
                 &self.continuation,
-                caller,
+                crate::protocol::mrtr::principal_fingerprint(caller.verified_identity),
                 server,
                 tool,
                 &arguments,

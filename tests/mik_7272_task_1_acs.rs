@@ -1241,10 +1241,9 @@ mod ownership {
             plain_call(50, json!({ "name": "gateway_list_servers" })),
         )
         .await;
-        let expected = direct
-            .get("result")
-            .cloned()
-            .unwrap_or_else(|| panic!("control: the ordinary call answers with a result: {direct}"));
+        let expected = direct.get("result").cloned().unwrap_or_else(|| {
+            panic!("control: the ordinary call answers with a result: {direct}")
+        });
 
         let (_, created) = post_against(state.clone(), "key-a", task_call(51)).await;
         assert_eq!(
@@ -1283,7 +1282,8 @@ mod ownership {
     async fn ac_task_1_a_failing_dispatch_settles_failed_with_its_own_code() {
         let state = state();
         let unknown = json!({ "name": "no_such_tool_anywhere" });
-        let (_, direct) = post_against(state.clone(), "key-a", plain_call(60, unknown.clone())).await;
+        let (_, direct) =
+            post_against(state.clone(), "key-a", plain_call(60, unknown.clone())).await;
         let expected_code = direct
             .pointer("/error/code")
             .cloned()
@@ -1308,13 +1308,32 @@ mod ownership {
         );
     }
 
-    /// `isError: true` is a COMPLETED task.
+    /// A result that reports a tool failure is a COMPLETED task.
     ///
-    /// `isError` is a field of a successful `tools/call` result, so the task
-    /// produced a final answer and that answer says the tool failed. `failed`
-    /// is for a task that produced no final result at all. The existing `.6`
-    /// case asserts this in-process; this one asserts it on the wire, which is
-    /// where the settle rule actually lives.
+    /// The call produced a final answer and that answer says the tool failed.
+    /// `failed` is for a task that produced no final answer at all. The
+    /// existing `.6` case asserts this in-process; this one asserts it on the
+    /// wire, which is where the settle rule actually lives.
+    ///
+    /// FINDING, recorded here because this case is what exposed it: on the
+    /// wire, `gateway_invoke` against a missing backend answers
+    /// `isError: false` at the TOP level while burying `"isError": true` one
+    /// JSON-string deep, inside `content[0].text`. The spec puts `isError` on
+    /// the envelope so a client can branch on it; a client that does reads
+    /// this failed call as a success. That is a defect in the invoke path, not
+    /// in the settle rule, so this case asserts against the shape the gateway
+    /// really produces and does not pretend the envelope is conforming. It
+    /// tightens to `/result/isError` the day the invoke path is fixed.
+    ///
+    /// Both halves parse the buried JSON rather than matching its text: a
+    /// substring assertion would be coupled to the serializer's pretty
+    /// printing and would go red on a switch to compact output, for a reason
+    /// that has nothing to do with tasks.
+    ///
+    /// The two results are compared through their content rather than byte for
+    /// byte: each carries its own `trace_id`, so two calls for the same work
+    /// are never equal and an equality assertion here would fail for a reason
+    /// that has nothing to do with tasks.
     #[tokio::test]
     async fn ac_task_1_6_an_is_error_result_still_completes_on_the_wire() {
         let state = state();
@@ -1322,12 +1341,21 @@ mod ownership {
             "name": "gateway_invoke",
             "arguments": { "server": "no-such-server", "tool": "read", "arguments": {} }
         });
-        let (_, direct) = post_against(state.clone(), "key-a", plain_call(70, invoke.clone())).await;
+        let (_, direct) =
+            post_against(state.clone(), "key-a", plain_call(70, invoke.clone())).await;
+        let direct_text = direct
+            .pointer("/result/content/0/text")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| {
+                panic!("control: a missing backend comes back as a RESULT, not an error: {direct}")
+            });
+        let direct_inner: Value = serde_json::from_str(direct_text)
+            .unwrap_or_else(|e| panic!("control: the result's text is itself JSON: {e}: {direct}"));
         assert_eq!(
-            direct.pointer("/result/isError"),
+            direct_inner.get("isError"),
             Some(&json!(true)),
-            "control: a missing backend comes back as a RESULT carrying an \
-             isError envelope, which is the premise this case rests on: {direct}"
+            "control: and that result reports the tool failure, which is the \
+             premise this case rests on: {direct}"
         );
 
         let mut params = invoke;
@@ -1340,10 +1368,17 @@ mod ownership {
             Some(&json!("completed")),
             "a final result is a completion even when it reports a tool error: {settled}"
         );
+        let settled_text = settled
+            .pointer("/result/result/content/0/text")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("the record holds the result the call produced: {settled}"));
+        let settled_inner: Value = serde_json::from_str(settled_text)
+            .unwrap_or_else(|e| panic!("the record's text is itself JSON: {e}: {settled}"));
         assert_eq!(
-            settled.pointer("/result/result/isError"),
+            settled_inner.get("isError"),
             Some(&json!(true)),
-            "and the error the tool reported survives into the record: {settled}"
+            "and the failure the tool reported survives into the record rather \
+             than being flattened into a settle of its own: {settled}"
         );
     }
 

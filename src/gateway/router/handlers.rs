@@ -1422,16 +1422,34 @@ pub(super) async fn meta_mcp_handler(
                         // HTTP holds the multiplexer, so this caller really can
                         // be sent a request of the gateway's own.
                         channel: state.proxy_manager.as_ref(),
-                        // Always `Elicit`, including when no session was
-                        // presented. HTTP can carry an asker; whether one
-                        // answered is what `policy` decides. Mapping a
-                        // sessionless request to `Unavailable` would refuse the
-                        // legacy caller this path deliberately still warns.
-                        confirmation:
-                            crate::gateway::destructive_confirmation::ConfirmationChannel::Elicit {
-                                proxy: &state.proxy_manager,
-                                policy: confirmation_policy,
-                            },
+                        // Split by ERA, and only by era.
+                        //
+                        // Legacy keeps `Elicit` unchanged, including when no
+                        // session was presented: HTTP can carry an asker, and
+                        // whether one answered is what `policy` decides.
+                        // Mapping a sessionless legacy request to `Unavailable`
+                        // would refuse the caller this path deliberately still
+                        // warns.
+                        //
+                        // Modern gets `InBand`, because that is the transport
+                        // with no session to hold an elicitation open — the
+                        // whole defect CONFIRM.2 names. It is asked through the
+                        // response itself and bound to its answer by a
+                        // continuation, so the channel carries the state that
+                        // mints and redeems the envelope.
+                        confirmation: match era {
+                            crate::protocol::meta::Era::Modern => {
+                                crate::gateway::destructive_confirmation::ConfirmationChannel::InBand {
+                                    continuation: state.continuation.as_ref(),
+                                }
+                            }
+                            crate::protocol::meta::Era::Legacy => {
+                                crate::gateway::destructive_confirmation::ConfirmationChannel::Elicit {
+                                    proxy: &state.proxy_manager,
+                                    policy: confirmation_policy,
+                                }
+                            }
+                        },
                     },
                 )
                 .await;

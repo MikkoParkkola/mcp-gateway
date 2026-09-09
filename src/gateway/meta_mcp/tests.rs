@@ -14,6 +14,9 @@ use crate::protocol::RequestId;
 use super::*;
 use crate::gateway::trace;
 
+#[path = "order2_fsm_tests.rs"]
+mod order2_fsm;
+
 /// The permissive authorizer the helpers below hand out.
 static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
 
@@ -4652,36 +4655,83 @@ const B10_EXPECTED_TOOLS: &[&str] = &[
 // Plan: docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md
 // ============================================================================
 
-/// A gateway whose default routing profile hides the mock backend's only tool.
+/// A gateway whose mock backend is invokable but absent from a filtered
+/// `tools/list`, because its tool cache is POPULATED AND STALE.
 ///
-/// The profile is what makes a promotion leak observable on the FILTERED list
-/// path. `collect_filtered_backend_tools` applies `tool_allowed` to every
-/// backend tool it enumerates, and the promoted-tool merge below it applies
-/// none — so `echo` can reach a filtered list only as a promoted entry.
-/// Without the profile the ordinary enumeration returns `echo` for any query
-/// matching it, promotion or no promotion, and an assertion that the list
-/// excludes `echo` could not fail whatever the merge did.
+/// Something must keep `echo` out of the ordinary enumeration or the case
+/// cannot fail: `collect_filtered_backend_tools` returns it for any query
+/// matching it, promotion or no promotion, and the promoted-tool merge below
+/// only adds names the enumeration did not already produce
+/// (`spec_preview.rs:114`). The tool has to be reachable through the promoted
+/// merge alone for a leak to be visible at all.
 ///
-/// The backend itself stays allowed: `list_tools_single_server` refuses a
-/// profile-denied BACKEND outright, which would leave the tool cache cold and
-/// silently empty the promotion.
+/// A stale cache is what buys that, and it is the one asymmetry between the two
+/// paths that production actually has. The enumeration skips a backend whose
+/// cache is not fresh (`spec_preview.rs:89` -> `has_cached_tools`, which is
+/// TTL-aware: `backend/metadata.rs:30-32`), while the promoted entry is
+/// resolved by `get_cached_tool` (`mod.rs:1048`), which reads the stored value
+/// and ignores the TTL (`backend/metadata.rs:78-82`). `Duration::ZERO` makes
+/// the cache stale the instant it is filled, so the state is not timing
+/// dependent — staleness only grows. The device is the one
+/// `gateway_search_includes_stale_non_empty_backend_cache` already uses, and
+/// the two assertions below pin both halves of it here as it does there.
+///
+/// A ROUTING PROFILE CANNOT DO THIS JOB, which is what the first CI run of this
+/// case proved: `spec_preview.rs:98` and `invoke.rs:1133` consult the same
+/// compiled `tool_filter`, so a profile that hides `echo` from the list also
+/// refuses the `gateway_invoke` that promotes it — the promotion the case
+/// exists to observe could never be made, on either the modern connection or
+/// the legacy control.
+///
+/// Nothing here can make the assertion true by itself: the cache is filled
+/// through the same `get_tools` call the startup prefetch and
+/// `list_tools_single_server` make, and the control at the end of the case
+/// shows `echo` reaching a filtered list through the promoted merge.
 #[cfg(feature = "spec-preview")]
-fn meta_with_echo_hidden_by_profile(url: &str) -> MetaMcp {
-    use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
-    use std::collections::HashMap;
+async fn meta_with_echo_hidden_by_a_stale_cache(url: &str) -> MetaMcp {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, TransportConfig};
 
-    let mut configs: HashMap<String, RoutingProfileConfig> = HashMap::new();
-    configs.insert(
-        "restricted".to_string(),
-        RoutingProfileConfig {
-            description: "the mock backend is reachable, its tool is not surfaced".to_string(),
-            deny_tools: Some(vec!["echo".to_string()]),
-            ..Default::default()
+    let config = BackendConfig {
+        description: String::new(),
+        enabled: true,
+        transport: TransportConfig::Http {
+            http_url: url.to_string(),
+            streamable_http: true,
+            protocol_version: None,
         },
+        stop_when_idle_for: None,
+        timeout: Duration::from_secs(5),
+        ..BackendConfig::default()
+    };
+    let backend = Arc::new(Backend::new(
+        "mock",
+        config,
+        &crate::config::FailsafeConfig::default(),
+        Duration::ZERO,
+    ));
+
+    // Production prefetches every backend's tools at startup; without a filled
+    // cache `promoted_tools_for_session` resolves the promoted key to nothing
+    // and the case could not fail whatever the promotion did.
+    backend
+        .get_tools()
+        .await
+        .expect("the mock backend's tools must be fetchable");
+    assert_eq!(
+        backend.cached_tools_count(),
+        1,
+        "the promoted entry is resolved out of this cache, so it must be filled"
+    );
+    assert!(
+        !backend.has_cached_tools(),
+        "zero TTL should make the cache stale immediately, or the enumeration \
+         returns `echo` on its own and the assertions below cannot fail"
     );
 
-    meta_with_backend(url, Duration::from_secs(5))
-        .with_profile_registry(ProfileRegistry::from_config(&configs, "restricted"))
+    let registry = Arc::new(BackendRegistry::new());
+    let _ = registry.register(backend);
+    MetaMcp::new(registry).with_prompts_resources_fetch_timeout(Duration::from_secs(5))
 }
 
 /// B-07 — a tool promoted by connection A's own successful `gateway_invoke`
@@ -4690,9 +4740,8 @@ fn meta_with_echo_hidden_by_profile(url: &str) -> MetaMcp {
 ///
 /// `params.query` is set on every list read, so `spec_preview.rs:111` — the
 /// filtered promoted-tool merge — is the executing line. Without the query the
-/// unfiltered merge runs instead, which B-10 already covers; a fix that
-/// skipped the profile in `collect_filtered_backend_tools` while leaving the
-/// filtered merge intact would then go unnoticed.
+/// unfiltered merge runs instead, which B-10 already covers, and the filtered
+/// merge could be deleted with the suite green.
 ///
 /// The promotion is driven through the production invoke path. A fixture
 /// calling `promote_tool_for_session` directly would supply the session id
@@ -4723,14 +4772,7 @@ fn meta_with_echo_hidden_by_profile(url: &str) -> MetaMcp {
 #[tokio::test]
 async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() {
     let url = start_invokable_mock().await;
-    let meta = meta_with_echo_hidden_by_profile(&url);
-
-    // Production prefetches every backend's tools at startup; without a warm
-    // cache `promoted_tools_for_session` resolves the promoted key to nothing
-    // and the case could not fail whatever the promotion did.
-    meta.list_tools(&json!({"server": "mock"}), MODERN_SESSIONLESS)
-        .await
-        .expect("the mock backend's tools must be fetchable");
+    let meta = meta_with_echo_hidden_by_a_stale_cache(&url).await;
 
     // Connection A promotes, through its own successful invoke.
     let invoked = meta
@@ -4759,7 +4801,8 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
 
     assert_eq!(
         promoter, B07_EXPECTED_FILTERED,
-        "the promoting connection was shown a tool its routing profile hides"
+        "the promoting connection was shown a tool no enumeration of its \
+         backends produces"
     );
     assert_eq!(
         bystander, B07_EXPECTED_FILTERED,
@@ -4794,9 +4837,10 @@ async fn b07_a_promotion_on_one_modern_connection_does_not_surface_on_another() 
 
 /// What a modern sessionless connection is shown for the query `echo`, pinned.
 ///
-/// Empty because the routing profile hides the mock's only tool and a filtered
-/// response carries backend tools alone — no meta-tools. The literal is thin
-/// on its own; the control above is what gives it force.
+/// Empty because a filtered response carries backend tools alone — no
+/// meta-tools — and the mock's stale cache keeps its only tool out of the
+/// enumeration. The literal is thin on its own; the control above is what
+/// gives it force.
 #[cfg(feature = "spec-preview")]
 const B07_EXPECTED_FILTERED: &[&str] = &[];
 
@@ -4973,13 +5017,13 @@ async fn b08_staging_the_capability_set_moves_with_the_fsm_state() {
 /// when the `set_state` silently did nothing and when a regression moved both
 /// lists in step.
 ///
-/// Q4 — whether `gateway_set_state` is refused outright on a sessionless
-/// modern connection — was ratified 2026-09-06: it is refused. Both halves are
-/// pinned here, the call's outcome as well as the lists, and the outcome pin
-/// is not redundant with them. Measured: with the refusal guard removed from
-/// `set_state`, every list assertion below still passes, because unchanged
-/// lists are equally what an accepted-then-silently-dropped write produces.
-/// Only the outcome pin tells the two apart.
+/// MIK-7272.ORDER2.FSM.2 — Q4, whether `gateway_set_state` is refused outright
+/// on a sessionless modern connection, was ratified 2026-09-06: it is refused.
+/// Both halves are pinned here, the call's outcome as well as the lists, and
+/// the outcome pin is not redundant with them. Measured: with the refusal guard
+/// removed from `set_state`, every list assertion below still passes, because
+/// unchanged lists are equally what an accepted-then-silently-dropped write
+/// produces. Only the outcome pin tells the two apart.
 #[tokio::test]
 async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
     let meta = meta_with_state_staged_capabilities().await;
@@ -5021,6 +5065,7 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
             allow_all_ctx(),
         )
         .await;
+    order2_fsm::assert_refusal(&meta, &set);
 
     // Q4: the write is refused, not filtered on read.
     let refusal = set
@@ -5090,10 +5135,11 @@ async fn b09_a_set_state_does_not_change_the_connections_discovery_set() {
 /// state A selected. B-09 asserts the same connection is unaffected by its own
 /// call; this asserts a bystander is unaffected by someone else's.
 ///
-/// The Q4 outcome pin — whether A's call is refused outright — is asserted on
-/// the same terms as B-09's: ratified 2026-09-06, and load-bearing rather than
-/// redundant, since B's unchanged lists are equally what a silently-dropped
-/// write would produce.
+/// MIK-7272.ORDER2.FSM.1 — the Q4 outcome pin, whether A's call is refused
+/// outright, is asserted on the same terms as B-09's: ratified 2026-09-06, and
+/// load-bearing rather than redundant, since B's unchanged lists are equally
+/// what a silently-dropped write would produce. The bystander stays in the
+/// default state after that refused mutation.
 #[tokio::test]
 async fn b08_one_connections_set_state_does_not_change_another_connections_set() {
     let meta = meta_with_state_staged_capabilities().await;
@@ -5110,6 +5156,7 @@ async fn b08_one_connections_set_state_does_not_change_another_connections_set()
             allow_all_ctx(),
         )
         .await;
+    order2_fsm::assert_refusal(&meta, &set);
 
     // Q4: A's write is refused outright, not accepted and dropped.
     let refusal = set
@@ -5770,5 +5817,91 @@ async fn a_reissued_idempotency_key_is_served_from_the_stored_result() {
         first.contains("CHARGED-ONCE") && second.contains("CHARGED-ONCE"),
         "both replies must carry the backend's own body, not an empty \
          placeholder: first={first}, second={second}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// BLOCK-1: an interim round must survive the meta-tool success wrapper
+// ---------------------------------------------------------------------------
+
+/// The envelope a backend returns when it stops to ask the client something.
+fn interim_envelope() -> serde_json::Value {
+    json!({
+        "resultType": "input_required",
+        "inputRequests": {
+            "confirm": { "type": "elicitation", "message": "proceed?" }
+        },
+        "requestState": "opaque-continuation-handle",
+        "content": [{ "type": "text", "text": "waiting" }],
+    })
+}
+
+#[test]
+fn block_1_gateway_invoke_interim_fields_reach_the_result() {
+    let content = interim_envelope();
+    let mut response = wrap_tool_success(RequestId::Number(1), &content, false);
+    promote_interim_envelope("gateway_invoke", &content, &mut response);
+
+    let result = response.result.expect("success response carries a result");
+    assert_eq!(
+        result.get("resultType").and_then(serde_json::Value::as_str),
+        Some("input_required"),
+        "a client reads resultType from the top level of the result",
+    );
+    assert_eq!(
+        result
+            .get("requestState")
+            .and_then(serde_json::Value::as_str),
+        Some("opaque-continuation-handle"),
+        "without the handle at the top level the round cannot be continued",
+    );
+    assert!(
+        result
+            .get("inputRequests")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|map| map.contains_key("confirm")),
+        "the questions must be readable as JSON, not as characters in a text block",
+    );
+}
+
+#[test]
+fn block_1_gateway_execute_interim_fields_reach_the_result() {
+    let content = interim_envelope();
+    let mut response = wrap_tool_success(RequestId::Number(2), &content, false);
+    promote_interim_envelope("gateway_execute", &content, &mut response);
+
+    let result = response.result.expect("success response carries a result");
+    assert_eq!(
+        result
+            .get("requestState")
+            .and_then(serde_json::Value::as_str),
+        Some("opaque-continuation-handle"),
+        "the single-tool execute path shares the wrapper and the defect",
+    );
+}
+
+#[test]
+fn block_1_promotion_leaves_a_completed_call_alone() {
+    let content = json!({ "resultType": "complete", "content": [] });
+    let mut response = wrap_tool_success(RequestId::Number(3), &content, false);
+    promote_interim_envelope("gateway_invoke", &content, &mut response);
+
+    let result = response.result.expect("success response carries a result");
+    assert!(
+        result.get("resultType").is_none(),
+        "a completed call keeps the response shape it always had",
+    );
+}
+
+#[test]
+fn block_1_promotion_ignores_tools_that_cannot_produce_a_round() {
+    let content = interim_envelope();
+    let mut response = wrap_tool_success(RequestId::Number(4), &content, false);
+    promote_interim_envelope("gateway_list_servers", &content, &mut response);
+
+    let result = response.result.expect("success response carries a result");
+    assert!(
+        result.get("requestState").is_none(),
+        "only the invocation paths mint continuations, so only they promote",
     );
 }

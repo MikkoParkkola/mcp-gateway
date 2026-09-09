@@ -90,6 +90,31 @@ impl Parent {
 /// relaying a caller's bytes onward: no control characters, no CR or LF, and
 /// nothing outside ASCII, so a field can never carry a header break or a
 /// smuggled line into a downstream request.
+/// Longest `tracestate` this gateway relays, in characters.
+///
+/// W3C Trace Context §3.3.1.5 (*tracestate Limits*): "Vendors SHOULD propagate
+/// at least 512 characters of a combined header." The spec states a floor on
+/// what a vendor must carry, not a ceiling on what may arrive, so a bound has
+/// to be chosen: this takes the floor as the bound, because relaying more than
+/// the specification obliges anyone downstream to accept buys nothing and
+/// widens the window of attacker-influenced bytes crossing the hop.
+const MAX_TRACESTATE_LEN: usize = 512;
+
+/// Most `tracestate` list-members this gateway relays.
+///
+/// W3C Trace Context §3.3.1.3 (*list-members*): "There can be a maximum of 32
+/// list-members in a list." Unlike the length this is a grammar ceiling, so a
+/// value above it is malformed rather than merely large.
+const MAX_TRACESTATE_MEMBERS: usize = 32;
+
+/// Longest `baggage` this gateway relays, in bytes.
+///
+/// W3C Baggage §3.3.2 (*Limits*), condition 2: a platform must propagate the
+/// list whenever "the resulting baggage-string is of size 8192 bytes or less".
+/// That is the largest string the specification guarantees anyone will carry,
+/// so it is the largest worth carrying.
+const MAX_BAGGAGE_LEN: usize = 8192;
+
 fn is_printable_ascii(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|b| (0x20..=0x7e).contains(&b))
 }
@@ -113,10 +138,13 @@ impl TraceContext {
             .as_ref()
             .and_then(|_| field("tracestate"))
             .filter(|value| is_printable_ascii(value))
+            .filter(|value| value.len() <= MAX_TRACESTATE_LEN)
+            .filter(|value| value.split(',').count() <= MAX_TRACESTATE_MEMBERS)
             .map(str::to_string);
         // Independent of the parent, by its own specification.
         let baggage = field("baggage")
             .filter(|value| is_printable_ascii(value))
+            .filter(|value| value.len() <= MAX_BAGGAGE_LEN)
             .map(str::to_string);
 
         if parent.is_none() && baggage.is_none() {
@@ -235,7 +263,10 @@ mod tests {
     fn all_zero_parent_id_is_rejected_and_a_nonzero_one_accepted() {
         // The span id has the same invalid-value rule as the trace id.
         let zero = "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01";
-        assert!(parent_of(zero).is_none(), "all-zero parent-id must be refused");
+        assert!(
+            parent_of(zero).is_none(),
+            "all-zero parent-id must be refused"
+        );
         assert!(parent_of(TRACEPARENT).is_some());
     }
 
@@ -262,7 +293,11 @@ mod tests {
         .expect("the traceparent is valid")
         .to_meta();
         assert!(onward.get("tracestate").is_none(), "got {onward}");
-        assert_eq!(onward["traceparent"], json!(TRACEPARENT), "the parent survives");
+        assert_eq!(
+            onward["traceparent"],
+            json!(TRACEPARENT),
+            "the parent survives"
+        );
     }
 
     #[test]
@@ -274,7 +309,11 @@ mod tests {
         .expect("the traceparent is valid")
         .to_meta();
         assert!(onward.get("baggage").is_none(), "got {onward}");
-        assert_eq!(onward["traceparent"], json!(TRACEPARENT), "the parent survives");
+        assert_eq!(
+            onward["traceparent"],
+            json!(TRACEPARENT),
+            "the parent survives"
+        );
     }
 
     // ── T5/T6: baggage is its own W3C specification and does not depend on a
@@ -298,7 +337,10 @@ mod tests {
         .expect("baggage propagates even when the parent is refused")
         .to_meta();
         assert_eq!(onward["baggage"], json!("userId=alice"));
-        assert!(onward.get("traceparent").is_none(), "a refused parent is dropped");
+        assert!(
+            onward.get("traceparent").is_none(),
+            "a refused parent is dropped"
+        );
     }
 
     #[test]

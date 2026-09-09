@@ -473,7 +473,6 @@ mod tests {
         assert_eq!(f.len(), 64); // SHA-256 → 64 hex chars
     }
 
-
     // ── build_outbound_meta: the hop (OTEL.1.b/.c/.d) ─────────────────
     //
     // Fixture direction is inbound-only in every row: trace values are placed

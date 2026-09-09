@@ -407,6 +407,17 @@ composition bounds". No command settles what those bounds are. Whether a remote 
 recursive `$ref` is permitted, and whether composition depth has a ceiling, are
 questions about intent, not about the tree.
 
+**U9 — RESOLVED 2026-09-08 as (c), by ruling `R6`**
+(`docs/release/2026-09-08-team-lead-rulings.md:103`). The row closes on `$ref`
+resolution; 2020-12 meta-validity of a FORWARDED schema is refused on purpose,
+because a validator on the emit path means promoting `jsonschema` from
+dev-dependency to runtime (declined under `D30`), and composition stays an
+observation rather than a bound. What that decided is built:
+`src/trust/schema_bounds.rs` inspects every emitted descriptor and the verdict
+rides along as `trustCard.schemaBounds`
+(`docs/design/2026-09-07-schema-1c-forwarded-schema-bounds.md`). The question as
+it was asked, kept for the record:
+
 **U9 (askable, blocking for a SCHEMA.1 closure comment, not for implementation):**
 does "the revision's `$ref` and composition bounds" name (a) a numeric limit the
 2026-11-25 revision states, (b) the gateway's own limit on what it will publish, or
