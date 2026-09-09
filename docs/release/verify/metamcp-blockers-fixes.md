@@ -427,6 +427,28 @@ Piping cargo into `tail` reports the pipe's exit status, so `[exited with code 0
 accompanied `could not compile ... due to 18 previous errors`. Redirect to a file
 and read `$?` when the exit status is the thing being trusted.
 
+## The two `Era` enums do not meet, and merging them would add a defect
+
+Measured 2026-09-09. The premise that `protocol::meta::Era` and
+`protocol::era::Era` meet in `src/gateway/router/handlers.rs` does not hold.
+`handlers.rs` names only `meta::Era` (`:827`, `:1462`, `:1467`, `:1590`, `:1595`);
+its two `protocol::era::` references are the error-code constants
+`UNSUPPORTED_PROTOCOL_VERSION` (`:287`) and `MISSING_REQUIRED_CLIENT_CAPABILITY`
+(`:992`), not the enum.
+
+The two answer different questions and their consumer sets are disjoint. `meta::Era`
+(`src/protocol/meta.rs:106`) is what one inbound request declared, derived from
+`RequestShape::era` and never computed independently; its consumers are the gateway
+inbound path — `router/handlers.rs`, `meta_mcp/*`, `server/mod.rs`. `era::Era`
+(`src/protocol/era.rs:25`) is what a backend peer speaks, established by probing and
+carried with `EraEvidence` and `EraSource`; its consumers are `backend/lifecycle.rs`,
+`backend/mod.rs` and `transport/http/mod.rs`. No file in `src/` names both, and no
+`From` impl or function converts between them.
+
+Unifying them would give the inbound path a type that also carries probe-derived
+backend state, which is the second era predicate the doc comment at
+`src/protocol/meta.rs:104` exists to forbid. Closed as no change required.
+
 ## `ConfirmationPolicy::for_modern()` is built on every modern call and discarded
 
 Measured 2026-09-09. `src/gateway/router/handlers.rs:1378` selects a
