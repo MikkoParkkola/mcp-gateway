@@ -1074,3 +1074,22 @@ them wrongly:
 - Inside the block, the `None` case has no tool name either. The guard method takes the tool name as
   an argument, so "no name, no key" is a fact about its signature and not a second check that could
   be forgotten — the same reason the backend name is a parameter and not an ambient lookup.
+
+### Where the review stands, and what revision 10 does NOT do
+
+Both legs are back: leg 1 (`gpt-review`) at `09:22:22Z` and leg 2 (`grok-review`) at `09:30:51Z`,
+both `process_status = ok`, both `SHIP-WITH-FIXES`. Revision 9 closed leg 1's list; revision 10
+closes leg 2's. Revision 9's closing sentence — that the second leg was outstanding — is spent.
+
+That is NOT a passing review. Per §12 and repair-protocol step 6 the repairs owe a confirmation pass
+back to the vendor that raised each finding: leg 1 re-checks whether F1's siting survives revision
+10 moving it again, leg 2 re-checks G1 and G3. Neither has been asked yet. Until both answer, this
+design is repaired, not ratified.
+
+- It still implements nothing. Every route-3 row is RED or unwritable.
+- It still does not settle the malformed-retry-field scope, which remains the requester's, and the
+  fourth row stays unwritable until it is answered.
+- It does not settle route 3's ownership, which is also the requester's.
+- It changes no public signature and no invariant. The G3 restructure moves statements inside one
+  handler; `apply_backend_tool_call_security` keeps its signature and its position above both
+  forwards.
