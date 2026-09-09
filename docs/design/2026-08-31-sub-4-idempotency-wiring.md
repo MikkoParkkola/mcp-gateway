@@ -907,3 +907,17 @@ name is part of the request fingerprint, and the method takes it explicitly.** R
 server/tool/arguments fingerprint construction rather than inventing a second one — a second
 spelling of a key is the drift the `CallerIdentity` comment already warns about.
 
+### F3 (HIGH, confirmed) — the reservation lifecycle was left undefined
+
+Rev 8 specified admission and stopped. `src/idempotency.rs` already defines the contract:
+`GuardOutcome::Proceed(IdempotencyReservation)` or `GuardOutcome::CachedResult(Value)`, with commit,
+completion and release settling the reservation. Leaving that unstated lets an implementer release
+protection early or strand a completed call marked in flight — a defect with the same symptom as
+the one the guard removes.
+
+**Repair, stated as the contract:** the `pub(crate)` method returns the existing `GuardOutcome`.
+`CachedResult` returns to the client without dispatch. `Proceed` hands the handler a reservation it
+holds ACROSS dispatch and settles on every exit — success, backend error, and the early returns —
+using the existing commit/complete/release semantics unchanged. No new lifecycle is invented here;
+route 3 adopts route 1's.
+
