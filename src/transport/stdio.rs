@@ -1031,7 +1031,7 @@ done
         panic!(
             "child survived dropping every handle to its transport: pid {pid} still alive after 2s"
         );
-    
+    }
     // =========================================================================
     // MIK-7272.SUB.2b — request-scoped notification capture over stdio.
     //
