@@ -223,11 +223,13 @@ pub(crate) fn extract_tools_call_params(params: Option<&Value>) -> (&str, Value)
 /// The meta layer reads it off the argument object it is handed, which is why
 /// it has to travel there.
 ///
-/// Conditional on purpose. `route_direct_backend_call` runs before the
-/// meta-tool match, so an unconditional merge would synthesise a `_meta` key
-/// into every direct-route backend payload — inventing a field for backends
-/// that never asked for one. Callers pass `is_meta_tool`, and the direct route
-/// stays byte-identical.
+/// Conditional on purpose. The merge happens in the router, *before*
+/// `route_direct_backend_call` picks the direct route inside
+/// `handle_tools_call`, so an unconditional merge would synthesise a `_meta`
+/// key into every direct-route backend payload — inventing a field for
+/// backends that never asked for one. `is_meta_tool` is the only thing keeping
+/// the direct route byte-identical, so it must answer "is this name one of
+/// *ours*", not merely "does this gateway confirm the name exists".
 ///
 /// An `arguments._meta` the client wrote itself is left alone: the caller's own
 /// value is the more specific one, and overwriting it would silently discard it.

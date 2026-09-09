@@ -136,6 +136,11 @@ pub struct AppState {
     /// (`idp_mint` / `idp_refuse`) into the same hash chain (MIK-6740). `None`
     /// when the transparency log is disabled — audit writes are then a no-op.
     pub transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
+    /// Lifecycle registry for TTL-reaped per-identity state
+    /// (`MIK-7215.CONTROL.4`). `None` when the gateway was constructed
+    /// without lifecycle wiring — tests and any embedder that does not run
+    /// the reaper — in which case tracking and sweeping are both no-ops.
+    pub session_lifecycle: Option<Arc<crate::gateway::session_lifecycle::SessionLifecycle>>,
 }
 
 /// Create the router.
