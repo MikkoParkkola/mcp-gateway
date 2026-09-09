@@ -9,11 +9,11 @@
     "id": "1141522724"
   },
   "websiteUrl": "https://github.com/MikkoParkkola/mcp-gateway#readme",
-  "version": "2.11.0",
+  "version": "3.5.1",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/mikkoparkkola/mcp-gateway:2.11.0",
+      "identifier": "ghcr.io/mikkoparkkola/mcp-gateway:3.5.1",
       "runtimeHint": "docker",
       "packageArguments": [
         {
@@ -27,7 +27,114 @@
       ],
       "transport": {
         "type": "stdio"
-      }
+      },
+      "environmentVariables": [
+        {
+          "name": "MCP_GATEWAY_CONFIG_DIR",
+          "description": "Overrides the gateway's data/config directory (default: ~/.mcp-gateway).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "GATEWAY_ATTESTATION_MODE",
+          "description": "Sandbox attestation mode: observe (default, audits only) or off.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "GATEWAY_ATTESTATION_SIGNING_KEY",
+          "description": "HMAC-SHA256 signing key shared with bnaut-attestation for sandbox token verification.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "GATEWAY_ATTESTATION_KEY_ID",
+          "description": "Signing key id for sandbox attestation tokens (default: gateway).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "SYMPHONY_PLUS_ATTESTATION",
+          "description": "Set to 0 to disable boot-time sandbox attestation enforcement (rollback flag).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "MCP_GATEWAY_FIREWALL_SKIP_KEYS",
+          "description": "Comma-separated JSON keys exempted from firewall free-text prompt-injection scanning.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "NO_COLOR",
+          "description": "Set (any value) to disable colored output in `doctor` diagnostics.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    },
+    {
+      "registryType": "cargo",
+      "registryBaseUrl": "https://crates.io",
+      "identifier": "mcp-gateway",
+      "version": "3.5.1",
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "serve"
+        },
+        {
+          "type": "positional",
+          "value": "--stdio"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MCP_GATEWAY_CONFIG_DIR",
+          "description": "Overrides the gateway's data/config directory (default: ~/.mcp-gateway).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "GATEWAY_ATTESTATION_MODE",
+          "description": "Sandbox attestation mode: observe (default, audits only) or off.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "GATEWAY_ATTESTATION_SIGNING_KEY",
+          "description": "HMAC-SHA256 signing key shared with bnaut-attestation for sandbox token verification.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "GATEWAY_ATTESTATION_KEY_ID",
+          "description": "Signing key id for sandbox attestation tokens (default: gateway).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "SYMPHONY_PLUS_ATTESTATION",
+          "description": "Set to 0 to disable boot-time sandbox attestation enforcement (rollback flag).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "MCP_GATEWAY_FIREWALL_SKIP_KEYS",
+          "description": "Comma-separated JSON keys exempted from firewall free-text prompt-injection scanning.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "NO_COLOR",
+          "description": "Set (any value) to disable colored output in `doctor` diagnostics.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
     }
   ]
 }

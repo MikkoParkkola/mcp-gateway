@@ -221,6 +221,67 @@ fn count_capability_yaml_files_by_category() -> Vec<(String, usize)> {
     counts.into_iter().collect()
 }
 
+fn cargo_toml_package_version() -> String {
+    let cargo_toml = read_repo_file("Cargo.toml");
+    let package_section = cargo_toml
+        .split_once("[package]")
+        .map(|(_, rest)| rest)
+        .expect("Cargo.toml should have a [package] section");
+    let package_section = package_section
+        .split_once("\n[")
+        .map_or(package_section, |(section, _)| section);
+    package_section
+        .lines()
+        .find_map(|line| {
+            let rest = line.strip_prefix("version")?;
+            let rest = rest.trim_start().strip_prefix('=')?.trim();
+            rest.strip_prefix('"')?.strip_suffix('"')
+        })
+        .expect("[package] section should declare a version")
+        .to_string()
+}
+
+#[test]
+fn server_json_version_tracks_cargo_toml_between_releases() {
+    let server_json: serde_json::Value = serde_json::from_str(&read_repo_file("server.json"))
+        .expect("server.json should be valid JSON");
+    let cargo_version = cargo_toml_package_version();
+
+    assert_eq!(
+        server_json["version"].as_str(),
+        Some(cargo_version.as_str()),
+        "checked-in server.json version should track Cargo.toml's [package] version; the \
+         release workflow re-stamps version and package identifiers from the pushed git tag \
+         at publish time, but the committed file must not drift behind development between \
+         releases"
+    );
+
+    let packages = server_json["packages"]
+        .as_array()
+        .expect("server.json should declare at least one package");
+    let oci_identifier = packages
+        .iter()
+        .find(|package| package["registryType"] == "oci")
+        .and_then(|package| package["identifier"].as_str())
+        .expect("server.json should declare an OCI package identifier");
+    assert_eq!(
+        oci_identifier,
+        format!("ghcr.io/mikkoparkkola/mcp-gateway:{cargo_version}"),
+        "checked-in OCI package identifier should carry the same version tag as Cargo.toml"
+    );
+
+    if let Some(cargo_package) = packages
+        .iter()
+        .find(|package| package["registryType"] == "cargo")
+    {
+        assert_eq!(
+            cargo_package["version"].as_str(),
+            Some(cargo_version.as_str()),
+            "checked-in cargo package version should track Cargo.toml"
+        );
+    }
+}
+
 #[test]
 fn generated_homebrew_formula_stays_gatekeeper_safe() {
     let workflow = read_repo_file(".github/workflows/release.yml");
