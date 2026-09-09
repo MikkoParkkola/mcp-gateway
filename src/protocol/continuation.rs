@@ -127,6 +127,27 @@ impl std::fmt::Debug for Payload {
 /// keys arrive with the durable ledger (MIK-7312) and not before.
 const CONTINUATION_LIFETIME_SECS: u64 = 300;
 
+/// How long one key mints before a fresh one replaces it.
+///
+/// Rotation is lazy: the age is checked inside `mint`, against the `now` the
+/// caller already supplies, so nothing runs on a timer and `open` never has to
+/// mutate the ring. Not a parameter, for the reason above it is not: the
+/// retention window it is measured against has exactly one home, and a second
+/// copy of that number is how the two stop agreeing.
+const CONTINUATION_ROTATION_SECS: u64 = 60;
+
+/// A retired kid must not return while envelopes it sealed can still verify.
+///
+/// Ids are one byte and each successor is the last plus one, so a kid comes
+/// back after 256 rotations. That span must exceed the retention window — if it
+/// did not, a rotation would find its successor still live, take the
+/// keep-the-current-key fallback every single time, and stop rotating without
+/// failing anything an operator could see.
+const _: () = assert!(
+    256 * CONTINUATION_ROTATION_SECS > CONTINUATION_LIFETIME_SECS,
+    "a kid would be reused while a retained key can still verify with it"
+);
+
 /// When a continuation minted at `now` dies.
 ///
 /// One function because two things need the answer and they must agree: the
@@ -294,23 +315,48 @@ impl std::error::Error for ContinuationError {}
 /// that, rotating a key breaks every elicitation in flight, and a redeploy
 /// looks exactly like an attack.
 pub struct Keyring {
-    minting_kid: u8,
-    keys: Vec<(u8, LessSafeKey)>,
+    ring: std::sync::RwLock<Ring>,
     rng: SystemRandom,
-    minted: std::sync::atomic::AtomicU64,
     mint_budget: u64,
 }
 
-#[expect(
-    clippy::missing_fields_in_debug,
-    reason = "the omitted field is the key material, and the omission is the point: a Debug that prints keys puts them in every log that ever formats a Keyring"
-)]
+/// One key and what rotation needs to know about it.
+struct RingKey {
+    kid: u8,
+    key: LessSafeKey,
+    /// When this key started minting. `None` until its first mint stamps it —
+    /// `Keyring::new` has no clock, and a key born at an assumed zero reads as
+    /// infinitely old and burns a successor on the first request after startup.
+    created_at: Option<u64>,
+    /// When this key stopped minting. `None` means it never has, which is true
+    /// of the minting key and of every operator-supplied verification key: a
+    /// key with no retirement instant is never pruned.
+    retired_at: Option<u64>,
+    /// Envelopes this key has sealed, against [`Keyring::mint_budget`]. Per key
+    /// rather than per keyring because the NIST bound is per key, and because a
+    /// counter on the key is what lets an ordinary mint hold a read guard —
+    /// were it beside `minting_kid`, every mint would be a writer.
+    minted: std::sync::atomic::AtomicU64,
+}
+
+/// `minting_kid` and `keys` under one lock, because they are one fact.
+///
+/// Read apart they can disagree: a mint that resolved the id and then looked it
+/// up across a rotation would fail to find a key it had just been told mints.
+struct Ring {
+    minting_kid: u8,
+    keys: Vec<RingKey>,
+}
+
 impl std::fmt::Debug for Keyring {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Never the key material, not even in a debug log.
+        // Never the key material, not even in a debug log: a `Debug` that
+        // prints keys puts them in every log that ever formats a `Keyring`.
+        // The counts are what an operator needs and all they get.
+        let ring = self.read_ring();
         f.debug_struct("Keyring")
-            .field("minting_kid", &self.minting_kid)
-            .field("verification_keys", &self.keys.len())
+            .field("minting_kid", &ring.minting_kid)
+            .field("verification_keys", &ring.keys.len())
             .finish()
     }
 }
@@ -353,22 +399,155 @@ impl Keyring {
         let Some((minting_kid, _)) = keys.first() else {
             return Err(ContinuationError::Malformed);
         };
-        let mut unbound: Vec<(u8, LessSafeKey)> = Vec::with_capacity(keys.len());
+        let mut unbound: Vec<RingKey> = Vec::with_capacity(keys.len());
         for (kid, material) in keys {
-            if unbound.iter().any(|(seen, _)| seen == kid) {
+            if unbound.iter().any(|held| held.kid == *kid) {
                 return Err(ContinuationError::Malformed);
             }
             let key = UnboundKey::new(&AES_256_GCM, material)
                 .map_err(|_| ContinuationError::Malformed)?;
-            unbound.push((*kid, LessSafeKey::new(key)));
+            unbound.push(RingKey {
+                kid: *kid,
+                key: LessSafeKey::new(key),
+                // No clock here, deliberately. The first mint stamps the
+                // minting key from the `now` it is handed; the rest are
+                // verification keys that never minted under this process and
+                // have no retirement instant to prune them by.
+                created_at: None,
+                retired_at: None,
+                minted: std::sync::atomic::AtomicU64::new(0),
+            });
         }
         Ok(Self {
-            minting_kid: *minting_kid,
-            keys: unbound,
+            ring: std::sync::RwLock::new(Ring {
+                minting_kid: *minting_kid,
+                keys: unbound,
+            }),
             rng: SystemRandom::new(),
-            minted: std::sync::atomic::AtomicU64::new(0),
             mint_budget: MINT_BUDGET,
         })
+    }
+
+    /// A poisoned lock is not a reason to stop minting.
+    ///
+    /// The guarded value is a key list, not an invariant a panic can leave
+    /// half-written: every mutation of it is a single `Vec` operation under the
+    /// write guard. Propagating the poison would turn one panicking thread into
+    /// a gateway that refuses every continuation for the rest of the process.
+    fn read_ring(&self) -> std::sync::RwLockReadGuard<'_, Ring> {
+        self.ring
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn write_ring(&self) -> std::sync::RwLockWriteGuard<'_, Ring> {
+        self.ring
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn key(ring: &Ring, kid: u8) -> Result<&RingKey, ContinuationError> {
+        ring.keys
+            .iter()
+            .find(|held| held.kid == kid)
+            .ok_or(ContinuationError::UnknownKey(kid))
+    }
+
+    /// How many keys this ring can still verify with.
+    ///
+    /// Exposed for the same reason [`Keyring::mint_budget_remaining`] is: the
+    /// retention rule is the criterion, and a rule nothing can read is a rule
+    /// nobody can check. Inferring it from a refused envelope would not do —
+    /// that answers whether one key is gone, not whether pruning ran.
+    #[must_use]
+    pub fn retained_kid_count(&self) -> usize {
+        self.read_ring().keys.len()
+    }
+
+    /// The id currently sealing envelopes.
+    #[must_use]
+    pub fn minting_kid(&self) -> u8 {
+        self.read_ring().minting_kid
+    }
+
+    /// Stamp the startup key, then rotate it if it has minted for long enough.
+    ///
+    /// Both under one write guard and in this order: an unstamped key has no
+    /// age, so checking its age first would rotate on the very first mint.
+    ///
+    /// The age is tested twice — once under the read guard by the caller to
+    /// decide whether this is worth a writer, and again here before acting.
+    /// Two mints arriving either side of the boundary would otherwise both
+    /// rotate, spending two ids for one interval.
+    fn rotate_if_due(&self, now: u64) -> Result<(), ContinuationError> {
+        let mut ring = self.write_ring();
+        let minting_kid = ring.minting_kid;
+        let Some(current) = ring.keys.iter().position(|held| held.kid == minting_kid) else {
+            return Ok(());
+        };
+        match ring.keys[current].created_at {
+            None => {
+                ring.keys[current].created_at = Some(now);
+                return Ok(());
+            }
+            Some(created_at) if now.saturating_sub(created_at) < CONTINUATION_ROTATION_SECS => {
+                return Ok(());
+            }
+            Some(_) => {}
+        }
+
+        // Always the successor, never the lowest free id. Reusing a gap would
+        // put a kid back on the wire while a retained key still verifies with
+        // it, and the two envelopes would be indistinguishable.
+        let old_kid = ring.minting_kid;
+        let new_kid = old_kid.wrapping_add(1);
+        if ring.keys.iter().any(|held| held.kid == new_kid) {
+            // Keeping the current key is the honest fallback: the caller asked
+            // for an envelope, not for a rotation, and refusing it would turn a
+            // ring-sizing mistake into an outage. The bound asserted beside
+            // `CONTINUATION_ROTATION_SECS` is what keeps this unreachable.
+            tracing::warn!(
+                minting_kid = old_kid,
+                successor_kid = new_kid,
+                "continuation key rotation skipped: successor id still retained"
+            );
+            return Ok(());
+        }
+
+        let mut material = [0u8; 32];
+        self.rng
+            .fill(&mut material)
+            .map_err(|_| ContinuationError::Malformed)?;
+        let key =
+            UnboundKey::new(&AES_256_GCM, &material).map_err(|_| ContinuationError::Malformed)?;
+
+        ring.keys[current].retired_at = Some(now);
+        ring.keys.push(RingKey {
+            kid: new_kid,
+            key: LessSafeKey::new(key),
+            created_at: Some(now),
+            retired_at: None,
+            minted: std::sync::atomic::AtomicU64::new(0),
+        });
+        ring.minting_kid = new_kid;
+
+        // Same pass, so retention is bounded by the rotation that caused it
+        // rather than by whatever happens to run next. A key with no retirement
+        // instant is never dropped, and neither is the one now minting.
+        ring.keys.retain(|held| {
+            held.kid == new_kid
+                || held.retired_at.is_none_or(|retired_at| {
+                    now.saturating_sub(retired_at) <= CONTINUATION_LIFETIME_SECS
+                })
+        });
+
+        tracing::info!(
+            retired_kid = old_kid,
+            minting_kid = new_kid,
+            retained_keys = ring.keys.len(),
+            "continuation key rotated"
+        );
+        Ok(())
     }
 
     /// Lower the mint budget below the default ceiling.
@@ -391,8 +570,11 @@ impl Keyring {
     /// this approach zero is the signal that rotation is overdue.
     #[must_use]
     pub fn mint_budget_remaining(&self) -> u64 {
-        self.mint_budget
-            .saturating_sub(self.minted.load(std::sync::atomic::Ordering::Relaxed))
+        let ring = self.read_ring();
+        let minted = Self::key(&ring, ring.minting_kid).map_or(0, |held| {
+            held.minted.load(std::sync::atomic::Ordering::Relaxed)
+        });
+        self.mint_budget.saturating_sub(minted)
     }
 
     /// Seal a payload into an envelope for the client to echo back.
@@ -421,33 +603,59 @@ impl Keyring {
         if payload.expires_at.saturating_sub(payload.issued_at) > CONTINUATION_LIFETIME_SECS {
             return Err(ContinuationError::LifetimeExceeded);
         }
+        // The payload's own `issued_at` is the clock. `mint` is handed no other,
+        // and reading the wall clock here would let the two disagree — an
+        // envelope stamped by one instant and rotated against another.
+        //
+        // Before the budget, so the very first mint stamps the startup key even
+        // if it is then refused: an unstamped key is an ageless one, and it
+        // would rotate on whatever request came next.
+        //
+        // The read guard is dropped before `rotate_if_due` takes the writer.
+        // Holding it across the call would deadlock on a non-reentrant lock.
+        let due = {
+            let ring = self.read_ring();
+            Self::key(&ring, ring.minting_kid).is_ok_and(|held| {
+                held.created_at.is_none_or(|created_at| {
+                    payload.issued_at.saturating_sub(created_at) >= CONTINUATION_ROTATION_SECS
+                })
+            })
+        };
+        if due {
+            self.rotate_if_due(payload.issued_at)?;
+        }
+
+        let ring = self.read_ring();
+        let kid = ring.minting_kid;
+        let held = Self::key(&ring, kid)?;
+
         // Counted before the nonce is drawn, so a refusal cannot consume one.
         // Fetch-and-add rather than read-then-write: concurrent minters must not
         // be able to step past the budget between the two halves.
-        let used = self
+        let used = held
             .minted
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if used >= self.mint_budget {
             // Saturate rather than wrap: a counter that wraps re-opens the
             // budget it exists to close.
-            self.minted
+            held.minted
                 .store(self.mint_budget, std::sync::atomic::Ordering::Relaxed);
             return Err(ContinuationError::MintBudgetExhausted);
         }
-        let key = self.key(self.minting_kid)?;
         let mut nonce_bytes = [0u8; NONCE_LEN];
         self.rng
             .fill(&mut nonce_bytes)
             .map_err(|_| ContinuationError::Malformed)?;
 
         let mut buffer = serde_json::to_vec(payload).map_err(|_| ContinuationError::Malformed)?;
-        let header = [VERSION, self.minting_kid];
-        key.seal_in_place_append_tag(
-            Nonce::assume_unique_for_key(nonce_bytes),
-            Aad::from(header),
-            &mut buffer,
-        )
-        .map_err(|_| ContinuationError::Malformed)?;
+        let header = [VERSION, kid];
+        held.key
+            .seal_in_place_append_tag(
+                Nonce::assume_unique_for_key(nonce_bytes),
+                Aad::from(header),
+                &mut buffer,
+            )
+            .map_err(|_| ContinuationError::Malformed)?;
 
         let mut wire = Vec::with_capacity(2 + NONCE_LEN + buffer.len());
         wire.extend_from_slice(&header);
@@ -486,22 +694,26 @@ impl Keyring {
             return Err(ContinuationError::UnknownVersion(version));
         }
         let kid = wire[1];
-        let key = self.key(kid)?;
 
         let mut nonce_bytes = [0u8; NONCE_LEN];
         nonce_bytes.copy_from_slice(&wire[2..2 + NONCE_LEN]);
         let mut buffer = wire[2 + NONCE_LEN..].to_vec();
 
-        let plaintext = key
-            .open_in_place(
-                Nonce::assume_unique_for_key(nonce_bytes),
-                Aad::from([version, kid]),
-                &mut buffer,
-            )
-            .map_err(|_| ContinuationError::NotAuthentic)?;
-
-        let payload: Payload =
-            serde_json::from_slice(plaintext).map_err(|_| ContinuationError::NotAuthentic)?;
+        // A read guard, never a writer: `open` neither rotates nor prunes. Kid
+        // resolution happens above the expiry check, so a pruning `open` would
+        // answer for a merely-late handle with the wrong refusal.
+        let payload: Payload = {
+            let ring = self.read_ring();
+            let plaintext = Self::key(&ring, kid)?
+                .key
+                .open_in_place(
+                    Nonce::assume_unique_for_key(nonce_bytes),
+                    Aad::from([version, kid]),
+                    &mut buffer,
+                )
+                .map_err(|_| ContinuationError::NotAuthentic)?;
+            serde_json::from_slice(plaintext).map_err(|_| ContinuationError::NotAuthentic)?
+        };
 
         // Checked after authentication, never before: an unauthenticated
         // deadline is a field an attacker chose.
@@ -519,14 +731,6 @@ impl Keyring {
             return Err(ContinuationError::LifetimeExceeded);
         }
         Ok(payload)
-    }
-
-    fn key(&self, kid: u8) -> Result<&LessSafeKey, ContinuationError> {
-        self.keys
-            .iter()
-            .find(|(id, _)| *id == kid)
-            .map(|(_, key)| key)
-            .ok_or(ContinuationError::UnknownKey(kid))
     }
 }
 
