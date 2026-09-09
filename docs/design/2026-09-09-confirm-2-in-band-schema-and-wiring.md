@@ -349,3 +349,50 @@ instead of a refusal it would have understood. That is a worse error message, ne
 Trigger it meets: it changes an observable contract — what a modern destructive call returns to a
 client that declared nothing. Not a scope move, so §P0's freeze does not re-open; it does belong in
 front of §P4 as a decision, not as an implementation detail nobody voted on.
+
+## W1 — why the envelope carries a purpose
+
+Ruled in by the lead on 2026-09-09. This section exists because a reviewer will
+otherwise ask what the field is for, and the honest answer is not the one the
+ruling was written against.
+
+**Not a live bypass.** The finding this was ruled on held that a retry naming
+`gateway_kill_server` has its envelope opened at `src/gateway/meta_mcp/invoke.rs:596`
+(via `mod.rs:1592`) before the gate at `mod.rs:1709` sees it. Source says otherwise, and
+the call chain is short enough to check by hand:
+
+| Site | What it is |
+|---|---|
+| `mod.rs:1592` | `retry_origin_backend` — opens the envelope, takes `backend_id` as a route |
+| `mod.rs:1581` | `route_retry_to_origin_backend` — its only caller |
+| `mod.rs:1553` | `route_direct_backend_call` — its only caller, and the tail of that function |
+| `mod.rs:1731` | the ONLY call site of `route_direct_backend_call` in the tree |
+| `mod.rs:1709` | the gate — runs first, and `:1731` is guarded by `if !confirmed_in_band` |
+
+So the open at `:1592` is downstream of the gate, not upstream. A destructive retry always
+meets the gate first, which asks, declines, or returns `ProceedConfirmed` — and
+`ProceedConfirmed` is exactly the case that skips `:1731`. There is no reachable path on
+which the gate never sees the redemption.
+
+**What the field is actually for.** Correctness of the confirmed path rests entirely on the
+`!confirmed_in_band` boolean at `mod.rs:1730`. Delete that one guard and a confirmed retry
+falls into backend routing, re-opens the envelope the gate has already spent, and dies as a
+stale retry instead of running the action the operator just approved — an approved
+destructive operation silently not performed. `purpose` makes that guard non-load-bearing:
+`retry_origin_backend` returns `None` for a gateway-purpose envelope, so routing falls
+through to the meta surface where the answer was always going. Defence-in-depth against a
+one-line regression, not a repair of a live hole.
+
+**It ships unprovable, and that is a known cost.** No test can fail only for the absence of
+`purpose`. Every reachable cross-presentation is already refused by
+`original_request_digest`: the nearest reachable case — mint a confirmation envelope, then
+present it on a retry naming `gateway_list_servers` — does reach `:1592`, and is refused by
+the digest downstream exactly as the comment at `mod.rs:1570-1580` already describes.
+`purpose` makes that refusal earlier and for the right reason; it does not create a case
+that goes green only with it present. Under the standing constraint — a case that would also
+pass with the mechanism absent proves nothing — this field arrives with no test that can
+defend it, and the gate-ordering table above is the whole of its justification.
+
+**Shape (§P3):** flat `purpose: ContinuationPurpose` beside `backend_id`, not W3's typed
+`origin`. Ruled by the lead: same contract, smaller diff, one field to review rather than a
+sum-type refactor mid-release.

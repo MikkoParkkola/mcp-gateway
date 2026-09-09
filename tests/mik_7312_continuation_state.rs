@@ -85,6 +85,7 @@ const NOW: u64 = 1_100;
 
 fn payload(jti: &str, origin: &str, expires_at: u64) -> Payload {
     Payload {
+        purpose: mcp_gateway::protocol::continuation::ContinuationPurpose::Backend,
         backend_id: "backend".to_string(),
         backend_request_state: Some("backend-state".to_string()),
         principal_fingerprint: "principal".to_string(),

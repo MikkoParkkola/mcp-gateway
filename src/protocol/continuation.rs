@@ -53,6 +53,32 @@ const NONCE_LEN: usize = 12;
 /// unauthenticated caller can demand small.
 const MAX_ENVELOPE_LEN: usize = 8 * 1024;
 
+/// Which redemption an envelope was minted for.
+///
+/// Both mints are reachable from one another's dispatch, so the envelope says
+/// which one issued it rather than leaving the two indistinguishable. The
+/// digest already refuses a cross-presentation whose tool or arguments differ;
+/// this refuses one whose tool and arguments MATCH, which is the case a digest
+/// cannot see.
+///
+/// Not a `bool`: "is this a confirmation" reads the same in both directions at
+/// a call site, and a third purpose would have nowhere to go.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ContinuationPurpose {
+    /// A backend asked for more input; the retry resumes that exchange.
+    ///
+    /// The default, and correct as one rather than merely convenient: a payload
+    /// sealed before this field existed carries no purpose to read back, and
+    /// every envelope minted before it existed was a backend exchange. So a
+    /// pre-field envelope deserializes as exactly what it is, and the wire
+    /// version does not have to move to say so.
+    #[default]
+    Backend,
+    /// The gateway asked the caller to confirm a destructive action of its own.
+    /// `backend_id` holds the meta-tool's name, which is not a backend.
+    GatewayConfirmation,
+}
+
 /// What the envelope carries. None of it is visible to the client.
 ///
 /// `Debug` is implemented by hand rather than derived, and the omissions are the
@@ -62,6 +88,14 @@ const MAX_ENVELOPE_LEN: usize = 8 * 1024;
 /// the caller bindings say who is entitled to redeem the exchange.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Payload {
+    /// Which redemption this envelope may be spent on.
+    ///
+    /// `#[serde(default)]` rather than a wire-version bump: `open()` refuses a
+    /// version byte it does not recognise (`:692-694`), so bumping would
+    /// invalidate every envelope in flight at the moment of deploy. A defaulted
+    /// field costs nothing and breaks nobody.
+    #[serde(default)]
+    pub purpose: ContinuationPurpose,
     /// Which backend holds the exchange.
     pub backend_id: String,
     /// The backend's own opaque state, verbatim — `None` when it issued none.
@@ -189,6 +223,11 @@ impl Payload {
         now: u64,
     ) -> Self {
         Self {
+            // `mint` keeps the signature it had. Every existing caller mints a
+            // backend exchange, and the one caller that does not says so with
+            // `with_purpose`, so no call site changes to gain a field it would
+            // only ever pass one value for.
+            purpose: ContinuationPurpose::Backend,
             backend_id,
             backend_request_state,
             principal_fingerprint,
@@ -199,6 +238,19 @@ impl Payload {
             jti: uuid::Uuid::new_v4().to_string(),
             hold_key,
         }
+    }
+
+    /// Re-purpose a freshly minted payload before it is sealed.
+    ///
+    /// The purpose is sealed inside the authenticated plaintext, so a client
+    /// cannot restate it; that, not this signature, is what binds an envelope to
+    /// one redemption. Re-tagging an already-opened payload is possible in
+    /// process and pointless, because nothing re-seals one. Consuming only so a
+    /// mint reads as a single expression.
+    #[must_use]
+    pub fn with_purpose(mut self, purpose: ContinuationPurpose) -> Self {
+        self.purpose = purpose;
+        self
     }
 
     /// Whether this continuation belongs to this caller and this request.

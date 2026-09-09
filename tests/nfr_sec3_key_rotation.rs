@@ -27,6 +27,7 @@ fn keyring() -> Keyring {
 
 fn payload(now: u64) -> Payload {
     Payload {
+        purpose: mcp_gateway::protocol::continuation::ContinuationPurpose::Backend,
         backend_id: "backend".to_string(),
         backend_request_state: None,
         principal_fingerprint: "fp".to_string(),
