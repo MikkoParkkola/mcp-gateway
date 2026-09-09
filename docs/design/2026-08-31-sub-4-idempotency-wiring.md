@@ -898,3 +898,12 @@ is fixed and is the design: resolve identity → INV-2 isolation refusal → `ap
 → **idempotency guard** → forward. A guard that runs before authorization is not a lazier version
 of this one; it is a different and worse feature.
 
+### F2 (CRITICAL, confirmed) — the key must carry the backend name
+
+Rev 8's proposed method takes the tool name and params. The direct route is addressed per backend
+(`/mcp/{name}`), and two backends may expose the same tool name. Without the backend in the
+fingerprint, a key reused across backends returns the wrong backend's result. **Repair: the backend
+name is part of the request fingerprint, and the method takes it explicitly.** Reuse the existing
+server/tool/arguments fingerprint construction rather than inventing a second one — a second
+spelling of a key is the drift the `CallerIdentity` comment already warns about.
+
