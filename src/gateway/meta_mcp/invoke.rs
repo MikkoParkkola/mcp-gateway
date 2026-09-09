@@ -1519,30 +1519,29 @@ impl MetaMcp {
         // the only scope holding all five values the mint sealed — the backend
         // server and tool, its argument object, the caller's identity, and the
         // handle itself.
-        let outbound_retry =
-            match redeem_retry(
-                &self.continuation,
-                caller,
-                crate::protocol::mrtr::principal_fingerprint(caller.verified_identity),
-                server,
-                tool,
-                &arguments,
-            )
-            .await
-            {
-                Ok(retry) => retry,
-                Err(error) => {
-                    // Refused before the backend was reached, so it has not
-                    // acted: the key is released rather than settled. Settling
-                    // one here would answer an honest retry, made after a fresh
-                    // question, with a sentence naming a side effect nothing
-                    // performed.
-                    if let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.release();
-                    }
-                    return Err(error);
+        let outbound_retry = match redeem_retry(
+            &self.continuation,
+            caller,
+            crate::protocol::mrtr::principal_fingerprint(caller.verified_identity),
+            server,
+            tool,
+            &arguments,
+        )
+        .await
+        {
+            Ok(retry) => retry,
+            Err(error) => {
+                // Refused before the backend was reached, so it has not
+                // acted: the key is released rather than settled. Settling
+                // one here would answer an honest retry, made after a fresh
+                // question, with a sentence naming a side effect nothing
+                // performed.
+                if let Some(reservation) = idem_reservation.as_mut() {
+                    reservation.release();
                 }
-            };
+                return Err(error);
+            }
+        };
 
         let dispatch_result = self
             .accounted_dispatch(

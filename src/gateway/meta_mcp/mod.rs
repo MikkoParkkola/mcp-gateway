@@ -1705,15 +1705,14 @@ impl MetaMcp {
             );
         }
 
-        let confirmed_in_band = match destructive_confirmation_gate(
-            &id, tool_name, &arguments, session_id, &caller,
-        )
-        .await
-        {
-            GateOutcome::Refuse(response) => return *response,
-            GateOutcome::Proceed => false,
-            GateOutcome::ProceedConfirmed => true,
-        };
+        let confirmed_in_band =
+            match destructive_confirmation_gate(&id, tool_name, &arguments, session_id, &caller)
+                .await
+            {
+                GateOutcome::Refuse(response) => return *response,
+                GateOutcome::Proceed => false,
+                GateOutcome::ProceedConfirmed => true,
+            };
 
         // T2.4: a call naming a backend tool directly — because an operator
         // surfaced it, or because it is a retry of an exchange this gateway
