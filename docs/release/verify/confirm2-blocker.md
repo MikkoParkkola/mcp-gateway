@@ -167,6 +167,40 @@ survive the in-band ask at all. If it was, `handlers.rs:1441-1451` splits on era
 should split on era *and* channel availability, and the dead `for_modern()` is the symptom.
 That is a design question for the CONFIRM.2 author, not a test repair.
 
+### Amendment (2026-09-09) — verified by the lead, and it is worse than "dead on HTTP"
+
+The lead re-checked this finding at source and it holds. Two anchors sharpened, and one
+claim above is now too weak:
+
+- The construction is `handlers.rs:1379` (`for_modern()`) against `:1381` (`for_legacy()`),
+  chosen by `is_modern` at `:1378`. The single consumer is `policy: confirmation_policy` at
+  `:1449`, inside the `Era::Legacy` arm at `:1446-1451`.
+- `ConfirmationPolicy::for_modern()` has **exactly one construction site in `src/`** —
+  `handlers.rs:1379`. Every other occurrence of the name is a doc comment or a test comment
+  (V: `rg -n 'for_modern' src/`).
+- `ConfirmationChannel::Elicit` also has **exactly one construction site** —
+  `handlers.rs:1447`, the same `Era::Legacy` arm (`mod.rs:2200` is the destructuring match,
+  not a construction). No other transport builds one; stdio and the server path build
+  `Unavailable`.
+
+Those two facts together make the earlier wording ("no live consumer on the HTTP path") an
+understatement. The only policy value that can reach
+`policy.on_unconfirmable() == ConfirmationPolicy::REFUSE` (`src/gateway/meta_mcp/mod.rs:2223`)
+is the one handed in at `handlers.rs:1449`, which is always `for_legacy()` =
+`PROCEED_WITH_WARNING`. So that comparison never yields true **from this call site on any
+transport**, not merely on HTTP. `REFUSE` is a string constant with no runtime producer.
+
+Anchor drift, recorded because it will bite the next reader: this comparison was cited as
+`mod.rs:2201-2204` earlier in this document and as `:1967` in the CONFIRM.1a ledger cell. It
+is at `:2223` in the current worktree. Neither older number was wrong when written — another
+lane's uncommitted hunks in `mod.rs` moved it twice. Cite `on_unconfirmable` by symbol.
+
+Per the lead's ruling this is recorded and **not fixed**: an unmeasured change to a
+destructive-action guard is worse than the gap it closes. The design question — whether
+`for_modern()`'s refusal was ever meant to survive the in-band ask — stays open for a
+compile-capable session, as does the `!confirmed_in_band` test and the CONFIRM.1a fixture
+rewrite, both assigned to this lane for after a host exists.
+
 ## Fourth entry — W1 built after all, and the wire version does NOT move
 
 The lead ruled W1 in on 2026-09-09 and approved the flat `purpose` field. The adjudication
