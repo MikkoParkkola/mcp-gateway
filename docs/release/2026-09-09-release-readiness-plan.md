@@ -668,3 +668,54 @@ on a structural fact whose end-to-end proof is an open test-plan row. That is no
 an objection to the fix — the structure is real and checkable by reading — but it
 belongs in the record, because a future edit to either half would break the
 invariant with no test to catch it.
+
+### E-upgraded: the stale green is real green, and the six-versus-seven seam
+
+Two things, one from a second lane's follow-up and one against this document.
+
+**The last green run was a genuine full pass, not a fail-fast illusion.** This
+matters because a fail-fast run can look green simply by stopping early, which
+is the whole failure mode section E describes — so "it was green 31 hours ago"
+would be worth very little if that run had also aborted somewhere in the suite.
+It did not. Four independent checks agree: the tree at `5cb4f4e9` held 75 test
+files, that run executed 75 binaries, the log carries zero `test result: FAILED`
+lines, and the last `Running tests/...` line is `wolfram_llm_tests` — last in
+byte order, so the run reached the end of the suite rather than stopping inside
+it.
+
+So the roughly 42 binaries carrying older evidence hold **real green from a
+complete, unaborted run on a named commit**, not merely green-before-things-went-
+red. They deserve more weight than a stale-green label usually earns. The hole is
+correspondingly narrower than section E first drew it: the release's exposure is
+the 13 never-green targets and whatever regressed in the 31 dark hours, not 55
+unknowns.
+
+**A seam in this document, corrected against itself.** The heading of the
+previous subsection says six criteria rest on evidence CI has never run, while
+its body says seven are cited and its table lists seven rows. Both numbers are
+defensible and neither was explained, which is the defect. The reconciliation:
+seven ledger rows cite binaries added after the last green run, and **six of the
+seven have executed in no CI run of any colour.** The seventh,
+`continuation_expiry_metric_test` behind `NFR.OBS.4`, sorts ahead of the aborting
+component binary in byte order, so it does run in the current red runs — it has
+simply never appeared in a green one. Seven rows are graded on evidence the
+pipeline has never confirmed; six of those seven are backed by binaries the
+pipeline has never executed at all. Use seven for the release question and six
+for the never-executed question, and say which is which.
+
+**One number withdrawn before it reached this document.** A first pass at the
+run-history archaeology reported that 88 of 88 targets had never run, and exited
+0. It was false — a dropped path prefix made every fetch 404, the error payload's
+first line was captured as a job id, and every run recorded a clean zero. No
+figure from that pass is used here; this document's `33 of 88`, `75` and the
+13-target list were each read from a job log or derived from `git ls-tree` and
+`git diff` directly, and the `75` is now confirmed twice by different routes.
+
+The generalisable point belongs in the record next to the other five reporting
+failures catalogued today, because it is the first one that was worn rather than
+caught: every ingredient tested clean in isolation, only the composition was
+broken, and the exit status said 0 over a confident and complete wrong answer.
+What caught it was the answer contradicting data read twenty minutes earlier —
+suspicion, not a control. The control is the guard that followed: **an empty
+result and a failed fetch must not be able to look alike.** A zero that can be
+produced by a broken fetch is not a measurement.
