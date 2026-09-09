@@ -1,6 +1,7 @@
 # MIK-7272.SUB.4 — idempotency protection for reissued side-effecting calls
 
-Status: proposed, revision 6. Route 1 of 3 is now built (`7851736d`); the rest is unbuilt.
+Status: proposed, revision 9. Route 1 is built (`7851736d`); route 2's carrier is built and
+uncommitted (rev 7); route 3 is unbuilt and acquires its design section in rev 8.
 Revisions 1 and 2 were reviewed by GPT-5.x and Grok; both returned `SHIP-WITH-FIXES` on revision 2.
 Revision 3 was the repair. Revision 4 settles the last question a check could settle, and records
 what happens to the two that need a person.
@@ -597,6 +598,30 @@ an invariant is what stops the defect returning row by row.
 The assertion is a mutation counter on the tool, never the response body: two identical bodies
 are also what executing twice produces.
 
+**2026-09-09 — direct route (`POST /mcp/{name}`): gap CONFIRMED at source, unimplemented.** The row
+above says "that route never resolves a key"; that is now verified rather than asserted. `rg` over
+`src/gateway/router/` returns ZERO occurrences of `idempot`, `derive_key`, `GuardOutcome` or
+`RetryFields` in `backend_handlers.rs` (the two `_meta` hits are `prepare_tool_metadata`, a substring,
+not a carrier read). The `tools/call` branch (`backend_handlers.rs:762`) runs
+`apply_backend_tool_call_security` and dispatches straight to `backend.request*`; no key is parsed,
+no guard is called, so a client's retry key is inert on this transport exactly as it was on stdio
+before R1. The row stays RED and the fix is NOT in the tree.
+
+Shape for whoever lands it, and the two ways to land it wrongly:
+- **Access.** `idempotency_cache` is `pub(super)` on `MetaMcp` (`src/gateway/meta_mcp/mod.rs:251`);
+  `AppState.meta_mcp: Arc<MetaMcp>` is in reach at `router/mod.rs:54` but the field is not. PREFERRED:
+  a method on `MetaMcp` that OWNS the guard and which the router calls — no field or accessor is
+  widened, so no VISIBILITY-IS-DESIGN event. A read accessor is the fallback, not the default.
+- **The fingerprint trap.** Route 1 keys with `idempotency_key_for`
+  (`src/gateway/meta_mcp/support.rs:48`, shape `{len}:{key}{projection}{identity}{step}`) and
+  fingerprints with `derive_key(&format!("{server}:{tool}"), &arguments)` plus
+  `retry.key_discriminator()` (`invoke.rs:1340-1412`). A direct-route guard that drops the
+  `{server}:` prefix, the length prefix or the identity suffix produces keys that CAN NEVER COLLIDE
+  with route 1's — a silent no-op that passes a same-route test while leaving the criterion open,
+  and the `:452` row's continuation collision live.
+- **The test must count.** Counting backend, `config.cache.enabled = false`, assert the backend was
+  asked ONCE — not merely that a guard ran, and never the response body.
+
 The fixture invariant meets the two landed rows differently, and neither case sets
 `config.cache.enabled = false`. The boot row runs `Gateway::new(Config::default())` ON PURPOSE —
 its doc comment makes the default load-bearing, because there is no section for an operator to
@@ -624,3 +649,252 @@ constraints on *this* plan because this is the change that activates the cache.
 |---|---|---|
 | cross-principal binding (P8/P9) | two *different* authenticated callers issue the same tool, same arguments and the same key string, with identity propagation OFF; the second must execute rather than receive the first's stored response | **CLOSED 2026-09-08 by `3403a53b`.** It failed exactly as described: `identity_suffix` was empty at that default, so both callers derived the same *key*, `admit` found the entry by key (`idempotency.rs:256`) and `matches` (`:130-131`) compared fingerprints that are identical because the two calls genuinely are the same `(server, tool, arguments)` — `AdmitOutcome::Completed`, replayed. `retry_identity_suffix` now falls back to the verified subject, tagged `sub:`, so the suffix is empty only for a caller the operator left unattributed. Same commit closes a second defect this row never saw: the client key was concatenated RAW and FIRST, so a caller could spell another caller's suffix inside its own key and derive that caller's entry outright (MIK-7408). It is now length-prefixed |
 | unresolvable principal under a client key (R5 / Axis 4) | on a non-`required` propagation backend, a caller with neither a `cache_binding` nor a stable actor id sends a client key for a `destructiveHint` tool; the call must be REFUSED — neither executed unprotected nor admitted under an unbound key | **STILL FAILS — NOT closed. Cause corrected 2026-09-08 against source; the criterion itself is open.** This cell read "no key is derived at all (`idempotency_cache` is `None`)", which stopped being true at `7851736d`: `enable_idempotency` (`src/gateway/server/mod.rs:742`) is the only production construction site and every route through `run`/`run_stdio` passes it, so route 1 derives a key today. The row still FAILS, for a different reason: such a caller now derives a key with an EMPTY identity suffix (`retry_identity_suffix`, both arms `None`) and is admitted under it, which is the second of the two states the criterion forbids rather than the first. The refusal itself is still unbuilt |
+
+---
+
+## Revision 7, 2026-09-09 — the stdio route acquires an owner and two test rows
+
+Nothing decided above is reopened. Axis 1 (mandatory, no kill switch), Axis 2 (three routes),
+Axis 3 (`_meta` on both carriers) and Axis 4 (identity binding) stand as written. This revision
+closes a hole in the *plan*, not in the design: Axis 2 names stdio as one of three routes and the
+test plan carries no stdio row, so the route this design calls UNWIRED had nothing that would go
+red if it stayed that way.
+
+### The seam has no owner, and rev 6 said it did
+
+Rev 6 states, at "stdio discards the client's key before dispatch": *"This seam has its own design
+— `docs/design/2026-09-02-cluster-g-stdio-dispatch-parity.md` §P3."* **That is wrong and is
+corrected here.** §P3 of that note is about where the stdio *negotiated protocol revision* lives
+and says nothing about retry fields. The section that does — "`NO_RETRY` on stdio — declared OUT,
+with something watching it" — declares the seam **out of scope for cluster G**, for a stated and
+good reason (closing it moves that change's `FOR` after its §P0 freeze), and names no successor
+owner. Cluster G owns a watcher, not the work.
+
+So the seam was cited as owned by a document that had explicitly disowned it. That is how a route
+this design lists as one of three ends up with zero test rows: each side could read the other as
+covering it.
+
+**Ownership transfers to this design, effective this revision.** The justification is not
+availability, it is fit: SUB.4's criterion is *the same tool call, reissued after an abort, must
+not execute twice*, and Axis 2 already commits to answering that on all three routes. A route
+named in an axis and owned by nobody is a decision this design failed to make (§P3 of
+`development-process.md`), and naming it is the whole obligation.
+
+What transfers with it: cluster G's own account of the cost. Closing the seam requires building
+`RetryFields` at the stdio convergence point **and** refusing malformed retry fields pre-dispatch
+on both transports. That is a behaviour change, it is larger than wiring, and it is why the two
+rows below are written as RED rows in this plan rather than as a repair claimed in passing.
+
+### Anchor by content, because the line numbers have drifted three times
+
+The production discard is one site: the stdio caller context that passes
+`retry: &crate::protocol::mrtr::NO_RETRY`. Rev 6 cites `server/mod.rs:2200`, cluster G cites
+`:1853`, and the tree today has it at `:2213`, with the only sibling occurrence at `:2716` inside
+`mod tests`. Three documents, three numbers, one site. Cite it as **the sole `NO_RETRY` caller
+context outside `#[cfg(test)]` in `src/gateway/server/mod.rs`** and let `rg` find the line; a
+number that is wrong in every document that carries it is not an anchor.
+
+### The `#[ignore]`d watcher is disposed of, not inherited
+
+`stdio_should_present_a_retry_when_the_context_declares_one` is a source-grep test: it reads
+`include_str!("mod.rs")` and asserts the file does not contain `concat!("retry: &","NO_RETRY")`.
+It watches the *text*, so it goes green the moment someone spells the constant differently and
+stays green if the client's key is still discarded by another mechanism. As a placeholder under
+cluster G's explicit OUT it was honest — better than prose. As this design's coverage of a route
+it owns, it is not enough.
+
+Disposal, one of the two, decided here: **it is replaced by the behavioural row below, and
+un-ignored only as that row's implementation lands.** It is not deleted first — deleting the
+watcher before the behavioural row exists is the one move that leaves the defect pinned by
+nothing at all, which is precisely what cluster G wrote it to prevent. Order: behavioural row goes
+red, implementation lands, behavioural row goes green, source-grep watcher is deleted in the same
+commit as its replacement's first green run.
+
+### Two rows, added to the test plan above
+
+The fixture invariant applies unchanged: `config.cache.enabled = false`.
+
+| criterion | case | how it fails today |
+|---|---|---|
+| SUB.4, stdio route (Axis 2, third route) | drive `run_stdio` end-to-end: send `tools/call` for a `destructiveHint` tool carrying a client retry key in `_meta`, abort after the backend executed, reissue over the same stdio session with a new request id and the same key; assert a mutation counter reads 1 | RED, by construction rather than by accident. The sole `NO_RETRY` caller context outside `#[cfg(test)]` makes `caller.retry.idempotency_key` absent before dispatch, so `idempotency_key_for` (`src/gateway/meta_mcp/support.rs:48`) returns `None`, the route-1 guard (`src/gateway/meta_mcp/invoke.rs:1253`) never fires, and the counter reaches 2. Note the cache itself IS populated on this path — `enable_idempotency` (`src/gateway/server/mod.rs:742`) is reached by `run_stdio` as well as `run` — so this row fails for want of a *key*, not for want of a cache, and a fixture that asserts `idempotency_cache.is_some()` on stdio will pass while the defect stands |
+| SUB.4, stdio malformed retry fields (the second half of the cost) | over stdio, send a retry key that violates the field's constraints (empty, or over the length bound the HTTP route enforces); the call must be REFUSED pre-dispatch, identically to the HTTP route | RED. There is no stdio pre-dispatch validation to refuse anything: the field is discarded before it reaches the point that would validate it, so "malformed" and "absent" are the same state on this transport. Written as its own row because closing the first row without this one buys parity on the happy path and a divergence on the failure path — cluster G named both halves as the cost, and a plan that carries only the first would let half the work look done |
+
+Both rows are **plan rows, not implementations**. They are red until the stdio convergence point
+builds `RetryFields`; this revision changes who owns making them green, and nothing else.
+
+**2026-09-09 — the stdio carrier now exists (R1, LANDED).** The convergence point named above,
+`stdio_caller_context` (`src/gateway/server/mod.rs`), pinned `retry: &crate::protocol::mrtr::NO_RETRY`
+in its struct literal, so every stdio caller's idempotency key was discarded before
+`invoke_tool_traced` could read it while the HTTP route kept the guard. The dispatch arm now builds
+`RetryFields::from_params(params.as_ref())` and passes it through. Two tests landed:
+`stdio_caller_context_carries_the_clients_idempotency_key` and
+`stdio_dispatch_builds_its_retry_fields_from_the_request` (the previously `#[ignore]`d row,
+unignored and renamed). §P2 falsifier probe, defect hand-edited back under a `trap ... EXIT INT TERM`
+with a `cp` restore (NOT `git stash`/`git checkout --`: the file carries a peer's concurrent
+uncommitted edits, and a full-file restore would destroy them): both tests FAILED on their intended
+assertions — `mod.rs:3716` *"the stdio caller context must carry the client's idempotency key; an
+absent one makes the duplicate-suppression guard inert on this transport"* (`left: None`,
+`right: Some("stdio-key-1")`) and `mod.rs:3739` *"the stdio context must take its retry fields from
+the request instead of pinning an absent retry"* — not compile errors; repair copied back, re-run
+`cargo test --lib stdio_` = 28 passed, 0 failed. The two plan rows above stay RED: a carrier is not
+an end-to-end drive, and neither row's fixture has been built.
+
+### What this revision does NOT do
+
+- It does not decide the representation of the retry fields at the stdio convergence point. That
+  is §II.5-shaped work shared with cluster A, and rev 6's instruction stands: before starting,
+  establish whether that lane already builds `RetryFields` there and consume its work rather than
+  duplicating it.
+- It does not move the release scope. Whether the stdio rows must be green for v4.0.0 is a
+  criteria-status question, not a design one; this plan says what "done" looks like on that route,
+  not when it is owed.
+
+## Revision 8, 2026-09-09 — route 3, the direct backend route, acquires its design
+
+Nothing decided above is reopened. This revision does for route 3 what rev 7 did for route 2: it
+says what the route must do, where the code goes, and which rows go red until it does. Rev 7's
+own note that the stdio carrier has landed stands; the two stdio end-to-end rows remain RED.
+
+### The route, and why it is not covered by route 1
+
+Route 1 guards `invoke_tool_traced` — the meta-MCP path a client reaches through `gateway_execute`.
+Route 3 is `handle_backend_request` in `src/gateway/router/backend_handlers.rs`, the *direct*
+route: a client addressing a backend by name, whose `tools/call` never enters `invoke_tool_traced`
+at all. A key presented on that route is read by nothing. The same tool, reissued after an abort,
+executes twice.
+
+This is not a new observation and the file already says it, in prose, about a different guard:
+
+> ADR-008 INV-2: the direct backend route bypasses `invoke_tool_traced`, so it must enforce the
+> same fail-closed OAuth-isolation guard.
+
+**INV-2 is this route's precedent, not its obstacle.** The invariant does not say the direct route
+must stay thin; it says the direct route owes the same guarantees as the meta route and must
+enforce them itself. An idempotency guard is a second instance of exactly that obligation. A
+reviewer who reads INV-2 as a reason to leave route 3 unguarded has it backwards — INV-2 is the
+sentence that makes leaving it unguarded a violation.
+
+### One guard, sited before the branch, because there are two forward paths
+
+`handle_backend_request` forwards to the backend in two places:
+
+1. the sanitized-params return inside `if method == "tools/call"`, after
+   `apply_backend_tool_call_security` yields `Some(Ok(Some(sanitized_params)))`;
+2. the general forward below that block, reached when the request carries no tool name or is not
+   `tools/call` at all.
+
+A guard placed on (1) alone passes a test that drives (1) and does nothing for (2). The guard goes
+**before the `if method == "tools/call"` block**, immediately after the INV-2 isolation guard —
+the same site, for the same reason, in the same shape. One site, both paths, no branch to keep in
+sync. Anchor it by content — *the statement following the `enforce_oauth_isolation` refusal in
+`handle_backend_request`* — not by a line number; rev 7 records what line numbers are worth in
+this tree.
+
+### Visibility: a method on `MetaMcp`, never a widened field
+
+The guard needs two things that live inside `meta_mcp` and are `pub(super)`:
+`idempotency_cache` (the field, `src/gateway/meta_mcp/mod.rs:251`) and `idempotency_key_for`
+(`src/gateway/meta_mcp/support.rs:48`). Widening either to `pub(crate)` is a design shift, not a
+convenience edit, and this design refuses it.
+
+**Decided here:** route 3's guard is a `pub(crate)` method ON `MetaMcp`, living inside `meta_mcp`,
+that takes the tool name and params and answers whether this call is a replay. The cache and the
+key helper stay private; the method is the only thing that crosses the module boundary. The
+precedent is in the same file and already called from the same function:
+`enforce_oauth_isolation` (`src/gateway/meta_mcp/mod.rs:882`) is `pub(crate)`, wraps private state,
+and `backend_handlers.rs:749` calls it as `state.meta_mcp.enforce_oauth_isolation(...)`. Route 3
+adds a sibling to it and copies its shape exactly. `stamp_direct_provenance`, already called on
+this route, is the same pattern again.
+
+No public signature changes. No architectural invariant moves. This is the reason the route can be
+built without the stop this design's brief reserves for signature and invariant changes.
+
+### The Axis-4 identity question — RESOLVED, and the answer is a design event
+
+*checkable:* **does the direct route have the two inputs `retry_identity_suffix` takes, and do they
+mean the same thing there?** — read `retry_identity_suffix`
+(`src/gateway/meta_mcp/support.rs:80`) and its call site (`src/gateway/meta_mcp/invoke.rs:1329`)
+against what `handle_backend_request` has in scope at the guard site — **both inputs exist and
+BOTH are spelled differently enough that passing them through raw would be wrong** — so the guard
+adapts them, and the adaptation is named below rather than made silently.
+
+Route 1 calls `retry_identity_suffix(caller_credential.cache_binding, verified_actor)`, both
+`Option<&str>`, and `(None, None)` yields the empty suffix — a deliberate single bucket for callers
+the operator left unattributed, pinned by the test
+`retry_identity_suffix_pools_callers_the_operator_left_unattributed`.
+
+The direct route has an analog for each, in scope before the `enforce_oauth_isolation` refusal:
+
+| route 1 input | direct-route analog | why it is not a drop-in |
+|---|---|---|
+| `cache_binding` (`idp:`-prefixed, minted by identity propagation) | `identity_key`, `Option<String>` | when it is set by the passthrough rung it is `passthrough_identity_key(credential)` — a bare SHA-256 hex of the caller's OWN credential, which the function's own comment states is deliberately disjoint from the minting path's `idp:` bindings. Passing it as `cache_binding` tags a passthrough digest `\|idp:`, which is a mislabel: correct partitioning, wrong provenance in the key |
+| `verified_actor` (`Option<String>`; `None` = unattributed) | `audit_subject(verified_identity)`, `String` | it NEVER returns `None`. An unverified caller gets the literal `"unauthenticated"`. Passed straight through, every anonymous direct-route caller lands in a bucket spelled `\|sub:unauthenticated` instead of route 1's empty bucket — the same pooling behaviour under a second spelling, which is exactly the drift the `CallerIdentity` doc comment says must not happen |
+
+**DESIGN EVENT, named here (§P3).** The guard does not pass either value raw. It maps
+`"unauthenticated"` back to `None` so the unattributed bucket has ONE spelling across routes, and
+it does not present a passthrough digest as a minted binding. Which arm a passthrough digest
+belongs in — a third `CallerIdentity` variant with its own tag, or the `Subject` arm — changes what
+a key means and is the requester's call, not one to be made while writing the guard.
+
+Consequence worth stating plainly: because the two routes derive the binding from different
+material, the same caller reissuing the same key across route 1 and route 3 will NOT deduplicate
+against each other. Within-route protection is what Axis 2 promises and what these rows test;
+cross-route deduplication is not promised, and now says so out loud instead of being assumed.
+
+### What is NOT decided here, and is named rather than assumed
+
+- **What a replay returns.** Route 1's behaviour is the default and no divergence is intended, but
+  route 3 builds its HTTP response by a different path (`build_http_response`), so the shape is an
+  implementation question the tests below pin rather than a design choice made here.
+
+### Test plan rows for route 3
+
+Fixture invariant unchanged: `config.cache.enabled = false`.
+
+| criterion | case | can it fail? — how it fails today |
+|---|---|---|
+| SUB.4, direct route (Axis 2, second route) | drive `handle_backend_request` for a `tools/call` naming a `destructiveHint` tool, with a client retry key in `_meta`; issue it twice with different request ids and the same key; assert the backend saw ONE call | YES, RED today. The function forwards to the backend with no idempotency read anywhere between entry and `backend.request`; the key rides through in `params` and is never consulted. Counter reads 2. The row cannot pass by accident: the assertion is on a backend-side call counter, not on a response field the gateway could synthesise |
+| SUB.4, direct route — the second forward path | same key and tool, but shaped so the request takes the general forward below the `tools/call` block rather than the sanitized-params return; assert the backend still saw ONE call | YES, RED today, and it is the row that catches the likely wrong fix. A guard sited inside the `tools/call` arm makes the first row green and leaves this one red. Its only purpose is to fail if the guard is sited on a branch instead of before it |
+| SUB.4, direct route — caller binding (Axis 4) | two DIFFERENT authenticated callers present the SAME idempotency key for the same tool; assert the backend saw TWO calls | YES — and it can fail in BOTH directions, which is why it is written before the guard exists. Today it passes vacuously (no guard, so nothing pools) and it is the row that goes red if the guard is built with an unbound key. A vacuous pass is recorded as such in the evidence cell until the guard lands; a green cell here before implementation is not evidence |
+| SUB.4, direct route — malformed retry field | over the direct route, present a retry key violating the field's constraints; the call is REFUSED pre-dispatch | NOT YET WRITABLE — and the empty evidence cell is the finding. The HTTP meta route's refusal is the reference behaviour; whether the direct route owes the same refusal is the scope question flagged to the requester alongside rev 7's stdio half. Row exists so the gap is visible; it is not claimed as covered |
+
+The last row's empty cell is deliberate per §P2: a plan that quietly omits a row it cannot yet
+write reports better coverage than it has.
+
+### What this revision does NOT do
+
+- It does not implement anything. Every row above is RED or unwritable, and the guard does not exist.
+- It does not settle the malformed-retry-field scope on either transport. Rev 7 raised it for stdio,
+  this raises it for the direct route, and it is one question for the requester, not two.
+
+
+## Revision 9, 2026-09-09 — the rev-8 repair: the guard site was wrong
+
+§P4 REVIEW OF REVISION 8 (2026-09-09). `gpt-review` returned `SHIP-WITH-FIXES` (rc=0,
+`process_status: ok`, verdict read from the ledger row, never scraped from the body — §PA).
+Headline: *the proposed replay site bypasses tool authorization*. Three findings, two CRITICAL and
+one HIGH, all confirmed at source before repair. Four IMPROVEMENTs, all accepted.
+
+The second leg did NOT return a verdict. `kimi-review` was run twice on identical material and
+both rows read `process_status: error`, `verdict: ""` — the first run returned a review of an
+unrelated GPU-fuzzing paper, the second emitted raw tool-call control tokens. Per §PA that is
+`ERROR`, not a verdict, and it is NOT recorded as agreement. `grok-review` was launched as the
+substitute second leg on the same material; its verdict is recorded when its ledger row lands, and
+this revision is not final until it does.
+
+### F1 (CRITICAL, confirmed) — the guard cannot sit before authorization
+
+Rev 8 sites the guard before the `if method == "tools/call"` block. `apply_backend_tool_call_security`
+— tool policy, name validation, input sanitization — runs INSIDE that block. So a replay would be
+served from cache without the retrying caller's *current* permissions being checked. A caller whose
+access was revoked between the original call and the reissue would still be handed the protected
+result. That is a privilege-escalation path introduced by a feature meant to be conservative.
+
+**Repair — the guard moves after the security decision, and rev 8's siting argument is retracted.**
+What survives from rev 8 is the *requirement* the siting was chosen to satisfy — ONE guard, both
+forward paths — and it is now met the other way round: rather than hoisting the guard above the
+branch, both forwards must converge below the security decision so a single guard sees them. Order
+is fixed and is the design: resolve identity → INV-2 isolation refusal → `apply_backend_tool_call_security`
+→ **idempotency guard** → forward. A guard that runs before authorization is not a lazier version
+of this one; it is a different and worse feature.
+
