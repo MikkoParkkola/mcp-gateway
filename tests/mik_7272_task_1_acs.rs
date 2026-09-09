@@ -1167,4 +1167,212 @@ mod ownership {
              caller on that gateway and is ANSWERED: {admitted}"
         );
     }
+
+    // =======================================================================
+    // MIK-7272.TASK.1 — the clause with no code behind it: the tool RUNS, and
+    // the handle resolves to what it produced.
+    //
+    // Designed in `docs/design/2026-08-31-task-1-tasks-extension.md` §3.
+    // Every case below compares the settled record against the SAME call made
+    // without `task`, so what it asserts is "the task path answers what the
+    // ordinary path answers" rather than a result shape this file invented.
+    // A fixture that hard-codes the answer passes against a dispatcher that
+    // fabricates it.
+    // =======================================================================
+
+    /// Poll a handle until it leaves `working`.
+    ///
+    /// The dispatch runs on its own task, so a settled status arrives
+    /// eventually rather than immediately. A bounded poll rather than one
+    /// sleep: a fixed sleep either flakes on a loaded machine or spends the
+    /// wall clock on every green run, and when it does fail it reports a
+    /// timeout instead of the last answer the gateway actually gave.
+    async fn poll_until_settled(
+        state: std::sync::Arc<mcp_gateway::gateway::test_helpers::AppState>,
+        key: &str,
+        task_id: &str,
+    ) -> Value {
+        for attempt in 0..200_i64 {
+            let (_, body) = post_against(
+                state.clone(),
+                key,
+                modern(
+                    9000 + attempt,
+                    "tasks/get",
+                    json!({ "taskId": task_id }),
+                    true,
+                ),
+            )
+            .await;
+            if body.pointer("/result/status") != Some(&json!("working")) {
+                return body;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the handle {task_id} never left `working`");
+    }
+
+    /// The `taskId` a creation response handed back.
+    fn handle_of(created: &Value) -> String {
+        created
+            .pointer("/result/taskId")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("a task handle carries its id: {created}"))
+            .to_string()
+    }
+
+    /// A call made the ordinary way, to establish what the task path owes.
+    fn plain_call(id: i64, params: Value) -> Value {
+        modern(id, "tools/call", params, true)
+    }
+
+    /// The tool actually runs, and the handle resolves to its result.
+    ///
+    /// Two assertions on the creation response carry as much as the settle
+    /// does: `working` with no `result` is a shape a synchronous
+    /// invoke-then-settle implementation cannot produce, so the pair excludes
+    /// the design this one was chosen over.
+    ///
+    /// LIMIT, stated rather than left for a reviewer to find: this does not
+    /// prove the backend call runs CONCURRENTLY with the response. That needs
+    /// a backend the test can hold at a barrier and release after the poll,
+    /// and the harness has no such backend. Recorded as a gap.
+    #[tokio::test]
+    async fn ac_task_1_a_task_augmented_call_runs_its_tool() {
+        let state = state();
+        let (_, direct) = post_against(
+            state.clone(),
+            "key-a",
+            plain_call(50, json!({ "name": "gateway_list_servers" })),
+        )
+        .await;
+        let expected = direct
+            .get("result")
+            .cloned()
+            .unwrap_or_else(|| panic!("control: the ordinary call answers with a result: {direct}"));
+
+        let (_, created) = post_against(state.clone(), "key-a", task_call(51)).await;
+        assert_eq!(
+            created.pointer("/result/status"),
+            Some(&json!("working")),
+            "the handle is returned before the tool has finished: {created}"
+        );
+        assert!(
+            created.pointer("/result/result").is_none(),
+            "a handle carries no result yet — a creation response that already \
+             had one would mean the call was awaited, not dispatched: {created}"
+        );
+
+        let settled = poll_until_settled(state, "key-a", &handle_of(&created)).await;
+        assert_eq!(
+            settled.pointer("/result/status"),
+            Some(&json!("completed")),
+            "the dispatched call settles its record: {settled}"
+        );
+        assert_eq!(
+            settled.pointer("/result/result"),
+            Some(&expected),
+            "the handle resolves to what the tool produced, byte for byte the \
+             answer the ordinary call gave: {settled}"
+        );
+    }
+
+    /// A dispatch that answers with a JSON-RPC error settles the task
+    /// `failed`, carrying that error's OWN code.
+    ///
+    /// The expected code is read off the ordinary call rather than written
+    /// here: a literal would pass against a settle that flattens every failure
+    /// to `-32603` if the two ever coincided, and would need editing every
+    /// time the refusal is reworded.
+    #[tokio::test]
+    async fn ac_task_1_a_failing_dispatch_settles_failed_with_its_own_code() {
+        let state = state();
+        let unknown = json!({ "name": "no_such_tool_anywhere" });
+        let (_, direct) = post_against(state.clone(), "key-a", plain_call(60, unknown.clone())).await;
+        let expected_code = direct
+            .pointer("/error/code")
+            .cloned()
+            .unwrap_or_else(|| panic!("control: the ordinary call is refused: {direct}"));
+
+        let mut params = unknown;
+        params["task"] = json!({});
+        let (_, created) = post_against(state.clone(), "key-a", plain_call(61, params)).await;
+        let settled = poll_until_settled(state, "key-a", &handle_of(&created)).await;
+
+        assert_eq!(
+            settled.pointer("/result/status"),
+            Some(&json!("failed")),
+            "a dispatch that produced no result failed, and says so rather \
+             than polling `working` forever: {settled}"
+        );
+        assert_eq!(
+            settled.pointer("/result/error/code"),
+            Some(&expected_code),
+            "the failure carries the refusal's own code, not a blanket \
+             internal error: {settled}"
+        );
+    }
+
+    /// `isError: true` is a COMPLETED task.
+    ///
+    /// `isError` is a field of a successful `tools/call` result, so the task
+    /// produced a final answer and that answer says the tool failed. `failed`
+    /// is for a task that produced no final result at all. The existing `.6`
+    /// case asserts this in-process; this one asserts it on the wire, which is
+    /// where the settle rule actually lives.
+    #[tokio::test]
+    async fn ac_task_1_6_an_is_error_result_still_completes_on_the_wire() {
+        let state = state();
+        let invoke = json!({
+            "name": "gateway_invoke",
+            "arguments": { "server": "no-such-server", "tool": "read", "arguments": {} }
+        });
+        let (_, direct) = post_against(state.clone(), "key-a", plain_call(70, invoke.clone())).await;
+        assert_eq!(
+            direct.pointer("/result/isError"),
+            Some(&json!(true)),
+            "control: a missing backend comes back as a RESULT carrying an \
+             isError envelope, which is the premise this case rests on: {direct}"
+        );
+
+        let mut params = invoke;
+        params["task"] = json!({});
+        let (_, created) = post_against(state.clone(), "key-a", plain_call(71, params)).await;
+        let settled = poll_until_settled(state, "key-a", &handle_of(&created)).await;
+
+        assert_eq!(
+            settled.pointer("/result/status"),
+            Some(&json!("completed")),
+            "a final result is a completion even when it reports a tool error: {settled}"
+        );
+        assert_eq!(
+            settled.pointer("/result/result/isError"),
+            Some(&json!(true)),
+            "and the error the tool reported survives into the record: {settled}"
+        );
+    }
+
+    /// A gate that refuses still refuses when the call asks for a task.
+    ///
+    /// The assertion that the relocated `create` is strictly safer than the
+    /// one at `handlers.rs:1196`, rather than merely later: today a
+    /// task-augmented call returns a handle BEFORE the admin pre-check runs,
+    /// so appending `"task": {}` converts a refusal into a `200` and a record
+    /// an unauthorized caller allocated.
+    #[tokio::test]
+    async fn ac_task_1_a_refused_call_is_refused_not_handed_a_handle() {
+        let state = state();
+        let admin_tool = json!({ "name": "gateway_reload_config", "task": {} });
+        let (_, body) = post_against(state, "key-a", plain_call(80, admin_tool)).await;
+
+        assert!(
+            body.get("error").is_some(),
+            "a non-admin caller is refused an admin tool whether or not the \
+             call asks for a task: {body}"
+        );
+        assert!(
+            body.pointer("/result/taskId").is_none(),
+            "and is handed no handle, so no record exists for it to poll: {body}"
+        );
+    }
 }
