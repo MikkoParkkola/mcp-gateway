@@ -336,3 +336,46 @@ re-read. It does not change the blocking count -- the tests are red today and
 already counted under item 0 -- but the production behaviour behind them is a
 wire regression, not a test-fixture artefact, and shipping it would refuse a
 class of legacy client the gateway previously served.
+
+### D-continued, after the first observable CI run (`cbd224f0`)
+
+Item 0 is closed. The lib target is `4157 passed; 0 failed; 3 ignored`, so
+`cargo test` now reaches the integration binaries for the first time on this
+branch. What it found is one root cause, not a spread: 16 of the 19 cases in
+`tests/mik_7212_mrtr_component_acs.rs` fail inside a single shared *arrange*
+helper, `mint_for` at line 189, which panics with "the gateway must mint a
+continuation for an interim exchange" against the same legacy-bridge `-32003`
+recorded above. Those 16 are the written specification for the fall-through
+section D proposes; the file does not exist on `main`, so they arrived with this
+branch as its own acceptance criteria and have never been measurable until now.
+
+The blast radius is wider than the fixtures suggested, and the reason is in
+`src/gateway/router/handlers.rs`. At lines 704 to 719 a caller that does *not*
+declare the modern revision by header is given a session id unconditionally --
+`get_or_create_session_for(None, owner)` mints one when the request carried no
+`Mcp-Session-Id` at all. The test harness posts to `/mcp` with no session header
+and no `Accept: text/event-stream`, and still satisfies `session_id.is_some()`.
+So the bridge branch fires on *every* legacy interim exchange over
+`POST /mcp`, and succeeds only where a live SSE stream happens to be attached.
+
+The invariant this violates is stated in that same file, six lines below the
+mint, at lines 720 to 725, as the reason the subscription is dropped:
+
+> This handler is not a stream reader. Holding the subscription would make a
+> server-to-client prompt look deliverable to a caller with no live SSE stream:
+> the send succeeds into a receiver nobody polls, and the caller waits out the
+> 120-second response timeout instead of being told there is nobody to ask.
+
+The handler drops the receiver precisely so that a session id is not read as a
+delivery channel. The bridge guard then reads it as one. This is not a design
+judgment to be weighed -- the file argues the point in prose and the downstream
+guard contradicts it, which makes section D a defect against a stated invariant
+rather than a preference about error shape.
+
+Two consequences for the release. First, the 16 failures are one fix, not
+sixteen, and that fix is the fall-through already described. Second, the Tests
+job still cannot measure everything after it: `mik_7212_mrtr_component_acs`
+sorts before `mik_7272_task_1_acs`, and with no `--no-fail-fast` the run aborts
+before the dispatcher binary executes. The `--no-fail-fast` change recorded in
+section C is therefore not housekeeping; without it, one lane's red spec keeps a
+second lane's evidence unobtainable.
