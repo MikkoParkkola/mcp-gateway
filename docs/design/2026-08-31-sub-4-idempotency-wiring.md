@@ -778,6 +778,10 @@ enforce them itself. An idempotency guard is a second instance of exactly that o
 reviewer who reads INV-2 as a reason to leave route 3 unguarded has it backwards — INV-2 is the
 sentence that makes leaving it unguarded a violation.
 
+> SUPERSEDED BY REVISION 9 AND REVISION 10 — this siting is wrong twice over. The live siting is
+> in revision 10, "one guard between the security decision and both forwards". Kept unedited as the
+> reviewed artifact; do not implement from it.
+
 ### One guard, sited before the branch, because there are two forward paths
 
 `handle_backend_request` forwards to the backend in two places:
@@ -812,6 +816,10 @@ this route, is the same pattern again.
 
 No public signature changes. No architectural invariant moves. This is the reason the route can be
 built without the stop this design's brief reserves for signature and invariant changes.
+
+> SUPERSEDED BY REVISION 10 — the inputs named here are `BackendAuthContext`'s, which are the
+> tool-policy trio, not the retry suffix's. Live version: revision 10, "the direct route's identity
+> inputs, named".
 
 ### The Axis-4 identity question — RESOLVED, and the answer is a design event
 
@@ -851,6 +859,11 @@ cross-route deduplication is not promised, and now says so out loud instead of b
   route 3 builds its HTTP response by a different path (`build_http_response`), so the shape is an
   implementation question the tests below pin rather than a design choice made here.
 
+> SUPERSEDED — these four rows were repaired and folded into the single `## Test plan` table above.
+> The versions here are the UNREPAIRED originals: the second row still selects its path by shape
+> rather than by a passthrough backend, and the caller-binding row still issues once per caller,
+> which passes vacuously. Kept as the reviewed artifact; drive the table above.
+
 ### Test plan rows for route 3
 
 Fixture invariant unchanged: `config.cache.enabled = false`.
@@ -885,6 +898,10 @@ unrelated GPU-fuzzing paper, the second emitted raw tool-call control tokens. Pe
 `ERROR`, not a verdict, and it is NOT recorded as agreement. `grok-review` was launched as the
 substitute second leg on the same material; its verdict is recorded when its ledger row lands, and
 this revision is not final until it does.
+
+> PARTLY SUPERSEDED BY REVISION 10 — the finding stands and the guard still sits below
+> authorization. The siting sentence "both forwards converge below the security decision" is
+> RETRACTED: they do not converge. Live siting: revision 10's G3 repair.
 
 ### F1 (CRITICAL, confirmed) — the guard cannot sit before authorization
 
