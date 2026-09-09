@@ -427,6 +427,35 @@ Piping cargo into `tail` reports the pipe's exit status, so `[exited with code 0
 accompanied `could not compile ... due to 18 previous errors`. Redirect to a file
 and read `$?` when the exit status is the thing being trusted.
 
+## Eighteen MRTR7 criteria are absent from the release ledger
+
+Measured 2026-09-09. `docs/design/2026-09-05-mrtr7-test-plan.md` declares
+`MIK-7212.ROOTS.1` through `.5` and `MIK-7212.WIRE.1` through `.13`. None of the
+eighteen appears in `docs/requirements/RELEASE-4.0.0-criteria-status.md`, which
+carries `MIK-7212.MRTR.*` rows and nothing else under that ticket. They are
+therefore not counted, and the release arithmetic neither passes nor blocks on
+them. This is the defect Cluster H already corrected once for the 35 GH475
+upgrade-path criteria.
+
+The two halves are in different states, and the ledger records neither.
+
+`ROOTS.1` to `.5` are implemented and covered. `forward_roots_list_with_response`
+(`src/gateway/proxy.rs:406`) mints `roots-{uuid}` (`:412`) and emits it on
+`event_type: "message"` with a `jsonrpc`/`id`/`method` body (`:426-431`), which is
+what `ROOTS.1` and `ROOTS.2` require. `tests/mrtr7_roots_acs.rs` asserts the id is
+the `roots-` prefix followed by a parseable UUID (`:82-86`) — the prefix alone
+would pass on `roots-anything` — and reads `event_type` off the emitted frame
+rather than the return value (`:103-107`), which is what the test plan demanded so
+the case cannot pass by accident. `cargo test --test mrtr7_roots_acs --test
+mik_7212_mrtr7_bridge_acs`, exit status 0: 26 passed and 5 passed, 0 failed.
+
+`WIRE.1` to `.13` have almost no traceable evidence. Three of the thirteen ids
+appear anywhere in `src/` or `tests/`, all as source comments and none in a test:
+`WIRE.1` (`src/gateway/meta_mcp/mod.rs`), `WIRE.10` (`src/gateway/input_bridge.rs`)
+and `WIRE.11` (`src/gateway/proxy.rs`). The remaining ten are named only in the
+design and test plan. An id in a comment is not a test result, so the honest
+starting verdict for all thirteen is unverified, not MET.
+
 ## The two `Era` enums do not meet, and merging them would add a defect
 
 Measured 2026-09-09. The premise that `protocol::meta::Era` and
