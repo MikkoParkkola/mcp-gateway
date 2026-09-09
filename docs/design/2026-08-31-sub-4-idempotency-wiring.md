@@ -968,8 +968,10 @@ route 3 adopts route 1's.
 ## Revision 10 — the second review leg came back, and it moved the guard again
 
 Leg 2 landed at `2026-09-09T09:30:51Z` against the same material leg 1 saw
-(`material_bytes` 11009, `head` `12441cec`), `process_status = ok`,
-verdict `SHIP-WITH-FIXES`. Per §PA that row and that exit status ARE the verdict; nothing here is
+(the `r8-review.txt` payload, 11008 bytes on disk against the ledger's 11009 — the wrapper appends a
+newline, so the recorded `material_sha256` is the payload's plus that byte, not the file's own hash;
+the review body naming revision 8's sections is the substantive proof, not the digest), `head`
+`12441cec`, `process_status = ok`, verdict `SHIP-WITH-FIXES`. Per §PA that row and that exit status ARE the verdict; nothing here is
 scraped from the body. The design is now dual-reviewed. Both legs returned SHIP-WITH-FIXES, which
 is not a ship — it is two lists of findings, and this revision closes leg 2's.
 
@@ -1065,8 +1067,26 @@ After that restructure the security decision is above the guard, both forwards a
 finding "a forward the guard does not see" cannot be stated on this route — which is the test the
 repair protocol sets for an elimination rather than a patch.
 
-Two properties that fall out and are worth stating because a later reader will otherwise re-derive
-them wrongly:
+A THIRD decision falls out of the restructure and is named here rather than made at the first line
+of guard code, because it changes what an acceptance criterion asserts (§P3): WHICH SPELLING OF
+`arguments` THE FINGERPRINT KEYS ON. The two forwards do not send the same value — path 1 forwards
+`sanitize_json_value`'s output, path 2 forwards `params` unchanged — and the sanitized value exists
+only inside the arm that returns. A guard sited above both forwards can therefore only see the RAW
+`params`, and that is also the right answer, so the site costs nothing:
+
+- The key binds WHAT THE CALLER SENT. A retry is the same call reissued, and the caller reissues its
+  own arguments, not the gateway's sanitized rewrite of them.
+- Sanitization is many-to-one. Keying on its output would let two callers who sent DIFFERENT
+  arguments collide on one entry, which is the false-dedup the `no false dedup (P2)` row exists to
+  forbid. Keying on raw cannot.
+- It keeps route 3's fingerprint identical in shape to route 1's, which has only one spelling of
+  `arguments` and so never had to choose.
+
+This lands on the `key/request binding (P5)` criterion: the tuple that row names is
+(backend, tool, RAW arguments).
+
+Two further properties that fall out and are worth stating because a later reader will otherwise
+re-derive them wrongly:
 
 - The guard sits INSIDE the `tools/call` block, so `tools/list`, `resources/read` and every other
   method reaching the general forward are never guarded. Correct: the fingerprint is
