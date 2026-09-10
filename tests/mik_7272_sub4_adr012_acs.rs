@@ -4,24 +4,247 @@
 //! execution, not admission.
 //!
 //! One test per acceptance row in
-//! `docs/adr/ADR-012-idempotency-under-uncertain-execution.md`. Each row that
-//! can be stated against today's public surface fails on the assertion naming
-//! the defect. Rows that need a production seam that does not exist yet — the
-//! `Failed` terminal, the liveness token of amendment A2, the resend flag of
-//! consequence 2 — are `#[ignore]`d with a comment naming what they wait on,
-//! rather than faked green or faked red.
+//! `docs/adr/ADR-012-idempotency-under-uncertain-execution.md`.
+//!
+//! The resend rows count deliveries that actually arrive at a backend rather
+//! than attempts made by `with_retry`. The primitive takes a policy and a
+//! closure and is told nothing about the request, so a row stated against it
+//! would demand that it suppress retries its own policy enables — a
+//! requirement no implementation can meet without breaking the contract
+//! `src/failsafe/retry.rs:144` pins for every other caller. The decision the
+//! ADR governs is made one level up, where `src/backend/ops.rs:218` knows the
+//! method and chooses the policy it passes; a counting mock backend is what
+//! observes that choice.
+//!
+//! Rows that need a production seam that does not exist yet — the `Failed`
+//! terminal, the liveness token of amendment A2 — are `#[ignore]`d with a
+//! comment naming what they wait on, rather than faked green or faked red.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde_json::json;
+use axum::extract::State;
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::post;
+use axum::{Json, Router};
+use serde_json::{Value, json};
 
-use mcp_gateway::Error;
-use mcp_gateway::failsafe::{RetryPolicy, with_retry};
+use mcp_gateway::backend::Backend;
+use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use mcp_gateway::idempotency::{
     CheckOutcome, GuardOutcome, IdempotencyCache, IdempotencyReservation, enforce,
 };
+
+/// A mutation. Carries no annotations at all, which under amendment A1 is the
+/// same answer as `readOnlyHint: false`: deny.
+const MUTATION: &str = "charge_card";
+
+/// The permission the deny default is a default *for*: the backend states
+/// `readOnlyHint: true` explicitly.
+const ANNOTATED_READ: &str = "read_ledger";
+
+/// A name that reads like a query and is not one. Amendment A1 exists because
+/// an implementation may not infer permission from a name, so the row pinning
+/// the deny default uses the name most likely to tempt one.
+const READ_LOOKING_MUTATION: &str = "get_and_increment";
+
+/// How the mock fails the `tools/call` it is sent.
+#[derive(Clone, Copy)]
+enum Fault {
+    /// No answer ever comes and the caller's own request timeout fires. The
+    /// request was delivered and the backend's answer is unknown.
+    Silence,
+    /// The request was read and the response body dies mid-flight — the
+    /// dispatch boundary amendment A3 is phrased against, with the bytes
+    /// already on the wire.
+    BrokenResponse,
+    /// A 200 carrying the JSON-RPC error a remote sends once it has forgotten
+    /// the session, which drives the HTTP recovery path at
+    /// `src/transport/http/mod.rs:1486-1510`.
+    SessionExpired,
+}
+
+struct Mock {
+    fault: Fault,
+    /// The tool name of every `tools/call` that arrived. Deliveries, not
+    /// attempts: a resend that never left the gateway is not one.
+    calls: Vec<String>,
+}
+
+fn tool(name: &str, annotations: Option<Value>) -> Value {
+    let mut entry = json!({
+        "name": name,
+        "description": name,
+        "inputSchema": {"type": "object", "properties": {}}
+    });
+    if let Some(annotations) = annotations {
+        entry["annotations"] = annotations;
+    }
+    entry
+}
+
+async fn mcp_handler(State(mock): State<Arc<Mutex<Mock>>>, Json(body): Json<Value>) -> Response {
+    let id = body.get("id").cloned().unwrap_or(Value::Null);
+    let method = body
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    match method.as_str() {
+        "initialize" => (
+            // A session id is what makes the recovery path at `mod.rs:1491`
+            // reachable: it only re-handshakes for a caller that had a session
+            // to lose.
+            [(
+                header::HeaderName::from_static("mcp-session-id"),
+                "sub4-session",
+            )],
+            Json(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": mcp_gateway::protocol::PROTOCOL_VERSION,
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "sub4-mock", "version": "0"}
+                }
+            })),
+        )
+            .into_response(),
+        "tools/list" => Json(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {"tools": [
+                tool(MUTATION, None),
+                tool(ANNOTATED_READ, Some(json!({"readOnlyHint": true}))),
+                tool(READ_LOOKING_MUTATION, None),
+            ]}
+        }))
+        .into_response(),
+        "tools/call" => {
+            let fault = {
+                let mut slot = mock.lock().expect("mock mutex poisoned");
+                slot.calls.push(
+                    body["params"]["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                );
+                slot.fault
+            };
+            match fault {
+                Fault::Silence => {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    Json(json!({"jsonrpc": "2.0", "id": id, "result": {}})).into_response()
+                }
+                Fault::BrokenResponse => {
+                    let broken = futures::stream::once(async {
+                        Err::<axum::body::Bytes, std::io::Error>(std::io::Error::other(
+                            "connection reset after the request was written",
+                        ))
+                    });
+                    (StatusCode::OK, axum::body::Body::from_stream(broken)).into_response()
+                }
+                Fault::SessionExpired => Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {"code": -32015, "message": "Session not found"}
+                }))
+                .into_response(),
+            }
+        }
+        _ => Json(json!({"jsonrpc": "2.0", "id": id, "result": {}})).into_response(),
+    }
+}
+
+async fn start_mock(fault: Fault) -> (String, Arc<Mutex<Mock>>) {
+    let mock = Arc::new(Mutex::new(Mock {
+        fault,
+        calls: Vec::new(),
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    let app = Router::new()
+        .route("/mcp", post(mcp_handler))
+        .with_state(Arc::clone(&mock));
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://{addr}/mcp"), mock)
+}
+
+/// The production failsafe shape — retries enabled, the configured attempt
+/// count — with only the sleep shortened, so the suite keeps testing the
+/// policy the gateway actually runs rather than a copy of its values.
+fn failsafe() -> FailsafeConfig {
+    let mut config = FailsafeConfig::default();
+    assert!(
+        config.retry.enabled && config.retry.max_attempts > 1,
+        "the resend rows need the shipped default to permit a resend, or they \
+         pass without exercising anything"
+    );
+    config.retry.initial_backoff = Duration::from_millis(1);
+    config.retry.max_backoff = Duration::from_millis(2);
+    config
+}
+
+fn backend_for(url: &str) -> Backend {
+    let config = BackendConfig {
+        description: "ADR-012 resend mock".to_string(),
+        enabled: true,
+        transport: TransportConfig::Http {
+            http_url: url.to_string(),
+            streamable_http: true,
+            protocol_version: None,
+        },
+        stop_when_idle_for: None,
+        // Short enough that `Fault::Silence` reads as a backend timeout
+        // without the suite waiting for one.
+        timeout: Duration::from_millis(300),
+        env: HashMap::default(),
+        headers: HashMap::default(),
+        oauth: None,
+        secrets: Vec::new(),
+        passthrough: false,
+        allow_cleartext_credentials: false,
+        runtime_profile: None,
+        identity_propagation: None,
+    };
+    Backend::new("sub4-mock", config, &failsafe(), Duration::from_secs(300))
+}
+
+/// Deliveries of `name` that reached the backend for one failing `tools/call`.
+///
+/// Discovery runs first, exactly as it does in production: a `tools/call` is
+/// always preceded by a `tools/list`, which is what puts the backend's
+/// annotations within reach of the resend decision.
+async fn deliveries(fault: Fault, name: &str) -> usize {
+    let (url, mock) = start_mock(fault).await;
+    let backend = backend_for(&url);
+    backend
+        .get_tools()
+        .await
+        .expect("discovery populates the tool cache");
+
+    let outcome = backend
+        .request("tools/call", Some(json!({"name": name, "arguments": {}})))
+        .await;
+    assert!(
+        outcome.is_err() || matches!(&outcome, Ok(response) if response.error.is_some()),
+        "the injected failure must surface rather than being answered normally"
+    );
+
+    let calls = mock.lock().expect("mock mutex poisoned").calls.clone();
+    assert!(
+        calls.iter().all(|called| called == name),
+        "only the tool under test may be called, got: {calls:?}"
+    );
+    calls.len()
+}
 
 /// The reservation a dispatched call holds, admitted exactly as
 /// `MetaMcp::direct_route_idempotency` admits one.
@@ -32,44 +255,19 @@ fn admit(cache: &Arc<IdempotencyCache>, key: &str) -> IdempotencyReservation {
     }
 }
 
-/// The retry policy the gateway runs with by default: enabled, three attempts
-/// (`src/config/features/failsafe.rs:15,65`). The backoff is shortened so the
-/// suite does not sleep; nothing else about the shape is changed.
-fn default_retry_policy() -> RetryPolicy {
-    RetryPolicy {
-        enabled: true,
-        max_attempts: 3,
-        initial_backoff: Duration::from_millis(1),
-        max_backoff: Duration::from_millis(2),
-        multiplier: 2.0,
-    }
-}
-
-/// Count the deliveries `with_retry` makes for one failing call, exactly as
-/// `src/backend/ops.rs:218` wraps a caller's `tools/call`.
-async fn deliveries_under_with_retry(error: fn() -> Error) -> usize {
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let policy = default_retry_policy();
-    let counter = Arc::clone(&attempts);
-    let outcome: Result<(), Error> = with_retry(&policy, "backend", || {
-        let counter = Arc::clone(&counter);
-        async move {
-            counter.fetch_add(1, Ordering::SeqCst);
-            Err(error())
-        }
-    })
-    .await;
-    assert!(outcome.is_err(), "the injected failure must surface");
-    attempts.load(Ordering::SeqCst)
-}
-
 /// Row 1 — a dispatched direct-route call answered with a backend error keeps
-/// its key, and the retry is served that error rather than reaching the backend
-/// again.
+/// its key, and the retry is served that error rather than reaching the
+/// backend again.
 ///
 /// The error exit at `src/gateway/router/backend_handlers.rs:862-867` never
 /// calls `settle_direct_idempotency`, so the reservation drops into
 /// `OnDrop::Release` and the key is removed.
+///
+/// Two negations rather than one: a key left wedged as in-flight would satisfy
+/// "not admitted" while stranding every retry until `IN_FLIGHT_TIMEOUT`, and
+/// that is a different failure, not a pass. They stay negations because
+/// `Failed` is a terminal alongside `Completed` (ADR-012:84) and this row must
+/// not presuppose which `CheckOutcome` variant carries it.
 #[tokio::test]
 async fn dispatched_direct_route_error_keeps_its_key() {
     let cache = Arc::new(IdempotencyCache::new());
@@ -80,11 +278,17 @@ async fn dispatched_direct_route_error_keeps_its_key() {
     // JSON-RPC error envelope and returns, settling nothing.
     drop(reservation);
 
+    let outcome = cache.check("key-dispatched-error");
     assert!(
-        !matches!(cache.check("key-dispatched-error"), CheckOutcome::Proceed),
+        !matches!(outcome, CheckOutcome::Proceed),
         "a dispatched call answered with a backend error must keep its key \
          (ADR-012 consequence 1); the guard released it and admitted the retry \
          as a first attempt against a mutation that may already have committed"
+    );
+    assert!(
+        !matches!(outcome, CheckOutcome::InFlight),
+        "the owner has dropped: the retry must be served the settled error, \
+         not told to wait out `IN_FLIGHT_TIMEOUT` on a call nobody is running"
     );
 }
 
@@ -109,52 +313,51 @@ async fn pre_dispatch_failure_releases_its_key() {
     );
 }
 
-/// Row 3 — an unannotated `tools/call` failing with `BackendTimeout` reaches
-/// the backend exactly once.
+/// Row 3 — an unannotated `tools/call` that times out reaches the backend
+/// exactly once.
 ///
-/// `src/backend/ops.rs:218` hands `with_retry` no annotation at all, and a
-/// timeout is not provably pre-dispatch, so today the call is delivered three
-/// times inside one reservation. Per amendment A1 resend permission comes only
-/// from an explicit backend `readOnlyHint`/`idempotentHint` of `true`; absent
-/// means deny, which is a property of the resend decision itself and is stated
-/// here the way rows 8 and 9 state it.
+/// `src/backend/ops.rs:218` passes `entry.failsafe.retry_policy` whatever the
+/// method is, and a timeout is not provably pre-dispatch, so today the call is
+/// delivered three times inside one reservation. Per amendment A1 resend
+/// permission comes only from an explicit backend `readOnlyHint`/
+/// `idempotentHint` of `true`; absent means deny.
 #[tokio::test]
 async fn unannotated_backend_timeout_reaches_the_backend_once() {
-    let deliveries = deliveries_under_with_retry(|| Error::BackendTimeout("slow".into())).await;
+    let delivered = deliveries(Fault::Silence, MUTATION).await;
 
     assert_eq!(
-        deliveries, 1,
+        delivered, 1,
         "a `tools/call` carrying no explicit read-only or idempotent hint must \
-         not be resent beneath the guard (ADR-012 consequence 2); the transport \
-         delivered it {deliveries} times inside one reservation"
+         not be resent beneath the guard (ADR-012 consequence 2); the backend \
+         received it {delivered} times inside one reservation"
     );
 }
 
 /// Row 3b — the permission the deny default is a default *for*: a call the
 /// backend annotates `readOnlyHint: true` is still resent.
 ///
-/// Separated from row 3 because it cannot be stated yet. `with_retry` takes a
-/// policy and a closure and no annotation, and nothing captures an explicit
-/// hint before normalization overwrites it — `src/backend/annotations.rs`
-/// exposes only `prepare_tool_metadata` (`:152`). Asserting three deliveries
-/// through today's helper would feed the same inputs as row 3 and demand the
-/// opposite answer, which no implementation can satisfy; asserting it against
-/// `with_retry` directly would demand the primitive ignore its own policy.
+/// Deliberately green, and the reason row 3 is worth having. An
+/// implementation that satisfies row 3 by disabling retries for every
+/// `tools/call` turns this row red, which is the cost the ADR declines to pay.
 #[tokio::test]
-#[ignore = "waits on the ADR-012 A1 explicit-hint capture: no surface carries a \
-            backend `readOnlyHint`/`idempotentHint` to the resend decision, so \
-            the annotated and unannotated cases are the same call"]
 async fn an_explicitly_read_only_call_is_still_resent() {
-    unimplemented!("needs the explicit-hint capture of ADR-012 amendment A1");
+    let delivered = deliveries(Fault::Silence, ANNOTATED_READ).await;
+
+    assert!(
+        delivered > 1,
+        "a call the backend explicitly annotates `readOnlyHint: true` keeps its \
+         resend permission (ADR-012 A1); it was delivered {delivered} time(s), \
+         so the deny default has been applied to a call that granted permission"
+    );
 }
 
 /// Row 4a — a second caller arriving on a key whose reservation passed
 /// `IN_FLIGHT_TIMEOUT` while its owner is still alive is told in-flight, not
 /// admitted.
 #[tokio::test]
-#[ignore = "waits on the ADR-012 A2 liveness token: nothing on the public \
-            surface can publish an aged in-flight entry whose owner is alive, \
-            and `decide_check_plan` is pub(crate)"]
+#[ignore = "waits on the ADR-012 A2 liveness token: `IdempotencyState::InFlight` \
+            carries a start instant read against the process clock, so the only \
+            running form of this row is a five-minute wall-clock wait"]
 async fn live_owner_past_the_timeout_is_told_in_flight() {
     unimplemented!("needs the liveness token from ADR-012 amendment A2");
 }
@@ -166,18 +369,35 @@ async fn live_owner_past_the_timeout_is_told_in_flight() {
 /// `!entry.state.is_expired()`, and staleness for an in-flight entry is a bare
 /// clock reading (`:84`) rather than a liveness question.
 ///
-/// Gated for the same reason as row 4a, and it is the reason the row cannot
-/// simply be asserted: `IdempotencyState::InFlight` carries a start instant and
-/// nothing else, so "whose owner is still running" is not expressible. Demanding
-/// `!is_expired()` of an aged in-flight entry built from that state would demand
-/// it of *every* aged in-flight entry, including one whose owner died — which
-/// removes the eviction that consequence 3 depends on. The requirement is that
-/// liveness decide the sweep, not that the sweep stop deciding.
+/// Gated for the same reason as row 4a, with one addition that decides the
+/// shape of the fix: demanding `!is_expired()` of an aged in-flight entry
+/// built from today's state would demand it of *every* aged in-flight entry,
+/// including one whose owner died — which removes the eviction consequence 3
+/// depends on. The requirement is that liveness decide the sweep, not that the
+/// sweep stop deciding.
 #[tokio::test]
-#[ignore = "waits on the ADR-012 A2 liveness token: `IdempotencyState::InFlight` \
-            carries only a start instant, so a live owner and a dead one are the \
-            same value to `evict_expired`"]
+#[ignore = "waits on the ADR-012 A2 liveness token: a live owner and a dead one \
+            are the same value to `evict_expired`, and reaching the aged state \
+            without a clock seam costs five minutes of wall clock"]
 async fn a_live_reservation_survives_an_evict_expired_sweep() {
+    unimplemented!("needs the liveness token from ADR-012 amendment A2");
+}
+
+/// Row 4c — a sweep landing while a reservation's settlement is in progress
+/// does not evict its entry.
+///
+/// The race amendment A2 exists for, and the one rows 4a and 4b cannot state:
+/// `Arc` drops the strong count to zero *before* running the inner value's
+/// `Drop`, so `Weak::upgrade` returns `None` while the reservation is still
+/// storing `Failed` (ADR-012:150-163). A liveness rule built on the
+/// reservation's own refcount passes 4a and 4b and still loses the entry here,
+/// admitting the next caller fresh against a key whose mutation may have
+/// committed.
+#[tokio::test]
+#[ignore = "waits on the ADR-012 A2 liveness token: the window this row has to \
+            open — settlement started, admission still published — exists only \
+            once a token is held from before publication until settlement ends"]
+async fn a_sweep_during_settlement_does_not_evict_the_entry() {
     unimplemented!("needs the liveness token from ADR-012 amendment A2");
 }
 
@@ -208,15 +428,34 @@ async fn input_required_interim_releases_its_key() {
 }
 
 /// Row 6 — a backend session expiry does not resend an unannotated
-/// `tools/call` through the HTTP recovery path, while an annotated read-only
-/// call still recovers.
+/// `tools/call`.
+///
+/// The second resend site. HTTP session recovery
+/// (`src/transport/http/mod.rs:1486-1510`) re-handshakes and replays the
+/// original request once, outside `with_retry` and without consulting any
+/// annotation, so amendment A3's deny default has to be applied there too or
+/// the row below stays red however row 3 is fixed.
 #[tokio::test]
-#[ignore = "waits on the resend flag of ADR-012 consequence 2: HTTP session \
-            recovery (src/transport/http/mod.rs:1486-1510) resends outside \
-            with_retry and takes no annotation, so the two halves are \
-            indistinguishable and the row cannot discriminate"]
 async fn session_expiry_does_not_resend_an_unannotated_call() {
-    unimplemented!("needs the per-request resend flag threaded to HTTP recovery");
+    let delivered = deliveries(Fault::SessionExpired, MUTATION).await;
+
+    assert_eq!(
+        delivered, 1,
+        "an expired backend session is a reason to re-handshake, not permission \
+         to replay a mutation the backend may already have run (ADR-012 A3); \
+         the recovery path delivered it {delivered} times"
+    );
+}
+
+/// Row 6b — the permission half of row 6: recovery still replays a call the
+/// backend annotates read-only.
+#[tokio::test]
+#[ignore = "waits on the per-request resend flag of ADR-012 consequence 2: \
+            recovery lives inside the transport, which is handed a method and \
+            params and no annotation, so today this row cannot tell the \
+            permitted half from the denied one"]
+async fn session_expiry_still_recovers_an_explicitly_read_only_call() {
+    unimplemented!("needs the resend flag threaded to HTTP session recovery");
 }
 
 /// Row 7 — a retry served a `Failed` terminal receives a JSON-RPC error
@@ -229,9 +468,9 @@ async fn a_served_failed_terminal_adopts_the_retry_request_id() {
     unimplemented!("needs OnDrop::Failed and its CacheEntryStatus/CheckPlan arms");
 }
 
-/// Row 8 — an unannotated `tools/call` whose transport fails *after* connection
-/// establishment and before any backend answer reaches the backend exactly
-/// once.
+/// Row 8 — an unannotated `tools/call` whose transport fails *after* the
+/// request was written and before any backend answer reaches the backend
+/// exactly once.
 ///
 /// The dispatch boundary the resend rule is phrased against (amendment A3).
 /// `is_retryable` (`src/failsafe/retry.rs:96-101`) matches on the error variant
@@ -239,42 +478,30 @@ async fn a_served_failed_terminal_adopts_the_retry_request_id() {
 /// the same terms as a refused connection.
 #[tokio::test]
 async fn a_post_dispatch_transport_failure_reaches_the_backend_once() {
-    let deliveries = deliveries_under_with_retry(|| {
-        Error::Transport("connection reset after request write, before any response".into())
-    })
-    .await;
+    let delivered = deliveries(Fault::BrokenResponse, MUTATION).await;
 
     assert_eq!(
-        deliveries, 1,
+        delivered, 1,
         "a transport failure raised after the connection was established and \
          the request written is not provably pre-dispatch, so the call must not \
-         be resent (ADR-012 A3); it was delivered {deliveries} times"
+         be resent (ADR-012 A3); the backend received it {delivered} times"
     );
 }
 
-/// Row 9 — a resend site handling a request that carries no annotation at all
-/// resends nothing.
+/// Row 9 — a name that reads like a query grants no resend permission.
 ///
-/// Stated at `with_retry` (`src/backend/ops.rs:218`). The second site, HTTP
-/// session recovery (`src/transport/http/mod.rs:1486-1510`), resends traffic
-/// that is not a `tools/call` at all and so carries no annotation to consult;
-/// amendment A3 fixes the default at both sites as deny. That site is covered
-/// by row 6, which cannot discriminate until the flag exists.
+/// The row amendment A1 is phrased for. `get_and_increment` is a mutation
+/// whose name invites the inference the ADR forbids, and it carries no
+/// annotation, so every resend site must deny it.
 #[tokio::test]
 async fn a_resend_site_denies_by_default_without_an_annotation() {
-    let deliveries = deliveries_under_with_retry(|| {
-        Error::Io(std::io::Error::new(
-            std::io::ErrorKind::ConnectionAborted,
-            "backend closed the connection",
-        ))
-    })
-    .await;
+    let delivered = deliveries(Fault::Silence, READ_LOOKING_MUTATION).await;
 
     assert_eq!(
-        deliveries, 1,
+        delivered, 1,
         "the resend default at every site is deny: a request carrying no \
          explicit annotation — including one whose name merely looks read-only, \
-         such as `get_and_increment` — must be resent nowhere (ADR-012 A1, A3); \
-         it was delivered {deliveries} times"
+         such as `{READ_LOOKING_MUTATION}` — must be resent nowhere (ADR-012 A1, \
+         A3); the backend received it {delivered} times"
     );
 }
