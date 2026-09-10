@@ -1,8 +1,12 @@
 # Design: a connect failure is provably pre-dispatch
 
-Amends the ADR-012 settlement design for `MIK-7272.SUB.4`. Closes the red row
-`pre_dispatch_failure_releases_its_key`
-(`tests/mik_7272_sub4_adr012_acs.rs:481`). The test binds an ephemeral TCP port,
+Amends the ADR-012 settlement design for `MIK-7272.SUB.4`. Supplies the
+mechanism the red row `pre_dispatch_failure_releases_its_key`
+(`tests/mik_7272_sub4_adr012_acs.rs:481`) is waiting on. It does not by itself
+close that row: the classifier below has no production caller until the two
+transport files described under "Handoff" land, and the row has not been re-run.
+`docs/requirements/RELEASE-4.0.0-criteria-status.md` keeps MIK-7272.SUB.4 at
+PARTIAL for that reason, and is the authority on the status. The test binds an ephemeral TCP port,
 drops it, and calls the dead address twice; both attempts must return 500. Today
 the second returns 200, because the first was settled as a terminal cached error
 and the retry was served that stored terminal instead of being dispatched.
