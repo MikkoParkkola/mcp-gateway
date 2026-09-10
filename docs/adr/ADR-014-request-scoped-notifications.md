@@ -111,44 +111,109 @@ stands.
 | Transport | Key | Why |
 |---|---|---|
 | HTTP | none needed — the connection is the key | The backend's notifications arrive interleaved on the response body of the very request that opened it (`src/transport/http/mod.rs:1335`, `content_type.contains("text/event-stream")`). Attribution is structural. |
-| stdio | the client-supplied progress token | One stdout is multiplexed across every in-flight call, so a key is the only attribution available (`src/transport/stdio.rs:104,467`). |
-| websocket | **out of scope** | The test plan rows this criterion is verified by name two transports and no more: S-02 is *"over stdio and over HTTP"* (`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:58`) and S-03 is per-request isolation on one connection (`:59`). Adding a third transport to the acceptance surface is a scope change, not an omission. |
+| stdio | a **gateway-minted** token, translated back to the caller's | One stdout is multiplexed across every in-flight call, so a key is the only attribution available (`src/transport/stdio.rs:104,467`) — and the caller's own token is not fit to be that key. See below. |
+| websocket | **out of scope — unreachable in production** | `WebSocketTransport` has no production construction site: it is named only in `src/transport/websocket.rs` and `src/transport/websocket_tests.rs`, and `src/backend/lifecycle.rs:335` builds exactly three variants — `Stdio` (`:336`), `Http` (`:352`), `A2a` (`:384`). No configured backend can reach it. The test plan agrees, naming two transports and no more (`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:58-59`). **Re-opens when** a production construction site appears or a websocket row lands in the test plan, whichever comes first. |
 
-Over stdio the gateway **never mints a token**. It passes a backend's own token
-through only when it matches one the caller supplied — the rule already written
-at `src/transport/stdio.rs:431-435` (*"MIK-7272.SUB.2b, §II.6 option (i)"*).
-Because nothing today parses a progress token out of `_meta`, that plumbing is
-**part of this change and not pre-existing**: an inbound `_meta` progress token
-must be captured beside `log_level` in `RequestFields`, forwarded on the
-outbound backend request, and handed to `register_progress_token`
-(`src/transport/stdio.rs:441`) before dispatch. Without it the stdio leg has a
-capture path that can never fire.
+**Superseded: "the gateway never mints a token."** The rule written at
+`src/transport/stdio.rs:431-435` (*"MIK-7272.SUB.2b, §II.6 option (i)"*) is to
+register the caller's own token and pass a backend's token through only when it
+matches. Read against the map it guards, that rule is unsound, for three reasons
+all visible at source:
+
+1. **The keyspace collapses types.** `capture_notification`
+   (`src/transport/stdio.rs:469-471`) maps `Value::Number(n)` through
+   `n.to_string()` into the same `String` key as `Value::String(s)`. Numeric
+   token `7` and string token `"7"` are one entry.
+2. **Registration overwrites a live owner.** `register_progress_token`
+   (`src/transport/stdio.rs:441-443`) is a bare `insert`. Two calls in flight
+   that supplied the same token — clients are free to; the token is theirs —
+   leave one draining the other's notifications.
+3. **A token outlives its request.** A caller may reuse a token on its next
+   call, and a late notification from the finished call lands in the live one's
+   buffer. Task-local sink isolation cannot prevent this: the mis-attribution
+   happens in the transport's map, one layer below the sink.
+
+**So the gateway mints, and translates back.** For each outbound backend request
+that carries progress, the gateway mints a fresh token in a namespace of its own
+— a non-numeric string, `gw-<uuid>` — registers **that**, and holds one entry
+mapping minted → the caller's own token for the life of the call. On capture the
+minted token is translated back before the notification reaches the caller, so
+**the token the client sees is byte-identical to the one it sent**. That
+identity is the property option (i) existed to protect, and it survives intact;
+what changes is only the key the backend and the map see. This closes all three:
+
+- A minted token is unique per request, so no two live registrations can alias,
+  and a completed request's token is never live again — a late notification
+  carries a retired key, matches nothing, and is dropped by the existing `None`
+  arm (`src/transport/stdio.rs:474`).
+- The map holds only gateway-minted keys, and a minted key is never numeric, so
+  the `Number`/`String` collapse at `:469-471` cannot alias two registrations.
+  Preserving the token's JSON type in the key would work too; the minted
+  namespace is smaller and needs no new key type.
+- **Registration is owned by the request.** A guard created beside the minted
+  token removes exactly its own key on drop — completion, error, timeout,
+  cancellation alike. Without it the registration outlives the sink: dropping
+  the task-local drops the receiver, while the transport's map entry keeps
+  accepting. Nothing reaps, so §5's *"a design needing reclamation is a design
+  that leaks"* holds for the map as well as for the sink.
+
+A caller that supplies **no** progress token gets no minted token and no
+progress capture, exactly as today. Progress is correlated by a token the client
+chose; with none there is nothing to translate back to, and handing the client a
+token it never sent is the invented owner that `src/transport/stdio.rs:455-462`
+guards against.
+
+**The inbound half is still new work.** Nothing today parses a progress token
+out of `_meta` (`src/protocol/meta.rs:43-51` declares five keys, none a token),
+so the caller's token must be captured beside `log_level` in `RequestFields` as
+part of this change. The comment at `src/transport/stdio.rs:431-435` is
+superseded by this ADR and must be rewritten when the code lands.
 
 `notifications/message` stays unattributable over stdio when it comes *from a
-backend*, as the existing note says: token-less methods have no owner on a
-multiplexed stdout. A `notifications/message` the **gateway itself** emits
-(§3) is deliverable on both transports, because the gateway knows whose
-request it is inside.
+backend*: it carries no progress token, so no key exists for it, minted or
+otherwise. A `notifications/message` the **gateway itself** emits (§3) is
+deliverable on both transports, because the gateway knows whose request it is
+inside.
 
 ### 3. The outbound emitter: who reads `log_level`, and where
 
 Two producers feed the sink, and both write into the same task-local.
 
-**Pass-through.** The transport is already the capture point. HTTP's
-`send_request_with_headers` (`src/transport/http/mod.rs:1219`) stops discarding
-`SseExchange.notifications` at `:1345` and instead pushes each captured
-notification into the ambient sink before returning the response; the
-`#[allow(dead_code)]` at `:297` is deleted, which is exactly what the ponytail
-note at `:300-301` says the outbound consumer landing means. stdio's drain
-(`take_captured_notifications`, `src/transport/stdio.rs:448`) does the same for
-the registered token, and loses its `#[allow(dead_code)]` too. This carries the
-backend's `notifications/progress` and, over HTTP, its
+**Pass-through, and it must be live.** The transport is already the capture
+point, but both capture paths today *accumulate a `Vec` and hand it over when
+the call ends*. Forwarding that `Vec` into the sink at the end would deliver
+every notification after the result — progress that arrives only once there is
+nothing left to progress. **The sender goes to the capture site; the `Vec` goes
+away.** Concretely:
+
+- **HTTP.** `send_request_with_headers` (`src/transport/http/mod.rs:1219`)
+  stops discarding `SseExchange.notifications` at `:1345`, and stops
+  accumulating them: each notification is pushed into the ambient sink as the
+  SSE body is parsed incrementally, so a notification reaches the client while
+  the call is still running. The `#[allow(dead_code)]` at `:297` is deleted,
+  which is what the note at `:300-301` says the outbound consumer landing
+  means.
+- **stdio.** The background reader owns the capture, and it is a **different
+  task** from the request — which is exactly why the map in §2 exists, and why
+  the sink alone cannot serve here. So the map entry holds the request's
+  bounded `Sender`, not a `Vec`: `register_progress_token` takes the sender,
+  `capture_notification` (`src/transport/stdio.rs:463`) translates the minted
+  token back and sends, and `take_captured_notifications`
+  (`src/transport/stdio.rs:448`) — the end-of-call drain — is deleted rather
+  than given a caller. One bounded channel per request is then the only buffer
+  on either transport, which is what makes §5's bound true at the capture site
+  and not merely downstream of it.
+
+This carries the backend's `notifications/progress` and, over HTTP, its
 `notifications/message`.
 
 **Gateway-generated.** `RequestFields::log_level` acquires its first production
-reader here. The rule: **a `tracing` event the gateway raises while inside a
-request's sink scope, at or above that request's declared level, is also
-emitted as a `notifications/message` into the sink.** The verified anchor for
+reader here. The rule is a **per-site opt-in, not a blanket promise**:
+**a named site, and only a named site, dual-emits its `tracing` event as a
+`notifications/message` into the sink when the request's declared level admits
+it. Adding a site requires an acceptance row.** A general "every qualifying
+event is forwarded" rule would be unfalsifiable and would need the very
+process-wide interceptor rejected below. The verified anchor for
 this is the refusal inside `invoke_tool_traced`
 (`src/gateway/meta_mcp/invoke.rs:1074`) at `:1330` — `tracing::warn!(server =
 %server, "refused: multi-user gateway would serve a gateway-held OAuth token
@@ -193,6 +258,12 @@ So:
    the conflation that ADR-008/INV-2 and `subscription_registry.rs`'s module
    doc both exist to prevent.
 
+One filter, both producers. A backend's `notifications/message` arriving by
+pass-through (§3) is filtered by the same per-request level as a
+gateway-generated one, at the sink. There is no second policy for relayed
+messages: below the declared level they are dropped, and with no declared level
+the request's stream carries none at all, whoever raised them.
+
 `notifications/progress` is not level-filtered. It has no level.
 
 ### 5. Lifetime, bounds, and the leak that is not built
@@ -206,15 +277,31 @@ the unbounded buffer.
   is nothing to reap, nothing to key, and no entry that can outlive its request
   — the same property `subscription_registry.rs:16-19` relies on for listeners
   (*"a design needing reclamation is a design that leaks"*).
-- **Bounded depth.** The channel is bounded. The producer is the transport and
+- **Bounded depth, at a named constant.** The channel is bounded at
+  `REQUEST_NOTIFICATION_DEPTH: usize = 64`. One buffer exists per in-flight
+  request rather than one per session, so it is deliberately shallower than
+  `SubscriptionRegistry`'s 256; 64 is the number acceptance row 8 is written
+  against, and changing it changes that row. The producer is the transport and
   the consumer is a socket; a slow or vanished client must not let a chatty
   backend grow the gateway's heap. On overflow the notification is **dropped
-  with a debug line, and the response is unaffected** — a lost log line is not
-  a failed tool call. `SubscriptionRegistry` chose to disconnect a lagging
+  with a debug line and a counter increment, and the response is unaffected** —
+  a lost log line is not a failed tool call. The counter is one monotonic
+  per-drop metric, which is what makes the *"dropped and counted"* half of
+  test-plan row S-04 assertable at all; without it row 11 is half an assertion.
+  `SubscriptionRegistry` chose to disconnect a lagging
   reader instead (`CHANNEL_DEPTH = 256`, `src/gateway/subscription_registry.rs:41`);
   that is right for a subscription whose only purpose is the notifications, and
   wrong here, where the response is the purpose and the notifications are
   commentary.
+- **The bound binds at capture, not downstream of it.** A bounded outbound
+  channel does nothing if the transport has already accumulated an unbounded
+  `Vec` upstream of it, which is what both capture paths do today
+  (`SseExchange.notifications`, and the stdio map's `Vec<JsonRpcNotification>`
+  at `src/transport/stdio.rs:104`). §3 removes both: the bounded sender reaches
+  the capture site itself, so the channel is the only buffer. The same applies
+  to the HTTP body — it must be parsed incrementally with bounded frame
+  storage, not read whole and then split, or the bound is defeated by the read
+  that precedes it.
 - **The request never completes / the backend streams forever.** Nothing new is
   needed: the existing per-request deadline and the backend's own timeout still
   end the dispatch future, and the stream ends with it. This design adds no
@@ -224,10 +311,22 @@ the unbounded buffer.
   future is dropped too, which is ordinary cancellation for this codebase, but
   see the ADR-012 note in Consequences.
 
-**The no-spawn invariant.** Every claim above rests on one thing: nothing
-between entering the sink scope and the transport read may move the work to a
-different task. A `tokio::spawn` there silently empties the sink and no unit
-test built on a hand-made channel would notice. Swept in this session:
+**Two invariants, not one.**
+
+*One task per in-flight request at the handler.* Concurrent requests must never
+share a task, or they share a task-local and the sink stops being per-request.
+This is a premise the whole design rests on and the spawn sweep does not check
+— the sweep asks whether work *moves* tasks, not whether two requests *start*
+on one. It holds today because axum drives each connection's request future
+independently, and it is listed so a future sweep knows both halves to check.
+
+*No spawn between the sink scope and the transport read.* A `tokio::spawn`
+there silently empties the sink, and no unit test built on a hand-made channel
+would notice. This binds the HTTP leg and the gateway-generated leg, which
+capture on the request's own task. It does **not** bind stdio: stdio's reader is
+a different task by construction, which is precisely why §2's map exists and why
+stdio's correlation is the minted token rather than the task-local. Swept in
+this session:
 
 - `src/backend/ops.rs:218` — `with_retry`'s closure returns an awaited async
   block, not a spawn. Safe.
@@ -243,8 +342,10 @@ test built on a hand-made channel would notice. Swept in this session:
   behave as though the sink were reachable.
 - `src/transport/http/mod.rs:650` — an OAuth-flow spawn (comment at `:642`).
   Whether it can sit inside a `tools/call` dispatch was **not traced to a
-  conclusion in this session: unverified.** Acceptance row 7 exists to catch it
-  either way.
+  conclusion in this session: unverified.** The rows that catch it are the
+  **positive** ones — 1, 4 and 6 — which assert a notification *arrives*; a lost
+  task-local makes them fail loudly. Row 7 cannot: a spawn drops every
+  notification, which satisfies a negative assertion perfectly.
 
 Because the invariant is what makes the design correct, the acceptance rows
 must run through the real handler path. A test that constructs a channel by
@@ -314,7 +415,8 @@ task-local has no such failure mode because its destructor is the request's.
 
 ## Acceptance
 
-Numbered; each must fail against the current tree unless marked otherwise.
+Thirteen rows. Eleven must fail against the current tree; rows 2 and 9 are
+marked and pass today.
 
 1. **Emitter exists.** A successful `tools/call` over HTTP with `Accept:
    text/event-stream` and `_meta` `logLevel: "info"` receives the `"tool
@@ -323,7 +425,10 @@ Numbered; each must fail against the current tree unless marked otherwise.
    `invoke.rs:1330` is the second site and needs the ADR-008 multi-user setup;
    the success path needs none. Fails today: `RequestFields::log_level` has no
    reader.
-2. **Absence means silence.** The identical call with no `logLevel` in `_meta`
+2. **Absence means silence.** *Passes vacuously today — the gateway emits
+   nothing at all — so it is a control on §4's precedence, meaningful only once
+   row 1 is green, not a row that fails against the current tree.* The
+   identical call with no `logLevel` in `_meta`
    receives zero `notifications/message`, even with the session's
    `logging/setLevel` set to `debug`. Fails today for the same reason, and
    pins the precedence in §4.
@@ -335,26 +440,36 @@ Numbered; each must fail against the current tree unless marked otherwise.
    request-scoped notification flows *on the response stream of its own
    request* — a `notifications/progress` raised by the backend during call A
    is read off A's response stream, and the same assertion is repeated over
-   stdio and over HTTP (test-plan row S-02, `:58`).
+   stdio and over HTTP (test-plan row S-02, `:58`). **The fixture releases the
+   result only after the client has read the notification**, which is what
+   makes this a liveness assertion rather than an ordering one: a design that
+   buffers and flushes at the end deadlocks here instead of passing.
 5. **Backend pass-through, HTTP.** `SseExchange.notifications`
    (`src/transport/http/mod.rs:298`) reaches the caller instead of being
    discarded at `:1345`, and `#[allow(dead_code)]` at `:297` is gone. Fails
-   today by construction.
-6. **Token plumbing, stdio.** A client-supplied `_meta` progress token is
-   parsed, forwarded on the outbound request, registered via
-   `register_progress_token` (`src/transport/stdio.rs:441`), and the backend's
-   matching `notifications/progress` reaches that call. Fails today: no code
-   outside `src/transport` mentions a progress token at all.
+   today by construction. The accumulating `Vec` is gone with it: the assertion
+   is that the notification arrives before the body has been read to its end.
+6. **Mint, map, translate back — stdio.** A client-supplied `_meta` progress
+   token is parsed; a *different*, gateway-minted token goes out on the backend
+   request and is what `register_progress_token`
+   (`src/transport/stdio.rs:441`) registers; the backend's matching
+   `notifications/progress` reaches that call **carrying the client's original
+   token, byte-identical**. Fails today twice over: no code outside
+   `src/transport` mentions a progress token at all, and nothing mints.
 7. **Negative control — no invented owner, through the real path.** A backend
    `notifications/progress` carrying a token no caller supplied reaches no
    caller's stream and fails no call. The unit-level form is already green
    (`src/transport/stdio.rs:1148`); this row runs it end to end through
-   `meta_mcp_handler`, which also makes it the row that catches a
-   `tokio::spawn` between scope entry and the transport read — including the
-   unverified OAuth spawn at `src/transport/http/mod.rs:650`.
-8. **The bound holds.** A backend emitting more notifications than the
-   channel's depth during one call does not grow the buffer without limit; the
-   excess is dropped and the response still arrives intact.
+   `meta_mcp_handler`. *It is a pure control and detects nothing else* — an
+   implementation that drops every notification passes it. Spawn detection
+   belongs to rows 1, 4 and 6 (§5).
+8. **The bound holds, at 64.** A backend emitting more than
+   `REQUEST_NOTIFICATION_DEPTH` (64) notifications during one call, with the
+   client not reading, does not grow gateway memory without limit; the excess is
+   dropped, the drop counter advances, and the response still arrives intact.
+   Asserted on both transports, because the buffer that could defeat it is a
+   different one in each (`SseExchange.notifications` for HTTP, the map's `Vec`
+   for stdio) and §3 removes both.
 9. **SUB.2a stays excluded.** `a_request_scoped_notification_never_rides_this_stream`
    (`src/gateway/subscription_registry.rs:200`) still passes unchanged.
    *Regression guard: this row passes today and must keep passing; it is listed
@@ -365,6 +480,17 @@ Numbered; each must fail against the current tree unless marked otherwise.
     (`docs/design/2026-08-31-cluster-b-connection-invariance-test-plan.md:57`).
     This is the row that pins the default staying byte-identical.
 11. **Late notification.** A notification arriving after the response has been
-    written is dropped and counted, not delivered to whatever occupies the
-    slot next — test-plan row S-04 (`:60`). This is the sink-lifetime row and
-    the one that fails loudest if the sink is ever hoisted out of the task.
+    written is dropped and **the drop counter advances by exactly one**, and it
+    is not delivered to whatever occupies the slot next — test-plan row S-04
+    (`:60`). This is the sink-lifetime row and the one that fails loudest if
+    the sink is ever hoisted out of the task.
+12. **A reused token does not cross requests.** Call A supplies token `t` and
+    completes. Call B then supplies the same `t`. A's backend emits a late
+    `notifications/progress` for A's *minted* token. It reaches no one, and in
+    particular reaches no part of B. Fails today by construction: with the
+    caller's token as the key, A's late notification lands in B's buffer.
+13. **Registration dies with the request.** A `tools/call` over stdio that is
+    cancelled mid-flight leaves no entry in `captured_notifications`, and a
+    subsequent backend notification for its minted token is dropped rather than
+    accumulated. This is the row that fails if the cleanup guard in §2 is
+    omitted and only the sink is dropped.
