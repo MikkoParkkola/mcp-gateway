@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The direct `POST /mcp/{name}` bypass's own idempotency guard
 //! (MIK-7272.SUB.4).
 //!
