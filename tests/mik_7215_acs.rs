@@ -677,11 +677,24 @@ mod http {
     /// handler branch that consults it (`router/handlers.rs:1139-1170`), by the
     /// only route a modern caller has.
     ///
-    /// A modern request cannot carry a session -- this revision deleted them --
-    /// so there is nobody to elicit over and `Unsupported` is the outcome every
-    /// time. That is precisely the case the legacy path answers with a warning.
+    /// The premise this row was written on inverted when `CONFIRM.2` landed. A
+    /// modern request carried no session to elicit over, so `Unsupported` was
+    /// the outcome every time; the in-band continuation is exactly the channel
+    /// that case was missing (`router/handlers.rs`, the
+    /// `Era::Modern => ConfirmationChannel::InBand` arm), so a modern caller
+    /// now HAS somebody to ask.
+    ///
+    /// `CONFIRM.1a`'s refusal is conditional -- it binds when confirmation
+    /// cannot be obtained -- and stays witnessed where that is still true:
+    /// `src/gateway/server/mod.rs::ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm`
+    /// drives `ConfirmationChannel::Unavailable` end to end including the
+    /// execution sentinel, and
+    /// `tests/mik_7246_confirm_1a_unconfirmable_producers.rs` covers the two
+    /// elicitation failures behind the same outcome. What this row pins is the
+    /// other half of the same rule, on the transport where a channel now
+    /// exists: asking is not running.
     #[tokio::test]
-    async fn ac_confirm_1_a_modern_destructive_call_with_nobody_to_ask_is_refused() {
+    async fn ac_confirm_1_a_modern_destructive_call_is_asked_in_band_and_not_run() {
         // Admin, because `gateway_kill_server` -- the only tool this build
         // annotates `destructiveHint: true` -- is refused for everyone else by
         // the admin check, which runs *before* the confirmation gate. A
@@ -727,40 +740,54 @@ mod http {
         assert_eq!(
             status,
             StatusCode::OK,
-            "JSON-RPC reports errors in the body: {body}"
+            "an in-band ask is a successful round, not a transport error: {body}"
+        );
+        assert!(
+            body.get("error").is_none(),
+            "the call is paused for an answer, not refused: {body}"
         );
         assert_eq!(
-            body.pointer("/error/code").and_then(Value::as_i64),
-            Some(-32001),
-            "an unconfirmable destructive call must be refused, not run: {body}"
+            body.pointer("/result/resultType").and_then(Value::as_str),
+            Some("input_required"),
+            "a destructive call must come back unfinished, carrying its question: {body}"
         );
-        // Distinguishes the two -32001 exits: a DECLINED operator says
-        // "Operator declined", an absent one says confirmation could not be
-        // obtained. Asserting only the code would pass on the wrong branch.
+        // The key is the contract the client keys its answer on. Asserting the
+        // method alone would pass on a question posted under any name, which no
+        // client would know to answer.
+        assert_eq!(
+            body.pointer("/result/inputRequests/io.mcp-gateway.destructive-confirmation.v1/method")
+                .and_then(Value::as_str),
+            Some("elicitation/create"),
+            "the round must carry the confirmation request itself: {body}"
+        );
         let message = body
-            .pointer("/error/message")
+            .pointer(
+                "/result/inputRequests/io.mcp-gateway.destructive-confirmation.v1/params/message",
+            )
             .and_then(Value::as_str)
             .unwrap_or_default();
-        assert!(
-            message.contains("none could be obtained"),
-            "the refusal must be the unconfirmable branch, not a decline: {message}"
-        );
-        // Guards two things at once, both invisible to every other assertion
-        // here. (1) The fixture's `arguments` key must be the one production
-        // reads (`server`), or the description degrades to the `<unknown>`
-        // fallback. (2) The refusal must actually interpolate the description:
-        // the prefix asserted above is a format-string literal that precedes
-        // the interpolation, so deleting `{action_desc}` from the format string
-        // leaves the prefix, the code, and the describer's own unit tests all
-        // green. `docs/DEPLOYMENT.md` promises the refusal names the action, so
-        // this asserts the whole action phrase, not just the argument inside it.
+        // Guards the same two things the refusal wording used to. (1) The
+        // fixture's `arguments` key must be the one production reads
+        // (`server`), or the description degrades to its generic fallback text.
+        // (2) The prompt must interpolate the description: the prefix is a
+        // format-string literal, so deleting the interpolation leaves the
+        // prefix and the describer's own unit tests green.
         assert!(
             message.contains("kill server 'any-backend'"),
-            "the refusal must name the action it refused, not the fallback text: {message}"
+            "the operator must be told what they are confirming: {message}"
         );
+        // Without an envelope the answer has nothing to come back on, and the
+        // question is decorative.
         assert!(
-            body.get("result").is_none(),
-            "a refused destructive call must not also return a result: {body}"
+            body.pointer("/result/requestState").is_some(),
+            "the ask must be bound to the state its answer is redeemed against: {body}"
+        );
+        // The execution sentinel for this transport: a finished tool call
+        // carries `content`. An unfinished round that also ran the tool would
+        // have refused nothing, which is the whole of the criterion.
+        assert!(
+            body.pointer("/result/content").is_none(),
+            "a call still waiting to be confirmed must not have run: {body}"
         );
     }
 
@@ -898,9 +925,9 @@ mod http {
         );
     }
 
-    /// MIK-7246.CONFIRM.1a — a confirmation refusal is the gate working, not the
-    /// caller misbehaving, so it is excluded from the caller's dispatch
-    /// accounting in BOTH directions.
+    /// MIK-7246.CONFIRM.1a — the confirmation gate answering is the gate
+    /// working, not the caller misbehaving, so its outcome is excluded from the
+    /// caller's dispatch accounting in BOTH directions.
     ///
     /// Both arms, not just the failure one: `record_client_success` resets the
     /// consecutive-failure count, so booking a refusal as a success would clear
@@ -962,7 +989,18 @@ mod http {
             "one failure of two must leave the breaker closed, or the fixture's threshold is wrong"
         );
 
-        // The refusal itself.
+        // The gate doing its job. Since `CONFIRM.2` this is an in-band ask
+        // rather than a refusal: the modern policy is REFUSE only when nobody
+        // can be asked, and this transport now has a channel
+        // (`destructive_confirmation.rs::for_modern`, `router/handlers.rs`'s
+        // `Era::Modern => InBand` arm). The unconfirmable refusal is not
+        // reachable over HTTP on either era -- legacy proceeds with a warning
+        // -- so it is witnessed on stdio
+        // (`src/gateway/server/mod.rs::ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm`),
+        // which carries no client accounting to exclude it from. What this row
+        // pins is the accounting rule itself, on the outcome the accounted
+        // path produces: an unfinished round is neither a client failure nor a
+        // completed call.
         let (_, _, refusal) = post_mcp_authed(
             Arc::clone(&state),
             json!({
@@ -984,22 +1022,30 @@ mod http {
             Some("admin-key"),
         )
         .await;
-        let message = refusal
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        // Discriminates the branch. Reading the breaker alone would pass on any
+        // outcome that happens not to be counted, including an ordinary success
+        // -- which would mean the gate never ran and this row proved nothing.
+        assert_eq!(
+            refusal
+                .pointer("/result/resultType")
+                .and_then(Value::as_str),
+            Some("input_required"),
+            "this row observes the gate's own outcome; another exit proves nothing about it: {refusal}"
+        );
         assert!(
-            message.contains("none could be obtained"),
-            "this row observes the unconfirmable branch; another -32001 exit proves nothing about it: {refusal}"
+            refusal
+                .pointer("/result/inputRequests/io.mcp-gateway.destructive-confirmation.v1")
+                .is_some(),
+            "the round must be the confirmation ask, not some other unfinished round: {refusal}"
         );
         assert_eq!(
             accounting.client_circuit_state("row17-client"),
             Some(mcp_gateway::failsafe::CircuitState::Closed),
-            "a refusal counted as a failure takes the count to two and trips the breaker: {refusal}"
+            "an unfinished round counted as a failure takes the count to two and trips the breaker: {refusal}"
         );
 
-        // One more genuine failure. It reaches two only if the refusal left the
-        // count at one -- a refusal booked as a SUCCESS would have reset it, and
+        // One more genuine failure. It reaches two only if the gate's round left
+        // the count at one -- booked as a SUCCESS it would have reset it, and
         // this failure would be the first of two rather than the second.
         let mut unknown_again = modern_tools_list(1703);
         unknown_again["method"] = json!("row17/does-not-exist");
@@ -1013,7 +1059,7 @@ mod http {
         assert_eq!(
             accounting.client_circuit_state("row17-client"),
             Some(mcp_gateway::failsafe::CircuitState::Open),
-            "a refusal booked as a success reset the count, so this failure is the first of two, not the second"
+            "the gate's round booked as a success reset the count, so this failure is the first of two, not the second"
         );
     }
 }
