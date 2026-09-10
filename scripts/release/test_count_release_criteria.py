@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """A number in a heading must say what it counts, immediately.
 
 The release plan's title and one of its section headings each carried a total

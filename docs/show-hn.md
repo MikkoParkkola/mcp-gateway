@@ -35,7 +35,7 @@ The MCP ecosystem treats "connect N servers" as a feature. It's also the entire 
 - Can hash-pin capability YAMLs by SHA-256. A changed pinned file fails closed with `RUG-PULL DETECTED`; unpinned files still load.
 - Imports a full OpenAPI spec into validated capability YAMLs with one command (Petstore: 19 operations end-to-end).
 
-2888 tests passing, `#![deny(unsafe_code)]`, zero clippy warnings, ~8 ms startup. Source-available: PolyForm Noncommercial by default, with an MIT core and a separate commercial license. This is the most mature of the four repos and is what I planned to Show HN'd a week ago. Then I kept building.
+2888 tests passing, `#![deny(unsafe_code)]`, zero clippy warnings, ~8 ms startup. Source-available: PolyForm Noncommercial 1.0.0 throughout, with a separate commercial license. This is the most mature of the four repos and is what I planned to Show HN'd a week ago. Then I kept building.
 
 ### Repo 2 — `botnaut-client` (the agent)
 

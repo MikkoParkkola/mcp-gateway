@@ -318,7 +318,7 @@ working.** Each requirement below therefore demands a *refusal*, not a computati
 | CON.1 | The gateway stays hand-rolled; `rmcp` is a development dependency for conformance testing only. Rationale in RFC-0061 Decision 1. |
 | CON.2 | The Meta-MCP surface budget is a locked decision and is not reopened by this release. |
 | CON.3 | Capability definitions remain SHA-256 pinned. |
-| CON.4 | Mixed per-file licensing (MIT core, PolyForm Noncommercial for enterprise paths) is unchanged. |
+| CON.4 | Licensing is PolyForm Noncommercial 1.0.0 for the whole repository. The mixed per-file model and its MIT core are dropped in this release; see ADR-013. |
 | CON.5 | The specification's twelve-month deprecation window means no legacy removal is forced by this release, and none is taken. |
 
 ### 3.1.1 A version we invented and have been advertising

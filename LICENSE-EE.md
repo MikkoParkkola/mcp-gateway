@@ -1,10 +1,12 @@
 > **SUPERSEDED (v3.3.0).** This file described the old model — MIT by default
 > with an *allowlist* of Enterprise files under PolyForm-Noncommercial. That
 > model leaked (enterprise features shipped under MIT when the allowlist missed
-> them). As of v3.3.0 the default is **flipped**: PolyForm-Noncommercial is the
-> default and a small, explicit MIT core is the carve-out. See
-> [`LICENSES.md`](LICENSES.md) for the current model and [`NOTICE.md`](NOTICE.md)
-> for the correction. This file is kept for historical reference only.
+> them). v3.3.0 flipped the default to PolyForm-Noncommercial with a small MIT
+> core as the carve-out, and **v4.0.0 removes the carve-out**: the whole
+> repository is PolyForm-Noncommercial, with no second license. See
+> [`LICENSES.md`](LICENSES.md) for the current model, [`ADR-013`](docs/adr/ADR-013-single-noncommercial-license.md)
+> for why the core was retired, and [`NOTICE.md`](NOTICE.md) for what each
+> release granted. This file is kept for historical reference only.
 
 # Enterprise Edition License (PolyForm Noncommercial)
 

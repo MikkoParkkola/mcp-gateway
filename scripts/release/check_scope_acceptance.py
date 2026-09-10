@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Validate the approved scope; release mode also rejects unresolved acceptance.
 
 Evidence existence is the agreed bar, not automatic proof of a test execution.

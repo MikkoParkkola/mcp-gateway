@@ -41,7 +41,7 @@ in_list() {
 changed=0; skipped=0
 while IFS= read -r f; do
   if in_list "$f" "$EXCLUDE"; then skipped=$((skipped+1)); continue; fi
-  case "$f" in *.sh) c='#' ;; *) c='//' ;; esac
+  case "$f" in *.sh|*.py) c='#' ;; *) c='//' ;; esac
   COPYR="$c $CR"
   id="$c $NC_ID"
 
@@ -72,7 +72,7 @@ while IFS= read -r f; do
     changed=$((changed+1))
     if $APPLY; then cat "$tmp" > "$f"; rm -f "$tmp"; else echo "would stamp [$id]: $f"; rm -f "$tmp"; fi
   fi
-done < <(find src crates tests examples benches scripts deploy tools -type f \( -name '*.rs' -o -name '*.sh' \) 2>/dev/null | sort)
+done < <(find src crates tests examples benches scripts deploy tools -type f \( -name '*.rs' -o -name '*.sh' -o -name '*.py' \) 2>/dev/null | sort)
 
 echo "headers: $changed to stamp, $skipped already-correct/excluded"
 $APPLY || echo "(dry-run — re-run with --apply to write)"

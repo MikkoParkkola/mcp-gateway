@@ -24,7 +24,6 @@ include = [
     "LICENSES.md",
     "NOTICE.md",
     "COMMERCIAL.md",
-    ".mit-core-allowlist",
     "CHANGELOG.md",
     "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md",

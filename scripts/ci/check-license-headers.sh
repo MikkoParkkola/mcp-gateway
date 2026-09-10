@@ -40,7 +40,7 @@ in_list() {
 no_copyright=(); bad_id=()
 while IFS= read -r f; do
   in_list "$f" "$EXCLUDE" && continue
-  case "$f" in *.sh) c='#' ;; *) c='//' ;; esac
+  case "$f" in *.sh|*.py) c='#' ;; *) c='//' ;; esac
   NC="$c $NC_ID"
 
   # Header is the first two non-shebang lines.
@@ -51,7 +51,7 @@ while IFS= read -r f; do
 
   [[ "$copyr" =~ $COPYR_RE ]] || no_copyright+=("$f")
   [ "$idline" = "$NC" ] || bad_id+=("$f")
-done < <(find src crates tests examples benches scripts deploy tools -type f \( -name '*.rs' -o -name '*.sh' \) 2>/dev/null)
+done < <(find src crates tests examples benches scripts deploy tools -type f \( -name '*.rs' -o -name '*.sh' -o -name '*.py' \) 2>/dev/null)
 
 rc=0
 report() { local title="$1"; shift; [ "$#" -gt 0 ] || return 0; echo "error: $title" >&2; printf '  %s\n' "$@" >&2; rc=1; }
