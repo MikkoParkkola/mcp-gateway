@@ -248,9 +248,8 @@ impl Backend {
         // attempt) can hand a borrow to each attempt's future without tying the
         // closure to the caller's borrow lifetime (MIK-6784).
         let identity_key = identity_key.map(str::to_string);
-        let resend_policy =
-            self.resend_policy(&entry.failsafe.retry_policy, method, params.as_ref());
-        let result = with_retry(&resend_policy, &name, || {
+        let policy = self.resend_policy(&entry.failsafe.retry_policy, method, params.as_ref());
+        let result = with_retry(&policy, &name, || {
             let transport = std::sync::Arc::clone(&transport);
             let method = method.to_string();
             let params = params.clone();
