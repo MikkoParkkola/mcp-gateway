@@ -1742,8 +1742,22 @@ impl MetaMcp {
         // completed body then runs the same post-invoke contract and anomaly
         // gates every non-bridged result runs. Returning early here would buy a
         // shorter diff by skipping them.
+        // `!requests.is_empty()` is load-bearing, not defensive. An interim
+        // result may carry `requestState` and no questions at all — MRTR.2's
+        // own shape, since a result carrying questions would be refused by the
+        // capability gate before any handle was minted — and handing that to
+        // the bridge makes it spin rather than refuse: `plan` yields no
+        // prompts, `ask` sends nothing, the backend is re-invoked, answers the
+        // same empty interim, and `run` exhausts its rounds. The -32003 that
+        // came back was `RoundsExhausted`, three pointless backend calls after
+        // a question nobody was ever asked.
+        //
+        // There is nothing here for a client to answer, so there is nothing to
+        // bridge. The continuation mint below is the whole of the correct
+        // behaviour for this shape.
         if caller.era == crate::protocol::meta::Era::Legacy
             && let Some(pending) = interim.clone()
+            && !pending.requests.is_empty()
             && let Some(session) = session_id
         {
             let dispatcher = BridgeDispatcher {
@@ -1797,10 +1811,16 @@ impl MetaMcp {
                 // wired in front of it.
                 //
                 // This arm does NOT reach stdio, and the reason is worth naming
-                // because no test enforces it. `stdio_caller_context` declares
-                // `Declared::NONE`, and `run` calls `plan` before `ask`, so an
-                // undeclared caller is refused with `Refused` one step before
-                // any delivery is attempted — never as `NoSession`. That is
+                // because no test enforces it. It takes both halves, and an
+                // earlier revision of this comment claimed only the second:
+                // the guard above admits nothing with an empty request map, so
+                // whatever gets here has questions in it, and `plan` — which
+                // refuses requests that are *present and undeclared*, and has
+                // nothing to say about an empty map — then refuses every one of
+                // them, because `stdio_caller_context` declares
+                // `Declared::NONE`. `run` calls `plan` before `ask`, so that
+                // refusal lands as `Refused` one step before any delivery is
+                // attempted, never as `NoSession`. That is
                 // what keeps the deliberate stdio refusal documented on
                 // `NoClientChannel` intact, and MIK-7387 the only thing that
                 // lifts it. The two halves are pinned separately and joined by
