@@ -454,7 +454,7 @@ These waited on per-request caller identity. The protocol now carries it, so the
 |---|---|---|
 | MIK-6207 | P2 | **In scope.** Its plumbing *is* slice 3. Re-triage after landing: likely closed as superseded rather than implemented. |
 | MIK-6729 | **P0** | **Largely built already, and nobody closed it.** `src/identity_propagation/token_exchange.rs` opens with *"RFC 8693 OAuth 2.0 Token Exchange identity-propagation strategy (MIK-6729)"*, and `src/gateway/server/mod.rs:1053` constructs it at startup behind the `TokenExchange` strategy (verified 2026-08-29). A P0 sitting in Blocked, with no recorded blocker, describing work that has shipped. Verify against its acceptance criteria and close — the same shape as the six tickets 3.5.0 already fixed. |
-| MIK-6744 / 6745 / 6746 | P2 | **Fast-follow, 4.1.0.** Identity-keyed token store, per-user consent binding, credential passthrough. Each is a *consumer* of the seam, not part of it, and each has its own consent and storage design. Bounded reason for deferring, not a shrug. |
+| MIK-6744 / 6745 / 6746 | P2 | **Superseded: in 4.0.0.** `docs/requirements/RELEASE-4.0.0-scope-update.md:42-43` pulled the ACCOUNTS package into 4.0.0 and supersedes the 4.1.0 deferral recorded below. The original reasoning is kept because it still explains the shape of the work, not because the date holds. **Fast-follow, 4.1.0 (superseded).** Identity-keyed token store, per-user consent binding, credential passthrough. Each is a *consumer* of the seam, not part of it, and each has its own consent and storage design. Bounded reason for deferring, not a shrug. |
 
 ## D. Security — what would otherwise ship as a known hole (4)
 
