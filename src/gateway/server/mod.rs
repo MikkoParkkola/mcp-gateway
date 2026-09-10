@@ -740,7 +740,10 @@ impl Gateway {
         // `tools/call` through `meta_mcp/invoke.rs`, stdio through the real
         // `RetryFields` `dispatch_single_with_sink` builds (`:1886`), and the
         // direct `POST /mcp/{name}` bypass through its own local re-enforcement
-        // (`meta_mcp/direct_route.rs`, called at `backend_handlers.rs:781`) —
+        // (`meta_mcp/direct_route.rs`, called at `backend_handlers.rs:781`).
+        // Reaching a guard is not the whole criterion: the direct route still
+        // RELEASES the client's key when the backend call fails, which is the
+        // broken-stream case SUB.4 is written about, so the row is PARTIAL —
         // see `docs/design/2026-08-31-sub-4-idempotency-wiring.md`.
         Arc::get_mut(&mut meta_mcp)
             .expect("no other Arc references at this point")
